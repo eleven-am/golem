@@ -1,0 +1,57 @@
+import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
+import { PrismaClient } from './generated/prisma/client';
+
+type SeedClient = Record<'user' | 'post' | 'profile', any>;
+
+export async function seed(client: SeedClient): Promise<void> {
+  await client.post.deleteMany();
+  await client.profile.deleteMany();
+  await client.user.deleteMany();
+  await client.user.create({
+    data: {
+      email: 'roy@example.com',
+      name: 'Roy',
+      phone: '+1-555-0100',
+      profile: { create: { bio: 'builder of things' } },
+      posts: {
+        create: [
+          { title: 'First post', published: true },
+          { title: 'Draft post', published: false },
+        ],
+      },
+    },
+  });
+  await client.user.create({
+    data: {
+      email: 'ada@example.com',
+      name: 'Ada',
+      phone: '+44-555-0200',
+      profile: { create: { bio: 'countess of computing' } },
+      posts: { create: [{ title: 'Memory systems', published: true }] },
+    },
+  });
+  await client.user.create({
+    data: {
+      email: 'guest@example.com',
+      name: 'Guest',
+    },
+  });
+  await client.user.create({
+    data: {
+      email: 'mod@example.com',
+      name: 'Mod',
+    },
+  });
+}
+
+if (require.main === module) {
+  const client = new PrismaClient({ adapter: new PrismaBetterSqlite3({ url: 'file:./prisma/dev.db' }) });
+  void seed(client)
+    .then(() => client.$disconnect())
+    .catch((error) => {
+      process.exitCode = 1;
+      return client.$disconnect().then(() => {
+        throw error;
+      });
+    });
+}

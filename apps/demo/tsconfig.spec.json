@@ -1,0 +1,12 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@casl/ability": ["../../node_modules/@casl/ability/dist/types/index.d.ts"],
+      "@casl/prisma": ["../../node_modules/@casl/prisma/dist/types/index.d.ts"]
+    }
+  },
+  "include": ["src", "test"]
+}

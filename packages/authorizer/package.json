@@ -1,0 +1,24 @@
+{
+  "name": "@eleven-am/golem-authorizer",
+  "version": "0.0.1",
+  "private": true,
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@casl/prisma": "^2.0.0",
+    "@eleven-am/golem-core": "0.0.1"
+  },
+  "peerDependencies": {
+    "@eleven-am/authorizer": "^2.0.0",
+    "@nestjs/common": "^11.0.0"
+  },
+  "devDependencies": {
+    "@eleven-am/authorizer": "^2.0.1",
+    "@nestjs/common": "^11.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0"
+  }
+}

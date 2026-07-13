@@ -1,0 +1,1 @@
+export { emitDatamodelModule } from './emit';

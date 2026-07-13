@@ -1,0 +1,18 @@
+{
+  "name": "golem",
+  "version": "0.0.1",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-authorizer && npm run build -w demo",
+    "test": "npm run test --workspaces --if-present",
+    "benchmark:hardening": "npm run build -w @eleven-am/golem-core -w @eleven-am/golem-authorizer && node benchmarks/hardening.bench.js"
+  },
+  "overrides": {
+    "ws": "^8.21.0",
+    "@apollo/server": "^5.5.1"
+  }
+}
