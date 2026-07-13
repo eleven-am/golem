@@ -1,5 +1,6 @@
 import {
   DynamicModule,
+  FactoryProvider,
   Logger,
   Module,
   ModuleMetadata,
@@ -35,6 +36,7 @@ export const GOLEM_SCHEMA = 'GOLEM_SCHEMA';
 export const GOLEM_EVENT_BUS = 'GOLEM_EVENT_BUS';
 export const GOLEM_ENGINE = 'GOLEM_ENGINE';
 const GOLEM_CLIENT_LIFECYCLE = 'GOLEM_CLIENT_LIFECYCLE';
+const GOLEM_CLIENT_OPTIONS = 'GOLEM_CLIENT_OPTIONS';
 
 type GeneratedGolemClient = new (
   options: unknown,
@@ -53,6 +55,12 @@ export interface GolemModuleOptions<TModels> {
   extensions?: Type<object>[];
   importedExtensions?: Array<Type<object> | string | symbol>;
   authorization?: Type<AuthorizationProvider> | string | symbol;
+}
+
+export interface GolemModuleAsyncOptions<TModels>
+  extends Omit<GolemModuleOptions<TModels>, 'prismaOptions'> {
+  inject?: FactoryProvider['inject'];
+  useFactory: (...dependencies: any[]) => unknown | Promise<unknown>;
 }
 
 interface ConnectableClient {
@@ -85,6 +93,24 @@ function subscriptionsEnabled<TModels>(options: GolemModuleOptions<TModels>): bo
 @Module({})
 export class GolemModule {
   static forRoot<TModels>(options: GolemModuleOptions<TModels>): DynamicModule {
+    return this.createDynamicModule(options, {
+      provide: GOLEM_CLIENT_OPTIONS,
+      useValue: options.prismaOptions,
+    });
+  }
+
+  static forRootAsync<TModels>(options: GolemModuleAsyncOptions<TModels>): DynamicModule {
+    return this.createDynamicModule(options, {
+      provide: GOLEM_CLIENT_OPTIONS,
+      inject: options.inject ?? [],
+      useFactory: options.useFactory,
+    });
+  }
+
+  private static createDynamicModule<TModels>(
+    options: Omit<GolemModuleOptions<TModels>, 'prismaOptions'>,
+    clientOptionsProvider: FactoryProvider | { provide: string; useValue: unknown },
+  ): DynamicModule {
     const eventBusProvider = options.pubSub
       ? {
           provide: GOLEM_EVENT_BUS,
@@ -116,6 +142,7 @@ export class GolemModule {
       global: true,
       imports: [DiscoveryModule, ...(options.imports ?? [])],
       providers: [
+        clientOptionsProvider,
         eventBusProvider,
         HookRegistry,
         GolemHooksExplorer,
@@ -123,19 +150,19 @@ export class GolemModule {
         ...authorizationProviders,
         {
           provide: options.client,
-          useFactory: (eventBus: PubSubEventBus) => {
+          useFactory: (eventBus: PubSubEventBus, clientOptions: unknown) => {
             const publisher = createEventPublisher({
               datamodel: options.datamodel,
               eventBus,
               models: subscribableModels(options),
             });
             return new (options.client as unknown as GeneratedGolemClient)(
-              options.prismaOptions,
+              clientOptions,
               publisher,
               engineRef,
             );
           },
-          inject: [GOLEM_EVENT_BUS],
+          inject: [GOLEM_EVENT_BUS, GOLEM_CLIENT_OPTIONS],
         },
         {
           provide: GOLEM_CLIENT_LIFECYCLE,

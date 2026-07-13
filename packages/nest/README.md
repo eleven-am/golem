@@ -1,10 +1,10 @@
 # @eleven-am/golem
 
-The NestJS module for [Golem](https://github.com/eleven-am/golem) — feed it a Prisma schema, get a complete authorized GraphQL API: queries, mutations with nested writes, live subscriptions, hooks, extensions and a CASL policy kernel.
+The NestJS module for [Golem](https://github.com/eleven-am/golem). Feed it a Prisma schema and get a complete GraphQL API: queries, mutations with nested writes, live subscriptions, typed hooks, custom operations, and a CASL authorization kernel enforcing row, field, and relation policy on every entry point.
 
 ```bash
 npm i @eleven-am/golem @eleven-am/golem-core
 npm i -D @eleven-am/golem-generator
 ```
 
-See the [root README](https://github.com/eleven-am/golem#readme) for the full guide.
+See the [full guide](https://github.com/eleven-am/golem#readme) for the quickstart, configuration reference, and authorization model.

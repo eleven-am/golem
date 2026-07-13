@@ -1,14 +1,74 @@
 # Golem
 
-**Write your Prisma schema. The backend comes alive — and defends itself.**
+**Write your Prisma schema. The backend comes alive, and it defends itself.**
 
-Golem generates a complete GraphQL API from your Prisma schema at runtime — no resolvers, no DTOs, no generated classes to maintain. Queries with filtering and pagination, mutations with nested writes, live subscriptions, and a full authorization kernel enforcing CASL rules on every row, column and relation hop.
+Golem builds a complete GraphQL API from your Prisma schema at runtime. You write no resolvers, no DTOs, no services, and there are no generated classes to maintain. Every model gets queries with filtering and pagination, mutations with nested writes, and live subscriptions. If you connect an authorization adapter, a single set of CASL rules is enforced on every row, every column, and every relation hop, across every entry point.
+
+## Why Golem
+
+The typical NestJS + Prisma + GraphQL app repeats the same four layers per model: a resolver that calls a service that calls a repository that calls Prisma, plus input types for each operation. None of that code is your product. Golem replaces all of it with one generator line and one module import, and keeps the parts that are your product (business rules, custom operations, access policy) in first-class, typed extension points.
+
+What you get out of the box:
+
+- Queries: `user(where)`, `users(where, orderBy, take, skip)` with Prisma-style filter inputs
+- Mutations: `createUser`, `updateUser`, `deleteUser`, `updateManyUsers`, `deleteManyUsers`, with relation-first nested writes (`connect`, `create`, `disconnect`)
+- Subscriptions: a per-model event stream with the subscriber's own field selection
+- One Prisma client with two stances: plain calls act as the system, `forContext(ctx)` calls act as the caller with policy enforced
+- An authorization kernel: row constraints compiled into queries, transactional write verification, field-level write permissions, per-row read masking
+- Typed hooks and typed custom operations
+- Guardrails on by default: query depth limits, take limits, no foreign-key forgery, no existence leaks
+
+## Packages
+
+| Package | Role |
+|---|---|
+| `@eleven-am/golem` | The NestJS module. This is the one you import. |
+| `@eleven-am/golem-core` | Engine, policy kernel, and schema builder. Framework-free. |
+| `@eleven-am/golem-generator` | The Prisma generator (`provider = "golem"`). |
+| `@eleven-am/golem-authorizer` | Authorization adapter for `@eleven-am/authorizer` (CASL). Optional. |
+
+## Quickstart
+
+**1. Install**
+
+```bash
+npm i @eleven-am/golem @eleven-am/golem-core
+npm i -D @eleven-am/golem-generator
+```
+
+**2. Add the generator to `schema.prisma`**
 
 ```prisma
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
 generator golem {
   provider = "golem"
+  output   = "../src/generated/golem"
+}
+
+model Article {
+  id        String    @id @default(cuid())
+  title     String
+  content   String?
+  published Boolean   @default(false)
+  savedAt   DateTime  @default(now())
+  author    User      @relation(fields: [authorId], references: [id])
+  authorId  String
 }
 ```
+
+**3. Generate**
+
+```bash
+npx prisma generate
+```
+
+Three artifacts land in `src/generated/golem`: the datamodel, a fully typed instrumented Prisma client (`GolemPrismaService`), and a type map for hooks and programmatic calls.
+
+**4. Wire the module**
 
 ```typescript
 @Module({
@@ -17,110 +77,220 @@ generator golem {
       client: GolemPrismaService,
       prismaOptions: { adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }) },
       datamodel: getDatamodel(),
+      defaults: { maxTake: 100 },
+      models: {
+        Article: { subscriptions: true },
+      },
     }),
     GraphQLModule.forRootAsync<ApolloDriverConfig>({
       driver: ApolloDriver,
       inject: [GOLEM_SCHEMA],
-      useFactory: (schema: GraphQLSchema) => ({ schema, subscriptions: { 'graphql-ws': true } }),
+      useFactory: (schema: GraphQLSchema) => ({
+        schema,
+        subscriptions: { 'graphql-ws': true },
+      }),
     }),
   ],
 })
 export class AppModule {}
 ```
 
-That is the whole backend. Every model in your schema now has `user`/`users` queries, `createUser`/`updateUser`/`deleteUser`/`updateManyUsers`/`deleteManyUsers` mutations with Prisma-mirroring inputs (relation-first: `connect`/`create` envelopes, no foreign-key forgery), and — per opted-in model — a `userEvents` subscription.
+**5. Use the API**
 
-## Packages
+```graphql
+mutation {
+  createArticle(data: {
+    title: "Hello Golem"
+    author: { connect: { id: "u1" } }
+  }) { id savedAt }
+}
 
-| Package | Role |
-|---|---|
-| `@eleven-am/golem` | The NestJS module — the one you import |
-| `@eleven-am/golem-core` | Engine, policy kernel, schema builder (framework-free) |
-| `@eleven-am/golem-generator` | The Prisma generator (`provider = "golem"`) |
-| `@eleven-am/golem-authorizer` | Authorization adapter for `@eleven-am/authorizer` (CASL) |
+query {
+  articles(
+    where: { published: { equals: true } }
+    orderBy: [{ savedAt: desc }]
+    take: 20
+  ) { title author { email } }
+}
 
-## Install
-
-```bash
-npm i @eleven-am/golem @eleven-am/golem-core
-npm i -D @eleven-am/golem-generator
-npm i @eleven-am/golem-authorizer @eleven-am/authorizer   # optional: authorization
+subscription {
+  articleEvents { type id entity { title published } }
+}
 ```
-
-Add the generator block to `schema.prisma`, run `npx prisma generate`. Three artifacts land next to your Prisma client: the datamodel, a typed instrumented client (`GolemPrismaService`), and a type map (`GolemRequest<'Post', 'create'>` etc.).
 
 ## The client: one object, two stances
 
+The generated `GolemPrismaService` is a real Prisma client. It carries the full Prisma API and full Prisma typing, and every write through it publishes subscription events automatically.
+
 ```typescript
-this.prisma.article.update(...)                  // act as the system: full Prisma, no policy
-this.prisma.forContext(ctx).article.update(...)  // act as the caller: policy enforced
+// Act as the system. Full Prisma, no policy. For workers, jobs, seeds.
+await this.prisma.article.update({ where: { id }, data: { status: 'READY' } });
+
+// Act as the caller. Same typing, policy enforced.
+await this.prisma.forContext(ctx).article.update({ where: { id }, data: { title } });
 ```
 
-`forContext` returns Prisma's own delegate types (select-narrowed returns included) restricted to the policy-covered operations — `upsert` included, `aggregate`/`groupBy`/raw are compile errors. Every write through either stance publishes subscription events; events during engine transactions are buffered and only publish on commit.
+`forContext(ctx)` returns Prisma's own delegate types (select-narrowed return types included) restricted to the policy-covered operations: `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`. Operations without defined policy semantics (`aggregate`, `groupBy`, raw queries) are compile errors on the bound client, not runtime surprises.
 
-## Authorization: one rules provider, every axis enforced
+## Authorization
+
+Golem does not implement its own permission language. It enforces [CASL](https://casl.js.org) rules provided through `@eleven-am/authorizer`, so your access policy lives in one rules provider and reads like a specification:
 
 ```typescript
 @Authorizer()
 export class AppRules implements WillAuthorize {
   forUser(user: SessionUser, { can, cannot }: AbilityBuilder<ResolvedAbility>) {
-    can('read', 'Article', { userId: user.id });          // row constraints — compiled into queries
-    can('create', 'Article', { type: 'PERSONAL' });       // verified against the REAL row, in a transaction
-    can('update', 'Post', ['published']);                  // field-level write permission
+    can(['read', 'create', 'update', 'delete'], 'Article', { userId: user.id });
+    can('create', 'Article', { type: 'PERSONAL' });
+    can('update', 'Post', ['published']);
     cannot('read', 'User', ['phone']);
-    can('read', 'User', ['phone'], { id: user.id });       // per-row read masking
+    can('read', 'User', ['phone'], { id: user.id });
   }
 }
 ```
 
-With `authorization: GolemAuthorizationAdapter` configured:
-
-- **Row constraints** merge into every query — including relation traversals (nested `where` on to-many hops, instance checks on to-one). Inaccessible rows read as `NOT_FOUND`; no existence leaks.
-- **Write verification** (`defaults: { checkWriteResults: true }`): writes run in a transaction, the actual resulting row is read back and checked against the ability, and denials roll back — dynamic defaults, atomic ops (`{ increment }`) and connect-by-any-key are all exact because nothing is simulated. Nested writes are verified by relation diff. Denied writes publish no events.
-- **Field permissions**: write-side by before/after column diff ("may not *change* this column"); read-side (`checkReadFields: true`) rejects never-readable fields at request time by name and masks conditionally-readable fields to `null` per row.
-- **Secure by default**: enabling authorization makes the whole surface authenticated-only.
-
-## Hooks, extensions, configuration
-
-```typescript
-@GolemHooks('Article')
-export class ArticleHooks {
-  @BeforeCreate()
-  async prepare(req: GolemRequest<'Article', 'create'>): Promise<GolemRequest<'Article', 'create'>> { ... }
-  @AfterCreate()
-  async enqueue(article: GolemResult<'Article', 'create'>) { ... }
-}
-```
-
-Hooks run in the engine — they apply identically to GraphQL calls and `forContext` calls. Extensions add what the generator can't know: `@ComputedField('Article', { type: 'String!', requires: ['url'] })` (its `requires` columns are fetched only when the field is requested) and `@CustomQuery`/`@CustomMutation` with SDL type references into the generated type system.
-
 ```typescript
 GolemModule.forRoot({
-  defaults: { maxTake: 100, maxDepth: 5, checkWriteResults: true, checkReadFields: true },
-  models: {
-    Article: { subscriptions: true, hidden: ['searchVector'], immutable: ['url'] },
-    AuditLog: { operations: ['findMany'] },
-    Session: false,
-  },
-  extensions: [ArticleExtension],
+  // ...
   authorization: GolemAuthorizationAdapter,
+  defaults: { checkWriteResults: true, checkReadFields: true },
 })
 ```
 
-`hidden` removes a field from every schema surface. `immutable` allows create-only. `maxTake` and `maxDepth` reject (never silently clamp) with `BAD_USER_INPUT`. Disabled operations do not exist in the schema.
+Each rule shape maps to a specific enforcement mechanism:
 
-## Subscriptions
+| Rule | Enforcement |
+|---|---|
+| `can('read', 'Article', { userId })` | Compiled into the SQL `where` of every read, including relation traversals. Rows outside the ability do not exist as far as the caller can tell. |
+| `can('update', 'Article', { userId })` | Fetch-then-mutate. Updating someone else's row returns `NOT_FOUND`, identical to a missing row. No existence leaks. |
+| `can('create', 'Article', { type: 'PERSONAL' })` | Transactional verification. The write executes, the real resulting row is read back and checked, and a denial rolls everything back. Dynamic defaults, `{ increment }`, and connect-by-any-unique-key are all handled exactly, because nothing is simulated. |
+| `can('update', 'Post', ['published'])` | Field-level write permission by before/after column diff. Changing any other column is rejected with the column named. A no-op write to a restricted column passes. |
+| `can('read', 'User', ['phone'], { id })` | Per-row read masking. Your own row shows the value, other rows show `null`. A field the caller could never read is rejected at request time by name. |
 
-`articleEvents(where?)` per opted-in model: events carry `{ type: CREATED | UPDATED | DELETED, id, entity }`. Delivery re-fetches with the subscriber's own selection and ability — a revoked user stops receiving events mid-connection without reconnecting. The pub/sub backend is any `graphql-subscriptions` `PubSubEngine` (`pubSub` option); the in-memory default is single-instance only and says so in the logs.
+Additional guarantees:
 
-## Honest limitations
+- Nested writes are verified per touched model. A forbidden row cannot be smuggled through a relation envelope.
+- Denied writes publish no events. Event publishing is transaction-aware.
+- Subscriptions re-check the ability on every delivered event. Revoking a user takes effect mid-connection, without a reconnect.
+- Enabling authorization makes the entire surface authenticated-only. Unauthenticated requests receive `UNAUTHENTICATED`.
 
-- **Subscription fan-out**: delivery costs ~2 indexed queries + one ability build per event per subscriber. Fine for typical fan-outs; a known scaling wall for very hot models.
-- **Events and your own transactions**: writes inside a user-initiated `prisma.$transaction` publish immediately, not on commit. Engine-managed transactions are buffered correctly.
-- **Conditional read-masked fields should be nullable** in your schema — a masked `null` on a non-nullable GraphQL field triggers standard null-propagation errors.
-- **Out-of-process writes** (other services, SQL consoles) are invisible to the event stream.
-- **`retrieveUser` runs per request** (and per delivered event) — verify a JWT or cache it; don't hit the database every time unless you mean to.
-- Batch mutations (`updateMany`/`deleteMany`) deliberately publish no events.
+## Hooks
+
+Hooks run inside the engine, below the transport, so the same hook applies to GraphQL calls and `forContext` calls alike. Before-hooks can transform the request or veto it; after-hooks observe results.
+
+```typescript
+@GolemHooks('Article')
+@Injectable()
+export class ArticleHooks {
+  constructor(private readonly sessions: SessionService, private readonly queue: ExtractionQueue) {}
+
+  @BeforeCreate()
+  async prepare(request: GolemRequest<'Article', 'create'>): Promise<GolemRequest<'Article', 'create'>> {
+    const url = normalizeUrl(request.data.url);
+    if (!isSafePublicUrl(url)) {
+      throw new GolemValidationError('That URL cannot be saved');
+    }
+    const user = await this.sessions.userFromContext(request.context);
+    return { ...request, data: { ...request.data, url, user: { connect: { id: user.id } } } };
+  }
+
+  @AfterCreate()
+  async enqueue(article: GolemResult<'Article', 'create'>) {
+    await this.queue.add({ articleId: article.id!, url: article.url! });
+  }
+}
+```
+
+`GolemRequest<'Article', 'create'>` resolves to Prisma's own input types, so `request.data` autocompletes and a misspelled field is a compile error. Hook classes are ordinary providers with full dependency injection, discovered automatically.
+
+## Extensions
+
+Extensions add what the generator cannot know about: computed fields and custom operations. They are declared explicitly in `forRoot` because they change the schema shape.
+
+```typescript
+@Injectable()
+export class ArticleExtension {
+  constructor(private readonly prisma: GolemPrismaService) {}
+
+  @ComputedField('Article', { type: 'String!', requires: ['url'] })
+  domain(article: Pick<Article, 'url'>): string {
+    return new URL(article.url).hostname;
+  }
+
+  @CustomQuery({ type: '[Article!]!', args: { term: 'String!' } })
+  searchArticles(args: { term: string }, ctx: unknown) {
+    return this.prisma.forContext(ctx).article.findMany({
+      where: { title: { contains: args.term } },
+    });
+  }
+}
+```
+
+The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Custom operations reference the generated type system by SDL name (`'[Article!]!'`, `'ArticleWhereInput'`), run through the same error mapping as generated operations, and inherit policy when they use `forContext`.
+
+## Configuration reference
+
+```typescript
+GolemModule.forRoot({
+  client: GolemPrismaService,          // the generated client class
+  prismaOptions: { adapter },          // passed to the PrismaClient constructor
+  datamodel: getDatamodel(),           // from the generated artifacts
+  pubSub: REDIS_PUBSUB,                // any graphql-subscriptions PubSubEngine; optional
+  authorization: GolemAuthorizationAdapter,  // optional
+  extensions: [ArticleExtension],      // optional
+  defaults: { /* global posture */ },
+  models: { /* per-model overrides */ },
+})
+```
+
+**`defaults`**
+
+| Option | Default | Meaning |
+|---|---|---|
+| `operations` | all seven | Which operations exist, globally |
+| `subscriptions` | `false` | Event streams per model |
+| `maxTake` | unlimited | `take` above this is rejected with `BAD_USER_INPUT`, never silently clamped |
+| `maxDepth` | `5` | Maximum relation nesting per query, rejected beyond |
+| `checkWriteResults` | `false` | Transactional write verification and field-level write permissions |
+| `checkReadFields` | `false` | Read-side field rejection and per-row masking |
+
+**`models`** (per model, overrides `defaults`)
+
+| Option | Meaning |
+|---|---|
+| `false` | Model does not appear in the API at all |
+| `operations: [...]` | Allowlist; disabled operations do not exist in the schema |
+| `hidden: [...]` | Field removed from every schema surface: types, filters, inputs |
+| `immutable: [...]` | Field accepted on create, absent from update inputs |
+| `subscriptions` | Event stream for this model |
+| `maxTake` | Per-model take limit |
+
+## Errors
+
+All failures surface as GraphQL errors with stable extension codes and no Prisma internals:
+
+| Code | Meaning |
+|---|---|
+| `BAD_USER_INPUT` | Validation, hook veto, take or depth limit exceeded, relation constraint violation |
+| `NOT_FOUND` | Row missing, or existing but outside the caller's ability |
+| `CONFLICT` | Unique constraint violation |
+| `UNAUTHENTICATED` | No resolvable user while authorization is enabled |
+| `FORBIDDEN` | The ability denies the action, row, or named field |
+
+## Subscriptions in detail
+
+Each opted-in model gets `articleEvents(where?)` emitting `{ type: CREATED | UPDATED | DELETED, id, entity }`. Delivery re-fetches the row with the subscriber's own selection and ability, so every subscriber sees exactly what they are allowed to see. Filters evaluate in the database. For production, provide a shared `PubSubEngine` (for example `graphql-redis-subscriptions`); the in-memory default only works on a single instance and logs a warning saying so.
+
+## Known limitations
+
+Stated here because you will hit them eventually, and finding them in a README beats finding them in production:
+
+- **Subscription fan-out.** Delivery costs about two indexed queries plus one ability build per event per subscriber. Fine for typical fan-outs, a scaling consideration for very hot models with thousands of subscribers.
+- **Your own transactions.** Writes inside a user-initiated `prisma.$transaction` publish events immediately rather than on commit. Engine-managed transactions buffer correctly.
+- **Conditional read-masked fields should be nullable** in your schema. A masked `null` on a non-nullable GraphQL field produces a standard null-propagation error.
+- **Out-of-process writes** (another service, a SQL console) are invisible to the event stream.
+- **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.
+- **Batch mutations publish no events.** `updateMany` and `deleteMany` return counts, and there are deliberately no per-row events for them.
 
 ## License
 
