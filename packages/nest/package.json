@@ -1,14 +1,13 @@
 {
   "name": "@eleven-am/golem",
-  "version": "0.0.1",
-  "private": true,
+  "version": "0.1.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
-    "@eleven-am/golem-core": "0.0.1",
+    "@eleven-am/golem-core": "^0.1.0",
     "graphql-subscriptions": "^3.0.0"
   },
   "peerDependencies": {
@@ -24,5 +23,31 @@
     "rxjs": "^7.8.1",
     "typescript": "^5.7.0",
     "@nestjs/core": "^11.0.0"
+  },
+  "license": "GPL-3.0",
+  "author": "Roy OSSAI",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "description": "Golem: feed it a Prisma schema, get a full authorized GraphQL API in one NestJS module",
+  "keywords": [
+    "nestjs",
+    "graphql",
+    "prisma",
+    "crud",
+    "subscriptions",
+    "authorization"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eleven-am/golem.git",
+    "directory": "packages/nest"
   }
 }

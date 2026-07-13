@@ -1,6 +1,6 @@
 {
   "name": "golem",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "packages/*",
@@ -14,5 +14,6 @@
   "overrides": {
     "ws": "^8.21.0",
     "@apollo/server": "^5.5.1"
-  }
+  },
+  "license": "GPL-3.0"
 }

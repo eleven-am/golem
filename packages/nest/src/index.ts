@@ -1,4 +1,12 @@
-import { DynamicModule, Logger, Module, OnModuleDestroy, OnModuleInit, Type } from '@nestjs/common';
+import {
+  DynamicModule,
+  Logger,
+  Module,
+  ModuleMetadata,
+  OnModuleDestroy,
+  OnModuleInit,
+  Type,
+} from '@nestjs/common';
 import { DiscoveryModule } from '@nestjs/core';
 import {
   AuthorizationProvider,
@@ -35,6 +43,7 @@ type GeneratedGolemClient = new (
 ) => object;
 
 export interface GolemModuleOptions<TModels> {
+  imports?: ModuleMetadata['imports'];
   client: Type<object>;
   prismaOptions?: unknown;
   datamodel: DatamodelDocument<TModels>;
@@ -42,6 +51,7 @@ export interface GolemModuleOptions<TModels> {
   defaults?: GolemDefaults;
   pubSub?: Type<PubSubEngine> | string | symbol;
   extensions?: Type<object>[];
+  importedExtensions?: Array<Type<object> | string | symbol>;
   authorization?: Type<AuthorizationProvider> | string | symbol;
 }
 
@@ -94,6 +104,8 @@ export class GolemModule {
         };
 
     const extensions = options.extensions ?? [];
+    const importedExtensions = options.importedExtensions ?? [];
+    const extensionInject = [...extensions, ...importedExtensions];
     const authorizationProviders =
       typeof options.authorization === 'function' ? [options.authorization] : [];
     const authorizationInject = options.authorization ? [options.authorization] : [];
@@ -102,7 +114,7 @@ export class GolemModule {
     return {
       module: GolemModule,
       global: true,
-      imports: [DiscoveryModule],
+      imports: [DiscoveryModule, ...(options.imports ?? [])],
       providers: [
         eventBusProvider,
         HookRegistry,
@@ -181,7 +193,14 @@ export class GolemModule {
               authorization,
             });
           },
-          inject: [options.client, GOLEM_EVENT_BUS, HookRegistry, GOLEM_ENGINE, ...authorizationInject, ...extensions],
+          inject: [
+            options.client,
+            GOLEM_EVENT_BUS,
+            HookRegistry,
+            GOLEM_ENGINE,
+            ...authorizationInject,
+            ...extensionInject,
+          ],
         },
       ],
       exports: [GOLEM_SCHEMA, GOLEM_EVENT_BUS, GOLEM_ENGINE, HookRegistry, options.client],
