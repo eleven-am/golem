@@ -38,7 +38,7 @@ jobs:
             if npm view "$name@$version" version >/dev/null 2>&1; then
               echo "$name@$version already published, skipping"
             else
-              npm publish -w "$name" --provenance --access public
+              npm publish -w "$name" --access public
             fi
           }
           publish @eleven-am/golem-core packages/core
