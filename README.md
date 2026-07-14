@@ -27,6 +27,8 @@ What you get out of the box:
 | `@eleven-am/golem-generator` | The Prisma generator (`provider = "golem"`). |
 | `@eleven-am/golem-authorizer` | Authorization adapter for `@eleven-am/authorizer` (CASL). Optional. |
 
+Upgrading an existing application? Follow the [0.1.0 migration guide](./MIGRATION.md).
+
 ## Quickstart
 
 **1. Install**
@@ -84,9 +86,10 @@ Three artifacts land in `src/generated/golem`: the datamodel, a fully typed inst
     }),
     GraphQLModule.forRootAsync<ApolloDriverConfig>({
       driver: ApolloDriver,
-      inject: [GOLEM_SCHEMA],
-      useFactory: (schema: GraphQLSchema) => ({
-        schema,
+      inject: [GOLEM_GRAPHQL],
+      useFactory: (golem: GolemGraphQLArtifacts) => ({
+        typeDefs: golem.typeDefs,
+        transformResolvers: golem.transformResolvers,
         subscriptions: { 'graphql-ws': true },
       }),
     }),
@@ -153,9 +156,10 @@ export class AppRules implements WillAuthorize {
 GolemModule.forRoot({
   // ...
   authorization: GolemAuthorizationAdapter,
-  defaults: { checkWriteResults: true, checkReadFields: true },
 })
 ```
+
+When authorization is configured, transactional write verification and read-field enforcement are enabled by default. Either can still be disabled explicitly for a deliberately row-policy-only integration.
 
 Each rule shape maps to a specific enforcement mechanism:
 
@@ -217,8 +221,10 @@ export class ArticleExtension {
     return new URL(article.url).hostname;
   }
 
+  @UseGuards(AuthorizationGuard)
+  @CanPerform({ action: 'read', subject: 'Article' })
   @CustomQuery({ type: '[Article!]!', args: { term: 'String!' } })
-  searchArticles(args: { term: string }, ctx: unknown) {
+  searchArticles(@Args() args: { term: string }, @Context() ctx: unknown) {
     return this.prisma.forContext(ctx).article.findMany({
       where: { title: { contains: args.term } },
     });
@@ -226,7 +232,7 @@ export class ArticleExtension {
 }
 ```
 
-The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Custom operations reference the generated type system by SDL name (`'[Article!]!'`, `'ArticleWhereInput'`), run through the same error mapping as generated operations, and inherit policy when they use `forContext`.
+The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Custom operations reference the generated type system by SDL name (`'[Article!]!'`, `'ArticleWhereInput'`) and are mounted as real Nest GraphQL resolvers, so Nest guards, pipes, interceptors, filters, and parameter decorators apply normally. They inherit row and field policy when they use `forContext`.
 
 ## Configuration reference
 
@@ -251,8 +257,8 @@ GolemModule.forRoot({
 | `subscriptions` | `false` | Event streams per model |
 | `maxTake` | unlimited | `take` above this is rejected with `BAD_USER_INPUT`, never silently clamped |
 | `maxDepth` | `5` | Maximum relation nesting per query, rejected beyond |
-| `checkWriteResults` | `false` | Transactional write verification and field-level write permissions |
-| `checkReadFields` | `false` | Read-side field rejection and per-row masking |
+| `checkWriteResults` | `true` with authorization | Transactional write verification and field-level write permissions |
+| `checkReadFields` | `true` with authorization | Read-side field rejection and per-row masking |
 
 **`models`** (per model, overrides `defaults`)
 
@@ -286,7 +292,7 @@ Each opted-in model gets `articleEvents(where?)` emitting `{ type: CREATED | UPD
 Stated here because you will hit them eventually, and finding them in a README beats finding them in production:
 
 - **Subscription fan-out.** Delivery costs about two indexed queries plus one ability build per event per subscriber. Fine for typical fan-outs, a scaling consideration for very hot models with thousands of subscribers.
-- **Your own transactions.** Writes inside a user-initiated `prisma.$transaction` publish events immediately rather than on commit. Engine-managed transactions buffer correctly.
+- **Transactions.** Writes through the generated client are buffered until `prisma.$transaction` commits and discarded on rollback. Out-of-process transactions remain outside Golem's event boundary.
 - **Conditional read-masked fields should be nullable** in your schema. A masked `null` on a non-nullable GraphQL field produces a standard null-propagation error.
 - **Out-of-process writes** (another service, a SQL console) are invisible to the event stream.
 - **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.

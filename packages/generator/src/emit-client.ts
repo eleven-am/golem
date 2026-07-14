@@ -5,6 +5,7 @@ export function emitClientModule(modelNames: readonly string[], clientImport: st
   const delegateUnion = modelNames.map((name) => `'${lcFirst(name)}'`).join(' | ');
 
   return `import { PrismaClient } from '${clientImport}';
+import { withBufferedEvents } from '@eleven-am/golem-core';
 import type { GolemEngineRef, GolemQueryInterceptor } from '@eleven-am/golem-core';
 
 export type GolemClientOptions = ConstructorParameters<typeof PrismaClient>[0];
@@ -27,7 +28,7 @@ const POLICY_OPS = {
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
   const raw = new PrismaClient(options);
-  return raw.$extends({
+  const instrumented = raw.$extends({
     query: {
       $allModels: {
         $allOperations({ model, operation, args, query }) {
@@ -43,6 +44,16 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
           });
         },
       },
+    },
+  });
+  const transaction = instrumented.$transaction.bind(instrumented);
+  const commitAwareTransaction = ((...args: unknown[]) =>
+    withBufferedEvents(() =>
+      (transaction as unknown as (...transactionArgs: unknown[]) => Promise<unknown>)(...args),
+    )) as typeof instrumented.$transaction;
+  return instrumented.$extends({
+    client: {
+      $transaction: commitAwareTransaction,
     },
   });
 }

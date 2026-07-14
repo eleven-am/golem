@@ -24,19 +24,26 @@ import {
   subscribableModels,
 } from '@eleven-am/golem-core';
 import { PubSub, PubSubEngine } from 'graphql-subscriptions';
+import type { GraphQLSchema } from 'graphql';
 import { PubSubEventBus } from './event-bus';
 import { extractExtensionSpecs } from './extensions';
+import type { ExtractedExtensions } from './extensions';
+import { createGolemGraphQLArtifacts } from './graphql-artifacts';
+import type { GolemGraphQLArtifacts } from './graphql-artifacts';
 import { GolemHooksExplorer } from './hooks-explorer';
 
 export { PubSubEventBus } from './event-bus';
+export type { GolemGraphQLArtifacts } from './graphql-artifacts';
 export * from './decorators';
 export * from '@eleven-am/golem-core';
 
-export const GOLEM_SCHEMA = 'GOLEM_SCHEMA';
+export const GOLEM_GRAPHQL = 'GOLEM_GRAPHQL';
 export const GOLEM_EVENT_BUS = 'GOLEM_EVENT_BUS';
 export const GOLEM_ENGINE = 'GOLEM_ENGINE';
 const GOLEM_CLIENT_LIFECYCLE = 'GOLEM_CLIENT_LIFECYCLE';
 const GOLEM_CLIENT_OPTIONS = 'GOLEM_CLIENT_OPTIONS';
+const GOLEM_EXTENSION_SPECS = 'GOLEM_EXTENSION_SPECS';
+const GOLEM_INTERNAL_SCHEMA = 'GOLEM_INTERNAL_SCHEMA';
 
 type GeneratedGolemClient = new (
   options: unknown,
@@ -194,19 +201,23 @@ export class GolemModule {
           inject: [options.client, GOLEM_EVENT_BUS, HookRegistry, ...authorizationInject],
         },
         {
-          provide: GOLEM_SCHEMA,
+          provide: GOLEM_EXTENSION_SPECS,
+          useFactory: (...extensionInstances: object[]) => extractExtensionSpecs(extensionInstances),
+          inject: extensionInject,
+        },
+        {
+          provide: GOLEM_INTERNAL_SCHEMA,
           useFactory: (
             client: Record<string, any>,
             eventBus: PubSubEventBus,
             hooks: HookRegistry,
             engine: GolemEngine,
+            specs: ExtractedExtensions,
             ...rest: unknown[]
           ) => {
             const authorization = options.authorization
               ? (rest[0] as AuthorizationProvider)
               : undefined;
-            const extensionInstances = rest.slice(authorizationInject.length) as object[];
-            const specs = extractExtensionSpecs(extensionInstances);
             return buildGolemSchema({
               datamodel: options.datamodel,
               client,
@@ -225,12 +236,20 @@ export class GolemModule {
             GOLEM_EVENT_BUS,
             HookRegistry,
             GOLEM_ENGINE,
+            GOLEM_EXTENSION_SPECS,
             ...authorizationInject,
-            ...extensionInject,
           ],
         },
+        {
+          provide: GOLEM_GRAPHQL,
+          useFactory: (
+            schema: GraphQLSchema,
+            specs: ExtractedExtensions,
+          ): GolemGraphQLArtifacts => createGolemGraphQLArtifacts(schema, specs.customOperations),
+          inject: [GOLEM_INTERNAL_SCHEMA, GOLEM_EXTENSION_SPECS],
+        },
       ],
-      exports: [GOLEM_SCHEMA, GOLEM_EVENT_BUS, GOLEM_ENGINE, HookRegistry, options.client],
+      exports: [GOLEM_GRAPHQL, GOLEM_EVENT_BUS, GOLEM_ENGINE, HookRegistry, options.client],
     };
   }
 }

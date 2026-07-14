@@ -47,7 +47,6 @@ describe('read field checks', () => {
     const findMany = jest.fn();
     const engine = new GolemEngine({ user: { findMany } }, models, {
       authorization: provider({ phone: { access: 'never' } }, () => false),
-      checkReadFields: true,
     });
     await expect(
       engine.findMany({ model: 'User', select: { email: true, phone: true }, context: ctx }),
@@ -128,7 +127,10 @@ describe('read field checks', () => {
   it('does nothing when the flag is off', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const authz = provider({ phone: { access: 'never' } }, () => false);
-    const engine = new GolemEngine({ user: { findMany } }, models, { authorization: authz });
+    const engine = new GolemEngine({ user: { findMany } }, models, {
+      authorization: authz,
+      checkReadFields: false,
+    });
     await engine.findMany({ model: 'User', select: { phone: true }, context: ctx });
     expect(authz.classifyFields).not.toHaveBeenCalled();
     expect(findMany).toHaveBeenCalled();
@@ -139,6 +141,7 @@ describe('read field checks', () => {
       () =>
         new GolemEngine({}, models, {
           authorization: { authorize: jest.fn(), constrain: jest.fn() },
+          checkWriteResults: false,
           checkReadFields: true,
         }),
     ).toThrow('does not implement classifyFields and checkField');

@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
+      - run: npm run generate -w demo
+      - run: npm run push -w demo
+      - run: npm run build
+      - run: npm test
+      - run: npm run benchmark:hardening
+      - run: npm audit --audit-level=moderate

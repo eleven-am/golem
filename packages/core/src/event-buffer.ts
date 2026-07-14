@@ -20,6 +20,16 @@ export function bufferEvent(event: BufferedEvent): boolean {
 }
 
 export async function withBufferedEvents<T>(fn: () => Promise<T>): Promise<T> {
+  const existing = storage.getStore();
+  if (existing) {
+    const checkpoint = existing.buffer.length;
+    try {
+      return await fn();
+    } catch (error) {
+      existing.buffer.splice(checkpoint);
+      throw error;
+    }
+  }
   const store: EventBufferStore = { buffer: [] };
   const result = await storage.run(store, fn);
   for (const event of store.buffer) {

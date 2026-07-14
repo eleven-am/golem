@@ -165,8 +165,8 @@ export class GolemEngine {
     this.takeLimits = options.takeLimits ?? new Map();
     this.authorization = options.authorization;
     this.maxDepth = options.maxDepth ?? 5;
-    this.checkWriteResults = options.checkWriteResults ?? false;
-    this.checkReadFields = options.checkReadFields ?? false;
+    this.checkWriteResults = options.checkWriteResults ?? (this.authorization !== undefined);
+    this.checkReadFields = options.checkReadFields ?? (this.authorization !== undefined);
     if (this.checkReadFields && this.authorization) {
       const missing = [
         !this.authorization.classifyFields ? 'classifyFields' : null,

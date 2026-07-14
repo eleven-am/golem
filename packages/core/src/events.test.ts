@@ -82,6 +82,7 @@ describe('schema subscription wiring', () => {
       models: { User: { subscriptions: true } },
       eventBus: bus,
       authorization,
+      defaults: { checkWriteResults: false, checkReadFields: false },
     });
   }
 
