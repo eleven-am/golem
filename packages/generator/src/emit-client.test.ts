@@ -19,4 +19,11 @@ describe('generated Golem client', () => {
     expect(output).toContain('.findUnique({ where, select })');
     expect(output).toContain('query: query as');
   });
+
+  it('buffers intercepted writes until the native transaction commits', () => {
+    expect(output).toContain("import { withBufferedEvents } from '@eleven-am/golem-core'");
+    expect(output).toContain('const transaction = instrumented.$transaction.bind(instrumented)');
+    expect(output).toContain('withBufferedEvents(() =>');
+    expect(output).toContain('$transaction: commitAwareTransaction');
+  });
 });

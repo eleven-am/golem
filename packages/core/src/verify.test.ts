@@ -46,6 +46,8 @@ function provider(overrides: Partial<AuthorizationProvider> = {}): Authorization
     constrain: jest.fn(async () => ({})),
     check: jest.fn(async () => true),
     checkField: jest.fn(async () => true),
+    classifyFields: jest.fn(async (_a, _m, fields: readonly string[]) =>
+      Object.fromEntries(fields.map((fieldName) => [fieldName, { access: 'conditional' }]))),
     ...overrides,
   } as never;
 }
@@ -73,6 +75,29 @@ describe('event buffer', () => {
     expect(published).toEqual([]);
   });
 
+  it('keeps nested events for the outer commit boundary', async () => {
+    const published: string[] = [];
+    await withBufferedEvents(async () => {
+      await withBufferedEvents(async () => {
+        bufferEvent({ publish: async () => void published.push('nested') });
+      });
+      expect(published).toEqual([]);
+    });
+    expect(published).toEqual(['nested']);
+  });
+
+  it('discards a failed nested scope without losing earlier outer events', async () => {
+    const published: string[] = [];
+    await withBufferedEvents(async () => {
+      bufferEvent({ publish: async () => void published.push('outer') });
+      await expect(withBufferedEvents(async () => {
+        bufferEvent({ publish: async () => void published.push('rolled back') });
+        throw new Error('nested rollback');
+      })).rejects.toThrow('nested rollback');
+    });
+    expect(published).toEqual(['outer']);
+  });
+
   it('publishes immediately outside any scope', () => {
     expect(bufferEvent({ publish: async () => undefined })).toBe(false);
   });
@@ -89,7 +114,10 @@ describe('transactional create verification', () => {
     };
     const client = txClient(delegates);
     const authz = provider();
-    const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkReadFields: false,
+    });
 
     await engine.create({ model: 'Post', data: { title: 'x' }, context: ctx });
     expect(client.$transaction).toHaveBeenCalled();
@@ -155,7 +183,11 @@ describe('transactional update verification', () => {
   it('verifies atomic operations against the computed result', async () => {
     const { client } = updateClient({ ...before, views: 4 });
     const authz = provider();
-    const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { views: { increment: 1 } }, context: ctx });
     expect(authz.check).toHaveBeenCalledWith('update', 'Post', expect.objectContaining({ views: 4 }), ctx);
@@ -167,7 +199,11 @@ describe('transactional update verification', () => {
     const authz = provider({
       checkField: jest.fn(async (_a, _m, _e, f: string) => f !== 'title'),
     });
-    const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: { set: 'old' } }, context: ctx });
     expect(authz.checkField).not.toHaveBeenCalled();
@@ -234,8 +270,12 @@ describe('nested relation diff verification', () => {
       },
     };
     const client = txClient(delegates);
-    const authz = provider();
-    const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
+    const authz = provider({ classifyFields: undefined });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
 
     await engine.update({
       model: 'User',
@@ -353,7 +393,11 @@ describe('flag off and upsert', () => {
     const delegates = { post: { create: jest.fn().mockResolvedValue({ id: 'p1' }) } };
     const client = txClient(delegates);
     const authz = provider({ check: jest.fn(async () => false) });
-    const engine = new GolemEngine(client, models, { authorization: authz });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
 
     await engine.create({ model: 'Post', data: { title: 'x' }, context: ctx });
     expect(client.$transaction).not.toHaveBeenCalled();
@@ -366,6 +410,7 @@ describe('flag off and upsert', () => {
         new GolemEngine({}, models, {
           authorization: { authorize: jest.fn(), constrain: jest.fn() },
           checkWriteResults: true,
+          checkReadFields: false,
         }),
     ).toThrow('does not implement check and checkField');
   });
@@ -473,8 +518,12 @@ describe('narrow verification readback (M14)', () => {
       },
     };
     const client = txClient(delegates);
-    const authz = provider();
-    const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
+    const authz = provider({ classifyFields: undefined });
+    const engine = new GolemEngine(client, models, {
+      authorization: authz,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: 'new' }, context: ctx });
     const select = delegates.post.findFirst.mock.calls[0][0].select;

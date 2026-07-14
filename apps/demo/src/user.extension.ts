@@ -1,6 +1,13 @@
-import { Injectable } from '@nestjs/common';
-import { ComputedField, CustomQuery } from '@eleven-am/golem';
+import { Injectable, UseGuards } from '@nestjs/common';
+import { Args, Context } from '@nestjs/graphql';
+import {
+  ComputedField,
+  CustomMutation,
+  CustomQuery,
+  GolemValidationError,
+} from '@eleven-am/golem';
 import { GolemPrismaService } from './generated/golem/client';
+import { SearchPostsGuard } from './search-posts.guard';
 
 @Injectable()
 export class UserExtension {
@@ -11,11 +18,17 @@ export class UserExtension {
     return parent.name ?? parent.email;
   }
 
+  @UseGuards(SearchPostsGuard)
   @CustomQuery({ type: '[Post!]!', args: { term: 'String!' } })
-  searchPosts(args: { term: string }, ctx: unknown) {
+  searchPosts(@Args() args: { term: string }, @Context() ctx: unknown) {
     return this.prisma.forContext(ctx).post.findMany({
       where: { title: { contains: args.term } },
       select: { id: true, title: true, published: true },
     });
+  }
+
+  @CustomMutation({ type: 'Boolean!' })
+  rejectCustomOperation(): never {
+    throw new GolemValidationError('custom operation rejected');
   }
 }

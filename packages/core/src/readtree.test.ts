@@ -57,13 +57,17 @@ function providerWith(constraints: Record<string, unknown>, check?: jest.Mock): 
   };
 }
 
+function relationPolicy(provider: AuthorizationProvider) {
+  return { authorization: provider, checkWriteResults: false, checkReadFields: false };
+}
+
 const ctx = { req: {} };
 
 describe('nested relation constraints', () => {
   it('injects constraints into to-many relation selects', async () => {
     const client = fakeClient();
     const provider = providerWith({ Post: { published: true }, User: {} }, jest.fn());
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     await engine.findMany({
       model: 'User',
@@ -83,7 +87,7 @@ describe('nested relation constraints', () => {
   it('expands bare true relation entries and merges user filters', async () => {
     const client = fakeClient();
     const provider = providerWith({ Post: { published: true }, User: {} }, jest.fn());
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     await engine.findMany({
       model: 'User',
@@ -113,7 +117,7 @@ describe('nested relation constraints', () => {
   it('leaves unconditional relations untouched', async () => {
     const client = fakeClient();
     const provider = providerWith({ Post: {}, User: {} }, jest.fn());
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     await engine.findMany({ model: 'User', select: { posts: true }, context: ctx });
     expect(client.user.findMany).toHaveBeenCalledWith(
@@ -133,7 +137,7 @@ describe('nested relation constraints', () => {
       { email: 'b', profile: { id: 'pr2', bio: 'other' } },
     ];
     client.user.findMany.mockResolvedValue(rows);
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     const result = (await engine.findMany({
       model: 'User',
@@ -148,7 +152,7 @@ describe('nested relation constraints', () => {
   it('rejects conditional to-one traversal when the provider lacks check', async () => {
     const client = fakeClient();
     const provider = providerWith({ Profile: { userId: 'me' }, User: {} });
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     await expect(
       engine.findMany({ model: 'User', select: { profile: true }, context: ctx }),
@@ -158,7 +162,7 @@ describe('nested relation constraints', () => {
   it('skips all injection for internal calls without context', async () => {
     const client = fakeClient();
     const provider = providerWith({ Post: { published: true } }, jest.fn());
-    const engine = new GolemEngine(client, datamodel.models, { authorization: provider });
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
 
     await engine.findMany({ model: 'User', select: { posts: true } });
     expect(provider.constrain).not.toHaveBeenCalled();

@@ -1,5 +1,7 @@
-import { SetMetadata } from '@nestjs/common';
+import { SetMetadata, UseFilters } from '@nestjs/common';
+import { Mutation, Query } from '@nestjs/graphql';
 import { GolemOperation } from '@eleven-am/golem-core';
+import { GolemGraphQLExceptionFilter } from './graphql-error.filter';
 
 export const GOLEM_HOOKS_MODEL = 'GOLEM_HOOKS_MODEL';
 export const GOLEM_HOOK = 'GOLEM_HOOK';
@@ -60,15 +62,23 @@ export function ComputedField(model: string, options: ComputedFieldOptions): Met
 }
 
 export function CustomQuery(options: CustomOperationOptions): MethodDecorator {
-  return SetMetadata<string, CustomOperationMetadata>(GOLEM_CUSTOM_OPERATION, {
-    kind: 'query',
-    ...options,
-  });
+  return (target, key, descriptor) => {
+    SetMetadata<string, CustomOperationMetadata>(GOLEM_CUSTOM_OPERATION, {
+      kind: 'query',
+      ...options,
+    })(target, key, descriptor);
+    Query(options.name ?? String(key))(target, key, descriptor);
+    UseFilters(GolemGraphQLExceptionFilter)(target, key, descriptor);
+  };
 }
 
 export function CustomMutation(options: CustomOperationOptions): MethodDecorator {
-  return SetMetadata<string, CustomOperationMetadata>(GOLEM_CUSTOM_OPERATION, {
-    kind: 'mutation',
-    ...options,
-  });
+  return (target, key, descriptor) => {
+    SetMetadata<string, CustomOperationMetadata>(GOLEM_CUSTOM_OPERATION, {
+      kind: 'mutation',
+      ...options,
+    })(target, key, descriptor);
+    Mutation(options.name ?? String(key))(target, key, descriptor);
+    UseFilters(GolemGraphQLExceptionFilter)(target, key, descriptor);
+  };
 }

@@ -67,13 +67,17 @@ function fakeProvider(constraint: unknown = { ownerId: 'me' }): AuthorizationPro
   };
 }
 
+function rowPolicy(provider: AuthorizationProvider) {
+  return { authorization: provider, checkWriteResults: false, checkReadFields: false };
+}
+
 const ctx = { req: {} };
 
 describe('engine authorization', () => {
   it('merges read constraints into findMany and switches findOne to findFirst', async () => {
     const client = fakeClient();
     const provider = fakeProvider({ authorId: 'me' });
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.findMany({ model: 'Post', where: { title: { contains: 'x' } }, context: ctx });
     expect(client.post.findMany).toHaveBeenCalledWith(
@@ -93,7 +97,7 @@ describe('engine authorization', () => {
     const client = fakeClient();
     client.post.findFirst.mockResolvedValueOnce({ id: 'p1' });
     const provider = fakeProvider({ authorId: 'me' });
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: 'new' }, context: ctx });
     expect(client.post.findFirst).toHaveBeenCalledWith({
@@ -114,7 +118,7 @@ describe('engine authorization', () => {
   it('merges constraints into batch operations directly', async () => {
     const client = fakeClient();
     const provider = fakeProvider({ authorId: 'me' });
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.deleteMany({ model: 'Post', where: { title: { contains: 'x' } }, context: ctx });
     expect(client.post.deleteMany).toHaveBeenCalledWith({
@@ -125,7 +129,7 @@ describe('engine authorization', () => {
   it('gates create and walks nested writes per touched model', async () => {
     const client = fakeClient();
     const provider = fakeProvider();
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.create({
       model: 'User',
@@ -146,7 +150,7 @@ describe('engine authorization', () => {
     const client = fakeClient();
     const provider = fakeProvider();
     (provider.authorize as jest.Mock).mockRejectedValue(new GolemForbiddenError('no'));
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await expect(
       engine.create({ model: 'Post', data: { title: 'x' }, context: ctx }),
@@ -157,7 +161,7 @@ describe('engine authorization', () => {
   it('skips enforcement for internal calls without context', async () => {
     const client = fakeClient();
     const provider = fakeProvider();
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.findMany({ model: 'Post' });
     expect(provider.constrain).not.toHaveBeenCalled();
@@ -169,7 +173,7 @@ describe('engine authorization', () => {
   it('memoizes model constraints for repeated work in one request context', async () => {
     const client = fakeClient();
     const provider = fakeProvider({ published: true });
-    const engine = new GolemEngine(client, models, { authorization: provider });
+    const engine = new GolemEngine(client, models, rowPolicy(provider));
     const requestContext = { req: {} };
 
     await engine.findMany({ model: 'Post', context: requestContext });
@@ -223,6 +227,7 @@ describe('subscription authorization', () => {
       models: { Post: { subscriptions: true } },
       eventBus: bus,
       authorization: provider,
+      defaults: { checkWriteResults: false, checkReadFields: false },
     });
 
     const iterator = (await subscribe({

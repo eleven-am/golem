@@ -66,9 +66,30 @@ describe('golem extensions and programmatic engine (e2e)', () => {
     expect(response.body.data.searchPosts).toEqual([{ title: 'First post', published: true }]);
   });
 
+  it('runs custom queries through Nest guards with injected dependencies', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/graphql')
+      .set('authorization', 'token-roy@example.com')
+      .set('x-deny-search', 'true')
+      .send({ query: '{ searchPosts(term: "First") { title } }' });
+
+    expect(response.body.data).toBeNull();
+    expect(response.body.errors[0].message).toBe('Forbidden resource');
+  });
+
   it('validates custom query args like any generated field', async () => {
     const response = await gql('{ searchPosts { title } }');
     expect(response.body.errors[0].message).toContain('"term" of type "String!" is required');
+  });
+
+  it('maps Golem errors thrown through the Nest resolver pipeline', async () => {
+    const response = await gql('mutation { rejectCustomOperation }');
+
+    expect(response.body.data).toBeNull();
+    expect(response.body.errors[0]).toMatchObject({
+      message: 'custom operation rejected',
+      extensions: { code: 'BAD_USER_INPUT' },
+    });
   });
 
   it('publishes subscription events from raw prisma writes outside any resolver', async () => {
