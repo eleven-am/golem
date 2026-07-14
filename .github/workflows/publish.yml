@@ -1,0 +1,47 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment: npm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 20
+          registry-url: https://registry.npmjs.org
+      - name: Update npm for trusted publishing
+        run: npm install -g npm@latest
+      - name: Install dependencies
+        run: npm ci
+      - name: Build libraries
+        run: |
+          npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
+          npm rebuild -w @eleven-am/golem-generator
+          npm run build -w @eleven-am/golem-authorizer -w @eleven-am/golem
+      - name: Test libraries
+        run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem --if-present
+      - name: Publish packages in dependency order
+        run: |
+          publish() {
+            name="$1"; dir="$2"
+            version="$(node -p "require('./$dir/package.json').version")"
+            if npm view "$name@$version" version >/dev/null 2>&1; then
+              echo "$name@$version already published, skipping"
+            else
+              npm publish -w "$name" --provenance --access public
+            fi
+          }
+          publish @eleven-am/golem-core packages/core
+          publish @eleven-am/golem-generator packages/generator
+          publish @eleven-am/golem-authorizer packages/authorizer
+          publish @eleven-am/golem packages/nest
