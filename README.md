@@ -326,7 +326,7 @@ Field behavior is explicit across every generated GraphQL surface, including nes
 
 | Configuration | Output/read | Filter/order/unique | Create input | Update input |
 |---|---:|---:|---:|---:|
-| normal | yes | yes | yes | yes |
+| `normal` | yes | yes | yes | yes |
 | `immutable` | yes | yes | yes | no |
 | `readOnly` | yes | yes | no | no |
 | `writeOnly` | no | no | yes | yes |
