@@ -192,6 +192,99 @@ describe('model configuration', () => {
     expect(printSchema(schema)).not.toContain('type Mutation');
   });
 
+  it('keeps relation-only connect and disconnect inputs when nested data is not writable', async () => {
+    const relational: DatamodelDocument<{
+      Parent: 'id' | 'children';
+      Child: 'id' | 'parent';
+    }> = {
+      models: [
+        {
+          name: 'Parent',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+            field({
+              name: 'children',
+              type: 'Child',
+              kind: 'object',
+              isList: true,
+              relationName: 'ChildrenToParent',
+            }),
+          ],
+        },
+        {
+          name: 'Child',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+            field({
+              name: 'parent',
+              type: 'Parent',
+              kind: 'object',
+              relationName: 'ChildrenToParent',
+            }),
+          ],
+        },
+      ],
+      enums: [],
+    };
+    const parent = {
+      create: jest.fn().mockResolvedValue({ id: 'p1' }),
+      update: jest.fn().mockResolvedValue({ id: 'p1' }),
+    };
+    const schema = buildGolemSchema({
+      datamodel: relational,
+      client: {
+        parent,
+        child: {
+          findUnique: jest.fn().mockResolvedValue(null),
+          findMany: jest.fn().mockResolvedValue([]),
+        },
+      },
+      models: {
+        Parent: { operations: ['create', 'update'] },
+        Child: {
+          readOnly: ['id'],
+          operations: ['findOne', 'findMany'],
+        },
+      },
+    });
+    const sdl = printSchema(schema);
+
+    expect(inputBlock(sdl, 'ChildCreateNestedManyWithoutParentInput')).toContain('connect:');
+    expect(inputBlock(sdl, 'ChildCreateNestedManyWithoutParentInput')).not.toContain('create:');
+    expect(inputBlock(sdl, 'ChildUpdateManyWithoutParentInput')).toContain('connect:');
+    expect(inputBlock(sdl, 'ChildUpdateManyWithoutParentInput')).toContain('disconnect:');
+    expect(inputBlock(sdl, 'ChildUpdateManyWithoutParentInput')).not.toContain('update:');
+
+    const create = await graphql({
+      schema,
+      source: `mutation {
+        createParent(data: { children: { connect: [{ id: "c1" }] } }) { id }
+      }`,
+    });
+    const update = await graphql({
+      schema,
+      source: `mutation {
+        updateParent(
+          where: { id: "p1" }
+          data: { children: { disconnect: [{ id: "c1" }] } }
+        ) { id }
+      }`,
+    });
+
+    expect(create.errors).toBeUndefined();
+    expect(update.errors).toBeUndefined();
+    expect(parent.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { children: { connect: [{ id: 'c1' }] } },
+      }),
+    );
+    expect(parent.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { children: { disconnect: [{ id: 'c1' }] } },
+      }),
+    );
+  });
+
   it('accepts write-only fields in writes and removes them from every read surface', () => {
     const schema = buildGolemSchema({
       datamodel,

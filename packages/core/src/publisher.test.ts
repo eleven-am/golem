@@ -73,6 +73,36 @@ describe('createEventPublisher', () => {
     expect(published).toHaveLength(1);
   });
 
+  it('recovers omitted primary keys for events without returning them to the caller', async () => {
+    const { bus, published } = busSpy();
+    const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
+    const query = jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' });
+
+    const result = await publisher({
+      model: 'User',
+      operation: 'delete',
+      args: { where: { id: 'u1' }, omit: { id: true } },
+      query,
+    });
+
+    expect(query).toHaveBeenCalledWith({
+      where: { id: 'u1' },
+      omit: { id: false },
+    });
+    expect(result).toEqual({ email: 'a@b.c' });
+    expect(published).toEqual([
+      {
+        topic: 'golem.User',
+        payload: {
+          type: 'DELETED',
+          model: 'User',
+          id: 'u1',
+          entity: { id: 'u1', email: 'a@b.c' },
+        },
+      },
+    ]);
+  });
+
   it('stays silent for batch operations, reads and unlisted models', async () => {
     const { bus, published } = busSpy();
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });

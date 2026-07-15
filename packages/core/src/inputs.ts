@@ -119,8 +119,15 @@ export class InputTypeRegistry {
     );
   }
 
-  private createWithoutInput(model: DatamodelModel, excludeRelation: DatamodelField): GraphQLInputObjectType {
+  private createWithoutInput(
+    model: DatamodelModel,
+    excludeRelation: DatamodelField,
+  ): GraphQLInputObjectType | undefined {
     const name = `${model.name}CreateWithout${ucFirst(excludeRelation.name)}Input`;
+    const writable = this.supportedWriteFields(model, excludeRelation);
+    if (writable.length === 0) {
+      return undefined;
+    }
     return this.memo(name, () => this.buildCreateInput(name, model, excludeRelation));
   }
 
@@ -154,14 +161,22 @@ export class InputTypeRegistry {
     const target = this.ctx.modelsByName.get(field.type)!;
     const back = this.backRelationField(model, field);
     const whereUnique = this.ctx.whereUniqueInputs.get(target.name)!;
+    const createWithout = this.createWithoutInput(target, back);
     if (field.isList) {
       const envelope = this.memo(`${target.name}CreateNestedManyWithout${ucFirst(back.name)}Input`, () =>
         new GraphQLInputObjectType({
           name: `${target.name}CreateNestedManyWithout${ucFirst(back.name)}Input`,
-          fields: () => ({
-            create: { type: new GraphQLList(new GraphQLNonNull(this.createWithoutInput(target, back))) },
-            connect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
-          }),
+          fields: () => {
+            const fields: GraphQLInputFieldConfigMap = {
+              connect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
+            };
+            if (createWithout) {
+              fields.create = {
+                type: new GraphQLList(new GraphQLNonNull(createWithout)),
+              };
+            }
+            return fields;
+          },
         }),
       );
       return envelope;
@@ -170,7 +185,7 @@ export class InputTypeRegistry {
       new GraphQLInputObjectType({
         name: `${target.name}CreateNestedOneWithout${ucFirst(back.name)}Input`,
         fields: () => ({
-          create: { type: this.createWithoutInput(target, back) },
+          ...(createWithout ? { create: { type: createWithout } } : {}),
           connect: { type: whereUnique },
         }),
       }),
@@ -202,13 +217,12 @@ export class InputTypeRegistry {
   private updateWithoutInput(
     model: DatamodelModel,
     excludeRelation: DatamodelField,
-  ): GraphQLInputObjectType {
+  ): GraphQLInputObjectType | undefined {
     const name = `${model.name}UpdateWithout${ucFirst(excludeRelation.name)}Input`;
-    const updatable = this.requireFields(
-      name,
-      model,
-      this.updatableFields(model, excludeRelation),
-    );
+    const updatable = this.updatableFields(model, excludeRelation);
+    if (updatable.length === 0) {
+      return undefined;
+    }
     return this.memo(
       name,
       () =>
@@ -239,22 +253,26 @@ export class InputTypeRegistry {
     const updateWithout = this.updateWithoutInput(target, back);
     if (field.isList) {
       const relationName = `${target.name}UpdateManyWithout${ucFirst(back.name)}Input`;
-      const updateWithWhere = this.memo(
-        `${target.name}UpdateWithWhereUniqueWithout${ucFirst(back.name)}Input`,
-        () =>
-          new GraphQLInputObjectType({
-            name: `${target.name}UpdateWithWhereUniqueWithout${ucFirst(back.name)}Input`,
-            fields: {
-              where: { type: new GraphQLNonNull(whereUnique) },
-              data: { type: new GraphQLNonNull(updateWithout) },
-            },
-          }),
-      );
+      const updateWithWhere = updateWithout
+        ? this.memo(
+            `${target.name}UpdateWithWhereUniqueWithout${ucFirst(back.name)}Input`,
+            () =>
+              new GraphQLInputObjectType({
+                name: `${target.name}UpdateWithWhereUniqueWithout${ucFirst(back.name)}Input`,
+                fields: {
+                  where: { type: new GraphQLNonNull(whereUnique) },
+                  data: { type: new GraphQLNonNull(updateWithout) },
+                },
+              }),
+          )
+        : undefined;
       return this.memo(relationName, () =>
         new GraphQLInputObjectType({
           name: relationName,
           fields: () => ({
-            update: { type: new GraphQLList(new GraphQLNonNull(updateWithWhere)) },
+            ...(updateWithWhere
+              ? { update: { type: new GraphQLList(new GraphQLNonNull(updateWithWhere)) } }
+              : {}),
             connect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
             disconnect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
           }),
@@ -267,7 +285,7 @@ export class InputTypeRegistry {
         new GraphQLInputObjectType({
           name: relationName,
           fields: () => ({
-            update: { type: updateWithout },
+            ...(updateWithout ? { update: { type: updateWithout } } : {}),
             connect: { type: whereUnique },
           }),
         }),
@@ -278,7 +296,7 @@ export class InputTypeRegistry {
       new GraphQLInputObjectType({
         name: relationName,
         fields: () => ({
-          update: { type: updateWithout },
+          ...(updateWithout ? { update: { type: updateWithout } } : {}),
           connect: { type: whereUnique },
           disconnect: { type: GraphQLBoolean },
         }),
