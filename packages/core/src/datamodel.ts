@@ -39,6 +39,8 @@ export interface ModelConfig<TField extends string = string> {
   operations?: readonly GolemOperation[];
   hidden?: readonly TField[];
   immutable?: readonly TField[];
+  readOnly?: readonly TField[];
+  writeOnly?: readonly TField[];
   maxTake?: number;
 }
 

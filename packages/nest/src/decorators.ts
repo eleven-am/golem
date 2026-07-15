@@ -1,6 +1,6 @@
 import { SetMetadata, UseFilters } from '@nestjs/common';
 import { Mutation, Query } from '@nestjs/graphql';
-import { GolemOperation } from '@eleven-am/golem-core';
+import { GolemHookOperation } from '@eleven-am/golem-core';
 import { GolemGraphQLExceptionFilter } from './graphql-error.filter';
 
 export const GOLEM_HOOKS_MODEL = 'GOLEM_HOOKS_MODEL';
@@ -8,18 +8,19 @@ export const GOLEM_HOOK = 'GOLEM_HOOK';
 
 export interface GolemHookMetadata {
   phase: 'before' | 'after';
-  operation: GolemOperation;
+  operation: GolemHookOperation;
 }
 
 export function GolemHooks(model: string): ClassDecorator {
   return SetMetadata(GOLEM_HOOKS_MODEL, model);
 }
 
-function hookDecorator(phase: 'before' | 'after', operation: GolemOperation): () => MethodDecorator {
+function hookDecorator(phase: 'before' | 'after', operation: GolemHookOperation): () => MethodDecorator {
   return () => SetMetadata<string, GolemHookMetadata>(GOLEM_HOOK, { phase, operation });
 }
 
 export const BeforeFindOne = hookDecorator('before', 'findOne');
+export const BeforeFindFirst = hookDecorator('before', 'findFirst');
 export const BeforeFindMany = hookDecorator('before', 'findMany');
 export const BeforeCreate = hookDecorator('before', 'create');
 export const BeforeUpdate = hookDecorator('before', 'update');
@@ -27,6 +28,7 @@ export const BeforeDelete = hookDecorator('before', 'delete');
 export const BeforeUpdateMany = hookDecorator('before', 'updateMany');
 export const BeforeDeleteMany = hookDecorator('before', 'deleteMany');
 export const AfterFindOne = hookDecorator('after', 'findOne');
+export const AfterFindFirst = hookDecorator('after', 'findFirst');
 export const AfterFindMany = hookDecorator('after', 'findMany');
 export const AfterCreate = hookDecorator('after', 'create');
 export const AfterUpdate = hookDecorator('after', 'update');

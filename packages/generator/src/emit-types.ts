@@ -15,7 +15,7 @@ export function emitTypesModule(modelNames: readonly string[], clientImport: str
     .join('\n');
 
   return `import type { Prisma, ${entityImports} } from '${clientImport}';
-import type { GolemOperation, HookRequestFor, HookResultFor } from '@eleven-am/golem-core';
+import type { GolemHookOperation, HookRequestFor, HookResultFor } from '@eleven-am/golem-core';
 
 export type GolemTypes = {
 ${entries}
@@ -23,13 +23,13 @@ ${entries}
 
 export type GolemModelName = keyof GolemTypes & string;
 
-export type GolemRequest<M extends GolemModelName, O extends GolemOperation> = HookRequestFor<
+export type GolemRequest<M extends GolemModelName, O extends GolemHookOperation> = HookRequestFor<
   GolemTypes,
   M,
   O
 >;
 
-export type GolemResult<M extends GolemModelName, O extends GolemOperation> = HookResultFor<
+export type GolemResult<M extends GolemModelName, O extends GolemHookOperation> = HookResultFor<
   GolemTypes,
   M,
   O

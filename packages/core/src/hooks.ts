@@ -7,6 +7,8 @@ export type GolemOperation =
   | 'updateMany'
   | 'deleteMany';
 
+export type GolemHookOperation = GolemOperation | 'findFirst';
+
 export const ALL_OPERATIONS: readonly GolemOperation[] = [
   'findOne',
   'findMany',
@@ -19,7 +21,7 @@ export const ALL_OPERATIONS: readonly GolemOperation[] = [
 
 export interface GolemHookContext {
   model: string;
-  operation: GolemOperation;
+  operation: GolemHookOperation;
   context?: unknown;
 }
 
@@ -34,29 +36,29 @@ export class HookRegistry {
   private readonly beforeHooks = new Map<string, BeforeHook[]>();
   private readonly afterHooks = new Map<string, AfterHook[]>();
 
-  private static key(model: string, operation: GolemOperation): string {
+  private static key(model: string, operation: GolemHookOperation): string {
     return `${model}.${operation}`;
   }
 
-  registerBefore(model: string, operation: GolemOperation, hook: BeforeHook): void {
+  registerBefore(model: string, operation: GolemHookOperation, hook: BeforeHook): void {
     const key = HookRegistry.key(model, operation);
     const hooks = this.beforeHooks.get(key) ?? [];
     hooks.push(hook);
     this.beforeHooks.set(key, hooks);
   }
 
-  registerAfter(model: string, operation: GolemOperation, hook: AfterHook): void {
+  registerAfter(model: string, operation: GolemHookOperation, hook: AfterHook): void {
     const key = HookRegistry.key(model, operation);
     const hooks = this.afterHooks.get(key) ?? [];
     hooks.push(hook);
     this.afterHooks.set(key, hooks);
   }
 
-  beforeFor(model: string, operation: GolemOperation): readonly BeforeHook[] {
+  beforeFor(model: string, operation: GolemHookOperation): readonly BeforeHook[] {
     return this.beforeHooks.get(HookRegistry.key(model, operation)) ?? [];
   }
 
-  afterFor(model: string, operation: GolemOperation): readonly AfterHook[] {
+  afterFor(model: string, operation: GolemHookOperation): readonly AfterHook[] {
     return this.afterHooks.get(HookRegistry.key(model, operation)) ?? [];
   }
 }

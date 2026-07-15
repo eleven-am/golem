@@ -7,7 +7,7 @@ import { DatamodelModel } from './datamodel';
 import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
 import { runPolicyChecks } from './concurrency';
 import { withBufferedEvents } from './event-buffer';
-import { GolemOperation, HookRegistry } from './hooks';
+import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { planNestedWrites } from './nested-writes';
@@ -89,6 +89,11 @@ export interface FindFirstRequest {
   context?: unknown;
   model: string;
   where?: unknown;
+  orderBy?: unknown;
+  take?: number;
+  skip?: number;
+  cursor?: unknown;
+  distinct?: unknown;
   select?: PrismaSelect;
   include?: unknown;
 }
@@ -356,7 +361,7 @@ export class GolemEngine {
   }
 
   private async runBefore<T extends { model: string; context?: unknown }>(
-    operation: GolemOperation,
+    operation: GolemHookOperation,
     request: T,
   ): Promise<T> {
     if (!this.hooks) {
@@ -377,7 +382,7 @@ export class GolemEngine {
   }
 
   private async runAfter(
-    operation: GolemOperation,
+    operation: GolemHookOperation,
     model: string,
     result: unknown,
     context: unknown,
@@ -462,16 +467,24 @@ export class GolemEngine {
 
   async findFirst(request: FindFirstRequest): Promise<unknown> {
     const delegate = this.delegate(request.model);
-    const prepared = await this.prepareRead(request);
-    const constraint = await this.constraintFor('read', request.model, request.context);
-    const found = await this.run(request.model, () =>
+    const req = await this.runBefore('findFirst', request);
+    const prepared = await this.prepareRead(req);
+    const constraint = await this.constraintFor('read', req.model, req.context);
+    const found = await this.run(req.model, () =>
       delegate.findFirst({
-        where: mergeConstraint(request.where, constraint),
+        where: mergeConstraint(req.where, constraint),
+        orderBy: req.orderBy,
+        take: req.take,
+        skip: req.skip,
+        cursor: req.cursor,
+        distinct: req.distinct,
         select: prepared.select,
         include: prepared.include,
       }),
     );
-    return this.finishRead(found, prepared, request.context);
+    await this.finishRead(found, prepared, req.context);
+    await this.runAfter('findFirst', req.model, found, req.context);
+    return found;
   }
 
   async create(request: CreateRequest): Promise<unknown> {
