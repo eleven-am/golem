@@ -347,6 +347,87 @@ describe('model configuration', () => {
     });
   });
 
+  it('keeps nested update envelopes distinct for multiple relations to one model', () => {
+    const relational: DatamodelDocument<{
+      User: 'id';
+      Post: 'id' | 'author' | 'reviewer';
+    }> = {
+      models: [
+        {
+          name: 'User',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+            field({
+              name: 'authoredPosts',
+              type: 'Post',
+              kind: 'object',
+              isList: true,
+              relationName: 'PostAuthor',
+            }),
+            field({
+              name: 'reviewedPosts',
+              type: 'Post',
+              kind: 'object',
+              isList: true,
+              relationName: 'PostReviewer',
+            }),
+          ],
+        },
+        {
+          name: 'Post',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+            field({
+              name: 'author',
+              type: 'User',
+              kind: 'object',
+              relationName: 'PostAuthor',
+              relationFromFields: ['authorId'],
+              relationToFields: ['id'],
+            }),
+            field({ name: 'authorId', type: 'String', isReadOnly: true }),
+            field({
+              name: 'reviewer',
+              type: 'User',
+              kind: 'object',
+              relationName: 'PostReviewer',
+              relationFromFields: ['reviewerId'],
+              relationToFields: ['id'],
+            }),
+            field({ name: 'reviewerId', type: 'String', isReadOnly: true }),
+          ],
+        },
+      ],
+      enums: [],
+    };
+    const schema = buildGolemSchema({
+      datamodel: relational,
+      client: {
+        ...fakeClient(),
+        post: {
+          findMany: jest.fn(),
+          findUnique: jest.fn(),
+          create: jest.fn(),
+          update: jest.fn(),
+          updateMany: jest.fn(),
+          delete: jest.fn(),
+          deleteMany: jest.fn(),
+        },
+      },
+    });
+    const sdl = printSchema(schema);
+    const userUpdate = inputBlock(sdl, 'UserUpdateInput');
+
+    expect(userUpdate).toContain('authoredPosts: PostUpdateManyWithoutAuthorInput');
+    expect(userUpdate).toContain('reviewedPosts: PostUpdateManyWithoutReviewerInput');
+    expect(inputBlock(sdl, 'PostUpdateManyWithoutAuthorInput')).toContain(
+      'update: [PostUpdateWithWhereUniqueWithoutAuthorInput!]',
+    );
+    expect(inputBlock(sdl, 'PostUpdateManyWithoutReviewerInput')).toContain(
+      'update: [PostUpdateWithWhereUniqueWithoutReviewerInput!]',
+    );
+  });
+
   it('rejects hiding the primary key', () => {
     expect(() =>
       buildGolemSchema({

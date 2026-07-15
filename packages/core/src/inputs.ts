@@ -209,6 +209,7 @@ export class InputTypeRegistry {
     const whereUnique = this.ctx.whereUniqueInputs.get(target.name)!;
     const updateWithout = this.updateWithoutInput(target, back);
     if (field.isList) {
+      const relationName = `${target.name}UpdateManyWithout${ucFirst(back.name)}Input`;
       const updateWithWhere = this.memo(
         `${target.name}UpdateWithWhereUniqueWithout${ucFirst(back.name)}Input`,
         () =>
@@ -220,9 +221,9 @@ export class InputTypeRegistry {
             },
           }),
       );
-      return this.memo(`${target.name}UpdateManyRelationInput`, () =>
+      return this.memo(relationName, () =>
         new GraphQLInputObjectType({
-          name: `${target.name}UpdateManyRelationInput`,
+          name: relationName,
           fields: () => ({
             update: { type: new GraphQLList(new GraphQLNonNull(updateWithWhere)) },
             connect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
@@ -232,9 +233,10 @@ export class InputTypeRegistry {
       );
     }
     if (field.isRequired) {
-      return this.memo(`${target.name}UpdateOneRequiredRelationInput`, () =>
+      const relationName = `${target.name}UpdateOneRequiredWithout${ucFirst(back.name)}Input`;
+      return this.memo(relationName, () =>
         new GraphQLInputObjectType({
-          name: `${target.name}UpdateOneRequiredRelationInput`,
+          name: relationName,
           fields: () => ({
             update: { type: updateWithout },
             connect: { type: whereUnique },
@@ -242,9 +244,10 @@ export class InputTypeRegistry {
         }),
       );
     }
-    return this.memo(`${target.name}UpdateOneRelationInput`, () =>
+    const relationName = `${target.name}UpdateOneWithout${ucFirst(back.name)}Input`;
+    return this.memo(relationName, () =>
       new GraphQLInputObjectType({
-        name: `${target.name}UpdateOneRelationInput`,
+        name: relationName,
         fields: () => ({
           update: { type: updateWithout },
           connect: { type: whereUnique },
