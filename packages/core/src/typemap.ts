@@ -14,6 +14,8 @@ export interface GolemTypeShape {
 
 export type GolemTypesMap = Record<string, GolemTypeShape>;
 
+type ScalarFieldFor<T extends GolemTypeShape> = Extract<keyof T['entity'], string>;
+
 export type HookRequestFor<
   TTypes extends GolemTypesMap,
   M extends keyof TTypes & string,
@@ -43,6 +45,8 @@ export type HookRequestFor<
                   orderBy?: TTypes[M]['orderBy'] | TTypes[M]['orderBy'][];
                   take?: number;
                   skip?: number;
+                  cursor?: TTypes[M]['whereUnique'];
+                  distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
                   select?: PrismaSelect;
                   context?: unknown;
                 }
@@ -53,6 +57,8 @@ export type HookRequestFor<
                   orderBy?: TTypes[M]['orderBy'] | TTypes[M]['orderBy'][];
                   take?: number;
                   skip?: number;
+                  cursor?: TTypes[M]['whereUnique'];
+                  distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
                   select?: PrismaSelect;
                   context?: unknown;
                 }

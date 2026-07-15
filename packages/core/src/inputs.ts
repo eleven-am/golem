@@ -45,7 +45,11 @@ export class InputTypeRegistry {
       throw new Error(`Relation ${model.name}.${field.name} targets unknown model ${field.type}`);
     }
     const back = target.fields.find(
-      (f) => f.kind === 'object' && f.relationName === field.relationName && f.type === model.name,
+      (f) =>
+        f !== field &&
+        f.kind === 'object' &&
+        f.relationName === field.relationName &&
+        f.type === model.name,
     );
     if (!back) {
       throw new Error(`Relation ${model.name}.${field.name} has no back relation on ${field.type}`);

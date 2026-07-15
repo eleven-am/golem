@@ -428,6 +428,55 @@ describe('model configuration', () => {
     );
   });
 
+  it('resolves the opposite field for nested updates on self-relations', () => {
+    const selfRelational: DatamodelDocument<{ Node: 'id' | 'parent' | 'children' }> = {
+      models: [
+        {
+          name: 'Node',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+            field({
+              name: 'parent',
+              type: 'Node',
+              kind: 'object',
+              isRequired: false,
+              relationName: 'NodeTree',
+              relationFromFields: ['parentId'],
+              relationToFields: ['id'],
+            }),
+            field({ name: 'parentId', type: 'String', isReadOnly: true }),
+            field({
+              name: 'children',
+              type: 'Node',
+              kind: 'object',
+              isList: true,
+              relationName: 'NodeTree',
+            }),
+          ],
+        },
+      ],
+      enums: [],
+    };
+    const schema = buildGolemSchema({
+      datamodel: selfRelational,
+      client: {
+        node: {
+          findMany: jest.fn(),
+          findUnique: jest.fn(),
+          create: jest.fn(),
+          update: jest.fn(),
+          updateMany: jest.fn(),
+          delete: jest.fn(),
+          deleteMany: jest.fn(),
+        },
+      },
+    });
+    const nodeUpdate = inputBlock(printSchema(schema), 'NodeUpdateInput');
+
+    expect(nodeUpdate).toContain('parent: NodeUpdateOneWithoutChildrenInput');
+    expect(nodeUpdate).toContain('children: NodeUpdateManyWithoutParentInput');
+  });
+
   it('rejects hiding the primary key', () => {
     expect(() =>
       buildGolemSchema({
