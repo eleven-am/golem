@@ -87,6 +87,8 @@ interface ResolvedModelSettings {
   operations: ReadonlySet<GolemOperation>;
   hidden: ReadonlySet<string>;
   immutable: ReadonlySet<string>;
+  readOnly: ReadonlySet<string>;
+  writeOnly: ReadonlySet<string>;
   maxTake?: number;
   subscriptions: boolean;
 }
@@ -99,7 +101,9 @@ function resolveModelSettings(
   const fieldNames = new Set(model.fields.map((f) => f.name));
   const hidden = new Set(config?.hidden ?? []);
   const immutable = new Set(config?.immutable ?? []);
-  for (const name of [...hidden, ...immutable]) {
+  const readOnly = new Set(config?.readOnly ?? []);
+  const writeOnly = new Set(config?.writeOnly ?? []);
+  for (const name of [...hidden, ...immutable, ...readOnly, ...writeOnly]) {
     if (!fieldNames.has(name)) {
       throw new Error(`Unknown field ${name} in configuration for model ${model.name}`);
     }
@@ -107,6 +111,36 @@ function resolveModelSettings(
   for (const field of model.fields) {
     if (field.isId && hidden.has(field.name)) {
       throw new Error(`Cannot hide primary key ${model.name}.${field.name}`);
+    }
+    if (writeOnly.has(field.name) && field.isId) {
+      throw new Error(`Cannot make primary key ${model.name}.${field.name} write-only`);
+    }
+    if (writeOnly.has(field.name) && field.kind === 'object') {
+      throw new Error(`Cannot make relation field ${model.name}.${field.name} write-only`);
+    }
+    if (writeOnly.has(field.name) && field.isReadOnly) {
+      throw new Error(`Cannot make Prisma read-only field ${model.name}.${field.name} write-only`);
+    }
+  }
+  const accessModes = [
+    ['hidden', hidden],
+    ['immutable', immutable],
+    ['readOnly', readOnly],
+    ['writeOnly', writeOnly],
+  ] as const;
+  for (const field of model.fields) {
+    const configured = accessModes
+      .filter(([, fields]) => fields.has(field.name))
+      .map(([name]) => name);
+    const allowed =
+      configured.length <= 1 ||
+      (configured.length === 2 &&
+        configured.includes('immutable') &&
+        configured.includes('writeOnly'));
+    if (!allowed) {
+      throw new Error(
+        `Conflicting field configuration for ${model.name}.${field.name}: ${configured.join(', ')}`,
+      );
     }
   }
   const operations = config?.operations ?? defaults.operations ?? ALL_OPERATIONS;
@@ -119,6 +153,8 @@ function resolveModelSettings(
     operations: new Set(operations),
     hidden,
     immutable,
+    readOnly,
+    writeOnly,
     maxTake: config?.maxTake ?? defaults.maxTake,
     subscriptions: config?.subscriptions ?? defaults.subscriptions ?? false,
   };
@@ -221,8 +257,14 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
   const hiddenFor = (name: string): ReadonlySet<string> => settings.get(name)?.hidden ?? new Set();
   const immutableFor = (name: string): ReadonlySet<string> =>
     settings.get(name)?.immutable ?? new Set();
+  const readOnlyFor = (name: string): ReadonlySet<string> =>
+    settings.get(name)?.readOnly ?? new Set();
   const visibleFields = (model: DatamodelModel): DatamodelField[] =>
-    model.fields.filter((f) => !hiddenFor(model.name).has(f.name));
+    model.fields.filter(
+      (f) =>
+        !hiddenFor(model.name).has(f.name) &&
+        !settings.get(model.name)?.writeOnly.has(f.name),
+    );
 
   const computedSpecs = options.computedFields ?? [];
   for (const spec of computedSpecs) {
@@ -426,6 +468,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
     scalarType,
     hiddenFor,
     immutableFor,
+    readOnlyFor,
   });
 
   const namedScalars: Record<string, GraphQLScalarType> = {

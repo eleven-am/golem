@@ -135,6 +135,8 @@ await this.prisma.forContext(ctx).article.update({ where: { id }, data: { title 
 
 `forContext(ctx)` returns Prisma's own delegate types (select-narrowed return types included) restricted to the policy-covered operations: `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`. Operations without defined policy semantics (`aggregate`, `groupBy`, raw queries) are compile errors on the bound client, not runtime surprises.
 
+This boundary also applies to hooks and field configuration. Generated GraphQL operations and `forContext(ctx)` enter `GolemEngine`, so they run hooks and caller authorization. Plain delegate calls intentionally bypass both as system-level Prisma access, although their writes still publish configured subscription events. `hidden`, `readOnly`, and `writeOnly` control the generated GraphQL schema; they do not remove fields from Prisma's generated types or impose field restrictions on `forContext(ctx)` or plain delegates. Use CASL when programmatic callers also need field-level enforcement.
+
 ## Authorization
 
 Golem does not implement its own permission language. It enforces [CASL](https://casl.js.org) rules provided through `@eleven-am/authorizer`, so your access policy lives in one rules provider and reads like a specification:
@@ -207,6 +209,53 @@ export class ArticleHooks {
 
 `GolemRequest<'Article', 'create'>` resolves to Prisma's own input types, so `request.data` autocompletes and a misspelled field is a compile error. Hook classes are ordinary providers with full dependency injection, discovered automatically.
 
+Before-hooks run sequentially in provider discovery order. Each hook receives the request returned by the preceding hook; returning `undefined` preserves the current request, and throwing stops the operation before Prisma runs. The final transformed request is used for authorization, nested-write checks, field checks, and the Prisma call. After-hooks run sequentially after the database operation and read-field processing succeed. They observe results and do not replace them.
+
+| Engine operation | Before decorator | After decorator |
+|---|---|---|
+| `findUnique` / `findOne` | `@BeforeFindOne()` | `@AfterFindOne()` |
+| `findFirst` | `@BeforeFindFirst()` | `@AfterFindFirst()` |
+| `findMany` | `@BeforeFindMany()` | `@AfterFindMany()` |
+| `create` | `@BeforeCreate()` | `@AfterCreate()` |
+| `update` | `@BeforeUpdate()` | `@AfterUpdate()` |
+| `delete` | `@BeforeDelete()` | `@AfterDelete()` |
+| `updateMany` | `@BeforeUpdateMany()` | `@AfterUpdateMany()` |
+| `deleteMany` | `@BeforeDeleteMany()` | `@AfterDeleteMany()` |
+
+`upsert` selects Golem's create or update pipeline, including that branch's hooks. Hooks do not run for plain Prisma delegate calls.
+
+### Credentials and write-only fields
+
+Use `writeOnly` when GraphQL must accept a secret without ever exposing it through generated read surfaces. The hook can replace the accepted value before authorization and persistence:
+
+```typescript
+GolemModule.forRoot({
+  // ...
+  models: {
+    User: { writeOnly: ['password'], immutable: ['password'] },
+  },
+});
+
+@GolemHooks('User')
+@Injectable()
+export class UserHooks {
+  constructor(private readonly passwords: PasswordHasher) {}
+
+  @BeforeCreate()
+  async hashPassword(request: GolemRequest<'User', 'create'>) {
+    return {
+      ...request,
+      data: {
+        ...request.data,
+        password: await this.passwords.hash(request.data.password),
+      },
+    };
+  }
+}
+```
+
+Here `password` exists in `UserCreateInput` but not in `User`, filters, ordering, or unique selectors. Because it is also `immutable`, generated update inputs omit it. CASL must still permit the transformed write. This is a GraphQL schema guarantee, not encryption by itself and not a restriction on `forContext()` or system-level Prisma access.
+
 ## Extensions
 
 Extensions add what the generator cannot know about: computed fields and custom operations. They are declared explicitly in `forRoot` because they change the schema shape.
@@ -268,8 +317,23 @@ GolemModule.forRoot({
 | `operations: [...]` | Allowlist; disabled operations do not exist in the schema |
 | `hidden: [...]` | Field removed from every schema surface: types, filters, inputs |
 | `immutable: [...]` | Field accepted on create, absent from update inputs |
+| `readOnly: [...]` | Field remains readable, filterable, orderable, and uniquely selectable, but is absent from create and update inputs |
+| `writeOnly: [...]` | Field is accepted by create and update inputs but absent from outputs, filters, ordering, and unique selectors |
 | `subscriptions` | Event stream for this model |
 | `maxTake` | Per-model take limit |
+
+Field behavior is explicit across every generated GraphQL surface, including nested inputs:
+
+| Configuration | Output/read | Filter/order/unique | Create input | Update input |
+|---|---:|---:|---:|---:|
+| normal | yes | yes | yes | yes |
+| `immutable` | yes | yes | yes | no |
+| `readOnly` | yes | yes | no | no |
+| `writeOnly` | no | no | yes | yes |
+| `writeOnly` + `immutable` | no | no | yes | no |
+| `hidden` | no | no | no | no |
+
+Configuration is validated while the schema is built. Unknown fields, write-only primary keys or relations, and conflicting access modes fail startup with the model and field named. `writeOnly` plus `immutable` is the supported combined mode; other overlapping access modes are rejected rather than resolved implicitly.
 
 ## Errors
 

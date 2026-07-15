@@ -49,14 +49,23 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     if (!pk) {
       return query(args);
     }
-    const finalArgs = args?.select ? { ...args, select: { ...args.select, [pk]: true } } : args;
+    const omittedPk = args?.omit?.[pk] === true;
+    const finalArgs = args?.select
+      ? { ...args, select: { ...args.select, [pk]: true } }
+      : omittedPk
+        ? { ...args, omit: { ...args.omit, [pk]: false } }
+        : args;
     const result = await query(finalArgs);
+    const eventEntity =
+      result && typeof result === 'object' && !Array.isArray(result)
+        ? { ...(result as Record<string, unknown>) }
+        : undefined;
     const payload = {
       type,
       model,
       id: (result as Record<string, string | number>)[pk],
-      ...(type === 'DELETED' && result && typeof result === 'object'
-        ? { entity: result as Record<string, unknown> }
+      ...(type === 'DELETED' && eventEntity
+        ? { entity: eventEntity }
         : {}),
     };
     const deferred = bufferEvent({
@@ -64,6 +73,11 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     });
     if (!deferred) {
       await options.eventBus.publish(eventTopic(model), payload);
+    }
+    if (omittedPk && eventEntity) {
+      const publicResult = { ...eventEntity };
+      delete publicResult[pk];
+      return publicResult;
     }
     return result;
   };

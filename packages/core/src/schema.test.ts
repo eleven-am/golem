@@ -161,7 +161,7 @@ describe('buildGolemSchema mutations', () => {
     const updateInput = sdl.slice(sdl.indexOf('input PostUpdateInput'), sdl.indexOf('}', sdl.indexOf('input PostUpdateInput')));
     expect(updateInput).not.toContain('authorId');
     expect(updateInput).toContain('title: String');
-    expect(updateInput).toContain('author: UserUpdateOneRequiredRelationInput');
+    expect(updateInput).toContain('author: UserUpdateOneRequiredWithoutPostsInput');
   });
 
   it('builds Without variants that drop the back relation', () => {

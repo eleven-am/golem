@@ -205,3 +205,75 @@ describe('maxDepth', () => {
     ).rejects.toThrow('Query depth 3 exceeds the maximum of 2');
   });
 });
+
+describe('omit projections', () => {
+  function fieldProvider(classifyFields: jest.Mock, checkField = jest.fn(async () => true)) {
+    return {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async () => undefined),
+      classifyFields,
+      checkField,
+    } satisfies AuthorizationProvider;
+  }
+
+  it('classifies only fields that Prisma will return', async () => {
+    const client = fakeClient();
+    const classifyFields = jest.fn(async (_action, _model, fields: readonly string[]) =>
+      Object.fromEntries(fields.map((name) => [name, { access: 'always' as const }])),
+    );
+    const engine = new GolemEngine(client, datamodel.models, {
+      authorization: fieldProvider(classifyFields),
+      checkWriteResults: false,
+    });
+
+    await engine.findFirst({ model: 'User', omit: { email: true }, context: ctx });
+
+    expect(classifyFields).toHaveBeenCalledWith('read', 'User', ['id'], ctx);
+    expect(client.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ omit: { email: true } }),
+    );
+  });
+
+  it('fetches an omitted policy dependency internally and strips it from the result', async () => {
+    const client = fakeClient();
+    client.user.findFirst.mockResolvedValue({ id: 'u1', email: 'a@b.c' });
+    const classifyFields = jest.fn(async (_action, _model, fields: readonly string[]) =>
+      Object.fromEntries(
+        fields.map((name) => [
+          name,
+          name === 'email'
+            ? { access: 'conditional' as const, requires: ['id'] }
+            : { access: 'always' as const },
+        ]),
+      ),
+    );
+    const checkedRows: unknown[] = [];
+    const checkField = jest.fn(async (_action, _model, row) => {
+      checkedRows.push({ ...row });
+      return true;
+    });
+    const engine = new GolemEngine(client, datamodel.models, {
+      authorization: fieldProvider(classifyFields, checkField),
+      checkWriteResults: false,
+    });
+
+    const result = await engine.findFirst({ model: 'User', omit: { id: true }, context: ctx });
+
+    expect(client.user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ omit: {} }),
+    );
+    expect(checkField).toHaveBeenCalledWith('read', 'User', expect.any(Object), 'email', ctx);
+    expect(checkedRows).toEqual([{ id: 'u1', email: 'a@b.c' }]);
+    expect(result).toEqual({ email: 'a@b.c' });
+  });
+
+  it('rejects omit combined with select before calling Prisma', async () => {
+    const client = fakeClient();
+    const engine = new GolemEngine(client, datamodel.models);
+
+    await expect(
+      engine.findFirst({ model: 'User', select: { id: true }, omit: { email: true } }),
+    ).rejects.toThrow('select and omit cannot be used together');
+    expect(client.user.findFirst).not.toHaveBeenCalled();
+  });
+});

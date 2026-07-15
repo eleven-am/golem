@@ -15,6 +15,7 @@ const models = [
 
 function fakeUserDelegate() {
   return {
+    findFirst: jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' }),
     findMany: jest.fn().mockResolvedValue([]),
     findUnique: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' }),
@@ -99,6 +100,65 @@ describe('engine hooks', () => {
       expect.objectContaining({
         where: { AND: [{ email: { contains: 'active' } }, { id: { equals: 'u1' } }] },
       }),
+    );
+  });
+
+  it('runs findFirst hooks sequentially and exactly once', async () => {
+    const registry = new HookRegistry();
+    const after = jest.fn();
+    registry.registerBefore('User', 'findFirst', (req) => ({
+      ...req,
+      where: { email: { contains: 'active' } },
+    }));
+    registry.registerBefore('User', 'findFirst', (req) => ({
+      ...req,
+      where: { AND: [req.where, { id: { equals: 'u1' } }] },
+    }));
+    registry.registerAfter('User', 'findFirst', after);
+    const user = fakeUserDelegate();
+    const engine = new GolemEngine({ user }, models, { hooks: registry });
+
+    const result = await engine.findFirst({
+      model: 'User',
+      orderBy: { email: 'asc' },
+      skip: 1,
+      select: { id: true },
+    });
+
+    expect(user.findFirst).toHaveBeenCalledTimes(1);
+    expect(user.findFirst).toHaveBeenCalledWith({
+      where: {
+        AND: [{ email: { contains: 'active' } }, { id: { equals: 'u1' } }],
+      },
+      orderBy: { email: 'asc' },
+      take: undefined,
+      skip: 1,
+      cursor: undefined,
+      distinct: undefined,
+      select: { id: true },
+      include: undefined,
+    });
+    expect(after).toHaveBeenCalledTimes(1);
+    expect(after).toHaveBeenCalledWith(result, {
+      model: 'User',
+      operation: 'findFirst',
+      context: undefined,
+    });
+  });
+
+  it('preserves omit transformations made by find hooks', async () => {
+    const registry = new HookRegistry();
+    registry.registerBefore('User', 'findFirst', (req) => ({
+      ...req,
+      omit: { email: true },
+    }));
+    const user = fakeUserDelegate();
+    const engine = new GolemEngine({ user }, models, { hooks: registry });
+
+    await engine.findFirst({ model: 'User' });
+
+    expect(user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ omit: { email: true } }),
     );
   });
 
