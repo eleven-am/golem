@@ -469,7 +469,7 @@ describe('model configuration', () => {
     ).toThrow(`Conflicting field configuration for User.credential: ${modes}`);
   });
 
-  it('rejects write-only primary keys and relation fields', () => {
+  it('rejects write-only primary keys, relations, and Prisma read-only fields', () => {
     expect(() =>
       buildGolemSchema({
         datamodel,
@@ -478,7 +478,10 @@ describe('model configuration', () => {
       }),
     ).toThrow('Cannot make primary key User.id write-only');
 
-    const relational: DatamodelDocument<{ User: 'id' | 'posts'; Post: 'id' | 'author' }> = {
+    const relational: DatamodelDocument<{
+      User: 'id' | 'posts';
+      Post: 'id' | 'author' | 'authorId';
+    }> = {
       models: [
         {
           name: 'User',
@@ -502,7 +505,10 @@ describe('model configuration', () => {
               type: 'User',
               kind: 'object',
               relationName: 'PostToUser',
+              relationFromFields: ['authorId'],
+              relationToFields: ['id'],
             }),
+            field({ name: 'authorId', type: 'String', isReadOnly: true }),
           ],
         },
       ],
@@ -515,5 +521,12 @@ describe('model configuration', () => {
         models: { User: { writeOnly: ['posts'] } },
       }),
     ).toThrow('Cannot make relation field User.posts write-only');
+    expect(() =>
+      buildGolemSchema({
+        datamodel: relational,
+        client: {},
+        models: { Post: { writeOnly: ['authorId' as 'author'] } },
+      }),
+    ).toThrow('Cannot make Prisma read-only field Post.authorId write-only');
   });
 });

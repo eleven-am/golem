@@ -118,6 +118,9 @@ function resolveModelSettings(
     if (writeOnly.has(field.name) && field.kind === 'object') {
       throw new Error(`Cannot make relation field ${model.name}.${field.name} write-only`);
     }
+    if (writeOnly.has(field.name) && field.isReadOnly) {
+      throw new Error(`Cannot make Prisma read-only field ${model.name}.${field.name} write-only`);
+    }
   }
   const accessModes = [
     ['hidden', hidden],
