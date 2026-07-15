@@ -32,6 +32,7 @@ export interface FindOneRequest {
   where: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface FindManyRequest {
@@ -45,6 +46,7 @@ export interface FindManyRequest {
   distinct?: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface CreateRequest {
@@ -53,6 +55,7 @@ export interface CreateRequest {
   data: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface UpdateRequest {
@@ -62,6 +65,7 @@ export interface UpdateRequest {
   data: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface UpdateManyRequest {
@@ -77,6 +81,7 @@ export interface DeleteRequest {
   where: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface DeleteManyRequest {
@@ -96,6 +101,7 @@ export interface FindFirstRequest {
   distinct?: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface UpsertRequest {
@@ -106,6 +112,7 @@ export interface UpsertRequest {
   update: unknown;
   select?: PrismaSelect;
   include?: unknown;
+  omit?: unknown;
 }
 
 export interface GolemEngineOptions {
@@ -217,6 +224,7 @@ export class GolemEngine {
     model: string;
     select?: PrismaSelect;
     include?: unknown;
+    omit?: unknown;
     context?: unknown;
   }): Promise<PreparedReadTree> {
     return prepareReadTree({
@@ -224,6 +232,7 @@ export class GolemEngine {
       modelsByName: this.modelsByName,
       select: request.select as Record<string, unknown> | undefined,
       include: request.include as Record<string, unknown> | undefined,
+      omit: request.omit as Record<string, unknown> | undefined,
       provider: this.enforced(request.context),
       context: request.context,
       maxDepth: this.maxDepth,
@@ -430,11 +439,17 @@ export class GolemEngine {
     const constraint = await this.constraintFor('read', req.model, req.context);
     const found = await this.run(req.model, () =>
       constraint === undefined
-        ? delegate.findUnique({ where: req.where, select: prepared.select, include: prepared.include })
+        ? delegate.findUnique({
+            where: req.where,
+            select: prepared.select,
+            include: prepared.include,
+            ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+          })
         : delegate.findFirst({
             where: mergeConstraint(req.where, constraint),
             select: prepared.select,
             include: prepared.include,
+            ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
           }),
     );
     await this.finishRead(found, prepared, req.context);
@@ -458,6 +473,7 @@ export class GolemEngine {
         distinct: req.distinct,
         select: prepared.select,
         include: prepared.include,
+        ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
       }),
     )) as unknown[];
     await this.finishRead(found, prepared, req.context);
@@ -480,6 +496,7 @@ export class GolemEngine {
         distinct: req.distinct,
         select: prepared.select,
         include: prepared.include,
+        ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
       }),
     );
     await this.finishRead(found, prepared, req.context);
@@ -530,6 +547,7 @@ export class GolemEngine {
                 where: { [pk.name]: wide[pk.name] },
                 select: prepared.select,
                 include: prepared.include,
+                ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
               });
             },
           ),
@@ -537,7 +555,12 @@ export class GolemEngine {
       );
     } else {
       created = await this.run(req.model, () =>
-        delegate.create({ data: req.data, select: prepared.select, include: prepared.include }),
+        delegate.create({
+          data: req.data,
+          select: prepared.select,
+          include: prepared.include,
+          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+        }),
       );
     }
     await this.finishRead(created, prepared, req.context);
@@ -594,6 +617,7 @@ export class GolemEngine {
                 where: { [pk.name]: before[pk.name] },
                 select: prepared.select,
                 include: prepared.include,
+                ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
               });
             },
           ),
@@ -607,6 +631,7 @@ export class GolemEngine {
           data: req.data,
           select: prepared.select,
           include: prepared.include,
+          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
         }),
       );
     }
@@ -680,7 +705,12 @@ export class GolemEngine {
     const { where } = await this.resolveConstrainedTarget('delete', req);
     const prepared = await this.prepareRead(req);
     const deleted = await this.run(req.model, () =>
-      delegate.delete({ where, select: prepared.select, include: prepared.include }),
+      delegate.delete({
+        where,
+        select: prepared.select,
+        include: prepared.include,
+        ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+      }),
     );
     await this.finishRead(deleted, prepared, req.context);
     await this.runAfter('delete', req.model, deleted, req.context);
@@ -703,6 +733,7 @@ export class GolemEngine {
         data: request.update,
         select: request.select,
         include: request.include,
+        omit: request.omit,
         context: request.context,
       });
     }
@@ -711,6 +742,7 @@ export class GolemEngine {
       data: request.create,
       select: request.select,
       include: request.include,
+      omit: request.omit,
       context: request.context,
     });
   }

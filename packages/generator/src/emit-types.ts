@@ -10,6 +10,7 @@ export function emitTypesModule(modelNames: readonly string[], clientImport: str
     where: Prisma.${name}WhereInput;
     whereUnique: Prisma.${name}WhereUniqueInput;
     orderBy: Prisma.${name}OrderByWithRelationInput;
+    omit: Prisma.${name}Omit;
   };`,
     )
     .join('\n');

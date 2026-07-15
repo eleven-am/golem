@@ -13,5 +13,6 @@ describe('generated Golem hook types', () => {
     expect(output).toContain(
       'export type GolemResult<M extends GolemModelName, O extends GolemHookOperation>',
     );
+    expect(output).toContain('omit: Prisma.UserOmit;');
   });
 });

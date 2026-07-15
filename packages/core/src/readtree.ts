@@ -26,6 +26,7 @@ export interface InjectedField {
 export interface PreparedReadTree {
   select?: Record<string, unknown>;
   include?: Record<string, unknown>;
+  omit?: Record<string, unknown>;
   toOneChecks: ToOneCheck[];
   maskChecks: FieldMaskCheck[];
   injected: InjectedField[];
@@ -36,6 +37,7 @@ interface PrepareOptions {
   modelsByName: Map<string, DatamodelModel>;
   select?: Record<string, unknown>;
   include?: Record<string, unknown>;
+  omit?: Record<string, unknown>;
   provider?: AuthorizationProvider;
   context?: unknown;
   maxDepth: number;
@@ -47,6 +49,7 @@ interface RelationEntry {
   where?: unknown;
   select?: Record<string, unknown>;
   include?: Record<string, unknown>;
+  omit?: Record<string, unknown>;
   [key: string]: unknown;
 }
 
@@ -68,6 +71,9 @@ export function constraintFieldNames(constraint: unknown, into: Set<string> = ne
 }
 
 export async function prepareReadTree(options: PrepareOptions): Promise<PreparedReadTree> {
+  if (options.select !== undefined && options.omit !== undefined) {
+    throw new GolemValidationError('select and omit cannot be used together');
+  }
   const checks: ToOneCheck[] = [];
   const maskChecks: FieldMaskCheck[] = [];
   const injected: InjectedField[] = [];
@@ -80,6 +86,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
   async function classifyModelFields(
     model: DatamodelModel,
     tree: Record<string, unknown> | undefined,
+    omit: Record<string, unknown> | undefined,
     path: readonly string[],
   ): Promise<void> {
     if (!classifying) {
@@ -90,7 +97,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       model.fields.filter((f) => f.kind !== 'object').map((f) => f.name);
     const requested = tree
       ? scalarNames.filter((name) => tree[name] === true)
-      : scalarNames;
+      : scalarNames.filter((name) => omit?.[name] !== true);
     if (requested.length === 0) {
       return;
     }
@@ -116,6 +123,13 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
             injected.push({ path, field: required });
           }
         }
+      } else if (omit) {
+        for (const required of entry.requires ?? []) {
+          if (omit[required] === true && scalarNames.includes(required)) {
+            delete omit[required];
+            injected.push({ path, field: required });
+          }
+        }
       }
     }
   }
@@ -123,6 +137,8 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
   async function walkTree(
     model: DatamodelModel,
     tree: Record<string, unknown> | undefined,
+    mode: 'select' | 'include',
+    omit: Record<string, unknown> | undefined,
     depth: number,
     path: readonly string[],
   ): Promise<Record<string, unknown> | undefined> {
@@ -162,10 +178,20 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
             ),
           }
         : entry === true ? {} : { ...(entry as RelationEntry) };
+      if (entryObject.omit) {
+        entryObject.omit = { ...entryObject.omit };
+      }
+      if (entryObject.select !== undefined && entryObject.omit !== undefined) {
+        throw new GolemValidationError(
+          `select and omit cannot be used together at ${relationPath.join('.')}`,
+        );
+      }
       if (entryObject.select !== undefined) {
         entryObject.select = await walkTree(
           target,
           entryObject.select as Record<string, unknown>,
+          'select',
+          undefined,
           depth + 1,
           relationPath,
         );
@@ -174,9 +200,14 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
         entryObject.include = await walkTree(
           target,
           entryObject.include as Record<string, unknown>,
+          'include',
+          entryObject.omit,
           depth + 1,
           relationPath,
         );
+      }
+      if (entryObject.select === undefined && entryObject.include === undefined) {
+        await classifyModelFields(target, undefined, entryObject.omit, relationPath);
       }
       if (conditional) {
         if (field.isList) {
@@ -190,6 +221,13 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
                 (entryObject.select as Record<string, unknown>)[name] ??= true;
               }
             }
+          } else if (entryObject.omit) {
+            for (const name of constraintFieldNames(constraint)) {
+              if (entryObject.omit[name] === true) {
+                delete entryObject.omit[name];
+                injected.push({ path: relationPath, field: name });
+              }
+            }
           }
           checks.push({ path: relationPath, model: target.name });
         } else {
@@ -200,16 +238,17 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       }
       rewritten[key] = Object.keys(entryObject).length === 0 ? true : entryObject;
     }
-    await classifyModelFields(model, rewritten, path);
+    await classifyModelFields(model, mode === 'select' ? rewritten : undefined, omit, path);
     return rewritten;
   }
 
-  const select = await walkTree(options.model, options.select, 1, []);
-  const include = await walkTree(options.model, options.include, 1, []);
+  const omit = options.omit ? { ...options.omit } : undefined;
+  const select = await walkTree(options.model, options.select, 'select', undefined, 1, []);
+  const include = await walkTree(options.model, options.include, 'include', omit, 1, []);
   if (!options.select && !options.include) {
-    await classifyModelFields(options.model, undefined, []);
+    await classifyModelFields(options.model, undefined, omit, []);
   }
-  return { select, include, toOneChecks: checks, maskChecks, injected };
+  return { select, include, omit, toOneChecks: checks, maskChecks, injected };
 }
 
 export async function applyToOneChecks(

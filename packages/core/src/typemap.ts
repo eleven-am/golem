@@ -10,34 +10,57 @@ export interface GolemTypeShape {
   where: unknown;
   whereUnique: unknown;
   orderBy: unknown;
+  omit?: unknown;
 }
 
 export type GolemTypesMap = Record<string, GolemTypeShape>;
 
 type ScalarFieldFor<T extends GolemTypeShape> = Extract<keyof T['entity'], string>;
+type OmitFor<T extends GolemTypeShape> = T extends { omit: infer O }
+  ? O
+  : Partial<Record<ScalarFieldFor<T>, boolean>>;
 
 export type HookRequestFor<
   TTypes extends GolemTypesMap,
   M extends keyof TTypes & string,
   O extends GolemHookOperation,
 > = O extends 'create'
-  ? { model: M; data: TTypes[M]['create']; select?: PrismaSelect; context?: unknown }
+  ? {
+      model: M;
+      data: TTypes[M]['create'];
+      select?: PrismaSelect;
+      omit?: OmitFor<TTypes[M]>;
+      context?: unknown;
+    }
   : O extends 'update'
     ? {
         model: M;
         where: TTypes[M]['whereUnique'];
         data: TTypes[M]['update'];
         select?: PrismaSelect;
+        omit?: OmitFor<TTypes[M]>;
         context?: unknown;
       }
     : O extends 'updateMany'
       ? { model: M; where?: TTypes[M]['where']; data: TTypes[M]['updateMany']; context?: unknown }
       : O extends 'delete'
-        ? { model: M; where: TTypes[M]['whereUnique']; select?: PrismaSelect; context?: unknown }
+        ? {
+            model: M;
+            where: TTypes[M]['whereUnique'];
+            select?: PrismaSelect;
+            omit?: OmitFor<TTypes[M]>;
+            context?: unknown;
+          }
         : O extends 'deleteMany'
           ? { model: M; where?: TTypes[M]['where']; context?: unknown }
           : O extends 'findOne'
-            ? { model: M; where: TTypes[M]['whereUnique']; select?: PrismaSelect; context?: unknown }
+            ? {
+                model: M;
+                where: TTypes[M]['whereUnique'];
+                select?: PrismaSelect;
+                omit?: OmitFor<TTypes[M]>;
+                context?: unknown;
+              }
             : O extends 'findFirst'
               ? {
                   model: M;
@@ -48,6 +71,7 @@ export type HookRequestFor<
                   cursor?: TTypes[M]['whereUnique'];
                   distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
                   select?: PrismaSelect;
+                  omit?: OmitFor<TTypes[M]>;
                   context?: unknown;
                 }
             : O extends 'findMany'
@@ -60,6 +84,7 @@ export type HookRequestFor<
                   cursor?: TTypes[M]['whereUnique'];
                   distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
                   select?: PrismaSelect;
+                  omit?: OmitFor<TTypes[M]>;
                   context?: unknown;
                 }
               : never;

@@ -125,6 +125,73 @@ describe('model configuration', () => {
     expect(inputBlock(sdl, 'UserUpdateManyInput')).not.toContain('serverLabel');
   });
 
+  it('rejects enabled mutations whose access configuration leaves an empty input', () => {
+    const minimal: DatamodelDocument<{ Token: 'id' }> = {
+      models: [
+        {
+          name: 'Token',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+          ],
+        },
+      ],
+      enums: [],
+    };
+
+    expect(() =>
+      printSchema(
+        buildGolemSchema({
+          datamodel: minimal,
+          client: { token: {} },
+          models: { Token: { readOnly: ['id'] } },
+        }),
+      ),
+    ).toThrow(
+      'Input TokenCreateInput for model Token has no writable fields; adjust field access configuration or disable the operation',
+    );
+    expect(() =>
+      printSchema(
+        buildGolemSchema({
+          datamodel: minimal,
+          client: { token: {} },
+          models: { Token: { immutable: ['id'], operations: ['update'] } },
+        }),
+      ),
+    ).toThrow('Input TokenUpdateInput for model Token has no writable fields');
+    expect(() =>
+      printSchema(
+        buildGolemSchema({
+          datamodel: minimal,
+          client: { token: {} },
+          models: { Token: { immutable: ['id'], operations: ['updateMany'] } },
+        }),
+      ),
+    ).toThrow('Input TokenUpdateManyInput for model Token has no writable fields');
+  });
+
+  it('allows read-only operation sets when no write input can be generated', () => {
+    const minimal: DatamodelDocument<{ Token: 'id' }> = {
+      models: [
+        {
+          name: 'Token',
+          fields: [
+            field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+          ],
+        },
+      ],
+      enums: [],
+    };
+    const schema = buildGolemSchema({
+      datamodel: minimal,
+      client: { token: {} },
+      models: {
+        Token: { readOnly: ['id'], operations: ['findOne', 'findMany'] },
+      },
+    });
+
+    expect(printSchema(schema)).not.toContain('type Mutation');
+  });
+
   it('accepts write-only fields in writes and removes them from every read surface', () => {
     const schema = buildGolemSchema({
       datamodel,

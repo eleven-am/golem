@@ -146,6 +146,22 @@ describe('engine hooks', () => {
     });
   });
 
+  it('preserves omit transformations made by find hooks', async () => {
+    const registry = new HookRegistry();
+    registry.registerBefore('User', 'findFirst', (req) => ({
+      ...req,
+      omit: { email: true },
+    }));
+    const user = fakeUserDelegate();
+    const engine = new GolemEngine({ user }, models, { hooks: registry });
+
+    await engine.findFirst({ model: 'User' });
+
+    expect(user.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ omit: { email: true } }),
+    );
+  });
+
   it('passes the request context to hooks', async () => {
     const registry = new HookRegistry();
     const seen: unknown[] = [];

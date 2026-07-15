@@ -9,6 +9,7 @@ type TestTypes = {
     where: { email?: string };
     whereUnique: { id?: string; email?: string };
     orderBy: { email?: 'asc' | 'desc' };
+    omit: { id?: boolean; email?: boolean };
   };
 };
 
@@ -20,12 +21,14 @@ describe('hook request types', () => {
         model: 'User',
         cursor: { id: 'u1' },
         distinct: ['email'],
+        omit: { email: true },
       } satisfies HookRequestFor<TestTypes, 'User', typeof operation>;
 
       expect(request).toEqual({
         model: 'User',
         cursor: { id: 'u1' },
         distinct: ['email'],
+        omit: { email: true },
       });
     },
   );
