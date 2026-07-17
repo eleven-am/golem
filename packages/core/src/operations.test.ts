@@ -174,3 +174,113 @@ describe('composite updateMany identity', () => {
     });
   });
 });
+
+describe('compound unique selectors in filterable where', () => {
+  const unnamedModels = [
+    {
+      name: 'Branch',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'authorId', type: 'String' }),
+        field({ name: 'name', type: 'String' }),
+      ],
+      uniqueIndexes: [{ fields: ['authorId', 'name'] }],
+    },
+  ];
+
+  it('unwraps an unnamed compound unique selector in the upsert probe', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+
+    await engine.upsert({
+      model: 'Branch',
+      where: { authorId_name: { authorId: 'a1', name: 'main' } },
+      create: { authorId: 'a1', name: 'main' },
+      update: { name: 'main' },
+      select: { id: true },
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { authorId: 'a1', name: 'main' },
+      select: { id: true },
+    });
+  });
+
+  it('unwraps a named compound unique selector and preserves sibling filters', async () => {
+    const namedModels = [
+      {
+        name: 'Branch',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'authorId', type: 'String' }),
+          field({ name: 'name', type: 'String' }),
+        ],
+        uniqueIndexes: [{ name: 'authorNameKey', fields: ['authorId', 'name'] }],
+      },
+    ];
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    const engine = new GolemEngine({ branch: { findFirst, create } }, namedModels);
+
+    await engine.upsert({
+      model: 'Branch',
+      where: { authorNameKey: { authorId: 'a1', name: 'main' }, id: 'b9' },
+      create: { authorId: 'a1', name: 'main' },
+      update: { name: 'main' },
+      select: { id: true },
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: 'b9', authorId: 'a1', name: 'main' },
+      select: { id: true },
+    });
+  });
+
+  it('leaves a where without any compound selector untouched', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+
+    await engine.upsert({
+      model: 'Branch',
+      where: { id: 'b9' },
+      create: { authorId: 'a1', name: 'main' },
+      update: { name: 'main' },
+      select: { id: true },
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({ where: { id: 'b9' }, select: { id: true } });
+  });
+
+  it('passes through a real scalar field that shares a compound selector name', async () => {
+    const collisionModels = [
+      {
+        name: 'Branch',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'authorId', type: 'String' }),
+          field({ name: 'name', type: 'String' }),
+          field({ name: 'authorId_name', type: 'String' }),
+        ],
+        uniqueIndexes: [{ fields: ['authorId', 'name'] }],
+      },
+    ];
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    const engine = new GolemEngine({ branch: { findFirst, create } }, collisionModels);
+
+    await engine.upsert({
+      model: 'Branch',
+      where: { authorId_name: { contains: 'x' } },
+      create: { authorId: 'a1', name: 'main' },
+      update: { name: 'main' },
+      select: { id: true },
+    });
+
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { authorId_name: { contains: 'x' } },
+      select: { id: true },
+    });
+  });
+});

@@ -8,6 +8,7 @@ export interface ModelMetadata {
   readonly primaryKey?: DatamodelField;
   readonly primaryKeys: readonly DatamodelField[];
   readonly compoundKeyName?: string;
+  readonly compoundUniqueSelectors: ReadonlyMap<string, readonly string[]>;
 }
 
 export type ModelMetadataIndex = ReadonlyMap<string, ModelMetadata>;
@@ -51,6 +52,14 @@ export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMeta
     } else {
       primaryKeys = Object.freeze(singleId ? [singleId] : []);
     }
+    const compoundUniqueSelectors = new ImmutableMap(
+      (model.uniqueIndexes ?? [])
+        .filter((index) => index.fields.length > 1)
+        .map((index): readonly [string, readonly string[]] => [
+          index.name ?? index.fields.join('_'),
+          Object.freeze([...index.fields]),
+        ]),
+    );
     return [
       model.name,
       Object.freeze({
@@ -61,6 +70,7 @@ export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMeta
         primaryKey: singleId,
         primaryKeys,
         compoundKeyName,
+        compoundUniqueSelectors,
       }),
     ];
   });

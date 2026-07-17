@@ -5,7 +5,8 @@ import {
 } from './authorization';
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError, GolemValidationError } from './errors';
-import { ModelMetadataIndex } from './model-meta';
+import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
+import { PrismaSelect } from './select';
 
 export interface ToOneCheck {
   path: readonly string[];
@@ -70,6 +71,109 @@ export function constraintFieldNames(constraint: unknown, into: Set<string> = ne
   return into;
 }
 
+export function mergeSelect(into: PrismaSelect, source: PrismaSelect): void {
+  for (const [name, value] of Object.entries(source)) {
+    const current = into[name];
+    if (
+      current && current !== true && value !== true &&
+      typeof current === 'object' && typeof value === 'object' &&
+      current.select && value.select
+    ) {
+      mergeSelect(current.select, value.select);
+    } else {
+      into[name] = value;
+    }
+  }
+}
+
+const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
+
+export function constraintHydrationSelect(
+  metadata: ModelMetadataIndex,
+  model: DatamodelModel,
+  constraint: unknown,
+  into: PrismaSelect = {},
+): PrismaSelect {
+  if (!constraint || typeof constraint !== 'object') {
+    return into;
+  }
+  const meta = metadata.get(model.name);
+  for (const [key, value] of Object.entries(constraint as Record<string, unknown>)) {
+    if (key === 'AND' || key === 'OR' || key === 'NOT') {
+      const branches = Array.isArray(value) ? value : [value];
+      for (const branch of branches) {
+        constraintHydrationSelect(metadata, model, branch, into);
+      }
+      continue;
+    }
+    const fieldDef = meta?.fieldsByName.get(key);
+    if (!fieldDef) {
+      continue;
+    }
+    if (fieldDef.kind !== 'object') {
+      into[key] = true;
+      continue;
+    }
+    const target = metadata.get(fieldDef.type)?.model;
+    if (!target || !value || typeof value !== 'object') {
+      continue;
+    }
+    const operatorValues = RELATION_FILTER_KEYS
+      .map((operator) => (value as Record<string, unknown>)[operator])
+      .filter((operand) => operand && typeof operand === 'object');
+    const conditions = operatorValues.length > 0 ? operatorValues : [value];
+    const nested: PrismaSelect = {};
+    for (const condition of conditions) {
+      constraintHydrationSelect(metadata, target, condition, nested);
+    }
+    if (Object.keys(nested).length === 0) {
+      continue;
+    }
+    const existing = into[key];
+    if (existing && existing !== true && typeof existing === 'object' && existing.select) {
+      mergeSelect(existing.select, nested);
+    } else {
+      into[key] = { select: nested };
+    }
+  }
+  return into;
+}
+
+function cloneSelectShape(shape: unknown): unknown {
+  if (shape === true || shape === false || !shape || typeof shape !== 'object') {
+    return shape;
+  }
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(shape as Record<string, unknown>)) {
+    result[key] = cloneSelectShape(value);
+  }
+  return result;
+}
+
+function injectHydrationSelect(
+  container: Record<string, unknown>,
+  hydration: PrismaSelect,
+  path: readonly string[],
+  injected: InjectedField[],
+): void {
+  for (const [key, shape] of Object.entries(hydration)) {
+    const existing = container[key];
+    if (existing === undefined || existing === false) {
+      container[key] = cloneSelectShape(shape);
+      injected.push({ path, field: key });
+      continue;
+    }
+    if (shape === true || existing === true || typeof existing !== 'object') {
+      continue;
+    }
+    const nested = (shape as { select?: PrismaSelect }).select;
+    const entry = existing as RelationEntry;
+    if (nested && entry.select && typeof entry.select === 'object') {
+      injectHydrationSelect(entry.select as Record<string, unknown>, nested, [...path, key], injected);
+    }
+  }
+}
+
 export async function prepareReadTree(options: PrepareOptions): Promise<PreparedReadTree> {
   if (options.select !== undefined && options.omit !== undefined) {
     throw new GolemValidationError('select and omit cannot be used together');
@@ -77,6 +181,8 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
   const checks: ToOneCheck[] = [];
   const maskChecks: FieldMaskCheck[] = [];
   const injected: InjectedField[] = [];
+  const metadata =
+    options.metadata ?? buildModelMetadata([...options.modelsByName.values()]);
 
   const classifying =
     options.readFieldChecks === true &&
@@ -88,13 +194,18 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
     tree: Record<string, unknown> | undefined,
     omit: Record<string, unknown> | undefined,
     path: readonly string[],
+    relationHost?: () => Record<string, unknown>,
   ): Promise<void> {
     if (!classifying) {
       return;
     }
+    const modelMeta = metadata.get(model.name);
     const scalarNames =
-      options.metadata?.get(model.name)?.scalarFields.map((f) => f.name) ??
+      modelMeta?.scalarFields.map((f) => f.name) ??
       model.fields.filter((f) => f.kind !== 'object').map((f) => f.name);
+    const relationNames = new Set(
+      (modelMeta?.relations ?? model.fields.filter((f) => f.kind === 'object')).map((f) => f.name),
+    );
     const requested = tree
       ? scalarNames.filter((name) => tree[name] === true)
       : scalarNames.filter((name) => omit?.[name] !== true);
@@ -107,6 +218,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       requested,
       options.context,
     );
+    const relationRequires = new Set<string>();
     for (const field of requested) {
       const entry = classification[field];
       if (!entry || entry.access === 'always') {
@@ -116,20 +228,52 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
         throw new GolemForbiddenError(`Cannot read field "${field}" on ${model.name}`);
       }
       maskChecks.push({ path, model: model.name, field });
-      if (tree) {
-        for (const required of entry.requires ?? []) {
+      for (const required of entry.requires ?? []) {
+        if (relationNames.has(required)) {
+          relationRequires.add(required);
+          continue;
+        }
+        if (tree) {
           if (tree[required] === undefined && scalarNames.includes(required)) {
             tree[required] = true;
             injected.push({ path, field: required });
           }
-        }
-      } else if (omit) {
-        for (const required of entry.requires ?? []) {
+        } else if (omit) {
           if (omit[required] === true && scalarNames.includes(required)) {
             delete omit[required];
             injected.push({ path, field: required });
           }
         }
+      }
+    }
+    if (relationRequires.size > 0 && relationHost && options.provider) {
+      const constraint = await options.provider.constrain('read', model.name, options.context);
+      const derived = constraintHydrationSelect(metadata, model, constraint);
+      const needed: PrismaSelect = {};
+      for (const relation of relationRequires) {
+        const relationField = modelMeta?.fieldsByName.get(relation) ??
+          model.fields.find((f) => f.name === relation);
+        const target = relationField ? options.modelsByName.get(relationField.type) : undefined;
+        if (!target) {
+          continue;
+        }
+        const scalars = metadata.get(target.name)?.scalarFields ??
+          target.fields.filter((f) => f.kind !== 'object');
+        const unioned: PrismaSelect = {};
+        for (const scalar of scalars) {
+          unioned[scalar.name] = true;
+        }
+        const derivedShape = derived[relation];
+        if (
+          derivedShape && derivedShape !== true &&
+          typeof derivedShape === 'object' && derivedShape.select
+        ) {
+          mergeSelect(unioned, derivedShape.select);
+        }
+        needed[relation] = { select: unioned };
+      }
+      if (Object.keys(needed).length > 0) {
+        injectHydrationSelect(relationHost(), needed, path, injected);
       }
     }
   }
@@ -207,7 +351,10 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
         );
       }
       if (entryObject.select === undefined && entryObject.include === undefined) {
-        await classifyModelFields(target, undefined, entryObject.omit, relationPath);
+        await classifyModelFields(target, undefined, entryObject.omit, relationPath, () => {
+          entryObject.include = (entryObject.include as Record<string, unknown> | undefined) ?? {};
+          return entryObject.include as Record<string, unknown>;
+        });
       }
       if (conditional) {
         if (field.isList) {
@@ -238,15 +385,19 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       }
       rewritten[key] = Object.keys(entryObject).length === 0 ? true : entryObject;
     }
-    await classifyModelFields(model, mode === 'select' ? rewritten : undefined, omit, path);
+    await classifyModelFields(model, mode === 'select' ? rewritten : undefined, omit, path, () => rewritten);
     return rewritten;
   }
 
   const omit = options.omit ? { ...options.omit } : undefined;
   const select = await walkTree(options.model, options.select, 'select', undefined, 1, []);
-  const include = await walkTree(options.model, options.include, 'include', omit, 1, []);
+  let include = await walkTree(options.model, options.include, 'include', omit, 1, []);
   if (!options.select && !options.include) {
-    await classifyModelFields(options.model, undefined, omit, []);
+    const rootHydration: Record<string, unknown> = {};
+    await classifyModelFields(options.model, undefined, omit, [], () => rootHydration);
+    if (Object.keys(rootHydration).length > 0) {
+      include = { ...(include ?? {}), ...rootHydration };
+    }
   }
   return { select, include, omit, toOneChecks: checks, maskChecks, injected };
 }

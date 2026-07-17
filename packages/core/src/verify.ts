@@ -8,7 +8,7 @@ import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { NestedRelationWritePlan, nestedPlanTargetsRow, planNestedWrites } from './nested-writes';
-import { constraintFieldNames } from './readtree';
+import { constraintFieldNames, constraintHydrationSelect, mergeSelect } from './readtree';
 import { PrismaSelect } from './select';
 
 export interface VerifyContext {
@@ -40,21 +40,6 @@ export function touchedRelations(
   return planNestedWrites(buildModelMetadata([...modelsByName.values()]), model, data);
 }
 
-function mergeSelect(into: PrismaSelect, source: PrismaSelect): void {
-  for (const [name, value] of Object.entries(source)) {
-    const current = into[name];
-    if (
-      current && current !== true && value !== true &&
-      typeof current === 'object' && typeof value === 'object' &&
-      current.select && value.select
-    ) {
-      mergeSelect(current.select, value.select);
-    } else {
-      into[name] = value;
-    }
-  }
-}
-
 export function wideSelect(
   modelsByName: Map<string, DatamodelModel>,
   model: DatamodelModel,
@@ -78,59 +63,6 @@ function wideSelectWithMetadata(
     select[relation.field.name] = { select: nestedSelect };
   }
   return select;
-}
-
-const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
-
-function constraintHydrationSelect(
-  metadata: ModelMetadataIndex,
-  model: DatamodelModel,
-  constraint: unknown,
-  into: PrismaSelect = {},
-): PrismaSelect {
-  if (!constraint || typeof constraint !== 'object') {
-    return into;
-  }
-  const meta = metadata.get(model.name);
-  for (const [key, value] of Object.entries(constraint as Record<string, unknown>)) {
-    if (key === 'AND' || key === 'OR' || key === 'NOT') {
-      const branches = Array.isArray(value) ? value : [value];
-      for (const branch of branches) {
-        constraintHydrationSelect(metadata, model, branch, into);
-      }
-      continue;
-    }
-    const fieldDef = meta?.fieldsByName.get(key);
-    if (!fieldDef) {
-      continue;
-    }
-    if (fieldDef.kind !== 'object') {
-      into[key] = true;
-      continue;
-    }
-    const target = metadata.get(fieldDef.type)?.model;
-    if (!target || !value || typeof value !== 'object') {
-      continue;
-    }
-    const operatorValues = RELATION_FILTER_KEYS
-      .map((operator) => (value as Record<string, unknown>)[operator])
-      .filter((operand) => operand && typeof operand === 'object');
-    const conditions = operatorValues.length > 0 ? operatorValues : [value];
-    const nested: PrismaSelect = {};
-    for (const condition of conditions) {
-      constraintHydrationSelect(metadata, target, condition, nested);
-    }
-    if (Object.keys(nested).length === 0) {
-      continue;
-    }
-    const existing = into[key];
-    if (existing && existing !== true && typeof existing === 'object' && existing.select) {
-      mergeSelect(existing.select, nested);
-    } else {
-      into[key] = { select: nested };
-    }
-  }
-  return into;
 }
 
 function payloadFieldNames(model: DatamodelModel, data: Record<string, unknown>): string[] {

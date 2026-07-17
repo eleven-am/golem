@@ -23,10 +23,16 @@ export interface DatamodelPrimaryKey {
   fields: readonly string[];
 }
 
+export interface DatamodelUniqueIndex {
+  name?: string;
+  fields: readonly string[];
+}
+
 export interface DatamodelModel {
   name: string;
   fields: readonly DatamodelField[];
   primaryKey?: DatamodelPrimaryKey;
+  uniqueIndexes?: readonly DatamodelUniqueIndex[];
 }
 
 export interface DatamodelEnum {

@@ -69,10 +69,16 @@ export class DemoRules implements WillAuthorize {
       if (demoUser.email === 'mod@example.com') {
         can('read', 'Post');
         can('update', 'Post', ['published']);
+        can('read', 'ReadingSession');
+        cannot('read', 'ReadingSession', ['note']);
+        can('read', 'ReadingSession', ['note'], { post: { is: { authorId: demoUser.id } } });
       } else {
         can('read', 'Post');
         can('update', 'User', { id: demoUser.id });
         can('create', 'Post', { type: 'PERSONAL', authorId: demoUser.id });
+        can(['read', 'create', 'update', 'delete'], 'ReadingSession', {
+          post: { is: { authorId: demoUser.id } },
+        });
       }
     }
     can(['update', 'delete'], 'Post', { authorId: demoUser.id, type: 'PERSONAL' });
@@ -80,5 +86,6 @@ export class DemoRules implements WillAuthorize {
     can('read', 'PostTag');
     can(['create', 'update', 'delete'], 'PostTag', { post: { is: { authorId: demoUser.id } } });
     can(['read', 'update'], 'Tag');
+    can(['read', 'create', 'update', 'delete'], 'Branch', { authorId: demoUser.id });
   }
 }

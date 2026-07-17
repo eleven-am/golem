@@ -65,5 +65,35 @@ describe('model metadata', () => {
     ]);
     expect(index.get('Membership')!.compoundKeyName).toBe('membership');
   });
+
+  it('derives compound unique selectors from unnamed and named indexes', () => {
+    const index = buildModelMetadata([
+      {
+        name: 'Branch',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'authorId', type: 'String' }),
+          field({ name: 'name', type: 'String' }),
+        ],
+        uniqueIndexes: [
+          { fields: ['authorId', 'name'] },
+          { name: 'authorNameKey', fields: ['authorId', 'name'] },
+        ],
+      },
+    ]);
+    const selectors = index.get('Branch')!.compoundUniqueSelectors;
+    expect([...selectors.get('authorId_name')!]).toEqual(['authorId', 'name']);
+    expect([...selectors.get('authorNameKey')!]).toEqual(['authorId', 'name']);
+  });
+
+  it('leaves compound unique selectors empty when a model declares none', () => {
+    const index = buildModelMetadata([
+      {
+        name: 'User',
+        fields: [field({ name: 'id', type: 'String', isId: true })],
+      },
+    ]);
+    expect(index.get('User')!.compoundUniqueSelectors.size).toBe(0);
+  });
 });
 

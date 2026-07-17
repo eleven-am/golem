@@ -30,6 +30,15 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel): string {
           },
         }
       : {}),
+    ...(() => {
+      const compound = (model.uniqueIndexes ?? [])
+        .filter((index) => index.fields.length > 1)
+        .map((index) => ({
+          ...(index.name ? { name: index.name } : {}),
+          fields: [...index.fields],
+        }));
+      return compound.length > 0 ? { uniqueIndexes: compound } : {};
+    })(),
   }));
   const enums = datamodel.enums.map((e) => ({
     name: e.name,

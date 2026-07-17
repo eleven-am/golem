@@ -277,3 +277,169 @@ describe('omit projections', () => {
     expect(client.user.findFirst).not.toHaveBeenCalled();
   });
 });
+
+describe('relation-scoped read hydration', () => {
+  const relationModels: DatamodelDocument = {
+    models: [
+      {
+        name: 'Session',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'progress', type: 'Int' }),
+          field({ name: 'note', type: 'String', isRequired: false }),
+          field({ name: 'post', type: 'Post', kind: 'object', relationName: 'PostToSession', relationFromFields: ['postId'], relationToFields: ['id'] }),
+          field({ name: 'postId', type: 'String', isReadOnly: true }),
+        ],
+      },
+      {
+        name: 'Post',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'title', type: 'String' }),
+          field({ name: 'authorId', type: 'String' }),
+        ],
+      },
+    ],
+    enums: [],
+  };
+
+  function sessionClient(rows: unknown[]) {
+    return { session: { findMany: jest.fn().mockResolvedValue(rows) }, post: { findMany: jest.fn() } };
+  }
+
+  function relationProvider(
+    sessionConstraint: unknown,
+    checkField: jest.Mock,
+  ): AuthorizationProvider {
+    return {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async (_action: string, model: string) =>
+        model === 'Session' ? sessionConstraint : {},
+      ),
+      checkField,
+      classifyFields: jest.fn(async (_action, _model, fields: readonly string[]) =>
+        Object.fromEntries(
+          fields.map((name) => [name, { access: 'conditional' as const, requires: ['post'] }]),
+        ),
+      ),
+    };
+  }
+
+  const policy = { checkWriteResults: false, checkReadFields: true };
+  const ctx = { req: {} };
+
+  it('injects the relation named by a field requirement and strips it from the result', async () => {
+    const client = sessionClient([{ progress: 5, post: { authorId: 'me' } }]);
+    const seenRows: unknown[] = [];
+    const checkField = jest.fn(async (_action, _model, row) => {
+      seenRows.push(JSON.parse(JSON.stringify(row)));
+      return true;
+    });
+    const provider = relationProvider({ post: { is: { authorId: 'me' } } }, checkField);
+    const engine = new GolemEngine(client, relationModels.models, { authorization: provider, ...policy });
+
+    const result = (await engine.findMany({
+      model: 'Session',
+      select: { progress: true },
+      context: ctx,
+    })) as Array<Record<string, unknown>>;
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { progress: true, post: { select: { id: true, title: true, authorId: true } } },
+      }),
+    );
+    expect(seenRows).toEqual([{ progress: 5, post: { authorId: 'me' } }]);
+    expect(result).toEqual([{ progress: 5 }]);
+  });
+
+  it('merges the hydrated relation into a user selection without leaking injected columns', async () => {
+    const client = sessionClient([{ progress: 5, post: { title: 't', authorId: 'me' } }]);
+    const checkField = jest.fn(async () => true);
+    const provider = relationProvider({ post: { is: { authorId: 'me' } } }, checkField);
+    const engine = new GolemEngine(client, relationModels.models, { authorization: provider, ...policy });
+
+    const result = (await engine.findMany({
+      model: 'Session',
+      select: { progress: true, post: { select: { title: true } } },
+      context: ctx,
+    })) as Array<Record<string, unknown>>;
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { progress: true, post: { select: { title: true, id: true, authorId: true } } },
+      }),
+    );
+    expect(result).toEqual([{ progress: 5, post: { title: 't' } }]);
+  });
+
+  it('hydrates the required relation scalars when the row constraint does not surface it', async () => {
+    const client = sessionClient([{ progress: 5, post: { id: 'p1', title: 't', authorId: 'other' } }]);
+    const checkField = jest.fn(async (_action, _model, row) =>
+      (row as { post?: { authorId?: string } }).post?.authorId === 'me',
+    );
+    const provider = relationProvider({}, checkField);
+    const engine = new GolemEngine(client, relationModels.models, { authorization: provider, ...policy });
+
+    const result = (await engine.findMany({
+      model: 'Session',
+      select: { progress: true },
+      context: ctx,
+    })) as Array<Record<string, unknown>>;
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { progress: true, post: { select: { id: true, title: true, authorId: true } } },
+      }),
+    );
+    expect(result).toEqual([{ progress: null }]);
+  });
+
+  it('hydrates through an include for a default selection and strips it', async () => {
+    const client = sessionClient([
+      { id: 's1', progress: 5, note: 'n', postId: 'p1', post: { authorId: 'me' } },
+    ]);
+    const checkField = jest.fn(async () => true);
+    const provider = relationProvider({ post: { is: { authorId: 'me' } } }, checkField);
+    const engine = new GolemEngine(client, relationModels.models, { authorization: provider, ...policy });
+
+    const result = (await engine.findMany({ model: 'Session', context: ctx })) as Array<
+      Record<string, unknown>
+    >;
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ include: { post: { select: { id: true, title: true, authorId: true } } } }),
+    );
+    expect(result).toEqual([{ id: 's1', progress: 5, note: 'n', postId: 'p1' }]);
+  });
+
+  it('unions the full relation scalars over a constraint shape that omits a field-rule scalar', async () => {
+    const client = sessionClient([{ note: 'secret', post: { authorId: 'other' } }]);
+    const checkField = jest.fn(async (_action, _model, row) =>
+      (row as { post?: { authorId?: string } }).post?.authorId !== 'other',
+    );
+    const provider = relationProvider({ post: { is: { title: 'x' } } }, checkField);
+    const engine = new GolemEngine(client, relationModels.models, { authorization: provider, ...policy });
+
+    const masked = (await engine.findMany({
+      model: 'Session',
+      select: { note: true },
+      context: ctx,
+    })) as Array<Record<string, unknown>>;
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { note: true, post: { select: { id: true, title: true, authorId: true } } },
+      }),
+    );
+    expect(masked).toEqual([{ note: null }]);
+
+    client.session.findMany.mockResolvedValueOnce([{ note: 'secret', post: { authorId: 'me' } }]);
+    const unmasked = (await engine.findMany({
+      model: 'Session',
+      select: { note: true },
+      context: ctx,
+    })) as Array<Record<string, unknown>>;
+    expect(unmasked).toEqual([{ note: 'secret' }]);
+  });
+});

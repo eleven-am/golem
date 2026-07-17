@@ -15,13 +15,14 @@ generator golem {
 }
 
 model User {
-  id      String   @id @default(cuid())
-  email   String   @unique
-  name    String?
-  phone   String?
-  apiKey  String?
-  posts   Post[]
-  profile Profile?
+  id       String   @id @default(cuid())
+  email    String   @unique
+  name     String?
+  phone    String?
+  apiKey   String?
+  posts    Post[]
+  profile  Profile?
+  branches Branch[]
 }
 
 enum PostType {
@@ -30,15 +31,16 @@ enum PostType {
 }
 
 model Post {
-  id        String    @id @default(cuid())
-  title     String
-  type      PostType  @default(PERSONAL)
-  published Boolean   @default(false)
-  viewCount BigInt    @default(0)
-  createdAt DateTime  @default(now())
-  author    User      @relation(fields: [authorId], references: [id])
-  authorId  String
-  postTags  PostTag[]
+  id              String           @id @default(cuid())
+  title           String
+  type            PostType         @default(PERSONAL)
+  published       Boolean          @default(false)
+  viewCount       BigInt           @default(0)
+  createdAt       DateTime         @default(now())
+  author          User             @relation(fields: [authorId], references: [id])
+  authorId        String
+  postTags        PostTag[]
+  readingSessions ReadingSession[]
 }
 
 model Profile {
@@ -62,4 +64,21 @@ model PostTag {
   addedAt DateTime @default(now())
 
   @@id([postId, tagId])
+}
+
+model Branch {
+  id       String @id @default(cuid())
+  name     String
+  author   User   @relation(fields: [authorId], references: [id])
+  authorId String
+
+  @@unique([authorId, name])
+}
+
+model ReadingSession {
+  id       String  @id @default(cuid())
+  progress Int     @default(0)
+  note     String?
+  post     Post    @relation(fields: [postId], references: [id])
+  postId   String
 }

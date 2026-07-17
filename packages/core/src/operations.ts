@@ -325,17 +325,38 @@ export class GolemEngine {
   }
 
   private filterableWhere(model: string, where: unknown): unknown {
-    const compoundName = this.metadata.get(model)?.compoundKeyName;
-    if (!compoundName || !where || typeof where !== 'object' || Array.isArray(where)) {
+    if (!where || typeof where !== 'object' || Array.isArray(where)) {
       return where;
     }
-    const source = where as Record<string, unknown>;
-    const compound = source[compoundName];
-    if (!compound || typeof compound !== 'object') {
+    const meta = this.metadata.get(model);
+    if (!meta) {
       return where;
     }
-    const { [compoundName]: _compound, ...rest } = source;
-    return { ...rest, ...(compound as Record<string, unknown>) };
+    const selectors = new Set<string>();
+    if (meta.compoundKeyName) {
+      selectors.add(meta.compoundKeyName);
+    }
+    for (const name of meta.compoundUniqueSelectors.keys()) {
+      selectors.add(name);
+    }
+    if (selectors.size === 0) {
+      return where;
+    }
+    const rest: Record<string, unknown> = {};
+    const flattened: Record<string, unknown> = {};
+    let changed = false;
+    for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+      if (
+        selectors.has(key) && !meta.fieldsByName.has(key) &&
+        value && typeof value === 'object' && !Array.isArray(value)
+      ) {
+        Object.assign(flattened, value as Record<string, unknown>);
+        changed = true;
+      } else {
+        rest[key] = value;
+      }
+    }
+    return changed ? { ...rest, ...flattened } : where;
   }
 
   private async prepareRead(request: {
