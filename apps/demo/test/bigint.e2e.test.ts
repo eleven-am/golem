@@ -29,6 +29,7 @@ describe('BigInt scalar (e2e)', () => {
     prisma = app.get(GolemPrismaService);
     await seed(prisma);
     await prisma.user.create({ data: { email: 'analyst@example.com', name: 'Analyst' } });
+    await prisma.user.create({ data: { email: 'cliff@example.com', name: 'Cliff' } });
   });
 
   afterAll(async () => {
@@ -112,6 +113,38 @@ describe('BigInt scalar (e2e)', () => {
     for (const post of facadeView) {
       expect((post.viewCount as bigint) >= 100n).toBe(true);
     }
+  });
+
+  it('verifies a BigInt write policy exactly one ULP beyond 2^53', async () => {
+    const above = await prisma.post.create({
+      data: {
+        title: 'cliff-above',
+        viewCount: 9007199254740993n,
+        author: { connect: { email: 'roy@example.com' } },
+      },
+    });
+    const below = await prisma.post.create({
+      data: {
+        title: 'cliff-below',
+        viewCount: 9007199254740992n,
+        author: { connect: { email: 'roy@example.com' } },
+      },
+    });
+
+    const allowed = await gql(
+      `mutation { updatePost(where: { id: "${above.id}" }, data: { title: "cliff-above-edited" }) { title } }`,
+      'token-cliff@example.com',
+    );
+    expect(allowed.body.errors).toBeUndefined();
+    expect(allowed.body.data.updatePost.title).toBe('cliff-above-edited');
+
+    const denied = await gql(
+      `mutation { updatePost(where: { id: "${below.id}" }, data: { title: "cliff-below-edited" }) { id } }`,
+      'token-cliff@example.com',
+    );
+    expect(denied.body.errors[0].extensions.code).toBe('NOT_FOUND');
+    const untouched = await prisma.post.findUnique({ where: { id: below.id } });
+    expect(untouched!.title).toBe('cliff-below');
   });
 
   it('verifies a write policy conditioned on the BigInt column', async () => {

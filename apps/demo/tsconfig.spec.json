@@ -5,7 +5,8 @@
     "baseUrl": ".",
     "paths": {
       "@casl/ability": ["../../node_modules/@casl/ability/dist/types/index.d.ts"],
-      "@casl/prisma": ["../../node_modules/@casl/prisma/dist/types/index.d.ts"]
+      "@casl/prisma": ["../../node_modules/@casl/prisma/dist/types/index.d.ts"],
+      "@eleven-am/authorizer/prisma": ["../../node_modules/@eleven-am/authorizer/dist/prisma.d.ts"]
     }
   },
   "include": ["src", "test"]

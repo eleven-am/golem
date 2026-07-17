@@ -13,32 +13,6 @@ import { golemContextStore, ensureGolemTransportRegistered, wrapFresh } from './
 
 export { ensureGolemTransportRegistered } from './transport';
 
-function normalizeBigInts(value: unknown): unknown {
-  if (typeof value === 'bigint') {
-    return Number(value);
-  }
-  if (Array.isArray(value)) {
-    let changed = false;
-    const next = value.map((item) => {
-      const converted = normalizeBigInts(item);
-      changed = changed || converted !== item;
-      return converted;
-    });
-    return changed ? next : value;
-  }
-  if (value && typeof value === 'object' && !(value instanceof Date)) {
-    let changed = false;
-    const next: Record<string, unknown> = {};
-    for (const [key, item] of Object.entries(value)) {
-      const converted = normalizeBigInts(item);
-      changed = changed || converted !== item;
-      next[key] = converted;
-    }
-    return changed ? next : value;
-  }
-  return value;
-}
-
 function translate(error: unknown): never {
   const status =
     typeof (error as { getStatus?: () => number })?.getStatus === 'function'
@@ -95,7 +69,7 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider {
   async check(action: GolemAction, model: string, entity: unknown, context: unknown): Promise<boolean> {
     try {
       const ability = await this.ability(context);
-      return ability.can(action, subject(model, normalizeBigInts(entity) as object));
+      return ability.can(action, subject(model, entity as object));
     } catch (error) {
       translate(error);
     }
@@ -110,7 +84,7 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider {
   ): Promise<boolean> {
     try {
       const ability = await this.ability(context);
-      return ability.can(action, subject(model, normalizeBigInts(entity) as object), field);
+      return ability.can(action, subject(model, entity as object), field);
     } catch (error) {
       translate(error);
     }

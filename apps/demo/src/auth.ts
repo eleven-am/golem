@@ -1,5 +1,4 @@
 import { AbilityBuilder } from '@casl/ability';
-import { createPrismaAbility } from '@casl/prisma';
 import {
   Authenticator,
   AuthorizationContext,
@@ -8,6 +7,7 @@ import {
   ResolvedUser,
   WillAuthorize,
 } from '@eleven-am/authorizer';
+import { createBigIntSafePrismaAbility } from '@eleven-am/authorizer/prisma';
 import { GolemPrismaService } from './generated/golem/client';
 
 interface DemoUser {
@@ -37,7 +37,7 @@ export class DemoAuthenticator implements Authenticator {
   }
 
   abilityFactory(): AbilityBuilder<ResolvedAbility> {
-    return new AbilityBuilder(createPrismaAbility) as unknown as AbilityBuilder<ResolvedAbility>;
+    return new AbilityBuilder(createBigIntSafePrismaAbility) as unknown as AbilityBuilder<ResolvedAbility>;
   }
 }
 
@@ -53,6 +53,11 @@ export class DemoRules implements WillAuthorize {
     if (demoUser.email === 'analyst@example.com') {
       can('read', 'Post', { viewCount: { gte: 100 } });
       can('update', 'Post', { viewCount: { gte: 100 } });
+      return;
+    }
+    if (demoUser.email === 'cliff@example.com') {
+      can('read', 'Post');
+      can('update', 'Post', { viewCount: { gt: 9007199254740992 } });
       return;
     }
     if (demoUser.name === 'REVOKED') {
