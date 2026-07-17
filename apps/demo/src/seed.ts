@@ -1,12 +1,17 @@
 import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from './generated/prisma/client';
 
-type SeedClient = Record<'user' | 'post' | 'profile', any>;
+type SeedClient = Record<'user' | 'post' | 'profile' | 'tag' | 'postTag', any>;
 
 export async function seed(client: SeedClient): Promise<void> {
+  await client.postTag.deleteMany();
   await client.post.deleteMany();
   await client.profile.deleteMany();
+  await client.tag.deleteMany();
   await client.user.deleteMany();
+  for (const label of ['alpha', 'beta', 'gamma', 'delta', 'epsilon']) {
+    await client.tag.create({ data: { label } });
+  }
   await client.user.create({
     data: {
       email: 'roy@example.com',

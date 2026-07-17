@@ -2,8 +2,10 @@ import { AuthorizationProvider } from './authorization';
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
 import { withBufferedEvents, bufferEvent } from './event-buffer';
+import { buildModelMetadata } from './model-meta';
 import { GolemEngine } from './operations';
 import { field } from './testing';
+import { planVerification, verifyUpdatedRow, VerifyContext } from './verify';
 
 const post: DatamodelModel = {
   name: 'Post',
@@ -529,5 +531,229 @@ describe('narrow verification readback (M14)', () => {
     const select = delegates.post.findFirst.mock.calls[0][0].select;
     expect(select.views).toBe(true);
     expect(select.published).toBe(true);
+  });
+});
+
+describe('planVerification relation-aware hydration', () => {
+  const planUser: DatamodelModel = {
+    name: 'User',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'email', type: 'String', isUnique: true }),
+      field({ name: 'posts', type: 'Post', kind: 'object', isList: true, relationName: 'PostToUser' }),
+      field({ name: 'profile', type: 'Profile', kind: 'object', relationName: 'ProfileToUser' }),
+    ],
+  };
+  const planPost: DatamodelModel = {
+    name: 'Post',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'title', type: 'String' }),
+      field({ name: 'published', type: 'Boolean' }),
+      field({
+        name: 'author',
+        type: 'User',
+        kind: 'object',
+        relationName: 'PostToUser',
+        relationFromFields: ['authorId'],
+        relationToFields: ['id'],
+      }),
+      field({ name: 'authorId', type: 'String' }),
+    ],
+  };
+  const planProfile: DatamodelModel = {
+    name: 'Profile',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'bio', type: 'String' }),
+      field({ name: 'userId', type: 'String', isUnique: true }),
+      field({
+        name: 'user',
+        type: 'User',
+        kind: 'object',
+        relationName: 'ProfileToUser',
+        relationFromFields: ['userId'],
+        relationToFields: ['id'],
+      }),
+    ],
+  };
+  const planModels = [planUser, planPost, planProfile];
+
+  function planContext(): VerifyContext {
+    return {
+      modelsByName: new Map(planModels.map((model) => [model.name, model])),
+      metadata: buildModelMetadata(planModels),
+      provider: provider(),
+      context: ctx,
+    };
+  }
+
+  function modelByName(name: string): DatamodelModel {
+    return planModels.find((model) => model.name === name)!;
+  }
+
+  it('hydrates a to-one relation referenced by an is condition', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('Post'),
+      { title: 't' },
+      { author: { is: { id: 'u1' } } },
+      'create',
+    );
+    expect(plan.fastPath).toBe(false);
+    expect(plan.select.author).toEqual({ select: { id: true } });
+  });
+
+  it('hydrates a to-many relation referenced by a some condition', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('User'),
+      { email: 'e' },
+      { posts: { some: { published: true } } },
+      'update',
+    );
+    expect(plan.select.posts).toEqual({ select: { published: true } });
+  });
+
+  it('recurses into nested relation conditions', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('Post'),
+      { title: 't' },
+      { author: { is: { profile: { is: { bio: 'x' } } } } },
+      'create',
+    );
+    expect(plan.select.author).toEqual({ select: { profile: { select: { bio: true } } } });
+  });
+
+  it('merges logical OR branches into the hydration select', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('Post'),
+      { title: 't' },
+      { OR: [{ author: { is: { id: 'u1' } } }, { author: { is: { email: 'x' } } }] },
+      'create',
+    );
+    expect(plan.select.author).toEqual({ select: { id: true, email: true } });
+  });
+
+  it('leaves an unrecognized relation condition shape unhydrated so it fails closed', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('Post'),
+      { title: 't' },
+      { author: 'weird' },
+      'create',
+    );
+    expect(plan.select.author).toBeUndefined();
+  });
+
+  it('leaves an unrecognized relation operand unhydrated so it fails closed', async () => {
+    const plan = await planVerification(
+      planContext(),
+      modelByName('Post'),
+      { title: 't' },
+      { author: { is: 5 } },
+      'create',
+    );
+    expect(plan.select.author).toBeUndefined();
+  });
+});
+
+describe('nested composite-child update verification', () => {
+  const childPost: DatamodelModel = {
+    name: 'Post',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'authorId', type: 'String' }),
+    ],
+  };
+  const tag: DatamodelModel = {
+    name: 'Tag',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'label', type: 'String' }),
+      field({ name: 'postTags', type: 'PostTag', kind: 'object', isList: true, relationName: 'PostTagToTag' }),
+    ],
+  };
+  const postTag: DatamodelModel = {
+    name: 'PostTag',
+    fields: [
+      field({ name: 'postId', type: 'String' }),
+      field({ name: 'tagId', type: 'String' }),
+      field({
+        name: 'post',
+        type: 'Post',
+        kind: 'object',
+        relationName: 'PostToPostTag',
+        relationFromFields: ['postId'],
+        relationToFields: ['id'],
+      }),
+    ],
+    primaryKey: { fields: ['postId', 'tagId'] },
+  };
+  const compositeModels = [childPost, tag, postTag];
+
+  function compositeContext(overrides: Partial<AuthorizationProvider> = {}): VerifyContext {
+    return {
+      modelsByName: new Map(compositeModels.map((model) => [model.name, model])),
+      metadata: buildModelMetadata(compositeModels),
+      provider: provider(overrides),
+      context: ctx,
+    };
+  }
+
+  const before = { id: 'tag1', label: 'x', postTags: [] as unknown[] };
+  const after = {
+    id: 'tag1',
+    label: 'x',
+    postTags: [
+      { postId: 'pV', tagId: 'tag1', post: { id: 'pV', authorId: 'victim' } },
+    ],
+  };
+  const data = { postTags: { create: [{ post: { connect: { id: 'pV' } } }] } };
+
+  it('rejects an appeared composite child that fails its value check', async () => {
+    const vctx = compositeContext({ check: jest.fn(async (_a, model) => model !== 'PostTag') });
+    await expect(verifyUpdatedRow(vctx, tag, before, after, data)).rejects.toBeInstanceOf(
+      GolemForbiddenError,
+    );
+  });
+
+  it('verifies an appeared composite child that passes its value check', async () => {
+    const vctx = compositeContext();
+    await expect(verifyUpdatedRow(vctx, tag, before, after, data)).resolves.toBeUndefined();
+    expect(vctx.provider.check).toHaveBeenCalledWith(
+      'create',
+      'PostTag',
+      expect.objectContaining({ postId: 'pV', tagId: 'tag1' }),
+      ctx,
+    );
+  });
+
+  it('fails closed for a nested child model that has no primary key', async () => {
+    const box: DatamodelModel = {
+      name: 'Box',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'items', type: 'Item', kind: 'object', isList: true, relationName: 'BoxToItem' }),
+      ],
+    };
+    const item: DatamodelModel = { name: 'Item', fields: [field({ name: 'name', type: 'String' })] };
+    const vctx: VerifyContext = {
+      modelsByName: new Map([box, item].map((model) => [model.name, model])),
+      metadata: buildModelMetadata([box, item]),
+      provider: provider(),
+      context: ctx,
+    };
+    await expect(
+      verifyUpdatedRow(
+        vctx,
+        box,
+        { id: 'b1', items: [] },
+        { id: 'b1', items: [{ name: 'n' }] },
+        { items: { create: [{ name: 'n' }] } },
+      ),
+    ).rejects.toThrow('Cannot verify nested writes to Item: model has no primary key');
   });
 });

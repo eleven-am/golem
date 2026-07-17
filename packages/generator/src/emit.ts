@@ -22,6 +22,14 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel): string {
         ...(field.relationFromFields?.length ? { relationFromFields: [...field.relationFromFields] } : {}),
         ...(field.relationToFields?.length ? { relationToFields: [...(field.relationToFields as string[])] } : {}),
       })),
+    ...(model.primaryKey
+      ? {
+          primaryKey: {
+            ...(model.primaryKey.name ? { name: model.primaryKey.name } : {}),
+            fields: [...model.primaryKey.fields],
+          },
+        }
+      : {}),
   }));
   const enums = datamodel.enums.map((e) => ({
     name: e.name,

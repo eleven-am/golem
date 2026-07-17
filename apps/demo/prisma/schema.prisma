@@ -30,14 +30,15 @@ enum PostType {
 }
 
 model Post {
-  id        String   @id @default(cuid())
+  id        String    @id @default(cuid())
   title     String
-  type      PostType @default(PERSONAL)
-  published Boolean  @default(false)
-  viewCount BigInt   @default(0)
-  createdAt DateTime @default(now())
-  author    User     @relation(fields: [authorId], references: [id])
+  type      PostType  @default(PERSONAL)
+  published Boolean   @default(false)
+  viewCount BigInt    @default(0)
+  createdAt DateTime  @default(now())
+  author    User      @relation(fields: [authorId], references: [id])
   authorId  String
+  postTags  PostTag[]
 }
 
 model Profile {
@@ -45,4 +46,20 @@ model Profile {
   bio    String
   user   User   @relation(fields: [userId], references: [id])
   userId String @unique
+}
+
+model Tag {
+  id       String    @id @default(cuid())
+  label    String    @unique
+  postTags PostTag[]
+}
+
+model PostTag {
+  post    Post     @relation(fields: [postId], references: [id])
+  postId  String
+  tag     Tag      @relation(fields: [tagId], references: [id])
+  tagId   String
+  addedAt DateTime @default(now())
+
+  @@id([postId, tagId])
 }

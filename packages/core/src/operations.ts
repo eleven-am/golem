@@ -3,7 +3,7 @@ import {
   GolemAction,
   mergeConstraint,
 } from './authorization';
-import { DatamodelModel } from './datamodel';
+import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
 import { runPolicyChecks } from './concurrency';
 import { withBufferedEvents } from './event-buffer';
@@ -275,12 +275,67 @@ export class GolemEngine {
     };
   }
 
-  private pkOf(model: string) {
-    const pk = this.metadata.get(model)?.primaryKey;
-    if (!pk) {
+  private primaryKeyFields(model: string): readonly DatamodelField[] {
+    const fields = this.metadata.get(model)?.primaryKeys ?? [];
+    if (fields.length === 0) {
       throw new GolemValidationError(`Model ${model} has no primary key field`);
     }
-    return pk;
+    return fields;
+  }
+
+  private pkSelect(model: string): PrismaSelect {
+    const select: PrismaSelect = {};
+    for (const pkField of this.primaryKeyFields(model)) {
+      select[pkField.name] = true;
+    }
+    return select;
+  }
+
+  private pkScalarWhere(model: string, row: Record<string, unknown>): Record<string, unknown> {
+    const identity: Record<string, unknown> = {};
+    for (const pkField of this.primaryKeyFields(model)) {
+      identity[pkField.name] = row[pkField.name];
+    }
+    return identity;
+  }
+
+  private pkWhere(model: string, row: Record<string, unknown>): Record<string, unknown> {
+    const fields = this.primaryKeyFields(model);
+    if (fields.length === 1) {
+      return { [fields[0].name]: row[fields[0].name] };
+    }
+    return { [this.metadata.get(model)!.compoundKeyName!]: this.pkScalarWhere(model, row) };
+  }
+
+  private pkIdentity(model: string, row: Record<string, unknown>): string {
+    return this.primaryKeyFields(model)
+      .map((pkField) => String(row[pkField.name]))
+      .join('\u0000');
+  }
+
+  private pkBatchWhere(
+    model: string,
+    rows: readonly Record<string, unknown>[],
+  ): Record<string, unknown> {
+    const fields = this.primaryKeyFields(model);
+    if (fields.length === 1) {
+      return { [fields[0].name]: { in: rows.map((row) => row[fields[0].name]) } };
+    }
+    return { OR: rows.map((row) => this.pkScalarWhere(model, row)) };
+  }
+
+  private filterableWhere(model: string, where: unknown): unknown {
+    const compoundName = this.metadata.get(model)?.compoundKeyName;
+    if (!compoundName || !where || typeof where !== 'object' || Array.isArray(where)) {
+      return where;
+    }
+    const source = where as Record<string, unknown>;
+    const compound = source[compoundName];
+    if (!compound || typeof compound !== 'object') {
+      return where;
+    }
+    const { [compoundName]: _compound, ...rest } = source;
+    return { ...rest, ...(compound as Record<string, unknown>) };
   }
 
   private async prepareRead(request: {
@@ -416,21 +471,18 @@ export class GolemEngine {
     if (constraint === undefined) {
       return { where: request.where };
     }
-    const pkField = this.metadata.get(request.model)?.primaryKey;
-    if (!pkField) {
-      throw new GolemValidationError(`Model ${request.model} has no primary key field`);
-    }
+    const pkSelect = this.pkSelect(request.model);
     const delegate = this.delegate(request.model, client);
     const found = (await this.run(request.model, () =>
       delegate.findFirst({
-        where: mergeConstraint(request.where, constraint),
-        select: { [pkField.name]: true },
+        where: mergeConstraint(this.filterableWhere(request.model, request.where), constraint),
+        select: pkSelect,
       }),
     )) as Record<string, unknown> | null;
     if (!found) {
       throw new GolemNotFoundError(`${request.model} not found`);
     }
-    return { where: { [pkField.name]: found[pkField.name] }, row: found };
+    return { where: this.pkWhere(request.model, found), row: found };
   }
 
   private async runBefore<T extends { model: string; context?: unknown }>(
@@ -617,17 +669,17 @@ export class GolemEngine {
     }
     if (provider && this.checkWriteResults && !createPlanFast) {
       const model = this.modelsByName.get(req.model)!;
-      const pk = this.pkOf(req.model);
+      const pkSelect = this.pkSelect(req.model);
       const vctx = this.verifyContext(req.context);
       created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
         const wide = await txDelegate.create({
           data: req.data,
-          select: { ...createPlan!.select, [pk.name]: true },
+          select: { ...createPlan!.select, ...pkSelect },
         });
         await verifyCreatedTree(vctx, model, wide, req.data as Record<string, unknown>);
         return txDelegate.findUnique({
-          where: { [pk.name]: wide[pk.name] },
+          where: this.pkWhere(req.model, wide),
           select: prepared.select,
           include: prepared.include,
           ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
@@ -671,27 +723,27 @@ export class GolemEngine {
     }
     if (provider && this.checkWriteResults && updatePlan && !updatePlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
-      const pk = this.pkOf(req.model);
+      const pkSelect = this.pkSelect(req.model);
       const vctx = this.verifyContext(req.context);
       const constraint = updateConstraint;
-      const wide = { ...updatePlan!.select, [pk.name]: true };
+      const wide = { ...updatePlan!.select, ...pkSelect };
       updated = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
         const before = await txDelegate.findFirst({
-          where: mergeConstraint(req.where, constraint),
+          where: mergeConstraint(this.filterableWhere(req.model, req.where), constraint),
           select: wide,
         });
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
         const after = await txDelegate.update({
-          where: { [pk.name]: before[pk.name] },
+          where: this.pkWhere(req.model, before),
           data: req.data,
           select: wide,
         });
         await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
         return txDelegate.findUnique({
-          where: { [pk.name]: before[pk.name] },
+          where: this.pkWhere(req.model, before),
           select: prepared.select,
           include: prepared.include,
           ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
@@ -734,29 +786,31 @@ export class GolemEngine {
     }
     if (provider && this.checkWriteResults && manyPlan && !manyPlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
-      const pk = this.pkOf(req.model);
+      const pkSelect = this.pkSelect(req.model);
       const vctx = this.verifyContext(req.context);
-      const scalars = { ...manyPlan.select, [pk.name]: true };
+      const scalars = { ...manyPlan.select, ...pkSelect };
       result = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
         const beforeRows = (await txDelegate.findMany({
           where: mergeConstraint(req.where, constraint),
           select: scalars,
         })) as Record<string, unknown>[];
-        const ids = beforeRows.map((row) => row[pk.name]);
-        await txDelegate.updateMany({ where: { [pk.name]: { in: ids } }, data: req.data });
+        const identityWhere = this.pkBatchWhere(req.model, beforeRows);
+        await txDelegate.updateMany({ where: identityWhere, data: req.data });
         const afterRows = (await txDelegate.findMany({
-          where: { [pk.name]: { in: ids } },
+          where: identityWhere,
           select: scalars,
         })) as Record<string, unknown>[];
-        const afterById = new Map(afterRows.map((row) => [row[pk.name], row]));
+        const afterById = new Map(
+          afterRows.map((row) => [this.pkIdentity(req.model, row), row] as const),
+        );
         await runPolicyChecks(beforeRows.map((before) => async () => {
-          const after = afterById.get(before[pk.name]);
+          const after = afterById.get(this.pkIdentity(req.model, before));
           if (after) {
             await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
           }
         }));
-        return { count: ids.length };
+        return { count: beforeRows.length };
       });
     } else {
       result = (await this.run(req.model, () =>
@@ -787,12 +841,9 @@ export class GolemEngine {
 
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
-    const pkField = this.metadata.get(request.model)?.primaryKey;
-    if (!pkField) {
-      throw new GolemValidationError(`Model ${request.model} has no primary key field`);
-    }
+    const pkSelect = this.pkSelect(request.model);
     const existing = await this.run(request.model, () =>
-      delegate.findFirst({ where: request.where, select: { [pkField.name]: true } }),
+      delegate.findFirst({ where: this.filterableWhere(request.model, request.where), select: pkSelect }),
     );
     if (existing) {
       return this.update(

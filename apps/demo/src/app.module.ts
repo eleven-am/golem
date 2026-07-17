@@ -38,6 +38,7 @@ export class AppModule {
             User: { subscriptions: true, hidden: ['apiKey'], immutable: ['email'] },
             Post: { subscriptions: true },
             Profile: { operations: ['findOne', 'findMany', 'create'] },
+            PostTag: false,
           },
           extensions: [UserExtension],
           authorization: GolemAuthorizationAdapter,

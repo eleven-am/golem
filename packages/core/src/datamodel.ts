@@ -18,9 +18,15 @@ export interface DatamodelField {
   relationToFields?: readonly string[];
 }
 
+export interface DatamodelPrimaryKey {
+  name?: string;
+  fields: readonly string[];
+}
+
 export interface DatamodelModel {
   name: string;
   fields: readonly DatamodelField[];
+  primaryKey?: DatamodelPrimaryKey;
 }
 
 export interface DatamodelEnum {

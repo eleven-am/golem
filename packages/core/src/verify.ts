@@ -80,6 +80,59 @@ function wideSelectWithMetadata(
   return select;
 }
 
+const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
+
+function constraintHydrationSelect(
+  metadata: ModelMetadataIndex,
+  model: DatamodelModel,
+  constraint: unknown,
+  into: PrismaSelect = {},
+): PrismaSelect {
+  if (!constraint || typeof constraint !== 'object') {
+    return into;
+  }
+  const meta = metadata.get(model.name);
+  for (const [key, value] of Object.entries(constraint as Record<string, unknown>)) {
+    if (key === 'AND' || key === 'OR' || key === 'NOT') {
+      const branches = Array.isArray(value) ? value : [value];
+      for (const branch of branches) {
+        constraintHydrationSelect(metadata, model, branch, into);
+      }
+      continue;
+    }
+    const fieldDef = meta?.fieldsByName.get(key);
+    if (!fieldDef) {
+      continue;
+    }
+    if (fieldDef.kind !== 'object') {
+      into[key] = true;
+      continue;
+    }
+    const target = metadata.get(fieldDef.type)?.model;
+    if (!target || !value || typeof value !== 'object') {
+      continue;
+    }
+    const operatorValues = RELATION_FILTER_KEYS
+      .map((operator) => (value as Record<string, unknown>)[operator])
+      .filter((operand) => operand && typeof operand === 'object');
+    const conditions = operatorValues.length > 0 ? operatorValues : [value];
+    const nested: PrismaSelect = {};
+    for (const condition of conditions) {
+      constraintHydrationSelect(metadata, target, condition, nested);
+    }
+    if (Object.keys(nested).length === 0) {
+      continue;
+    }
+    const existing = into[key];
+    if (existing && existing !== true && typeof existing === 'object' && existing.select) {
+      mergeSelect(existing.select, nested);
+    } else {
+      into[key] = { select: nested };
+    }
+  }
+  return into;
+}
+
 function payloadFieldNames(model: DatamodelModel, data: Record<string, unknown>): string[] {
   const names = new Set<string>();
   for (const field of model.fields) {
@@ -194,32 +247,35 @@ export async function verifyUpdatedRow(
   }
   await checkFields(ctx, 'update', model.name, before, changed);
   for (const relation of planNestedWrites(metadata, model, data)) {
-    const pk = metadata.get(relation.target.name)?.primaryKey;
-    if (!pk) {
-      continue;
+    const targetMeta = metadata.get(relation.target.name);
+    const pkFields = targetMeta?.primaryKeys ?? [];
+    if (pkFields.length === 0) {
+      throw new GolemForbiddenError(
+        `Cannot verify nested writes to ${relation.target.name}: model has no primary key`,
+      );
     }
+    const identityOf = (row: Record<string, unknown>): string =>
+      pkFields.map((pkField) => String(row[pkField.name])).join('\u0000');
     const beforeValue = before[relation.field.name];
     const afterValue = after[relation.field.name];
     const beforeRows = Array.isArray(beforeValue) ? beforeValue : beforeValue ? [beforeValue] : [];
     const afterRows = Array.isArray(afterValue) ? afterValue : afterValue ? [afterValue] : [];
     const beforeById = new Map(beforeRows.map((row) => {
       const record = row as Record<string, unknown>;
-      return [record[pk.name], record] as const;
+      return [identityOf(record), record] as const;
     }));
     const afterById = new Map(afterRows.map((row) => {
       const record = row as Record<string, unknown>;
-      return [record[pk.name], record] as const;
+      return [identityOf(record), record] as const;
     }));
     for (const child of afterRows) {
       const childRow = child as Record<string, unknown>;
-      const beforeChild = beforeById.get(childRow[pk.name]);
+      const beforeChild = beforeById.get(identityOf(childRow));
       if (!beforeChild) {
         await verifyAppearedRow(ctx, relation, childRow);
         continue;
       }
-      const childChanged = metadata
-        .get(relation.target.name)!
-        .scalarFields
+      const childChanged = targetMeta!.scalarFields
         .filter((field) => scalarChanged(beforeChild[field.name], childRow[field.name]))
         .map((field) => field.name);
       if (
@@ -235,7 +291,7 @@ export async function verifyUpdatedRow(
     }
     for (const child of beforeRows) {
       const childRow = child as Record<string, unknown>;
-      if (afterById.has(childRow[pk.name])) continue;
+      if (afterById.has(identityOf(childRow))) continue;
       await runPolicyChecks([...relation.removedActions].map((action) => () =>
         checkRow(ctx, action, relation.target.name, childRow)));
     }
@@ -289,7 +345,9 @@ export async function planVerification(
   const metadata = metadataFor(ctx);
   const relations = planNestedWrites(metadata, model, data);
   if (!ctx.provider.classifyFields) {
-    return { select: wideSelectWithMetadata(metadata, model, data), fastPath: false };
+    const wide = wideSelectWithMetadata(metadata, model, data);
+    mergeSelect(wide, constraintHydrationSelect(metadata, model, constraint));
+    return { select: wide, fastPath: false };
   }
   const payload = payloadFieldNames(model, data);
   const classification =
@@ -331,5 +389,6 @@ export async function planVerification(
     }
     select[relation.field.name] = { select: nestedSelect };
   }
+  mergeSelect(select, constraintHydrationSelect(metadata, model, constraint));
   return { select, fastPath: false };
 }

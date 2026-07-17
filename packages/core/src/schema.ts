@@ -216,6 +216,7 @@ function wrapResolve(
 
 interface ResolvedGolem {
   models: readonly DatamodelModel[];
+  engineModels: readonly DatamodelModel[];
   modelsByName: Map<string, DatamodelModel>;
   settings: Map<string, ResolvedModelSettings>;
   subscribable: Set<string>;
@@ -253,12 +254,12 @@ function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): Resol
     }
   }
 
-  return { models, modelsByName, settings, subscribable, takeLimits };
+  return { models, engineModels: options.datamodel.models, modelsByName, settings, subscribable, takeLimits };
 }
 
 export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TModels>): GolemEngine {
-  const { models, takeLimits } = resolveGolem(options);
-  return new GolemEngine(options.client, models, {
+  const { engineModels, takeLimits } = resolveGolem(options);
+  return new GolemEngine(options.client, engineModels, {
     hooks: options.hooks,
     takeLimits,
     authorization: options.authorization,
@@ -275,16 +276,29 @@ export function subscribableModels<TModels>(
 }
 
 export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TModels>): GraphQLSchema {
-  const { models, modelsByName, settings, subscribable, takeLimits } = resolveGolem(options);
+  const { models, engineModels, modelsByName, settings, subscribable, takeLimits } = resolveGolem(options);
   if (subscribable.size > 0 && !options.eventBus) {
     throw new Error(
       `Subscriptions are enabled for ${[...subscribable].join(', ')} but no event bus was provided`,
     );
   }
+  for (const model of models) {
+    if (!model.primaryKey || model.primaryKey.fields.length <= 1) {
+      continue;
+    }
+    if (subscribable.has(model.name)) {
+      throw new Error(
+        `Model ${model.name} has a composite primary key and cannot enable subscriptions; Golem event identifiers require a single-column primary key`,
+      );
+    }
+    throw new Error(
+      `Model ${model.name} has a composite primary key and cannot be exposed on the generated GraphQL surface; set models.${model.name} to false and use forContext for composite-key access`,
+    );
+  }
 
   const engine =
     options.engine ??
-    new GolemEngine(options.client, models, {
+    new GolemEngine(options.client, engineModels, {
       hooks: options.hooks,
       takeLimits,
       authorization: options.authorization,

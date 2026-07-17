@@ -23,5 +23,47 @@ describe('model metadata', () => {
     expect(Object.isFrozen(metadata.scalarFields)).toBe(true);
     expect(Object.isFrozen(metadata)).toBe(true);
   });
+
+  it('reports a single-field primary key through primaryKeys without a compound key name', () => {
+    const index = buildModelMetadata([
+      {
+        name: 'User',
+        fields: [field({ name: 'id', type: 'String', isId: true }), field({ name: 'email', type: 'String' })],
+      },
+    ]);
+    const metadata = index.get('User')!;
+    expect(metadata.primaryKey?.name).toBe('id');
+    expect(metadata.primaryKeys.map((entry) => entry.name)).toEqual(['id']);
+    expect(metadata.compoundKeyName).toBeUndefined();
+  });
+
+  it('resolves composite primary keys in declared order and derives the compound key name', () => {
+    const index = buildModelMetadata([
+      {
+        name: 'PostTag',
+        fields: [
+          field({ name: 'postId', type: 'String' }),
+          field({ name: 'tagId', type: 'String' }),
+          field({ name: 'addedAt', type: 'DateTime', hasDefaultValue: true }),
+        ],
+        primaryKey: { fields: ['postId', 'tagId'] },
+      },
+    ]);
+    const metadata = index.get('PostTag')!;
+    expect(metadata.primaryKey).toBeUndefined();
+    expect(metadata.primaryKeys.map((entry) => entry.name)).toEqual(['postId', 'tagId']);
+    expect(metadata.compoundKeyName).toBe('postId_tagId');
+  });
+
+  it('honours a named composite primary key', () => {
+    const index = buildModelMetadata([
+      {
+        name: 'Membership',
+        fields: [field({ name: 'userId', type: 'String' }), field({ name: 'orgId', type: 'String' })],
+        primaryKey: { name: 'membership', fields: ['userId', 'orgId'] },
+      },
+    ]);
+    expect(index.get('Membership')!.compoundKeyName).toBe('membership');
+  });
 });
 

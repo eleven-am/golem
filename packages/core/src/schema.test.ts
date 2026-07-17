@@ -118,6 +118,77 @@ describe('buildGolemSchema queries', () => {
     expect(sdl).toContain('type User');
   });
 
+  it('rejects exposing a composite primary key model on the GraphQL surface', () => {
+    const composite: DatamodelDocument = {
+      models: [
+        {
+          name: 'PostTag',
+          fields: [
+            field({ name: 'postId', type: 'String' }),
+            field({ name: 'tagId', type: 'String' }),
+          ],
+          primaryKey: { fields: ['postId', 'tagId'] },
+        },
+      ],
+      enums: [],
+    };
+    expect(() => buildGolemSchema({ datamodel: composite, client: {} })).toThrow(
+      'Model PostTag has a composite primary key and cannot be exposed on the generated GraphQL surface',
+    );
+  });
+
+  it('rejects enabling subscriptions on a composite primary key model', () => {
+    const composite: DatamodelDocument = {
+      models: [
+        {
+          name: 'PostTag',
+          fields: [
+            field({ name: 'postId', type: 'String' }),
+            field({ name: 'tagId', type: 'String' }),
+          ],
+          primaryKey: { fields: ['postId', 'tagId'] },
+        },
+      ],
+      enums: [],
+    };
+    expect(() =>
+      buildGolemSchema({
+        datamodel: composite,
+        client: {},
+        models: { PostTag: { subscriptions: true } },
+        eventBus: {} as never,
+      }),
+    ).toThrow('Model PostTag has a composite primary key and cannot enable subscriptions');
+  });
+
+  it('keeps a hidden composite primary key model available to the engine', () => {
+    const composite: DatamodelDocument = {
+      models: [
+        {
+          name: 'User',
+          fields: [field({ name: 'id', type: 'String', isId: true }), field({ name: 'email', type: 'String' })],
+        },
+        {
+          name: 'PostTag',
+          fields: [
+            field({ name: 'postId', type: 'String' }),
+            field({ name: 'tagId', type: 'String' }),
+          ],
+          primaryKey: { fields: ['postId', 'tagId'] },
+        },
+      ],
+      enums: [],
+    };
+    const schema = buildGolemSchema({
+      datamodel: composite,
+      client: { user: { findMany: jest.fn() }, postTag: { findMany: jest.fn() } },
+      models: { PostTag: false },
+    });
+    const sdl = printSchema(schema);
+    expect(sdl).not.toContain('type PostTag');
+    expect(sdl).toContain('type User');
+  });
+
   it('rejects unsupported scalar types with a clear error', () => {
     const bad: DatamodelDocument = {
       models: [

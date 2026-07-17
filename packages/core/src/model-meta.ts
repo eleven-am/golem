@@ -6,6 +6,8 @@ export interface ModelMetadata {
   readonly scalarFields: readonly DatamodelField[];
   readonly relations: readonly DatamodelField[];
   readonly primaryKey?: DatamodelField;
+  readonly primaryKeys: readonly DatamodelField[];
+  readonly compoundKeyName?: string;
 }
 
 export type ModelMetadataIndex = ReadonlyMap<string, ModelMetadata>;
@@ -32,16 +34,33 @@ class ImmutableMap<K, V> implements ReadonlyMap<K, V> {
 
 export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMetadataIndex {
   const entries = models.map((model): readonly [string, ModelMetadata] => {
+    const fieldsByName = new ImmutableMap(model.fields.map((field) => [field.name, field] as const));
     const scalarFields = Object.freeze(model.fields.filter((field) => field.kind !== 'object'));
     const relations = Object.freeze(model.fields.filter((field) => field.kind === 'object'));
+    const singleId = scalarFields.find((field) => field.isId);
+    const compound = model.primaryKey;
+    let primaryKeys: readonly DatamodelField[];
+    let compoundKeyName: string | undefined;
+    if (compound && compound.fields.length > 0) {
+      primaryKeys = Object.freeze(
+        compound.fields
+          .map((name) => fieldsByName.get(name))
+          .filter((entry): entry is DatamodelField => entry !== undefined),
+      );
+      compoundKeyName = compound.name ?? compound.fields.join('_');
+    } else {
+      primaryKeys = Object.freeze(singleId ? [singleId] : []);
+    }
     return [
       model.name,
       Object.freeze({
         model,
-        fieldsByName: new ImmutableMap(model.fields.map((field) => [field.name, field] as const)),
+        fieldsByName,
         scalarFields,
         relations,
-        primaryKey: scalarFields.find((field) => field.isId),
+        primaryKey: singleId,
+        primaryKeys,
+        compoundKeyName,
       }),
     ];
   });
