@@ -26,4 +26,16 @@ describe('generated Golem client', () => {
     expect(output).toContain('withBufferedEvents(() =>');
     expect(output).toContain('$transaction: commitAwareTransaction');
   });
+
+  it('exposes count and aggregate through the context-bound surface', () => {
+    expect(output).toContain('count:');
+    expect(output).toContain('aggregate:');
+  });
+
+  it('routes context-bound $transaction through the engine transaction', () => {
+    expect(output).toContain("if (prop === '$transaction')");
+    expect(output).toContain('.transaction(');
+    expect(output).toContain('$transaction<T>(');
+    expect(output).toContain('fn: (tx: ContextBoundDelegates) => Promise<T>');
+  });
 });

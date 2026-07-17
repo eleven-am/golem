@@ -133,7 +133,16 @@ await this.prisma.article.update({ where: { id }, data: { status: 'READY' } });
 await this.prisma.forContext(ctx).article.update({ where: { id }, data: { title } });
 ```
 
-`forContext(ctx)` returns Prisma's own delegate types (select-narrowed return types included) restricted to the policy-covered operations: `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`. Operations without defined policy semantics (`aggregate`, `groupBy`, raw queries) are compile errors on the bound client, not runtime surprises.
+`forContext(ctx)` returns Prisma's own delegate types (select-narrowed return types included) restricted to the policy-covered operations: `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `count`, and `aggregate`, plus an interactive `$transaction`. `count` and `aggregate` merge the caller's read constraint into the query exactly as `findMany` does; `aggregate` additionally fails closed on any aggregated field the caller cannot unconditionally read — a `never` field and a `conditional` (per-row) field are both rejected by name, because a single aggregate value cannot carry per-row masking. Operations without defined policy semantics (`groupBy`, raw queries) remain compile errors on the bound client, not runtime surprises.
+
+`forContext(ctx).$transaction(fn)` runs an interactive transaction in which every operation is the caller's policy-enforced op bound to the transaction connection. A policy denial anywhere in the callback aborts and rolls the whole transaction back, and buffered subscription events publish only if it commits. Only the callback form exists; there is no sequential-array form on the bound client.
+
+```typescript
+await this.prisma.forContext(ctx).$transaction(async (tx) => {
+  const author = await tx.user.create({ data: { email } });
+  await tx.post.create({ data: { title, author: { connect: { id: author.id } } } });
+});
+```
 
 This boundary also applies to hooks and field configuration. Generated GraphQL operations and `forContext(ctx)` enter `GolemEngine`, so they run hooks and caller authorization. Plain delegate calls intentionally bypass both as system-level Prisma access, although their writes still publish configured subscription events. `hidden`, `readOnly`, and `writeOnly` control the generated GraphQL schema; they do not remove fields from Prisma's generated types or impose field restrictions on `forContext(ctx)` or plain delegates. Use CASL when programmatic callers also need field-level enforcement.
 
@@ -356,7 +365,8 @@ Each opted-in model gets `articleEvents(where?)` emitting `{ type: CREATED | UPD
 Stated here because you will hit them eventually, and finding them in a README beats finding them in production:
 
 - **Subscription fan-out.** Delivery costs about two indexed queries plus one ability build per event per subscriber. Fine for typical fan-outs, a scaling consideration for very hot models with thousands of subscribers.
-- **Transactions.** Writes through the generated client are buffered until `prisma.$transaction` commits and discarded on rollback. Out-of-process transactions remain outside Golem's event boundary.
+- **Transactions.** Writes through the generated client are buffered until `prisma.$transaction` commits and discarded on rollback. `forContext(ctx).$transaction(fn)` extends this to policy-enforced callers with the callback form only — there is no sequential-array (`$transaction([...])`) form on the bound client. Out-of-process transactions remain outside Golem's event boundary.
+- **Count and aggregate are read-only and hook-free.** `count` and `aggregate` merge the caller's read constraint but run no `before`/`after` hooks. `aggregate` fails closed on any aggregated field that is not unconditionally readable: a `never` field and a `conditional` (per-row) field are both rejected by name, since one aggregate value cannot carry per-row masking. `groupBy` is not exposed.
 - **Conditional read-masked fields should be nullable** in your schema. A masked `null` on a non-nullable GraphQL field produces a standard null-propagation error.
 - **`BigInt` columns serialize as strings** over GraphQL, since values can exceed `2^53` and JSON cannot carry a raw bigint. Inputs accept an integer string or an integer literal; fractional numbers, unsafe integer numbers, and non-numeric strings are rejected.
 - **BigInt policy conditions need the BigInt-safe ability.** Applications whose schemas use `BigInt` columns must build their abilities with `createBigIntSafePrismaAbility` from `@eleven-am/authorizer` — recommended unconditionally for Prisma-syntax rules. Its conditions matcher compares mixed `BigInt`/number operands exactly (fail-closed on non-numeric and `NaN` operands), so the in-memory checks — read field masking, transactional write verification, and the subscription delete re-check — are exact at any magnitude, with no `2^53` ceiling. The row-level query filter compiles to SQL and was always exact. List-membership operators (`has`, `hasSome`, `hasEvery`) keep JavaScript `Array.includes` element semantics.

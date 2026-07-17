@@ -24,6 +24,8 @@ const POLICY_OPS = {
   delete: 'delete',
   deleteMany: 'deleteMany',
   upsert: 'upsert',
+  count: 'count',
+  aggregate: 'aggregate',
 } as const;
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
@@ -60,36 +62,74 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
 
 export type GolemBaseClient = ReturnType<typeof createBaseClient>;
 
-export type ContextBoundClient = {
+export type ContextBoundDelegates = {
   [K in ${delegateUnion}]: Pick<GolemBaseClient[K], keyof typeof POLICY_OPS & keyof GolemBaseClient[K]>;
 };
 
+export interface ContextBoundTransactionOptions {
+  timeout?: number;
+  isolationLevel?: unknown;
+}
+
+export type ContextBoundClient = ContextBoundDelegates & {
+  $transaction<T>(
+    fn: (tx: ContextBoundDelegates) => Promise<T>,
+    options?: ContextBoundTransactionOptions,
+  ): Promise<T>;
+};
+
 function bindContext(engineRef: GolemEngineRef, context: unknown): ContextBoundClient {
-  return new Proxy({} as Record<string, unknown>, {
-    get: (_target, delegateName) => {
-      const model = GOLEM_MODELS[delegateName as keyof typeof GOLEM_MODELS];
-      if (!model) {
-        return undefined;
-      }
-      return new Proxy({} as Record<string, unknown>, {
-        get: (_inner, operation) => {
-          const engineOp = POLICY_OPS[operation as keyof typeof POLICY_OPS];
-          if (!engineOp) {
-            return undefined;
-          }
-          return (args: Record<string, unknown> = {}) => {
-            const engine = engineRef.current;
-            if (!engine) {
-              throw new Error('GolemModule is not initialized: forContext is unavailable before bootstrap');
+  const requireEngine = (): Record<string, (request: unknown) => Promise<unknown>> => {
+    const engine = engineRef.current;
+    if (!engine) {
+      throw new Error('GolemModule is not initialized: forContext is unavailable before bootstrap');
+    }
+    return engine as unknown as Record<string, (request: unknown) => Promise<unknown>>;
+  };
+  const boundDelegates = (
+    resolve: () => Record<string, (request: unknown) => Promise<unknown>>,
+  ): ContextBoundDelegates =>
+    new Proxy({} as Record<string, unknown>, {
+      get: (_target, delegateName) => {
+        const model = GOLEM_MODELS[delegateName as keyof typeof GOLEM_MODELS];
+        if (!model) {
+          return undefined;
+        }
+        return new Proxy({} as Record<string, unknown>, {
+          get: (_inner, operation) => {
+            const engineOp = POLICY_OPS[operation as keyof typeof POLICY_OPS];
+            if (!engineOp) {
+              return undefined;
             }
-            return (engine as unknown as Record<string, (request: unknown) => Promise<unknown>>)[engineOp]({
-              model,
-              ...args,
-              context,
-            });
-          };
-        },
-      });
+            return (args: Record<string, unknown> = {}) =>
+              resolve()[engineOp]({ model, ...args, context });
+          },
+        });
+      },
+    }) as unknown as ContextBoundDelegates;
+  const engineDelegates = boundDelegates(requireEngine);
+  return new Proxy({} as Record<string, unknown>, {
+    get: (_target, prop, receiver) => {
+      if (prop === '$transaction') {
+        return (
+          fn: (tx: ContextBoundDelegates) => Promise<unknown>,
+          options?: ContextBoundTransactionOptions,
+        ) =>
+          (
+            requireEngine() as unknown as {
+              transaction(
+                context: unknown,
+                run: (tx: Record<string, (request: unknown) => Promise<unknown>>) => Promise<unknown>,
+                options?: ContextBoundTransactionOptions,
+              ): Promise<unknown>;
+            }
+          ).transaction(
+            context,
+            (txView) => fn(boundDelegates(() => txView)),
+            options,
+          );
+      }
+      return Reflect.get(engineDelegates as object, prop, receiver);
     },
   }) as unknown as ContextBoundClient;
 }

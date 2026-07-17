@@ -115,6 +115,47 @@ export interface UpsertRequest {
   omit?: unknown;
 }
 
+export interface CountRequest {
+  context?: unknown;
+  model: string;
+  where?: unknown;
+}
+
+export interface AggregateRequest {
+  context?: unknown;
+  model: string;
+  where?: unknown;
+  _sum?: unknown;
+  _avg?: unknown;
+  _min?: unknown;
+  _max?: unknown;
+  _count?: unknown;
+}
+
+export interface GolemOpScope {
+  client: Record<string, any>;
+  ambient: boolean;
+}
+
+export interface TransactionOptions {
+  timeout?: number;
+  isolationLevel?: unknown;
+}
+
+export interface GolemEngineTransaction {
+  findOne(request: FindOneRequest): Promise<unknown>;
+  findMany(request: FindManyRequest): Promise<unknown[]>;
+  findFirst(request: FindFirstRequest): Promise<unknown>;
+  create(request: CreateRequest): Promise<unknown>;
+  update(request: UpdateRequest): Promise<unknown>;
+  updateMany(request: UpdateManyRequest): Promise<BatchResult>;
+  delete(request: DeleteRequest): Promise<unknown>;
+  deleteMany(request: DeleteManyRequest): Promise<BatchResult>;
+  upsert(request: UpsertRequest): Promise<unknown>;
+  count(request: CountRequest): Promise<number>;
+  aggregate(request: AggregateRequest): Promise<unknown>;
+}
+
 export interface GolemEngineOptions {
   hooks?: HookRegistry;
   takeLimits?: ReadonlyMap<string, number>;
@@ -153,6 +194,28 @@ function translateError(error: unknown, model: string): never {
     }
   }
   throw error;
+}
+
+function collectAggregateFields(request: AggregateRequest): string[] {
+  const fields = new Set<string>();
+  const addTrueKeys = (source: unknown): void => {
+    if (source && typeof source === 'object') {
+      for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+        if (value === true) {
+          fields.add(key);
+        }
+      }
+    }
+  };
+  addTrueKeys(request._sum);
+  addTrueKeys(request._avg);
+  addTrueKeys(request._min);
+  addTrueKeys(request._max);
+  if (typeof request._count === 'object') {
+    addTrueKeys(request._count);
+    fields.delete('_all');
+  }
+  return [...fields];
 }
 
 export class GolemEngine {
@@ -347,6 +410,7 @@ export class GolemEngine {
   private async resolveConstrainedTarget(
     action: GolemAction,
     request: { model: string; where: unknown; context?: unknown },
+    client?: Record<string, any>,
   ): Promise<{ where: unknown; row?: Record<string, unknown> }> {
     const constraint = await this.constraintFor(action, request.model, request.context);
     if (constraint === undefined) {
@@ -356,7 +420,7 @@ export class GolemEngine {
     if (!pkField) {
       throw new GolemValidationError(`Model ${request.model} has no primary key field`);
     }
-    const delegate = this.delegate(request.model);
+    const delegate = this.delegate(request.model, client);
     const found = (await this.run(request.model, () =>
       delegate.findFirst({
         where: mergeConstraint(request.where, constraint),
@@ -413,15 +477,37 @@ export class GolemEngine {
     }
   }
 
-  private delegate(model: string): Record<string, (args: unknown) => Promise<any>> {
+  private delegate(
+    model: string,
+    client: Record<string, any> = this.client,
+  ): Record<string, (args: unknown) => Promise<any>> {
     if (!this.modelsByName.has(model)) {
       throw new GolemValidationError(`Unknown model ${model}`);
     }
-    const delegate = this.client[lcFirst(model)];
+    const delegate = client[lcFirst(model)];
     if (!delegate) {
       throw new GolemValidationError(`Prisma client has no delegate for model ${model}`);
     }
     return delegate;
+  }
+
+  private async runVerifiedWrite<T>(
+    model: string,
+    scope: GolemOpScope | undefined,
+    work: (client: Record<string, any>) => Promise<T>,
+  ): Promise<T> {
+    if (scope?.ambient) {
+      return this.run(model, () => work(scope.client));
+    }
+    return withBufferedEvents(() =>
+      this.run(model, () =>
+        (
+          this.client as {
+            $transaction: (fn: (tx: any) => Promise<T>) => Promise<T>;
+          }
+        ).$transaction((tx) => work(tx)),
+      ),
+    );
   }
 
   private async run<T>(model: string, action: () => Promise<T>): Promise<T> {
@@ -432,8 +518,8 @@ export class GolemEngine {
     }
   }
 
-  async findOne(request: FindOneRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async findOne(request: FindOneRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findOne', request);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
@@ -457,8 +543,8 @@ export class GolemEngine {
     return found;
   }
 
-  async findMany(request: FindManyRequest): Promise<unknown[]> {
-    const delegate = this.delegate(request.model);
+  async findMany(request: FindManyRequest, scope?: GolemOpScope): Promise<unknown[]> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findMany', request);
     this.enforceTakeLimit(req);
     const prepared = await this.prepareRead(req);
@@ -481,8 +567,8 @@ export class GolemEngine {
     return found;
   }
 
-  async findFirst(request: FindFirstRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async findFirst(request: FindFirstRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findFirst', request);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
@@ -504,8 +590,8 @@ export class GolemEngine {
     return found;
   }
 
-  async create(request: CreateRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async create(request: CreateRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('create', request);
     const provider = this.enforced(req.context);
     if (provider) {
@@ -533,26 +619,20 @@ export class GolemEngine {
       const model = this.modelsByName.get(req.model)!;
       const pk = this.pkOf(req.model);
       const vctx = this.verifyContext(req.context);
-      created = await withBufferedEvents(() =>
-        this.run(req.model, () =>
-          (this.client as { $transaction: (fn: (tx: any) => Promise<unknown>) => Promise<unknown> }).$transaction(
-            async (tx) => {
-              const txDelegate = tx[lcFirst(req.model)];
-              const wide = await txDelegate.create({
-                data: req.data,
-                select: { ...createPlan!.select, [pk.name]: true },
-              });
-              await verifyCreatedTree(vctx, model, wide, req.data as Record<string, unknown>);
-              return txDelegate.findUnique({
-                where: { [pk.name]: wide[pk.name] },
-                select: prepared.select,
-                include: prepared.include,
-                ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-              });
-            },
-          ),
-        ),
-      );
+      created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
+        const txDelegate = this.delegate(req.model, txClient);
+        const wide = await txDelegate.create({
+          data: req.data,
+          select: { ...createPlan!.select, [pk.name]: true },
+        });
+        await verifyCreatedTree(vctx, model, wide, req.data as Record<string, unknown>);
+        return txDelegate.findUnique({
+          where: { [pk.name]: wide[pk.name] },
+          select: prepared.select,
+          include: prepared.include,
+          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+        });
+      });
     } else {
       created = await this.run(req.model, () =>
         delegate.create({
@@ -568,8 +648,8 @@ export class GolemEngine {
     return created;
   }
 
-  async update(request: UpdateRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async update(request: UpdateRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const provider = this.enforced(req.context);
@@ -595,36 +675,30 @@ export class GolemEngine {
       const vctx = this.verifyContext(req.context);
       const constraint = updateConstraint;
       const wide = { ...updatePlan!.select, [pk.name]: true };
-      updated = await withBufferedEvents(() =>
-        this.run(req.model, () =>
-          (this.client as { $transaction: (fn: (tx: any) => Promise<unknown>) => Promise<unknown> }).$transaction(
-            async (tx) => {
-              const txDelegate = tx[lcFirst(req.model)];
-              const before = await txDelegate.findFirst({
-                where: mergeConstraint(req.where, constraint),
-                select: wide,
-              });
-              if (!before) {
-                throw new GolemNotFoundError(`${req.model} not found`);
-              }
-              const after = await txDelegate.update({
-                where: { [pk.name]: before[pk.name] },
-                data: req.data,
-                select: wide,
-              });
-              await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
-              return txDelegate.findUnique({
-                where: { [pk.name]: before[pk.name] },
-                select: prepared.select,
-                include: prepared.include,
-                ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-              });
-            },
-          ),
-        ),
-      );
+      updated = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
+        const txDelegate = this.delegate(req.model, txClient);
+        const before = await txDelegate.findFirst({
+          where: mergeConstraint(req.where, constraint),
+          select: wide,
+        });
+        if (!before) {
+          throw new GolemNotFoundError(`${req.model} not found`);
+        }
+        const after = await txDelegate.update({
+          where: { [pk.name]: before[pk.name] },
+          data: req.data,
+          select: wide,
+        });
+        await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
+        return txDelegate.findUnique({
+          where: { [pk.name]: before[pk.name] },
+          select: prepared.select,
+          include: prepared.include,
+          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+        });
+      });
     } else {
-      const target = await this.resolveConstrainedTarget('update', req);
+      const target = await this.resolveConstrainedTarget('update', req, scope?.client);
       updated = await this.run(req.model, () =>
         delegate.update({
           where: target.where,
@@ -640,8 +714,8 @@ export class GolemEngine {
     return updated;
   }
 
-  async updateMany(request: UpdateManyRequest): Promise<BatchResult> {
-    const delegate = this.delegate(request.model);
+  async updateMany(request: UpdateManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('updateMany', request);
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const constraint = await this.constraintFor('update', req.model, req.context);
@@ -663,33 +737,27 @@ export class GolemEngine {
       const pk = this.pkOf(req.model);
       const vctx = this.verifyContext(req.context);
       const scalars = { ...manyPlan.select, [pk.name]: true };
-      result = (await withBufferedEvents(() =>
-        this.run(req.model, () =>
-          (this.client as { $transaction: (fn: (tx: any) => Promise<unknown>) => Promise<unknown> }).$transaction(
-            async (tx) => {
-              const txDelegate = tx[lcFirst(req.model)];
-              const beforeRows = (await txDelegate.findMany({
-                where: mergeConstraint(req.where, constraint),
-                select: scalars,
-              })) as Record<string, unknown>[];
-              const ids = beforeRows.map((row) => row[pk.name]);
-              await txDelegate.updateMany({ where: { [pk.name]: { in: ids } }, data: req.data });
-              const afterRows = (await txDelegate.findMany({
-                where: { [pk.name]: { in: ids } },
-                select: scalars,
-              })) as Record<string, unknown>[];
-              const afterById = new Map(afterRows.map((row) => [row[pk.name], row]));
-              await runPolicyChecks(beforeRows.map((before) => async () => {
-                const after = afterById.get(before[pk.name]);
-                if (after) {
-                  await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
-                }
-              }));
-              return { count: ids.length };
-            },
-          ),
-        ),
-      )) as BatchResult;
+      result = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
+        const txDelegate = this.delegate(req.model, txClient);
+        const beforeRows = (await txDelegate.findMany({
+          where: mergeConstraint(req.where, constraint),
+          select: scalars,
+        })) as Record<string, unknown>[];
+        const ids = beforeRows.map((row) => row[pk.name]);
+        await txDelegate.updateMany({ where: { [pk.name]: { in: ids } }, data: req.data });
+        const afterRows = (await txDelegate.findMany({
+          where: { [pk.name]: { in: ids } },
+          select: scalars,
+        })) as Record<string, unknown>[];
+        const afterById = new Map(afterRows.map((row) => [row[pk.name], row]));
+        await runPolicyChecks(beforeRows.map((before) => async () => {
+          const after = afterById.get(before[pk.name]);
+          if (after) {
+            await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
+          }
+        }));
+        return { count: ids.length };
+      });
     } else {
       result = (await this.run(req.model, () =>
         delegate.updateMany({ where: mergeConstraint(req.where, constraint), data: req.data }),
@@ -699,10 +767,10 @@ export class GolemEngine {
     return result;
   }
 
-  async delete(request: DeleteRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async delete(request: DeleteRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('delete', request);
-    const { where } = await this.resolveConstrainedTarget('delete', req);
+    const { where } = await this.resolveConstrainedTarget('delete', req, scope?.client);
     const prepared = await this.prepareRead(req);
     const deleted = await this.run(req.model, () =>
       delegate.delete({
@@ -717,8 +785,8 @@ export class GolemEngine {
     return deleted;
   }
 
-  async upsert(request: UpsertRequest): Promise<unknown> {
-    const delegate = this.delegate(request.model);
+  async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
     const pkField = this.metadata.get(request.model)?.primaryKey;
     if (!pkField) {
       throw new GolemValidationError(`Model ${request.model} has no primary key field`);
@@ -727,28 +795,34 @@ export class GolemEngine {
       delegate.findFirst({ where: request.where, select: { [pkField.name]: true } }),
     );
     if (existing) {
-      return this.update({
+      return this.update(
+        {
+          model: request.model,
+          where: request.where,
+          data: request.update,
+          select: request.select,
+          include: request.include,
+          omit: request.omit,
+          context: request.context,
+        },
+        scope,
+      );
+    }
+    return this.create(
+      {
         model: request.model,
-        where: request.where,
-        data: request.update,
+        data: request.create,
         select: request.select,
         include: request.include,
         omit: request.omit,
         context: request.context,
-      });
-    }
-    return this.create({
-      model: request.model,
-      data: request.create,
-      select: request.select,
-      include: request.include,
-      omit: request.omit,
-      context: request.context,
-    });
+      },
+      scope,
+    );
   }
 
-  async deleteMany(request: DeleteManyRequest): Promise<BatchResult> {
-    const delegate = this.delegate(request.model);
+  async deleteMany(request: DeleteManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
+    const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('deleteMany', request);
     const constraint = await this.constraintFor('delete', req.model, req.context);
     const result = (await this.run(req.model, () =>
@@ -756,5 +830,80 @@ export class GolemEngine {
     )) as BatchResult;
     await this.runAfter('deleteMany', req.model, result, req.context);
     return result;
+  }
+
+  async count(request: CountRequest, scope?: GolemOpScope): Promise<number> {
+    const delegate = this.delegate(request.model, scope?.client);
+    const constraint = await this.constraintFor('read', request.model, request.context);
+    return (await this.run(request.model, () =>
+      delegate.count({ where: mergeConstraint(request.where, constraint) }),
+    )) as number;
+  }
+
+  async aggregate(request: AggregateRequest, scope?: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope?.client);
+    if (this.checkReadFields) {
+      const provider = this.enforced(request.context);
+      if (provider?.classifyFields) {
+        const fields = collectAggregateFields(request);
+        if (fields.length > 0) {
+          const classification = await provider.classifyFields(
+            'read',
+            request.model,
+            fields,
+            request.context,
+          );
+          for (const field of fields) {
+            const entry = classification[field];
+            if (!entry || entry.access !== 'always') {
+              throw new GolemValidationError(
+                `Cannot aggregate field "${field}" on ${request.model}`,
+              );
+            }
+          }
+        }
+      }
+    }
+    const constraint = await this.constraintFor('read', request.model, request.context);
+    const args: Record<string, unknown> = {
+      where: mergeConstraint(request.where, constraint),
+    };
+    if (request._sum !== undefined) args._sum = request._sum;
+    if (request._avg !== undefined) args._avg = request._avg;
+    if (request._min !== undefined) args._min = request._min;
+    if (request._max !== undefined) args._max = request._max;
+    if (request._count !== undefined) args._count = request._count;
+    return this.run(request.model, () => delegate.aggregate(args));
+  }
+
+  async transaction<T>(
+    context: unknown,
+    fn: (tx: GolemEngineTransaction) => Promise<T>,
+    options?: TransactionOptions,
+  ): Promise<T> {
+    return (
+      this.client as {
+        $transaction: (
+          run: (tx: Record<string, any>) => Promise<T>,
+          options?: TransactionOptions,
+        ) => Promise<T>;
+      }
+    ).$transaction((txClient) => {
+      const scope: GolemOpScope = { client: txClient, ambient: true };
+      const view: GolemEngineTransaction = {
+        findOne: (request) => this.findOne({ context, ...request }, scope),
+        findMany: (request) => this.findMany({ context, ...request }, scope),
+        findFirst: (request) => this.findFirst({ context, ...request }, scope),
+        create: (request) => this.create({ context, ...request }, scope),
+        update: (request) => this.update({ context, ...request }, scope),
+        updateMany: (request) => this.updateMany({ context, ...request }, scope),
+        delete: (request) => this.delete({ context, ...request }, scope),
+        deleteMany: (request) => this.deleteMany({ context, ...request }, scope),
+        upsert: (request) => this.upsert({ context, ...request }, scope),
+        count: (request) => this.count({ context, ...request }, scope),
+        aggregate: (request) => this.aggregate({ context, ...request }, scope),
+      };
+      return fn(view);
+    }, options);
   }
 }
