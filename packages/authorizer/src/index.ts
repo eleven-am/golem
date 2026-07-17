@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, OnModuleInit } from '@nestjs/common';
 import { subject } from '@casl/ability';
 import {
   AuthorizationProvider,
@@ -12,6 +12,9 @@ import { PrismaAuthorizationService } from '@eleven-am/authorizer/prisma';
 import { golemContextStore, ensureGolemTransportRegistered, wrapFresh } from './transport';
 
 export { ensureGolemTransportRegistered } from './transport';
+
+export const BIGINT_EXACT_ABILITY_ERROR =
+  'Golem authorization requires a BigInt-exact ability factory: the configured Authenticator.abilityFactory() does not match a rule condition { equals: 1n } against a numeric 1, so in-memory checks would be wrong for BigInt columns. Use createAbility from @eleven-am/authorizer/prisma, or omit abilityFactory to use the safe default.';
 
 function translate(error: unknown): never {
   const status =
@@ -29,12 +32,27 @@ function translate(error: unknown): never {
 }
 
 @Injectable()
-export class GolemAuthorizationAdapter implements AuthorizationProvider {
+export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModuleInit {
   private readonly port: PrismaAuthorizationService;
 
   constructor(private readonly authorizationService: AuthorizationService) {
     ensureGolemTransportRegistered();
     this.port = new PrismaAuthorizationService(authorizationService);
+  }
+
+  onModuleInit(): void {
+    const factory = this.authorizationService.resolvedAbilityFactory();
+    let ability: ResolvedAbilityLike;
+    try {
+      const builder = factory();
+      builder.can('read', 'GolemBigIntProbe', { v: { equals: 1n } });
+      ability = builder.build() as unknown as ResolvedAbilityLike;
+    } catch (error) {
+      throw new Error(BIGINT_EXACT_ABILITY_ERROR, { cause: error });
+    }
+    if (!ability.can('read', subject('GolemBigIntProbe', { v: 1 }))) {
+      throw new Error(BIGINT_EXACT_ABILITY_ERROR);
+    }
   }
 
   private ability(context: unknown): Promise<ResolvedAbilityLike> {

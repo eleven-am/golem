@@ -7,7 +7,6 @@ import {
   ResolvedUser,
   WillAuthorize,
 } from '@eleven-am/authorizer';
-import { createBigIntSafePrismaAbility } from '@eleven-am/authorizer/prisma';
 import { GolemPrismaService } from './generated/golem/client';
 
 interface DemoUser {
@@ -34,10 +33,6 @@ export class DemoAuthenticator implements Authenticator {
     }
     const email = token.slice('token-'.length);
     return this.prisma.user.findUnique({ where: { email } });
-  }
-
-  abilityFactory(): AbilityBuilder<ResolvedAbility> {
-    return new AbilityBuilder(createBigIntSafePrismaAbility) as unknown as AbilityBuilder<ResolvedAbility>;
   }
 }
 
