@@ -59,12 +59,51 @@ export const DateTimeScalar = new GraphQLScalarType({
   parseLiteral: (ast) => (ast.kind === Kind.STRING ? new Date(ast.value) : null),
 });
 
+const BIGINT_STRING = /^-?\d+$/;
+
+function coerceBigInt(value: unknown): bigint {
+  if (typeof value === 'bigint') {
+    return value;
+  }
+  if (typeof value === 'number') {
+    if (!Number.isSafeInteger(value)) {
+      throw new GraphQLError(`BigInt cannot represent non-integer value: ${value}`);
+    }
+    return BigInt(value);
+  }
+  if (typeof value === 'string' && BIGINT_STRING.test(value)) {
+    return BigInt(value);
+  }
+  throw new GraphQLError(
+    `BigInt cannot represent value: ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`,
+  );
+}
+
+export const BigIntScalar = new GraphQLScalarType({
+  name: 'BigInt',
+  serialize: (value) => coerceBigInt(value).toString(),
+  parseValue: (value) => coerceBigInt(value),
+  parseLiteral: (ast) => {
+    if (ast.kind === Kind.INT) {
+      return BigInt(ast.value);
+    }
+    if (ast.kind === Kind.STRING && BIGINT_STRING.test(ast.value)) {
+      return BigInt(ast.value);
+    }
+    throw new GraphQLError(
+      `BigInt cannot represent literal: ${'value' in ast ? String(ast.value) : ast.kind}`,
+      { nodes: ast },
+    );
+  },
+});
+
 const SCALAR_MAP: Record<string, GraphQLScalarType> = {
   String: GraphQLString as unknown as GraphQLScalarType,
   Int: GraphQLInt as unknown as GraphQLScalarType,
   Float: GraphQLFloat as unknown as GraphQLScalarType,
   Boolean: GraphQLBoolean as unknown as GraphQLScalarType,
   DateTime: DateTimeScalar,
+  BigInt: BigIntScalar,
 };
 
 const ORDERED_OPERATORS = ['lt', 'lte', 'gt', 'gte'] as const;

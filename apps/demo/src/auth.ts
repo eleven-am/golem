@@ -50,6 +50,11 @@ export class DemoRules implements WillAuthorize {
       can('manage', 'all');
       return;
     }
+    if (demoUser.email === 'analyst@example.com') {
+      can('read', 'Post', { viewCount: { gte: 100 } });
+      can('update', 'Post', { viewCount: { gte: 100 } });
+      return;
+    }
     if (demoUser.name === 'REVOKED') {
       return;
     }
