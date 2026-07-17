@@ -1,12 +1,10 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import { Client, createClient } from 'graphql-ws';
 import request from 'supertest';
 import WebSocket from 'ws';
 import { GOLEM_ENGINE, GolemEngine } from '@eleven-am/golem';
-import { AppModule } from '../src/app.module';
 import { GolemPrismaService } from '../src/generated/golem/client';
-import { seed } from '../src/seed';
+import { bootDemoApp, shutdownDemoApp } from './harness';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -19,15 +17,11 @@ describe('golem extensions and programmatic engine (e2e)', () => {
   let wsClient: Client;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication();
-    await app.init();
+    const context = await bootDemoApp(__filename);
+    app = context.app;
+    prisma = context.prisma;
     await app.listen(0);
-    prisma = app.get(GolemPrismaService);
     engine = app.get(GOLEM_ENGINE);
-    await seed(prisma);
     const address = app.getHttpServer().address();
     wsClient = createClient({
       url: `ws://127.0.0.1:${address.port}/graphql`,
@@ -38,7 +32,7 @@ describe('golem extensions and programmatic engine (e2e)', () => {
 
   afterAll(async () => {
     await wsClient.dispose();
-    await app.close();
+    await shutdownDemoApp(app, __filename);
   });
 
   function gql(query: string) {

@@ -1,9 +1,7 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import { GolemValidationError } from '@eleven-am/golem';
-import { AppModule } from '../src/app.module';
 import { GolemPrismaService } from '../src/generated/golem/client';
-import { seed } from '../src/seed';
+import { bootDemoApp, shutdownDemoApp } from './harness';
 
 function ctxFor(email: string) {
   return { req: { headers: { authorization: `token-${email}` } } };
@@ -14,15 +12,13 @@ describe('forContext count and aggregate (e2e)', () => {
   let prisma: GolemPrismaService;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication();
-    await app.init();
-    prisma = app.get(GolemPrismaService);
-    await seed(prisma);
+    const context = await bootDemoApp(__filename);
+    app = context.app;
+    prisma = context.prisma;
   });
 
   afterAll(async () => {
-    await app.close();
+    await shutdownDemoApp(app, __filename);
   });
 
   it('scopes count to the caller ability and resists a nested OR that would inflate it', async () => {

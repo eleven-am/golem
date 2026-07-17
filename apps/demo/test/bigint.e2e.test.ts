@@ -1,11 +1,9 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import { Client, createClient } from 'graphql-ws';
 import request from 'supertest';
 import WebSocket from 'ws';
-import { AppModule } from '../src/app.module';
 import { GolemPrismaService } from '../src/generated/golem/client';
-import { seed } from '../src/seed';
+import { bootDemoApp, shutdownDemoApp } from './harness';
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,20 +18,16 @@ describe('BigInt scalar (e2e)', () => {
   let prisma: GolemPrismaService;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication();
-    await app.init();
+    const context = await bootDemoApp(__filename);
+    app = context.app;
+    prisma = context.prisma;
     await app.listen(0);
-    prisma = app.get(GolemPrismaService);
-    await seed(prisma);
     await prisma.user.create({ data: { email: 'analyst@example.com', name: 'Analyst' } });
     await prisma.user.create({ data: { email: 'cliff@example.com', name: 'Cliff' } });
   });
 
   afterAll(async () => {
-    await app.close();
+    await shutdownDemoApp(app, __filename);
   });
 
   function gql(query: string, token = 'token-roy@example.com', variables?: Record<string, unknown>) {

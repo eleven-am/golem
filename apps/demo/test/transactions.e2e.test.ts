@@ -1,13 +1,12 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import {
   GOLEM_EVENT_BUS,
   PubSubEventBus,
   eventTopic,
 } from '@eleven-am/golem';
-import { AppModule } from '../src/app.module';
 import { GolemPrismaService } from '../src/generated/golem/client';
 import { seed } from '../src/seed';
+import { bootDemoApp, shutdownDemoApp } from './harness';
 
 function wait(ms: number): Promise<'waiting'> {
   return new Promise((resolve) => setTimeout(() => resolve('waiting'), ms));
@@ -19,10 +18,9 @@ describe('application-owned transaction events (e2e)', () => {
   let eventBus: PubSubEventBus;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({ imports: [AppModule] }).compile();
-    app = moduleRef.createNestApplication();
-    await app.init();
-    prisma = app.get(GolemPrismaService);
+    const context = await bootDemoApp(__filename);
+    app = context.app;
+    prisma = context.prisma;
     eventBus = app.get(GOLEM_EVENT_BUS);
   });
 
@@ -31,7 +29,7 @@ describe('application-owned transaction events (e2e)', () => {
   });
 
   afterAll(async () => {
-    await app.close();
+    await shutdownDemoApp(app, __filename);
   });
 
   it('publishes intercepted writes only after an interactive transaction commits', async () => {

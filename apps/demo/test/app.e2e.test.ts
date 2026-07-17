@@ -1,26 +1,20 @@
 import { INestApplication } from '@nestjs/common';
-import { Test } from '@nestjs/testing';
 import request from 'supertest';
-import { AppModule } from '../src/app.module';
 import { GolemPrismaService } from '../src/generated/golem/client';
-import { seed } from '../src/seed';
+import { bootDemoApp, shutdownDemoApp } from './harness';
 
 describe('golem demo (e2e)', () => {
   let app: INestApplication;
   let prisma: GolemPrismaService;
 
   beforeAll(async () => {
-    const moduleRef = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-    app = moduleRef.createNestApplication();
-    await app.init();
-    prisma = app.get(GolemPrismaService);
-    await seed(prisma);
+    const context = await bootDemoApp(__filename);
+    app = context.app;
+    prisma = context.prisma;
   });
 
   afterAll(async () => {
-    await app.close();
+    await shutdownDemoApp(app, __filename);
   });
 
   function gql(query: string) {
