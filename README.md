@@ -322,7 +322,7 @@ GolemModule.forRoot({
 
 | Option | Meaning |
 |---|---|
-| `false` | Model is removed from the generated GraphQL surface, but stays reachable under policy through `forContext(ctx)` and to plain delegate access (the intended home for internal or composite-key models) |
+| `false` | Model is removed from the generated GraphQL surface, but stays reachable under policy through `forContext(ctx)` and to plain delegate access (the intended home for internal or composite-key models). Relation fields on other models that point at it are pruned with it — see below |
 | `operations: [...]` | Allowlist; disabled operations do not exist in the schema |
 | `hidden: [...]` | Field removed from every schema surface: types, filters, inputs |
 | `immutable: [...]` | Field accepted on create, absent from update inputs |
@@ -375,6 +375,7 @@ Stated here because you will hit them eventually, and finding them in a README b
 - **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.
 - **Batch mutations publish no events.** `updateMany` and `deleteMany` return counts, and there are deliberately no per-row events for them.
 - **Composite primary keys are `forContext`-only.** Models with a Prisma composite `@@id` are supported for policy-enforced reads and verified writes through `forContext(ctx)` (and plain delegate access). Identity is the compound unique key — `{ postId_tagId: { postId, tagId } }` for `@@id([postId, tagId])`, or the two columns as scalar fields in a filter `where`; every key column is selected across the verified read/write/re-read cycle, so relation-scoped rules like `{ post: { is: { authorId } } }` verify correctly. Such models are not supported on the generated GraphQL surface (their `where`-unique input cannot be expressed) and cannot enable subscriptions (event ids are single-column); both are rejected at schema build naming the model. Set the model to `false` in the `models` config to keep it off the GraphQL surface while it stays reachable through `forContext`.
+- **Excluding a model prunes the relations pointing at it.** A relation field cannot reference a GraphQL type that does not exist, so `Artist.genres` disappears from the surface when the join model `ArtistGenre` is `false`. This is silent, and you notice it as an absence rather than an error. Expose what you actually want through a `@ComputedField` — `Artist.genreNames: [String!]!` — which is the better API in any case, since a join table is a storage decision and not something an API should promise. Computed fields resolve per row with no batching layer, so a computed field backed by its own query costs one query per row of the parent list.
 
 ## License
 
