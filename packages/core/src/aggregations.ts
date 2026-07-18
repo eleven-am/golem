@@ -104,7 +104,7 @@ export function buildAggregationTypes(
 
   const hasMeasures = fields.measures.length > 0;
 
-  const measureScalar = (field: DatamodelField, kind: MeasureKind) => {
+  const measureOutputScalar = (field: DatamodelField, kind: MeasureKind) => {
     if (kind === 'avg') {
       return field.type === 'Decimal'
         ? dimensionType(model, field)
@@ -117,6 +117,15 @@ export function buildAggregationTypes(
     return dimensionType(model, field);
   };
 
+  const measureInputScalar = (field: DatamodelField, kind: MeasureKind) => {
+    if (kind === 'avg') {
+      return field.type === 'Decimal'
+        ? dimensionType(model, field)
+        : GraphQLFloat;
+    }
+    return dimensionType(model, field);
+  };
+
   const measureValues = Object.fromEntries(
     MEASURE_KINDS.map((kind) => [
       kind,
@@ -125,7 +134,7 @@ export function buildAggregationTypes(
         fields: () => {
           const config: GraphQLFieldConfigMap<unknown, unknown> = {};
           for (const field of fields.measures) {
-            config[field.name] = { type: measureScalar(field, kind) };
+            config[field.name] = { type: measureOutputScalar(field, kind) };
           }
           return config;
         },
@@ -187,7 +196,7 @@ export function buildAggregationTypes(
             fields: () => {
               const config: GraphQLInputFieldConfigMap = {};
               for (const field of fields.measures) {
-                const scalar = measureScalar(field, kind);
+                const scalar = measureInputScalar(field, kind);
                 config[field.name] = {
                   type: filterTypeFor(`${scalar.name}Filter`, scalar, NUMBER_OPERATORS),
                 };

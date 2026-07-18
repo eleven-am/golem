@@ -616,6 +616,34 @@ describe('planVerification relation-aware hydration', () => {
     });
   });
 
+  it('preserves deep field dependencies when the same relation has a nested write', async () => {
+    const context = planContext();
+    context.provider.classifyFields = jest.fn(async () => ({
+      title: {
+        access: 'conditional',
+        requires: ['author'],
+        dependencies: { author: { profile: { bio: true } } },
+      },
+      authorId: { access: 'always' },
+    }));
+
+    const plan = await planVerification(
+      context,
+      modelByName('Post'),
+      { title: 'new title', author: { update: { email: 'new@example.com' } } },
+      {},
+      'update',
+    );
+
+    expect(plan.select.author).toEqual({
+      select: {
+        id: true,
+        email: true,
+        profile: { select: { bio: true } },
+      },
+    });
+  });
+
   it('fails closed when a write field dependency cannot be hydrated', async () => {
     const context = planContext();
     context.provider.classifyFields = jest.fn(async () => ({

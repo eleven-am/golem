@@ -356,7 +356,9 @@ export async function planVerification(
     for (const payload of [...relation.createPayloads, ...relation.updatePayloads]) {
       mergeSelect(nestedSelect, wideSelectWithMetadata(metadata, relation.target, payload));
     }
-    select[relation.field.name] = { select: nestedSelect };
+    mergeSelect(select, {
+      [relation.field.name]: { select: nestedSelect },
+    });
   }
   const hydrationState = { complete: true };
   mergeSelect(select, constraintHydrationSelect(metadata, model, constraint, {}, hydrationState));

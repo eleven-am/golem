@@ -65,6 +65,8 @@ describe('aggregation schema surface', () => {
     expect(sdl).toMatch(/type PlayMinValues[\s\S]*bytesPlayed: BigInt/);
     expect(sdl).toMatch(/type PlayMaxValues[\s\S]*bytesPlayed: BigInt/);
     expect(sdl).toMatch(/type PlaySumValues[\s\S]*cost: Decimal/);
+    expect(sdl).toMatch(/input PlaySumFilterInput[\s\S]*msPlayed: IntFilter/);
+    expect(sdl).toMatch(/input PlayAvgFilterInput[\s\S]*msPlayed: FloatFilter/);
     expect(sdl).toContain('scalar Decimal');
   });
 
@@ -204,6 +206,24 @@ describe('aggregation schema surface', () => {
         having: { msPlayed: { _sum: { gt: 1000 } } },
       }),
     );
+  });
+
+  it('rejects fractional Int sum filters before calling Prisma', async () => {
+    const client = fakeClient([]);
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsGrouped(
+          by: [trackId]
+          having: { sum: { msPlayed: { gt: 1.5 } } }
+        ) { count }
+      }`,
+    });
+
+    expect(result.errors?.[0].message).toContain('Int cannot represent non-integer value: 1.5');
+    expect(client.play.groupBy).not.toHaveBeenCalled();
   });
 
   it('translates a count ordering onto the first grouping key', async () => {
