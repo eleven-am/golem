@@ -1,5 +1,7 @@
 # Aggregation Brief — Consolidated Requirements from eros and readable
 
+> Status: historical requirements record. The local, policy-scoped aggregate/groupBy work was accepted in Golem 0.2.x. Current behavior and relation-dimension guidance live in `README.md`; this document is retained for design provenance and is not a current roadmap.
+
 Date: 2026-07-18
 Consumers: **readable-v3** (reading analytics, streaks, rollup replacement) and **eros** (listening analytics: top artists/tracks, time-of-day patterns, skip rates over ~500k plays).
 Supersedes: the earlier eros "Policy-Aware Aggregation" requirements document in full. Where that document and this one disagree, this one wins.

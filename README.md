@@ -26,8 +26,9 @@ What you get out of the box:
 | `@eleven-am/golem-core` | Engine, policy kernel, and schema builder. Framework-free. |
 | `@eleven-am/golem-generator` | The Prisma generator (`provider = "golem"`). |
 | `@eleven-am/golem-authorizer` | Authorization adapter for `@eleven-am/authorizer` (CASL). Optional. |
+| `@eleven-am/golem-queue` | Durable NestJS job queue with leases, retries, cancellation, and Prisma persistence. Optional. |
 
-Upgrading an existing application? Follow the [0.1.0 migration guide](./MIGRATION.md).
+Upgrading an existing application? Follow the [migration guide](./MIGRATION.md).
 
 ## Quickstart
 
@@ -133,7 +134,9 @@ await this.prisma.article.update({ where: { id }, data: { status: 'READY' } });
 await this.prisma.forContext(ctx).article.update({ where: { id }, data: { title } });
 ```
 
-`forContext(ctx)` returns Prisma's own delegate types (select-narrowed return types included) restricted to the policy-covered operations: `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, `count`, `aggregate`, and `groupBy`, plus an interactive `$transaction`. All three read operations merge the caller's read constraint into the query exactly as `findMany` does. A field is aggregable when it is readable on every row the merged constraint matches: under a model-level scoped grant every field qualifies, because the constraint already excludes every row the caller cannot read. Conditions the constraint does not discharge — a field-level rule, an inverted rule — are rejected by name, since a single aggregate value cannot carry per-row masking. Operations without defined policy semantics (raw queries) remain compile errors on the bound client, not runtime surprises.
+`forContext(ctx)` returns a generated, Prisma-inferred policy delegate: selections still narrow result types, but only arguments whose semantics Golem implements are present. The supported operations are `findUnique`, `findFirst`, `findMany`, `create`, `update`, `updateMany`, `upsert`, `delete`, `deleteMany`, numeric `count`, `aggregate`, and `groupBy`, plus an interactive `$transaction`. Unsupported forms such as field-selected `count`, batch mutation `limit`, raw queries, and newly added Prisma arguments remain compile errors until Golem gives them explicit policy semantics. If an argument type-checks on this surface, Golem forwards it after applying policy rather than silently ignoring it.
+
+All three read operations merge the caller's read constraint into the query exactly as `findMany` does. A field is aggregable when it is readable on every row the merged constraint matches: under a model-level scoped grant every field qualifies, because the constraint already excludes every row the caller cannot read. Conditions the constraint does not discharge — a field-level rule or an inverted rule — are rejected by name, since a single aggregate value cannot carry per-row masking.
 
 `forContext(ctx).$transaction(fn)` runs an interactive transaction in which every operation is the caller's policy-enforced op bound to the transaction connection. A policy denial anywhere in the callback aborts and rolls the whole transaction back, and buffered subscription events publish only if it commits. Only the callback form exists; there is no sequential-array form on the bound client.
 
@@ -188,6 +191,7 @@ Additional guarantees:
 - Denied writes publish no events. Event publishing is transaction-aware.
 - Subscriptions re-check the ability on every delivered event. Revoking a user takes effect mid-connection, without a reconnect.
 - Enabling authorization makes the entire surface authenticated-only. Unauthenticated requests receive `UNAUTHENTICATED`.
+- Conditional and inverted field rules are hydrated from their exact recursive condition trees, including `is`, `isNot`, `some`, `every`, `none`, `AND`, `OR`, and `NOT`. Policy-only fields and relations are stripped before results return. A dependency or condition shape that cannot be resolved through the generated datamodel fails closed before Prisma or an in-memory check can under-select it.
 
 ## Hooks
 
@@ -231,7 +235,7 @@ Before-hooks run sequentially in provider discovery order. Each hook receives th
 | `updateMany` | `@BeforeUpdateMany()` | `@AfterUpdateMany()` |
 | `deleteMany` | `@BeforeDeleteMany()` | `@AfterDeleteMany()` |
 
-`upsert` selects Golem's create or update pipeline, including that branch's hooks. Hooks do not run for plain Prisma delegate calls.
+`upsert` first probes with a policy-scoped `findFirst`, then selects Golem's create or update pipeline. Exactly that branch's hooks and verification run once. This preserves truthful branch behavior, but it is not Prisma's native atomic upsert: concurrent missing-row callers can race, and the loser receives Golem's stable `CONFLICT` error for the unique violation. Put the operation inside `forContext(ctx).$transaction(...)` when the probe and branch must share your ambient transaction; use application-level retry only when retrying the whole operation is safe. Hooks do not run for plain Prisma delegate calls.
 
 ### Credentials and write-only fields
 
@@ -264,6 +268,33 @@ export class UserHooks {
 ```
 
 Here `password` exists in `UserCreateInput` but not in `User`, filters, ordering, or unique selectors. Because it is also `immutable`, generated update inputs omit it. CASL must still permit the transformed write. This is a GraphQL schema guarantee, not encryption by itself and not a restriction on `forContext()` or system-level Prisma access.
+
+## Aggregation and analytical dimensions
+
+Models that opt into `aggregations` receive policy-scoped `aggregate` and `groupBy` operations through GraphQL and `forContext(ctx)`. The engine merges the same read constraint used by ordinary reads before Prisma aggregates. GraphQL generates separate sum, average, minimum, and maximum value objects because Prisma's result type depends on both the source scalar and the operation:
+
+- `BigInt` sum/min/max use the exact `BigInt` scalar and serialize as strings; Prisma's BigInt average is a `Float`.
+- `Decimal` measures use the exact `Decimal` scalar and serialize the Prisma Decimal value as a string.
+- `Int` min/max remain `Int`, while Int sum/average use `Float` because a sum can exceed GraphQL Int's 32-bit range.
+- `forContext()` returns Prisma-native `bigint`, `Decimal`, and `number` values unchanged.
+- Empty and nullable measure results stay `null`; they are never changed to zero.
+
+Group keys are local scalar or enum columns. When analytics need to group a fact row by an attribute reached through a relation, prefer an explicit fact-row dimension stamped at write time:
+
+```prisma
+model Play {
+  id              String  @id @default(cuid())
+  userId          String
+  trackId         String
+  primaryArtistId String?
+  albumId         String?
+  msPlayed        BigInt
+}
+```
+
+Then `groupBy({ by: ['primaryArtistId'], _sum: { msPlayed: true } })` stays one Prisma query under the existing policy kernel. This also forces attribution semantics to be honest: a play can count once for its primary artist instead of silently fanning out across every featured artist and inflating total listening time.
+
+Relation-traversing aggregation is not implemented. If it is designed later, it must remain Prisma-native and policy-scoped in both phases, reconstruct averages from sum/count, inspect the full first-phase set before measure ordering plus `take`, enforce an explicit intermediate-cardinality cap, define fan-out semantics, and fail closed unless the hop model and keys are readable. This is design guidance, not a committed roadmap item.
 
 ## Extensions
 
@@ -330,6 +361,7 @@ GolemModule.forRoot({
 | `writeOnly: [...]` | Field is accepted by create and update inputs but absent from outputs, filters, ordering, and unique selectors |
 | `subscriptions` | Event stream for this model |
 | `maxTake` | Per-model take limit |
+| `aggregations` | `true` or an allowlist of dimensions/measures plus optional `maxGroups`; generates scoped aggregate/groupBy operations |
 
 Field behavior is explicit across every generated GraphQL surface, including nested inputs:
 
@@ -367,9 +399,11 @@ Stated here because you will hit them eventually, and finding them in a README b
 - **Subscription fan-out.** Delivery costs about two indexed queries plus one ability build per event per subscriber. Fine for typical fan-outs, a scaling consideration for very hot models with thousands of subscribers.
 - **Transactions.** Writes through the generated client are buffered until `prisma.$transaction` commits and discarded on rollback. `forContext(ctx).$transaction(fn)` extends this to policy-enforced callers with the callback form only — there is no sequential-array (`$transaction([...])`) form on the bound client. Out-of-process transactions remain outside Golem's event boundary.
 - **Aggregates are read-only and hook-free.** `count`, `aggregate`, and `groupBy` merge the caller's read constraint but run no `before`/`after` hooks. They fail closed on any field that is not readable on every row the merged constraint matches — a `never` field, a field-level condition, or an inverted rule — rejected by name, since one aggregate value cannot carry per-row masking. A model-level scoped grant discharges its own conditions, so every field on such a model aggregates normally.
+- **Context-aware upsert is branch-aware, not a native atomic upsert.** Golem performs a scoped branch probe and then runs either the create or update pipeline so the correct hooks and authorization execute once. A concurrent unique insert can win between those steps; the losing caller receives `CONFLICT`.
 - **`maxGroups` bounds the generated GraphQL surface only.** With it set, a `groupBy` that supplies no `take` is fetched with a `take` of `maxGroups + 1` and refused if the extra group appears — bounded, and never silently truncated. An explicit `take` above the cap is refused outright. The programmatic `forContext` client is deliberately uncapped: a developer asking for every distinct group is not an anonymous caller asking for one. Note that Prisma requires any `orderBy` on a `groupBy` to use only fields present in `by`; when a `take` is in play and you supplied no ordering, Golem orders by the grouping keys so the page is deterministic.
 - **Conditional read-masked fields should be nullable** in your schema. A masked `null` on a non-nullable GraphQL field produces a standard null-propagation error. This bites only on rows the caller genuinely cannot read the field on: a relation-scoped condition (for example `{ post: { is: { authorId } } }`) is hydrated before the per-row check runs, so an owner's own rows return the real value instead of being masked, even when the model carries no owner scalar of its own. Only genuinely unauthorized rows mask.
 - **`BigInt` columns serialize as strings** over GraphQL, since values can exceed `2^53` and JSON cannot carry a raw bigint. Inputs accept an integer string or an integer literal; fractional numbers, unsafe integer numbers, and non-numeric strings are rejected.
+- **`Decimal` columns and Decimal aggregates serialize as strings** over GraphQL. Golem preserves the exact Prisma Decimal value; database/provider precision remains the database's responsibility (for example, SQLite numeric aggregation can already be approximate before Prisma returns it).
 - **BigInt policy conditions are exact by default.** The default ability — used when your `Authenticator` leaves `abilityFactory` off — compares mixed `BigInt`/number operands exactly (fail-closed on non-numeric and `NaN` operands), so the in-memory checks — read field masking, transactional write verification, and the subscription delete re-check — are exact at any magnitude, with no `2^53` ceiling. If you override `abilityFactory`, build it with `createAbility` from `@eleven-am/authorizer/prisma`; the adapter verifies this BigInt exactness at startup and refuses to boot with a factory that is not exact. The row-level query filter compiles to SQL and was always exact. List-membership operators (`has`, `hasSome`, `hasEvery`) are BigInt-exact for mixed `BigInt`/number element pairs; non-numeric elements keep JavaScript `Array.includes` (`SameValueZero`) semantics.
 - **Out-of-process writes** (another service, a SQL console) are invisible to the event stream.
 - **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.

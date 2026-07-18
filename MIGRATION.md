@@ -1,4 +1,42 @@
-# Migrating to 0.1.0
+# Migrating to 0.3.0
+
+This release tightens the policy-aware TypeScript contract, makes GraphQL aggregation precision-safe, closes recursive authorization hydration gaps, and hardens the queue. Regenerate the client after upgrading:
+
+```bash
+npx prisma generate
+```
+
+## Review `forContext()` compile errors
+
+The context-bound client now exposes an explicit allowlist of arguments that Golem forwards with policy semantics. Projection-sensitive results still use Prisma inference, but unsupported arguments no longer appear merely because Prisma added them to its raw delegate.
+
+Intentional exclusions include:
+
+- `select` on `count`; the supported form returns `number`.
+- `limit` on `updateMany` and `deleteMany`.
+- raw queries, `createMany`, and other operations without a Golem policy pipeline.
+
+`aggregate` now forwards `orderBy`, `cursor`, `take`, and `skip`. Hook request types now include the model's real `select` and `include` types. Treat a new compile error as a boundary decision: use a supported policy-aware form, or make an explicitly system-level plain Prisma call where that is genuinely intended.
+
+## Review aggregate GraphQL contracts
+
+Generated sum, average, minimum, and maximum fields now use separate output objects and scalar types. BigInt sum/min/max values and all Decimal measures serialize as strings; BigInt average follows Prisma and remains `Float`. Any client code that previously expected a lossy JSON number for a BigInt aggregate must switch to a string/BigInt-aware parser.
+
+The new `Decimal` scalar also enables ordinary Decimal model fields. It serializes Prisma Decimal values exactly as strings.
+
+## Review context-aware upsert retries
+
+`forContext().model.upsert()` performs a policy-scoped branch probe and then runs either the create or update pipeline so exactly that branch's hooks and verification execute. It is not Prisma's atomic native upsert. Concurrent missing-row writers can race; a unique race is reported as Golem `CONFLICT`. Retry only when repeating the entire operation is safe.
+
+## Queue validation changes
+
+`@eleven-am/golem-queue` now rejects invalid timing/retention options and invalid or duplicate handlers during startup. Enqueue rejects empty metadata, invalid dates/attempt counts, BigInt payloads, circular references, and unsupported JSON values with a payload-safe error. `retryFailed()` no longer stops at the human-facing 100-row listing default, and `PrismaJobStore.countByStatus()` now counts in the database.
+
+If an application accidentally depended on JSON silently dropping `undefined`, functions, or symbols from job payloads, normalize that payload before enqueueing.
+
+---
+
+# Historical: migrating to 0.1.0
 
 This release changes the Nest GraphQL integration, strengthens authorization defaults, and updates the generated Prisma client. Existing applications should make the following changes.
 
