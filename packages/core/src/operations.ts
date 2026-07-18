@@ -193,10 +193,42 @@ export interface BatchResult {
 
 const PRISMA_CODE_PATTERN = /^P\d+$/;
 
+function sanitizePrismaMessage(message: string, model: string): string {
+  const cleaned = message
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line.length > 0 &&
+        !line.startsWith('Invalid `') &&
+        !line.startsWith('→') &&
+        !/^\d+\s/.test(line) &&
+        !line.includes('/') &&
+        !line.includes('\\'),
+    )
+    .join(' ');
+  return cleaned.length > 0 ? cleaned : `Invalid query for ${model}`;
+}
+
+function assertPageArgument(
+  model: string,
+  name: 'take' | 'skip',
+  value: number | undefined,
+): void {
+  if (value === undefined) {
+    return;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new GolemValidationError(
+      `${name} on ${model} must be a non-negative integer, received ${value}`,
+    );
+  }
+}
+
 function translateError(error: unknown, model: string): never {
   if (error instanceof Error) {
     if (error.name === 'PrismaClientValidationError') {
-      throw new GolemValidationError(error.message);
+      throw new GolemValidationError(sanitizePrismaMessage(error.message, model));
     }
     const code = (error as { code?: unknown }).code;
     if (typeof code === 'string' && PRISMA_CODE_PATTERN.test(code)) {
@@ -208,6 +240,9 @@ function translateError(error: unknown, model: string): never {
       }
       if (code === 'P2003' || code === 'P2014') {
         throw new GolemValidationError(`The requested change violates a relation constraint on ${model}`);
+      }
+      if (code === 'P2009' || code === 'P2019' || code === 'P2020') {
+        throw new GolemValidationError(sanitizePrismaMessage(error.message, model));
       }
     }
   }
@@ -1011,6 +1046,8 @@ export class GolemEngine {
         `groupBy on ${request.model} requires at least one grouping key`,
       );
     }
+    assertPageArgument(request.model, 'take', request.take);
+    assertPageArgument(request.model, 'skip', request.skip);
     await this.classifyAggregateFields(
       request.model,
       request.context,

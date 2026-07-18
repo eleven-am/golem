@@ -29,7 +29,10 @@ export interface AggregationTypeDeps {
   model: DatamodelModel;
   fields: AggregationFieldSets;
   sortOrder: GraphQLEnumType;
-  scalarType: (model: DatamodelModel, field: DatamodelField) => GraphQLScalarType;
+  dimensionType: (
+    model: DatamodelModel,
+    field: DatamodelField,
+  ) => GraphQLScalarType | GraphQLEnumType;
   filterTypeFor: (
     name: string,
     type: GraphQLInputType,
@@ -61,7 +64,7 @@ const NUMBER_OPERATORS = ['equals', 'in', 'lt', 'lte', 'gt', 'gte', 'not'];
 export function buildAggregationTypes(
   deps: AggregationTypeDeps,
 ): AggregationTypes {
-  const { model, fields, sortOrder, scalarType, filterTypeFor } = deps;
+  const { model, fields, sortOrder, dimensionType, filterTypeFor } = deps;
   const measureEnum =
     fields.measures.length > 0
       ? new GraphQLEnumType({
@@ -141,7 +144,7 @@ export function buildAggregationTypes(
     fields: () => {
       const config: GraphQLFieldConfigMap<unknown, unknown> = {};
       for (const field of fields.dimensions) {
-        config[field.name] = { type: scalarType(model, field) };
+        config[field.name] = { type: dimensionType(model, field) };
       }
       return config;
     },
@@ -226,6 +229,10 @@ export function buildAggregationTypes(
     aggregateOutput,
     groupOutput,
   };
+}
+
+export function byFieldsOrder(by: readonly string[]): unknown {
+  return by.map((field) => ({ [field]: 'asc' }));
 }
 
 export interface MeasuresArg {

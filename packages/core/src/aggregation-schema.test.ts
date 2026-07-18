@@ -159,8 +159,68 @@ describe('aggregation schema surface', () => {
       source: '{ playsGrouped(by: [trackId], measures: { count: true }, take: 500) { count } }',
     });
 
-    expect(result.errors?.[0].message).toMatch(/take of at most 50/);
+    expect(result.errors?.[0].message).toMatch(/explicit take of at most 50/);
     expect(client.play.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('bounds an uncapped-take query by the cap without demanding one', async () => {
+    const client = fakeClient([{ trackId: 't1', _count: 1 }]);
+    const schema = buildGolemSchema({
+      datamodel,
+      client,
+      models: { Play: { aggregations: { maxGroups: 50 } } },
+    });
+
+    const result = await graphql({
+      schema,
+      source: '{ playsGrouped(by: [trackId], measures: { count: true }) { count } }',
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ take: 51, orderBy: [{ trackId: 'asc' }] }),
+    );
+  });
+
+  it('refuses rather than truncates when a query exceeds the cap', async () => {
+    const rows = Array.from({ length: 51 }, (_, index) => ({
+      trackId: `t${index}`,
+      _count: 1,
+    }));
+    const schema = buildGolemSchema({
+      datamodel,
+      client: fakeClient(rows),
+      models: { Play: { aggregations: { maxGroups: 50 } } },
+    });
+
+    const result = await graphql({
+      schema,
+      source: '{ playsGrouped(by: [trackId], measures: { count: true }) { count } }',
+    });
+
+    expect(result.errors?.[0].message).toMatch(/matched more than 50 groups/);
+    expect(result.data).toBeNull();
+  });
+
+  it('leaves an uncapped model unbounded and unordered', async () => {
+    const client = fakeClient([]);
+    const schema = buildGolemSchema({
+      datamodel,
+      client,
+      models: { Play: { aggregations: { dimensions: ['trackId'] } } },
+    });
+
+    await graphql({
+      schema,
+      source: '{ playsGrouped(by: [trackId], measures: { count: true }) { count } }',
+    });
+
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.anything() }),
+    );
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ orderBy: expect.anything() }),
+    );
   });
 
   it('runs a filtered scalar aggregate', async () => {

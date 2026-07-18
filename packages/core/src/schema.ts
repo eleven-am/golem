@@ -53,6 +53,7 @@ import {
 } from './naming';
 import {
   buildAggregationTypes,
+  byFieldsOrder,
   isGroupable,
   isMeasurable,
   toAggregateResult,
@@ -433,6 +434,22 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
     return mapped;
   }
 
+  function dimensionType(
+    model: DatamodelModel,
+    field: DatamodelField,
+  ): GraphQLScalarType | GraphQLEnumType {
+    if (field.kind === 'enum') {
+      const enumType = enumTypes.get(field.type);
+      if (!enumType) {
+        throw new Error(
+          `Cannot group ${model.name} by ${field.name}: unknown enum ${field.type}`,
+        );
+      }
+      return enumType;
+    }
+    return scalarType(model, field);
+  }
+
   function filterTypeFor(name: string, type: GraphQLInputType, operators: readonly string[]): GraphQLInputObjectType {
     const existing = filterTypes.get(name);
     if (existing) {
@@ -705,7 +722,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
         model,
         fields: { dimensions: groupable, measures: measurable },
         sortOrder,
-        scalarType,
+        dimensionType,
         filterTypeFor,
       });
 
@@ -748,18 +765,26 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           resolve: wrapResolve(async (_root, args, ctx) => {
             const by = (args.by ?? []) as string[];
             const groupLimit = groupLimits.get(model.name);
+            const requestedTake = (args.take ?? undefined) as number | undefined;
             if (
               groupLimit !== undefined &&
-              (args.take === undefined ||
-                args.take === null ||
-                Math.abs(args.take as number) > groupLimit)
+              requestedTake !== undefined &&
+              Math.abs(requestedTake) > groupLimit
             ) {
               throw new GolemValidationError(
-                `${groupByFieldName(model.name)} requires take of at most ${groupLimit}`,
+                `${groupByFieldName(model.name)} requires an explicit take of at most ${groupLimit}`,
               );
             }
+            const take =
+              requestedTake ??
+              (groupLimit === undefined ? undefined : groupLimit + 1);
             const countKey = by[0];
             const measures = toPrismaMeasures(args.measures as MeasuresArg);
+            const orderBy =
+              toPrismaGroupOrderBy(
+                args.orderBy as Record<string, unknown>,
+                countKey,
+              ) ?? (take === undefined ? undefined : byFieldsOrder(by));
             const rows = (await engine.groupBy({
               model: model.name,
               by,
@@ -768,15 +793,21 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
                 args.having as Record<string, unknown>,
                 countKey,
               ),
-              orderBy: toPrismaGroupOrderBy(
-                args.orderBy as Record<string, unknown>,
-                countKey,
-              ),
-              take: args.take ?? undefined,
+              orderBy,
+              take,
               skip: args.skip ?? undefined,
               ...measures,
               context: ctx,
             })) as Record<string, unknown>[];
+            if (
+              groupLimit !== undefined &&
+              requestedTake === undefined &&
+              rows.length > groupLimit
+            ) {
+              throw new GolemValidationError(
+                `${groupByFieldName(model.name)} matched more than ${groupLimit} groups; narrow the query or pass an explicit take of at most ${groupLimit}`,
+              );
+            }
             return toGroupResults(rows, by);
           }),
         };
