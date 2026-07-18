@@ -98,6 +98,29 @@ async function seed(
 }
 
 describe('JobDispatcher', () => {
+  it.each([
+    [{ type: '   ' }, /handler type.*must not be empty/],
+    [{ concurrency: 0 }, /concurrency=0.*integer of at least 1/],
+    [{ concurrency: 1.5 }, /concurrency=1.5.*integer of at least 1/],
+    [{ timeoutMs: 0 }, /timeoutMs=0.*greater than 0/],
+  ] as const)('rejects an invalid handler configuration', (overrides, message) => {
+    expect(() => build([handler(() => Promise.resolve(), overrides)])).toThrow(message);
+  });
+
+  it('rejects duplicate handler types and identifies both providers', () => {
+    class FirstHandler implements JobHandler {
+      readonly type = 'duplicate.job';
+      readonly concurrency = 1;
+      readonly timeoutMs = 1000;
+      handle() { return Promise.resolve(); }
+    }
+    class SecondHandler extends FirstHandler {}
+
+    expect(() => build([new FirstHandler(), new SecondHandler()])).toThrow(
+      /duplicate\.job.*FirstHandler.*SecondHandler/,
+    );
+  });
+
   it('runs a due job and marks it succeeded', async () => {
     const seen: Record<string, unknown>[] = [];
     const { store, dispatcher } = build([
@@ -417,7 +440,7 @@ describe('JobDispatcher', () => {
   it('caps the exponential backoff', async () => {
     const { store, dispatcher } = build(
       [handler(() => Promise.reject(new Error('boom')))],
-      { baseBackoffMs: 10_000, maxBackoffMs: 1000 },
+      { baseBackoffMs: 1000, maxBackoffMs: 1000 },
     );
     const id = await seed(store);
     const before = Date.now();
@@ -431,7 +454,7 @@ describe('JobDispatcher', () => {
   it('still honours retryAfterMs above the cap', async () => {
     const { store, dispatcher } = build(
       [handler(() => Promise.reject(new RetryableJobError('slow down', 30_000)))],
-      { maxBackoffMs: 1000 },
+      { baseBackoffMs: 1000, maxBackoffMs: 1000 },
     );
     const id = await seed(store);
     const before = Date.now();
@@ -445,7 +468,7 @@ describe('JobDispatcher', () => {
 
   it('sweeps terminal jobs when retention is configured', async () => {
     const { store, dispatcher } = build([handler(() => Promise.resolve())], {
-      retention: { olderThanMs: 1000, sweepIntervalMs: 0 },
+      retention: { olderThanMs: 1000, sweepIntervalMs: 1 },
     });
     const stale = await seed(store);
     Object.assign(store.get(stale)!, {

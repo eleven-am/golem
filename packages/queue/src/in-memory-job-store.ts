@@ -252,6 +252,16 @@ export class InMemoryJobStore implements JobStore {
     return Promise.resolve(matched);
   }
 
+  findJobIds(query: JobQuery): Promise<string[]> {
+    const start = query.skip ?? 0;
+    const matched = this.matching(query)
+      .sort((a, b) => b.runAt.getTime() - a.runAt.getTime());
+    const page = query.limit === undefined
+      ? matched.slice(start)
+      : matched.slice(start, start + query.limit);
+    return Promise.resolve(page.map(({ id }) => id));
+  }
+
   countByStatus(query: JobQuery): Promise<Record<JobStatus, number>> {
     const counts: Record<JobStatus, number> = {
       PENDING: 0,

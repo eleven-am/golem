@@ -88,6 +88,10 @@ await queue.add('article.extract', { articleId }, {
 });
 ```
 
+Job types, dedupe keys, and supplied scope components must be non-empty; `maxAttempts` must be a positive integer and `runAt` a valid `Date`. Payloads must be JSON-safe objects. BigInt, circular references, non-finite numbers, functions, symbols, `undefined`, and unsupported object instances are rejected with `QueuePayloadError`; the error names the job type and failure category without printing the payload. Convert BigInt to a string before enqueueing.
+
+Payloads can contain credentials, document content, or other sensitive application data. The persisted `Job.payload` and lifecycle observer transition `payload` contain the serialized value, so secure database access, logs, metrics, and observer destinations accordingly.
+
 ### Enqueueing inside your own transaction
 
 Queueing work usually has to be atomic with a change to your own tables — mark a row "processing" *and* enqueue the job, or neither. Pass a `store` bound to your transaction:
@@ -134,6 +138,7 @@ await queue.prune({ olderThan: new Date(Date.now() - WEEK) });   // drop old SUC
 ```
 
 `retryFailed` resets `attempts` to 0 and clears `lastError`, so a dead job gets a full budget rather than immediately re-failing.
+Without `limit`/`skip`, it retries every failed job matching the filter; it does not inherit the 100-row listing default. Supplying `limit` and/or `skip` makes the administrative operation explicitly paginated.
 
 Terminal jobs accumulate forever unless you prune them. Pruning can also run automatically — **opt-in**, because a library should not silently delete your rows:
 
@@ -175,6 +180,8 @@ Outcomes: `started`, `succeeded`, `retry-scheduled`, `failed-terminal`, `cancell
 | `workerId` | `randomUUID()` | lease owner identity |
 | `retention` | *off* | opt-in pruning of terminal jobs |
 
+Options are validated when the module is configured. Durations that represent intervals must be positive, grace/backoff durations cannot be negative, `maxBackoffMs` must be at least `baseBackoffMs`, attempts must be a positive integer, worker IDs cannot be blank, and an enabled retention policy must have a useful positive age/interval and non-empty status set.
+
 ## How claiming works
 
 Jobs are claimed with a compare-and-set `updateMany` guarded on `status` (and `leaseOwner` for completion), so **multiple workers are safe** — only one wins each job. A claim writes `leaseOwner` + `leaseExpiresAt` (`timeoutMs + leaseGraceMs`). If a worker dies, its lease expires and another worker recovers the job, incrementing `attempts`; once attempts are exhausted the job fails terminally rather than looping forever.
@@ -191,7 +198,7 @@ const store = new InMemoryJobStore();
 
 ## Custom persistence
 
-Implement the `JobStore` port (12 operations) to back the queue with something other than Prisma.
+Implement the full `JobStore` port to back the queue with something other than Prisma.
 
 The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update. That is deliberately portable — it behaves identically on SQLite, Postgres and MySQL — and it is the right default for most apps.
 

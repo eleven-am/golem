@@ -35,6 +35,11 @@ interface PrismaJobDelegate {
   }): Promise<Record<string, unknown> | null>;
   updateMany(args: { where: Where; data: Data }): Promise<{ count: number }>;
   deleteMany(args: { where: Where }): Promise<{ count: number }>;
+  groupBy(args: {
+    by: readonly string[];
+    where: Where;
+    _count: { _all: true };
+  }): Promise<Record<string, unknown>[]>;
 }
 
 export interface PrismaClientLike {
@@ -286,10 +291,22 @@ export class PrismaJobStore implements JobStore {
     return rows as unknown as JobSummary[];
   }
 
-  async countByStatus(query: JobQuery): Promise<Record<JobStatus, number>> {
+  async findJobIds(query: JobQuery): Promise<string[]> {
     const rows = await this.prisma.job.findMany({
       where: queryWhere(query),
-      select: { status: true },
+      orderBy: { runAt: 'desc' },
+      ...(query.limit === undefined ? {} : { take: query.limit }),
+      skip: query.skip,
+      select: { id: true },
+    });
+    return ids(rows);
+  }
+
+  async countByStatus(query: JobQuery): Promise<Record<JobStatus, number>> {
+    const rows = await this.prisma.job.groupBy({
+      by: ['status'],
+      where: queryWhere(query),
+      _count: { _all: true },
     });
     const counts: Record<JobStatus, number> = {
       PENDING: 0,
@@ -298,7 +315,8 @@ export class PrismaJobStore implements JobStore {
       FAILED: 0,
     };
     for (const row of rows) {
-      counts[row.status as JobStatus] += 1;
+      const count = (row._count as { _all?: unknown } | undefined)?._all;
+      if (typeof count === 'number') counts[row.status as JobStatus] = count;
     }
     return counts;
   }

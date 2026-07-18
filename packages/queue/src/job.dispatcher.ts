@@ -70,6 +70,23 @@ export class JobDispatcher implements OnModuleDestroy {
   }
 
   register(handler: JobHandler): void {
+    const identity = handler.constructor?.name || '<anonymous provider>';
+    if (typeof handler.type !== 'string' || handler.type.trim().length === 0) {
+      throw new Error(`Invalid queue handler type=${JSON.stringify(handler.type)} on ${identity}: must not be empty`);
+    }
+    if (!Number.isInteger(handler.concurrency) || handler.concurrency < 1) {
+      throw new Error(`Invalid queue handler concurrency=${String(handler.concurrency)} for "${handler.type}" on ${identity}: must be an integer of at least 1`);
+    }
+    if (!Number.isFinite(handler.timeoutMs) || handler.timeoutMs <= 0) {
+      throw new Error(`Invalid queue handler timeoutMs=${String(handler.timeoutMs)} for "${handler.type}" on ${identity}: must be greater than 0`);
+    }
+    const previous = this.handlers.get(handler.type);
+    if (previous) {
+      const previousIdentity = previous.constructor?.name || '<anonymous provider>';
+      throw new Error(
+        `Duplicate queue handler type "${handler.type}": ${previousIdentity} and ${identity}`,
+      );
+    }
     this.handlers.set(handler.type, handler);
     this.inFlight.set(handler.type, this.inFlight.get(handler.type) ?? 0);
   }

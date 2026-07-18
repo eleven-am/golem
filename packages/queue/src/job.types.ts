@@ -41,6 +41,17 @@ export class RetryableJobError extends Error {
   }
 }
 
+export class QueuePayloadError extends Error {
+  constructor(
+    readonly jobType: string,
+    readonly reason: 'BigInt' | 'circular references' | 'unsupported non-JSON values',
+    options?: ErrorOptions,
+  ) {
+    super(`Cannot enqueue job "${jobType}": payload contains ${reason}`, options);
+    this.name = QueuePayloadError.name;
+  }
+}
+
 export function retryAfterMs(error: unknown): number | undefined {
   if (!(error instanceof RetryableJobError)) return undefined;
   return error.retryAfterMs;
@@ -143,7 +154,7 @@ export const GOLEM_QUEUE_DEFAULTS: ResolvedGolemQueueOptions = {
 export function resolveQueueOptions(
   options: GolemQueueOptions = {},
 ): ResolvedGolemQueueOptions {
-  return {
+  const resolved: ResolvedGolemQueueOptions = {
     pollIntervalMs:
       options.pollIntervalMs ?? GOLEM_QUEUE_DEFAULTS.pollIntervalMs,
     baseBackoffMs: options.baseBackoffMs ?? GOLEM_QUEUE_DEFAULTS.baseBackoffMs,
@@ -158,6 +169,60 @@ export function resolveQueueOptions(
     workerId: options.workerId,
     retention: options.retention,
   };
+  validateQueueOptions(resolved);
+  return resolved;
+}
+
+function invalidOption(name: string, value: unknown, expectation: string): never {
+  throw new Error(`Invalid Golem queue option ${name}=${String(value)}: ${expectation}`);
+}
+
+function finiteNumber(name: string, value: number): void {
+  if (!Number.isFinite(value)) invalidOption(name, value, 'must be a finite number');
+}
+
+export function validateQueueOptions(options: ResolvedGolemQueueOptions): void {
+  for (const key of [
+    'pollIntervalMs',
+    'baseBackoffMs',
+    'maxBackoffMs',
+    'leaseGraceMs',
+    'abandonGraceMs',
+    'shutdownGraceMs',
+    'defaultMaxAttempts',
+  ] as const) {
+    finiteNumber(key, options[key]);
+  }
+  if (options.pollIntervalMs <= 0) invalidOption('pollIntervalMs', options.pollIntervalMs, 'must be greater than 0');
+  if (options.baseBackoffMs < 0) invalidOption('baseBackoffMs', options.baseBackoffMs, 'must be at least 0');
+  if (options.maxBackoffMs < 0) invalidOption('maxBackoffMs', options.maxBackoffMs, 'must be at least 0');
+  if (options.maxBackoffMs < options.baseBackoffMs) {
+    invalidOption('maxBackoffMs', options.maxBackoffMs, `must be at least baseBackoffMs (${options.baseBackoffMs})`);
+  }
+  if (options.leaseGraceMs < 0) invalidOption('leaseGraceMs', options.leaseGraceMs, 'must be at least 0');
+  if (options.abandonGraceMs < 0) invalidOption('abandonGraceMs', options.abandonGraceMs, 'must be at least 0');
+  if (options.shutdownGraceMs < 0) invalidOption('shutdownGraceMs', options.shutdownGraceMs, 'must be at least 0');
+  if (!Number.isInteger(options.defaultMaxAttempts) || options.defaultMaxAttempts < 1) {
+    invalidOption('defaultMaxAttempts', options.defaultMaxAttempts, 'must be an integer of at least 1');
+  }
+  if (options.workerId !== undefined && options.workerId.trim().length === 0) {
+    invalidOption('workerId', JSON.stringify(options.workerId), 'must not be empty');
+  }
+  const retention = options.retention;
+  if (!retention) return;
+  finiteNumber('retention.olderThanMs', retention.olderThanMs);
+  if (retention.olderThanMs <= 0) {
+    invalidOption('retention.olderThanMs', retention.olderThanMs, 'must be greater than 0');
+  }
+  if (retention.sweepIntervalMs !== undefined) {
+    finiteNumber('retention.sweepIntervalMs', retention.sweepIntervalMs);
+    if (retention.sweepIntervalMs <= 0) {
+      invalidOption('retention.sweepIntervalMs', retention.sweepIntervalMs, 'must be greater than 0');
+    }
+  }
+  if (retention.statuses !== undefined && retention.statuses.length === 0) {
+    invalidOption('retention.statuses', '[]', 'must contain at least one terminal status');
+  }
 }
 
 export function errorMessage(error: unknown): string {
