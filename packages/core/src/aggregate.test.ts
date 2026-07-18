@@ -111,6 +111,10 @@ describe('engine aggregate', () => {
     const result = await engine.aggregate({
       model: 'Post',
       where: { published: true },
+      orderBy: { createdAt: 'desc' },
+      cursor: { id: 'p9' },
+      take: 10,
+      skip: 2,
       _sum: { viewCount: true },
       _count: true,
       context: ctx,
@@ -119,6 +123,10 @@ describe('engine aggregate', () => {
     expect(result).toEqual({ _sum: { viewCount: 42n }, _count: 2 });
     expect(client.post.aggregate).toHaveBeenCalledWith({
       where: { AND: [{ published: true }, { authorId: 'me' }] },
+      orderBy: { createdAt: 'desc' },
+      cursor: { id: 'p9' },
+      take: 10,
+      skip: 2,
       _sum: { viewCount: true },
       _count: true,
     });

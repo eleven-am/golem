@@ -8,7 +8,7 @@
     "push": "prisma db push",
     "seed": "node dist/src/seed.js",
     "start": "node dist/src/main.js",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand && tsc -p tsconfig.spec.json"
   },
   "dependencies": {
     "@apollo/server": "^5.5.1",

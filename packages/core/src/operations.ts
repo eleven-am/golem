@@ -125,6 +125,10 @@ export interface AggregateRequest {
   context?: unknown;
   model: string;
   where?: unknown;
+  orderBy?: unknown;
+  cursor?: unknown;
+  take?: number;
+  skip?: number;
   _sum?: unknown;
   _avg?: unknown;
   _min?: unknown;
@@ -1030,6 +1034,10 @@ export class GolemEngine {
     const args: Record<string, unknown> = {
       where: mergeConstraint(request.where, constraint),
     };
+    if (request.orderBy !== undefined) args.orderBy = request.orderBy;
+    if (request.cursor !== undefined) args.cursor = request.cursor;
+    if (request.take !== undefined) args.take = request.take;
+    if (request.skip !== undefined) args.skip = request.skip;
     if (request._sum !== undefined) args._sum = request._sum;
     if (request._avg !== undefined) args._avg = request._avg;
     if (request._min !== undefined) args._min = request._min;
