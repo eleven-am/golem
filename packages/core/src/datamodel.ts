@@ -4,6 +4,7 @@ export type DatamodelFieldKind = 'scalar' | 'object' | 'enum';
 
 export interface DatamodelField {
   name: string;
+  dbName?: string;
   kind: DatamodelFieldKind;
   type: string;
   isList: boolean;
@@ -30,6 +31,7 @@ export interface DatamodelUniqueIndex {
 
 export interface DatamodelModel {
   name: string;
+  dbName?: string;
   fields: readonly DatamodelField[];
   primaryKey?: DatamodelPrimaryKey;
   uniqueIndexes?: readonly DatamodelUniqueIndex[];
@@ -67,9 +69,12 @@ export type ModelsConfig<TModels> = {
   [K in keyof TModels]?: false | ModelConfig<Extract<TModels[K], string>>;
 };
 
+export type GolemDialect = 'sqlite' | 'postgres' | 'mysql';
+
 export interface GolemDefaults {
   subscriptions?: boolean;
   aggregations?: boolean;
+  dialect?: GolemDialect;
   operations?: readonly GolemOperation[];
   maxTake?: number;
   maxGroups?: number;
