@@ -1,20 +1,45 @@
 import {
   GraphQLBoolean,
   GraphQLEnumType,
+  GraphQLError,
   GraphQLFloat,
   GraphQLInputObjectType,
   GraphQLInt,
   GraphQLList,
   GraphQLNonNull,
   GraphQLObjectType,
+  GraphQLScalarType,
+  Kind,
   type GraphQLInputFieldConfigMap,
   type GraphQLFieldConfigMap,
   type GraphQLInputType,
-  type GraphQLScalarType,
 } from 'graphql';
 import type { DatamodelField, DatamodelModel } from './datamodel';
 
 const NUMERIC_TYPES = new Set(['Int', 'Float', 'BigInt', 'Decimal']);
+
+function coerceSafeInt(value: unknown): number {
+  if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    return value;
+  }
+  throw new GraphQLError(`SafeInt cannot represent non-integer value: ${String(value)}`);
+}
+
+const SafeIntScalar = new GraphQLScalarType({
+  name: 'SafeInt',
+  description: 'A signed integer that is exactly representable as a JavaScript number.',
+  serialize: coerceSafeInt,
+  parseValue: coerceSafeInt,
+  parseLiteral: (ast) => {
+    if (ast.kind === Kind.INT) {
+      return coerceSafeInt(Number(ast.value));
+    }
+    throw new GraphQLError(
+      `SafeInt cannot represent non-integer literal: ${'value' in ast ? String(ast.value) : ast.kind}`,
+      { nodes: ast },
+    );
+  },
+});
 
 export const MEASURE_KINDS = ['sum', 'avg', 'min', 'max'] as const;
 
@@ -122,6 +147,9 @@ export function buildAggregationTypes(
       return field.type === 'Decimal'
         ? dimensionType(model, field)
         : GraphQLFloat;
+    }
+    if (kind === 'sum' && field.type === 'Int') {
+      return SafeIntScalar;
     }
     return dimensionType(model, field);
   };

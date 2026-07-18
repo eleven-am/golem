@@ -65,7 +65,7 @@ describe('aggregation schema surface', () => {
     expect(sdl).toMatch(/type PlayMinValues[\s\S]*bytesPlayed: BigInt/);
     expect(sdl).toMatch(/type PlayMaxValues[\s\S]*bytesPlayed: BigInt/);
     expect(sdl).toMatch(/type PlaySumValues[\s\S]*cost: Decimal/);
-    expect(sdl).toMatch(/input PlaySumFilterInput[\s\S]*msPlayed: IntFilter/);
+    expect(sdl).toMatch(/input PlaySumFilterInput[\s\S]*msPlayed: SafeIntFilter/);
     expect(sdl).toMatch(/input PlayAvgFilterInput[\s\S]*msPlayed: FloatFilter/);
     expect(sdl).toContain('scalar Decimal');
   });
@@ -222,8 +222,30 @@ describe('aggregation schema surface', () => {
       }`,
     });
 
-    expect(result.errors?.[0].message).toContain('Int cannot represent non-integer value: 1.5');
+    expect(result.errors?.[0].message).toContain('SafeInt cannot represent non-integer literal: 1.5');
     expect(client.play.groupBy).not.toHaveBeenCalled();
+  });
+
+  it('accepts Int sum filters above the GraphQL Int range', async () => {
+    const client = fakeClient([]);
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsGrouped(
+          by: [trackId]
+          having: { sum: { msPlayed: { gt: 3000000000 } } }
+        ) { count }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        having: { msPlayed: { _sum: { gt: 3000000000 } } },
+      }),
+    );
   });
 
   it('translates a count ordering onto the first grouping key', async () => {
