@@ -6,6 +6,7 @@ import {
   GolemForbiddenError,
   GolemUnauthorizedError,
   FieldClassification,
+  FieldDependencyTree,
 } from '@eleven-am/golem-core';
 import { AuthorizationService } from '@eleven-am/authorizer';
 import { PrismaAuthorizationService } from '@eleven-am/authorizer/prisma';
@@ -124,10 +125,12 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
         const chain = rulesFor(action, model, field);
         let classified: FieldClassification | undefined;
         const requires = new Set<string>();
+        const dependencies: Record<string, true | FieldDependencyTree> = {};
         let discharged = true;
         for (const rule of chain) {
           if (rule.conditions) {
             collectConditionKeys(rule.conditions, requires);
+            collectConditionDependencies(rule.conditions, dependencies);
             if (rule.fields !== undefined || rule.inverted) {
               discharged = false;
             }
@@ -138,6 +141,7 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
           } else {
             for (const later of chain.slice(chain.indexOf(rule))) {
               collectConditionKeys(later.conditions, requires);
+              collectConditionDependencies(later.conditions, dependencies);
               if (later.conditions && (later.fields !== undefined || later.inverted)) {
                 discharged = false;
               }
@@ -145,6 +149,7 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
             classified = {
               access: 'conditional',
               requires: [...requires],
+              dependencies,
               dischargedByConstraint: discharged,
             };
           }
@@ -156,6 +161,7 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
             ? {
                 access: 'conditional',
                 requires: [...requires],
+                dependencies,
                 dischargedByConstraint: discharged,
               }
             : { access: 'never' });
@@ -195,5 +201,63 @@ function collectConditionKeys(conditions: unknown, into: Set<string>): void {
     } else {
       into.add(key);
     }
+  }
+}
+
+function mergeDependencies(
+  into: Record<string, true | FieldDependencyTree>,
+  source: FieldDependencyTree,
+): void {
+  for (const [key, dependency] of Object.entries(source)) {
+    const current = into[key];
+    if (current === undefined || current === true && dependency !== true) {
+      into[key] = dependency;
+      continue;
+    }
+    if (dependency === true || current === true) {
+      continue;
+    }
+    const nested = { ...(current ?? {}) } as Record<string, true | FieldDependencyTree>;
+    mergeDependencies(nested, dependency);
+    into[key] = nested;
+  }
+}
+
+function dependencyFor(value: unknown): true | FieldDependencyTree {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return true;
+  }
+  const nested: Record<string, true | FieldDependencyTree> = {};
+  collectConditionDependencies(value, nested);
+  return Object.keys(nested).length === 0 ? true : nested;
+}
+
+function collectConditionDependencies(
+  conditions: unknown,
+  into: Record<string, true | FieldDependencyTree>,
+): void {
+  if (!conditions || typeof conditions !== 'object' || Array.isArray(conditions)) {
+    return;
+  }
+  for (const [key, value] of Object.entries(conditions)) {
+    if (key === 'AND' || key === 'OR' || key === 'NOT') {
+      const branches = Array.isArray(value) ? value : [value];
+      for (const branch of branches) {
+        collectConditionDependencies(branch, into);
+      }
+      continue;
+    }
+    const dependency = dependencyFor(value);
+    const current = into[key];
+    if (current === undefined || current === true && dependency !== true) {
+      into[key] = dependency;
+      continue;
+    }
+    if (dependency === true || current === true) {
+      continue;
+    }
+    const nested = { ...(current ?? {}) } as Record<string, true | FieldDependencyTree>;
+    mergeDependencies(nested, dependency);
+    into[key] = nested;
   }
 }

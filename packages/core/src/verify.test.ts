@@ -1,4 +1,4 @@
-import { AuthorizationProvider } from './authorization';
+import { AuthorizationProvider, FieldClassification } from './authorization';
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
 import { withBufferedEvents, bufferEvent } from './event-buffer';
@@ -437,7 +437,7 @@ describe('flag off and upsert', () => {
 
 describe('narrow verification readback (M14)', () => {
   function classifyingProvider(
-    perField: Record<string, { access: 'always' | 'conditional' | 'never'; requires?: string[] }>,
+    perField: Record<string, FieldClassification>,
     constraint: unknown = {},
   ) {
     return {
@@ -532,6 +532,7 @@ describe('narrow verification readback (M14)', () => {
     expect(select.views).toBe(true);
     expect(select.published).toBe(true);
   });
+
 });
 
 describe('planVerification relation-aware hydration', () => {
@@ -592,6 +593,67 @@ describe('planVerification relation-aware hydration', () => {
     return planModels.find((model) => model.name === name)!;
   }
 
+  it('hydrates exact deep field dependencies for transactional write checks', async () => {
+    const context = planContext();
+    context.provider.classifyFields = jest.fn(async () => ({
+      title: {
+        access: 'conditional',
+        requires: ['author'],
+        dependencies: { author: { profile: { bio: true } } },
+      },
+    }));
+
+    const plan = await planVerification(
+      context,
+      modelByName('Post'),
+      { title: 'new title' },
+      {},
+      'update',
+    );
+
+    expect(plan.select.author).toEqual({
+      select: { profile: { select: { bio: true } } },
+    });
+  });
+
+  it('fails closed when a write field dependency cannot be hydrated', async () => {
+    const context = planContext();
+    context.provider.classifyFields = jest.fn(async () => ({
+      title: {
+        access: 'conditional',
+        requires: ['author'],
+        dependencies: { author: { missingRelation: { secret: true } } },
+      },
+    }));
+
+    await expect(
+      planVerification(
+        context,
+        modelByName('Post'),
+        { title: 'new title' },
+        {},
+        'update',
+      ),
+    ).rejects.toThrow('authorization dependencies cannot be hydrated safely');
+  });
+
+  it('fails closed when a write provider names a relation without an exact tree', async () => {
+    const context = planContext();
+    context.provider.classifyFields = jest.fn(async () => ({
+      title: { access: 'conditional', requires: ['author'] },
+    }));
+
+    await expect(
+      planVerification(
+        context,
+        modelByName('Post'),
+        { title: 'new title' },
+        {},
+        'update',
+      ),
+    ).rejects.toThrow('relation dependency "author" has no exact hydration tree');
+  });
+
   it('hydrates a to-one relation referenced by an is condition', async () => {
     const plan = await planVerification(
       planContext(),
@@ -637,26 +699,24 @@ describe('planVerification relation-aware hydration', () => {
     expect(plan.select.author).toEqual({ select: { id: true, email: true } });
   });
 
-  it('leaves an unrecognized relation condition shape unhydrated so it fails closed', async () => {
-    const plan = await planVerification(
+  it('rejects an unrecognized relation condition shape before verification', async () => {
+    await expect(planVerification(
       planContext(),
       modelByName('Post'),
       { title: 't' },
       { author: 'weird' },
       'create',
-    );
-    expect(plan.select.author).toBeUndefined();
+    )).rejects.toThrow(/cannot be hydrated safely/);
   });
 
-  it('leaves an unrecognized relation operand unhydrated so it fails closed', async () => {
-    const plan = await planVerification(
+  it('rejects an unrecognized relation operand before verification', async () => {
+    await expect(planVerification(
       planContext(),
       modelByName('Post'),
       { title: 't' },
       { author: { is: 5 } },
       'create',
-    );
-    expect(plan.select.author).toBeUndefined();
+    )).rejects.toThrow(/cannot be hydrated safely/);
   });
 });
 

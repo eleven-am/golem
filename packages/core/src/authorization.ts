@@ -23,8 +23,13 @@ export interface AuthorizationProvider {
 export interface FieldClassification {
   access: 'always' | 'conditional' | 'never';
   requires?: readonly string[];
+  dependencies?: FieldDependencyTree;
   dischargedByConstraint?: boolean;
 }
+
+export type FieldDependencyTree = Readonly<{
+  [field: string]: true | FieldDependencyTree;
+}>;
 
 export function isConditionalConstraint(constraint: unknown): boolean {
   return (
