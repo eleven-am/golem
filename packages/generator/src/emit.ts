@@ -5,12 +5,10 @@ const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
 export function emitDatamodelModule(datamodel: DMMF.Datamodel): string {
   const models = datamodel.models.map((model) => ({
     name: model.name,
-    dbName: model.dbName ?? model.name,
     fields: model.fields
       .filter((field) => SUPPORTED_KINDS.has(field.kind))
       .map((field) => ({
         name: field.name,
-        dbName: field.dbName ?? field.name,
         kind: field.kind as 'scalar' | 'object' | 'enum',
         type: field.type,
         isList: field.isList,
