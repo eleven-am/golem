@@ -39,11 +39,21 @@ describe('compiled constraint matches the prisma path (e2e)', () => {
 
   async function idsViaCompiledSql(constraint: unknown) {
     const model = modelOrThrow('Post');
-    const compiled = compileConstraint(constraint, { model, dialect: DIALECT });
+    const compiled = compileConstraint(constraint, {
+      model,
+      dialect: DIALECT,
+      modelsByName: new Map(
+        getDatamodel().models.map((entry) => [entry.name, entry]),
+      ),
+    });
     const table = quoteIdentifier(model.dbName ?? model.name, DIALECT);
-    const idColumn = quoteIdentifier('id', DIALECT);
+    const base = quoteIdentifier(compiled.alias, DIALECT);
+    const idColumn = `${base}.${quoteIdentifier('id', DIALECT)}`;
+    const joins = compiled.joins
+      .map((join) => ` JOIN ${join.table} AS ${join.alias} ON ${join.on}`)
+      .join('');
     const rows = (await prisma.$queryRawUnsafe(
-      `SELECT ${idColumn} AS id FROM ${table} WHERE ${compiled.sql} ORDER BY ${idColumn} ASC`,
+      `SELECT ${idColumn} AS id FROM ${table} AS ${base}${joins} WHERE ${compiled.sql} ORDER BY ${idColumn} ASC`,
       ...compiled.params,
     )) as { id: string }[];
     return rows.map((row) => row.id);
@@ -94,12 +104,30 @@ describe('compiled constraint matches the prisma path (e2e)', () => {
     });
   });
 
+  it('agrees on a one-hop relation-scoped constraint', async () => {
+    const author = await prisma.user.findFirstOrThrow({
+      select: { email: true },
+    });
+    const rows = await expectAgreement({
+      author: { is: { email: author.email } },
+    });
+    expect(rows.length).toBeGreaterThan(0);
+  });
+
+  it('agrees on a hop combined with an own scalar', async () => {
+    const author = await prisma.user.findFirstOrThrow({
+      select: { email: true },
+    });
+    await expectAgreement({
+      AND: [{ author: { is: { email: author.email } } }, { published: true }],
+    });
+  });
+
   it('refuses the shapes it cannot prove rather than selecting the wrong rows', () => {
     const model = modelOrThrow('Post');
     const refused: unknown[] = [
       { OR: [{ published: true }, { published: false }] },
       { NOT: { published: true } },
-      { author: { is: { email: 'roy@example.com' } } },
       { title: { contains: 'a' } },
     ];
     for (const constraint of refused) {
