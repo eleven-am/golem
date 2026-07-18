@@ -9,7 +9,7 @@ import { runPolicyChecks } from './concurrency';
 import { withBufferedEvents } from './event-buffer';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
-import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
+import { buildModelMetadata, ModelMetadata, ModelMetadataIndex } from './model-meta';
 import { planNestedWrites } from './nested-writes';
 import {
   PreparedReadTree,
@@ -309,11 +309,38 @@ function addObservedKeys(fields: Set<string>, source: unknown): void {
   }
 }
 
-function collectAggregateFields(request: AggregateRequest): string[] {
+function addCursorFields(
+  fields: Set<string>,
+  source: unknown,
+  metadata: ModelMetadata,
+): void {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) {
+    return;
+  }
+  for (const key of Object.keys(source as Record<string, unknown>)) {
+    if (metadata.fieldsByName.has(key)) {
+      fields.add(key);
+      continue;
+    }
+    const compoundFields = key === metadata.compoundKeyName
+      ? metadata.primaryKeys.map((field) => field.name)
+      : metadata.compoundUniqueSelectors.get(key);
+    if (compoundFields) {
+      for (const field of compoundFields) fields.add(field);
+      continue;
+    }
+    fields.add(key);
+  }
+}
+
+function collectAggregateFields(
+  request: AggregateRequest,
+  metadata: ModelMetadata,
+): string[] {
   const fields = new Set<string>();
   addMeasureFields(fields, request);
   addNestedFields(fields, request.orderBy);
-  addNestedFields(fields, request.cursor);
+  addCursorFields(fields, request.cursor, metadata);
   return [...fields];
 }
 
@@ -1029,7 +1056,7 @@ export class GolemEngine {
     await this.classifyAggregateFields(
       request.model,
       request.context,
-      collectAggregateFields(request),
+      collectAggregateFields(request, this.metadata.get(request.model)!),
       'aggregate',
     );
     const constraint = await this.constraintFor('read', request.model, request.context);
