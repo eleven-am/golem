@@ -83,6 +83,18 @@ describe('JobQueue', () => {
     }
   });
 
+  it.each([
+    new Date(0),
+    { toJSON: () => 'not-an-object' },
+    { toJSON: () => ['not', 'an', 'object'] },
+  ])('rejects a root payload that serializes to a non-object', (payload) => {
+    const { queue } = build();
+
+    expect(() =>
+      queue.add('invalid-root.job', payload as unknown as Record<string, unknown>),
+    ).toThrow(QueuePayloadError);
+  });
+
   it('accepts JSON-safe dates and repeated non-circular references', async () => {
     const { store, queue } = build();
     const shared = { value: 'safe' };

@@ -74,6 +74,14 @@ function serializePayload(type: string, payload: Record<string, unknown>): strin
     if (serialized === undefined) {
       throw new InvalidPayloadValue('unsupported non-JSON values');
     }
+    const serializedPayload = JSON.parse(serialized) as unknown;
+    if (
+      !serializedPayload ||
+      typeof serializedPayload !== 'object' ||
+      Array.isArray(serializedPayload)
+    ) {
+      throw new InvalidPayloadValue('unsupported non-JSON values');
+    }
     return serialized;
   } catch (error) {
     const reason = error instanceof InvalidPayloadValue
