@@ -124,9 +124,13 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
         const chain = rulesFor(action, model, field);
         let classified: FieldClassification | undefined;
         const requires = new Set<string>();
+        let discharged = true;
         for (const rule of chain) {
           if (rule.conditions) {
             collectConditionKeys(rule.conditions, requires);
+            if (rule.fields !== undefined || rule.inverted) {
+              discharged = false;
+            }
             continue;
           }
           if (requires.size === 0) {
@@ -134,15 +138,26 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
           } else {
             for (const later of chain.slice(chain.indexOf(rule))) {
               collectConditionKeys(later.conditions, requires);
+              if (later.conditions && (later.fields !== undefined || later.inverted)) {
+                discharged = false;
+              }
             }
-            classified = { access: 'conditional', requires: [...requires] };
+            classified = {
+              access: 'conditional',
+              requires: [...requires],
+              dischargedByConstraint: discharged,
+            };
           }
           break;
         }
         result[field] =
           classified ??
           (requires.size > 0
-            ? { access: 'conditional', requires: [...requires] }
+            ? {
+                access: 'conditional',
+                requires: [...requires],
+                dischargedByConstraint: discharged,
+              }
             : { access: 'never' });
       }
       return result;

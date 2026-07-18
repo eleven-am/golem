@@ -1011,7 +1011,6 @@ export class GolemEngine {
         `groupBy on ${request.model} requires at least one grouping key`,
       );
     }
-    this.enforceGroupLimit(request);
     await this.classifyAggregateFields(
       request.model,
       request.context,
@@ -1035,18 +1034,6 @@ export class GolemEngine {
     return (await this.run(request.model, () => delegate.groupBy(args))) as unknown[];
   }
 
-  private enforceGroupLimit(request: GroupByRequest): void {
-    const limit = this.groupLimits.get(request.model);
-    if (limit === undefined) {
-      return;
-    }
-    if (request.take === undefined || Math.abs(request.take) > limit) {
-      throw new GolemValidationError(
-        `groupBy on ${request.model} requires take of at most ${limit}`,
-      );
-    }
-  }
-
   private async classifyAggregateFields(
     model: string,
     context: unknown,
@@ -1063,13 +1050,19 @@ export class GolemEngine {
     const classification = await provider.classifyFields('read', model, [...fields], context);
     for (const field of fields) {
       const entry = classification[field];
-      if (!entry || entry.access !== 'always') {
-        throw new GolemValidationError(
-          kind === 'group'
-            ? `Cannot group or aggregate field "${field}" on ${model}`
-            : `Cannot aggregate field "${field}" on ${model}`,
-        );
+      if (entry?.access === 'always') {
+        continue;
       }
+      if (entry?.access === 'conditional' && entry.dischargedByConstraint) {
+        continue;
+      }
+      const verb = kind === 'group' ? 'group or aggregate' : 'aggregate';
+      const undischarged = entry?.requires?.join(', ');
+      throw new GolemValidationError(
+        undischarged
+          ? `Cannot ${verb} field "${field}" on ${model}: readability depends on ${undischarged}, which the query constraint does not discharge`
+          : `Cannot ${verb} field "${field}" on ${model}`,
+      );
     }
   }
 

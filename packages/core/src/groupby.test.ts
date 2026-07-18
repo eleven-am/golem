@@ -199,34 +199,20 @@ describe('engine groupBy', () => {
     ).rejects.toThrow(/requires at least one grouping key/);
   });
 
-  it('rejects an unbounded group query when a group cap is configured', async () => {
-    const engine = engineWith(fakeClient(), {
-      groupLimits: new Map([['Play', 100]]),
-    });
-
-    await expect(
-      engine.groupBy({ model: 'Play', by: ['trackId'], context: ctx }),
-    ).rejects.toThrow(/requires take of at most 100/);
-  });
-
-  it('rejects a group query that exceeds the cap rather than truncating', async () => {
+  it('does not cap an unbounded group query on the programmatic stance', async () => {
     const client = fakeClient();
     const engine = engineWith(client, {
       groupLimits: new Map([['Play', 100]]),
     });
 
-    await expect(
-      engine.groupBy({
-        model: 'Play',
-        by: ['trackId'],
-        take: 500,
-        context: ctx,
-      }),
-    ).rejects.toThrow(/requires take of at most 100/);
-    expect(client.play.groupBy).not.toHaveBeenCalled();
+    await engine.groupBy({ model: 'Play', by: ['trackId'], context: ctx });
+
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.not.objectContaining({ take: expect.anything() }),
+    );
   });
 
-  it('accepts a group query within the cap', async () => {
+  it('passes a take larger than the graphql cap straight through', async () => {
     const client = fakeClient();
     const engine = engineWith(client, {
       groupLimits: new Map([['Play', 100]]),
@@ -235,12 +221,12 @@ describe('engine groupBy', () => {
     await engine.groupBy({
       model: 'Play',
       by: ['trackId'],
-      take: 10,
+      take: 34_000,
       context: ctx,
     });
 
     expect(client.play.groupBy).toHaveBeenCalledWith(
-      expect.objectContaining({ take: 10 }),
+      expect.objectContaining({ take: 34_000 }),
     );
   });
 

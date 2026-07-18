@@ -76,11 +76,110 @@ describe('forContext count and aggregate (e2e)', () => {
     expect(rows._count).toBeGreaterThan(0);
   });
 
-  it('exposes count and aggregate but not groupBy on the context-bound surface', async () => {
+  it('exposes count, aggregate and groupBy on the context-bound surface', async () => {
     const scoped = prisma.forContext(ctxFor('roy@example.com'));
     expect(typeof scoped.post.count).toBe('function');
     expect(typeof scoped.post.aggregate).toBe('function');
-    // @ts-expect-error groupBy is deliberately absent from the context-bound surface
-    scoped.post.groupBy;
+    expect(typeof scoped.post.groupBy).toBe('function');
+  });
+
+  it('merges the caller constraint into a grouped query', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+    const asGuest = prisma.forContext(ctxFor('guest@example.com'));
+
+    const royGroups = (await asRoy.post.groupBy({
+      by: ['published'],
+      _count: { _all: true },
+    })) as { published: boolean; _count: { _all: number } }[];
+    const guestGroups = (await asGuest.post.groupBy({
+      by: ['published'],
+      _count: { _all: true },
+    })) as { published: boolean; _count: { _all: number } }[];
+
+    const total = (groups: { _count: { _all: number } }[]) =>
+      groups.reduce((sum, group) => sum + group._count._all, 0);
+
+    expect(total(royGroups)).toBe(3);
+    expect(total(guestGroups)).toBe(2);
+  });
+
+  it('keeps one caller out of another caller grouped sums', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+    const asGuest = prisma.forContext(ctxFor('guest@example.com'));
+
+    const sumFor = async (client: typeof asRoy) => {
+      const groups = (await client.post.groupBy({
+        by: ['published'],
+        _sum: { viewCount: true },
+      })) as { _sum: { viewCount: bigint | null } }[];
+      return groups.reduce(
+        (sum, group) => sum + (group._sum.viewCount ?? 0n),
+        0n,
+      );
+    };
+
+    const royTotal = await sumFor(asRoy);
+    const guestTotal = await sumFor(asGuest);
+
+    expect(royTotal).toBe(9007199254740993n + 5n + 100n);
+    expect(guestTotal).toBe(9007199254740993n + 100n);
+    expect(royTotal - guestTotal).toBe(5n);
+  });
+
+  it('contributes zero from a row the caller cannot read to any group', async () => {
+    const asGuest = prisma.forContext(ctxFor('guest@example.com'));
+
+    const groups = (await asGuest.post.groupBy({
+      by: ['published'],
+      _sum: { viewCount: true },
+      _count: { _all: true },
+    })) as {
+      published: boolean;
+      _sum: { viewCount: bigint | null };
+      _count: { _all: number };
+    }[];
+
+    const unpublished = groups.find((group) => group.published === false);
+    expect(unpublished).toBeUndefined();
+    expect(groups).toHaveLength(1);
+    expect(groups[0]._sum.viewCount).toBe(9007199254740993n + 100n);
+  });
+
+  it('orders by an aggregate measure and takes the top group', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+
+    const top = (await asRoy.post.groupBy({
+      by: ['published'],
+      _sum: { viewCount: true },
+      orderBy: { _sum: { viewCount: 'desc' } },
+      take: 1,
+    })) as { published: boolean; _sum: { viewCount: bigint | null } }[];
+
+    expect(top).toHaveLength(1);
+    expect(top[0]._sum.viewCount).toBe(9007199254740993n + 100n);
+  });
+
+  it('returns null rather than zero for a measure over zero rows', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+
+    const empty = (await asRoy.post.aggregate({
+      where: { title: '__no_such_post__' },
+      _max: { viewCount: true },
+    })) as { _max: { viewCount: bigint | null } };
+
+    expect(empty._max.viewCount).toBeNull();
+  });
+
+  it('groups inside a caller-scoped transaction', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+
+    const groups = await asRoy.$transaction(async (tx) => {
+      return (await tx.post.groupBy({
+        by: ['published'],
+        _count: { _all: true },
+      })) as { _count: { _all: number } }[];
+    });
+
+    expect(groups.reduce((sum, group) => sum + group._count._all, 0)).toBe(3);
   });
 });

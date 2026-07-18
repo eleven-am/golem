@@ -30,7 +30,7 @@ import {
   ModelConfig,
   ModelsConfig,
 } from './datamodel';
-import { GolemError } from './errors';
+import { GolemError, GolemValidationError } from './errors';
 import { GolemEventBus, eventTopic } from './events';
 import {
   ComputedFieldSpec,
@@ -747,6 +747,17 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           },
           resolve: wrapResolve(async (_root, args, ctx) => {
             const by = (args.by ?? []) as string[];
+            const groupLimit = groupLimits.get(model.name);
+            if (
+              groupLimit !== undefined &&
+              (args.take === undefined ||
+                args.take === null ||
+                Math.abs(args.take as number) > groupLimit)
+            ) {
+              throw new GolemValidationError(
+                `${groupByFieldName(model.name)} requires take of at most ${groupLimit}`,
+              );
+            }
             const countKey = by[0];
             const measures = toPrismaMeasures(args.measures as MeasuresArg);
             const rows = (await engine.groupBy({

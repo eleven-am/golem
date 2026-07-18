@@ -26,6 +26,7 @@ const POLICY_OPS = {
   upsert: 'upsert',
   count: 'count',
   aggregate: 'aggregate',
+  groupBy: 'groupBy',
 } as const;
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
