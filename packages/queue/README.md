@@ -88,6 +88,22 @@ await queue.add('article.extract', { articleId }, {
 });
 ```
 
+### Enqueueing inside your own transaction
+
+Queueing work usually has to be atomic with a change to your own tables — mark a row "processing" *and* enqueue the job, or neither. Pass a `store` bound to your transaction:
+
+```ts
+await prisma.$transaction(async (tx) => {
+  await tx.article.update({ where: { id }, data: { audioStatus: 'PENDING' } });
+  await queue.add('article.audio', { articleId: id }, {
+    scope: { type: 'Article', id },
+    store: jobStore.withClient(tx),
+  });
+});
+```
+
+Without this the two writes can diverge — the job runs while your row still says idle, or your row says "processing" for work that was never queued.
+
 Cancellation:
 
 ```ts

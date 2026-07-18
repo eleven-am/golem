@@ -36,7 +36,7 @@ export class JobQueue {
     payload: Record<string, unknown>,
     options: EnqueueOptions = {},
   ): Promise<boolean> {
-    return this.store.create({
+    return (options.store ?? this.store).create({
       id: options.id,
       type,
       payload: JSON.stringify(payload),

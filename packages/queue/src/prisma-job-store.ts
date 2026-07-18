@@ -73,6 +73,10 @@ function ids(rows: Record<string, unknown>[]): string[] {
 export class PrismaJobStore implements JobStore {
   constructor(private readonly prisma: PrismaClientLike) {}
 
+  withClient(client: PrismaClientLike): PrismaJobStore {
+    return new PrismaJobStore(client);
+  }
+
   async create(input: CreateJobInput): Promise<boolean> {
     try {
       await this.prisma.job.create({

@@ -1,3 +1,5 @@
+import type { JobStore } from './job-store';
+
 export interface JobScope {
   readonly type: string;
   readonly id: string;
@@ -95,6 +97,7 @@ export interface EnqueueOptions {
   dedupeKey?: string;
   maxAttempts?: number;
   scope?: JobScope;
+  store?: JobStore;
 }
 
 export interface JobRetentionOptions {

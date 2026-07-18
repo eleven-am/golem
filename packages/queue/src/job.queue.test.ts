@@ -130,6 +130,36 @@ describe('JobQueue', () => {
     expect(store.all()).toHaveLength(1);
   });
 
+  it('enqueues against a caller-supplied store', async () => {
+    const { store, queue } = build();
+    const transactional = new InMemoryJobStore();
+
+    await expect(
+      queue.add('article.extract', { articleId: 'a1' }, {
+        scope: SCOPE,
+        store: transactional,
+      }),
+    ).resolves.toBe(true);
+
+    expect(store.all()).toHaveLength(0);
+    expect(transactional.all()).toHaveLength(1);
+    expect(transactional.all()[0]).toMatchObject({
+      type: 'article.extract',
+      scopeType: 'Article',
+      scopeId: 'a1',
+      maxAttempts: 3,
+    });
+  });
+
+  it('still reports dedupe conflicts through a supplied store', async () => {
+    const { queue } = build();
+    const transactional = new InMemoryJobStore();
+    const options = { dedupeKey: 'k', store: transactional };
+
+    await expect(queue.add('t', {}, options)).resolves.toBe(true);
+    await expect(queue.add('t', {}, options)).resolves.toBe(false);
+  });
+
   it('finds jobs for a scope', async () => {
     const { queue } = build();
     await queue.add('article.extract', {}, { scope: SCOPE });
