@@ -7,7 +7,7 @@
     "apps/*"
   ],
   "scripts": {
-    "build": "npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-authorizer && npm run build -w demo",
+    "build": "npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-authorizer -w @eleven-am/golem-queue && npm run build -w demo",
     "test": "npm run test --workspaces --if-present",
     "benchmark:hardening": "npm run build -w @eleven-am/golem-core -w @eleven-am/golem-authorizer && node benchmarks/hardening.bench.js"
   },

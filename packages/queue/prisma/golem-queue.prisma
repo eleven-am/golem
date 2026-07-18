@@ -1,0 +1,28 @@
+enum JobStatus {
+  PENDING
+  RUNNING
+  SUCCEEDED
+  FAILED
+}
+
+model Job {
+  id             String    @id @default(cuid())
+  type           String
+  payload        String
+  scopeType      String?
+  scopeId        String?
+  status         JobStatus @default(PENDING)
+  runAt          DateTime  @default(now())
+  attempts       Int       @default(0)
+  maxAttempts    Int       @default(3)
+  lastError      String?
+  dedupeKey      String?   @unique
+  leaseOwner     String?
+  leaseExpiresAt DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([status, runAt])
+  @@index([status, leaseExpiresAt])
+  @@index([scopeType, scopeId, status])
+}

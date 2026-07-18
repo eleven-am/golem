@@ -1,0 +1,164 @@
+export interface JobScope {
+  readonly type: string;
+  readonly id: string;
+}
+
+export interface JobExecution {
+  readonly signal: AbortSignal;
+}
+
+export interface JobWork {
+  handle(
+    payload: Record<string, unknown>,
+    execution: JobExecution,
+  ): Promise<void>;
+}
+
+export interface JobHandler extends JobWork {
+  readonly type: string;
+  readonly concurrency: number;
+  readonly timeoutMs: number;
+}
+
+export class TerminalJobError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = TerminalJobError.name;
+  }
+}
+
+export class RetryableJobError extends Error {
+  constructor(
+    message: string,
+    readonly retryAfterMs?: number,
+    readonly consumesAttempt = true,
+    options?: ErrorOptions,
+  ) {
+    super(message, options);
+    this.name = RetryableJobError.name;
+  }
+}
+
+export function retryAfterMs(error: unknown): number | undefined {
+  if (!(error instanceof RetryableJobError)) return undefined;
+  return error.retryAfterMs;
+}
+
+export function consumesRetryAttempt(error: unknown): boolean {
+  return !(error instanceof RetryableJobError) || error.consumesAttempt;
+}
+
+export function isTerminalJobError(error: unknown): boolean {
+  return (
+    error instanceof TerminalJobError ||
+    (typeof error === 'object' &&
+      error !== null &&
+      'retryable' in error &&
+      error.retryable === false)
+  );
+}
+
+export const JOB_HANDLER = 'GOLEM_QUEUE_JOB_HANDLER';
+
+export const JOB_LIFECYCLE_OBSERVER = 'GOLEM_QUEUE_JOB_LIFECYCLE_OBSERVER';
+
+export const JOB_STORE = 'GOLEM_QUEUE_JOB_STORE';
+
+export const GOLEM_QUEUE_OPTIONS = 'GOLEM_QUEUE_OPTIONS';
+
+export type JobLifecycleOutcome =
+  | 'started'
+  | 'succeeded'
+  | 'retry-scheduled'
+  | 'failed-terminal'
+  | 'cancelled';
+
+export interface JobLifecycleTransition {
+  readonly jobId: string;
+  readonly type: string;
+  readonly payload: string;
+  readonly scope: JobScope | null;
+  readonly outcome: JobLifecycleOutcome;
+  readonly attempts?: number;
+  readonly maxAttempts?: number;
+  readonly error?: string;
+  readonly durationMs?: number;
+}
+
+export interface JobLifecycleObserver {
+  onTransition(transition: JobLifecycleTransition): Promise<void>;
+}
+
+export interface EnqueueOptions {
+  id?: string;
+  runAt?: Date;
+  dedupeKey?: string;
+  maxAttempts?: number;
+  scope?: JobScope;
+}
+
+export interface JobRetentionOptions {
+  readonly statuses?: readonly ('SUCCEEDED' | 'FAILED')[];
+  readonly olderThanMs: number;
+  readonly sweepIntervalMs?: number;
+}
+
+export interface GolemQueueOptions {
+  pollIntervalMs?: number;
+  baseBackoffMs?: number;
+  maxBackoffMs?: number;
+  leaseGraceMs?: number;
+  abandonGraceMs?: number;
+  shutdownGraceMs?: number;
+  defaultMaxAttempts?: number;
+  workerId?: string;
+  retention?: JobRetentionOptions;
+}
+
+export interface ResolvedGolemQueueOptions {
+  readonly pollIntervalMs: number;
+  readonly baseBackoffMs: number;
+  readonly maxBackoffMs: number;
+  readonly leaseGraceMs: number;
+  readonly abandonGraceMs: number;
+  readonly shutdownGraceMs: number;
+  readonly defaultMaxAttempts: number;
+  readonly workerId?: string;
+  readonly retention?: JobRetentionOptions;
+}
+
+export const GOLEM_QUEUE_DEFAULTS: ResolvedGolemQueueOptions = {
+  pollIntervalMs: 500,
+  baseBackoffMs: 2000,
+  maxBackoffMs: 300_000,
+  leaseGraceMs: 30_000,
+  abandonGraceMs: 5000,
+  shutdownGraceMs: 15_000,
+  defaultMaxAttempts: 3,
+};
+
+export function resolveQueueOptions(
+  options: GolemQueueOptions = {},
+): ResolvedGolemQueueOptions {
+  return {
+    pollIntervalMs:
+      options.pollIntervalMs ?? GOLEM_QUEUE_DEFAULTS.pollIntervalMs,
+    baseBackoffMs: options.baseBackoffMs ?? GOLEM_QUEUE_DEFAULTS.baseBackoffMs,
+    maxBackoffMs: options.maxBackoffMs ?? GOLEM_QUEUE_DEFAULTS.maxBackoffMs,
+    leaseGraceMs: options.leaseGraceMs ?? GOLEM_QUEUE_DEFAULTS.leaseGraceMs,
+    abandonGraceMs:
+      options.abandonGraceMs ?? GOLEM_QUEUE_DEFAULTS.abandonGraceMs,
+    shutdownGraceMs:
+      options.shutdownGraceMs ?? GOLEM_QUEUE_DEFAULTS.shutdownGraceMs,
+    defaultMaxAttempts:
+      options.defaultMaxAttempts ?? GOLEM_QUEUE_DEFAULTS.defaultMaxAttempts,
+    workerId: options.workerId,
+    retention: options.retention,
+  };
+}
+
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === 'string') return error;
+  return String(error);
+}

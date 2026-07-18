@@ -27,9 +27,9 @@ jobs:
         run: |
           npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
           npm rebuild -w @eleven-am/golem-generator
-          npm run build -w @eleven-am/golem-authorizer -w @eleven-am/golem
+          npm run build -w @eleven-am/golem-authorizer -w @eleven-am/golem -w @eleven-am/golem-queue
       - name: Test libraries
-        run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem --if-present
+        run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-queue --if-present
       - name: Publish packages in dependency order
         run: |
           publish() {
@@ -45,3 +45,4 @@ jobs:
           publish @eleven-am/golem-generator packages/generator
           publish @eleven-am/golem-authorizer packages/authorizer
           publish @eleven-am/golem packages/nest
+          publish @eleven-am/golem-queue packages/queue
