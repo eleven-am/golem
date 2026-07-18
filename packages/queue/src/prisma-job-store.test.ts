@@ -1,4 +1,4 @@
-import { PrismaJobStore, type PrismaClientLike } from './prisma-job-store';
+import { PrismaJobStore } from './prisma-job-store';
 
 function build() {
   const job = {
@@ -11,7 +11,7 @@ function build() {
   };
   return {
     job,
-    store: new PrismaJobStore({ job } as unknown as PrismaClientLike),
+    store: new PrismaJobStore({ job }),
   };
 }
 

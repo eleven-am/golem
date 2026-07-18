@@ -84,7 +84,7 @@ export function isGroupable(field: DatamodelField): boolean {
   return field.kind !== 'object' && !field.isList;
 }
 
-const NUMBER_OPERATORS = ['equals', 'in', 'lt', 'lte', 'gt', 'gte', 'not'];
+const ORDERED_NUMBER_OPERATORS = ['lt', 'lte', 'gt', 'gte'];
 
 export function buildAggregationTypes(
   deps: AggregationTypeDeps,
@@ -213,7 +213,11 @@ export function buildAggregationTypes(
     }),
   });
 
-  const intFilter = filterTypeFor('IntFilter', GraphQLInt, NUMBER_OPERATORS);
+  const intFilter = filterTypeFor(
+    'IntFilter',
+    GraphQLInt,
+    ORDERED_NUMBER_OPERATORS,
+  );
 
   const measureFilters = hasMeasures
     ? Object.fromEntries(
@@ -226,7 +230,11 @@ export function buildAggregationTypes(
               for (const field of fields.measures) {
                 const scalar = measureInputScalar(field, kind);
                 config[field.name] = {
-                  type: filterTypeFor(`${scalar.name}Filter`, scalar, NUMBER_OPERATORS),
+                  type: filterTypeFor(
+                    `${scalar.name}Filter`,
+                    scalar,
+                    ORDERED_NUMBER_OPERATORS,
+                  ),
                 };
               }
               return config;

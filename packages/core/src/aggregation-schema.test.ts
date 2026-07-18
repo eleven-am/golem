@@ -70,6 +70,18 @@ describe('aggregation schema surface', () => {
     expect(sdl).toContain('scalar Decimal');
   });
 
+  it('exposes list-valued in operators for every numeric aggregation filter', () => {
+    const sdl = printSchema(
+      buildGolemSchema({ datamodel, client: fakeClient(), models: enabled }),
+    );
+    const inputFields = (name: string): string =>
+      new RegExp(`input ${name} \\{([^}]*)\\}`).exec(sdl)?.[1] ?? '';
+
+    expect(inputFields('IntFilter')).toContain('in: [Int!]');
+    expect(inputFields('SafeIntFilter')).toContain('in: [SafeInt!]');
+    expect(inputFields('FloatFilter')).toContain('in: [Float!]');
+  });
+
   it('serializes BigInt and Decimal measures without converting them to numbers', async () => {
     const exactBigInt = 9007199254740993n;
     const exactDecimal = { toString: () => '1234567890.1234567890123456789' };
