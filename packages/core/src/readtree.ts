@@ -98,28 +98,32 @@ export function dependencyHydrationSelect(
   metadata: ModelMetadataIndex,
   model: DatamodelModel,
   dependencies: FieldDependencyTree,
+  relationFilterNode = false,
 ): DependencyHydration {
   const select: PrismaSelect = {};
   let complete = true;
   const meta = metadata.get(model.name);
   for (const [name, dependency] of Object.entries(dependencies)) {
     const field = meta?.fieldsByName.get(name);
-    if (!field) {
-      if ((RELATION_FILTER_KEYS as readonly string[]).includes(name)) {
-        if (dependency === true) {
-          const identity = meta?.primaryKeys[0] ?? meta?.scalarFields[0];
-          if (identity) {
-            select[identity.name] = true;
-          } else {
-            complete = false;
-          }
-          continue;
+    if (
+      (relationFilterNode || !field) &&
+      (RELATION_FILTER_KEYS as readonly string[]).includes(name)
+    ) {
+      if (dependency === true) {
+        const identity = meta?.primaryKeys[0] ?? meta?.scalarFields[0];
+        if (identity) {
+          select[identity.name] = true;
+        } else {
+          complete = false;
         }
-        const nested = dependencyHydrationSelect(metadata, model, dependency);
-        complete &&= nested.complete;
-        mergeSelect(select, nested.select);
         continue;
       }
+      const nested = dependencyHydrationSelect(metadata, model, dependency, false);
+      complete &&= nested.complete;
+      mergeSelect(select, nested.select);
+      continue;
+    }
+    if (!field) {
       complete = false;
       continue;
     }
@@ -142,7 +146,7 @@ export function dependencyHydrationSelect(
       select[name] = { select: { [identity.name]: true } };
       continue;
     }
-    const nested = dependencyHydrationSelect(metadata, target, dependency);
+    const nested = dependencyHydrationSelect(metadata, target, dependency, true);
     complete &&= nested.complete;
     if (Object.keys(nested.select).length === 0) {
       complete = false;

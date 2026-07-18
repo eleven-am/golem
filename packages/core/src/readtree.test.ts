@@ -355,6 +355,7 @@ describe('relation-scoped read hydration', () => {
         fields: [
           field({ name: 'id', type: 'String', isId: true }),
           field({ name: 'title', type: 'String' }),
+          field({ name: 'is', type: 'String' }),
           field({ name: 'authorId', type: 'String' }),
           field({ name: 'organization', type: 'Organization', kind: 'object', relationName: 'OrganizationToPost', relationFromFields: ['organizationId'], relationToFields: ['id'] }),
           field({ name: 'organizationId', type: 'String', isReadOnly: true }),
@@ -382,6 +383,7 @@ describe('relation-scoped read hydration', () => {
         fields: [
           field({ name: 'id', type: 'String', isId: true }),
           field({ name: 'flagged', type: 'Boolean' }),
+          field({ name: 'some', type: 'String' }),
         ],
       },
     ],
@@ -540,7 +542,7 @@ describe('relation-scoped read hydration', () => {
     expect(unmasked).toEqual([{ note: 'secret' }]);
   });
 
-  it('hydrates exact dependencies through multiple relation hops and strips them recursively', async () => {
+  it('hydrates relation operators that collide with target field names', async () => {
     const client = sessionClient([
       {
         progress: 5,
@@ -692,7 +694,7 @@ describe('relation-scoped read hydration', () => {
     ]);
   });
 
-  it('hydrates to-many dependencies completely for in-memory field checks', async () => {
+  it('hydrates a to-many operator when the target has a field named some', async () => {
     const client = sessionClient([
       {
         note: 'secret',
