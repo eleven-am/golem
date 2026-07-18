@@ -14,5 +14,7 @@ describe('generated Golem hook types', () => {
       'export type GolemResult<M extends GolemModelName, O extends GolemHookOperation>',
     );
     expect(output).toContain('omit: Prisma.UserOmit;');
+    expect(output).toContain("include: ArgField<Prisma.UserFindManyArgs, 'include'>;");
+    expect(output).toContain('type ArgField<TArgs, TKey extends PropertyKey>');
   });
 });

@@ -3,6 +3,7 @@ import { JobCancellationRegistry } from './job-cancellation.registry';
 import { JobObserverRegistry } from './job-observer.registry';
 import { JobQueue } from './job.queue';
 import {
+  QueuePayloadError,
   resolveQueueOptions,
   type JobLifecycleObserver,
   type JobLifecycleTransition,
@@ -36,6 +37,75 @@ function recorder() {
 }
 
 describe('JobQueue', () => {
+  it.each([
+    ['', {}, {}, /type.*must not be empty/],
+    ['job', {}, { maxAttempts: 0 }, /maxAttempts=0/],
+    ['job', {}, { maxAttempts: 1.5 }, /maxAttempts=1.5/],
+    ['job', {}, { scope: { type: ' ', id: 'a1' } }, /scope\.type/],
+    ['job', {}, { scope: { type: 'Article', id: ' ' } }, /scope\.id/],
+    ['job', {}, { dedupeKey: ' ' }, /dedupeKey/],
+    ['job', {}, { runAt: new Date(Number.NaN) }, /runAt.*valid Date/],
+  ] as const)('rejects invalid enqueue metadata', (type, payload, options, message) => {
+    const { queue } = build();
+    expect(() => queue.add(type, payload, options)).toThrow(message);
+  });
+
+  it.each([
+    [{ value: 1n }, 'BigInt'],
+    [{ value: undefined }, 'unsupported non-JSON values'],
+    [{ value: Number.POSITIVE_INFINITY }, 'unsupported non-JSON values'],
+    [{ value: () => 'secret' }, 'unsupported non-JSON values'],
+    [{ value: new Map([['secret', 'do-not-print']]) }, 'unsupported non-JSON values'],
+  ] as const)('rejects unsafe payloads without exposing their values', (payload, reason) => {
+    const { queue } = build();
+    expect(() => queue.add('sensitive.job', payload as Record<string, unknown>)).toThrow(
+      QueuePayloadError,
+    );
+    try {
+      queue.add('sensitive.job', payload as Record<string, unknown>);
+    } catch (error) {
+      expect((error as Error).message).toContain('sensitive.job');
+      expect((error as Error).message).toContain(reason);
+      expect((error as Error).message).not.toContain('do-not-print');
+    }
+  });
+
+  it('identifies circular payloads without printing payload contents', () => {
+    const { queue } = build();
+    const payload: Record<string, unknown> = { secret: 'do-not-print' };
+    payload.self = payload;
+
+    expect(() => queue.add('circular.job', payload)).toThrow(/circular references/);
+    try {
+      queue.add('circular.job', payload);
+    } catch (error) {
+      expect((error as Error).message).not.toContain('do-not-print');
+    }
+  });
+
+  it.each([
+    new Date(0),
+    { toJSON: () => 'not-an-object' },
+    { toJSON: () => ['not', 'an', 'object'] },
+  ])('rejects a root payload that serializes to a non-object', (payload) => {
+    const { queue } = build();
+
+    expect(() =>
+      queue.add('invalid-root.job', payload as unknown as Record<string, unknown>),
+    ).toThrow(QueuePayloadError);
+  });
+
+  it('accepts JSON-safe dates and repeated non-circular references', async () => {
+    const { store, queue } = build();
+    const shared = { value: 'safe' };
+    await expect(queue.add('safe.job', { at: new Date(0), first: shared, second: shared })).resolves.toBe(true);
+    expect(JSON.parse(store.all()[0].payload)).toEqual({
+      at: '1970-01-01T00:00:00.000Z',
+      first: shared,
+      second: shared,
+    });
+  });
+
   it('inserts a job carrying its scope', async () => {
     const { store, queue } = build();
 
@@ -241,6 +311,32 @@ describe('JobQueue', () => {
     await expect(
       queue.retryFailed({ scopeType: SCOPE.type, scopeId: SCOPE.id }),
     ).resolves.toBe(1);
+  });
+
+  it('requeues every matching failed job beyond the listing default', async () => {
+    const { store, queue } = build();
+    for (let index = 0; index < 125; index += 1) {
+      await queue.add('bulk.retry', { index });
+    }
+    store.all().forEach((job) => {
+      job.status = 'FAILED';
+      job.attempts = 3;
+      job.lastError = 'boom';
+    });
+
+    await expect(queue.retryFailed({ types: ['bulk.retry'] })).resolves.toBe(125);
+    expect(store.all().every((job) => job.status === 'PENDING')).toBe(true);
+  });
+
+  it('honors an explicit administrative retry page', async () => {
+    const { store, queue } = build();
+    for (let index = 0; index < 20; index += 1) {
+      await queue.add('bulk.retry', { index });
+    }
+    store.all().forEach((job) => (job.status = 'FAILED'));
+
+    await expect(queue.retryFailed({ limit: 7 })).resolves.toBe(7);
+    expect(store.all().filter((job) => job.status === 'FAILED')).toHaveLength(13);
   });
 
   it('prunes only terminal jobs older than the cutoff', async () => {

@@ -19,6 +19,7 @@ function fakeUserDelegate() {
     findMany: jest.fn().mockResolvedValue([]),
     findUnique: jest.fn().mockResolvedValue(null),
     create: jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' }),
+    update: jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' }),
     delete: jest.fn().mockResolvedValue({ id: 'u1' }),
   };
 }
@@ -178,6 +179,93 @@ describe('engine hooks', () => {
       context: { requestId: 'r1' },
     });
     expect(seen).toEqual([{ requestId: 'r1' }]);
+  });
+
+  it('runs only the update branch hooks once for an existing upsert target', async () => {
+    const registry = new HookRegistry();
+    const beforeCreate = jest.fn();
+    const beforeUpdate = jest.fn();
+    const afterCreate = jest.fn();
+    const afterUpdate = jest.fn();
+    registry.registerBefore('User', 'create', beforeCreate);
+    registry.registerBefore('User', 'update', beforeUpdate);
+    registry.registerAfter('User', 'create', afterCreate);
+    registry.registerAfter('User', 'update', afterUpdate);
+    const user = fakeUserDelegate();
+    const engine = new GolemEngine({ user }, models, { hooks: registry });
+
+    await engine.upsert({
+      model: 'User',
+      where: { id: 'u1' },
+      create: { email: 'new@example.com' },
+      update: { email: 'edited@example.com' },
+    });
+
+    expect(beforeUpdate).toHaveBeenCalledTimes(1);
+    expect(afterUpdate).toHaveBeenCalledTimes(1);
+    expect(beforeCreate).not.toHaveBeenCalled();
+    expect(afterCreate).not.toHaveBeenCalled();
+  });
+
+  it('runs only the create branch hooks once for a missing upsert target', async () => {
+    const registry = new HookRegistry();
+    const beforeCreate = jest.fn();
+    const beforeUpdate = jest.fn();
+    const afterCreate = jest.fn();
+    const afterUpdate = jest.fn();
+    registry.registerBefore('User', 'create', beforeCreate);
+    registry.registerBefore('User', 'update', beforeUpdate);
+    registry.registerAfter('User', 'create', afterCreate);
+    registry.registerAfter('User', 'update', afterUpdate);
+    const user = fakeUserDelegate();
+    user.findFirst.mockResolvedValue(null);
+    const engine = new GolemEngine({ user }, models, { hooks: registry });
+
+    await engine.upsert({
+      model: 'User',
+      where: { id: 'missing' },
+      create: { email: 'new@example.com' },
+      update: { email: 'edited@example.com' },
+    });
+
+    expect(beforeCreate).toHaveBeenCalledTimes(1);
+    expect(afterCreate).toHaveBeenCalledTimes(1);
+    expect(beforeUpdate).not.toHaveBeenCalled();
+    expect(afterUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not re-enter branch hooks during transactional write verification', async () => {
+    const registry = new HookRegistry();
+    const beforeCreate = jest.fn();
+    registry.registerBefore('User', 'create', beforeCreate);
+    const user = fakeUserDelegate();
+    user.findFirst.mockResolvedValue(null);
+    user.findUnique.mockResolvedValue({ id: 'u1', email: 'new@example.com' });
+    const client = {
+      user,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) => run({ user })),
+    };
+    const engine = new GolemEngine(client, models, {
+      hooks: registry,
+      authorization: {
+        authorize: jest.fn(async () => undefined),
+        constrain: jest.fn(async () => ({})),
+        check: jest.fn(async () => true),
+        checkField: jest.fn(async () => true),
+      },
+      checkReadFields: false,
+    });
+
+    await engine.upsert({
+      model: 'User',
+      where: { id: 'missing' },
+      create: { email: 'new@example.com' },
+      update: { email: 'edited@example.com' },
+      context: {},
+    });
+
+    expect(beforeCreate).toHaveBeenCalledTimes(1);
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('rejects take values above the configured limit after hooks run', async () => {

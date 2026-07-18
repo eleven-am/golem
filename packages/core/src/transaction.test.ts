@@ -142,4 +142,32 @@ describe('engine interactive transaction', () => {
     ).rejects.toBeInstanceOf(GolemForbiddenError);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
+
+  it('keeps the context-aware upsert branch probe and write inside the ambient transaction', async () => {
+    const txDelegates = {
+      post: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'p2', title: 'new' }),
+      },
+    };
+    const txClient = guardTxClient(txDelegates);
+    const client = {
+      post: { findFirst: jest.fn(), create: jest.fn() },
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) => run(txClient)),
+    };
+    const engine = new GolemEngine(client, models);
+
+    await engine.transaction(ctx, (tx) => tx.upsert({
+      model: 'Post',
+      where: { id: 'p2' },
+      create: { title: 'new' },
+      update: { title: 'updated' },
+    }));
+
+    expect(txDelegates.post.findFirst).toHaveBeenCalledTimes(1);
+    expect(txDelegates.post.create).toHaveBeenCalledTimes(1);
+    expect(client.post.findFirst).not.toHaveBeenCalled();
+    expect(client.post.create).not.toHaveBeenCalled();
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
+  });
 });

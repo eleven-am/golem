@@ -35,6 +35,23 @@ describe('GolemEngine', () => {
     ).rejects.toBeInstanceOf(GolemConflictError);
   });
 
+  it('translates a unique race after a missing upsert probe into GolemConflictError', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockRejectedValue(
+      Object.assign(new Error('unique race'), { code: 'P2002' }),
+    );
+    const engine = engineWith({ findFirst, create });
+
+    await expect(engine.upsert({
+      model: 'User',
+      where: { id: 'raced' },
+      create: { id: 'raced' },
+      update: { id: 'raced' },
+    })).rejects.toBeInstanceOf(GolemConflictError);
+    expect(findFirst).toHaveBeenCalledTimes(1);
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
   it('translates relation constraint codes into GolemValidationError', async () => {
     const update = jest.fn().mockRejectedValue(Object.assign(new Error('x'), { code: 'P2014' }));
     const engine = engineWith({ update });

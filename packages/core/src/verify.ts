@@ -8,7 +8,12 @@ import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { NestedRelationWritePlan, nestedPlanTargetsRow, planNestedWrites } from './nested-writes';
-import { constraintFieldNames, constraintHydrationSelect, mergeSelect } from './readtree';
+import {
+  constraintFieldNames,
+  constraintHydrationSelect,
+  dependencyHydrationSelect,
+  mergeSelect,
+} from './readtree';
 import { PrismaSelect } from './select';
 
 export interface VerifyContext {
@@ -278,7 +283,13 @@ export async function planVerification(
   const relations = planNestedWrites(metadata, model, data);
   if (!ctx.provider.classifyFields) {
     const wide = wideSelectWithMetadata(metadata, model, data);
-    mergeSelect(wide, constraintHydrationSelect(metadata, model, constraint));
+    const hydrationState = { complete: true };
+    mergeSelect(wide, constraintHydrationSelect(metadata, model, constraint, {}, hydrationState));
+    if (!hydrationState.complete) {
+      throw new GolemForbiddenError(
+        `Cannot ${action} ${model.name}: its authorization constraint cannot be hydrated safely`,
+      );
+    }
     return { select: wide, fastPath: false };
   }
   const payload = payloadFieldNames(model, data);
@@ -292,6 +303,7 @@ export async function planVerification(
   }
   const scalarNames = new Set(metadata.get(model.name)!.scalarFields.map((f) => f.name));
   const needed = new Set<string>();
+  const fieldDependencies: PrismaSelect = {};
   for (const field of metadata.get(model.name)!.scalarFields) {
     if (field.isId || field.isUpdatedAt) {
       needed.add(field.name);
@@ -304,7 +316,31 @@ export async function planVerification(
     needed.add(name);
   }
   for (const name of payload) {
-    for (const required of classification[name]?.requires ?? []) {
+    const entry = classification[name];
+    if (entry?.dependencies) {
+      const hydration = dependencyHydrationSelect(metadata, model, entry.dependencies);
+      if (!hydration.complete) {
+        throw new GolemForbiddenError(
+          `Cannot ${action} field "${name}" on ${model.name}: its authorization dependencies cannot be hydrated safely`,
+        );
+      }
+      mergeSelect(fieldDependencies, hydration.select);
+    }
+    for (const required of entry?.requires ?? []) {
+      const requiredField = metadata.get(model.name)?.fieldsByName.get(required);
+      if (!requiredField) {
+        throw new GolemForbiddenError(
+          `Cannot ${action} field "${name}" on ${model.name}: authorization dependency "${required}" is not a model field`,
+        );
+      }
+      if (requiredField.kind === 'object') {
+        if (!entry?.dependencies?.[required]) {
+          throw new GolemForbiddenError(
+            `Cannot ${action} field "${name}" on ${model.name}: relation dependency "${required}" has no exact hydration tree`,
+          );
+        }
+        continue;
+      }
       needed.add(required);
     }
   }
@@ -314,13 +350,22 @@ export async function planVerification(
       select[name] = true;
     }
   }
+  mergeSelect(select, fieldDependencies);
   for (const relation of relations) {
     const nestedSelect = modelScalarSelect(relation.target);
     for (const payload of [...relation.createPayloads, ...relation.updatePayloads]) {
       mergeSelect(nestedSelect, wideSelectWithMetadata(metadata, relation.target, payload));
     }
-    select[relation.field.name] = { select: nestedSelect };
+    mergeSelect(select, {
+      [relation.field.name]: { select: nestedSelect },
+    });
   }
-  mergeSelect(select, constraintHydrationSelect(metadata, model, constraint));
+  const hydrationState = { complete: true };
+  mergeSelect(select, constraintHydrationSelect(metadata, model, constraint, {}, hydrationState));
+  if (!hydrationState.complete) {
+    throw new GolemForbiddenError(
+      `Cannot ${action} ${model.name}: its authorization constraint cannot be hydrated safely`,
+    );
+  }
   return { select, fastPath: false };
 }

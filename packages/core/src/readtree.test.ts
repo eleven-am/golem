@@ -149,6 +149,65 @@ describe('nested relation constraints', () => {
     expect(check).toHaveBeenCalledWith('read', 'Profile', { id: 'pr2', bio: 'other' }, ctx);
   });
 
+  it('hydrates deep to-one constraint relations exactly and strips them after checking', async () => {
+    const client = fakeClient();
+    const checked: unknown[] = [];
+    const check = jest.fn(async (_action, _model, row) => {
+      checked.push(structuredClone(row));
+      return true;
+    });
+    const provider = providerWith({
+      User: {},
+      Profile: { user: { is: { profile: { is: { bio: 'allowed' } } } } },
+    }, check);
+    client.user.findMany.mockResolvedValue([
+      {
+        email: 'a',
+        profile: {
+          id: 'pr1',
+          user: { profile: { bio: 'allowed' } },
+        },
+      },
+    ]);
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    const result = await engine.findMany({
+      model: 'User',
+      select: { email: true, profile: { select: { id: true } } },
+      context: ctx,
+    });
+
+    expect(client.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: {
+        email: true,
+        profile: {
+          select: {
+            id: true,
+            user: { select: { profile: { select: { bio: true } } } },
+          },
+        },
+      },
+    }));
+    expect(checked).toEqual([{
+      id: 'pr1',
+      user: { profile: { bio: 'allowed' } },
+    }]);
+    expect(result).toEqual([{ email: 'a', profile: { id: 'pr1' } }]);
+  });
+
+  it('fails closed when a to-one authorization constraint cannot be hydrated', async () => {
+    const client = fakeClient();
+    const provider = providerWith({ Profile: { user: { is: 5 } }, User: {} }, jest.fn());
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    await expect(engine.findMany({
+      model: 'User',
+      select: { profile: { select: { id: true } } },
+      context: ctx,
+    })).rejects.toThrow(/cannot be hydrated safely/);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+  });
+
   it('rejects conditional to-one traversal when the provider lacks check', async () => {
     const client = fakeClient();
     const provider = providerWith({ Profile: { userId: 'me' }, User: {} });
@@ -296,7 +355,35 @@ describe('relation-scoped read hydration', () => {
         fields: [
           field({ name: 'id', type: 'String', isId: true }),
           field({ name: 'title', type: 'String' }),
+          field({ name: 'is', type: 'String' }),
           field({ name: 'authorId', type: 'String' }),
+          field({ name: 'organization', type: 'Organization', kind: 'object', relationName: 'OrganizationToPost', relationFromFields: ['organizationId'], relationToFields: ['id'] }),
+          field({ name: 'organizationId', type: 'String', isReadOnly: true }),
+          field({ name: 'comments', type: 'Comment', kind: 'object', isList: true, relationName: 'CommentToPost' }),
+        ],
+      },
+      {
+        name: 'Organization',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'suspended', type: 'Boolean' }),
+          field({ name: 'company', type: 'Company', kind: 'object', relationName: 'CompanyToOrganization', relationFromFields: ['companyId'], relationToFields: ['id'] }),
+          field({ name: 'companyId', type: 'String', isReadOnly: true }),
+        ],
+      },
+      {
+        name: 'Company',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'blocked', type: 'Boolean' }),
+        ],
+      },
+      {
+        name: 'Comment',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'flagged', type: 'Boolean' }),
+          field({ name: 'some', type: 'String' }),
         ],
       },
     ],
@@ -310,6 +397,9 @@ describe('relation-scoped read hydration', () => {
   function relationProvider(
     sessionConstraint: unknown,
     checkField: jest.Mock,
+    dependencies: Record<string, true | Record<string, unknown>> = {
+      post: { authorId: true },
+    },
   ): AuthorizationProvider {
     return {
       authorize: jest.fn(async () => undefined),
@@ -317,9 +407,18 @@ describe('relation-scoped read hydration', () => {
         model === 'Session' ? sessionConstraint : {},
       ),
       checkField,
-      classifyFields: jest.fn(async (_action, _model, fields: readonly string[]) =>
+      classifyFields: jest.fn(async (_action, model, fields: readonly string[]) =>
         Object.fromEntries(
-          fields.map((name) => [name, { access: 'conditional' as const, requires: ['post'] }]),
+          fields.map((name) => [
+            name,
+            model === 'Session'
+              ? {
+                  access: 'conditional' as const,
+                  requires: ['post'],
+                  dependencies,
+                }
+              : { access: 'always' as const },
+          ]),
         ),
       ),
     };
@@ -346,7 +445,7 @@ describe('relation-scoped read hydration', () => {
 
     expect(client.session.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        select: { progress: true, post: { select: { id: true, title: true, authorId: true } } },
+        select: { progress: true, post: { select: { authorId: true } } },
       }),
     );
     expect(seenRows).toEqual([{ progress: 5, post: { authorId: 'me' } }]);
@@ -367,7 +466,7 @@ describe('relation-scoped read hydration', () => {
 
     expect(client.session.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        select: { progress: true, post: { select: { title: true, id: true, authorId: true } } },
+        select: { progress: true, post: { select: { title: true, authorId: true } } },
       }),
     );
     expect(result).toEqual([{ progress: 5, post: { title: 't' } }]);
@@ -389,7 +488,7 @@ describe('relation-scoped read hydration', () => {
 
     expect(client.session.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        select: { progress: true, post: { select: { id: true, title: true, authorId: true } } },
+        select: { progress: true, post: { select: { authorId: true } } },
       }),
     );
     expect(result).toEqual([{ progress: null }]);
@@ -408,7 +507,7 @@ describe('relation-scoped read hydration', () => {
     >;
 
     expect(client.session.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ include: { post: { select: { id: true, title: true, authorId: true } } } }),
+      expect.objectContaining({ include: { post: { select: { authorId: true } } } }),
     );
     expect(result).toEqual([{ id: 's1', progress: 5, note: 'n', postId: 'p1' }]);
   });
@@ -429,7 +528,7 @@ describe('relation-scoped read hydration', () => {
 
     expect(client.session.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        select: { note: true, post: { select: { id: true, title: true, authorId: true } } },
+        select: { note: true, post: { select: { authorId: true } } },
       }),
     );
     expect(masked).toEqual([{ note: null }]);
@@ -441,5 +540,321 @@ describe('relation-scoped read hydration', () => {
       context: ctx,
     })) as Array<Record<string, unknown>>;
     expect(unmasked).toEqual([{ note: 'secret' }]);
+  });
+
+  it('hydrates relation operators that collide with target field names', async () => {
+    const client = sessionClient([
+      {
+        progress: 5,
+        post: {
+          title: 'visible title',
+          organization: { company: { blocked: true } },
+        },
+      },
+    ]);
+    const seenRows: unknown[] = [];
+    const checkField = jest.fn(async (_action, _model, row) => {
+      seenRows.push(structuredClone(row));
+      return !(row as {
+        post?: { organization?: { company?: { blocked?: boolean } } };
+      }).post?.organization?.company?.blocked;
+    });
+    const provider = relationProvider({}, checkField, {
+      post: {
+        is: {
+          organization: { isNot: { company: { is: { blocked: true } } } },
+        },
+      },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      select: { progress: true, post: { select: { title: true } } },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          progress: true,
+          post: {
+            select: {
+              title: true,
+              organization: {
+                select: { company: { select: { blocked: true } } },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(seenRows).toEqual([
+      {
+        progress: 5,
+        post: {
+          title: 'visible title',
+          organization: { company: { blocked: true } },
+        },
+      },
+    ]);
+    expect(result).toEqual([
+      { progress: null, post: { title: 'visible title' } },
+    ]);
+  });
+
+  it('merges deep dependencies through caller include projections without leaking them', async () => {
+    const client = sessionClient([
+      {
+        id: 's1',
+        progress: 5,
+        post: {
+          id: 'p1',
+          title: 'visible title',
+          authorId: 'author',
+          organizationId: 'o1',
+          organization: { id: 'o1', suspended: false },
+        },
+      },
+    ]);
+    const provider = relationProvider({}, jest.fn(async () => true), {
+      post: { organization: { suspended: true } },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      include: {
+        post: { include: { organization: { select: { id: true } } } },
+      },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        include: {
+          post: {
+            include: {
+              organization: { select: { id: true, suspended: true } },
+            },
+          },
+        },
+      }),
+    );
+    expect(result).toEqual([
+      {
+        id: 's1',
+        progress: 5,
+        post: {
+          id: 'p1',
+          title: 'visible title',
+          authorId: 'author',
+          organizationId: 'o1',
+          organization: { id: 'o1' },
+        },
+      },
+    ]);
+  });
+
+  it('temporarily removes a nested omit for policy evaluation and restores the public shape', async () => {
+    const client = sessionClient([
+      {
+        id: 's1',
+        progress: 5,
+        post: { id: 'p1', title: 'visible title', authorId: 'author', organizationId: 'o1' },
+      },
+    ]);
+    const provider = relationProvider({}, jest.fn(async () => true));
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      include: { post: { omit: { authorId: true } } },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ include: { post: { omit: {} } } }),
+    );
+    expect(result).toEqual([
+      {
+        id: 's1',
+        progress: 5,
+        post: { id: 'p1', title: 'visible title', organizationId: 'o1' },
+      },
+    ]);
+  });
+
+  it('hydrates a to-many operator when the target has a field named some', async () => {
+    const client = sessionClient([
+      {
+        note: 'secret',
+        post: { comments: [{ flagged: true }, { flagged: false }] },
+      },
+    ]);
+    const checkField = jest.fn(async (_action, _model, row) =>
+      !(row as { post?: { comments?: Array<{ flagged?: boolean }> } })
+        .post?.comments?.some(({ flagged }) => flagged),
+    );
+    const provider = relationProvider({}, checkField, {
+      post: { comments: { some: { flagged: true } } },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      select: { note: true },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          note: true,
+          post: {
+            select: {
+              comments: { select: { flagged: true } },
+            },
+          },
+        },
+      }),
+    );
+    expect(result).toEqual([{ note: null }]);
+  });
+
+  it('preserves nullable relation state for field checks without leaking the relation', async () => {
+    const client = sessionClient([{ note: 'secret', post: null }]);
+    const seenRows: unknown[] = [];
+    const checkField = jest.fn(async (_action, _model, row) => {
+      seenRows.push(structuredClone(row));
+      return (row as { post?: unknown }).post !== null;
+    });
+    const provider = relationProvider({}, checkField, {
+      post: { is: true },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      select: { note: true },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: { note: true, post: { select: { id: true } } },
+      }),
+    );
+    expect(seenRows).toEqual([{ note: 'secret', post: null }]);
+    expect(result).toEqual([{ note: null }]);
+  });
+
+  it('hydrates and strips deep dependencies for a field on a caller-selected relation', async () => {
+    const client = sessionClient([
+      {
+        id: 's1',
+        post: {
+          title: 'nested secret',
+          organization: { company: { blocked: true } },
+        },
+      },
+    ]);
+    const provider: AuthorizationProvider = {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async () => ({})),
+      checkField: jest.fn(async (_action, model, row, fieldName) =>
+        model !== 'Post' || fieldName !== 'title' ||
+        !(row as { organization?: { company?: { blocked?: boolean } } })
+          .organization?.company?.blocked,
+      ),
+      classifyFields: jest.fn(async (_action, model, fields: readonly string[]) =>
+        Object.fromEntries(fields.map((name) => [
+          name,
+          model === 'Post' && name === 'title'
+            ? {
+                access: 'conditional' as const,
+                requires: ['organization'],
+                dependencies: {
+                  organization: { company: { blocked: true } },
+                },
+              }
+            : { access: 'always' as const },
+        ]))),
+    };
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    const result = await engine.findMany({
+      model: 'Session',
+      select: { id: true, post: { select: { title: true } } },
+      context: ctx,
+    });
+
+    expect(client.session.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          id: true,
+          post: {
+            select: {
+              title: true,
+              organization: {
+                select: { company: { select: { blocked: true } } },
+              },
+            },
+          },
+        },
+      }),
+    );
+    expect(result).toEqual([{ id: 's1', post: { title: null } }]);
+  });
+
+  it('fails closed when an exact dependency cannot be resolved through the datamodel', async () => {
+    const client = sessionClient([]);
+    const provider = relationProvider({}, jest.fn(async () => true), {
+      post: { missingRelation: { secret: true } },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    await expect(
+      engine.findMany({ model: 'Session', select: { progress: true }, context: ctx }),
+    ).rejects.toThrow('authorization dependencies cannot be hydrated safely');
+    expect(client.session.findMany).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for a legacy provider that names a relation without an exact tree', async () => {
+    const client = sessionClient([]);
+    const provider = relationProvider({}, jest.fn(async () => true));
+    (provider.classifyFields as jest.Mock).mockResolvedValue({
+      progress: { access: 'conditional', requires: ['post'] },
+    });
+    const engine = new GolemEngine(client, relationModels.models, {
+      authorization: provider,
+      ...policy,
+    });
+
+    await expect(
+      engine.findMany({ model: 'Session', select: { progress: true }, context: ctx }),
+    ).rejects.toThrow('relation dependency "post" has no exact hydration tree');
+    expect(client.session.findMany).not.toHaveBeenCalled();
   });
 });

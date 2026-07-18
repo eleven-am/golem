@@ -10,6 +10,8 @@ export function emitTypesModule(modelNames: readonly string[], clientImport: str
     where: Prisma.${name}WhereInput;
     whereUnique: Prisma.${name}WhereUniqueInput;
     orderBy: Prisma.${name}OrderByWithRelationInput;
+    select: Prisma.${name}Select;
+    include: ArgField<Prisma.${name}FindManyArgs, 'include'>;
     omit: Prisma.${name}Omit;
   };`,
     )
@@ -17,6 +19,10 @@ export function emitTypesModule(modelNames: readonly string[], clientImport: str
 
   return `import type { Prisma, ${entityImports} } from '${clientImport}';
 import type { GolemHookOperation, HookRequestFor, HookResultFor } from '@eleven-am/golem-core';
+
+type ArgField<TArgs, TKey extends PropertyKey> = TKey extends keyof TArgs
+  ? TArgs[TKey]
+  : never;
 
 export type GolemTypes = {
 ${entries}

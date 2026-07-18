@@ -9,6 +9,8 @@ type TestTypes = {
     where: { email?: string };
     whereUnique: { id?: string; email?: string };
     orderBy: { email?: 'asc' | 'desc' };
+    select: { id?: boolean; email?: boolean };
+    include: { posts?: boolean };
     omit: { id?: boolean; email?: boolean };
   };
 };
@@ -21,6 +23,7 @@ describe('hook request types', () => {
         model: 'User',
         cursor: { id: 'u1' },
         distinct: ['email'],
+        include: { posts: true },
         omit: { email: true },
       } satisfies HookRequestFor<TestTypes, 'User', typeof operation>;
 
@@ -28,6 +31,7 @@ describe('hook request types', () => {
         model: 'User',
         cursor: { id: 'u1' },
         distinct: ['email'],
+        include: { posts: true },
         omit: { email: true },
       });
     },

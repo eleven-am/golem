@@ -135,6 +135,7 @@ export interface JobStore {
   findByDedupeKeys(query: DedupeQuery): Promise<CancellableJob[]>;
   deleteByIds(ids: readonly string[]): Promise<number>;
   findJobs(query: JobQuery): Promise<JobSummary[]>;
+  findJobIds(query: JobQuery): Promise<string[]>;
   countByStatus(query: JobQuery): Promise<Record<JobStatus, number>>;
   requeue(input: RequeueInput): Promise<number>;
   deleteTerminalBefore(input: PruneInput): Promise<number>;

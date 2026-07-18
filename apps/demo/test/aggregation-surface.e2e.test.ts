@@ -112,4 +112,95 @@ describe('generated aggregation surface (e2e)', () => {
     expect(response.body.data.postsGrouped).toHaveLength(1);
     expect(response.body.data.postsGrouped[0].key.published).toBe(true);
   });
+
+  it('serializes BigInt aggregates exactly and uses Prisma native average semantics', async () => {
+    const response = await query(`{
+      postsAggregate(measures: {
+        sum: [viewCount]
+        avg: [viewCount]
+        min: [viewCount]
+        max: [viewCount]
+      }) {
+        sum { viewCount }
+        avg { viewCount }
+        min { viewCount }
+        max { viewCount }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.postsAggregate).toEqual({
+      sum: { viewCount: '9007199254741098' },
+      avg: { viewCount: 3002399751580366 },
+      min: { viewCount: '5' },
+      max: { viewCount: '9007199254740993' },
+    });
+  });
+
+  it('serializes Decimal aggregates as exact strings, including nullable source rows', async () => {
+    const response = await query(`{
+      postsAggregate(measures: {
+        sum: [rating]
+        avg: [rating]
+        min: [rating]
+        max: [rating]
+      }) {
+        sum { rating }
+        avg { rating }
+        min { rating }
+        max { rating }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.postsAggregate).toEqual({
+      sum: { rating: '0.30000000000000004' },
+      avg: { rating: '0.15000000000000002' },
+      min: { rating: '0.1' },
+      max: { rating: '0.2' },
+    });
+  });
+
+  it('uses operation-specific aggregate field types in the GraphQL schema', async () => {
+    const response = await query(`{
+      sum: __type(name: "PostSumValues") { fields { name type { name } } }
+      avg: __type(name: "PostAvgValues") { fields { name type { name } } }
+      min: __type(name: "PostMinValues") { fields { name type { name } } }
+      max: __type(name: "PostMaxValues") { fields { name type { name } } }
+    }`);
+
+    const typeOf = (kind: 'sum' | 'avg' | 'min' | 'max', field: string) =>
+      response.body.data[kind].fields.find((entry: { name: string }) => entry.name === field).type.name;
+    expect(typeOf('sum', 'viewCount')).toBe('BigInt');
+    expect(typeOf('avg', 'viewCount')).toBe('Float');
+    expect(typeOf('min', 'viewCount')).toBe('BigInt');
+    expect(typeOf('max', 'viewCount')).toBe('BigInt');
+    expect(typeOf('sum', 'rating')).toBe('Decimal');
+    expect(typeOf('avg', 'rating')).toBe('Decimal');
+  });
+
+  it('preserves exact BigInt and Decimal values in grouped results', async () => {
+    const response = await query(`{
+      postsGrouped(
+        by: [published]
+        measures: { sum: [viewCount, rating], min: [viewCount, rating], max: [viewCount, rating] }
+      ) {
+        key { published }
+        sum { viewCount rating }
+        min { viewCount rating }
+        max { viewCount rating }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    const published = response.body.data.postsGrouped.find(
+      (group: { key: { published: boolean } }) => group.key.published,
+    );
+    expect(published).toEqual({
+      key: { published: true },
+      sum: { viewCount: '9007199254741093', rating: '0.30000000000000004' },
+      min: { viewCount: '100', rating: '0.1' },
+      max: { viewCount: '9007199254740993', rating: '0.2' },
+    });
+  });
 });

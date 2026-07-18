@@ -21,6 +21,23 @@ const models = [
       field({ name: 'authorId', type: 'String', isReadOnly: true }),
     ],
   },
+  {
+    name: 'Membership',
+    fields: [
+      field({ name: 'userId', type: 'String' }),
+      field({ name: 'orgId', type: 'String' }),
+    ],
+    primaryKey: { fields: ['userId', 'orgId'] },
+  },
+  {
+    name: 'Branch',
+    fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'authorId', type: 'String' }),
+      field({ name: 'name', type: 'String' }),
+    ],
+    uniqueIndexes: [{ fields: ['authorId', 'name'] }],
+  },
 ];
 
 const ctx = { req: {} };
@@ -32,6 +49,14 @@ function fakeClient() {
       aggregate: jest.fn().mockResolvedValue({}),
     },
     post: {
+      count: jest.fn().mockResolvedValue(0),
+      aggregate: jest.fn().mockResolvedValue({}),
+    },
+    membership: {
+      count: jest.fn().mockResolvedValue(0),
+      aggregate: jest.fn().mockResolvedValue({}),
+    },
+    branch: {
       count: jest.fn().mockResolvedValue(0),
       aggregate: jest.fn().mockResolvedValue({}),
     },
@@ -111,6 +136,10 @@ describe('engine aggregate', () => {
     const result = await engine.aggregate({
       model: 'Post',
       where: { published: true },
+      orderBy: { createdAt: 'desc' },
+      cursor: { id: 'p9' },
+      take: 10,
+      skip: 2,
       _sum: { viewCount: true },
       _count: true,
       context: ctx,
@@ -119,6 +148,10 @@ describe('engine aggregate', () => {
     expect(result).toEqual({ _sum: { viewCount: 42n }, _count: 2 });
     expect(client.post.aggregate).toHaveBeenCalledWith({
       where: { AND: [{ published: true }, { authorId: 'me' }] },
+      orderBy: { createdAt: 'desc' },
+      cursor: { id: 'p9' },
+      take: 10,
+      skip: 2,
       _sum: { viewCount: true },
       _count: true,
     });
@@ -151,6 +184,83 @@ describe('engine aggregate', () => {
     ).rejects.toBeInstanceOf(GolemValidationError);
     expect(client.user.aggregate).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['orderBy', { orderBy: { phone: 'desc' } }],
+    ['cursor', { cursor: { phone: '555-0100' } }],
+  ] as const)(
+    'rejects aggregate pagination through a never-readable %s field',
+    async (_argument, pagination) => {
+      const client = fakeClient();
+      const provider = classifyProvider({
+        email: { access: 'always' },
+        phone: { access: 'never' },
+      });
+      const engine = new GolemEngine(client, models, {
+        authorization: provider,
+        checkWriteResults: false,
+        checkReadFields: true,
+      });
+
+      await expect(
+        engine.aggregate({
+          model: 'User',
+          _count: { email: true },
+          ...pagination,
+          context: ctx,
+        }),
+      ).rejects.toBeInstanceOf(GolemValidationError);
+
+      expect(provider.classifyFields).toHaveBeenCalledWith(
+        'read',
+        'User',
+        expect.arrayContaining(['email', 'phone']),
+        ctx,
+      );
+      expect(client.user.aggregate).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      'composite primary key',
+      'Membership',
+      'userId_orgId',
+      { userId_orgId: { userId: 'u1', orgId: 'o1' } },
+      ['userId', 'orgId'],
+    ],
+    [
+      'compound unique key',
+      'Branch',
+      'authorId_name',
+      { authorId_name: { authorId: 'a1', name: 'main' } },
+      ['authorId', 'name'],
+    ],
+  ] as const)(
+    'classifies scalar fields behind a %s aggregate cursor',
+    async (_kind, model, selector, cursor, expectedFields) => {
+      const client = fakeClient();
+      const provider = classifyProvider(
+        Object.fromEntries(expectedFields.map((field) => [field, { access: 'always' as const }])),
+      );
+      const engine = new GolemEngine(client, models, {
+        authorization: provider,
+        checkWriteResults: false,
+        checkReadFields: true,
+      });
+
+      await engine.aggregate({
+        model,
+        cursor,
+        _count: true,
+        context: ctx,
+      });
+
+      const classified = provider.classifyFields.mock.calls[0][2] as string[];
+      expect(classified).toEqual(expect.arrayContaining(expectedFields));
+      expect(classified).not.toContain(selector);
+    },
+  );
 
   it('allows an aggregation over always-readable fields', async () => {
     const client = fakeClient();

@@ -5,6 +5,7 @@ export {
   GOLEM_QUEUE_OPTIONS,
   GOLEM_QUEUE_DEFAULTS,
   RetryableJobError,
+  QueuePayloadError,
   TerminalJobError,
   consumesRetryAttempt,
   errorMessage,

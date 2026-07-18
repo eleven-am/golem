@@ -25,8 +25,13 @@ export async function seed(client: SeedClient): Promise<void> {
       profile: { create: { bio: 'builder of things' } },
       posts: {
         create: [
-          { title: 'First post', published: true, viewCount: 9007199254740993n },
-          { title: 'Draft post', published: false, viewCount: 5n },
+          {
+            title: 'First post',
+            published: true,
+            viewCount: 9007199254740993n,
+            rating: '0.1',
+          },
+          { title: 'Draft post', published: false, viewCount: 5n, rating: null },
         ],
       },
     },
@@ -37,7 +42,14 @@ export async function seed(client: SeedClient): Promise<void> {
       name: 'Ada',
       phone: '+44-555-0200',
       profile: { create: { bio: 'countess of computing' } },
-      posts: { create: [{ title: 'Memory systems', published: true, viewCount: 100n }] },
+      posts: {
+        create: [{
+          title: 'Memory systems',
+          published: true,
+          viewCount: 100n,
+          rating: '0.2',
+        }],
+      },
     },
   });
   await client.user.create({

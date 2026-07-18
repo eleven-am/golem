@@ -111,6 +111,42 @@ export const BigIntScalar = new GraphQLScalarType({
   },
 });
 
+const DECIMAL_STRING = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+function coerceDecimal(value: unknown): string {
+  const serialized =
+    typeof value === 'string'
+      ? value
+      : value && typeof value === 'object' && typeof (value as { toString?: unknown }).toString === 'function'
+        ? String(value)
+        : undefined;
+  if (serialized !== undefined && DECIMAL_STRING.test(serialized)) {
+    return serialized;
+  }
+  throw new GraphQLError(
+    `Decimal cannot represent value: ${typeof value === 'string' ? JSON.stringify(value) : String(value)}`,
+  );
+}
+
+export const DecimalScalar = new GraphQLScalarType({
+  name: 'Decimal',
+  description: 'An arbitrary-precision decimal serialized as a string.',
+  serialize: (value) => coerceDecimal(value),
+  parseValue: (value) => coerceDecimal(value),
+  parseLiteral: (ast) => {
+    if (
+      (ast.kind === Kind.STRING || ast.kind === Kind.INT || ast.kind === Kind.FLOAT) &&
+      DECIMAL_STRING.test(ast.value)
+    ) {
+      return ast.value;
+    }
+    throw new GraphQLError(
+      `Decimal cannot represent literal: ${'value' in ast ? String(ast.value) : ast.kind}`,
+      { nodes: ast },
+    );
+  },
+});
+
 const SCALAR_MAP: Record<string, GraphQLScalarType> = {
   String: GraphQLString as unknown as GraphQLScalarType,
   Int: GraphQLInt as unknown as GraphQLScalarType,
@@ -118,6 +154,7 @@ const SCALAR_MAP: Record<string, GraphQLScalarType> = {
   Boolean: GraphQLBoolean as unknown as GraphQLScalarType,
   DateTime: DateTimeScalar,
   BigInt: BigIntScalar,
+  Decimal: DecimalScalar,
 };
 
 const ORDERED_OPERATORS = ['lt', 'lte', 'gt', 'gte'] as const;

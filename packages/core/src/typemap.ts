@@ -1,6 +1,5 @@
 import { GolemHookOperation } from './hooks';
 import { BatchResult } from './operations';
-import { PrismaSelect } from './select';
 
 export interface GolemTypeShape {
   entity: unknown;
@@ -10,6 +9,8 @@ export interface GolemTypeShape {
   where: unknown;
   whereUnique: unknown;
   orderBy: unknown;
+  select: unknown;
+  include: unknown;
   omit?: unknown;
 }
 
@@ -28,7 +29,8 @@ export type HookRequestFor<
   ? {
       model: M;
       data: TTypes[M]['create'];
-      select?: PrismaSelect;
+      select?: TTypes[M]['select'];
+      include?: TTypes[M]['include'];
       omit?: OmitFor<TTypes[M]>;
       context?: unknown;
     }
@@ -37,7 +39,8 @@ export type HookRequestFor<
         model: M;
         where: TTypes[M]['whereUnique'];
         data: TTypes[M]['update'];
-        select?: PrismaSelect;
+        select?: TTypes[M]['select'];
+        include?: TTypes[M]['include'];
         omit?: OmitFor<TTypes[M]>;
         context?: unknown;
       }
@@ -47,7 +50,8 @@ export type HookRequestFor<
         ? {
             model: M;
             where: TTypes[M]['whereUnique'];
-            select?: PrismaSelect;
+            select?: TTypes[M]['select'];
+            include?: TTypes[M]['include'];
             omit?: OmitFor<TTypes[M]>;
             context?: unknown;
           }
@@ -57,7 +61,8 @@ export type HookRequestFor<
             ? {
                 model: M;
                 where: TTypes[M]['whereUnique'];
-                select?: PrismaSelect;
+                select?: TTypes[M]['select'];
+                include?: TTypes[M]['include'];
                 omit?: OmitFor<TTypes[M]>;
                 context?: unknown;
               }
@@ -70,7 +75,8 @@ export type HookRequestFor<
                   skip?: number;
                   cursor?: TTypes[M]['whereUnique'];
                   distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
-                  select?: PrismaSelect;
+                  select?: TTypes[M]['select'];
+                  include?: TTypes[M]['include'];
                   omit?: OmitFor<TTypes[M]>;
                   context?: unknown;
                 }
@@ -83,7 +89,8 @@ export type HookRequestFor<
                   skip?: number;
                   cursor?: TTypes[M]['whereUnique'];
                   distinct?: ScalarFieldFor<TTypes[M]> | ScalarFieldFor<TTypes[M]>[];
-                  select?: PrismaSelect;
+                  select?: TTypes[M]['select'];
+                  include?: TTypes[M]['include'];
                   omit?: OmitFor<TTypes[M]>;
                   context?: unknown;
                 }

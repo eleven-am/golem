@@ -32,6 +32,25 @@ describe('generated Golem client', () => {
     expect(output).toContain('aggregate:');
   });
 
+  it('generates an explicit policy-aware argument whitelist instead of copying Prisma delegates', () => {
+    expect(output).toContain('type ContextBoundDelegate<TDelegate> = {');
+    expect(output).toContain("'findMany', 'where' | 'orderBy' | 'take' | 'skip' | 'cursor' | 'distinct' | 'select' | 'include' | 'omit'");
+    expect(output).toContain("'aggregate', 'where' | 'orderBy' | 'cursor' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'");
+    expect(output).toContain("'groupBy', 'where' | 'orderBy' | 'by' | 'having' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'");
+    expect(output).toContain("'updateMany', 'where' | 'data'");
+    expect(output).toContain("'deleteMany', 'where'");
+    expect(output).toContain("'count', 'where'");
+    expect(output).not.toContain('Pick<TDelegate');
+  });
+
+  it('uses Prisma payload inference for projection-sensitive results', () => {
+    expect(output).toContain("Promise<Prisma.Result<TDelegate, TArgs, 'findUnique'>>");
+    expect(output).toContain("Promise<Prisma.Result<TDelegate, TArgs, 'findMany'>>");
+    expect(output).toContain("Promise<Prisma.Result<TDelegate, TArgs, 'aggregate'>>");
+    expect(output).toContain("Promise<Prisma.Result<TDelegate, TArgs, 'groupBy'>>");
+    expect(output).toContain('): Promise<number>;');
+  });
+
   it('routes context-bound $transaction through the engine transaction', () => {
     expect(output).toContain("if (prop === '$transaction')");
     expect(output).toContain('.transaction(');

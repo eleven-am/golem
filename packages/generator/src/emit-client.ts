@@ -4,7 +4,7 @@ export function emitClientModule(modelNames: readonly string[], clientImport: st
   const modelMap = modelNames.map((name) => `  ${lcFirst(name)}: '${name}',`).join('\n');
   const delegateUnion = modelNames.map((name) => `'${lcFirst(name)}'`).join(' | ');
 
-  return `import { PrismaClient } from '${clientImport}';
+  return `import { Prisma, PrismaClient } from '${clientImport}';
 import { withBufferedEvents } from '@eleven-am/golem-core';
 import type { GolemEngineRef, GolemQueryInterceptor } from '@eleven-am/golem-core';
 
@@ -63,8 +63,56 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
 
 export type GolemBaseClient = ReturnType<typeof createBaseClient>;
 
+type SupportedArgs<
+  TDelegate,
+  TOperation extends keyof typeof POLICY_OPS,
+  TKeys extends PropertyKey,
+> = Pick<
+  Prisma.Args<TDelegate, TOperation>,
+  Extract<keyof Prisma.Args<TDelegate, TOperation>, TKeys>
+>;
+
+type ContextBoundDelegate<TDelegate> = {
+  findUnique<TArgs extends SupportedArgs<TDelegate, 'findUnique', 'where' | 'select' | 'include' | 'omit'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'findUnique', 'where' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'findUnique'>>;
+  findFirst<TArgs extends SupportedArgs<TDelegate, 'findFirst', 'where' | 'orderBy' | 'take' | 'skip' | 'cursor' | 'distinct' | 'select' | 'include' | 'omit'>>(
+    args?: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'findFirst', 'where' | 'orderBy' | 'take' | 'skip' | 'cursor' | 'distinct' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'findFirst'>>;
+  findMany<TArgs extends SupportedArgs<TDelegate, 'findMany', 'where' | 'orderBy' | 'take' | 'skip' | 'cursor' | 'distinct' | 'select' | 'include' | 'omit'>>(
+    args?: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'findMany', 'where' | 'orderBy' | 'take' | 'skip' | 'cursor' | 'distinct' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'findMany'>>;
+  create<TArgs extends SupportedArgs<TDelegate, 'create', 'data' | 'select' | 'include' | 'omit'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'create', 'data' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'create'>>;
+  update<TArgs extends SupportedArgs<TDelegate, 'update', 'where' | 'data' | 'select' | 'include' | 'omit'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'update', 'where' | 'data' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'update'>>;
+  updateMany<TArgs extends SupportedArgs<TDelegate, 'updateMany', 'where' | 'data'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'updateMany', 'where' | 'data'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'updateMany'>>;
+  delete<TArgs extends SupportedArgs<TDelegate, 'delete', 'where' | 'select' | 'include' | 'omit'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'delete', 'where' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'delete'>>;
+  deleteMany<TArgs extends SupportedArgs<TDelegate, 'deleteMany', 'where'>>(
+    args?: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'deleteMany', 'where'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'deleteMany'>>;
+  upsert<TArgs extends SupportedArgs<TDelegate, 'upsert', 'where' | 'create' | 'update' | 'select' | 'include' | 'omit'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'upsert', 'where' | 'create' | 'update' | 'select' | 'include' | 'omit'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'upsert'>>;
+  count<TArgs extends SupportedArgs<TDelegate, 'count', 'where'>>(
+    args?: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'count', 'where'>>,
+  ): Promise<number>;
+  aggregate<TArgs extends SupportedArgs<TDelegate, 'aggregate', 'where' | 'orderBy' | 'cursor' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'aggregate', 'where' | 'orderBy' | 'cursor' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'aggregate'>>;
+  groupBy<TArgs extends SupportedArgs<TDelegate, 'groupBy', 'where' | 'orderBy' | 'by' | 'having' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>(
+    args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'groupBy', 'where' | 'orderBy' | 'by' | 'having' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>,
+  ): Promise<Prisma.Result<TDelegate, TArgs, 'groupBy'>>;
+};
+
 export type ContextBoundDelegates = {
-  [K in ${delegateUnion}]: Pick<GolemBaseClient[K], keyof typeof POLICY_OPS & keyof GolemBaseClient[K]>;
+  [K in ${delegateUnion}]: ContextBoundDelegate<GolemBaseClient[K]>;
 };
 
 export interface ContextBoundTransactionOptions {
