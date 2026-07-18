@@ -312,6 +312,8 @@ function addObservedKeys(fields: Set<string>, source: unknown): void {
 function collectAggregateFields(request: AggregateRequest): string[] {
   const fields = new Set<string>();
   addMeasureFields(fields, request);
+  addNestedFields(fields, request.orderBy);
+  addNestedFields(fields, request.cursor);
   return [...fields];
 }
 

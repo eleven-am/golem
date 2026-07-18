@@ -160,6 +160,42 @@ describe('engine aggregate', () => {
     expect(client.user.aggregate).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['orderBy', { orderBy: { phone: 'desc' } }],
+    ['cursor', { cursor: { phone: '555-0100' } }],
+  ] as const)(
+    'rejects aggregate pagination through a never-readable %s field',
+    async (_argument, pagination) => {
+      const client = fakeClient();
+      const provider = classifyProvider({
+        email: { access: 'always' },
+        phone: { access: 'never' },
+      });
+      const engine = new GolemEngine(client, models, {
+        authorization: provider,
+        checkWriteResults: false,
+        checkReadFields: true,
+      });
+
+      await expect(
+        engine.aggregate({
+          model: 'User',
+          _count: { email: true },
+          ...pagination,
+          context: ctx,
+        }),
+      ).rejects.toBeInstanceOf(GolemValidationError);
+
+      expect(provider.classifyFields).toHaveBeenCalledWith(
+        'read',
+        'User',
+        expect.arrayContaining(['email', 'phone']),
+        ctx,
+      );
+      expect(client.user.aggregate).not.toHaveBeenCalled();
+    },
+  );
+
   it('allows an aggregation over always-readable fields', async () => {
     const client = fakeClient();
     client.user.aggregate.mockResolvedValue({ _count: { email: 4 } });
