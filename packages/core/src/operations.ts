@@ -132,6 +132,22 @@ export interface AggregateRequest {
   _count?: unknown;
 }
 
+export interface GroupByRequest {
+  context?: unknown;
+  model: string;
+  by: readonly string[];
+  where?: unknown;
+  having?: unknown;
+  orderBy?: unknown;
+  take?: number;
+  skip?: number;
+  _sum?: unknown;
+  _avg?: unknown;
+  _min?: unknown;
+  _max?: unknown;
+  _count?: unknown;
+}
+
 export interface GolemOpScope {
   client: Record<string, any>;
   ambient: boolean;
@@ -154,11 +170,13 @@ export interface GolemEngineTransaction {
   upsert(request: UpsertRequest): Promise<unknown>;
   count(request: CountRequest): Promise<number>;
   aggregate(request: AggregateRequest): Promise<unknown>;
+  groupBy(request: GroupByRequest): Promise<unknown[]>;
 }
 
 export interface GolemEngineOptions {
   hooks?: HookRegistry;
   takeLimits?: ReadonlyMap<string, number>;
+  groupLimits?: ReadonlyMap<string, number>;
   authorization?: AuthorizationProvider;
   maxDepth?: number;
   checkWriteResults?: boolean;
@@ -196,25 +214,76 @@ function translateError(error: unknown, model: string): never {
   throw error;
 }
 
-function collectAggregateFields(request: AggregateRequest): string[] {
-  const fields = new Set<string>();
-  const addTrueKeys = (source: unknown): void => {
-    if (source && typeof source === 'object') {
-      for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
-        if (value === true) {
-          fields.add(key);
-        }
+const MEASURE_KEYS = ['_sum', '_avg', '_min', '_max', '_count'] as const;
+
+function addTrueKeys(fields: Set<string>, source: unknown): void {
+  if (source && typeof source === 'object') {
+    for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
+      if (value === true) {
+        fields.add(key);
       }
     }
-  };
-  addTrueKeys(request._sum);
-  addTrueKeys(request._avg);
-  addTrueKeys(request._min);
-  addTrueKeys(request._max);
+  }
+}
+
+function addMeasureFields(fields: Set<string>, request: AggregateRequest): void {
+  addTrueKeys(fields, request._sum);
+  addTrueKeys(fields, request._avg);
+  addTrueKeys(fields, request._min);
+  addTrueKeys(fields, request._max);
   if (typeof request._count === 'object') {
-    addTrueKeys(request._count);
+    addTrueKeys(fields, request._count);
     fields.delete('_all');
   }
+}
+
+function addNestedFields(fields: Set<string>, source: unknown): void {
+  if (!source || typeof source !== 'object') {
+    return;
+  }
+  for (const entry of Array.isArray(source) ? source : [source]) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
+      if ((MEASURE_KEYS as readonly string[]).includes(key)) {
+        addObservedKeys(fields, value);
+        continue;
+      }
+      if (key === 'AND' || key === 'OR' || key === 'NOT') {
+        addNestedFields(fields, value);
+        continue;
+      }
+      fields.add(key);
+    }
+  }
+}
+
+function addObservedKeys(fields: Set<string>, source: unknown): void {
+  if (!source || typeof source !== 'object') {
+    return;
+  }
+  for (const key of Object.keys(source as Record<string, unknown>)) {
+    if (key !== '_all') {
+      fields.add(key);
+    }
+  }
+}
+
+function collectAggregateFields(request: AggregateRequest): string[] {
+  const fields = new Set<string>();
+  addMeasureFields(fields, request);
+  return [...fields];
+}
+
+function collectGroupByFields(request: GroupByRequest): string[] {
+  const fields = new Set<string>();
+  addMeasureFields(fields, request);
+  for (const key of request.by ?? []) {
+    fields.add(key);
+  }
+  addNestedFields(fields, request.having);
+  addNestedFields(fields, request.orderBy);
   return [...fields];
 }
 
@@ -223,6 +292,7 @@ export class GolemEngine {
   private readonly metadata: ModelMetadataIndex;
   private readonly hooks?: HookRegistry;
   private readonly takeLimits: ReadonlyMap<string, number>;
+  private readonly groupLimits: ReadonlyMap<string, number>;
   private readonly authorization?: AuthorizationProvider;
   private readonly maxDepth: number;
   private readonly checkWriteResults: boolean;
@@ -238,6 +308,7 @@ export class GolemEngine {
     this.metadata = buildModelMetadata(models);
     this.hooks = options.hooks;
     this.takeLimits = options.takeLimits ?? new Map();
+    this.groupLimits = options.groupLimits ?? new Map();
     this.authorization = options.authorization;
     this.maxDepth = options.maxDepth ?? 5;
     this.checkWriteResults = options.checkWriteResults ?? (this.authorization !== undefined);
@@ -914,28 +985,12 @@ export class GolemEngine {
 
   async aggregate(request: AggregateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
-    if (this.checkReadFields) {
-      const provider = this.enforced(request.context);
-      if (provider?.classifyFields) {
-        const fields = collectAggregateFields(request);
-        if (fields.length > 0) {
-          const classification = await provider.classifyFields(
-            'read',
-            request.model,
-            fields,
-            request.context,
-          );
-          for (const field of fields) {
-            const entry = classification[field];
-            if (!entry || entry.access !== 'always') {
-              throw new GolemValidationError(
-                `Cannot aggregate field "${field}" on ${request.model}`,
-              );
-            }
-          }
-        }
-      }
-    }
+    await this.classifyAggregateFields(
+      request.model,
+      request.context,
+      collectAggregateFields(request),
+      'aggregate',
+    );
     const constraint = await this.constraintFor('read', request.model, request.context);
     const args: Record<string, unknown> = {
       where: mergeConstraint(request.where, constraint),
@@ -946,6 +1001,76 @@ export class GolemEngine {
     if (request._max !== undefined) args._max = request._max;
     if (request._count !== undefined) args._count = request._count;
     return this.run(request.model, () => delegate.aggregate(args));
+  }
+
+  async groupBy(request: GroupByRequest, scope?: GolemOpScope): Promise<unknown[]> {
+    const delegate = this.delegate(request.model, scope?.client);
+    const by = request.by ?? [];
+    if (by.length === 0) {
+      throw new GolemValidationError(
+        `groupBy on ${request.model} requires at least one grouping key`,
+      );
+    }
+    this.enforceGroupLimit(request);
+    await this.classifyAggregateFields(
+      request.model,
+      request.context,
+      collectGroupByFields(request),
+      'group',
+    );
+    const constraint = await this.constraintFor('read', request.model, request.context);
+    const args: Record<string, unknown> = {
+      by: [...by],
+      where: mergeConstraint(request.where, constraint),
+    };
+    if (request.having !== undefined) args.having = request.having;
+    if (request.orderBy !== undefined) args.orderBy = request.orderBy;
+    if (request.take !== undefined) args.take = request.take;
+    if (request.skip !== undefined) args.skip = request.skip;
+    if (request._sum !== undefined) args._sum = request._sum;
+    if (request._avg !== undefined) args._avg = request._avg;
+    if (request._min !== undefined) args._min = request._min;
+    if (request._max !== undefined) args._max = request._max;
+    if (request._count !== undefined) args._count = request._count;
+    return (await this.run(request.model, () => delegate.groupBy(args))) as unknown[];
+  }
+
+  private enforceGroupLimit(request: GroupByRequest): void {
+    const limit = this.groupLimits.get(request.model);
+    if (limit === undefined) {
+      return;
+    }
+    if (request.take === undefined || Math.abs(request.take) > limit) {
+      throw new GolemValidationError(
+        `groupBy on ${request.model} requires take of at most ${limit}`,
+      );
+    }
+  }
+
+  private async classifyAggregateFields(
+    model: string,
+    context: unknown,
+    fields: readonly string[],
+    kind: 'aggregate' | 'group',
+  ): Promise<void> {
+    if (!this.checkReadFields || fields.length === 0) {
+      return;
+    }
+    const provider = this.enforced(context);
+    if (!provider?.classifyFields) {
+      return;
+    }
+    const classification = await provider.classifyFields('read', model, [...fields], context);
+    for (const field of fields) {
+      const entry = classification[field];
+      if (!entry || entry.access !== 'always') {
+        throw new GolemValidationError(
+          kind === 'group'
+            ? `Cannot group or aggregate field "${field}" on ${model}`
+            : `Cannot aggregate field "${field}" on ${model}`,
+        );
+      }
+    }
   }
 
   async transaction<T>(
@@ -974,6 +1099,7 @@ export class GolemEngine {
         upsert: (request) => this.upsert({ context, ...request }, scope),
         count: (request) => this.count({ context, ...request }, scope),
         aggregate: (request) => this.aggregate({ context, ...request }, scope),
+        groupBy: (request) => this.groupBy({ context, ...request }, scope),
       };
       return fn(view);
     }, options);

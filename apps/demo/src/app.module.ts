@@ -36,7 +36,10 @@ export class AppModule {
           },
           models: {
             User: { subscriptions: true, hidden: ['apiKey'], immutable: ['email'] },
-            Post: { subscriptions: true },
+            Post: {
+              subscriptions: true,
+              aggregations: { dimensions: ['authorId', 'published'], maxGroups: 50 },
+            },
             Profile: { operations: ['findOne', 'findMany', 'create'] },
             PostTag: false,
           },

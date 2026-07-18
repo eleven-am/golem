@@ -44,3 +44,11 @@ export function deleteManyFieldName(model: string): string {
 export function eventsFieldName(model: string): string {
   return `${lcFirst(model)}Events`;
 }
+
+export function aggregateFieldName(model: string): string {
+  return `${pluralOrList(lcFirst(model))}Aggregate`;
+}
+
+export function groupByFieldName(model: string): string {
+  return `${pluralOrList(lcFirst(model))}Grouped`;
+}

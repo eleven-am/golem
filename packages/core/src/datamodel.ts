@@ -46,8 +46,15 @@ export interface DatamodelDocument<TModels = Record<string, string>> {
   __models?: TModels;
 }
 
+export interface AggregationsConfig<TField extends string = string> {
+  dimensions?: readonly TField[];
+  measures?: readonly TField[];
+  maxGroups?: number;
+}
+
 export interface ModelConfig<TField extends string = string> {
   subscriptions?: boolean;
+  aggregations?: boolean | AggregationsConfig<TField>;
   operations?: readonly GolemOperation[];
   hidden?: readonly TField[];
   immutable?: readonly TField[];
@@ -62,8 +69,10 @@ export type ModelsConfig<TModels> = {
 
 export interface GolemDefaults {
   subscriptions?: boolean;
+  aggregations?: boolean;
   operations?: readonly GolemOperation[];
   maxTake?: number;
+  maxGroups?: number;
   maxDepth?: number;
   checkWriteResults?: boolean;
   checkReadFields?: boolean;

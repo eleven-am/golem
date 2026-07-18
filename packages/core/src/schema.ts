@@ -40,15 +40,28 @@ import {
 import { ALL_OPERATIONS, GolemOperation, HookRegistry } from './hooks';
 import { InputTypeRegistry } from './inputs';
 import {
+  aggregateFieldName,
   createFieldName,
   deleteFieldName,
   deleteManyFieldName,
   eventsFieldName,
   findManyFieldName,
   findOneFieldName,
+  groupByFieldName,
   updateFieldName,
   updateManyFieldName,
 } from './naming';
+import {
+  buildAggregationTypes,
+  isGroupable,
+  isMeasurable,
+  toAggregateResult,
+  toGroupResults,
+  toPrismaGroupOrderBy,
+  toPrismaHaving,
+  toPrismaMeasures,
+  type MeasuresArg,
+} from './aggregations';
 import { GolemEngine } from './operations';
 import { buildEventEntitySelect, buildSelect, primaryKeySelect } from './select';
 
@@ -130,6 +143,10 @@ interface ResolvedModelSettings {
   writeOnly: ReadonlySet<string>;
   maxTake?: number;
   subscriptions: boolean;
+  aggregations: boolean;
+  dimensions?: ReadonlySet<string>;
+  measures?: ReadonlySet<string>;
+  maxGroups?: number;
 }
 
 function resolveModelSettings(
@@ -196,6 +213,31 @@ function resolveModelSettings(
     writeOnly,
     maxTake: config?.maxTake ?? defaults.maxTake,
     subscriptions: config?.subscriptions ?? defaults.subscriptions ?? false,
+    ...resolveAggregations(config?.aggregations, defaults),
+  };
+}
+
+function resolveAggregations(
+  config: ModelConfig['aggregations'],
+  defaults: GolemDefaults,
+): Pick<
+  ResolvedModelSettings,
+  'aggregations' | 'dimensions' | 'measures' | 'maxGroups'
+> {
+  if (config === undefined) {
+    return {
+      aggregations: defaults.aggregations ?? false,
+      maxGroups: defaults.maxGroups,
+    };
+  }
+  if (typeof config === 'boolean') {
+    return { aggregations: config, maxGroups: defaults.maxGroups };
+  }
+  return {
+    aggregations: true,
+    dimensions: config.dimensions ? new Set(config.dimensions) : undefined,
+    measures: config.measures ? new Set(config.measures) : undefined,
+    maxGroups: config.maxGroups ?? defaults.maxGroups,
   };
 }
 
@@ -221,6 +263,7 @@ interface ResolvedGolem {
   settings: Map<string, ResolvedModelSettings>;
   subscribable: Set<string>;
   takeLimits: Map<string, number>;
+  groupLimits: Map<string, number>;
 }
 
 function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): ResolvedGolem {
@@ -248,20 +291,33 @@ function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): Resol
   );
 
   const takeLimits = new Map<string, number>();
+  const groupLimits = new Map<string, number>();
   for (const [name, resolved] of settings) {
     if (resolved.maxTake !== undefined) {
       takeLimits.set(name, resolved.maxTake);
     }
+    if (resolved.maxGroups !== undefined) {
+      groupLimits.set(name, resolved.maxGroups);
+    }
   }
 
-  return { models, engineModels: options.datamodel.models, modelsByName, settings, subscribable, takeLimits };
+  return {
+    models,
+    engineModels: options.datamodel.models,
+    modelsByName,
+    settings,
+    subscribable,
+    takeLimits,
+    groupLimits,
+  };
 }
 
 export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TModels>): GolemEngine {
-  const { engineModels, takeLimits } = resolveGolem(options);
+  const { engineModels, takeLimits, groupLimits } = resolveGolem(options);
   return new GolemEngine(options.client, engineModels, {
     hooks: options.hooks,
     takeLimits,
+    groupLimits,
     authorization: options.authorization,
     maxDepth: options.defaults?.maxDepth,
     checkWriteResults: options.defaults?.checkWriteResults,
@@ -276,7 +332,8 @@ export function subscribableModels<TModels>(
 }
 
 export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TModels>): GraphQLSchema {
-  const { models, engineModels, modelsByName, settings, subscribable, takeLimits } = resolveGolem(options);
+  const { models, engineModels, modelsByName, settings, subscribable, takeLimits, groupLimits } =
+    resolveGolem(options);
   if (subscribable.size > 0 && !options.eventBus) {
     throw new Error(
       `Subscriptions are enabled for ${[...subscribable].join(', ')} but no event bus was provided`,
@@ -301,6 +358,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
     new GolemEngine(options.client, engineModels, {
       hooks: options.hooks,
       takeLimits,
+      groupLimits,
       authorization: options.authorization,
       maxDepth: options.defaults?.maxDepth,
       checkWriteResults: options.defaults?.checkWriteResults,
@@ -629,6 +687,89 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           }),
         ),
       };
+    }
+
+    const modelSettings = settings.get(model.name)!;
+    if (modelSettings.aggregations) {
+      const groupable = visibleFields(model).filter(
+        (field) =>
+          isGroupable(field) &&
+          (!modelSettings.dimensions || modelSettings.dimensions.has(field.name)),
+      );
+      const measurable = visibleFields(model).filter(
+        (field) =>
+          isMeasurable(field) &&
+          (!modelSettings.measures || modelSettings.measures.has(field.name)),
+      );
+      const types = buildAggregationTypes({
+        model,
+        fields: { dimensions: groupable, measures: measurable },
+        sortOrder,
+        scalarType,
+        filterTypeFor,
+      });
+
+      queryFields[aggregateFieldName(model.name)] = {
+        type: new GraphQLNonNull(types.aggregateOutput),
+        args: {
+          where: { type: whereInput },
+          measures: { type: types.measuresInput },
+        },
+        resolve: wrapResolve(async (_root, args, ctx) => {
+          const measures = toPrismaMeasures(args.measures as MeasuresArg);
+          const result = (await engine.aggregate({
+            model: model.name,
+            where: args.where ?? undefined,
+            ...measures,
+            context: ctx,
+          })) as Record<string, unknown>;
+          return toAggregateResult(result);
+        }),
+      };
+
+      if (types.dimensionEnum && types.groupOutput) {
+        queryFields[groupByFieldName(model.name)] = {
+          type: new GraphQLNonNull(
+            new GraphQLList(new GraphQLNonNull(types.groupOutput)),
+          ),
+          args: {
+            where: { type: whereInput },
+            by: {
+              type: new GraphQLNonNull(
+                new GraphQLList(new GraphQLNonNull(types.dimensionEnum)),
+              ),
+            },
+            measures: { type: types.measuresInput },
+            ...(types.havingInput ? { having: { type: types.havingInput } } : {}),
+            ...(types.orderByInput ? { orderBy: { type: types.orderByInput } } : {}),
+            take: { type: GraphQLInt },
+            skip: { type: GraphQLInt },
+          },
+          resolve: wrapResolve(async (_root, args, ctx) => {
+            const by = (args.by ?? []) as string[];
+            const countKey = by[0];
+            const measures = toPrismaMeasures(args.measures as MeasuresArg);
+            const rows = (await engine.groupBy({
+              model: model.name,
+              by,
+              where: args.where ?? undefined,
+              having: toPrismaHaving(
+                args.having as Record<string, unknown>,
+                countKey,
+              ),
+              orderBy: toPrismaGroupOrderBy(
+                args.orderBy as Record<string, unknown>,
+                countKey,
+              ),
+              take: args.take ?? undefined,
+              skip: args.skip ?? undefined,
+              ...measures,
+              context: ctx,
+            })) as Record<string, unknown>[];
+            return toGroupResults(rows, by);
+          }),
+        };
+      }
     }
 
     if (operations.has('create')) {
