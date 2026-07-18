@@ -49,6 +49,27 @@ describe('forContext count and aggregate (e2e)', () => {
     expect(published._sum.viewCount).toBe(9007199254740993n + 100n);
   });
 
+  it('keeps Prisma-native BigInt, Decimal and average result types programmatically', async () => {
+    const asRoy = prisma.forContext(ctxFor('roy@example.com'));
+    const result = await asRoy.post.aggregate({
+      _sum: { viewCount: true, rating: true },
+      _avg: { viewCount: true, rating: true },
+      _min: { viewCount: true, rating: true },
+      _max: { viewCount: true, rating: true },
+    });
+
+    expect(result._sum.viewCount).toBe(9007199254741098n);
+    expect(typeof result._sum.viewCount).toBe('bigint');
+    expect(result._avg.viewCount).toBe(3002399751580366);
+    expect(typeof result._avg.viewCount).toBe('number');
+    expect(result._min.viewCount).toBe(5n);
+    expect(result._max.viewCount).toBe(9007199254740993n);
+    expect(result._sum.rating?.toString()).toBe('0.30000000000000004');
+    expect(result._avg.rating?.toString()).toBe('0.15000000000000002');
+    expect(result._min.rating?.toString()).toBe('0.1');
+    expect(result._max.rating?.toString()).toBe('0.2');
+  });
+
   it('rejects aggregating a field the caller can never read, naming the field', async () => {
     const asGuest = prisma.forContext(ctxFor('guest@example.com'));
     await expect(

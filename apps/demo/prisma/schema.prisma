@@ -36,6 +36,7 @@ model Post {
   type            PostType         @default(PERSONAL)
   published       Boolean          @default(false)
   viewCount       BigInt           @default(0)
+  rating          Decimal?
   createdAt       DateTime         @default(now())
   author          User             @relation(fields: [authorId], references: [id])
   authorId        String

@@ -4,7 +4,7 @@ import { buildGolemSchema } from './schema';
 import { field } from './testing';
 
 const datamodel: DatamodelDocument<{
-  Play: 'id' | 'userId' | 'trackId' | 'msPlayed';
+  Play: 'id' | 'userId' | 'trackId' | 'msPlayed' | 'bytesPlayed' | 'cost';
 }> = {
   models: [
     {
@@ -14,6 +14,8 @@ const datamodel: DatamodelDocument<{
         field({ name: 'userId', type: 'String' }),
         field({ name: 'trackId', type: 'String' }),
         field({ name: 'msPlayed', type: 'Int' }),
+        field({ name: 'bytesPlayed', type: 'BigInt' }),
+        field({ name: 'cost', type: 'Decimal' }),
         field({ name: 'skipped', type: 'Boolean', hasDefaultValue: true }),
       ],
     },
@@ -58,6 +60,80 @@ describe('aggregation schema surface', () => {
     expect(sdl).toContain('playsGrouped');
     expect(sdl).toContain('enum PlayGroupField');
     expect(sdl).toContain('input PlayMeasuresInput');
+    expect(sdl).toMatch(/type PlaySumValues[\s\S]*bytesPlayed: BigInt/);
+    expect(sdl).toMatch(/type PlayAvgValues[\s\S]*bytesPlayed: Float/);
+    expect(sdl).toMatch(/type PlayMinValues[\s\S]*bytesPlayed: BigInt/);
+    expect(sdl).toMatch(/type PlayMaxValues[\s\S]*bytesPlayed: BigInt/);
+    expect(sdl).toMatch(/type PlaySumValues[\s\S]*cost: Decimal/);
+    expect(sdl).toContain('scalar Decimal');
+  });
+
+  it('serializes BigInt and Decimal measures without converting them to numbers', async () => {
+    const exactBigInt = 9007199254740993n;
+    const exactDecimal = { toString: () => '1234567890.1234567890123456789' };
+    const client = fakeClient([], {
+      _sum: { bytesPlayed: exactBigInt, cost: exactDecimal },
+      _avg: { bytesPlayed: 4.5, cost: exactDecimal },
+      _min: { bytesPlayed: exactBigInt, cost: exactDecimal },
+      _max: { bytesPlayed: exactBigInt, cost: exactDecimal },
+    });
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsAggregate(measures: {
+          sum: [bytesPlayed, cost]
+          avg: [bytesPlayed, cost]
+          min: [bytesPlayed, cost]
+          max: [bytesPlayed, cost]
+        }) {
+          sum { bytesPlayed cost }
+          avg { bytesPlayed cost }
+          min { bytesPlayed cost }
+          max { bytesPlayed cost }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsAggregate).toEqual({
+      sum: { bytesPlayed: exactBigInt.toString(), cost: exactDecimal.toString() },
+      avg: { bytesPlayed: 4.5, cost: exactDecimal.toString() },
+      min: { bytesPlayed: exactBigInt.toString(), cost: exactDecimal.toString() },
+      max: { bytesPlayed: exactBigInt.toString(), cost: exactDecimal.toString() },
+    });
+  });
+
+  it('serializes exact grouped measures and preserves nullable empty measures', async () => {
+    const client = fakeClient([
+      {
+        trackId: 't1',
+        _sum: { bytesPlayed: 9007199254740993n, cost: { toString: () => '0.1000000000000000001' } },
+        _min: { bytesPlayed: null, cost: null },
+      },
+    ]);
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsGrouped(by: [trackId], measures: { sum: [bytesPlayed, cost], min: [bytesPlayed, cost] }) {
+          key { trackId }
+          sum { bytesPlayed cost }
+          min { bytesPlayed cost }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsGrouped).toEqual([
+      {
+        key: { trackId: 't1' },
+        sum: { bytesPlayed: '9007199254740993', cost: '0.1000000000000000001' },
+        min: { bytesPlayed: null, cost: null },
+      },
+    ]);
   });
 
   it('limits grouping keys to the configured dimensions', () => {

@@ -102,18 +102,36 @@ export function buildAggregationTypes(
     },
   });
 
-  const measureValues = new GraphQLObjectType({
-    name: `${model.name}MeasureValues`,
-    fields: () => {
-      const config: GraphQLFieldConfigMap<unknown, unknown> = {};
-      for (const field of fields.measures) {
-        config[field.name] = { type: GraphQLFloat };
-      }
-      return config;
-    },
-  });
-
   const hasMeasures = fields.measures.length > 0;
+
+  const measureScalar = (field: DatamodelField, kind: MeasureKind) => {
+    if (kind === 'avg') {
+      return field.type === 'Decimal'
+        ? dimensionType(model, field)
+        : GraphQLFloat;
+    }
+    if (kind === 'sum' && field.type === 'Int') {
+      // A sum can exceed GraphQL Int's 32-bit range even though each source value cannot.
+      return GraphQLFloat;
+    }
+    return dimensionType(model, field);
+  };
+
+  const measureValues = Object.fromEntries(
+    MEASURE_KINDS.map((kind) => [
+      kind,
+      new GraphQLObjectType({
+        name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}Values`,
+        fields: () => {
+          const config: GraphQLFieldConfigMap<unknown, unknown> = {};
+          for (const field of fields.measures) {
+            config[field.name] = { type: measureScalar(field, kind) };
+          }
+          return config;
+        },
+      }),
+    ]),
+  ) as Record<MeasureKind, GraphQLObjectType>;
 
   const measureFieldsFor = (
     prefix: string,
@@ -123,7 +141,7 @@ export function buildAggregationTypes(
     };
     if (hasMeasures) {
       for (const kind of MEASURE_KINDS) {
-        config[kind] = { type: measureValues };
+        config[kind] = { type: measureValues[kind] };
       }
     }
     void prefix;
@@ -158,24 +176,27 @@ export function buildAggregationTypes(
     }),
   });
 
-  const numberFilter = filterTypeFor(
-    'FloatFilter',
-    GraphQLFloat,
-    NUMBER_OPERATORS,
-  );
   const intFilter = filterTypeFor('IntFilter', GraphQLInt, NUMBER_OPERATORS);
 
-  const measureFilter = hasMeasures
-    ? new GraphQLInputObjectType({
-        name: `${model.name}MeasureFilterInput`,
-        fields: () => {
-          const config: GraphQLInputFieldConfigMap = {};
-          for (const field of fields.measures) {
-            config[field.name] = { type: numberFilter };
-          }
-          return config;
-        },
-      })
+  const measureFilters = hasMeasures
+    ? Object.fromEntries(
+        MEASURE_KINDS.map((kind) => [
+          kind,
+          new GraphQLInputObjectType({
+            name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}FilterInput`,
+            fields: () => {
+              const config: GraphQLInputFieldConfigMap = {};
+              for (const field of fields.measures) {
+                const scalar = measureScalar(field, kind);
+                config[field.name] = {
+                  type: filterTypeFor(`${scalar.name}Filter`, scalar, NUMBER_OPERATORS),
+                };
+              }
+              return config;
+            },
+          }),
+        ]),
+      ) as Record<MeasureKind, GraphQLInputObjectType>
     : undefined;
 
   const havingInput = new GraphQLInputObjectType({
@@ -184,9 +205,9 @@ export function buildAggregationTypes(
       const config: GraphQLInputFieldConfigMap = {
         count: { type: intFilter },
       };
-      if (measureFilter) {
+      if (measureFilters) {
         for (const kind of MEASURE_KINDS) {
-          config[kind] = { type: measureFilter };
+          config[kind] = { type: measureFilters[kind] };
         }
       }
       return config;
@@ -326,26 +347,15 @@ export function toPrismaGroupOrderBy(
   return entries;
 }
 
-function coerceMeasures(source: unknown): unknown {
-  if (!source || typeof source !== 'object') {
-    return source;
-  }
-  const coerced: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
-    coerced[key] = typeof value === 'bigint' ? Number(value) : value;
-  }
-  return coerced;
-}
-
 export function toAggregateResult(
   result: Record<string, unknown>,
 ): Record<string, unknown> {
   return {
     count: typeof result._count === 'number' ? result._count : undefined,
-    sum: coerceMeasures(result._sum),
-    avg: coerceMeasures(result._avg),
-    min: coerceMeasures(result._min),
-    max: coerceMeasures(result._max),
+    sum: result._sum,
+    avg: result._avg,
+    min: result._min,
+    max: result._max,
   };
 }
 
