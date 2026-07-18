@@ -35,11 +35,15 @@ interface PrismaJobDelegate {
   }): Promise<Record<string, unknown> | null>;
   updateMany(args: { where: Where; data: Data }): Promise<{ count: number }>;
   deleteMany(args: { where: Where }): Promise<{ count: number }>;
+  readonly groupBy: unknown;
+}
+
+interface PrismaStatusGroupByDelegate {
   groupBy(args: {
-    by: readonly string[];
+    by: ['status'];
     where: Where;
     _count: { _all: true };
-  }): Promise<Record<string, unknown>[]>;
+  }): Promise<Array<{ status: JobStatus; _count: { _all: number } }>>;
 }
 
 export interface PrismaClientLike {
@@ -303,7 +307,12 @@ export class PrismaJobStore implements JobStore {
   }
 
   async countByStatus(query: JobQuery): Promise<Record<JobStatus, number>> {
-    const rows = await this.prisma.job.groupBy({
+    // Prisma's generated groupBy is a conditional generic that cannot satisfy a
+    // version-neutral structural interface, although this call is valid in
+    // supported Prisma clients. Keep that compatibility cast local to groupBy.
+    const statusGroupBy = this.prisma.job as PrismaJobDelegate &
+      PrismaStatusGroupByDelegate;
+    const rows = await statusGroupBy.groupBy({
       by: ['status'],
       where: queryWhere(query),
       _count: { _all: true },
@@ -315,8 +324,7 @@ export class PrismaJobStore implements JobStore {
       FAILED: 0,
     };
     for (const row of rows) {
-      const count = (row._count as { _all?: unknown } | undefined)?._all;
-      if (typeof count === 'number') counts[row.status as JobStatus] = count;
+      counts[row.status] = row._count._all;
     }
     return counts;
   }

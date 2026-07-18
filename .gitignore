@@ -3,4 +3,5 @@ dist/
 *.db
 *.db-journal
 apps/demo/src/generated/
+packages/queue/test/prisma7/generated/
 .DS_Store
