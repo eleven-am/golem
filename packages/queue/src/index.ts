@@ -14,6 +14,7 @@ export {
   retryAfterMs,
   type EnqueueOptions,
   type GolemQueueOptions,
+  type JobEvent,
   type JobExecution,
   type JobHandler,
   type JobWork,

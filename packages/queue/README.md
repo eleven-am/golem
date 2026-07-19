@@ -40,32 +40,54 @@ model Job {
 }
 ```
 
-## 2. Write a handler
+## 2. Declare your job types
+
+Job types are yours, not Prisma's, so nothing can generate them. Declare them once — anywhere in your program — and both ends of the queue are checked against it:
+
+```ts
+declare global {
+  interface GolemRegister {
+    jobs: {
+      'article.extract': { articleId: string };
+      'article.audio': { articleId: string; voiceId: string };
+    };
+  }
+}
+
+export {};
+```
+
+This is optional. Without it `add` accepts any string and any payload, exactly as before.
+
+## 3. Write a handler
+
+The decorator registers the handler; the interface types it — the same split as `@Authorizer` and `WillAuthorize` in `@eleven-am/authorizer`.
 
 ```ts
 import { Injectable } from '@nestjs/common';
-import { RetryableJobError, TerminalJobError, type JobHandler, type JobExecution } from '@eleven-am/golem-queue';
+import { QueueHandler, RetryableJobError, TerminalJobError, type JobEvent, type JobWork } from '@eleven-am/golem-queue';
 
+@QueueHandler({ type: 'article.extract', concurrency: 2, timeoutMs: 60_000 })
 @Injectable()
-export class ExtractHandler implements JobHandler {
-  readonly type = 'article.extract';
-  readonly concurrency = 2;
-  readonly timeoutMs = 60_000;
-
-  async handle(payload: Record<string, unknown>, { signal }: JobExecution) {
+export class ExtractHandler implements JobWork<'article.extract'> {
+  async handle({ payload, signal, attempt, maxAttempts }: JobEvent<'article.extract'>) {
     const res = await fetch(url, { signal });          // honour the signal
-    if (res.status === 429) throw new RetryableJobError('rate limited', 60_000, false);
+    if (res.status === 429 && attempt < maxAttempts) throw new RetryableJobError('rate limited', 60_000, false);
     if (res.status === 404) throw new TerminalJobError('gone');
   }
 }
 ```
+
+`payload` is typed from the registration. `attempt` and `maxAttempts` let a handler behave differently on its last try — notify, degrade, or write a tombstone — rather than failing silently into the dead-letter state.
+
+A `JobEvent` carries `id`, `type`, `payload`, `attempt`, `maxAttempts`, `scope`, and `signal`.
 
 - **`TerminalJobError`** — fail now, don't retry.
 - **`RetryableJobError(message, retryAfterMs?, consumesAttempt?)`** — `retryAfterMs` is a *floor* on the backoff; `consumesAttempt: false` retries without burning an attempt (right for capacity/rate limits).
 - Anything else retries with exponential backoff + jitter until `maxAttempts`.
 - `signal` aborts on timeout, cancellation, and shutdown — pass it to your I/O.
 
-## 3. Register the module
+## 4. Register the module
 
 ```ts
 import { GolemQueueModule, PrismaJobStore } from '@eleven-am/golem-queue';
@@ -79,7 +101,7 @@ GolemQueueModule.forRootAsync({
 })
 ```
 
-## 4. Enqueue
+## 5. Enqueue
 
 ```ts
 await queue.add('article.extract', { articleId }, {

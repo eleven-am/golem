@@ -1,4 +1,4 @@
-import type { JobQueue } from '@eleven-am/golem-queue';
+import type { JobEvent, JobQueue, JobWork } from '@eleven-am/golem-queue';
 import { QueueHandler } from '@eleven-am/golem-queue';
 import '../src/generated/golem';
 
@@ -37,3 +37,24 @@ class InvalidHandler {}
 void enqueues;
 void ValidHandler;
 void InvalidHandler;
+
+@QueueHandler({ type: 'article-extract' })
+class TypedHandler implements JobWork<'article-extract'> {
+  async handle({ payload, attempt, maxAttempts, signal }: JobEvent<'article-extract'>): Promise<void> {
+    const id: string = payload.articleId;
+    const remaining: number = maxAttempts - attempt;
+    void id;
+    void remaining;
+    void signal;
+  }
+}
+
+class MismatchedPayload implements JobWork<'article-extract'> {
+  // @ts-expect-error handle must accept the payload registered for this job type
+  async handle({ payload }: JobEvent<'article-summarize'>): Promise<void> {
+    void payload;
+  }
+}
+
+void TypedHandler;
+void MismatchedPayload;

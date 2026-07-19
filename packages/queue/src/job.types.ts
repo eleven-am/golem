@@ -1,4 +1,5 @@
 import type { JobStore } from './job-store';
+import type { JobPayload, JobType } from './register';
 
 export interface JobScope {
   readonly type: string;
@@ -9,15 +10,22 @@ export interface JobExecution {
   readonly signal: AbortSignal;
 }
 
-export interface JobWork {
-  handle(
-    payload: Record<string, unknown>,
-    execution: JobExecution,
-  ): Promise<void>;
+export interface JobEvent<TType extends JobType = JobType> {
+  readonly id: string;
+  readonly type: TType;
+  readonly payload: JobPayload<TType>;
+  readonly attempt: number;
+  readonly maxAttempts: number;
+  readonly scope: JobScope | null;
+  readonly signal: AbortSignal;
 }
 
-export interface JobHandler extends JobWork {
-  readonly type: string;
+export interface JobWork<TType extends JobType = JobType> {
+  handle(job: JobEvent<TType>): Promise<void>;
+}
+
+export interface JobHandler<TType extends JobType = JobType> extends JobWork<TType> {
+  readonly type: TType;
   readonly concurrency: number;
   readonly timeoutMs: number;
 }

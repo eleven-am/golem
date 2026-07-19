@@ -1,3 +1,39 @@
+# Migrating `@eleven-am/golem-queue` to 0.3.0
+
+A handler now receives one `JobEvent` instead of a payload and an execution object. Breaking, and mechanical.
+
+```diff
+-async handle(payload: Record<string, unknown>, { signal }: JobExecution) {
+-  const articleId = payload.articleId as string;
++async handle({ payload, signal }: JobEvent<'article.extract'>) {
++  const articleId = payload.articleId;      // typed, no cast
+ }
+```
+
+Add the interface so the payload is checked against your registration:
+
+```diff
+-export class ExtractHandler {
++export class ExtractHandler implements JobWork<'article.extract'> {
+```
+
+The decorator is unchanged. As in `@eleven-am/authorizer`, the decorator registers and the interface types — `@QueueHandler` is to `JobWork` what `@Authorizer` is to `WillAuthorize`, and as there, parameters are annotated explicitly.
+
+## What a JobEvent carries
+
+`id`, `type`, `payload`, `attempt`, `maxAttempts`, `scope`, and `signal`.
+
+`attempt` and `maxAttempts` were previously unreachable even though the dispatcher had them, so a handler could not tell whether it was on its last try. It can now:
+
+```ts
+if (res.status === 429 && attempt < maxAttempts) throw new RetryableJobError('rate limited', 60_000);
+if (res.status === 429) await this.notifyGaveUp(payload.articleId);
+```
+
+## Typing is optional
+
+Handlers written as `implements JobWork` without a job type still compile, and `queue.add` still accepts any string, unless you declare a `jobs` map. See the README.
+
 # Migrating to 0.5.1
 
 Regenerate first: `npx prisma generate`. This release changes what the generated module emits.

@@ -7,7 +7,7 @@ import {
   TerminalJobError,
   resolveQueueOptions,
   type GolemQueueOptions,
-  type JobExecution,
+  type JobEvent,
   type JobHandler,
   type JobLifecycleObserver,
   type JobLifecycleTransition,
@@ -16,10 +16,7 @@ import {
 const WORKER = 'worker-under-test';
 const SCOPE = { type: 'Article', id: 'a1' } as const;
 
-type Handle = (
-  payload: Record<string, unknown>,
-  execution: JobExecution,
-) => Promise<void>;
+type Handle = (job: JobEvent) => Promise<void>;
 
 function handler(handle: Handle, overrides: Partial<JobHandler> = {}): JobHandler {
   return {
@@ -124,7 +121,7 @@ describe('JobDispatcher', () => {
   it('runs a due job and marks it succeeded', async () => {
     const seen: Record<string, unknown>[] = [];
     const { store, dispatcher } = build([
-      handler((payload) => {
+      handler(({ payload }) => {
         seen.push(payload);
         return Promise.resolve();
       }),
@@ -276,9 +273,9 @@ describe('JobDispatcher', () => {
     let observedAbort = false;
     const { store, dispatcher } = build([
       handler(
-        (_payload, execution) =>
+        (event) =>
           new Promise<void>((resolve) => {
-            execution.signal.addEventListener('abort', () => {
+            event.signal.addEventListener('abort', () => {
               observedAbort = true;
               resolve();
             });
@@ -366,9 +363,9 @@ describe('JobDispatcher', () => {
     const { store, dispatcher } = build(
       [
         handler(
-          (_payload, execution) =>
+          (event) =>
             new Promise<void>((resolve) => {
-              execution.signal.addEventListener('abort', () => {
+              event.signal.addEventListener('abort', () => {
                 observedAbort = true;
                 resolve();
               });
@@ -393,9 +390,9 @@ describe('JobDispatcher', () => {
     const { store, dispatcher } = build(
       [
         handler(
-          (_payload, execution) =>
+          (event) =>
             new Promise<void>((resolve) => {
-              execution.signal.addEventListener('abort', () => {
+              event.signal.addEventListener('abort', () => {
                 aborted = true;
               });
               setTimeout(() => {

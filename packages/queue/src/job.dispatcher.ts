@@ -18,6 +18,7 @@ import {
   JOB_STORE,
   retryAfterMs,
   TerminalJobError,
+  type JobEvent,
   type JobHandler,
   type JobLifecycleTransition,
   type JobScope,
@@ -292,7 +293,19 @@ export class JobDispatcher implements OnModuleDestroy {
     });
     try {
       const payload = this.parsePayload(job.payload);
-      await this.executeWithTimeout(handler, payload, controller);
+      await this.executeWithTimeout(
+        handler,
+        {
+          id: job.id,
+          type: handler.type,
+          payload,
+          attempt: job.attempts + 1,
+          maxAttempts: job.maxAttempts,
+          scope,
+          signal: controller.signal,
+        },
+        controller,
+      );
       const completed = await this.store.complete({
         id: job.id,
         leaseOwner: this.workerId,
@@ -334,7 +347,7 @@ export class JobDispatcher implements OnModuleDestroy {
 
   private async executeWithTimeout(
     handler: JobHandler,
-    payload: Record<string, unknown>,
+    event: JobEvent,
     controller: AbortController,
   ): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
@@ -348,7 +361,7 @@ export class JobDispatcher implements OnModuleDestroy {
         resolve();
       }, handler.timeoutMs);
     });
-    const work = handler.handle(payload, { signal: controller.signal });
+    const work = handler.handle(event);
     try {
       await Promise.race([work, timeout]);
       if (controller.signal.aborted) {

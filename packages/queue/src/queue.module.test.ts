@@ -6,7 +6,7 @@ import { JobDispatcher } from './job.dispatcher';
 import { JobObserverRegistry } from './job-observer.registry';
 import { JobQueue } from './job.queue';
 import { QueueHandler, QueueObserver } from './queue.decorators';
-import type { JobExecution, JobLifecycleTransition, JobWork } from './job.types';
+import type { JobEvent, JobLifecycleTransition, JobWork } from './job.types';
 
 const handled: string[] = [];
 const seen: JobLifecycleTransition[] = [];
@@ -14,7 +14,7 @@ const seen: JobLifecycleTransition[] = [];
 @QueueHandler({ type: 'discovered.job', concurrency: 4, timeoutMs: 5_000 })
 @Injectable()
 class DiscoveredHandler implements JobWork {
-  handle(payload: Record<string, unknown>, _execution: JobExecution) {
+  handle({ payload }: JobEvent) {
     handled.push(payload.tag as string);
     return Promise.resolve();
   }
