@@ -128,3 +128,11 @@ return {
 ## License
 
 GPL-3.0
+
+## Caching is the resolver's business
+
+Metadata resolvers run on every matching request, and crawlers hit these URLs harder than users do. Golem does not cache them, and will not.
+
+A resolver may branch on `@Query()`, on `Accept-Language`, or on `User-Agent` to serve a different image to different unfurlers. Only its author knows which inputs matter, so any cache key Golem chose would be wrong for someone — and wrong here means serving the wrong preview, which is worse than an extra query.
+
+Because a render route is an ordinary Nest route, cache it however you already cache anything else: memoize inside the resolver, apply an interceptor, or reach for `cache-manager`. Golem stays out of the way.

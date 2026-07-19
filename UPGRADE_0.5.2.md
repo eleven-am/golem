@@ -1,14 +1,16 @@
-# Upgrading to Golem 0.5.1
+# Upgrading to Golem 0.5.2
 
-For applications currently on `0.3.x`. Covers `0.4.0` (breaking), `0.5.0` (breaking), and `0.5.1`. All are on npm now.
+For applications currently on `0.3.x`. Covers `0.4.0`, `0.5.0`, `0.5.1`, and `0.5.2` — plus `@eleven-am/golem-queue@0.3.0`, which is breaking on its own schedule. All are on npm now.
 
 ```bash
-npm i @eleven-am/golem@^0.5.1 @eleven-am/golem-core@^0.5.1
-npm i -D @eleven-am/golem-generator@^0.5.1
+npm i @eleven-am/golem@^0.5.2 @eleven-am/golem-core@^0.5.2
+npm i -D @eleven-am/golem-generator@^0.5.2
 npx prisma generate      # required before your code will type-check
 ```
 
-`@eleven-am/golem-authorizer` moves to `0.5.1` with them. `@eleven-am/golem-queue` moves to `0.2.2`, which adds optional job typing and changes nothing you already have.
+`@eleven-am/golem-authorizer` moves to `0.5.2` with them.
+
+**If you use `@eleven-am/golem-queue`, read section 6 before upgrading it.** It moves to `0.3.0` and every job handler signature changes.
 
 ---
 
@@ -167,15 +169,85 @@ If you mount the frontend only in production, register the module conditionally 
 
 ---
 
+## 6. Queue handlers take one typed `JobEvent` (`golem-queue@0.3.0`)
+
+**Breaking, and it affects every handler.** Skip this section only if you do not use `@eleven-am/golem-queue`.
+
+```diff
+-async handle(payload: Record<string, unknown>, { signal }: JobExecution) {
+-  const articleId = payload.articleId as string;
++async handle({ payload, signal }: JobEvent<'article.extract'>) {
++  const articleId = payload.articleId;      // typed, no cast
+ }
+```
+
+Add the interface so the payload is checked:
+
+```diff
+-export class ExtractHandler {
++export class ExtractHandler implements JobWork<'article.extract'> {
+```
+
+The decorator is unchanged. As in `@eleven-am/authorizer`, the decorator registers and the interface types — `@QueueHandler` is to `JobWork` what `@Authorizer` is to `WillAuthorize`, annotated parameters included.
+
+### Declare your job types (optional)
+
+```ts
+declare global {
+  interface GolemRegister {
+    jobs: {
+      'article.extract': { articleId: string };
+      'article.audio': { articleId: string; voiceId: string };
+    };
+  }
+}
+
+export {};
+```
+
+With this, a typo'd type in `queue.add` and a payload the handler does not expect are both compile errors. Previously `queue.add('artcile-extract', …)` compiled, enqueued, and the row sat unprocessed forever with no error anywhere.
+
+Unlike model registration this block is hand-written — job types have no source Golem can generate from — and it stays **optional**: omit it and `queue.add` accepts any string and any payload, exactly as before.
+
+### What a `JobEvent` carries
+
+`id`, `type`, `payload`, `attempt`, `maxAttempts`, `scope`, and `signal`.
+
+`attempt` and `maxAttempts` were previously unreachable even though the dispatcher had them, so a handler could not tell whether it was on its last try. It can now:
+
+```ts
+if (res.status === 429 && attempt < maxAttempts) throw new RetryableJobError('rate limited', 60_000);
+if (res.status === 429) await this.notifyGaveUp(payload.articleId);   // last attempt
+```
+
+---
+
+## 7. Computed field return types are checked (0.5.2)
+
+A computed field declaring `type: 'String!'` while returning a number used to compile and fail at query time. It is now a compile error:
+
+```ts
+@ComputedField('User', { type: 'String!' })
+displayName(): number { return 1; }
+//           ^ Type 'number' is not assignable to type 'string'
+```
+
+Built-in scalars are checked through their list and nullability modifiers. Object and enum types stay unconstrained on purpose — a field declaring `'[Post!]!'` may legitimately return partial objects, since GraphQL resolves subfields from whatever the resolver returns.
+
+If this surfaces errors, each one is a field that would have failed at runtime.
+
+---
+
 ## Upgrade checklist
 
-1. `npm i` the four packages at `^0.5.1`, then `npx prisma generate`.
+1. `npm i` the four packages at `^0.5.2`, then `npx prisma generate`.
 2. Add `@Parent()` to every computed field. Grep for `@ComputedField`.
 3. Add `fieldResolverEnhancers` to the GraphQL module factory.
 4. Move `ComputedField`, `GolemRequest`, `GolemResult` imports to `@eleven-am/golem`.
 5. Build. Fix any model-name errors the compiler now reports — each one was a silent bug.
 6. Boot. Unknown hook models fail loudly with the known models listed.
-7. Run your test suite, including any GraphQL contract tests. The generated SDL should not change except for computed fields that now declare `args`.
+7. If you use the queue, update every handler to `handle({ payload, signal }: JobEvent<'…'>)`.
+8. Run your test suite, including any GraphQL contract tests. The generated SDL should not change except for computed fields that now declare `args`.
 
 ## If something looks wrong
 
@@ -183,26 +255,7 @@ If you mount the frontend only in production, register the module conditionally 
 - **Guards on computed fields do not fire** — missing `fieldResolverEnhancers`.
 - **`'"Article"' is not assignable to '"GOLEM_SCHEMA_NOT_REGISTERED_RUN_PRISMA_GENERATE"'`** — you have not run `npx prisma generate`, or the generated module is outside your `tsconfig` include. As of 0.5.1 this is a compile error rather than silent type loss.
 - **Boot fails naming two models** — one extension class serves two models; split it.
+- **A handler's `payload` is suddenly `undefined`** — the handler still takes `(payload, execution)`; it now receives a single `JobEvent`.
+- **`Type 'number' is not assignable to type 'string'` on a computed field** — the declared GraphQL `type` and the method's return type disagree. It would have failed at query time before.
 
 ---
-
-## 6. Optional: typed queue jobs (0.5.2 of `golem-queue`, shipped as 0.2.2)
-
-`queue.add` and `@QueueHandler` narrow against a job map if you declare one:
-
-```ts
-declare global {
-  interface GolemRegister {
-    jobs: {
-      'article-extract': { articleId: string };
-      'article-summarize': { articleId: string; model: string };
-    };
-  }
-}
-```
-
-A typo'd job type and a payload the handler does not expect both become compile errors. Previously `queue.add('artcile-extract', …)` compiled, enqueued, and the row sat unprocessed forever with no error anywhere.
-
-Job types have no source Golem can generate from, so unlike models this block is written by hand. Put it anywhere in your program.
-
-**Declaring jobs is optional and stays permissive.** Omit the block and `queue.add` accepts any string and any payload exactly as before, so adoption is incremental. Model registration fails closed because the generator always provides it — its absence means you did not regenerate. Nothing provides job types, so their absence means you chose not to type them.
