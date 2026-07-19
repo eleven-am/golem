@@ -1,11 +1,11 @@
 import { Injectable, UseGuards, UseInterceptors } from '@nestjs/common';
 import { Args, Context, Parent } from '@nestjs/graphql';
 import {
+  ComputedField,
   CustomMutation,
   CustomQuery,
   GolemValidationError,
 } from '@eleven-am/golem';
-import { ComputedField } from './generated/golem';
 import { GolemPrismaService } from './generated/golem/client';
 import {
   ComputedSuffixInterceptor,

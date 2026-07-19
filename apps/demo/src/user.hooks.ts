@@ -4,9 +4,10 @@ import {
   BeforeCreate,
   BeforeDelete,
   GolemHooks,
+  GolemRequest,
+  GolemResult,
   GolemValidationError,
 } from '@eleven-am/golem';
-import { GolemRequest, GolemResult } from './generated/golem/types';
 
 @GolemHooks('User')
 @Injectable()

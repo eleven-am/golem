@@ -1,4 +1,5 @@
 import { SetMetadata, UseFilters } from '@nestjs/common';
+import type { GolemFieldName, RegisteredModels } from './register';
 import { Mutation, Query, ResolveField, Resolver } from '@nestjs/graphql';
 import { GolemHookOperation } from '@eleven-am/golem-core';
 import { GolemGraphQLExceptionFilter } from './graphql-error.filter';
@@ -11,7 +12,9 @@ export interface GolemHookMetadata {
   operation: GolemHookOperation;
 }
 
-export function GolemHooks(model: string): ClassDecorator {
+export function GolemHooks<TModel extends keyof RegisteredModels & string>(
+  model: TModel,
+): ClassDecorator {
   return SetMetadata(GOLEM_HOOKS_MODEL, model);
 }
 
@@ -51,13 +54,6 @@ export interface ComputedFieldMetadata extends ComputedFieldOptions {
   model: string;
 }
 
-export type TypedComputedFieldDecorator<TModels extends object> = <
-  TModel extends keyof TModels & string,
->(
-  model: TModel,
-  options: ComputedFieldOptions<Extract<TModels[TModel], string>>,
-) => MethodDecorator;
-
 export interface CustomOperationOptions {
   type: string;
   args?: Record<string, string>;
@@ -68,7 +64,10 @@ export interface CustomOperationMetadata extends CustomOperationOptions {
   kind: 'query' | 'mutation';
 }
 
-export function ComputedField(model: string, options: ComputedFieldOptions): MethodDecorator {
+export function ComputedField<TModel extends keyof RegisteredModels & string>(
+  model: TModel,
+  options: ComputedFieldOptions<GolemFieldName<TModel>>,
+): MethodDecorator {
   return (target, key, descriptor) => {
     SetMetadata<string, ComputedFieldMetadata>(GOLEM_COMPUTED_FIELD, {
       model,
@@ -87,12 +86,6 @@ export function ComputedField(model: string, options: ComputedFieldOptions): Met
     ResolveField(options.name ?? String(key))(target, key, descriptor);
     UseFilters(GolemGraphQLExceptionFilter)(target, key, descriptor);
   };
-}
-
-export function createComputedFieldDecorator<
-  TModels extends object,
->(): TypedComputedFieldDecorator<TModels> {
-  return ComputedField as TypedComputedFieldDecorator<TModels>;
 }
 
 export function CustomQuery(options: CustomOperationOptions): MethodDecorator {

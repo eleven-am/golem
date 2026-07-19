@@ -1,3 +1,28 @@
+# Migrating to 0.5.0
+
+Golem now registers your schema with the package itself, so decorators and hook payload types are checked against your models without importing anything from the generated folder. Regenerate first: `npx prisma generate`.
+
+## Import decorators and payload types from the package
+
+The generated module now emits a `declare module` block that registers your models and Prisma types with `@eleven-am/golem`. You never write or read it. What changes is where you import from:
+
+```diff
+-import { AfterCreate, BeforeCreate, GolemHooks } from '@eleven-am/golem';
+-import { GolemRequest, GolemResult } from './generated/golem/types';
++import { AfterCreate, BeforeCreate, GolemHooks, GolemRequest, GolemResult } from '@eleven-am/golem';
+
+-import { ComputedField } from './generated/golem';
++import { ComputedField } from '@eleven-am/golem';
+```
+
+`ComputedField` is no longer re-exported from the generated module; import it from `@eleven-am/golem`. It stays fully typed. You still import `getDatamodel()` and the generated client from `./generated/golem` when wiring the module.
+
+## Model names are now checked
+
+`@GolemHooks`, `@ComputedField`, `GolemRequest`, and `GolemResult` all narrow their model parameter to your actual models, so a typo is a compile error rather than a hook that silently never fires. Passing a `string` variable where a literal is expected no longer compiles.
+
+Unknown hook models are also refused at boot, naming the model and listing the known ones, so the check still holds if the generated module is missing from your TypeScript program.
+
 # Migrating to 0.4.0
 
 This release makes computed fields genuine Nest GraphQL field resolvers. It is intentionally breaking for existing positional computed-field methods.

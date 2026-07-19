@@ -30,11 +30,12 @@ import { extractExtensionSpecs } from './extensions';
 import type { ExtractedExtensions } from './extensions';
 import { createGolemGraphQLArtifacts } from './graphql-artifacts';
 import type { GolemGraphQLArtifacts } from './graphql-artifacts';
-import { GolemHooksExplorer } from './hooks-explorer';
+import { GOLEM_MODEL_NAMES, GolemHooksExplorer } from './hooks-explorer';
 
 export { PubSubEventBus } from './event-bus';
 export type { GolemGraphQLArtifacts } from './graphql-artifacts';
 export * from './decorators';
+export * from './register';
 export * from '@eleven-am/golem-core';
 
 export const GOLEM_GRAPHQL = 'GOLEM_GRAPHQL';
@@ -151,6 +152,10 @@ export class GolemModule {
         clientOptionsProvider,
         eventBusProvider,
         HookRegistry,
+        {
+          provide: GOLEM_MODEL_NAMES,
+          useValue: new Set(options.datamodel.models.map((model) => model.name)),
+        },
         GolemHooksExplorer,
         ...extensions,
         ...authorizationProviders,

@@ -120,12 +120,24 @@ describe('emitDatamodelModule compound unique indexes', () => {
 });
 
 describe('emitDatamodelModule extension helpers', () => {
-  it('emits a computed-field decorator typed by model and field names', () => {
+  it('registers the schema with the package so decorators and hook payloads are typed', () => {
     const output = emitDatamodelModule(
       datamodel([model('User', [scalar('id'), scalar('email')], null)]),
     );
 
-    expect(output).toContain("import { createComputedFieldDecorator } from '@eleven-am/golem';");
-    expect(output).toContain('export const ComputedField = createComputedFieldDecorator<GolemModels>();');
+    expect(output).toContain("declare module '@eleven-am/golem' {");
+    expect(output).toContain('interface Register {');
+    expect(output).toContain('models: GolemModels;');
+    expect(output).toContain('types: GolemTypes;');
+    expect(output).toContain("import type { GolemTypes } from './types';");
+  });
+
+  it('no longer re-exports a generated decorator', () => {
+    const output = emitDatamodelModule(
+      datamodel([model('User', [scalar('id'), scalar('email')], null)]),
+    );
+
+    expect(output).not.toContain('createComputedFieldDecorator');
+    expect(output).not.toContain('export const ComputedField');
   });
 });
