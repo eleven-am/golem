@@ -560,9 +560,18 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             }
           }
           for (const spec of computedByModel.get(model.name) ?? []) {
+            const args: GraphQLFieldConfigArgumentMap = {};
+            for (const [argName, argRef] of Object.entries(spec.args ?? {})) {
+              args[argName] = {
+                type: resolveTypeRef(argRef, inputTypeByName) as GraphQLInputType,
+              };
+            }
             fields[spec.name] = {
               type: resolveTypeRef(spec.type, outputTypeByName) as GraphQLOutputType,
-              resolve: wrapResolve((parent, _args, ctx, info) => spec.resolve(parent, ctx, info)),
+              args,
+              resolve: wrapResolve((parent, resolvedArgs, ctx, info) =>
+                spec.resolve(parent, resolvedArgs, ctx, info),
+              ),
             };
           }
           return fields;

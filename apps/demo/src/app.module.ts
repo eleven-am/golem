@@ -55,6 +55,7 @@ export class AppModule {
           useFactory: (golem: GolemGraphQLArtifacts) => ({
             typeDefs: golem.typeDefs,
             transformResolvers: golem.transformResolvers,
+            fieldResolverEnhancers: golem.fieldResolverEnhancers,
             subscriptions: { 'graphql-ws': true },
           }),
         }),

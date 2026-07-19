@@ -1,4 +1,50 @@
-# Migrating to 0.3.0
+# Migrating to 0.4.0
+
+This release makes computed fields genuine Nest GraphQL field resolvers. It is intentionally breaking for existing positional computed-field methods.
+
+## Migrate computed fields to Nest parameters
+
+Regenerate the Golem artifacts, import the typed `ComputedField` helper from the generated Golem module, and annotate the parent explicitly:
+
+```typescript
+import { Parent } from '@nestjs/graphql';
+import { ComputedField } from './generated/golem';
+
+@ComputedField('Article', { type: 'String!', requires: ['url'] })
+domain(@Parent() article: Pick<Article, 'url'>): string {
+  return new URL(article.url).hostname;
+}
+```
+
+The previous `domain(article)` positional form no longer receives its parent. The generated decorator checks both the model and `requires` field names. Computed fields may now declare GraphQL arguments with `args` and receive them through `@Args()`.
+
+## Enable Nest field-resolver enhancers
+
+Pass the new artifact option through the GraphQL module:
+
+```typescript
+GraphQLModule.forRootAsync<ApolloDriverConfig>({
+  driver: ApolloDriver,
+  inject: [GOLEM_GRAPHQL],
+  useFactory: (golem: GolemGraphQLArtifacts) => ({
+    typeDefs: golem.typeDefs,
+    transformResolvers: golem.transformResolvers,
+    fieldResolverEnhancers: golem.fieldResolverEnhancers,
+  }),
+})
+```
+
+Nest disables guards, interceptors, and filters on field resolvers unless this option is enabled. Parameter decorators, pipes, request-scoped providers, guards, interceptors, and Golem exception mapping now run through Nest rather than a Golem-bound callback.
+
+For relation-backed computed fields, use a request-scoped DataLoader. Golem does not add a separate batching API.
+
+## Optional SPA rendering package
+
+`@eleven-am/golem-render` is a new independent package for hosting a compiled SPA and injecting route-specific Open Graph/Twitter metadata. It has no dependency on Golem Core and adds no authorization behavior. See `packages/render/README.md` before exposing unscoped metadata.
+
+---
+
+# Historical: migrating to 0.3.0
 
 This release tightens the policy-aware TypeScript contract, makes GraphQL aggregation precision-safe, closes recursive authorization hydration gaps, and hardens the queue. Regenerate the client after upgrading:
 

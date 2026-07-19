@@ -54,6 +54,55 @@ describe('golem extensions and programmatic engine (e2e)', () => {
     expect(fallback.body.data.user.displayName).toBe('ada@example.com');
   });
 
+  it('runs computed fields through Nest parameter decorators, args, pipes, and interceptors', async () => {
+    const response = await gql(`{
+      user(where: { email: "roy@example.com" }) {
+        emailDomain
+        requestAuthorization
+        greeting(prefix: "hello")
+        interceptedName
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.user).toEqual({
+      emailDomain: 'example.com',
+      requestAuthorization: 'token-roy@example.com',
+      greeting: 'HELLO Roy',
+      interceptedName: 'Roy!',
+    });
+  });
+
+  it('runs computed fields through injected Nest guards', async () => {
+    const response = await request(app.getHttpServer())
+      .post('/graphql')
+      .set('authorization', 'token-roy@example.com')
+      .set('x-deny-search', 'true')
+      .send({ query: '{ user(where: { email: "roy@example.com" }) { displayName } }' });
+
+    expect(response.body.data.user).toBeNull();
+    expect(response.body.errors[0].message).toBe('Forbidden resource');
+  });
+
+  it('creates computed-field dependencies once per request', async () => {
+    const first = await gql('{ users(take: 2) { requestScope } }');
+    const second = await gql('{ users(take: 2) { requestScope } }');
+
+    expect(new Set(first.body.data.users.map((user: { requestScope: number }) => user.requestScope)).size).toBe(1);
+    expect(new Set(second.body.data.users.map((user: { requestScope: number }) => user.requestScope)).size).toBe(1);
+    expect(first.body.data.users[0].requestScope).not.toBe(second.body.data.users[0].requestScope);
+  });
+
+  it('maps Golem errors thrown by computed fields through the Nest filter', async () => {
+    const response = await gql('{ user(where: { email: "roy@example.com" }) { rejectComputedField } }');
+
+    expect(response.body.data.user).toBeNull();
+    expect(response.body.errors[0]).toMatchObject({
+      message: 'computed field rejected',
+      extensions: { code: 'BAD_USER_INPUT' },
+    });
+  });
+
   it('serves custom queries running through the engine', async () => {
     const response = await gql('{ searchPosts(term: "First") { title published } }');
     expect(response.body.errors).toBeUndefined();

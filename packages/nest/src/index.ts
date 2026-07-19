@@ -8,7 +8,7 @@ import {
   OnModuleInit,
   Type,
 } from '@nestjs/common';
-import { DiscoveryModule } from '@nestjs/core';
+import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
 import {
   AuthorizationProvider,
   GolemDefaults,
@@ -138,7 +138,6 @@ export class GolemModule {
 
     const extensions = options.extensions ?? [];
     const importedExtensions = options.importedExtensions ?? [];
-    const extensionInject = [...extensions, ...importedExtensions];
     const authorizationProviders =
       typeof options.authorization === 'function' ? [options.authorization] : [];
     const authorizationInject = options.authorization ? [options.authorization] : [];
@@ -202,8 +201,24 @@ export class GolemModule {
         },
         {
           provide: GOLEM_EXTENSION_SPECS,
-          useFactory: (...extensionInstances: object[]) => extractExtensionSpecs(extensionInstances),
-          inject: extensionInject,
+          useFactory: (discovery: DiscoveryService) => {
+            const importedTypes = importedExtensions.map((token) => {
+              if (typeof token === 'function') {
+                return token;
+              }
+              const wrapper = discovery.getProviders().find((provider) => provider.token === token);
+              const instanceType = wrapper?.instance?.constructor;
+              const type = typeof instanceType === 'function' && instanceType !== Object
+                ? instanceType
+                : wrapper?.metatype;
+              if (typeof type !== 'function') {
+                throw new Error(`Imported Golem extension ${String(token)} has no discoverable class`);
+              }
+              return type;
+            });
+            return extractExtensionSpecs([...extensions, ...importedTypes]);
+          },
+          inject: [DiscoveryService],
         },
         {
           provide: GOLEM_INTERNAL_SCHEMA,
@@ -245,7 +260,11 @@ export class GolemModule {
           useFactory: (
             schema: GraphQLSchema,
             specs: ExtractedExtensions,
-          ): GolemGraphQLArtifacts => createGolemGraphQLArtifacts(schema, specs.customOperations),
+          ): GolemGraphQLArtifacts => createGolemGraphQLArtifacts(
+            schema,
+            specs.computedFields,
+            specs.customOperations,
+          ),
           inject: [GOLEM_INTERNAL_SCHEMA, GOLEM_EXTENSION_SPECS],
         },
       ],

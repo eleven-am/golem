@@ -27,6 +27,7 @@ What you get out of the box:
 | `@eleven-am/golem-generator` | The Prisma generator (`provider = "golem"`). |
 | `@eleven-am/golem-authorizer` | Authorization adapter for `@eleven-am/authorizer` (CASL). Optional. |
 | `@eleven-am/golem-queue` | Durable NestJS job queue with leases, retries, cancellation, and Prisma persistence. Optional. |
+| `@eleven-am/golem-render` | Nest-native SPA hosting and route-specific link-preview metadata. Optional. |
 
 Upgrading an existing application? Follow the [migration guide](./MIGRATION.md).
 
@@ -91,6 +92,7 @@ Three artifacts land in `src/generated/golem`: the datamodel, a fully typed inst
       useFactory: (golem: GolemGraphQLArtifacts) => ({
         typeDefs: golem.typeDefs,
         transformResolvers: golem.transformResolvers,
+        fieldResolverEnhancers: golem.fieldResolverEnhancers,
         subscriptions: { 'graphql-ws': true },
       }),
     }),
@@ -306,7 +308,7 @@ export class ArticleExtension {
   constructor(private readonly prisma: GolemPrismaService) {}
 
   @ComputedField('Article', { type: 'String!', requires: ['url'] })
-  domain(article: Pick<Article, 'url'>): string {
+  domain(@Parent() article: Pick<Article, 'url'>): string {
     return new URL(article.url).hostname;
   }
 
@@ -321,7 +323,9 @@ export class ArticleExtension {
 }
 ```
 
-The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Custom operations reference the generated type system by SDL name (`'[Article!]!'`, `'ArticleWhereInput'`) and are mounted as real Nest GraphQL resolvers, so Nest guards, pipes, interceptors, filters, and parameter decorators apply normally. They inherit row and field policy when they use `forContext`.
+Import `ComputedField` from the generated Golem module so the model and every entry in `requires` are checked against the Prisma datamodel. The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Computed fields and custom operations are mounted as real Nest GraphQL resolvers, so Nest guards, pipes, interceptors, filters, request-scoped providers, and parameter decorators apply normally. Pass `golem.fieldResolverEnhancers` into `GraphQLModule` alongside `typeDefs` and `transformResolvers`; Nest disables guards, interceptors, and filters on field resolvers unless that option is enabled. Existing computed fields written as positional callbacks must migrate from `method(parent)` to `method(@Parent() parent)`. They inherit row and field policy when they use `forContext`.
+
+For relation-backed computed fields, use a request-scoped DataLoader from `@Context()` or dependency injection to batch distinct parent keys. Golem deliberately does not add a separate batching API: Nest owns resolver invocation and the ordinary GraphQL DataLoader pattern applies.
 
 ## Configuration reference
 

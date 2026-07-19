@@ -65,6 +65,30 @@ describe('computed fields', () => {
     );
   });
 
+  it('declares and resolves computed-field arguments', async () => {
+    const client = fakeClient();
+    client.user.findMany.mockResolvedValue([{ name: 'Ada', email: 'a@b.c' }]);
+    const schema = buildGolemSchema({
+      datamodel,
+      client,
+      computedFields: [{
+        ...displayName,
+        name: 'greeting',
+        args: { prefix: 'String!' },
+        resolve: (parent: { name?: string }, args: { prefix: string }) =>
+          `${args.prefix} ${parent.name}`,
+      }],
+    });
+
+    expect(printSchema(schema)).toContain('greeting(prefix: String!): String!');
+    const result = await graphql({
+      schema,
+      source: '{ users { greeting(prefix: "Hello") } }',
+    });
+    expect(result.errors).toBeUndefined();
+    expect(result.data).toEqual({ users: [{ greeting: 'Hello Ada' }] });
+  });
+
   it('rejects unknown models, unknown requires and collisions at build time', () => {
     expect(() =>
       buildGolemSchema({

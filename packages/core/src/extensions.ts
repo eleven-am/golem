@@ -5,7 +5,8 @@ export interface ComputedFieldSpec {
   name: string;
   type: string;
   requires: readonly string[];
-  resolve: (parent: any, ctx: unknown, info: GraphQLResolveInfo) => unknown;
+  args?: Record<string, string>;
+  resolve: (parent: any, args: any, ctx: unknown, info: GraphQLResolveInfo) => unknown;
 }
 
 export interface CustomOperationSpec {

@@ -50,10 +50,13 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel): string {
     .join('\n');
 
   return `import type { DatamodelDocument } from '@eleven-am/golem-core';
+import { createComputedFieldDecorator } from '@eleven-am/golem';
 
 export interface GolemModels {
 ${modelEntries}
 }
+
+export const ComputedField = createComputedFieldDecorator<GolemModels>();
 
 export const datamodel = ${JSON.stringify({ models, enums }, null, 2)} as const;
 

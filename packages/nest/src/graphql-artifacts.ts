@@ -6,7 +6,7 @@ import {
   isSpecifiedScalarType,
   printSchema,
 } from 'graphql';
-import type { CustomOperationSpec } from '@eleven-am/golem-core';
+import type { ComputedFieldSpec, CustomOperationSpec } from '@eleven-am/golem-core';
 import type { GraphQLField, GraphQLSchema } from 'graphql';
 
 type ResolverMap = Record<string, any>;
@@ -15,6 +15,7 @@ type ResolverTransform = NonNullable<GqlModuleOptions['transformResolvers']>;
 export interface GolemGraphQLArtifacts {
   typeDefs: string;
   transformResolvers: ResolverTransform;
+  fieldResolverEnhancers: NonNullable<GqlModuleOptions['fieldResolverEnhancers']>;
 }
 
 function fieldResolver(field: GraphQLField<unknown, unknown>): unknown {
@@ -29,12 +30,19 @@ function fieldResolver(field: GraphQLField<unknown, unknown>): unknown {
 
 function generatedResolvers(
   schema: GraphQLSchema,
+  computedFields: readonly ComputedFieldSpec[],
   customOperations: readonly CustomOperationSpec[],
 ): ResolverMap {
   const customRootFields = new Map<string, Set<string>>([
     ['Query', new Set(customOperations.filter((spec) => spec.kind === 'query').map((spec) => spec.name))],
     ['Mutation', new Set(customOperations.filter((spec) => spec.kind === 'mutation').map((spec) => spec.name))],
   ]);
+  const computedByModel = new Map<string, Set<string>>();
+  for (const spec of computedFields) {
+    const fields = computedByModel.get(spec.model) ?? new Set<string>();
+    fields.add(spec.name);
+    computedByModel.set(spec.model, fields);
+  }
   const resolvers: ResolverMap = {};
 
   for (const type of Object.values(schema.getTypeMap())) {
@@ -52,7 +60,10 @@ function generatedResolvers(
     }
     const fields: ResolverMap = {};
     for (const [fieldName, field] of Object.entries(type.getFields())) {
-      if (customRootFields.get(type.name)?.has(fieldName)) {
+      if (
+        customRootFields.get(type.name)?.has(fieldName) ||
+        computedByModel.get(type.name)?.has(fieldName)
+      ) {
         continue;
       }
       const resolve = fieldResolver(field);
@@ -66,6 +77,22 @@ function generatedResolvers(
   }
 
   return resolvers;
+}
+
+function assertComputedFieldsDiscovered(
+  discovered: ResolverMap,
+  computedFields: readonly ComputedFieldSpec[],
+): void {
+  for (const field of computedFields) {
+    const resolver = isResolverGroup(discovered[field.model])
+      ? discovered[field.model][field.name]
+      : undefined;
+    if (typeof resolver !== 'function') {
+      throw new Error(
+        `Computed field ${field.model}.${field.name} was not discovered by Nest GraphQL`,
+      );
+    }
+  }
 }
 
 function isResolverGroup(value: unknown): value is ResolverMap {
@@ -126,13 +153,16 @@ function mergeResolvers(generated: ResolverMap, discovered: ResolverMap): Resolv
 
 export function createGolemGraphQLArtifacts(
   schema: GraphQLSchema,
+  computedFields: readonly ComputedFieldSpec[],
   customOperations: readonly CustomOperationSpec[],
 ): GolemGraphQLArtifacts {
-  const generated = generatedResolvers(schema, customOperations);
+  const generated = generatedResolvers(schema, computedFields, customOperations);
   return {
     typeDefs: printSchema(schema),
+    fieldResolverEnhancers: ['guards', 'interceptors', 'filters'],
     transformResolvers: ((resolvers: ResolverMap | ResolverMap[]) => {
       const discovered = normalizeResolvers(resolvers);
+      assertComputedFieldsDiscovered(discovered, computedFields);
       assertCustomOperationsDiscovered(discovered, customOperations);
       return mergeResolvers(generated, discovered);
     }) as ResolverTransform,

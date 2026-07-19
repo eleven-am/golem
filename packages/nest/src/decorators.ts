@@ -1,5 +1,5 @@
 import { SetMetadata, UseFilters } from '@nestjs/common';
-import { Mutation, Query } from '@nestjs/graphql';
+import { Mutation, Query, ResolveField, Resolver } from '@nestjs/graphql';
 import { GolemHookOperation } from '@eleven-am/golem-core';
 import { GolemGraphQLExceptionFilter } from './graphql-error.filter';
 
@@ -37,17 +37,26 @@ export const AfterUpdateMany = hookDecorator('after', 'updateMany');
 export const AfterDeleteMany = hookDecorator('after', 'deleteMany');
 
 export const GOLEM_COMPUTED_FIELD = 'GOLEM_COMPUTED_FIELD';
+export const GOLEM_COMPUTED_MODELS = 'GOLEM_COMPUTED_MODELS';
 export const GOLEM_CUSTOM_OPERATION = 'GOLEM_CUSTOM_OPERATION';
 
-export interface ComputedFieldOptions {
+export interface ComputedFieldOptions<TField extends string = string> {
   type: string;
-  requires?: readonly string[];
+  requires?: readonly TField[];
+  args?: Record<string, string>;
   name?: string;
 }
 
 export interface ComputedFieldMetadata extends ComputedFieldOptions {
   model: string;
 }
+
+export type TypedComputedFieldDecorator<TModels extends object> = <
+  TModel extends keyof TModels & string,
+>(
+  model: TModel,
+  options: ComputedFieldOptions<Extract<TModels[TModel], string>>,
+) => MethodDecorator;
 
 export interface CustomOperationOptions {
   type: string;
@@ -60,7 +69,30 @@ export interface CustomOperationMetadata extends CustomOperationOptions {
 }
 
 export function ComputedField(model: string, options: ComputedFieldOptions): MethodDecorator {
-  return SetMetadata<string, ComputedFieldMetadata>(GOLEM_COMPUTED_FIELD, { model, ...options });
+  return (target, key, descriptor) => {
+    SetMetadata<string, ComputedFieldMetadata>(GOLEM_COMPUTED_FIELD, {
+      model,
+      ...options,
+    })(target, key, descriptor);
+    const constructor = target.constructor;
+    const models = Reflect.getOwnMetadata(GOLEM_COMPUTED_MODELS, constructor) as
+      | readonly string[]
+      | undefined;
+    Reflect.defineMetadata(
+      GOLEM_COMPUTED_MODELS,
+      [...new Set([...(models ?? []), model])],
+      constructor,
+    );
+    Resolver(model)(constructor);
+    ResolveField(options.name ?? String(key))(target, key, descriptor);
+    UseFilters(GolemGraphQLExceptionFilter)(target, key, descriptor);
+  };
+}
+
+export function createComputedFieldDecorator<
+  TModels extends object,
+>(): TypedComputedFieldDecorator<TModels> {
+  return ComputedField as TypedComputedFieldDecorator<TModels>;
 }
 
 export function CustomQuery(options: CustomOperationOptions): MethodDecorator {

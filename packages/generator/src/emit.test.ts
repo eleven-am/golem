@@ -118,3 +118,14 @@ describe('emitDatamodelModule compound unique indexes', () => {
     expect(parsed.models[0].uniqueIndexes).toBeUndefined();
   });
 });
+
+describe('emitDatamodelModule extension helpers', () => {
+  it('emits a computed-field decorator typed by model and field names', () => {
+    const output = emitDatamodelModule(
+      datamodel([model('User', [scalar('id'), scalar('email')], null)]),
+    );
+
+    expect(output).toContain("import { createComputedFieldDecorator } from '@eleven-am/golem';");
+    expect(output).toContain('export const ComputedField = createComputedFieldDecorator<GolemModels>();');
+  });
+});
