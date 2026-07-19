@@ -1,8 +1,12 @@
 # Design Brief — `@eleven-am/golem-render`
 
 Date: 2026-07-19
-Status: designed, not implemented. Approved in principle; Phase 1 ready to build.
+Status: **implemented and published** as `@eleven-am/golem-render@0.1.0` (Golem 0.4.0).
 Author of record: design discussion with Roy Ossai.
+
+This document is kept for the decisions in §3, which explain why the code is shaped
+as it is. For usage, see `packages/render/README.md`. Deviations made during
+implementation are recorded in §9.
 
 ---
 
@@ -315,3 +319,17 @@ poster: episode.still_path ? `https://image.tmdb.org/t/p/original${episode.still
 `media.poster` from the frames database is stored complete and is fine. Only the three raw TMDB path fields are affected — link previews for people, collections, and companies would show a broken image.
 
 Pass-through remains the correct behaviour for the render layer; this is the application supplying a bad value.
+
+---
+
+## 9. What changed during implementation
+
+Three things came out better than specified. Recorded so the code and this document do not disagree.
+
+**Cache headers key off content hashing, not directory.** §5 specified `immutable` for anything under the assets path, copying readable's behaviour. The implementation detects a content hash in the filename instead, so `assets/index-CDc0fz_X.js` is `immutable` while a non-hashed `assets/plain.js` correctly gets `no-cache`. Strictly better — the original would have cached an unhashed file for a year.
+
+**`Sec-Fetch-Dest` takes precedence over the path.** §5 item 2 specified extension-based asset detection, inherited from readable. That misclassifies any client route whose segment contains a dot — `/user/john.doe`, `/authors/j.k.rowling` — as an asset, returning 404 instead of the shell. Extension matching is now an allowlist, and where the browser sends `Sec-Fetch-Dest` it is authoritative: sub-resource destinations 404 even without an extension, and `document` gets the shell even if the path looks file-ish. The important property is preserved — a stale chunk request never receives HTML with a 200.
+
+**Golem's resolver is a tripwire.** Not specified. `resolve` on the discovered spec throws if it is ever invoked, so a failure to register through Nest surfaces loudly instead of silently reverting to the pre-0.4.0 behaviour §3.4 exists to prevent.
+
+Everything else shipped as written, including the §5 Phase 1 checkpoint contract, the escaping requirements, and pass-through URLs with no `Host` header dependency.
