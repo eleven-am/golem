@@ -47,6 +47,13 @@ export interface FailExpiredLeaseInput {
   readonly lastError: string;
 }
 
+export interface RenewLeaseInput {
+  readonly id: string;
+  readonly leaseOwner: string;
+  readonly leaseExpiresAt: Date;
+  readonly now: Date;
+}
+
 export interface FailInput {
   readonly id: string;
   readonly leaseOwner: string;
@@ -119,6 +126,7 @@ export interface JobStore {
     limit: number;
   }): Promise<ClaimCandidate[]>;
   claim(input: ClaimInput): Promise<boolean>;
+  renewLease?(input: RenewLeaseInput): Promise<boolean>;
   failExpiredLease(input: FailExpiredLeaseInput): Promise<boolean>;
   findOwnedRunningIds(input: {
     ids: readonly string[];

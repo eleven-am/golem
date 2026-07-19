@@ -503,3 +503,117 @@ describe('JobDispatcher', () => {
     expect(store.get(id)?.lastError).toContain('invalid JSON');
   });
 });
+
+describe('lease renewal', () => {
+  const RENEWING = { leaseDurationMs: 60, leaseRenewIntervalMs: 20 };
+
+  function leaseOf(store: InMemoryJobStore, id: string): Date | null {
+    const jobs = (store as unknown as { jobs: Map<string, { leaseExpiresAt: Date | null }> }).jobs;
+    return jobs.get(id)?.leaseExpiresAt ?? null;
+  }
+
+  it('keeps a job past its lease duration while it heartbeats', async () => {
+    let release: (() => void) | undefined;
+    const { store, dispatcher } = build(
+      [handler(() => new Promise<void>((resolve) => { release = resolve; }), { timeoutMs: 5_000 })],
+      RENEWING,
+    );
+    const id = await seed(store);
+
+    const running = tick(dispatcher);
+    await new Promise((resolve) => setTimeout(resolve, 90));
+    const renewed = leaseOf(store, id);
+    expect(renewed).not.toBeNull();
+    expect(renewed!.getTime()).toBeGreaterThan(Date.now());
+
+    release?.();
+    await running;
+    expect((await store.findJobs({ limit: 10 }))[0]?.status).toBe('SUCCEEDED');
+  });
+
+  it('aborts the handler when the lease is lost', async () => {
+    let observedAbort = false;
+    const { store, dispatcher } = build(
+      [
+        handler(
+          (event) =>
+            new Promise<void>((resolve) => {
+              event.signal.addEventListener('abort', () => {
+                observedAbort = true;
+                resolve();
+              });
+            }),
+          { timeoutMs: 5_000 },
+        ),
+      ],
+      RENEWING,
+    );
+    const id = await seed(store);
+
+    const running = tick(dispatcher);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    const jobs = (store as unknown as { jobs: Map<string, { leaseOwner: string | null }> }).jobs;
+    jobs.get(id)!.leaseOwner = 'another-worker';
+
+    await running;
+    expect(observedAbort).toBe(true);
+  });
+
+  it('refuses to renew a lease that has already expired', async () => {
+    const store = new InMemoryJobStore();
+    const id = await seed(store);
+    await store.claim({
+      id,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: WORKER,
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+
+    const renewed = await store.renewLease({
+      id,
+      leaseOwner: WORKER,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+    expect(renewed).toBe(false);
+  });
+
+  it('refuses to renew a lease owned by another worker', async () => {
+    const store = new InMemoryJobStore();
+    const id = await seed(store);
+    await store.claim({
+      id,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'another-worker',
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+    });
+
+    const renewed = await store.renewLease({
+      id,
+      leaseOwner: WORKER,
+      leaseExpiresAt: new Date(Date.now() + 60_000),
+      now: new Date(),
+    });
+    expect(renewed).toBe(false);
+  });
+
+  it('leaves lease behaviour unchanged when renewal is not configured', async () => {
+    let release: (() => void) | undefined;
+    const { store, dispatcher } = build(
+      [handler(() => new Promise<void>((resolve) => { release = resolve; }), { timeoutMs: 5_000 })],
+    );
+    const id = await seed(store);
+    const running = tick(dispatcher);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    const first = leaseOf(store, id);
+    await new Promise((resolve) => setTimeout(resolve, 60));
+
+    expect(first).not.toBeNull();
+    expect(leaseOf(store, id)?.getTime()).toBe(first?.getTime());
+
+    release?.();
+    await running;
+  });
+});

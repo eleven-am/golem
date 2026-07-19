@@ -130,6 +130,8 @@ export interface GolemQueueOptions {
   baseBackoffMs?: number;
   maxBackoffMs?: number;
   leaseGraceMs?: number;
+  leaseDurationMs?: number;
+  leaseRenewIntervalMs?: number;
   abandonGraceMs?: number;
   shutdownGraceMs?: number;
   defaultMaxAttempts?: number;
@@ -142,6 +144,8 @@ export interface ResolvedGolemQueueOptions {
   readonly baseBackoffMs: number;
   readonly maxBackoffMs: number;
   readonly leaseGraceMs: number;
+  readonly leaseDurationMs?: number;
+  readonly leaseRenewIntervalMs?: number;
   readonly abandonGraceMs: number;
   readonly shutdownGraceMs: number;
   readonly defaultMaxAttempts: number;
@@ -168,6 +172,12 @@ export function resolveQueueOptions(
     baseBackoffMs: options.baseBackoffMs ?? GOLEM_QUEUE_DEFAULTS.baseBackoffMs,
     maxBackoffMs: options.maxBackoffMs ?? GOLEM_QUEUE_DEFAULTS.maxBackoffMs,
     leaseGraceMs: options.leaseGraceMs ?? GOLEM_QUEUE_DEFAULTS.leaseGraceMs,
+    leaseDurationMs: options.leaseDurationMs,
+    leaseRenewIntervalMs:
+      options.leaseRenewIntervalMs ??
+      (options.leaseDurationMs === undefined
+        ? undefined
+        : Math.max(1, Math.floor(options.leaseDurationMs / 3))),
     abandonGraceMs:
       options.abandonGraceMs ?? GOLEM_QUEUE_DEFAULTS.abandonGraceMs,
     shutdownGraceMs:
@@ -208,6 +218,28 @@ export function validateQueueOptions(options: ResolvedGolemQueueOptions): void {
     invalidOption('maxBackoffMs', options.maxBackoffMs, `must be at least baseBackoffMs (${options.baseBackoffMs})`);
   }
   if (options.leaseGraceMs < 0) invalidOption('leaseGraceMs', options.leaseGraceMs, 'must be at least 0');
+  if (options.leaseDurationMs !== undefined) {
+    finiteNumber('leaseDurationMs', options.leaseDurationMs);
+    if (options.leaseDurationMs <= 0) {
+      invalidOption('leaseDurationMs', options.leaseDurationMs, 'must be greater than 0');
+    }
+  }
+  if (options.leaseRenewIntervalMs !== undefined) {
+    finiteNumber('leaseRenewIntervalMs', options.leaseRenewIntervalMs);
+    if (options.leaseRenewIntervalMs <= 0) {
+      invalidOption('leaseRenewIntervalMs', options.leaseRenewIntervalMs, 'must be greater than 0');
+    }
+    if (options.leaseDurationMs === undefined) {
+      invalidOption('leaseRenewIntervalMs', options.leaseRenewIntervalMs, 'requires leaseDurationMs to be set');
+    }
+    if (options.leaseRenewIntervalMs >= options.leaseDurationMs) {
+      invalidOption(
+        'leaseRenewIntervalMs',
+        options.leaseRenewIntervalMs,
+        `must be less than leaseDurationMs (${options.leaseDurationMs})`,
+      );
+    }
+  }
   if (options.abandonGraceMs < 0) invalidOption('abandonGraceMs', options.abandonGraceMs, 'must be at least 0');
   if (options.shutdownGraceMs < 0) invalidOption('shutdownGraceMs', options.shutdownGraceMs, 'must be at least 0');
   if (!Number.isInteger(options.defaultMaxAttempts) || options.defaultMaxAttempts < 1) {

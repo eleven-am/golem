@@ -140,6 +140,29 @@ await queue.cancelByDedupeKeys('article.audio', keys, 'voice changed');
 
 `cancelForScope` aborts work running **on this process** synchronously and deletes the rows before returning. A job running on *another* worker is not stopped instantly: that worker notices the row is gone on its next reconcile pass and aborts then, so the bound is one `pollIntervalMs`, not zero.
 
+## Long-running jobs: lease renewal
+
+By default a lease is written once at claim time and lasts `timeoutMs + leaseGraceMs`. That makes `timeoutMs` control two unrelated things — how long a job may run, and how long a crashed worker's job stays stuck — with no value that is right for both. A short timeout expires the lease *while the job is still running* and another worker picks it up, executing it twice; a long one means slow recovery after a crash.
+
+Set `leaseDurationMs` and the dispatcher heartbeats instead:
+
+```ts
+GolemQueueModule.forRootAsync({
+  useFactory: (prisma: PrismaService) => new PrismaJobStore(prisma),
+  leaseDurationMs: 60_000,          // how fast a crash is detected
+  // leaseRenewIntervalMs defaults to leaseDurationMs / 3
+  handlers: [ExtractHandler],
+})
+```
+
+Now the lease is short regardless of job length, and `timeoutMs` is purely a cap on total duration. A job may run for an hour while a crashed worker is still recovered in a minute.
+
+**If a renewal fails, the handler is aborted.** A worker that lost its lease — deposed, paused past expiry, partitioned — stops working immediately, because another worker may already own the job. Its `signal` fires exactly as it does for a timeout or a cancellation, so honouring the signal is what makes this safe. Without that abort, renewal would turn a bounded double-execution window into an unbounded one.
+
+Renewal engages only when `leaseDurationMs` is set **and** the store implements `renewLease`. Both bundled stores do. A custom store without it keeps the write-once behaviour, unchanged.
+
+Renewal is fenced like every other lease write: it updates only a `RUNNING` row still owned by this worker whose lease has **not** already expired. An expired lease cannot be renewed even by its original owner, because another worker may have claimed it in the meantime.
+
 ## Inspecting the queue
 
 The queue is the source of truth for "is this still running?" — useful for driving UI state and for operator tooling.

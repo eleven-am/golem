@@ -75,3 +75,44 @@ describe('PrismaJobStore administrative queries', () => {
     expect(job.findMany).toHaveBeenCalledWith(expect.objectContaining({ take: 25, skip: 10 }));
   });
 });
+
+describe('PrismaJobStore lease renewal', () => {
+  it('fences renewal on owner, running status, and an unexpired lease', async () => {
+    const { job, store } = build();
+    job.updateMany.mockResolvedValue({ count: 1 });
+    const now = new Date('2026-01-01T00:00:00.000Z');
+    const leaseExpiresAt = new Date('2026-01-01T00:01:00.000Z');
+
+    const renewed = await store.renewLease({
+      id: 'job-1',
+      leaseOwner: 'worker-1',
+      leaseExpiresAt,
+      now,
+    });
+
+    expect(renewed).toBe(true);
+    expect(job.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'job-1',
+        status: 'RUNNING',
+        leaseOwner: 'worker-1',
+        leaseExpiresAt: { gt: now },
+      },
+      data: { leaseExpiresAt },
+    });
+  });
+
+  it('reports a lost lease when the fenced update matches nothing', async () => {
+    const { job, store } = build();
+    job.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(
+      store.renewLease({
+        id: 'job-1',
+        leaseOwner: 'worker-1',
+        leaseExpiresAt: new Date(),
+        now: new Date(),
+      }),
+    ).resolves.toBe(false);
+  });
+});

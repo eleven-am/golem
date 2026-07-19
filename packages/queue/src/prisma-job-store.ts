@@ -2,6 +2,7 @@ import type {
   CancellableJob,
   ClaimCandidate,
   ClaimInput,
+  RenewLeaseInput,
   CreateJobInput,
   DedupeQuery,
   FailExpiredLeaseInput,
@@ -151,6 +152,19 @@ export class PrismaJobStore implements JobStore {
           ? {}
           : { lastError: input.lastError }),
       },
+    });
+    return result.count === 1;
+  }
+
+  async renewLease(input: RenewLeaseInput): Promise<boolean> {
+    const result = await this.prisma.job.updateMany({
+      where: {
+        id: input.id,
+        status: 'RUNNING',
+        leaseOwner: input.leaseOwner,
+        leaseExpiresAt: { gt: input.now },
+      },
+      data: { leaseExpiresAt: input.leaseExpiresAt },
     });
     return result.count === 1;
   }

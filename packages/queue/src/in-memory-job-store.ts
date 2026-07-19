@@ -2,6 +2,7 @@ import type {
   CancellableJob,
   ClaimCandidate,
   ClaimInput,
+  RenewLeaseInput,
   CreateJobInput,
   DedupeQuery,
   FailExpiredLeaseInput,
@@ -121,6 +122,21 @@ export class InMemoryJobStore implements JobStore {
     job.leaseExpiresAt = input.leaseExpiresAt;
     if (input.attempts !== undefined) job.attempts = input.attempts;
     if (input.lastError !== undefined) job.lastError = input.lastError;
+    return Promise.resolve(true);
+  }
+
+  renewLease(input: RenewLeaseInput): Promise<boolean> {
+    const job = this.jobs.get(input.id);
+    if (
+      !job ||
+      job.status !== 'RUNNING' ||
+      job.leaseOwner !== input.leaseOwner ||
+      job.leaseExpiresAt === null ||
+      job.leaseExpiresAt <= input.now
+    ) {
+      return Promise.resolve(false);
+    }
+    job.leaseExpiresAt = input.leaseExpiresAt;
     return Promise.resolve(true);
   }
 

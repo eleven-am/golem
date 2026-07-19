@@ -200,9 +200,7 @@ export class JobDispatcher implements OnModuleDestroy {
         }
         continue;
       }
-      const leaseExpiresAt = new Date(
-        Date.now() + handler.timeoutMs + this.options.leaseGraceMs,
-      );
+      const leaseExpiresAt = new Date(Date.now() + this.leaseMs(handler));
       const won = await this.store.claim({
         id: candidate.id,
         fromStatus: recoveringExpiredLease ? 'RUNNING' : 'PENDING',
@@ -221,8 +219,60 @@ export class JobDispatcher implements OnModuleDestroy {
     return claimed;
   }
 
+  private leaseMs(handler: JobHandler): number {
+    return (
+      this.options.leaseDurationMs ??
+      handler.timeoutMs + this.options.leaseGraceMs
+    );
+  }
+
+  private startHeartbeat(
+    handler: JobHandler,
+    job: ClaimCandidate,
+    controller: AbortController,
+  ): NodeJS.Timeout | undefined {
+    const interval = this.options.leaseRenewIntervalMs;
+    const renew = this.store.renewLease?.bind(this.store);
+    if (interval === undefined || renew === undefined) {
+      return undefined;
+    }
+    const timer = setInterval(() => {
+      const now = new Date();
+      void renew({
+        id: job.id,
+        leaseOwner: this.workerId,
+        leaseExpiresAt: new Date(now.getTime() + this.leaseMs(handler)),
+        now,
+      })
+        .then((held) => {
+          if (held) {
+            return;
+          }
+          clearInterval(timer);
+          this.logger.warn(
+            `Job lease lost: type=${handler.type} jobId=${job.id} reason=another-worker-may-own-it`,
+          );
+          controller.abort(
+            new Error(`Lost the lease for job ${job.id}; another worker may own it`),
+          );
+        })
+        .catch((error: unknown) => {
+          clearInterval(timer);
+          this.logger.warn(
+            `Job lease renewal failed: type=${handler.type} jobId=${job.id} error=${errorMessage(error)}`,
+          );
+          controller.abort(
+            new Error(`Could not renew the lease for job ${job.id}`),
+          );
+        });
+    }, interval);
+    timer.unref?.();
+    return timer;
+  }
+
   private startExecution(handler: JobHandler, job: ClaimCandidate): void {
     const controller = new AbortController();
+    const heartbeat = this.startHeartbeat(handler, job, controller);
     this.cancellations.register(job.id, toScope(job), controller);
     this.inFlight.set(handler.type, (this.inFlight.get(handler.type) ?? 0) + 1);
     const completion = this.run(handler, job, controller)
@@ -232,6 +282,7 @@ export class JobDispatcher implements OnModuleDestroy {
         );
       })
       .finally(() => {
+        if (heartbeat !== undefined) clearInterval(heartbeat);
         this.cancellations.unregister(job.id);
         this.executions.delete(job.id);
         this.inFlight.set(
