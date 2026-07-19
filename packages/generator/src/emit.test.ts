@@ -125,8 +125,8 @@ describe('emitDatamodelModule extension helpers', () => {
       datamodel([model('User', [scalar('id'), scalar('email')], null)]),
     );
 
-    expect(output).toContain("declare module '@eleven-am/golem' {");
-    expect(output).toContain('interface Register {');
+    expect(output).toContain('declare global {');
+    expect(output).toContain('interface GolemRegister {');
     expect(output).toContain('models: GolemModels;');
     expect(output).toContain('types: GolemTypes;');
     expect(output).toContain("import type { GolemTypes } from './types';");

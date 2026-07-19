@@ -16,6 +16,7 @@ import {
   type JobScope,
   type ResolvedGolemQueueOptions,
 } from './job.types';
+import type { JobPayload, JobType } from './register';
 
 const PENDING_ONLY: readonly JobStatus[] = ['PENDING'];
 const PENDING_AND_RUNNING: readonly JobStatus[] = ['PENDING', 'RUNNING'];
@@ -107,9 +108,9 @@ export class JobQueue {
     private readonly observers: JobObserverRegistry,
   ) {}
 
-  add(
-    type: string,
-    payload: Record<string, unknown>,
+  add<TType extends JobType>(
+    type: TType,
+    payload: JobPayload<TType>,
     options: EnqueueOptions = {},
   ): Promise<boolean> {
     requireNonEmpty('type', type);

@@ -1,14 +1,14 @@
-# Upgrading to Golem 0.5.0
+# Upgrading to Golem 0.5.1
 
-For applications currently on `0.3.x`. Covers two releases: `0.4.0` (breaking) and `0.5.0` (breaking). Both are on npm now.
+For applications currently on `0.3.x`. Covers `0.4.0` (breaking), `0.5.0` (breaking), and `0.5.1`. All are on npm now.
 
 ```bash
-npm i @eleven-am/golem@^0.5.0 @eleven-am/golem-core@^0.5.0
-npm i -D @eleven-am/golem-generator@^0.5.0
+npm i @eleven-am/golem@^0.5.1 @eleven-am/golem-core@^0.5.1
+npm i -D @eleven-am/golem-generator@^0.5.1
 npx prisma generate      # required before your code will type-check
 ```
 
-`@eleven-am/golem-authorizer` moves to `0.5.0` with them. `@eleven-am/golem-queue` stays at `0.2.1` and needs no change.
+`@eleven-am/golem-authorizer` moves to `0.5.1` with them. `@eleven-am/golem-queue` moves to `0.2.2`, which adds optional job typing and changes nothing you already have.
 
 ---
 
@@ -96,11 +96,16 @@ Golem now registers your schema with itself, so nothing schema-specific needs im
 +import { ComputedField } from '@eleven-am/golem';
 ```
 
-The generator emits a `declare module` block registering your models and Prisma types. You never write it, and you should not edit it. Everything stays fully typed.
+The generator emits a `declare global { interface GolemRegister { … } }` block registering your models and Prisma types. You never write it, and you should not edit it. Everything stays fully typed. Being global rather than module-scoped is what lets other Golem packages read the same registration without depending on each other.
 
 You still import the client and `getDatamodel()` from `./generated/golem` when wiring the module — that part is unchanged.
 
-**Regenerate before type-checking**, or the registration will not exist yet and your types will silently loosen rather than error.
+**Regenerate before type-checking.** As of 0.5.1 a missing registration is a compile error naming its own cause, rather than silent type loss:
+
+```
+Argument of type '"Article"' is not assignable to parameter of type
+'"GOLEM_SCHEMA_NOT_REGISTERED_RUN_PRISMA_GENERATE"'.
+```
 
 ---
 
@@ -164,7 +169,7 @@ If you mount the frontend only in production, register the module conditionally 
 
 ## Upgrade checklist
 
-1. `npm i` the four packages at `^0.5.0`, then `npx prisma generate`.
+1. `npm i` the four packages at `^0.5.1`, then `npx prisma generate`.
 2. Add `@Parent()` to every computed field. Grep for `@ComputedField`.
 3. Add `fieldResolverEnhancers` to the GraphQL module factory.
 4. Move `ComputedField`, `GolemRequest`, `GolemResult` imports to `@eleven-am/golem`.
@@ -176,5 +181,28 @@ If you mount the frontend only in production, register the module conditionally 
 
 - **A computed field returns `undefined`** — missing `@Parent()`.
 - **Guards on computed fields do not fire** — missing `fieldResolverEnhancers`.
-- **Types went loose instead of erroring** — you have not run `npx prisma generate`, or the generated module is outside your `tsconfig` include.
+- **`'"Article"' is not assignable to '"GOLEM_SCHEMA_NOT_REGISTERED_RUN_PRISMA_GENERATE"'`** — you have not run `npx prisma generate`, or the generated module is outside your `tsconfig` include. As of 0.5.1 this is a compile error rather than silent type loss.
 - **Boot fails naming two models** — one extension class serves two models; split it.
+
+---
+
+## 6. Optional: typed queue jobs (0.5.2 of `golem-queue`, shipped as 0.2.2)
+
+`queue.add` and `@QueueHandler` narrow against a job map if you declare one:
+
+```ts
+declare global {
+  interface GolemRegister {
+    jobs: {
+      'article-extract': { articleId: string };
+      'article-summarize': { articleId: string; model: string };
+    };
+  }
+}
+```
+
+A typo'd job type and a payload the handler does not expect both become compile errors. Previously `queue.add('artcile-extract', …)` compiled, enqueued, and the row sat unprocessed forever with no error anywhere.
+
+Job types have no source Golem can generate from, so unlike models this block is written by hand. Put it anywhere in your program.
+
+**Declaring jobs is optional and stays permissive.** Omit the block and `queue.add` accepts any string and any payload exactly as before, so adoption is incremental. Model registration fails closed because the generator always provides it — its absence means you did not regenerate. Nothing provides job types, so their absence means you chose not to type them.

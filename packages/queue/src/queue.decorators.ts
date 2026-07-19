@@ -1,11 +1,12 @@
 import { SetMetadata } from '@nestjs/common';
+import type { JobType } from './register';
 
 export const QUEUE_HANDLER_METADATA = 'GOLEM_QUEUE_HANDLER_METADATA';
 
 export const QUEUE_OBSERVER_METADATA = 'GOLEM_QUEUE_OBSERVER_METADATA';
 
-export interface QueueHandlerConfig {
-  readonly type: string;
+export interface QueueHandlerConfig<TType extends JobType = JobType> {
+  readonly type: TType;
   readonly concurrency?: number;
   readonly timeoutMs?: number;
 }
@@ -19,7 +20,9 @@ export interface ResolvedQueueHandlerConfig {
 const DEFAULT_CONCURRENCY = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 
-export function QueueHandler(config: QueueHandlerConfig): ClassDecorator {
+export function QueueHandler<TType extends JobType>(
+  config: QueueHandlerConfig<TType>,
+): ClassDecorator {
   const resolved: ResolvedQueueHandlerConfig = {
     type: config.type,
     concurrency: config.concurrency ?? DEFAULT_CONCURRENCY,

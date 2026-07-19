@@ -64,3 +64,4 @@ export {
   type GolemQueueRootOptions,
   type GolemQueueRootAsyncOptions,
 } from './queue.module';
+export type { RegisteredJobs, JobType, JobPayload } from './register';

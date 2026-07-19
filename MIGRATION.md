@@ -1,3 +1,41 @@
+# Migrating to 0.5.1
+
+Regenerate first: `npx prisma generate`. This release changes what the generated module emits.
+
+## Registration is global, and missing registration now fails loudly
+
+The generated module registers your schema through a global `GolemRegister` interface rather than a module augmentation. You never write or read it; the change matters for two reasons.
+
+**Any Golem package can now read the registration without depending on the others.** That is what lets `@eleven-am/golem-queue` type job payloads while keeping zero dependency on `@eleven-am/golem`.
+
+**Forgetting to regenerate is now a compile error rather than silent type loss.** Previously an unregistered schema fell back to permissive types, so model names stopped being checked and nothing said so. Now the first decorated model name reports:
+
+```
+Argument of type '"Article"' is not assignable to parameter of type
+'"GOLEM_SCHEMA_NOT_REGISTERED_RUN_PRISMA_GENERATE"'.
+```
+
+If you see that, run `npx prisma generate`.
+
+## Typed queue jobs (optional)
+
+`queue.add` and `@QueueHandler` now narrow against a job map, if you declare one:
+
+```typescript
+declare global {
+  interface GolemRegister {
+    jobs: {
+      'article-extract': { articleId: string };
+      'article-summarize': { articleId: string; model: string };
+    };
+  }
+}
+```
+
+A typo'd job type and a payload the handler does not expect both become compile errors. Job types have no source Golem can generate from, so this block is written by hand — put it anywhere in your program.
+
+Unlike model registration, **declaring jobs stays optional**: if you omit the block, `queue.add` accepts any string and any payload exactly as before. Model registration fails closed because the generator always provides it, so its absence means you did not regenerate. Nothing provides job types, so their absence means you chose not to type them.
+
 # Migrating to 0.5.0
 
 Golem now registers your schema with the package itself, so decorators and hook payload types are checked against your models without importing anything from the generated folder. Regenerate first: `npx prisma generate`.

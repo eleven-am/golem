@@ -5,15 +5,24 @@ import type {
   HookResultFor,
 } from '@eleven-am/golem-core';
 
-export interface Register {}
+declare global {
+  interface GolemRegister {}
+}
 
-export type RegisteredModels = Register extends { models: infer TModels extends object }
+export interface GolemSchemaNotRegistered {
+  GOLEM_SCHEMA_NOT_REGISTERED_RUN_PRISMA_GENERATE: never;
+}
+
+export type RegisteredModels = GolemRegister extends { models: infer TModels extends object }
   ? TModels
-  : Record<string, string>;
+  : GolemSchemaNotRegistered;
 
-export type RegisteredTypes = Register extends { types: infer TTypes extends GolemTypesMap }
+export type RegisteredTypes = GolemRegister extends { types: infer TTypes extends GolemTypesMap }
   ? TTypes
-  : GolemTypesMap;
+  : Record<
+      keyof GolemSchemaNotRegistered,
+      GolemTypesMap[string]
+    >;
 
 export type GolemModelName = keyof RegisteredTypes & string;
 

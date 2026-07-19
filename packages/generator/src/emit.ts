@@ -56,8 +56,8 @@ export interface GolemModels {
 ${modelEntries}
 }
 
-declare module '@eleven-am/golem' {
-  interface Register {
+declare global {
+  interface GolemRegister {
     models: GolemModels;
     types: GolemTypes;
   }
