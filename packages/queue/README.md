@@ -87,6 +87,22 @@ A `JobEvent` carries `id`, `type`, `payload`, `attempt`, `maxAttempts`, `scope`,
 - Anything else retries with exponential backoff + jitter until `maxAttempts`.
 - `signal` aborts on timeout, cancellation, and shutdown — pass it to your I/O.
 
+### One job at a time per scope
+
+Set `serializeByScope` when two jobs sharing a scope must never run together — one send per account, one export per workspace:
+
+```ts
+@QueueHandler({ type: 'message.send', concurrency: 8, serializeByScope: true })
+```
+
+Concurrency still applies across scopes: eight accounts send in parallel, one job per account at a time. Jobs with no scope are unaffected.
+
+This is enforced in the store, not in the process, so it holds across N workers. A candidate is skipped when another job in its scope holds a **live** lease — `status = 'RUNNING' AND leaseExpiresAt > now`. A crashed worker's stranded row is not a blocker, or it would freeze its whole scope until lease recovery ran, which is precisely what recovery exists to fix.
+
+`PrismaJobStore` needs `$executeRawUnsafe` on the client for this: the predicate and the claim have to be a single statement, and a same-table `NOT EXISTS` cannot be expressed through the delegate's where-shape. Check-then-claim across two statements races, on every engine — SQLite's single writer serializes statements, not a transaction with a read in the middle. If your `Job` model is `@@map`ped, pass the physical name: `new PrismaJobStore(prisma, { table: 'queue_jobs' })`.
+
+`InMemoryJobStore` enforces the same rule, so tests exercise production semantics.
+
 ## 4. Register the module
 
 ```ts
@@ -94,12 +110,20 @@ import { GolemQueueModule, PrismaJobStore } from '@eleven-am/golem-queue';
 
 GolemQueueModule.forRootAsync({
   imports: [PrismaModule],
-  inject: [PrismaService],
-  useFactory: (prisma: PrismaService) => new PrismaJobStore(prisma),
+  inject: [PrismaService, ConfigService],
+  useFactory: (prisma: PrismaService, config: ConfigService) => ({
+    store: new PrismaJobStore(prisma),
+    pollIntervalMs: config.get('QUEUE_POLL_MS'),
+    leaseDurationMs: config.get('QUEUE_LEASE_MS'),
+  }),
   handlers: [ExtractHandler],
   observers: [PipelineStatusObserver],
 })
 ```
+
+The factory may return a bare store, or `{ store, ...options }` when the options themselves come from injected config. Anything it returns wins over statically supplied options.
+
+`handlers` is optional, so a process that only enqueues — an API role in a split deployment — registers none and runs no dispatcher work.
 
 ## 5. Enqueue
 

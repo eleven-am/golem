@@ -207,6 +207,7 @@ export class JobDispatcher implements OnModuleDestroy {
         now,
         leaseOwner: this.workerId,
         leaseExpiresAt,
+        ...(handler.serializeByScope ? { serializeScope: true } : {}),
         ...(recoveringExpiredLease
           ? {
               attempts: recoveredAttempts,

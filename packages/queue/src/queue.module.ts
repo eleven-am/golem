@@ -33,9 +33,27 @@ export interface GolemQueueRootOptions extends RegistrationOptions {
   store: JobStore;
 }
 
+export type GolemQueueAsyncFactoryResult =
+  | JobStore
+  | ({ store: JobStore } & GolemQueueOptions);
+
 export interface GolemQueueRootAsyncOptions extends RegistrationOptions {
-  useFactory: (...args: never[]) => JobStore | Promise<JobStore>;
+  useFactory: (
+    ...args: never[]
+  ) => GolemQueueAsyncFactoryResult | Promise<GolemQueueAsyncFactoryResult>;
   inject?: unknown[];
+}
+
+const GOLEM_QUEUE_ASYNC_RESULT = 'GOLEM_QUEUE_ASYNC_RESULT';
+
+function isFactoryResultWithOptions(
+  value: GolemQueueAsyncFactoryResult,
+): value is { store: JobStore } & GolemQueueOptions {
+  return typeof value === 'object' && value !== null && 'store' in value;
+}
+
+function resolvedStore(value: GolemQueueAsyncFactoryResult): JobStore {
+  return isFactoryResultWithOptions(value) ? value.store : value;
 }
 
 const CORE_PROVIDERS = [
@@ -48,13 +66,16 @@ const CORE_PROVIDERS = [
 
 const CORE_EXPORTS = [JobQueue, JobCancellationRegistry, JobObserverRegistry];
 
-function registrationProviders(options: RegistrationOptions): Provider[] {
+function registrationProviders(
+  options: RegistrationOptions,
+  optionsProvider?: Provider,
+): Provider[] {
   const handlers = options.handlers ?? [];
   const observers = options.observers ?? [];
   return [
     ...handlers,
     ...observers,
-    {
+    optionsProvider ?? {
       provide: GOLEM_QUEUE_OPTIONS,
       useValue: resolveQueueOptions(options),
     },
@@ -96,11 +117,25 @@ export class GolemQueueModule {
       imports: [DiscoveryModule, ...(options.imports ?? [])],
       providers: [
         {
-          provide: JOB_STORE,
+          provide: GOLEM_QUEUE_ASYNC_RESULT,
           useFactory: options.useFactory,
           inject: options.inject as never[],
         },
-        ...registrationProviders(options),
+        {
+          provide: JOB_STORE,
+          useFactory: resolvedStore,
+          inject: [GOLEM_QUEUE_ASYNC_RESULT],
+        },
+        ...registrationProviders(options, {
+          provide: GOLEM_QUEUE_OPTIONS,
+          useFactory: (resolved: GolemQueueAsyncFactoryResult) =>
+            resolveQueueOptions(
+              isFactoryResultWithOptions(resolved)
+                ? { ...options, ...resolved }
+                : options,
+            ),
+          inject: [GOLEM_QUEUE_ASYNC_RESULT],
+        }),
         ...CORE_PROVIDERS,
       ],
       exports: CORE_EXPORTS,

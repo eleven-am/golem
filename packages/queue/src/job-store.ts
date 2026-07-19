@@ -38,6 +38,23 @@ export interface ClaimInput {
   readonly leaseExpiresAt: Date;
   readonly attempts?: number;
   readonly lastError?: string;
+  /**
+   * Refuse the claim when another job in the same scope holds a live lease.
+   *
+   * A store MUST evaluate this predicate and the claim itself atomically. Two
+   * workers polling the same scope will otherwise both observe no live holder
+   * and both claim, which is the exact outcome the flag exists to prevent.
+   * Reading and then writing in separate statements is not sufficient on any
+   * engine, including SQLite, whose single writer serializes statements rather
+   * than transactions with reads interleaved.
+   *
+   * "Live" means `status = 'RUNNING' AND leaseExpiresAt > now`. A crashed
+   * worker leaves a RUNNING row behind; treating that as a holder would block
+   * the whole scope until lease recovery ran, defeating the recovery. The
+   * candidate's own row is never its own blocker, or reclaiming an expired
+   * lease would block on itself.
+   */
+  readonly serializeScope?: boolean;
 }
 
 export interface FailExpiredLeaseInput {

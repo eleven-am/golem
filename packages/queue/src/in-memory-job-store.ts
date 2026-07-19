@@ -117,12 +117,35 @@ export class InMemoryJobStore implements JobStore {
           job.leaseExpiresAt !== null &&
           job.leaseExpiresAt <= input.now;
     if (!claimable) return Promise.resolve(false);
+    if (input.serializeScope && job.scopeType !== null && this.scopeIsBusy(job, input.now)) {
+      return Promise.resolve(false);
+    }
     job.status = 'RUNNING';
     job.leaseOwner = input.leaseOwner;
     job.leaseExpiresAt = input.leaseExpiresAt;
     if (input.attempts !== undefined) job.attempts = input.attempts;
     if (input.lastError !== undefined) job.lastError = input.lastError;
     return Promise.resolve(true);
+  }
+
+  private scopeIsBusy(
+    candidate: { id: string; scopeType: string | null; scopeId: string | null },
+    now: Date,
+  ): boolean {
+    for (const other of this.jobs.values()) {
+      if (
+        other.id !== candidate.id &&
+        other.scopeType !== null &&
+        other.scopeType === candidate.scopeType &&
+        other.scopeId === candidate.scopeId &&
+        other.status === 'RUNNING' &&
+        other.leaseExpiresAt !== null &&
+        other.leaseExpiresAt > now
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   renewLease(input: RenewLeaseInput): Promise<boolean> {

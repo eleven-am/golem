@@ -49,9 +49,27 @@ interface PrismaStatusGroupByDelegate {
 
 export interface PrismaClientLike {
   readonly job: PrismaJobDelegate;
+  /**
+   * Required only when a handler sets `serializeByScope`. The scope predicate
+   * and the claim have to land in one statement, and a same-table NOT EXISTS
+   * is not expressible through the delegate's where-shape.
+   */
+  $executeRawUnsafe?(query: string, ...values: unknown[]): Promise<number>;
+}
+
+export interface PrismaJobStoreOptions {
+  /** Physical table name, when the Job model is mapped to something else. */
+  readonly table?: string;
 }
 
 const UNIQUE_VIOLATION = 'P2002';
+
+function quoteIdentifier(name: string): string {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
+    throw new Error(`Unsupported job table name: ${name}`);
+  }
+  return `"${name}"`;
+}
 
 const CANCELLABLE_SELECT = {
   id: true,
@@ -81,10 +99,17 @@ function ids(rows: Record<string, unknown>[]): string[] {
 }
 
 export class PrismaJobStore implements JobStore {
-  constructor(private readonly prisma: PrismaClientLike) {}
+  private readonly table: string;
+
+  constructor(
+    private readonly prisma: PrismaClientLike,
+    options: PrismaJobStoreOptions = {},
+  ) {
+    this.table = options.table ?? 'Job';
+  }
 
   withClient(client: PrismaClientLike): PrismaJobStore {
-    return new PrismaJobStore(client);
+    return new PrismaJobStore(client, { table: this.table });
   }
 
   async create(input: CreateJobInput): Promise<boolean> {
@@ -137,6 +162,9 @@ export class PrismaJobStore implements JobStore {
   }
 
   async claim(input: ClaimInput): Promise<boolean> {
+    if (input.serializeScope) {
+      return this.claimSerializedByScope(input);
+    }
     const guard =
       input.fromStatus === 'PENDING'
         ? { status: 'PENDING', runAt: { lte: input.now } }
@@ -154,6 +182,52 @@ export class PrismaJobStore implements JobStore {
       },
     });
     return result.count === 1;
+  }
+
+  private async claimSerializedByScope(input: ClaimInput): Promise<boolean> {
+    const execute = this.prisma.$executeRawUnsafe;
+    if (!execute) {
+      throw new Error(
+        'A handler sets serializeByScope, which needs $executeRawUnsafe on the Prisma client passed to PrismaJobStore. The scope predicate and the claim must be one statement.',
+      );
+    }
+    const table = quoteIdentifier(this.table);
+    const guard =
+      input.fromStatus === 'PENDING'
+        ? `"status" = 'PENDING' AND "runAt" <= ?`
+        : `"status" = 'RUNNING' AND "leaseExpiresAt" <= ?`;
+    const sets = [
+      `"status" = 'RUNNING'`,
+      `"leaseOwner" = ?`,
+      `"leaseExpiresAt" = ?`,
+    ];
+    const values: unknown[] = [input.leaseOwner, input.leaseExpiresAt];
+    if (input.attempts !== undefined) {
+      sets.push(`"attempts" = ?`);
+      values.push(input.attempts);
+    }
+    if (input.lastError !== undefined) {
+      sets.push(`"lastError" = ?`);
+      values.push(input.lastError);
+    }
+    values.push(input.id, input.now, input.now);
+    const affected = await execute.call(
+      this.prisma,
+      `UPDATE ${table} SET ${sets.join(', ')}
+       WHERE "id" = ?
+         AND ${guard}
+         AND NOT EXISTS (
+           SELECT 1 FROM ${table} AS active
+           WHERE active."id" <> ${table}."id"
+             AND active."scopeType" IS NOT NULL
+             AND active."scopeType" = ${table}."scopeType"
+             AND active."scopeId" = ${table}."scopeId"
+             AND active."status" = 'RUNNING'
+             AND active."leaseExpiresAt" > ?
+         )`,
+      ...values,
+    );
+    return affected === 1;
   }
 
   async renewLease(input: RenewLeaseInput): Promise<boolean> {

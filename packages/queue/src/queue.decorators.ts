@@ -9,12 +9,14 @@ export interface QueueHandlerConfig<TType extends JobType = JobType> {
   readonly type: TType;
   readonly concurrency?: number;
   readonly timeoutMs?: number;
+  readonly serializeByScope?: boolean;
 }
 
 export interface ResolvedQueueHandlerConfig {
   readonly type: string;
   readonly concurrency: number;
   readonly timeoutMs: number;
+  readonly serializeByScope: boolean;
 }
 
 const DEFAULT_CONCURRENCY = 1;
@@ -27,6 +29,7 @@ export function QueueHandler<TType extends JobType>(
     type: config.type,
     concurrency: config.concurrency ?? DEFAULT_CONCURRENCY,
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    serializeByScope: config.serializeByScope ?? false,
   };
   return (target) => {
     SetMetadata(QUEUE_HANDLER_METADATA, resolved)(target);

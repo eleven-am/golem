@@ -219,3 +219,42 @@ queue → 110 SUCCEEDED, 1 RUNNING
 ```
 
 Aggregation answers are consistent with pre-upgrade values (corpus grew because the watcher kept recording during the upgrade). No regressions observed.
+
+---
+
+# Addendum 3 — eros #3 scale acceptance (the last open item)
+
+Date: 2026-07-19
+Tested: `@eleven-am/golem-core@0.5.2`, `@eleven-am/golem@0.5.2`, `-authorizer@0.5.2`, `-generator@0.5.2`, `@eleven-am/golem-queue@0.3.1`
+Corpus: one user, **494,193 plays** spanning 2016-02 → 2026-07, SQLite (better-sqlite3 adapter, WAL), 340 MB snapshot
+Verdict: **PASS.** This closes the only acceptance item eros still owed.
+
+## Method
+
+Measured through the **context client** (`forContext(ctx).play.groupBy(...)`) against a `VACUUM INTO` snapshot of the production database, so no dispatcher or watcher competed for the file. The caller was bound through the request-principal seam, so every query carried the real CASL constraint (`{ userId }`) compiled into the SQL.
+
+## Results
+
+| Query | Wall clock | Groups |
+|---|---:|---:|
+| `groupBy(['trackId'])`, `_count` + `_sum`, **no take** | **1,142 ms** | **34,424** |
+| `groupBy(['primaryArtistId'])`, `_count` + `_sum`, no take | 1,897 ms | 8,875 |
+| `groupBy(['trackId'])` ordered by `_sum.msPlayed`, take 20 | 479 ms | 20 |
+| `groupBy(['playedDate'])` — daily buckets over a decade | 46 ms | 3,549 |
+
+## Correctness checks
+
+- **No truncation.** 34,424 groups returned; distinct `trackId` values in the result set = 34,424, matching `COUNT(DISTINCT trackId)` computed independently in SQL.
+- **No cap on the programmatic stance.** The GraphQL surface's `maxGroups: 100` guardrail correctly does **not** apply to `forContext`, exactly as documented.
+- **Scoping intact at scale.** Sum of all group `_count._all` values = 494,193 = the caller's total play count. The constraint was merged, not dropped, and nothing leaked in or out.
+- **Ordering by measure works at full cardinality** — the top-20-by-time query ranks across all 34k groups rather than a truncated subset.
+
+## Observations worth recording
+
+1. **Higher cardinality was faster than lower.** Grouping 34,424 tracks took 1.14 s while grouping 8,875 artists took 1.90 s — because `primaryArtistId` is nullable and less selectively indexed than `trackId`. Group count is not the cost driver; index shape is.
+2. **Time-bucket grouping is essentially free** (46 ms for 3,549 daily buckets) — good evidence that the stored-bucket-column pattern recommended in the brief's §6 is a sound substitute for expression grouping, not a compromise.
+3. **A full-cardinality group-by is a viable building block.** At ~1 s for half a million rows on SQLite, the two-phase rollup pattern (group by local FK, then resolve the hop in memory) is practical — which is the fallback the brief proposed instead of relation-hop grouping. eros ultimately chose denormalization (`Play.primaryArtistId`) for its hot path, but the fallback is measurably real.
+
+## Status of the original acceptance list
+
+All eros acceptance criteria from the brief are now met: cross-user isolation on grouped sums (Addendum 1), null-over-zero-rows, order-by-measure with take, zero schema diff elsewhere, `count` non-regression, and now **#3 scale**. No open items remain from eros against golem.

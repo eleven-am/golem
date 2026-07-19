@@ -28,6 +28,7 @@ export interface JobHandler<TType extends JobType = JobType> extends JobWork<TTy
   readonly type: TType;
   readonly concurrency: number;
   readonly timeoutMs: number;
+  readonly serializeByScope?: boolean;
 }
 
 export class TerminalJobError extends Error {

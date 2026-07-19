@@ -116,3 +116,84 @@ describe('PrismaJobStore lease renewal', () => {
     ).resolves.toBe(false);
   });
 });
+
+describe('PrismaJobStore scope serialization', () => {
+  function client(affected: number) {
+    const calls: Array<{ sql: string; values: unknown[] }> = [];
+    return {
+      calls,
+      prisma: {
+        job: {} as never,
+        $executeRawUnsafe(sql: string, ...values: unknown[]) {
+          calls.push({ sql, values });
+          return Promise.resolve(affected);
+        },
+      },
+    };
+  }
+
+  const input = {
+    id: 'job-1',
+    fromStatus: 'PENDING' as const,
+    now: new Date('2026-01-01T00:00:00.000Z'),
+    leaseOwner: 'worker-1',
+    leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
+    serializeScope: true,
+  };
+
+  it('claims and checks the scope in one statement', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    expect(await store.claim(input)).toBe(true);
+    expect(calls).toHaveLength(1);
+
+    const sql = calls[0].sql.replace(/\s+/g, ' ');
+    expect(sql).toMatch(/^UPDATE "Job" SET/);
+    expect(sql).toContain('NOT EXISTS');
+  });
+
+  it('only treats a live lease as a blocker', async () => {
+    const { calls, prisma } = client(1);
+    await new PrismaJobStore(prisma).claim(input);
+
+    const sql = calls[0].sql.replace(/\s+/g, ' ');
+    expect(sql).toContain(`active."status" = 'RUNNING'`);
+    expect(sql).toContain('active."leaseExpiresAt" > ?');
+  });
+
+  it('never blocks a candidate on its own row', async () => {
+    const { calls, prisma } = client(1);
+    await new PrismaJobStore(prisma).claim(input);
+
+    expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('active."id" <> "Job"."id"');
+  });
+
+  it('reports a lost race as a failed claim', async () => {
+    const { prisma } = client(0);
+    expect(await new PrismaJobStore(prisma).claim(input)).toBe(false);
+  });
+
+  it('leaves ordinary claims on the delegate path', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore({
+      ...prisma,
+      job: { updateMany: () => Promise.resolve({ count: 1 }) } as never,
+    });
+
+    expect(await store.claim({ ...input, serializeScope: undefined })).toBe(true);
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses serialization when the client cannot run a statement', async () => {
+    const store = new PrismaJobStore({ job: {} as never });
+    await expect(store.claim(input)).rejects.toThrow(/serializeByScope/);
+  });
+
+  it('honours a mapped table name', async () => {
+    const { calls, prisma } = client(1);
+    await new PrismaJobStore(prisma, { table: 'queue_jobs' }).claim(input);
+
+    expect(calls[0].sql).toContain('"queue_jobs"');
+  });
+});
