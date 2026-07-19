@@ -42,3 +42,21 @@ export type GolemResult<
 > = HookResultFor<RegisteredTypes, TModel, TOperation>;
 
 export type GolemEntity<TModel extends GolemModelName> = RegisteredTypes[TModel]['entity'];
+
+export type GraphQLToTS<TRef extends string> = TRef extends `${infer TBase}!`
+  ? NonNullable<GraphQLToTS<TBase>>
+  : TRef extends `[${infer TItem}]`
+    ? Array<GraphQLToTS<TItem>>
+    : TRef extends 'String' | 'ID'
+      ? string | null
+      : TRef extends 'Int' | 'Float'
+        ? number | null
+        : TRef extends 'Boolean'
+          ? boolean | null
+          : TRef extends 'DateTime'
+            ? Date | null
+            : unknown;
+
+export type ComputedFieldReturn<TRef extends string> =
+  | GraphQLToTS<TRef>
+  | Promise<GraphQLToTS<TRef>>;

@@ -49,3 +49,44 @@ void InvalidComputedFields;
 void ValidHooks;
 void InvalidHooks;
 void InvalidHookPayload;
+
+class ReturnTypes {
+  @ComputedField('User', { type: 'String!', requires: ['email'] })
+  ok(): string {
+    return '';
+  }
+
+  @ComputedField('User', { type: 'String!', requires: ['email'] })
+  okAsync(): Promise<string> {
+    return Promise.resolve('');
+  }
+
+  @ComputedField('User', { type: 'Int!' })
+  okInt(): number {
+    return 1;
+  }
+
+  @ComputedField('User', { type: '[String!]!' })
+  okList(): string[] {
+    return [];
+  }
+
+  @ComputedField('User', { type: 'Post!' })
+  okObject(): { id: string } {
+    return { id: '' };
+  }
+
+  // @ts-expect-error String! cannot be satisfied by a number
+  @ComputedField('User', { type: 'String!' })
+  wrongScalar(): number {
+    return 1;
+  }
+
+  // @ts-expect-error a non-null field cannot return null
+  @ComputedField('User', { type: 'String!' })
+  wrongNullability(): string | null {
+    return null;
+  }
+}
+
+void ReturnTypes;

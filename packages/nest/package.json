@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -8,7 +8,7 @@
     "test": "jest"
   },
   "dependencies": {
-    "@eleven-am/golem-core": "^0.5.1",
+    "@eleven-am/golem-core": "^0.5.2",
     "graphql-subscriptions": "^3.0.0"
   },
   "peerDependencies": {

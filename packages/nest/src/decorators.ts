@@ -1,5 +1,9 @@
 import { SetMetadata, UseFilters } from '@nestjs/common';
-import type { GolemFieldName, RegisteredModels } from './register';
+import type {
+  ComputedFieldReturn,
+  GolemFieldName,
+  RegisteredModels,
+} from './register';
 import { Mutation, Query, ResolveField, Resolver } from '@nestjs/graphql';
 import { GolemHookOperation } from '@eleven-am/golem-core';
 import { GolemGraphQLExceptionFilter } from './graphql-error.filter';
@@ -43,8 +47,11 @@ export const GOLEM_COMPUTED_FIELD = 'GOLEM_COMPUTED_FIELD';
 export const GOLEM_COMPUTED_MODELS = 'GOLEM_COMPUTED_MODELS';
 export const GOLEM_CUSTOM_OPERATION = 'GOLEM_CUSTOM_OPERATION';
 
-export interface ComputedFieldOptions<TField extends string = string> {
-  type: string;
+export interface ComputedFieldOptions<
+  TField extends string = string,
+  TType extends string = string,
+> {
+  type: TType;
   requires?: readonly TField[];
   args?: Record<string, string>;
   name?: string;
@@ -64,11 +71,18 @@ export interface CustomOperationMetadata extends CustomOperationOptions {
   kind: 'query' | 'mutation';
 }
 
-export function ComputedField<TModel extends keyof RegisteredModels & string>(
+export function ComputedField<
+  TModel extends keyof RegisteredModels & string,
+  TType extends string,
+>(
   model: TModel,
-  options: ComputedFieldOptions<GolemFieldName<TModel>>,
-): MethodDecorator {
-  return (target, key, descriptor) => {
+  options: ComputedFieldOptions<GolemFieldName<TModel>, TType>,
+): <TReturn extends ComputedFieldReturn<TType>>(
+  target: object,
+  key: string | symbol,
+  descriptor: TypedPropertyDescriptor<(...args: never[]) => TReturn>,
+) => void {
+  return ((target: object, key: string | symbol, descriptor: PropertyDescriptor) => {
     SetMetadata<string, ComputedFieldMetadata>(GOLEM_COMPUTED_FIELD, {
       model,
       ...options,
@@ -85,7 +99,7 @@ export function ComputedField<TModel extends keyof RegisteredModels & string>(
     Resolver(model)(constructor);
     ResolveField(options.name ?? String(key))(target, key, descriptor);
     UseFilters(GolemGraphQLExceptionFilter)(target, key, descriptor);
-  };
+  }) as ReturnType<typeof ComputedField<TModel, TType>>;
 }
 
 export function CustomQuery(options: CustomOperationOptions): MethodDecorator {
