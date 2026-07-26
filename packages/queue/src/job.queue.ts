@@ -197,16 +197,9 @@ export class JobQueue {
     olderThan: Date;
     statuses?: readonly JobStatus[];
   }): Promise<number> {
-    const windows = Object.values(this.options.resources ?? {})
-      .map((resource) => (resource.ratePerMinute === undefined ? 0 : 60_000))
-      .filter((window) => window > 0);
-    const longest = windows.length === 0 ? undefined : Math.max(...windows);
     return this.store.deleteTerminalBefore({
       statuses: input.statuses ?? TERMINAL,
       before: input.olderThan,
-      ...(longest === undefined
-        ? {}
-        : { keepStartedAfter: new Date(Date.now() - longest) }),
     });
   }
 

@@ -1,4 +1,5 @@
 import type {
+  ClaimPool,
   CancellableJob,
   ClaimCandidate,
   ClaimInput,
@@ -48,9 +49,18 @@ interface PrismaStatusGroupByDelegate {
   }): Promise<Array<{ status: JobStatus; _count: { _all: number } }>>;
 }
 
+export interface GuardRow {
+  readonly windowStart: Date | null;
+  readonly spent: bigint | number;
+}
+
 export interface PrismaGuardDelegate {
-  create(args: { data: Data }): Promise<unknown>;
-  update(args: { where: Where; data: Data }): Promise<unknown>;
+  upsert(args: {
+    where: Where;
+    create: Data;
+    update: Data;
+  }): Promise<GuardRow>;
+  update(args: { where: Where; data: Data }): Promise<GuardRow>;
 }
 
 export interface PrismaClientLike {
@@ -70,6 +80,41 @@ export interface PrismaClientLike {
 }
 
 const UNIQUE_VIOLATION = 'P2002';
+
+interface Budget {
+  readonly key: string;
+  readonly limit: number;
+  readonly cost: number;
+  readonly spent: number;
+  readonly rolled: boolean;
+}
+
+export function readBudget(
+  pool: ClaimPool | undefined,
+  held: ReadonlyMap<string, GuardRow>,
+  now: Date,
+): Budget | undefined {
+  if (
+    pool === undefined ||
+    pool.rateLimit === undefined ||
+    pool.rateWindowMs === undefined
+  ) {
+    return undefined;
+  }
+  const key = `pool:${pool.name}`;
+  const row = held.get(key);
+  if (row === undefined) return undefined;
+  const opened = row.windowStart;
+  const rolled =
+    opened == null || now.getTime() - opened.getTime() >= pool.rateWindowMs;
+  return {
+    key,
+    limit: pool.rateLimit,
+    cost: pool.rateCost ?? 1,
+    spent: rolled ? 0 : Number(row.spent),
+    rolled,
+  };
+}
 
 
 
@@ -108,8 +153,6 @@ export class PrismaJobStore implements JobStore {
     private readonly prisma: PrismaClientLike,
   ) {
   }
-
-  private readonly knownGuards = new Set<string>();
 
   withClient(client: PrismaClientLike): PrismaJobStore {
     return new PrismaJobStore(client);
@@ -176,7 +219,6 @@ export class PrismaJobStore implements JobStore {
         'A handler uses a claim guard (serializeByScope, waitsFor, notWhileRunning, or a resource pool), which needs $transaction and a jobGuard delegate on the Prisma client passed to PrismaJobStore. Add the JobGuard model to your schema and migrate.',
       );
     }
-    await this.ensureGuardRows(guardKeys);
     return runTransaction(async (tx) => {
       const guardDelegate = tx.jobGuard;
       if (!guardDelegate) {
@@ -187,29 +229,43 @@ export class PrismaJobStore implements JobStore {
       // a read-write conflict the engine would not serialize into a write-write
       // one it must, and on SQLite it takes the writer lock up front rather
       // than failing to upgrade a deferred reader mid-transaction.
+      const held = new Map<string, GuardRow>();
       for (const key of guardKeys) {
-        await guardDelegate.update({
-          where: { key },
-          data: { seq: { increment: 1 } },
-        });
+        held.set(
+          key,
+          // Upsert rather than update: the row is created on first use, and a
+          // row deleted out from under a long-lived worker is recreated instead
+          // of failing every later claim. Both paths write, so both take the
+          // lock the guard depends on.
+          await guardDelegate.upsert({
+            where: { key },
+            create: { key, seq: 1 },
+            update: { seq: { increment: 1 } },
+          }),
+        );
+      }
+      const budget = readBudget(input.pool, held, input.now);
+      if (budget !== undefined && budget.spent + budget.cost > budget.limit) {
+        return false;
       }
       if (!(await this.guardsAllow(tx, input))) {
         return false;
       }
-      return this.claimUnguarded(tx, input);
-    });
-  }
-
-  private async ensureGuardRows(keys: readonly string[]): Promise<void> {
-    for (const key of keys) {
-      if (this.knownGuards.has(key)) continue;
-      try {
-        await this.prisma.jobGuard?.create({ data: { key } });
-      } catch (error) {
-        if (!isUniqueViolation(error)) throw error;
+      if (!(await this.claimUnguarded(tx, input))) {
+        return false;
       }
-      this.knownGuards.add(key);
-    }
+      if (budget !== undefined) {
+        // Spend only once the job is actually running. Charging before the
+        // claim would bill a budget for work that never started.
+        await guardDelegate.update({
+          where: { key: budget.key },
+          data: budget.rolled
+            ? { windowStart: input.now, spent: budget.cost }
+            : { spent: { increment: budget.cost } },
+        });
+      }
+      return true;
+    });
   }
 
   private async guardsAllow(
@@ -268,26 +324,6 @@ export class PrismaJobStore implements JobStore {
         0,
       );
       if (used + pool.cost > pool.limit) return false;
-    }
-    if (
-      pool !== undefined &&
-      pool.rateLimit !== undefined &&
-      pool.rateWindowStart !== undefined
-    ) {
-      // No status filter: a job that started inside the window spent its budget
-      // whether or not it has finished since.
-      const started = await tx.job.findMany({
-        where: {
-          type: { in: [...pool.types] },
-          startedAt: { gt: pool.rateWindowStart },
-        },
-        select: { type: true },
-      });
-      const spent = started.reduce(
-        (total, row) => total + (pool.rateCosts?.[row.type as string] ?? 1),
-        0,
-      );
-      if (spent + (pool.rateCost ?? 1) > pool.rateLimit) return false;
     }
     return true;
   }
@@ -348,11 +384,9 @@ export class PrismaJobStore implements JobStore {
   async poolUsage(input: {
     types: readonly string[];
     costs: Readonly<Record<string, number>>;
-    rateCosts: Readonly<Record<string, number>>;
-    rateWindowStart?: Date;
     now: Date;
-  }): Promise<{ concurrency: number; rate: number }> {
-    if (input.types.length === 0) return { concurrency: 0, rate: 0 };
+  }): Promise<number> {
+    if (input.types.length === 0) return 0;
     const live = await this.prisma.job.findMany({
       where: {
         type: { in: [...input.types] },
@@ -361,23 +395,10 @@ export class PrismaJobStore implements JobStore {
       },
       select: { type: true },
     });
-    const concurrency = live.reduce(
+    return live.reduce(
       (total, row) => total + (input.costs[row.type as string] ?? 1),
       0,
     );
-    if (input.rateWindowStart === undefined) return { concurrency, rate: 0 };
-    const started = await this.prisma.job.findMany({
-      where: {
-        type: { in: [...input.types] },
-        startedAt: { gt: input.rateWindowStart },
-      },
-      select: { type: true },
-    });
-    const rate = started.reduce(
-      (total, row) => total + (input.rateCosts[row.type as string] ?? 1),
-      0,
-    );
-    return { concurrency, rate };
   }
 
   async renewLease(input: RenewLeaseInput): Promise<boolean> {
@@ -588,14 +609,6 @@ export class PrismaJobStore implements JobStore {
       where: {
         status: { in: [...input.statuses] },
         updatedAt: { lt: input.before },
-        ...(input.keepStartedAfter === undefined
-          ? {}
-          : {
-              OR: [
-                { startedAt: null },
-                { startedAt: { lte: input.keepStartedAfter } },
-              ],
-            }),
       },
     });
     return result.count;

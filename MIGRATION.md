@@ -11,8 +11,10 @@ model Job {
 }
 
 model JobGuard {
-  key String @id
-  seq Int    @default(0)
+  key         String    @id
+  seq         BigInt    @default(0)
+  windowStart DateTime?
+  spent       BigInt    @default(0)
 }
 ```
 

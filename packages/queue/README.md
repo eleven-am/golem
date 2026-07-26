@@ -42,8 +42,10 @@ model Job {
 }
 
 model JobGuard {
-  key String @id
-  seq BigInt @default(0)
+  key         String    @id
+  seq         BigInt    @default(0)
+  windowStart DateTime?
+  spent       BigInt    @default(0)
 }
 ```
 
@@ -221,9 +223,9 @@ Declare either dimension or both. They bound different things and are not interc
 
 The two costs are separate for the same reason. A job that holds one connection while making fifty calls occupies one slot and spends fifty units.
 
-The rate window counts **starts, whatever their status now** — a job that finished ten seconds ago still spent what it called, so it keeps counting until it ages out. A retried job counts each attempt, because it called again. The window slides continuously rather than resetting, so a budget cannot be spent twice across a boundary.
+The budget is a counter on the pool's guard row, not a query over jobs. It records what was spent whether or not the job that spent it still exists, so finishing, retrying, pruning, and cancelling a job all leave the spend in place. **Every attempt of a retrying job is charged**, because every attempt called.
 
-Retention respects this: `prune` keeps terminal rows that started inside the longest configured window, however old the cutoff you pass. Deleting them would free budget that was really spent.
+The window is fixed rather than sliding: it opens on the first start and resets once the minute has passed. A fixed window admits up to twice the budget across a boundary — 180 late in one window and 180 early in the next. Size it for the burst you can tolerate, not the average.
 
 No handler changes. A job is claimed only when the summed cost of pool members already holding a live lease leaves room for it, evaluated inside the claiming transaction behind the pool's guard row — so two workers cannot both take the last slot.
 
@@ -250,7 +252,7 @@ Handlers are independent by default: any two types can run at the same time. Two
 @QueueHandler({ type: 'history-import', notWhileRunning: ['track-hydrate'] })
 ```
 
-Neither type is claimed while the other holds a live lease. **Declare it on both sides** — one-sided is almost always a bug, because the undeclared side is free to start while the declared one is already running, which is the overlap you were trying to prevent.
+Neither type is claimed while the other holds a live lease. **Declare it on both sides** — one-sided is almost always a bug, because the undeclared side is free to start while the declared one is already running, which is the overlap you were trying to prevent. When both handlers run in the same process a one-sided declaration is warned about at startup; across processes nothing can see it, so this is on you.
 
 It is safe in both directions: whichever claims first runs, the other waits, and progress is always possible. An expired lease does not block, for the same reason it does not block a scope: that job is not finished, it is about to be reclaimed, and treating it as a blocker would stop the recovery that resolves it.
 
@@ -360,7 +362,7 @@ const store = new InMemoryJobStore();
 
 Implement the full `JobStore` port to back the queue with something other than Prisma.
 
-The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable across SQLite, Postgres and MySQL, and it is the right default for most apps.
+The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable, and it is the right default for most apps. SQLite and Postgres are both exercised against real engines — see `test/sqlite` and `test/postgres`. MySQL is not supported.
 
 Claims that carry a guard serialize on a shared row, which bounds their throughput. A pool serializes every claim of its member types on one row; `serializeByScope` serializes on the **scope type**, not the individual scope, so all scopes of a type share one claim serialization point across the fleet; `waitsFor` and `notWhileRunning` serialize per declared pair. Execution is unaffected — this bounds how fast work is *handed out*, not how much runs at once.
 

@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import { InMemoryJobStore } from './in-memory-job-store';
 import { JobCancellationRegistry } from './job-cancellation.registry';
 import { JobObserverRegistry } from './job-observer.registry';
@@ -1093,7 +1094,7 @@ describe('rate budgets', () => {
     ).toHaveLength(2);
   });
 
-  it('admits again once the window slides past the earlier starts', async () => {
+  it('admits again once the window rolls over', async () => {
     const { store, dispatcher } = build(
       [handler(() => Promise.resolve(), { type: 'hydrate', concurrency: 10 })],
       budget({ ratePerMinute: 1 }),
@@ -1104,12 +1105,61 @@ describe('rate budgets', () => {
     await tick(dispatcher);
     expect(await statusOf(store, first)).toBe('SUCCEEDED');
 
-    const rows = (store as unknown as { jobs: Map<string, { startedAt: Date | null }> }).jobs;
-    const aged = rows.get(first)!;
-    aged.startedAt = new Date(Date.now() - 120_000);
+    const guards = (store as unknown as {
+      guards: Map<string, { windowStart: Date | null }>;
+    }).guards;
+    guards.get('pool:spotify')!.windowStart = new Date(Date.now() - 120_000);
 
     await tick(dispatcher);
     expect(await statusOf(store, second)).toBe('SUCCEEDED');
+  });
+
+  it('charges every attempt of a job that keeps retrying', async () => {
+    // The budget used to be derived from `startedAt`, which a claim overwrites.
+    // A retrying job refunded its own previous attempt and could start without
+    // limit: thirty starts against a budget of two.
+    const store = new InMemoryJobStore();
+    await store.create({
+      type: 'hydrate',
+      payload: '{}',
+      scopeType: null,
+      scopeId: null,
+      runAt: new Date(),
+      maxAttempts: 99,
+    });
+    const id = (await store.findJobs({ limit: 1 }))[0].id;
+    let admitted = 0;
+
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const won = await store.claim({
+        id,
+        fromStatus: 'PENDING',
+        now: new Date(),
+        leaseOwner: 'w',
+        leaseExpiresAt: new Date(Date.now() + 1000),
+        guardKeys: ['pool:spotify'],
+        pool: {
+          name: 'spotify',
+          types: ['hydrate'],
+          costs: {},
+          cost: 1,
+          rateLimit: 2,
+          rateWindowMs: 60_000,
+          rateCost: 1,
+        },
+      });
+      if (!won) break;
+      admitted += 1;
+      await store.retry({
+        id,
+        leaseOwner: 'w',
+        attempts: attempt + 1,
+        lastError: 'boom',
+        runAt: new Date(),
+      });
+    }
+
+    expect(admitted).toBe(2);
   });
 
   it('enforces concurrency and rate together when both are declared', async () => {
@@ -1134,27 +1184,6 @@ describe('rate budgets', () => {
     for (const release of releases) release();
   });
 
-  it('withholds rows inside the rate window when pruning', async () => {
-    const store = new InMemoryJobStore();
-    const recent = await seed(store, { type: 'hydrate' });
-    await store.claim({
-      id: recent,
-      fromStatus: 'PENDING',
-      now: new Date(),
-      leaseOwner: 'w',
-      leaseExpiresAt: new Date(Date.now() + 1000),
-    });
-    await store.complete({ id: recent, leaseOwner: 'w' });
-
-    const deleted = await store.deleteTerminalBefore({
-      statuses: ['SUCCEEDED', 'FAILED'],
-      before: new Date(Date.now() + 60_000),
-      keepStartedAfter: new Date(Date.now() - 60_000),
-    });
-
-    expect(deleted).toBe(0);
-    expect(await statusOf(store, recent)).toBe('SUCCEEDED');
-  });
 });
 
 describe('guard keys across workers hosting different handlers', () => {
@@ -1219,26 +1248,34 @@ describe('guard keys across workers hosting different handlers', () => {
   });
 });
 
-describe('retention and the rate window', () => {
-  it('does not let the automatic sweep free budget that was spent', async () => {
-    const { store, dispatcher } = build(
-      [handler(() => Promise.resolve(), { type: 'hydrate' })],
-      {
-        retention: { olderThanMs: 1 },
-        resources: { api: { ratePerMinute: 5, types: ['hydrate'] } },
-      },
-    );
-    const id = await seed(store, { type: 'hydrate' });
 
-    await tick(dispatcher);
-    expect(
-      (await store.findJobs({ limit: 10 })).find((row) => row.id === id)?.status,
-    ).toBe('SUCCEEDED');
 
-    const internals = dispatcher as unknown as { sweepRetention(): Promise<void> };
-    (dispatcher as unknown as { lastSweepAt: number }).lastSweepAt = 0;
-    await internals.sweepRetention();
+describe('asymmetric overlap declarations', () => {
+  it('warns when only one side declares notWhileRunning', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { dispatcher } = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b' }),
+    ]);
 
-    expect(await store.findJobs({ limit: 10 })).toHaveLength(1);
+    dispatcher.start();
+
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('does not declare it back'));
+    warn.mockRestore();
+    void dispatcher.onModuleDestroy();
+  });
+
+  it('stays quiet when both sides declare it', () => {
+    const warn = jest.spyOn(Logger.prototype, 'warn').mockImplementation(() => undefined);
+    const { dispatcher } = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b', notWhileRunning: ['a'] }),
+    ]);
+
+    dispatcher.start();
+
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining('does not declare it back'));
+    warn.mockRestore();
+    void dispatcher.onModuleDestroy();
   });
 });

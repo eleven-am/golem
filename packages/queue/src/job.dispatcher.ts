@@ -117,16 +117,13 @@ export class JobDispatcher implements OnModuleDestroy {
     const pool = this.poolFor(handler.type);
     if (pool === undefined) return undefined;
     return {
+      name: pool.name,
       types: pool.types,
       limit: pool.limit,
       costs: pool.costs,
       cost: pool.costs[handler.type] ?? 1,
       rateLimit: pool.rateLimit,
-      rateWindowStart:
-        pool.rateWindowMs === undefined
-          ? undefined
-          : new Date(Date.now() - pool.rateWindowMs),
-      rateCosts: pool.rateCosts,
+      rateWindowMs: pool.rateWindowMs,
       rateCost: pool.rateCosts[handler.type] ?? 1,
     };
   }
@@ -179,11 +176,33 @@ export class JobDispatcher implements OnModuleDestroy {
     }
   }
 
+  /**
+   * `notWhileRunning` only prevents overlap if both types declare it. Declared
+   * one way, the undeclared side is free to start underneath the declaring one,
+   * which is the overlap the constraint exists to stop — and it fails silently.
+   * Only visible when both handlers are registered here, so this warns rather
+   * than refuses.
+   */
+  private warnAsymmetricOverlap(): void {
+    for (const [type, handler] of this.handlers) {
+      for (const other of handler.notWhileRunning ?? []) {
+        const peer = this.handlers.get(other);
+        if (peer === undefined) continue;
+        if (!(peer.notWhileRunning ?? []).includes(type)) {
+          this.logger.warn(
+            `${type} declares notWhileRunning: ['${other}'] but ${other} does not declare it back, so ${other} can still start while ${type} is running. Declare it on both sides, or use waitsFor if you meant precedence.`,
+          );
+        }
+      }
+    }
+  }
+
   start(): void {
     if (this.timer || this.stopped) return;
     this.assertNoExclusionCycle();
     this.resolveExclusionGroups();
     this.assertStoreEnforcesGuards();
+    this.warnAsymmetricOverlap();
     this.schedule();
   }
 
@@ -391,30 +410,11 @@ export class JobDispatcher implements OnModuleDestroy {
     const usage = this.store.poolUsage?.bind(this.store);
     if (pool === undefined || usage === undefined) return undefined;
     const now = new Date();
-    const used = await usage({
-      types: pool.types,
-      costs: pool.costs,
-      rateCosts: pool.rateCosts,
-      rateWindowStart:
-        pool.rateWindowMs === undefined
-          ? undefined
-          : new Date(now.getTime() - pool.rateWindowMs),
-      now,
-    });
-    const rooms: number[] = [];
-    if (pool.limit !== undefined) {
-      rooms.push(
-        Math.floor((pool.limit - used.concurrency) / (pool.costs[handler.type] ?? 1)),
-      );
-    }
-    if (pool.rateLimit !== undefined) {
-      rooms.push(
-        Math.floor(
-          (pool.rateLimit - used.rate) / (pool.rateCosts[handler.type] ?? 1),
-        ),
-      );
-    }
-    return rooms.length === 0 ? undefined : Math.min(...rooms);
+    // Concurrency only. The rate budget lives on the guard row and is read
+    // under its lock, so a pre-check would be a guess the claim then repeats.
+    if (pool.limit === undefined) return undefined;
+    const used = await usage({ types: pool.types, costs: pool.costs, now });
+    return Math.floor((pool.limit - used) / (pool.costs[handler.type] ?? 1));
   }
 
   private async isOrderBlocked(handler: JobHandler): Promise<boolean> {
@@ -520,15 +520,6 @@ export class JobDispatcher implements OnModuleDestroy {
     this.executions.set(job.id, { controller, completion });
   }
 
-  private rateWindowFloor(): Date | undefined {
-    const windows = [...this.pools.values()]
-      .map((pool) => pool.rateWindowMs ?? 0)
-      .filter((window) => window > 0);
-    return windows.length === 0
-      ? undefined
-      : new Date(Date.now() - Math.max(...windows));
-  }
-
   private async sweepRetention(): Promise<void> {
     const retention = this.options.retention;
     if (!retention) return;
@@ -537,11 +528,9 @@ export class JobDispatcher implements OnModuleDestroy {
     if (now - this.lastSweepAt < interval) return;
     this.lastSweepAt = now;
     try {
-      const floor = this.rateWindowFloor();
       const pruned = await this.store.deleteTerminalBefore({
         statuses: retention.statuses ?? TERMINAL_STATUSES,
         before: new Date(now - retention.olderThanMs),
-        ...(floor === undefined ? {} : { keepStartedAfter: floor }),
       });
       if (pruned > 0) {
         this.logger.log(`Pruned ${pruned} terminal job(s)`);

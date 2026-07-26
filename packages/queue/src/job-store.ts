@@ -107,18 +107,26 @@ export interface ClaimInput {
 }
 
 export interface ClaimPool {
+  readonly name: string;
   readonly types: readonly string[];
   /** Concurrency: summed cost of members holding a live lease. */
   readonly limit?: number;
   readonly costs: Readonly<Record<string, number>>;
   readonly cost: number;
   /**
-   * Rate: summed cost of members *started* since `rateWindowStart`, whatever
-   * their status now. A finished job still spent its budget, so unlike the
-   * concurrency dimension this counts terminal rows too.
+   * Rate: budget spent by members that started inside the current window.
+   *
+   * Held as a counter on the pool's guard row rather than derived from job
+   * rows. Deriving it counted at most one start per row, because a claim
+   * overwrites `startedAt`, so a job retrying inside the window refunded its
+   * own previous attempt and could start without limit. A counter records what
+   * was spent whether or not the row still says so, or still exists.
+   *
+   * The window is fixed, not sliding: it resets when `rateWindowMs` has passed
+   * since it opened.
    */
   readonly rateLimit?: number;
-  readonly rateWindowStart?: Date;
+  readonly rateWindowMs?: number;
   readonly rateCosts?: Readonly<Record<string, number>>;
   readonly rateCost?: number;
 }
@@ -195,12 +203,6 @@ export interface RequeueInput {
 export interface PruneInput {
   readonly statuses: readonly JobStatus[];
   readonly before: Date;
-  /**
-   * Keep rows started after this instant even when they are older than
-   * `before`. A rate budget counts starts inside its window, so pruning one out
-   * of the window frees budget that was actually spent.
-   */
-  readonly keepStartedAfter?: Date;
 }
 
 /**
@@ -246,10 +248,8 @@ export interface JobStore {
   poolUsage?(input: {
     types: readonly string[];
     costs: Readonly<Record<string, number>>;
-    rateCosts: Readonly<Record<string, number>>;
-    rateWindowStart?: Date;
     now: Date;
-  }): Promise<{ concurrency: number; rate: number }>;
+  }): Promise<number>;
   failExpiredLease(input: FailExpiredLeaseInput): Promise<boolean>;
   findOwnedRunningIds(input: {
     ids: readonly string[];

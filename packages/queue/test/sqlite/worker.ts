@@ -23,7 +23,7 @@ const [, , dbFile, jobId, startAtMs] = process.argv;
         leaseOwner: `worker-${process.pid}`,
         leaseExpiresAt: new Date(Date.now() + 60_000),
         guardKeys: ['pool:api'],
-        pool: { types: ['hydrate'], costs: {}, limit: 2, cost: 1 },
+        pool: { name: 'api', types: ['hydrate'], costs: {}, limit: 2, cost: 1 },
       }),
     );
   } catch (error) {

@@ -35,7 +35,7 @@ const DDL = [
      "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
      "updatedAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
    )`,
-  `CREATE TABLE "JobGuard" ("key" TEXT PRIMARY KEY, "seq" BIGINT NOT NULL DEFAULT 0)`,
+  `CREATE TABLE "JobGuard" ("key" TEXT PRIMARY KEY, "seq" BIGINT NOT NULL DEFAULT 0, "windowStart" DATETIME, "spent" BIGINT NOT NULL DEFAULT 0)`,
 ];
 
 let failures = 0;
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
       { guardKeys: ['order:other'], waitsForTypes: ['other'] },
       {
         guardKeys: ['pool:api'],
-        pool: { types: ['hydrate'], costs: {}, limit: 8, cost: 1 },
+        pool: { name: 'api', types: ['hydrate'], costs: {}, limit: 8, cost: 1 },
       },
       {
         guardKeys: ['order:other', 'pool:api', 'scope:Article'],
@@ -129,7 +129,7 @@ async function main(): Promise<void> {
         scopeType: 'Article',
         scopeId: 's3',
         waitsForTypes: ['other'],
-        pool: { types: ['hydrate'], costs: { hydrate: 2 }, limit: 8, cost: 2 },
+        pool: { name: 'api', types: ['hydrate'], costs: { hydrate: 2 }, limit: 8, cost: 2 },
       },
     ];
     for (const [index, extra] of combinations.entries()) {
@@ -146,7 +146,7 @@ async function main(): Promise<void> {
         store.claim(
           claimOf(`p${i}`, {
             guardKeys: ['pool:api'],
-            pool: { types: ['hydrate'], costs: {}, limit: 2, cost: 1 },
+            pool: { name: 'api', types: ['hydrate'], costs: {}, limit: 2, cost: 1 },
           }),
         ),
       ),
@@ -203,14 +203,14 @@ async function main(): Promise<void> {
       ...claimOf('dead'),
       leaseExpiresAt: new Date(Date.now() - 1),
       guardKeys: ['pool:api'],
-      pool: { types: ['hydrate'], costs: {}, limit: 1, cost: 1 },
+      pool: { name: 'api', types: ['hydrate'], costs: {}, limit: 1, cost: 1 },
     } as ClaimInput);
     await seed('next');
     assert.equal(
       await store.claim(
         claimOf('next', {
           guardKeys: ['pool:api'],
-          pool: { types: ['hydrate'], costs: {}, limit: 1, cost: 1 },
+          pool: { name: 'api', types: ['hydrate'], costs: {}, limit: 1, cost: 1 },
         }),
       ),
       true,
@@ -219,19 +219,18 @@ async function main(): Promise<void> {
 
   await test('bounds a rate budget, counting jobs that already finished', async () => {
     for (let i = 0; i < 5; i += 1) await seed(`r${i}`);
-    const windowStart = new Date(Date.now() - 60_000);
     const admitted: boolean[] = [];
     for (let i = 0; i < 5; i += 1) {
       const won = await store.claim(
         claimOf(`r${i}`, {
           guardKeys: ['pool:api'],
           pool: {
+            name: 'api',
             types: ['hydrate'],
             costs: {},
             cost: 1,
             rateLimit: 2,
-            rateWindowStart: windowStart,
-            rateCosts: {},
+            rateWindowMs: 60_000,
             rateCost: 1,
           },
         }),
@@ -249,19 +248,35 @@ async function main(): Promise<void> {
     assert.equal(admitted.filter(Boolean).length, 2, 'budget admitted too many');
   });
 
-  await test('withholds rows inside the rate window when pruning', async () => {
-    await seed('kept');
-    await store.claim(claimOf('kept', { guardKeys: ['pool:api'] }));
-    await prisma.job.update({
-      where: { id: 'kept' },
-      data: { status: 'SUCCEEDED' },
-    });
-    const removed = await store.deleteTerminalBefore({
-      statuses: ['SUCCEEDED', 'FAILED'],
-      before: new Date(Date.now() + 60_000),
-      keepStartedAfter: new Date(Date.now() - 60_000),
-    });
-    assert.equal(removed, 0);
+  await test('charges every attempt of a job that keeps retrying', async () => {
+    await seed('retrier');
+    let admitted = 0;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const won = await store.claim(
+        claimOf('retrier', {
+          guardKeys: ['pool:api'],
+          pool: {
+            name: 'api',
+            types: ['hydrate'],
+            costs: {},
+            cost: 1,
+            rateLimit: 2,
+            rateWindowMs: 60_000,
+            rateCost: 1,
+          },
+        }),
+      );
+      if (!won) break;
+      admitted += 1;
+      await store.retry({
+        id: 'retrier',
+        leaseOwner: 'worker-retrier',
+        attempts: attempt + 1,
+        lastError: 'boom',
+        runAt: new Date(),
+      });
+    }
+    assert.equal(admitted, 2, `admitted ${admitted} attempts against a budget of 2`);
   });
 
   // The case no in-process test can reach: separate workers contending for one

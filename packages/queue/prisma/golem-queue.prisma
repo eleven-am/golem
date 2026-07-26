@@ -26,10 +26,11 @@ model Job {
   @@index([status, runAt])
   @@index([status, leaseExpiresAt])
   @@index([scopeType, scopeId, status])
-  @@index([type, startedAt])
 }
 
 model JobGuard {
-  key String @id
-  seq BigInt @default(0)
+  key         String    @id
+  seq         BigInt    @default(0)
+  windowStart DateTime?
+  spent       BigInt    @default(0)
 }

@@ -138,11 +138,13 @@ describe('PrismaJobStore guarded claims', () => {
       }),
     };
     const jobGuard = {
-      create: jest.fn(async (args: { data: { key: string } }) => {
-        calls.push(`guard.create:${args.data.key}`);
+      upsert: jest.fn(async (args: { where: { key: string } }) => {
+        calls.push(`guard.update:${args.where.key}`);
+        return { windowStart: null, spent: 0 };
       }),
       update: jest.fn(async (args: { where: { key: string } }) => {
-        calls.push(`guard.update:${args.where.key}`);
+        calls.push(`guard.spend:${args.where.key}`);
+        return { windowStart: null, spent: 0 };
       }),
     };
     let lastUpdate: { where: Where; data: Data } | undefined;
@@ -214,15 +216,18 @@ describe('PrismaJobStore guarded claims', () => {
     ]);
   });
 
-  it('creates a guard row once and reuses it', async () => {
+  it('upserts the guard row so a deleted one cannot wedge the worker', async () => {
     const { jobGuard, prisma } = client();
     const store = new PrismaJobStore(prisma as never);
 
     await store.claim({ ...base, guardKeys: ['pool:spotify'] });
     await store.claim({ ...base, guardKeys: ['pool:spotify'] });
 
-    expect(jobGuard.create).toHaveBeenCalledTimes(1);
-    expect(jobGuard.update).toHaveBeenCalledTimes(2);
+    expect(jobGuard.upsert).toHaveBeenCalledTimes(2);
+    expect(jobGuard.upsert.mock.calls[0][0]).toMatchObject({
+      where: { key: 'pool:spotify' },
+      create: { key: 'pool:spotify' },
+    });
   });
 
   it('refuses the claim when a live lease holds the scope', async () => {

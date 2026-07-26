@@ -1,4 +1,5 @@
 import type {
+  ClaimPool,
   CancellableJob,
   ClaimCandidate,
   ClaimInput,
@@ -37,7 +38,14 @@ interface StoredJob {
   updatedAt: Date;
 }
 
+interface GuardState {
+  windowStart: Date | null;
+  spent: number;
+}
+
 export class InMemoryJobStore implements JobStore {
+  private readonly guards = new Map<string, GuardState>();
+
   readonly enforcesClaimGuards = true;
 
   private readonly jobs = new Map<string, StoredJob>();
@@ -140,15 +148,14 @@ export class InMemoryJobStore implements JobStore {
     ) {
       return Promise.resolve(false);
     }
-    if (
-      pool !== undefined &&
-      pool.rateLimit !== undefined &&
-      pool.rateWindowStart !== undefined &&
-      this.spentOf(pool.types, pool.rateCosts ?? {}, pool.rateWindowStart) +
-        (pool.rateCost ?? 1) >
-        pool.rateLimit
-    ) {
+    const budget = this.budgetFor(pool, input.now);
+    if (budget !== undefined && budget.spent + budget.cost > budget.limit) {
       return Promise.resolve(false);
+    }
+    if (budget !== undefined) {
+      const state = this.guardState(budget.key);
+      state.windowStart = budget.rolled ? input.now : state.windowStart;
+      state.spent = (budget.rolled ? 0 : state.spent) + budget.cost;
     }
     job.status = 'RUNNING';
     job.leaseOwner = input.leaseOwner;
@@ -179,6 +186,39 @@ export class InMemoryJobStore implements JobStore {
     return total;
   }
 
+  private guardState(key: string): GuardState {
+    const existing = this.guards.get(key);
+    if (existing !== undefined) return existing;
+    const created: GuardState = { windowStart: null, spent: 0 };
+    this.guards.set(key, created);
+    return created;
+  }
+
+  private budgetFor(
+    pool: ClaimPool | undefined,
+    now: Date,
+  ): { key: string; limit: number; cost: number; spent: number; rolled: boolean } | undefined {
+    if (
+      pool === undefined ||
+      pool.rateLimit === undefined ||
+      pool.rateWindowMs === undefined
+    ) {
+      return undefined;
+    }
+    const key = `pool:${pool.name}`;
+    const state = this.guardState(key);
+    const rolled =
+      state.windowStart === null ||
+      now.getTime() - state.windowStart.getTime() >= pool.rateWindowMs;
+    return {
+      key,
+      limit: pool.rateLimit,
+      cost: pool.rateCost ?? 1,
+      spent: rolled ? 0 : state.spent,
+      rolled,
+    };
+  }
+
   private spentOf(
     types: readonly string[],
     rateCosts: Readonly<Record<string, number>>,
@@ -201,17 +241,9 @@ export class InMemoryJobStore implements JobStore {
   poolUsage(input: {
     types: readonly string[];
     costs: Readonly<Record<string, number>>;
-    rateCosts: Readonly<Record<string, number>>;
-    rateWindowStart?: Date;
     now: Date;
-  }): Promise<{ concurrency: number; rate: number }> {
-    return Promise.resolve({
-      concurrency: this.usageOf(input.types, input.costs, input.now),
-      rate:
-        input.rateWindowStart === undefined
-          ? 0
-          : this.spentOf(input.types, input.rateCosts, input.rateWindowStart),
-    });
+  }): Promise<number> {
+    return Promise.resolve(this.usageOf(input.types, input.costs, input.now));
   }
 
   private outstandingOf(types: readonly string[], now: Date): boolean {
@@ -464,10 +496,7 @@ export class InMemoryJobStore implements JobStore {
     const doomed = this.all().filter(
       (job) =>
         input.statuses.includes(job.status) &&
-        job.updatedAt < input.before &&
-        (input.keepStartedAfter === undefined ||
-          job.startedAt === null ||
-          job.startedAt <= input.keepStartedAfter),
+        job.updatedAt < input.before,
     );
     for (const job of doomed) this.jobs.delete(job.id);
     return Promise.resolve(doomed.length);
