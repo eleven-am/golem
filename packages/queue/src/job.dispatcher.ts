@@ -51,6 +51,7 @@ export class JobDispatcher implements OnModuleDestroy {
   private readonly inFlight = new Map<string, number>();
   private readonly blockedTicks = new Map<string, number>();
   private readonly pools: Map<string, ResolvedJobPool>;
+  private readonly exclusionGroups = new Map<string, string>();
   private tickOffset = 0;
   private readonly executions = new Map<
     string,
@@ -118,9 +119,48 @@ export class JobDispatcher implements OnModuleDestroy {
     };
   }
 
+  /**
+   * Claimers that can block one another must serialize on the same guard row,
+   * so every type joined by an exclusion edge shares a group. The group name is
+   * derived from its members rather than assigned, so every worker computes the
+   * same key without coordinating.
+   */
+  private resolveExclusionGroups(): void {
+    const parent = new Map<string, string>();
+    const find = (type: string): string => {
+      const seen = parent.get(type);
+      if (seen === undefined || seen === type) {
+        parent.set(type, type);
+        return type;
+      }
+      const root = find(seen);
+      parent.set(type, root);
+      return root;
+    };
+    const union = (a: string, b: string): void => {
+      const rootA = find(a);
+      const rootB = find(b);
+      if (rootA !== rootB) parent.set(rootA, rootB);
+    };
+    for (const [type, handler] of this.handlers) {
+      for (const other of handler.excludes ?? []) union(type, other);
+    }
+    const members = new Map<string, string[]>();
+    for (const type of parent.keys()) {
+      const root = find(type);
+      members.set(root, [...(members.get(root) ?? []), type]);
+    }
+    for (const [root, group] of members) {
+      const name = [...group].sort().join('|');
+      for (const type of group) this.exclusionGroups.set(type, name);
+      void root;
+    }
+  }
+
   start(): void {
     if (this.timer || this.stopped) return;
     this.assertNoExclusionCycle();
+    this.resolveExclusionGroups();
     this.schedule();
   }
 
@@ -269,6 +309,9 @@ export class JobDispatcher implements OnModuleDestroy {
           ? { excludeTypes: handler.excludes }
           : {}),
         ...(claimPool === undefined ? {} : { pool: claimPool }),
+        scopeType: candidate.scopeType,
+        scopeId: candidate.scopeId,
+        guardKeys: this.guardKeysFor(handler, candidate),
         ...(recoveringExpiredLease
           ? {
               attempts: recoveredAttempts,
@@ -279,6 +322,21 @@ export class JobDispatcher implements OnModuleDestroy {
       if (won) claimed.push(candidate);
     }
     return claimed;
+  }
+
+  private guardKeysFor(
+    handler: JobHandler,
+    candidate: ClaimCandidate,
+  ): string[] {
+    const keys: string[] = [];
+    const pool = this.poolFor(handler.type);
+    if (pool !== undefined) keys.push(`pool:${pool.name}`);
+    const group = this.exclusionGroups.get(handler.type);
+    if (group !== undefined) keys.push(`excl:${group}`);
+    if (handler.serializeByScope && candidate.scopeType !== null) {
+      keys.push(`scope:${candidate.scopeType}`);
+    }
+    return keys.sort();
   }
 
   private async poolRoom(handler: JobHandler): Promise<number | undefined> {

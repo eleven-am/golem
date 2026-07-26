@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "strict": false,
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+    "outDir": "./out",
+    "rootDir": "../.."
+  },
+  "include": ["*.ts", "../prisma7/generated/**/*.ts", "../../src/**/*.ts"],
+  "exclude": ["../../src/**/*.test.ts"]
+}

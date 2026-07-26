@@ -30,10 +30,16 @@ model Job {
   dedupeKey      String?   @unique
   leaseOwner     String?
   leaseExpiresAt DateTime?
+  startedAt      DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   @@index([status, runAt])
   @@index([status, leaseExpiresAt])
   @@index([scopeType, scopeId, status])
+}
+
+model JobGuard {
+  key String @id
+  seq Int    @default(0)
 }

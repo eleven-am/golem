@@ -117,100 +117,44 @@ describe('PrismaJobStore lease renewal', () => {
   });
 });
 
-describe('PrismaJobStore scope serialization', () => {
-  function client(affected: number) {
-    const calls: Array<{ sql: string; values: unknown[] }> = [];
-    return {
-      calls,
-      prisma: {
-        job: {} as never,
-        $executeRawUnsafe(sql: string, ...values: unknown[]) {
-          calls.push({ sql, values });
-          return Promise.resolve(affected);
-        },
+describe('PrismaJobStore guarded claims', () => {
+  function client(options: { holders?: number; members?: { type: string }[] } = {}) {
+    const calls: string[] = [];
+    const job = {
+      count: jest.fn(async () => {
+        calls.push('job.count');
+        return options.holders ?? 0;
+      }),
+      findMany: jest.fn(async () => {
+        calls.push('job.findMany');
+        return options.members ?? [];
+      }),
+      updateMany: jest.fn(async (args: { where: Where; data: Data }) => {
+        calls.push('job.updateMany');
+        lastUpdate = args;
+        return { count: 1 };
+      }),
+    };
+    const jobGuard = {
+      create: jest.fn(async (args: { data: { key: string } }) => {
+        calls.push(`guard.create:${args.data.key}`);
+      }),
+      update: jest.fn(async (args: { where: { key: string } }) => {
+        calls.push(`guard.update:${args.where.key}`);
+      }),
+    };
+    let lastUpdate: { where: Where; data: Data } | undefined;
+    const prisma = {
+      job,
+      jobGuard,
+      async $transaction<T>(fn: (tx: unknown) => Promise<T>): Promise<T> {
+        calls.push('tx.begin');
+        const out = await fn(prisma);
+        calls.push('tx.commit');
+        return out;
       },
     };
-  }
-
-  const input = {
-    id: 'job-1',
-    fromStatus: 'PENDING' as const,
-    now: new Date('2026-01-01T00:00:00.000Z'),
-    leaseOwner: 'worker-1',
-    leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
-    serializeScope: true,
-  };
-
-  it('claims and checks the scope in one statement', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
-
-    expect(await store.claim(input)).toBe(true);
-    expect(calls).toHaveLength(1);
-
-    const sql = calls[0].sql.replace(/\s+/g, ' ');
-    expect(sql).toMatch(/^UPDATE "Job" SET/);
-    expect(sql).toContain('NOT EXISTS');
-  });
-
-  it('only treats a live lease as a blocker', async () => {
-    const { calls, prisma } = client(1);
-    await new PrismaJobStore(prisma).claim(input);
-
-    const sql = calls[0].sql.replace(/\s+/g, ' ');
-    expect(sql).toContain(`active."status" = 'RUNNING'`);
-    expect(sql).toContain('active."leaseExpiresAt" > ?');
-  });
-
-  it('never blocks a candidate on its own row', async () => {
-    const { calls, prisma } = client(1);
-    await new PrismaJobStore(prisma).claim(input);
-
-    expect(calls[0].sql.replace(/\s+/g, ' ')).toContain('active."id" <> "Job"."id"');
-  });
-
-  it('reports a lost race as a failed claim', async () => {
-    const { prisma } = client(0);
-    expect(await new PrismaJobStore(prisma).claim(input)).toBe(false);
-  });
-
-  it('leaves ordinary claims on the delegate path', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore({
-      ...prisma,
-      job: { updateMany: () => Promise.resolve({ count: 1 }) } as never,
-    });
-
-    expect(await store.claim({ ...input, serializeScope: undefined })).toBe(true);
-    expect(calls).toHaveLength(0);
-  });
-
-  it('refuses serialization when the client cannot run a statement', async () => {
-    const store = new PrismaJobStore({ job: {} as never });
-    await expect(store.claim(input)).rejects.toThrow(/serializeByScope/);
-  });
-
-  it('honours a mapped table name', async () => {
-    const { calls, prisma } = client(1);
-    await new PrismaJobStore(prisma, { table: 'queue_jobs' }).claim(input);
-
-    expect(calls[0].sql).toContain('"queue_jobs"');
-  });
-});
-
-describe('PrismaJobStore cross-type exclusion', () => {
-  function client(affected: number) {
-    const calls: Array<{ sql: string; values: unknown[] }> = [];
-    return {
-      calls,
-      prisma: {
-        job: {} as never,
-        $executeRawUnsafe(sql: string, ...values: unknown[]) {
-          calls.push({ sql, values });
-          return Promise.resolve(affected);
-        },
-      },
-    };
+    return { calls, job, jobGuard, prisma, update: () => lastUpdate };
   }
 
   const base = {
@@ -221,144 +165,154 @@ describe('PrismaJobStore cross-type exclusion', () => {
     leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
   };
 
-  it('claims and checks excluded types in one statement', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
+  it('claims without a transaction when no guard applies', async () => {
+    const { calls, prisma } = client();
+    const store = new PrismaJobStore(prisma as never);
+
+    expect(await store.claim(base)).toBe(true);
+    expect(calls).toEqual(['job.updateMany']);
+  });
+
+  it('writes every guard row before reading anything', async () => {
+    const { calls, prisma } = client();
+    const store = new PrismaJobStore(prisma as never);
+
+    await store.claim({
+      ...base,
+      guardKeys: ['excl:a|b', 'pool:spotify'],
+      excludeTypes: ['b'],
+      pool: { types: ['a'], costs: {}, limit: 2, cost: 1 },
+    });
+
+    const begin = calls.indexOf('tx.begin');
+    const lastGuardWrite = calls.lastIndexOf('guard.update:pool:spotify');
+    const firstRead = calls.findIndex(
+      (c, i) => i > begin && (c === 'job.count' || c === 'job.findMany'),
+    );
+    expect(begin).toBeGreaterThanOrEqual(0);
+    expect(lastGuardWrite).toBeGreaterThan(begin);
+    expect(firstRead).toBeGreaterThan(lastGuardWrite);
+    expect(calls[calls.length - 1]).toBe('tx.commit');
+  });
+
+  it('acquires guard rows in the order given, so two guards cannot deadlock', async () => {
+    const { calls, prisma } = client();
+    const store = new PrismaJobStore(prisma as never);
+
+    await store.claim({
+      ...base,
+      guardKeys: ['excl:a|b', 'pool:spotify', 'scope:Article'],
+    });
+
+    const acquired = calls.filter((c) => c.startsWith('guard.update:'));
+    expect(acquired).toEqual([
+      'guard.update:excl:a|b',
+      'guard.update:pool:spotify',
+      'guard.update:scope:Article',
+    ]);
+  });
+
+  it('creates a guard row once and reuses it', async () => {
+    const { jobGuard, prisma } = client();
+    const store = new PrismaJobStore(prisma as never);
+
+    await store.claim({ ...base, guardKeys: ['pool:spotify'] });
+    await store.claim({ ...base, guardKeys: ['pool:spotify'] });
+
+    expect(jobGuard.create).toHaveBeenCalledTimes(1);
+    expect(jobGuard.update).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses the claim when a live lease holds the scope', async () => {
+    const { job, prisma } = client({ holders: 1 });
+    const store = new PrismaJobStore(prisma as never);
 
     expect(
-      await store.claim({ ...base, excludeTypes: ['history-import'] }),
-    ).toBe(true);
+      await store.claim({
+        ...base,
+        guardKeys: ['scope:Article'],
+        serializeScope: true,
+        scopeType: 'Article',
+        scopeId: 'a1',
+      }),
+    ).toBe(false);
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0].sql).toMatch(/UPDATE[\s\S]*NOT EXISTS[\s\S]*blocker/);
-    expect(calls[0].sql).toMatch(/blocker\."status" IN \('PENDING', 'RUNNING'\)/);
-    expect(calls[0].values).toContain('history-import');
-  });
-
-  it('binds one placeholder per excluded type', async () => {
-    const { calls, prisma } = client(0);
-    const store = new PrismaJobStore(prisma);
-
-    await store.claim({ ...base, excludeTypes: ['a', 'b', 'c'] });
-
-    expect(calls[0].sql).toContain('IN (?, ?, ?)');
-    expect(calls[0].values.slice(-3)).toEqual(['a', 'b', 'c']);
-  });
-
-  it('composes the scope and exclusion predicates in the same statement', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
-
-    await store.claim({
-      ...base,
-      serializeScope: true,
-      excludeTypes: ['history-import'],
-    });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].sql).toContain('active."scopeType"');
-    expect(calls[0].sql).toContain('blocker."type"');
-  });
-
-  it('names excludes when the client cannot run a guarded claim', async () => {
-    const store = new PrismaJobStore({ job: {} as never });
-
-    await expect(
-      store.claim({ ...base, excludeTypes: ['history-import'] }),
-    ).rejects.toThrow(/excludes.*\$executeRawUnsafe/s);
-  });
-
-  it('reports whether any job of the given types is active', async () => {
-    const job = {
-      findMany: jest.fn().mockResolvedValue([{ id: 'x' }]),
-    } as never;
-    const store = new PrismaJobStore({ job });
-
-    await expect(store.hasActiveOfTypes({ types: ['a'] })).resolves.toBe(true);
-    await expect(store.hasActiveOfTypes({ types: [] })).resolves.toBe(false);
-  });
-});
-
-describe('PrismaJobStore resource pools', () => {
-  function client(affected: number) {
-    const calls: Array<{ sql: string; values: unknown[] }> = [];
-    return {
-      calls,
-      prisma: {
-        job: {} as never,
-        $executeRawUnsafe(sql: string, ...values: unknown[]) {
-          calls.push({ sql, values });
-          return Promise.resolve(affected);
-        },
+    expect(job.updateMany).not.toHaveBeenCalled();
+    expect(job.count).toHaveBeenCalledWith({
+      where: {
+        id: { not: 'job-1' },
+        scopeType: 'Article',
+        scopeId: 'a1',
+        status: 'RUNNING',
+        leaseExpiresAt: { gt: base.now },
       },
-    };
-  }
-
-  const base = {
-    id: 'job-1',
-    fromStatus: 'PENDING' as const,
-    now: new Date('2026-01-01T00:00:00.000Z'),
-    leaseOwner: 'worker-1',
-    leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
-  };
-
-  it('counts only live-leased pool members, in the claiming statement', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
-
-    await store.claim({
-      ...base,
-      pool: { types: ['a', 'b'], costs: {}, limit: 4, cost: 1 },
     });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].sql).toMatch(/SUM\(1\)/);
-    expect(calls[0].sql).toMatch(/pooled\."status" = 'RUNNING'/);
-    expect(calls[0].sql).toMatch(/pooled\."leaseExpiresAt" > \?/);
-    expect(calls[0].values.slice(-5)).toEqual(['a', 'b', base.now, 1, 4]);
   });
 
-  it('binds weighted costs rather than inlining type names', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
+  it('refuses the claim while an excluded type is pending or running', async () => {
+    const { job, prisma } = client({ holders: 1 });
+    const store = new PrismaJobStore(prisma as never);
 
-    await store.claim({
-      ...base,
-      pool: { types: ['a', 'b'], costs: { b: 3 }, limit: 4, cost: 1 },
+    expect(
+      await store.claim({
+        ...base,
+        guardKeys: ['excl:history-import|track-hydrate'],
+        excludeTypes: ['history-import'],
+      }),
+    ).toBe(false);
+
+    expect(job.count).toHaveBeenCalledWith({
+      where: {
+        type: { in: ['history-import'] },
+        status: { in: ['PENDING', 'RUNNING'] },
+      },
     });
+  });
 
-    expect(calls[0].sql).toContain('CASE pooled."type" WHEN ? THEN ? ELSE 1 END');
-    expect(calls[0].sql).not.toContain("'b'");
-    expect(calls[0].values).toContain(3);
+  it('weighs pool members by cost and refuses when the budget is spent', async () => {
+    const { job, prisma } = client({
+      members: [{ type: 'sync' }, { type: 'hydrate' }],
+    });
+    const store = new PrismaJobStore(prisma as never);
+
+    expect(
+      await store.claim({
+        ...base,
+        guardKeys: ['pool:spotify'],
+        pool: { types: ['sync', 'hydrate'], costs: { sync: 3 }, limit: 4, cost: 1 },
+      }),
+    ).toBe(false);
+    expect(job.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('admits the claim when the pool still has room', async () => {
+    const { prisma, update } = client({ members: [{ type: 'hydrate' }] });
+    const store = new PrismaJobStore(prisma as never);
+
+    expect(
+      await store.claim({
+        ...base,
+        guardKeys: ['pool:spotify'],
+        pool: { types: ['sync', 'hydrate'], costs: {}, limit: 4, cost: 1 },
+      }),
+    ).toBe(true);
+    expect((update()?.data as { startedAt?: Date })?.startedAt).toEqual(base.now);
   });
 
   it('records when the job started so a rate window can be derived', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
+    const { prisma, update } = client();
+    const store = new PrismaJobStore(prisma as never);
 
-    await store.claim({
-      ...base,
-      pool: { types: ['a'], costs: {}, limit: 1, cost: 1 },
-    });
+    await store.claim(base);
 
-    expect(calls[0].sql).toContain('"startedAt" = ?');
-    expect(calls[0].values).toContain(base.now);
+    expect((update()?.data as { startedAt?: Date })?.startedAt).toEqual(base.now);
   });
 
-  it('composes the pool predicate with scope and exclusion guards', async () => {
-    const { calls, prisma } = client(1);
-    const store = new PrismaJobStore(prisma);
+  it('names what is missing when the client cannot run a guarded claim', async () => {
+    const store = new PrismaJobStore({ job: {} as never });
 
-    await store.claim({
-      ...base,
-      serializeScope: true,
-      excludeTypes: ['history-import'],
-      pool: { types: ['a'], costs: {}, limit: 1, cost: 1 },
-    });
-
-    expect(calls).toHaveLength(1);
-    expect(calls[0].sql).toContain('active."scopeType"');
-    expect(calls[0].sql).toContain('blocker."type"');
-    expect(calls[0].sql).toContain('pooled."type"');
+    await expect(
+      store.claim({ ...base, guardKeys: ['pool:spotify'] }),
+    ).rejects.toThrow(/\$transaction and a jobGuard delegate/);
   });
 });

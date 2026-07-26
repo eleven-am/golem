@@ -28,3 +28,8 @@ model Job {
   @@index([scopeType, scopeId, status])
   @@index([type, startedAt])
 }
+
+model JobGuard {
+  key String @id
+  seq Int    @default(0)
+}

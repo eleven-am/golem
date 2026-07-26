@@ -206,7 +206,7 @@ GolemQueueModule.forRootAsync({
 })
 ```
 
-No handler changes. A job is claimed only when the summed cost of pool members already holding a live lease leaves room for it, evaluated in the statement that claims — so two workers cannot both see the last slot.
+No handler changes. A job is claimed only when the summed cost of pool members already holding a live lease leaves room for it, evaluated inside the claiming transaction behind the pool's guard row — so two workers cannot both take the last slot.
 
 **Membership is declared in config, not on the handler, because a worker counts only the types it is told about.** If `spotify-sync` runs in another process and is missing from `types`, every worker bounds the members it knows and the pool silently admits more than its limit. List every participating type, including those handled elsewhere; a type with no local handler is normal and accepted.
 
@@ -226,7 +226,7 @@ Handlers are independent by default: any two types can run at the same time. Whe
 @QueueHandler({ type: 'track-hydrate', excludes: ['history-import'] })
 ```
 
-`track-hydrate` claims nothing while any `history-import` job is PENDING or RUNNING, and resumes on the next poll once none remain. The check and the claim are one statement, so a job enqueued between them cannot slip through — that race is the whole reason this is not a thing you can write yourself around `add()`.
+`track-hydrate` claims nothing while any `history-import` job is PENDING or RUNNING, and resumes on the next poll once none remain. The check and the claim commit together behind a shared guard row, so a job enqueued between them cannot slip through — that race is the whole reason this is not a thing you can write yourself around `add()`.
 
 An excluded type does not need a handler in this process. Excluding work that runs on a different worker is the normal case, and the type name is checked against your declared job map at compile time.
 
@@ -320,7 +320,9 @@ const store = new InMemoryJobStore();
 
 Implement the full `JobStore` port to back the queue with something other than Prisma.
 
-The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update. That is deliberately portable — it behaves identically on SQLite, Postgres and MySQL — and it is the right default for most apps.
+The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable across SQLite, Postgres and MySQL, and it is the right default for most apps.
+
+A claim that carries a guard — `serializeByScope`, `excludes`, or a resource pool — needs a serialization point, because the condition it tests is about *other* rows and engines do not serialize a read against a concurrent uncommitted write. Every competing claimer for a guard therefore writes one shared `JobGuard` row before reading anything, inside the transaction that claims. Writing first is what makes it work: competitors queue on a row lock rather than racing, and on SQLite it takes the writer lock up front instead of leaving a deferred reader that cannot upgrade. Guards are acquired in sorted order, so a claim needing several cannot deadlock against one acquiring the same guards in another order.
 
 The trade-off is a round-trip per candidate, so claim throughput is bounded by the poll interval and the number of workers. If an app outgrows that, the escape hatch is a Postgres-native `JobStore` that claims a whole batch in one statement with `SELECT … FOR UPDATE SKIP LOCKED`. Nothing else has to change: the dispatcher only talks to the port.
 

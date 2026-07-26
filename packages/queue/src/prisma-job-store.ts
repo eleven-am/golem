@@ -34,6 +34,7 @@ interface PrismaJobDelegate {
     where: Where;
     select: Data;
   }): Promise<Record<string, unknown> | null>;
+  count(args: { where: Where }): Promise<number>;
   updateMany(args: { where: Where; data: Data }): Promise<{ count: number }>;
   deleteMany(args: { where: Where }): Promise<{ count: number }>;
   readonly groupBy: unknown;
@@ -47,14 +48,25 @@ interface PrismaStatusGroupByDelegate {
   }): Promise<Array<{ status: JobStatus; _count: { _all: number } }>>;
 }
 
+export interface PrismaGuardDelegate {
+  create(args: { data: Data }): Promise<unknown>;
+  update(args: { where: Where; data: Data }): Promise<unknown>;
+}
+
 export interface PrismaClientLike {
   readonly job: PrismaJobDelegate;
   /**
-   * Required only when a handler sets `serializeByScope`. The scope predicate
-   * and the claim have to land in one statement, and a same-table NOT EXISTS
-   * is not expressible through the delegate's where-shape.
+   * Required only when a handler uses a claim guard: `serializeByScope`,
+   * `excludes`, or a resource pool. Guards need a serialization point, and the
+   * JobGuard row is it.
    */
-  $executeRawUnsafe?(query: string, ...values: unknown[]): Promise<number>;
+  readonly jobGuard?: PrismaGuardDelegate;
+  /**
+   * Required only when a handler uses a claim guard. The guard reads and the
+   * claim have to commit together, and the guard row has to be written first
+   * so competitors queue on a lock rather than failing to upgrade a reader.
+   */
+  $transaction?<T>(fn: (tx: PrismaClientLike) => Promise<T>): Promise<T>;
 }
 
 export interface PrismaJobStoreOptions {
@@ -64,23 +76,6 @@ export interface PrismaJobStoreOptions {
 
 const UNIQUE_VIOLATION = 'P2002';
 
-function costExpression(
-  alias: string,
-  costs: Readonly<Record<string, number>>,
-): { sql: string; values: unknown[] } {
-  const weighted = Object.entries(costs).filter(([, cost]) => cost !== 1);
-  if (weighted.length === 0) {
-    return { sql: '1', values: [] };
-  }
-  const values: unknown[] = [];
-  const branches = weighted
-    .map(([type, cost]) => {
-      values.push(type, cost);
-      return 'WHEN ? THEN ?';
-    })
-    .join(' ');
-  return { sql: `CASE ${alias}."type" ${branches} ELSE 1 END`, values };
-}
 
 function quoteIdentifier(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
@@ -125,6 +120,8 @@ export class PrismaJobStore implements JobStore {
   ) {
     this.table = options.table ?? 'Job';
   }
+
+  private readonly knownGuards = new Set<string>();
 
   withClient(client: PrismaClientLike): PrismaJobStore {
     return new PrismaJobStore(client, { table: this.table });
@@ -180,18 +177,107 @@ export class PrismaJobStore implements JobStore {
   }
 
   async claim(input: ClaimInput): Promise<boolean> {
-    if (
-      input.serializeScope ||
-      (input.excludeTypes?.length ?? 0) > 0 ||
-      input.pool !== undefined
-    ) {
-      return this.claimGuarded(input);
+    const guardKeys = input.guardKeys ?? [];
+    if (guardKeys.length === 0) {
+      return this.claimUnguarded(this.prisma, input);
     }
+    const runTransaction = this.prisma.$transaction?.bind(this.prisma);
+    const guards = this.prisma.jobGuard;
+    if (!runTransaction || !guards) {
+      throw new Error(
+        'A handler uses a claim guard (serializeByScope, excludes, or a resource pool), which needs $transaction and a jobGuard delegate on the Prisma client passed to PrismaJobStore. Add the JobGuard model to your schema and migrate.',
+      );
+    }
+    await this.ensureGuardRows(guardKeys);
+    return runTransaction(async (tx) => {
+      const guardDelegate = tx.jobGuard;
+      if (!guardDelegate) {
+        throw new Error('The transaction client is missing the jobGuard delegate');
+      }
+      // Write the guard rows before reading anything. Competing claimers then
+      // queue on a row lock instead of racing: on Postgres and MySQL this turns
+      // a read-write conflict the engine would not serialize into a write-write
+      // one it must, and on SQLite it takes the writer lock up front rather
+      // than failing to upgrade a deferred reader mid-transaction.
+      for (const key of guardKeys) {
+        await guardDelegate.update({
+          where: { key },
+          data: { seq: { increment: 1 } },
+        });
+      }
+      if (!(await this.guardsAllow(tx, input))) {
+        return false;
+      }
+      return this.claimUnguarded(tx, input);
+    });
+  }
+
+  private async ensureGuardRows(keys: readonly string[]): Promise<void> {
+    for (const key of keys) {
+      if (this.knownGuards.has(key)) continue;
+      try {
+        await this.prisma.jobGuard?.create({ data: { key } });
+      } catch (error) {
+        if (!isUniqueViolation(error)) throw error;
+      }
+      this.knownGuards.add(key);
+    }
+  }
+
+  private async guardsAllow(
+    tx: PrismaClientLike,
+    input: ClaimInput,
+  ): Promise<boolean> {
+    if (input.serializeScope && input.scopeType !== null && input.scopeType !== undefined) {
+      const holders = await tx.job.count({
+        where: {
+          id: { not: input.id },
+          scopeType: input.scopeType,
+          scopeId: input.scopeId ?? null,
+          status: 'RUNNING',
+          leaseExpiresAt: { gt: input.now },
+        },
+      });
+      if (holders > 0) return false;
+    }
+    const excluded = input.excludeTypes ?? [];
+    if (excluded.length > 0) {
+      const blockers = await tx.job.count({
+        where: {
+          type: { in: [...excluded] },
+          status: { in: ['PENDING', 'RUNNING'] },
+        },
+      });
+      if (blockers > 0) return false;
+    }
+    const pool = input.pool;
+    if (pool !== undefined) {
+      const members = await tx.job.findMany({
+        where: {
+          type: { in: [...pool.types] },
+          status: 'RUNNING',
+          leaseExpiresAt: { gt: input.now },
+        },
+        select: { type: true },
+      });
+      const used = members.reduce(
+        (total, row) => total + (pool.costs[row.type as string] ?? 1),
+        0,
+      );
+      if (used + pool.cost > pool.limit) return false;
+    }
+    return true;
+  }
+
+  private async claimUnguarded(
+    client: PrismaClientLike,
+    input: ClaimInput,
+  ): Promise<boolean> {
     const guard =
       input.fromStatus === 'PENDING'
         ? { status: 'PENDING', runAt: { lte: input.now } }
         : { status: 'RUNNING', leaseExpiresAt: { lte: input.now } };
-    const result = await this.prisma.job.updateMany({
+    const result = await client.job.updateMany({
       where: { id: input.id, ...guard },
       data: {
         status: 'RUNNING',
@@ -199,129 +285,10 @@ export class PrismaJobStore implements JobStore {
         leaseExpiresAt: input.leaseExpiresAt,
         startedAt: input.now,
         ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
-        ...(input.lastError === undefined
-          ? {}
-          : { lastError: input.lastError }),
+        ...(input.lastError === undefined ? {} : { lastError: input.lastError }),
       },
     });
     return result.count === 1;
-  }
-
-  private async claimGuarded(input: ClaimInput): Promise<boolean> {
-    const execute = this.prisma.$executeRawUnsafe;
-    if (!execute) {
-      const flag = input.serializeScope
-        ? 'serializeByScope'
-        : input.pool !== undefined
-          ? 'a resource pool'
-          : 'excludes';
-      throw new Error(
-        `A handler sets ${flag}, which needs $executeRawUnsafe on the Prisma client passed to PrismaJobStore. The guard predicate and the claim must be one statement.`,
-      );
-    }
-    const table = quoteIdentifier(this.table);
-    const guard =
-      input.fromStatus === 'PENDING'
-        ? `"status" = 'PENDING' AND "runAt" <= ?`
-        : `"status" = 'RUNNING' AND "leaseExpiresAt" <= ?`;
-    const sets = [
-      `"status" = 'RUNNING'`,
-      `"leaseOwner" = ?`,
-      `"leaseExpiresAt" = ?`,
-      `"startedAt" = ?`,
-    ];
-    const values: unknown[] = [input.leaseOwner, input.leaseExpiresAt, input.now];
-    if (input.attempts !== undefined) {
-      sets.push(`"attempts" = ?`);
-      values.push(input.attempts);
-    }
-    if (input.lastError !== undefined) {
-      sets.push(`"lastError" = ?`);
-      values.push(input.lastError);
-    }
-    values.push(input.id, input.now);
-    const predicates: string[] = [];
-    if (input.serializeScope) {
-      predicates.push(`AND NOT EXISTS (
-           SELECT 1 FROM ${table} AS active
-           WHERE active."id" <> ${table}."id"
-             AND active."scopeType" IS NOT NULL
-             AND active."scopeType" = ${table}."scopeType"
-             AND active."scopeId" = ${table}."scopeId"
-             AND active."status" = 'RUNNING'
-             AND active."leaseExpiresAt" > ?
-         )`);
-      values.push(input.now);
-    }
-    const excluded = input.excludeTypes ?? [];
-    if (excluded.length > 0) {
-      predicates.push(`AND NOT EXISTS (
-           SELECT 1 FROM ${table} AS blocker
-           WHERE blocker."type" IN (${excluded.map(() => '?').join(', ')})
-             AND blocker."status" IN ('PENDING', 'RUNNING')
-         )`);
-      values.push(...excluded);
-    }
-    const pool = input.pool;
-    if (pool !== undefined) {
-      const cost = costExpression('pooled', pool.costs);
-      predicates.push(`AND (
-           SELECT COALESCE(SUM(${cost.sql}), 0)
-           FROM ${table} AS pooled
-           WHERE pooled."type" IN (${pool.types.map(() => '?').join(', ')})
-             AND pooled."status" = 'RUNNING'
-             AND pooled."leaseExpiresAt" > ?
-         ) + ? <= ?`);
-      values.push(
-        ...cost.values,
-        ...pool.types,
-        input.now,
-        pool.cost,
-        pool.limit,
-      );
-    }
-    const affected = await execute.call(
-      this.prisma,
-      `UPDATE ${table} SET ${sets.join(', ')}
-       WHERE "id" = ?
-         AND ${guard}
-         ${predicates.join('\n         ')}`,
-      ...values,
-    );
-    return affected === 1;
-  }
-
-  async poolUsage(input: {
-    types: readonly string[];
-    costs: Readonly<Record<string, number>>;
-    now: Date;
-  }): Promise<number> {
-    if (input.types.length === 0) return 0;
-    const rows = await this.prisma.job.findMany({
-      where: {
-        type: { in: [...input.types] },
-        status: 'RUNNING',
-        leaseExpiresAt: { gt: input.now },
-      },
-      select: { type: true },
-    });
-    return rows.reduce(
-      (total, row) => total + (input.costs[row.type as string] ?? 1),
-      0,
-    );
-  }
-
-  async hasActiveOfTypes(input: { types: readonly string[] }): Promise<boolean> {
-    if (input.types.length === 0) return false;
-    const rows = await this.prisma.job.findMany({
-      where: {
-        type: { in: [...input.types] },
-        status: { in: ['PENDING', 'RUNNING'] },
-      },
-      select: { id: true },
-      take: 1,
-    });
-    return rows.length > 0;
   }
 
   async renewLease(input: RenewLeaseInput): Promise<boolean> {

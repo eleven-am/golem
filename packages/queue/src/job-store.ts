@@ -86,6 +86,16 @@ export interface ClaimInput {
    * being reclaimed has an expired lease.
    */
   readonly pool?: ClaimPool;
+  /** Scope of the candidate, needed to evaluate `serializeScope`. */
+  readonly scopeType?: string | null;
+  readonly scopeId?: string | null;
+  /**
+   * Rows every competing claimer of this guard group must write before reading.
+   * Sorted, so a claim needing several guards cannot deadlock against one
+   * acquiring the same guards in another order. Empty means an unguarded claim,
+   * which is a same-row compare-and-set and needs no serialization point.
+   */
+  readonly guardKeys?: readonly string[];
 }
 
 export interface ClaimPool {
