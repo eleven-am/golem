@@ -187,6 +187,37 @@ Renewal engages only when `leaseDurationMs` is set **and** the store implements 
 
 Renewal is fenced like every other lease write: it updates only a `RUNNING` row still owned by this worker whose lease has **not** already expired. An expired lease cannot be renewed even by its original owner, because another worker may have claimed it in the meantime.
 
+## Sharing a rate-limited dependency
+
+Handler concurrency bounds one type. When several types draw on the same third-party API, what matters is the budget they share, and per-handler numbers cannot express it: four handlers at 30, 3, 1, and 1 permit 35 simultaneous callers against one budget, and each number looks defensible on its own.
+
+Declare the pool in module config:
+
+```ts
+GolemQueueModule.forRootAsync({
+  resources: {
+    spotify: {
+      concurrency: 4,
+      types: ['spotify-sync', 'track-hydrate', 'artist-enrich'],
+      costs: { 'spotify-sync': 2 },   // slots occupied while running, default 1
+    },
+  },
+  handlers: [SyncHandler, HydrateHandler, EnrichHandler],
+})
+```
+
+No handler changes. A job is claimed only when the summed cost of pool members already holding a live lease leaves room for it, evaluated in the statement that claims — so two workers cannot both see the last slot.
+
+**Membership is declared in config, not on the handler, because a worker counts only the types it is told about.** If `spotify-sync` runs in another process and is missing from `types`, every worker bounds the members it knows and the pool silently admits more than its limit. List every participating type, including those handled elsewhere; a type with no local handler is normal and accepted.
+
+Occupancy is derived, never held. Nothing is acquired, so nothing leaks: a worker that dies frees its slots when its lease expires, through the same recovery that reclaims its job. A blocked job stays PENDING and unleased rather than sitting RUNNING and idle.
+
+Each poll visits handlers in a rotating order, so a pool mate with high concurrency cannot take the whole pool every tick and starve a smaller one.
+
+### What a pool cannot do
+
+A pool bounds jobs, not the requests made inside them. A handler that runs for hours polling in a loop is one job to the queue: putting it in a pool of four would run four of them while each still calls the API as often as it likes. Rate-limit those calls in the client that makes them — the queue cannot see them.
+
 ## Ordering between job types
 
 Handlers are independent by default: any two types can run at the same time. When one type's correctness depends on another not running, say so and the dispatcher enforces it at claim time:

@@ -278,3 +278,87 @@ describe('PrismaJobStore cross-type exclusion', () => {
     await expect(store.hasActiveOfTypes({ types: [] })).resolves.toBe(false);
   });
 });
+
+describe('PrismaJobStore resource pools', () => {
+  function client(affected: number) {
+    const calls: Array<{ sql: string; values: unknown[] }> = [];
+    return {
+      calls,
+      prisma: {
+        job: {} as never,
+        $executeRawUnsafe(sql: string, ...values: unknown[]) {
+          calls.push({ sql, values });
+          return Promise.resolve(affected);
+        },
+      },
+    };
+  }
+
+  const base = {
+    id: 'job-1',
+    fromStatus: 'PENDING' as const,
+    now: new Date('2026-01-01T00:00:00.000Z'),
+    leaseOwner: 'worker-1',
+    leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
+  };
+
+  it('counts only live-leased pool members, in the claiming statement', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({
+      ...base,
+      pool: { types: ['a', 'b'], costs: {}, limit: 4, cost: 1 },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toMatch(/SUM\(1\)/);
+    expect(calls[0].sql).toMatch(/pooled\."status" = 'RUNNING'/);
+    expect(calls[0].sql).toMatch(/pooled\."leaseExpiresAt" > \?/);
+    expect(calls[0].values.slice(-5)).toEqual(['a', 'b', base.now, 1, 4]);
+  });
+
+  it('binds weighted costs rather than inlining type names', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({
+      ...base,
+      pool: { types: ['a', 'b'], costs: { b: 3 }, limit: 4, cost: 1 },
+    });
+
+    expect(calls[0].sql).toContain('CASE pooled."type" WHEN ? THEN ? ELSE 1 END');
+    expect(calls[0].sql).not.toContain("'b'");
+    expect(calls[0].values).toContain(3);
+  });
+
+  it('records when the job started so a rate window can be derived', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({
+      ...base,
+      pool: { types: ['a'], costs: {}, limit: 1, cost: 1 },
+    });
+
+    expect(calls[0].sql).toContain('"startedAt" = ?');
+    expect(calls[0].values).toContain(base.now);
+  });
+
+  it('composes the pool predicate with scope and exclusion guards', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({
+      ...base,
+      serializeScope: true,
+      excludeTypes: ['history-import'],
+      pool: { types: ['a'], costs: {}, limit: 1, cost: 1 },
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toContain('active."scopeType"');
+    expect(calls[0].sql).toContain('blocker."type"');
+    expect(calls[0].sql).toContain('pooled."type"');
+  });
+});

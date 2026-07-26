@@ -32,6 +32,7 @@ interface StoredJob {
   dedupeKey: string | null;
   leaseOwner: string | null;
   leaseExpiresAt: Date | null;
+  startedAt: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -71,6 +72,7 @@ export class InMemoryJobStore implements JobStore {
       dedupeKey: input.dedupeKey,
       leaseOwner: null,
       leaseExpiresAt: null,
+      startedAt: null,
       createdAt: new Date(),
       updatedAt: new Date(),
     });
@@ -123,12 +125,48 @@ export class InMemoryJobStore implements JobStore {
     if (this.typesAreActive(input.excludeTypes ?? [])) {
       return Promise.resolve(false);
     }
+    const pool = input.pool;
+    if (
+      pool !== undefined &&
+      this.usageOf(pool.types, pool.costs, input.now) + pool.cost > pool.limit
+    ) {
+      return Promise.resolve(false);
+    }
     job.status = 'RUNNING';
     job.leaseOwner = input.leaseOwner;
     job.leaseExpiresAt = input.leaseExpiresAt;
+    job.startedAt = input.now;
     if (input.attempts !== undefined) job.attempts = input.attempts;
     if (input.lastError !== undefined) job.lastError = input.lastError;
     return Promise.resolve(true);
+  }
+
+  private usageOf(
+    types: readonly string[],
+    costs: Readonly<Record<string, number>>,
+    now: Date,
+  ): number {
+    const members = new Set(types);
+    let total = 0;
+    for (const job of this.jobs.values()) {
+      if (
+        members.has(job.type) &&
+        job.status === 'RUNNING' &&
+        job.leaseExpiresAt !== null &&
+        job.leaseExpiresAt > now
+      ) {
+        total += costs[job.type] ?? 1;
+      }
+    }
+    return total;
+  }
+
+  poolUsage(input: {
+    types: readonly string[];
+    costs: Readonly<Record<string, number>>;
+    now: Date;
+  }): Promise<number> {
+    return Promise.resolve(this.usageOf(input.types, input.costs, input.now));
   }
 
   private typesAreActive(types: readonly string[]): boolean {

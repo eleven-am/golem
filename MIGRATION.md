@@ -1,3 +1,38 @@
+# Migrating `@eleven-am/golem-queue` to 0.5.0
+
+The `Job` model gains a column. Add it and migrate before upgrading:
+
+```prisma
+model Job {
+  // ...
+  startedAt      DateTime?
+
+  @@index([type, startedAt])
+}
+```
+
+`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery — a retried job did its work twice and must count twice. Resource pools do not read it; it is here so that per-minute rate budgets, which need a window over job starts, do not require a second migration.
+
+## Sharing a budget across handlers
+
+Nothing else changes. Handlers, enqueues, and existing config all behave as before. To bound several job types against one third-party budget:
+
+```ts
+GolemQueueModule.forRootAsync({
+  resources: {
+    spotify: {
+      concurrency: 4,
+      types: ['spotify-sync', 'track-hydrate', 'artist-enrich'],
+      costs: { 'spotify-sync': 2 },
+    },
+  },
+})
+```
+
+Membership belongs in config rather than on the handler: a worker bounds only the types it is told about, so a member handled by another process must still be listed or the pool admits more than its limit on every worker independently.
+
+See the README for what a pool can and cannot bound.
+
 # Migrating `@eleven-am/golem-queue` to 0.3.0
 
 A handler now receives one `JobEvent` instead of a payload and an execution object. Breaking, and mechanical.

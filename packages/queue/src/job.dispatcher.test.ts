@@ -741,3 +741,199 @@ describe('cross-type exclusion', () => {
     void dispatcher.onModuleDestroy();
   });
 });
+
+describe('resource pools', () => {
+  const POOL = {
+    resources: {
+      spotify: {
+        concurrency: 2,
+        types: ['track-hydrate', 'artist-enrich'],
+      },
+    },
+  };
+
+  function pooled(type: string, hold?: () => Promise<void>) {
+    return handler(hold ?? (() => Promise.resolve()), { type });
+  }
+
+  it('bounds two handlers sharing a pool in aggregate', async () => {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    const { store, dispatcher } = build(
+      [
+        pooled('track-hydrate', hold),
+        pooled('artist-enrich', hold),
+      ],
+      { ...POOL, resources: { spotify: { concurrency: 2, types: ['track-hydrate', 'artist-enrich'] } } },
+    );
+    for (let i = 0; i < 3; i += 1) await seed(store, { type: 'track-hydrate' });
+    for (let i = 0; i < 3; i += 1) await seed(store, { type: 'artist-enrich' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+
+    const running = (await store.findJobs({ limit: 20 })).filter(
+      (row) => row.status === 'RUNNING',
+    );
+    expect(running).toHaveLength(2);
+
+    for (const release of releases) release();
+  });
+
+  it('respects a weighted cost', async () => {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    const { store, dispatcher } = build(
+      [handler(hold, { type: 'track-hydrate', concurrency: 10 })],
+      {
+        resources: {
+          spotify: {
+            concurrency: 4,
+            types: ['track-hydrate'],
+            costs: { 'track-hydrate': 2 },
+          },
+        },
+      },
+    );
+    for (let i = 0; i < 4; i += 1) await seed(store, { type: 'track-hydrate' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+
+    expect(
+      (await store.findJobs({ limit: 20 })).filter((row) => row.status === 'RUNNING'),
+    ).toHaveLength(2);
+
+    for (const release of releases) release();
+  });
+
+  it('leaves a blocked job PENDING and unleased rather than running and idle', async () => {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    const { store, dispatcher } = build([pooled('track-hydrate', hold)], {
+      resources: { spotify: { concurrency: 1, types: ['track-hydrate'] } },
+    });
+    await seed(store, { type: 'track-hydrate' });
+    const blocked = await seed(store, { type: 'track-hydrate' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+
+    const job = (await store.findJobs({ limit: 20 })).find((row) => row.id === blocked);
+    expect(job?.status).toBe('PENDING');
+    expect(job?.leaseOwner ?? null).toBeNull();
+
+    for (const release of releases) release();
+  });
+
+  it('does not let a candidate block itself when reclaiming its own expired lease', async () => {
+    const { store, dispatcher } = build([pooled('track-hydrate')], {
+      resources: { spotify: { concurrency: 1, types: ['track-hydrate'] } },
+    });
+    const id = await seed(store, { type: 'track-hydrate' });
+    await store.claim({
+      id,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'dead-worker',
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 20 })).find((row) => row.id === id)?.status,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('frees pool capacity when a lease expires, with no reconciliation', async () => {
+    const { store, dispatcher } = build([pooled('track-hydrate')], {
+      resources: { spotify: { concurrency: 1, types: ['track-hydrate'] } },
+    });
+    const dead = await seed(store, { type: 'track-hydrate' });
+    await store.claim({
+      id: dead,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'dead-worker',
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+    const waiting = await seed(store, { type: 'track-hydrate' });
+
+    await tick(dispatcher);
+    await tick(dispatcher);
+
+    const rows = await store.findJobs({ limit: 20 });
+    expect(rows.find((row) => row.id === dead)?.status).toBe('SUCCEEDED');
+    expect(rows.find((row) => row.id === waiting)?.status).toBe('SUCCEEDED');
+  });
+
+  it('refuses a claim when a pool mate is taken after candidates are read', async () => {
+    const { store, dispatcher } = build([pooled('track-hydrate')], {
+      resources: { spotify: { concurrency: 1, types: ['track-hydrate', 'artist-enrich'] } },
+    });
+    const target = await seed(store, { type: 'track-hydrate' });
+
+    const original = store.findClaimCandidates.bind(store);
+    let raced = false;
+    store.findClaimCandidates = async (input) => {
+      const candidates = await original(input);
+      if (!raced) {
+        raced = true;
+        const mate = await seed(store, { type: 'artist-enrich' });
+        await store.claim({
+          id: mate,
+          fromStatus: 'PENDING',
+          now: new Date(),
+          leaseOwner: 'other-worker',
+          leaseExpiresAt: new Date(Date.now() + 60_000),
+        });
+      }
+      return candidates;
+    };
+
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 20 })).find((row) => row.id === target)?.status,
+    ).toBe('PENDING');
+  });
+
+  it('leaves handlers outside any pool unaffected', async () => {
+    const { store, dispatcher } = build([handler(() => Promise.resolve())], {
+      resources: { spotify: { concurrency: 1, types: ['track-hydrate'] } },
+    });
+    const id = await seed(store);
+
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 20 })).find((row) => row.id === id)?.status,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('does not let a greedy pool mate starve another across ticks', async () => {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    const { store, dispatcher } = build(
+      [
+        handler(hold, { type: 'track-hydrate', concurrency: 10 }),
+        handler(hold, { type: 'artist-enrich', concurrency: 1 }),
+      ],
+      { resources: { spotify: { concurrency: 1, types: ['track-hydrate', 'artist-enrich'] } } },
+    );
+    for (let i = 0; i < 5; i += 1) await seed(store, { type: 'track-hydrate' });
+    const starved = await seed(store, { type: 'artist-enrich' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+    for (const release of releases.splice(0)) release();
+    await new Promise((resolve) => setImmediate(resolve));
+    await internals.tick();
+    for (const release of releases.splice(0)) release();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    const job = (await store.findJobs({ limit: 20 })).find((row) => row.id === starved);
+    expect(job?.status).not.toBe('PENDING');
+  });
+});

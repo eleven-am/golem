@@ -88,3 +88,46 @@ describe('async factory options', () => {
     await moduleRef.close();
   });
 });
+
+describe('resource pool configuration', () => {
+  it('rejects a pool that bounds nothing', () => {
+    expect(() =>
+      resolveQueueOptions({ resources: { spotify: { concurrency: 0, types: ['a'] } } }),
+    ).toThrow(/concurrency.*at least 1/);
+    expect(() =>
+      resolveQueueOptions({ resources: { spotify: { concurrency: 2, types: [] } } }),
+    ).toThrow(/must name at least one job type/);
+  });
+
+  it('rejects a cost that is not a positive integer or names an outsider', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: { spotify: { concurrency: 2, types: ['a'], costs: { a: 0 } } },
+      }),
+    ).toThrow(/costs\.a.*at least 1/);
+    expect(() =>
+      resolveQueueOptions({
+        resources: { spotify: { concurrency: 2, types: ['a'], costs: { b: 1 } } },
+      }),
+    ).toThrow(/costs\.b.*listed in resources\.spotify\.types/);
+  });
+
+  it('rejects a job type drawing on two resources', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: {
+          spotify: { concurrency: 2, types: ['shared'] },
+          openai: { concurrency: 2, types: ['shared'] },
+        },
+      }),
+    ).toThrow(/already claimed by resources\.spotify/);
+  });
+
+  it('accepts a member type this process has no handler for', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: { spotify: { concurrency: 2, types: ['remote-only'] } },
+      }),
+    ).not.toThrow();
+  });
+});

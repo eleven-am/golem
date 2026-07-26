@@ -64,6 +64,24 @@ export interface PrismaJobStoreOptions {
 
 const UNIQUE_VIOLATION = 'P2002';
 
+function costExpression(
+  alias: string,
+  costs: Readonly<Record<string, number>>,
+): { sql: string; values: unknown[] } {
+  const weighted = Object.entries(costs).filter(([, cost]) => cost !== 1);
+  if (weighted.length === 0) {
+    return { sql: '1', values: [] };
+  }
+  const values: unknown[] = [];
+  const branches = weighted
+    .map(([type, cost]) => {
+      values.push(type, cost);
+      return 'WHEN ? THEN ?';
+    })
+    .join(' ');
+  return { sql: `CASE ${alias}."type" ${branches} ELSE 1 END`, values };
+}
+
 function quoteIdentifier(name: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
     throw new Error(`Unsupported job table name: ${name}`);
@@ -162,7 +180,11 @@ export class PrismaJobStore implements JobStore {
   }
 
   async claim(input: ClaimInput): Promise<boolean> {
-    if (input.serializeScope || (input.excludeTypes?.length ?? 0) > 0) {
+    if (
+      input.serializeScope ||
+      (input.excludeTypes?.length ?? 0) > 0 ||
+      input.pool !== undefined
+    ) {
       return this.claimGuarded(input);
     }
     const guard =
@@ -175,6 +197,7 @@ export class PrismaJobStore implements JobStore {
         status: 'RUNNING',
         leaseOwner: input.leaseOwner,
         leaseExpiresAt: input.leaseExpiresAt,
+        startedAt: input.now,
         ...(input.attempts === undefined ? {} : { attempts: input.attempts }),
         ...(input.lastError === undefined
           ? {}
@@ -187,7 +210,11 @@ export class PrismaJobStore implements JobStore {
   private async claimGuarded(input: ClaimInput): Promise<boolean> {
     const execute = this.prisma.$executeRawUnsafe;
     if (!execute) {
-      const flag = input.serializeScope ? 'serializeByScope' : 'excludes';
+      const flag = input.serializeScope
+        ? 'serializeByScope'
+        : input.pool !== undefined
+          ? 'a resource pool'
+          : 'excludes';
       throw new Error(
         `A handler sets ${flag}, which needs $executeRawUnsafe on the Prisma client passed to PrismaJobStore. The guard predicate and the claim must be one statement.`,
       );
@@ -201,8 +228,9 @@ export class PrismaJobStore implements JobStore {
       `"status" = 'RUNNING'`,
       `"leaseOwner" = ?`,
       `"leaseExpiresAt" = ?`,
+      `"startedAt" = ?`,
     ];
-    const values: unknown[] = [input.leaseOwner, input.leaseExpiresAt];
+    const values: unknown[] = [input.leaseOwner, input.leaseExpiresAt, input.now];
     if (input.attempts !== undefined) {
       sets.push(`"attempts" = ?`);
       values.push(input.attempts);
@@ -234,6 +262,24 @@ export class PrismaJobStore implements JobStore {
          )`);
       values.push(...excluded);
     }
+    const pool = input.pool;
+    if (pool !== undefined) {
+      const cost = costExpression('pooled', pool.costs);
+      predicates.push(`AND (
+           SELECT COALESCE(SUM(${cost.sql}), 0)
+           FROM ${table} AS pooled
+           WHERE pooled."type" IN (${pool.types.map(() => '?').join(', ')})
+             AND pooled."status" = 'RUNNING'
+             AND pooled."leaseExpiresAt" > ?
+         ) + ? <= ?`);
+      values.push(
+        ...cost.values,
+        ...pool.types,
+        input.now,
+        pool.cost,
+        pool.limit,
+      );
+    }
     const affected = await execute.call(
       this.prisma,
       `UPDATE ${table} SET ${sets.join(', ')}
@@ -243,6 +289,26 @@ export class PrismaJobStore implements JobStore {
       ...values,
     );
     return affected === 1;
+  }
+
+  async poolUsage(input: {
+    types: readonly string[];
+    costs: Readonly<Record<string, number>>;
+    now: Date;
+  }): Promise<number> {
+    if (input.types.length === 0) return 0;
+    const rows = await this.prisma.job.findMany({
+      where: {
+        type: { in: [...input.types] },
+        status: 'RUNNING',
+        leaseExpiresAt: { gt: input.now },
+      },
+      select: { type: true },
+    });
+    return rows.reduce(
+      (total, row) => total + (input.costs[row.type as string] ?? 1),
+      0,
+    );
   }
 
   async hasActiveOfTypes(input: { types: readonly string[] }): Promise<boolean> {

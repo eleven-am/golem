@@ -127,7 +127,21 @@ export interface JobRetentionOptions {
   readonly sweepIntervalMs?: number;
 }
 
+export interface JobResourceOptions {
+  /** Maximum summed cost of pool members holding a live lease at once. */
+  readonly concurrency: number;
+  /**
+   * Every job type drawing on this resource, including types whose handler
+   * runs in another process. A worker counts only the types it is told about,
+   * so a member missing here is a member the pool does not bound.
+   */
+  readonly types: readonly string[];
+  /** Concurrency slots a type occupies while running. Defaults to 1. */
+  readonly costs?: Readonly<Record<string, number>>;
+}
+
 export interface GolemQueueOptions {
+  resources?: Readonly<Record<string, JobResourceOptions>>;
   pollIntervalMs?: number;
   baseBackoffMs?: number;
   maxBackoffMs?: number;
@@ -142,6 +156,7 @@ export interface GolemQueueOptions {
 }
 
 export interface ResolvedGolemQueueOptions {
+  readonly resources?: Readonly<Record<string, JobResourceOptions>>;
   readonly pollIntervalMs: number;
   readonly baseBackoffMs: number;
   readonly maxBackoffMs: number;
@@ -188,8 +203,10 @@ export function resolveQueueOptions(
       options.defaultMaxAttempts ?? GOLEM_QUEUE_DEFAULTS.defaultMaxAttempts,
     workerId: options.workerId,
     retention: options.retention,
+    resources: options.resources,
   };
   validateQueueOptions(resolved);
+  resolveJobPools(resolved.resources);
   return resolved;
 }
 
@@ -199,6 +216,73 @@ function invalidOption(name: string, value: unknown, expectation: string): never
 
 function finiteNumber(name: string, value: number): void {
   if (!Number.isFinite(value)) invalidOption(name, value, 'must be a finite number');
+}
+
+export interface ResolvedJobPool {
+  readonly name: string;
+  readonly limit: number;
+  readonly types: readonly string[];
+  readonly costs: Readonly<Record<string, number>>;
+}
+
+export function resolveJobPools(
+  resources: Readonly<Record<string, JobResourceOptions>> | undefined,
+): Map<string, ResolvedJobPool> {
+  const byType = new Map<string, ResolvedJobPool>();
+  const owner = new Map<string, string>();
+  for (const [name, resource] of Object.entries(resources ?? {})) {
+    if (!Number.isInteger(resource.concurrency) || resource.concurrency < 1) {
+      invalidOption(
+        `resources.${name}.concurrency`,
+        resource.concurrency,
+        'must be an integer of at least 1',
+      );
+    }
+    if (resource.types.length === 0) {
+      invalidOption(
+        `resources.${name}.types`,
+        '[]',
+        'must name at least one job type, including types handled by other workers',
+      );
+    }
+    const costs: Record<string, number> = {};
+    for (const [type, cost] of Object.entries(resource.costs ?? {})) {
+      if (!resource.types.includes(type)) {
+        invalidOption(
+          `resources.${name}.costs.${type}`,
+          cost,
+          `must name a type listed in resources.${name}.types`,
+        );
+      }
+      if (!Number.isInteger(cost) || cost < 1) {
+        invalidOption(
+          `resources.${name}.costs.${type}`,
+          cost,
+          'must be an integer of at least 1',
+        );
+      }
+      costs[type] = cost;
+    }
+    const pool: ResolvedJobPool = {
+      name,
+      limit: resource.concurrency,
+      types: [...new Set(resource.types)],
+      costs,
+    };
+    for (const type of pool.types) {
+      const claimed = owner.get(type);
+      if (claimed !== undefined) {
+        invalidOption(
+          `resources.${name}.types`,
+          type,
+          `is already claimed by resources.${claimed}; a job type may draw on one resource`,
+        );
+      }
+      owner.set(type, name);
+      byType.set(type, pool);
+    }
+  }
+  return byType;
 }
 
 export function validateQueueOptions(options: ResolvedGolemQueueOptions): void {

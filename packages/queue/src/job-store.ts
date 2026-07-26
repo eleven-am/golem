@@ -70,6 +70,29 @@ export interface ClaimInput {
    * the blocked work and the expired row are the same job.
    */
   readonly excludeTypes?: readonly string[];
+  /**
+   * Refuse the claim when the resource pool this job draws on is already at
+   * its limit.
+   *
+   * Occupancy is derived, not held: it is the summed cost of pool members that
+   * are RUNNING with a live lease, counted at claim time. Nothing is acquired,
+   * so nothing has to be released, and a worker that dies frees its units when
+   * its lease expires through the same recovery that reclaims the job.
+   *
+   * Like the other guards this MUST be evaluated in the statement that claims.
+   * A separate read admits two workers that both saw room.
+   *
+   * The candidate cannot block itself: a PENDING row is not RUNNING, and a row
+   * being reclaimed has an expired lease.
+   */
+  readonly pool?: ClaimPool;
+}
+
+export interface ClaimPool {
+  readonly types: readonly string[];
+  readonly costs: Readonly<Record<string, number>>;
+  readonly limit: number;
+  readonly cost: number;
 }
 
 export interface FailExpiredLeaseInput {
@@ -168,6 +191,18 @@ export interface JobStore {
    * on it: `ClaimInput.excludeTypes` is the enforcing predicate.
    */
   hasActiveOfTypes?(input: { types: readonly string[] }): Promise<boolean>;
+  /**
+   * Summed cost of pool members holding a live lease.
+   *
+   * Optional. The dispatcher uses it to skip a handler whose pool is full and
+   * to bound how many candidates it fetches, rather than issuing claims that
+   * cannot succeed. Correctness rests on `ClaimInput.pool`.
+   */
+  poolUsage?(input: {
+    types: readonly string[];
+    costs: Readonly<Record<string, number>>;
+    now: Date;
+  }): Promise<number>;
   failExpiredLease(input: FailExpiredLeaseInput): Promise<boolean>;
   findOwnedRunningIds(input: {
     ids: readonly string[];

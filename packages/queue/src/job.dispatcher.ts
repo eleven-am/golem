@@ -6,7 +6,7 @@ import {
   OnModuleDestroy,
 } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
-import type { ClaimCandidate, JobStatus, JobStore } from './job-store';
+import type { ClaimCandidate, ClaimPool, JobStatus, JobStore } from './job-store';
 import { JobCancellationRegistry } from './job-cancellation.registry';
 import { JobObserverRegistry } from './job-observer.registry';
 import {
@@ -23,6 +23,8 @@ import {
   type JobLifecycleTransition,
   type JobScope,
   type ResolvedGolemQueueOptions,
+  type ResolvedJobPool,
+  resolveJobPools,
 } from './job.types';
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
@@ -48,6 +50,8 @@ export class JobDispatcher implements OnModuleDestroy {
   private readonly handlers = new Map<string, JobHandler>();
   private readonly inFlight = new Map<string, number>();
   private readonly blockedTicks = new Map<string, number>();
+  private readonly pools: Map<string, ResolvedJobPool>;
+  private tickOffset = 0;
   private readonly executions = new Map<
     string,
     { controller: AbortController; completion: Promise<void> }
@@ -67,6 +71,7 @@ export class JobDispatcher implements OnModuleDestroy {
     private readonly observers: JobObserverRegistry,
   ) {
     this.workerId = options.workerId ?? randomUUID();
+    this.pools = resolveJobPools(options.resources);
     for (const handler of handlers) {
       this.register(handler);
     }
@@ -96,6 +101,21 @@ export class JobDispatcher implements OnModuleDestroy {
 
   registeredTypes(): string[] {
     return [...this.handlers.keys()];
+  }
+
+  private poolFor(type: string): ResolvedJobPool | undefined {
+    return this.pools.get(type);
+  }
+
+  private claimPool(handler: JobHandler): ClaimPool | undefined {
+    const pool = this.poolFor(handler.type);
+    if (pool === undefined) return undefined;
+    return {
+      types: pool.types,
+      costs: pool.costs,
+      limit: pool.limit,
+      cost: pool.costs[handler.type] ?? 1,
+    };
   }
 
   start(): void {
@@ -174,11 +194,22 @@ export class JobDispatcher implements OnModuleDestroy {
   private async tick(): Promise<void> {
     await this.reconcileCancellations();
     await this.sweepRetention();
-    for (const [type, handler] of this.handlers) {
+    const entries = [...this.handlers.entries()];
+    this.tickOffset = entries.length === 0 ? 0 : (this.tickOffset + 1) % entries.length;
+    const rotated = [
+      ...entries.slice(this.tickOffset),
+      ...entries.slice(0, this.tickOffset),
+    ];
+    for (const [type, handler] of rotated) {
       if (this.stopped) return;
-      const capacity = handler.concurrency - (this.inFlight.get(type) ?? 0);
+      let capacity = handler.concurrency - (this.inFlight.get(type) ?? 0);
       if (capacity <= 0) continue;
       if (await this.isExcluded(handler)) continue;
+      const room = await this.poolRoom(handler);
+      if (room !== undefined) {
+        if (room <= 0) continue;
+        capacity = Math.min(capacity, room);
+      }
       const claimed = await this.claim(handler, capacity);
       for (const job of claimed) this.startExecution(handler, job);
     }
@@ -189,6 +220,7 @@ export class JobDispatcher implements OnModuleDestroy {
     limit: number,
   ): Promise<ClaimCandidate[]> {
     const now = new Date();
+    const claimPool = this.claimPool(handler);
     const candidates = await this.store.findClaimCandidates({
       type: handler.type,
       now,
@@ -236,6 +268,7 @@ export class JobDispatcher implements OnModuleDestroy {
         ...((handler.excludes?.length ?? 0) > 0
           ? { excludeTypes: handler.excludes }
           : {}),
+        ...(claimPool === undefined ? {} : { pool: claimPool }),
         ...(recoveringExpiredLease
           ? {
               attempts: recoveredAttempts,
@@ -246,6 +279,19 @@ export class JobDispatcher implements OnModuleDestroy {
       if (won) claimed.push(candidate);
     }
     return claimed;
+  }
+
+  private async poolRoom(handler: JobHandler): Promise<number | undefined> {
+    const pool = this.poolFor(handler.type);
+    const usage = this.store.poolUsage?.bind(this.store);
+    if (pool === undefined || usage === undefined) return undefined;
+    const used = await usage({
+      types: pool.types,
+      costs: pool.costs,
+      now: new Date(),
+    });
+    const cost = pool.costs[handler.type] ?? 1;
+    return Math.floor((pool.limit - used) / cost);
   }
 
   private async isExcluded(handler: JobHandler): Promise<boolean> {
