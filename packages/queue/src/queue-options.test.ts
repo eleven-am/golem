@@ -131,3 +131,45 @@ describe('resource pool configuration', () => {
     ).not.toThrow();
   });
 });
+
+describe('rate budget configuration', () => {
+  it('rejects a resource that bounds nothing', () => {
+    expect(() =>
+      resolveQueueOptions({ resources: { api: { types: ['a'] } } as never }),
+    ).toThrow(/must declare concurrency, ratePerMinute, or both/);
+  });
+
+  it('rejects a rate that is not a positive integer', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: { api: { ratePerMinute: 0, types: ['a'] } },
+      }),
+    ).toThrow(/ratePerMinute.*at least 1/);
+  });
+
+  it('rejects weights against a budget that was never declared', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: { api: { concurrency: 2, types: ['a'], rateCosts: { a: 2 } } },
+      }),
+    ).toThrow(/weighs a budget that resources\.api does not declare/);
+  });
+
+  it('rejects a rate cost larger than the budget', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: {
+          api: { ratePerMinute: 5, types: ['a'], rateCosts: { a: 6 } },
+        },
+      }),
+    ).toThrow(/exceeds resources\.api\.ratePerMinute/);
+  });
+
+  it('accepts a rate-only resource', () => {
+    expect(() =>
+      resolveQueueOptions({
+        resources: { api: { ratePerMinute: 180, types: ['a'] } },
+      }),
+    ).not.toThrow();
+  });
+});

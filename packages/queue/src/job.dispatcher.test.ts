@@ -1031,3 +1031,128 @@ describe('store capability', () => {
     void dispatcher.onModuleDestroy();
   });
 });
+
+describe('rate budgets', () => {
+  const statusOf = async (store: InMemoryJobStore, id: string) =>
+    (await store.findJobs({ limit: 40 })).find((row) => row.id === id)?.status;
+
+  function budget(overrides: Partial<{ ratePerMinute: number; rateCosts: Record<string, number> }> = {}) {
+    return {
+      resources: {
+        spotify: {
+          ratePerMinute: overrides.ratePerMinute ?? 3,
+          types: ['hydrate'],
+          ...(overrides.rateCosts ? { rateCosts: overrides.rateCosts } : {}),
+        },
+      },
+    };
+  }
+
+  it('bounds starts even when every job finishes immediately', async () => {
+    const { store, dispatcher } = build(
+      [handler(() => Promise.resolve(), { type: 'hydrate', concurrency: 10 })],
+      budget(),
+    );
+    for (let i = 0; i < 6; i += 1) await seed(store, { type: 'hydrate' });
+
+    await tick(dispatcher);
+    await tick(dispatcher);
+
+    const rows = await store.findJobs({ limit: 40 });
+    expect(rows.filter((row) => row.status === 'SUCCEEDED')).toHaveLength(3);
+    expect(rows.filter((row) => row.status === 'PENDING')).toHaveLength(3);
+  });
+
+  it('keeps counting a job that has already completed', async () => {
+    const { store, dispatcher } = build(
+      [handler(() => Promise.resolve(), { type: 'hydrate', concurrency: 10 })],
+      budget({ ratePerMinute: 1 }),
+    );
+    const first = await seed(store, { type: 'hydrate' });
+    const second = await seed(store, { type: 'hydrate' });
+
+    await tick(dispatcher);
+    expect(await statusOf(store, first)).toBe('SUCCEEDED');
+
+    await tick(dispatcher);
+    expect(await statusOf(store, second)).toBe('PENDING');
+  });
+
+  it('spends a weighted cost per start', async () => {
+    const { store, dispatcher } = build(
+      [handler(() => Promise.resolve(), { type: 'hydrate', concurrency: 10 })],
+      budget({ ratePerMinute: 4, rateCosts: { hydrate: 2 } }),
+    );
+    for (let i = 0; i < 4; i += 1) await seed(store, { type: 'hydrate' });
+
+    await tick(dispatcher);
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 40 })).filter((row) => row.status === 'SUCCEEDED'),
+    ).toHaveLength(2);
+  });
+
+  it('admits again once the window slides past the earlier starts', async () => {
+    const { store, dispatcher } = build(
+      [handler(() => Promise.resolve(), { type: 'hydrate', concurrency: 10 })],
+      budget({ ratePerMinute: 1 }),
+    );
+    const first = await seed(store, { type: 'hydrate' });
+    const second = await seed(store, { type: 'hydrate' });
+
+    await tick(dispatcher);
+    expect(await statusOf(store, first)).toBe('SUCCEEDED');
+
+    const rows = (store as unknown as { jobs: Map<string, { startedAt: Date | null }> }).jobs;
+    const aged = rows.get(first)!;
+    aged.startedAt = new Date(Date.now() - 120_000);
+
+    await tick(dispatcher);
+    expect(await statusOf(store, second)).toBe('SUCCEEDED');
+  });
+
+  it('enforces concurrency and rate together when both are declared', async () => {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    const { store, dispatcher } = build(
+      [handler(hold, { type: 'hydrate', concurrency: 10, timeoutMs: 5_000 })],
+      {
+        resources: {
+          spotify: { concurrency: 1, ratePerMinute: 5, types: ['hydrate'] },
+        },
+      },
+    );
+    for (let i = 0; i < 4; i += 1) await seed(store, { type: 'hydrate' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+
+    expect(
+      (await store.findJobs({ limit: 40 })).filter((row) => row.status === 'RUNNING'),
+    ).toHaveLength(1);
+    for (const release of releases) release();
+  });
+
+  it('withholds rows inside the rate window when pruning', async () => {
+    const store = new InMemoryJobStore();
+    const recent = await seed(store, { type: 'hydrate' });
+    await store.claim({
+      id: recent,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'w',
+      leaseExpiresAt: new Date(Date.now() + 1000),
+    });
+    await store.complete({ id: recent, leaseOwner: 'w' });
+
+    const deleted = await store.deleteTerminalBefore({
+      statuses: ['SUCCEEDED', 'FAILED'],
+      before: new Date(Date.now() + 60_000),
+      keepStartedAfter: new Date(Date.now() - 60_000),
+    });
+
+    expect(deleted).toBe(0);
+    expect(await statusOf(store, recent)).toBe('SUCCEEDED');
+  });
+});

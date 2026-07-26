@@ -135,7 +135,18 @@ export class InMemoryJobStore implements JobStore {
     const pool = input.pool;
     if (
       pool !== undefined &&
+      pool.limit !== undefined &&
       this.usageOf(pool.types, pool.costs, input.now) + pool.cost > pool.limit
+    ) {
+      return Promise.resolve(false);
+    }
+    if (
+      pool !== undefined &&
+      pool.rateLimit !== undefined &&
+      pool.rateWindowStart !== undefined &&
+      this.spentOf(pool.types, pool.rateCosts ?? {}, pool.rateWindowStart) +
+        (pool.rateCost ?? 1) >
+        pool.rateLimit
     ) {
       return Promise.resolve(false);
     }
@@ -168,12 +179,39 @@ export class InMemoryJobStore implements JobStore {
     return total;
   }
 
+  private spentOf(
+    types: readonly string[],
+    rateCosts: Readonly<Record<string, number>>,
+    windowStart: Date,
+  ): number {
+    const members = new Set(types);
+    let total = 0;
+    for (const job of this.jobs.values()) {
+      if (
+        members.has(job.type) &&
+        job.startedAt !== null &&
+        job.startedAt > windowStart
+      ) {
+        total += rateCosts[job.type] ?? 1;
+      }
+    }
+    return total;
+  }
+
   poolUsage(input: {
     types: readonly string[];
     costs: Readonly<Record<string, number>>;
+    rateCosts: Readonly<Record<string, number>>;
+    rateWindowStart?: Date;
     now: Date;
-  }): Promise<number> {
-    return Promise.resolve(this.usageOf(input.types, input.costs, input.now));
+  }): Promise<{ concurrency: number; rate: number }> {
+    return Promise.resolve({
+      concurrency: this.usageOf(input.types, input.costs, input.now),
+      rate:
+        input.rateWindowStart === undefined
+          ? 0
+          : this.spentOf(input.types, input.rateCosts, input.rateWindowStart),
+    });
   }
 
   private outstandingOf(types: readonly string[], now: Date): boolean {
@@ -425,7 +463,11 @@ export class InMemoryJobStore implements JobStore {
   deleteTerminalBefore(input: PruneInput): Promise<number> {
     const doomed = this.all().filter(
       (job) =>
-        input.statuses.includes(job.status) && job.updatedAt < input.before,
+        input.statuses.includes(job.status) &&
+        job.updatedAt < input.before &&
+        (input.keepStartedAfter === undefined ||
+          job.startedAt === null ||
+          job.startedAt <= input.keepStartedAfter),
     );
     for (const job of doomed) this.jobs.delete(job.id);
     return Promise.resolve(doomed.length);

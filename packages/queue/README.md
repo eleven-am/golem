@@ -197,14 +197,24 @@ Declare the pool in module config:
 GolemQueueModule.forRootAsync({
   resources: {
     spotify: {
-      concurrency: 4,
+      concurrency: 4,                    // how many may run at once
+      ratePerMinute: 180,                // how many may start per minute
       types: ['spotify-sync', 'track-hydrate', 'artist-enrich'],
-      costs: { 'spotify-sync': 2 },   // slots occupied while running, default 1
+      costs:     { 'spotify-sync': 2 },  // slots held while running, default 1
+      rateCosts: { 'track-hydrate': 50 },// budget spent per start, default 1
     },
   },
   handlers: [SyncHandler, HydrateHandler, EnrichHandler],
 })
 ```
+
+Declare either dimension or both. They bound different things and are not interchangeable: **concurrency** limits how much runs at once, **rate** limits how much starts over time. A handler at `concurrency: 1` issuing batched calls in a tight loop respects a parallelism limit while exhausting a per-minute budget on its own, which is why the second exists.
+
+The two costs are separate for the same reason. A job that holds one connection while making fifty calls occupies one slot and spends fifty units.
+
+The rate window counts **starts, whatever their status now** — a job that finished ten seconds ago still spent what it called, so it keeps counting until it ages out. A retried job counts each attempt, because it called again. The window slides continuously rather than resetting, so a budget cannot be spent twice across a boundary.
+
+Retention respects this: `prune` keeps terminal rows that started inside the longest configured window, however old the cutoff you pass. Deleting them would free budget that was really spent.
 
 No handler changes. A job is claimed only when the summed cost of pool members already holding a live lease leaves room for it, evaluated inside the claiming transaction behind the pool's guard row — so two workers cannot both take the last slot.
 
@@ -216,7 +226,9 @@ Each poll visits handlers in a rotating order, so a pool mate with high concurre
 
 ### What a pool cannot do
 
-A pool bounds jobs, not the requests made inside them. A handler that runs for hours polling in a loop is one job to the queue: putting it in a pool of four would run four of them while each still calls the API as often as it likes. Rate-limit those calls in the client that makes them — the queue cannot see them.
+A pool bounds jobs, not the requests made inside them. A handler that runs for hours polling in a loop is one job to the queue: a concurrency pool of four would run four of them while each still calls the API as often as it likes, and a rate budget counts its single start and nothing after. Neither dimension can see calls made inside a job.
+
+Two ways out. Rate-limit those calls in the client that makes them, where they are visible. Or **model recurring work as recurring jobs** — if each poll is its own short job rather than one long loop, every call crosses a claim boundary and both dimensions bound it exactly. The second is usually the better shape: it also gives you retries, cancellation, and visibility per poll instead of per watcher.
 
 ## Ordering between job types
 

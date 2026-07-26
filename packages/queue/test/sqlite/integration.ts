@@ -217,6 +217,53 @@ async function main(): Promise<void> {
     );
   });
 
+  await test('bounds a rate budget, counting jobs that already finished', async () => {
+    for (let i = 0; i < 5; i += 1) await seed(`r${i}`);
+    const windowStart = new Date(Date.now() - 60_000);
+    const admitted: boolean[] = [];
+    for (let i = 0; i < 5; i += 1) {
+      const won = await store.claim(
+        claimOf(`r${i}`, {
+          guardKeys: ['pool:api'],
+          pool: {
+            types: ['hydrate'],
+            costs: {},
+            cost: 1,
+            rateLimit: 2,
+            rateWindowStart: windowStart,
+            rateCosts: {},
+            rateCost: 1,
+          },
+        }),
+      );
+      admitted.push(won);
+      if (won) {
+        // Finish it. A completed job still spent its budget, so the next claim
+        // must still be refused.
+        await prisma.job.update({
+          where: { id: `r${i}` },
+          data: { status: 'SUCCEEDED', leaseOwner: null, leaseExpiresAt: null },
+        });
+      }
+    }
+    assert.equal(admitted.filter(Boolean).length, 2, 'budget admitted too many');
+  });
+
+  await test('withholds rows inside the rate window when pruning', async () => {
+    await seed('kept');
+    await store.claim(claimOf('kept', { guardKeys: ['pool:api'] }));
+    await prisma.job.update({
+      where: { id: 'kept' },
+      data: { status: 'SUCCEEDED' },
+    });
+    const removed = await store.deleteTerminalBefore({
+      statuses: ['SUCCEEDED', 'FAILED'],
+      before: new Date(Date.now() + 60_000),
+      keepStartedAfter: new Date(Date.now() - 60_000),
+    });
+    assert.equal(removed, 0);
+  });
+
   // The case no in-process test can reach: separate workers contending for one
   // pool on one database file. Reading before writing the guard row leaves a
   // deferred reader that cannot upgrade while another worker holds the writer

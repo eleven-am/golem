@@ -18,7 +18,7 @@ model JobGuard {
 
 `JobGuard` is the serialization point for claim guards. Every worker competing for the same guard writes one shared row before reading, which is what makes the guard hold across processes and across engines. Rows are created as needed; there is nothing to seed or prune.
 
-`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery. Nothing reads it yet — it is here so that per-minute rate budgets, which need a window over job starts, do not require a second migration.
+`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery. Rate budgets count starts inside a sliding window, and `prune` uses it to keep rows that are still inside one.
 
 ## `excludes` splits into two constraints
 

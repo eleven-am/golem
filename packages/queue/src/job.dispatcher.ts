@@ -113,9 +113,16 @@ export class JobDispatcher implements OnModuleDestroy {
     if (pool === undefined) return undefined;
     return {
       types: pool.types,
-      costs: pool.costs,
       limit: pool.limit,
+      costs: pool.costs,
       cost: pool.costs[handler.type] ?? 1,
+      rateLimit: pool.rateLimit,
+      rateWindowStart:
+        pool.rateWindowMs === undefined
+          ? undefined
+          : new Date(Date.now() - pool.rateWindowMs),
+      rateCosts: pool.rateCosts,
+      rateCost: pool.rateCosts[handler.type] ?? 1,
     };
   }
 
@@ -385,13 +392,31 @@ export class JobDispatcher implements OnModuleDestroy {
     const pool = this.poolFor(handler.type);
     const usage = this.store.poolUsage?.bind(this.store);
     if (pool === undefined || usage === undefined) return undefined;
+    const now = new Date();
     const used = await usage({
       types: pool.types,
       costs: pool.costs,
-      now: new Date(),
+      rateCosts: pool.rateCosts,
+      rateWindowStart:
+        pool.rateWindowMs === undefined
+          ? undefined
+          : new Date(now.getTime() - pool.rateWindowMs),
+      now,
     });
-    const cost = pool.costs[handler.type] ?? 1;
-    return Math.floor((pool.limit - used) / cost);
+    const rooms: number[] = [];
+    if (pool.limit !== undefined) {
+      rooms.push(
+        Math.floor((pool.limit - used.concurrency) / (pool.costs[handler.type] ?? 1)),
+      );
+    }
+    if (pool.rateLimit !== undefined) {
+      rooms.push(
+        Math.floor(
+          (pool.rateLimit - used.rate) / (pool.rateCosts[handler.type] ?? 1),
+        ),
+      );
+    }
+    return rooms.length === 0 ? undefined : Math.min(...rooms);
   }
 
   private async isOrderBlocked(handler: JobHandler): Promise<boolean> {

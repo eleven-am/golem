@@ -268,7 +268,7 @@ export class PrismaJobStore implements JobStore {
       if (live > 0) return false;
     }
     const pool = input.pool;
-    if (pool !== undefined) {
+    if (pool !== undefined && pool.limit !== undefined) {
       const members = await tx.job.findMany({
         where: {
           type: { in: [...pool.types] },
@@ -282,6 +282,26 @@ export class PrismaJobStore implements JobStore {
         0,
       );
       if (used + pool.cost > pool.limit) return false;
+    }
+    if (
+      pool !== undefined &&
+      pool.rateLimit !== undefined &&
+      pool.rateWindowStart !== undefined
+    ) {
+      // No status filter: a job that started inside the window spent its budget
+      // whether or not it has finished since.
+      const started = await tx.job.findMany({
+        where: {
+          type: { in: [...pool.types] },
+          startedAt: { gt: pool.rateWindowStart },
+        },
+        select: { type: true },
+      });
+      const spent = started.reduce(
+        (total, row) => total + (pool.rateCosts?.[row.type as string] ?? 1),
+        0,
+      );
+      if (spent + (pool.rateCost ?? 1) > pool.rateLimit) return false;
     }
     return true;
   }
@@ -516,6 +536,14 @@ export class PrismaJobStore implements JobStore {
       where: {
         status: { in: [...input.statuses] },
         updatedAt: { lt: input.before },
+        ...(input.keepStartedAfter === undefined
+          ? {}
+          : {
+              OR: [
+                { startedAt: null },
+                { startedAt: { lte: input.keepStartedAfter } },
+              ],
+            }),
       },
     });
     return result.count;

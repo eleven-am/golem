@@ -101,9 +101,19 @@ export interface ClaimInput {
 
 export interface ClaimPool {
   readonly types: readonly string[];
+  /** Concurrency: summed cost of members holding a live lease. */
+  readonly limit?: number;
   readonly costs: Readonly<Record<string, number>>;
-  readonly limit: number;
   readonly cost: number;
+  /**
+   * Rate: summed cost of members *started* since `rateWindowStart`, whatever
+   * their status now. A finished job still spent its budget, so unlike the
+   * concurrency dimension this counts terminal rows too.
+   */
+  readonly rateLimit?: number;
+  readonly rateWindowStart?: Date;
+  readonly rateCosts?: Readonly<Record<string, number>>;
+  readonly rateCost?: number;
 }
 
 export interface FailExpiredLeaseInput {
@@ -178,6 +188,12 @@ export interface RequeueInput {
 export interface PruneInput {
   readonly statuses: readonly JobStatus[];
   readonly before: Date;
+  /**
+   * Keep rows started after this instant even when they are older than
+   * `before`. A rate budget counts starts inside its window, so pruning one out
+   * of the window frees budget that was actually spent.
+   */
+  readonly keepStartedAfter?: Date;
 }
 
 /**
@@ -223,8 +239,10 @@ export interface JobStore {
   poolUsage?(input: {
     types: readonly string[];
     costs: Readonly<Record<string, number>>;
+    rateCosts: Readonly<Record<string, number>>;
+    rateWindowStart?: Date;
     now: Date;
-  }): Promise<number>;
+  }): Promise<{ concurrency: number; rate: number }>;
   failExpiredLease(input: FailExpiredLeaseInput): Promise<boolean>;
   findOwnedRunningIds(input: {
     ids: readonly string[];

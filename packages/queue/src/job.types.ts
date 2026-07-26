@@ -130,7 +130,15 @@ export interface JobRetentionOptions {
 
 export interface JobResourceOptions<TType extends string = JobType> {
   /** Maximum summed cost of pool members holding a live lease at once. */
-  readonly concurrency: number;
+  readonly concurrency?: number;
+  /**
+   * Maximum summed rate cost of pool members *started* in the last minute.
+   *
+   * Bounds throughput rather than parallelism, and counts jobs that have since
+   * finished: a completed job still spent whatever it called. Declare this
+   * instead of, or alongside, `concurrency`.
+   */
+  readonly ratePerMinute?: number;
   /**
    * Every job type drawing on this resource, including types whose handler
    * runs in another process. A worker counts only the types it is told about,
@@ -139,6 +147,14 @@ export interface JobResourceOptions<TType extends string = JobType> {
   readonly types: readonly TType[];
   /** Concurrency slots a type occupies while running. Defaults to 1. */
   readonly costs?: Partial<Record<TType, number>>;
+  /**
+   * Budget a type spends when it starts. Defaults to 1.
+   *
+   * Separate from `costs` because the two measure different things: a job that
+   * holds one connection while making fifty calls occupies one slot and spends
+   * fifty units.
+   */
+  readonly rateCosts?: Partial<Record<TType, number>>;
 }
 
 export interface GolemQueueOptions {
@@ -221,9 +237,12 @@ function finiteNumber(name: string, value: number): void {
 
 export interface ResolvedJobPool {
   readonly name: string;
-  readonly limit: number;
   readonly types: readonly string[];
+  readonly limit?: number;
   readonly costs: Readonly<Record<string, number>>;
+  readonly rateLimit?: number;
+  readonly rateWindowMs?: number;
+  readonly rateCosts: Readonly<Record<string, number>>;
 }
 
 export function resolveJobPools(
@@ -232,11 +251,38 @@ export function resolveJobPools(
   const byType = new Map<string, ResolvedJobPool>();
   const owner = new Map<string, string>();
   for (const [name, resource] of Object.entries(resources ?? {})) {
-    if (!Number.isInteger(resource.concurrency) || resource.concurrency < 1) {
+    if (resource.concurrency === undefined && resource.ratePerMinute === undefined) {
+      invalidOption(
+        `resources.${name}`,
+        'no limit',
+        'must declare concurrency, ratePerMinute, or both; a resource with neither bounds nothing',
+      );
+    }
+    if (
+      resource.concurrency !== undefined &&
+      (!Number.isInteger(resource.concurrency) || resource.concurrency < 1)
+    ) {
       invalidOption(
         `resources.${name}.concurrency`,
         resource.concurrency,
         'must be an integer of at least 1',
+      );
+    }
+    if (
+      resource.ratePerMinute !== undefined &&
+      (!Number.isInteger(resource.ratePerMinute) || resource.ratePerMinute < 1)
+    ) {
+      invalidOption(
+        `resources.${name}.ratePerMinute`,
+        resource.ratePerMinute,
+        'must be an integer of at least 1',
+      );
+    }
+    if (resource.rateCosts !== undefined && resource.ratePerMinute === undefined) {
+      invalidOption(
+        `resources.${name}.rateCosts`,
+        Object.keys(resource.rateCosts).join(', '),
+        `weighs a budget that resources.${name} does not declare; add ratePerMinute`,
       );
     }
     if (resource.types.length === 0) {
@@ -263,7 +309,10 @@ export function resolveJobPools(
           'must be an integer of at least 1',
         );
       }
-      if (cost > resource.concurrency) {
+      if (
+        resource.concurrency !== undefined &&
+        cost > resource.concurrency
+      ) {
         invalidOption(
           `resources.${name}.costs.${type}`,
           cost,
@@ -272,11 +321,43 @@ export function resolveJobPools(
       }
       costs[type] = cost;
     }
+    const rateCosts: Record<string, number> = {};
+    for (const [type, rawCost] of Object.entries(resource.rateCosts ?? {})) {
+      const cost = rawCost as number;
+      if (!resource.types.includes(type)) {
+        invalidOption(
+          `resources.${name}.rateCosts.${type}`,
+          cost,
+          `must name a type listed in resources.${name}.types`,
+        );
+      }
+      if (!Number.isInteger(cost) || cost < 1) {
+        invalidOption(
+          `resources.${name}.rateCosts.${type}`,
+          cost,
+          'must be an integer of at least 1',
+        );
+      }
+      if (
+        resource.ratePerMinute !== undefined &&
+        cost > resource.ratePerMinute
+      ) {
+        invalidOption(
+          `resources.${name}.rateCosts.${type}`,
+          cost,
+          `exceeds resources.${name}.ratePerMinute (${resource.ratePerMinute}); a job spending more than the budget holds could never be claimed`,
+        );
+      }
+      rateCosts[type] = cost;
+    }
     const pool: ResolvedJobPool = {
       name,
-      limit: resource.concurrency,
       types: [...new Set(resource.types)],
+      limit: resource.concurrency,
       costs,
+      rateLimit: resource.ratePerMinute,
+      rateWindowMs: resource.ratePerMinute === undefined ? undefined : 60_000,
+      rateCosts,
     };
     for (const type of pool.types) {
       const claimed = owner.get(type);
