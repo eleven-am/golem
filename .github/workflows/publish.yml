@@ -22,14 +22,17 @@ jobs:
       - name: Update npm for trusted publishing
         run: npm install -g npm@latest
       - name: Install dependencies
-        run: npm ci
+        run: |
+          npm ci
+          # npm 11 defers install scripts until approved, which leaves native
+          # modules unbuilt. The queue's integration suite runs against a real
+          # SQLite engine and cannot load better-sqlite3 without its binary.
+          npm approve-scripts better-sqlite3
+          npm rebuild better-sqlite3
       - name: Build libraries
         run: |
           npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
           npm rebuild -w @eleven-am/golem-generator
-          # better-sqlite3 ships no prebuild for this Node major, and the queue's
-          # integration suite runs against a real engine.
-          npm rebuild better-sqlite3
           npm run build -w @eleven-am/golem-authorizer -w @eleven-am/golem -w @eleven-am/golem-queue -w @eleven-am/golem-render
       - name: Test libraries
         run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-queue -w @eleven-am/golem-render --if-present
