@@ -7,7 +7,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "jest && npm run test:sqlite && npm run test:prisma7-types",
     "test:prisma7-types": "prisma generate --schema test/prisma7/schema.prisma && tsc -p test/prisma7/tsconfig.json --noEmit",
-    "test:sqlite": "tsc -p test/sqlite/tsconfig.json && node test/sqlite/out/test/sqlite/integration.js",
+    "test:sqlite": "prisma generate --schema test/prisma7/schema.prisma && tsc -p test/sqlite/tsconfig.json && node test/sqlite/out/test/sqlite/integration.js",
     "test:postgres": "prisma generate --schema test/postgres/schema.prisma && tsc -p test/postgres/tsconfig.json && node test/postgres/out/test/postgres/integration.js"
   },
   "peerDependencies": {
