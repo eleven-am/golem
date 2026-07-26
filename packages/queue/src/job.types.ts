@@ -29,7 +29,8 @@ export interface JobHandler<TType extends JobType = JobType> extends JobWork<TTy
   readonly concurrency: number;
   readonly timeoutMs: number;
   readonly serializeByScope?: boolean;
-  readonly excludes?: readonly string[];
+  readonly waitsFor?: readonly string[];
+  readonly notWhileRunning?: readonly string[];
 }
 
 export class TerminalJobError extends Error {
@@ -127,7 +128,7 @@ export interface JobRetentionOptions {
   readonly sweepIntervalMs?: number;
 }
 
-export interface JobResourceOptions {
+export interface JobResourceOptions<TType extends string = JobType> {
   /** Maximum summed cost of pool members holding a live lease at once. */
   readonly concurrency: number;
   /**
@@ -135,9 +136,9 @@ export interface JobResourceOptions {
    * runs in another process. A worker counts only the types it is told about,
    * so a member missing here is a member the pool does not bound.
    */
-  readonly types: readonly string[];
+  readonly types: readonly TType[];
   /** Concurrency slots a type occupies while running. Defaults to 1. */
-  readonly costs?: Readonly<Record<string, number>>;
+  readonly costs?: Partial<Record<TType, number>>;
 }
 
 export interface GolemQueueOptions {
@@ -246,7 +247,8 @@ export function resolveJobPools(
       );
     }
     const costs: Record<string, number> = {};
-    for (const [type, cost] of Object.entries(resource.costs ?? {})) {
+    for (const [type, rawCost] of Object.entries(resource.costs ?? {})) {
+      const cost = rawCost as number;
       if (!resource.types.includes(type)) {
         invalidOption(
           `resources.${name}.costs.${type}`,
@@ -259,6 +261,13 @@ export function resolveJobPools(
           `resources.${name}.costs.${type}`,
           cost,
           'must be an integer of at least 1',
+        );
+      }
+      if (cost > resource.concurrency) {
+        invalidOption(
+          `resources.${name}.costs.${type}`,
+          cost,
+          `exceeds resources.${name}.concurrency (${resource.concurrency}); a job costing more than the pool holds could never be claimed`,
         );
       }
       costs[type] = cost;

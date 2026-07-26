@@ -220,23 +220,42 @@ A pool bounds jobs, not the requests made inside them. A handler that runs for h
 
 ## Ordering between job types
 
-Handlers are independent by default: any two types can run at the same time. When one type's correctness depends on another not running, say so and the dispatcher enforces it at claim time:
+Handlers are independent by default: any two types can run at the same time. Two different constraints are available when that is not safe, and they are not interchangeable.
+
+### `notWhileRunning` — never overlap
 
 ```ts
-@QueueHandler({ type: 'track-hydrate', excludes: ['history-import'] })
+@QueueHandler({ type: 'track-hydrate', notWhileRunning: ['history-import'] })
+@QueueHandler({ type: 'history-import', notWhileRunning: ['track-hydrate'] })
 ```
 
-`track-hydrate` claims nothing while any `history-import` job is PENDING or RUNNING, and resumes on the next poll once none remain. The check and the claim commit together behind a shared guard row, so a job enqueued between them cannot slip through — that race is the whole reason this is not a thing you can write yourself around `add()`.
+Neither type is claimed while the other holds a live lease. **Declare it on both sides** — one-sided is almost always a bug, because the undeclared side is free to start while the declared one is already running, which is the overlap you were trying to prevent.
 
-An excluded type does not need a handler in this process. Excluding work that runs on a different worker is the normal case, and the type name is checked against your declared job map at compile time.
+It is safe in both directions: whichever claims first runs, the other waits, and progress is always possible. An expired lease does not block, for the same reason it does not block a scope: that job is not finished, it is about to be reclaimed, and treating it as a blocker would stop the recovery that resolves it.
 
-A RUNNING job whose lease has expired still blocks: it will be reclaimed and rerun, so its work is not finished.
+### `waitsFor` — drain a backlog first
 
-Two handlers that exclude each other would deadlock, so that is refused at startup naming the cycle. Indefinite one-way starvation is still possible — a type excluded by work that never stops arriving never runs — so a handler blocked for many consecutive polls logs a warning naming what is blocking it.
+```ts
+@QueueHandler({ type: 'nightly-rollup', waitsFor: ['event-ingest'] })
+```
 
-**Prefer an idempotent handler to an ordered one.** Exclusion makes an assumption enforceable, but a handler that can safely run at any time needs no assumption at all. Ordering constrains *when* work may run; idempotence removes the constraint. Where you have the choice, take idempotence — it also covers the case no exclusion rule can, which is work arriving long after the job that would have excluded it.
+Blocks while the named types have *outstanding* work — a job that is due now, or one already running. It is a priority relation rather than an overlap rule: the rollup yields until ingestion has caught up.
+
+Because it blocks on queued work and not just running work, it is **one-way by nature**. Two types that wait for each other could never start, so that is refused at startup. A job scheduled for later, or parked in retry backoff, does not block until it comes due.
+
+### Which one
+
+If your invariant is "these must not run at the same time", use `notWhileRunning` on both. If it is "do not start until that queue is empty", use `waitsFor`.
+
+**Prefer an idempotent handler to either.** Both make an assumption enforceable, but a handler that can safely run at any time needs no assumption at all. Ordering constrains *when* work may run; idempotence removes the constraint, and it covers the case no ordering rule can — work arriving long after the job that would have blocked it.
 
 If you do write a repair or backfill handler that processes a pending set in chunks, **the pending predicate must exclude rows the work cannot change.** A predicate that re-selects rows every pass without shrinking the set spins until the job times out. The symptom is a hung job rather than an error, and it does not reproduce against small fixtures.
+
+### Starvation
+
+Neither constraint can deadlock: `waitsFor` cycles are refused at startup, and `notWhileRunning` always lets one side proceed. Indefinite one-way starvation is still possible — a type waiting on work that never stops arriving never runs — so a handler blocked for many consecutive polls logs a warning naming what is blocking it, whether that is another type or a full resource pool.
+
+The startup cycle check only sees handlers registered in **this** process. If two workers each register one side of a cycle, neither can detect it; `notWhileRunning` is the safe choice whenever the types are split across processes.
 
 ## Inspecting the queue
 
@@ -322,7 +341,7 @@ Implement the full `JobStore` port to back the queue with something other than P
 
 The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable across SQLite, Postgres and MySQL, and it is the right default for most apps.
 
-A claim that carries a guard — `serializeByScope`, `excludes`, or a resource pool — needs a serialization point, because the condition it tests is about *other* rows and engines do not serialize a read against a concurrent uncommitted write. Every competing claimer for a guard therefore writes one shared `JobGuard` row before reading anything, inside the transaction that claims. Writing first is what makes it work: competitors queue on a row lock rather than racing, and on SQLite it takes the writer lock up front instead of leaving a deferred reader that cannot upgrade. Guards are acquired in sorted order, so a claim needing several cannot deadlock against one acquiring the same guards in another order.
+A claim that carries a guard — `serializeByScope`, `waitsFor`, `notWhileRunning`, or a resource pool — needs a serialization point, because the condition it tests is about *other* rows and engines do not serialize a read against a concurrent uncommitted write. Every competing claimer for a guard therefore writes one shared `JobGuard` row before reading anything, inside the transaction that claims. Writing first is what makes it work: competitors queue on a row lock rather than racing, and on SQLite it takes the writer lock up front instead of leaving a deferred reader that cannot upgrade. Guards are acquired in sorted order, so a claim needing several cannot deadlock against one acquiring the same guards in another order.
 
 The trade-off is a round-trip per candidate, so claim throughput is bounded by the poll interval and the number of workers. If an app outgrows that, the escape hatch is a Postgres-native `JobStore` that claims a whole batch in one statement with `SELECT … FOR UPDATE SKIP LOCKED`. Nothing else has to change: the dispatcher only talks to the port.
 

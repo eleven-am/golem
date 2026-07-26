@@ -618,33 +618,31 @@ describe('lease renewal', () => {
   });
 });
 
-describe('cross-type exclusion', () => {
+describe('waitsFor — drain a backlog before running', () => {
   function hydrate(overrides: Partial<JobHandler> = {}) {
     return handler(() => Promise.resolve(), {
       type: 'track-hydrate',
-      excludes: ['history-import'],
+      waitsFor: ['history-import'],
       ...overrides,
     });
   }
 
-  async function seedOf(store: InMemoryJobStore, type: string): Promise<string> {
-    return seed(store, { type });
-  }
+  const statusOf = async (store: InMemoryJobStore, id: string) =>
+    (await store.findJobs({ limit: 20 })).find((row) => row.id === id)?.status;
 
-  it('does not claim while an excluded job is PENDING', async () => {
+  it('does not claim while the awaited type has a due pending job', async () => {
     const { store, dispatcher } = build([hydrate()]);
-    await seedOf(store, 'history-import');
-    const target = await seedOf(store, 'track-hydrate');
+    await seed(store, { type: 'history-import' });
+    const target = await seed(store, { type: 'track-hydrate' });
 
     await tick(dispatcher);
 
-    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
-    expect(job?.status).toBe('PENDING');
+    expect(await statusOf(store, target)).toBe('PENDING');
   });
 
-  it('does not claim while an excluded job is RUNNING, including with an expired lease', async () => {
+  it('does not claim while the awaited type is running, expired lease included', async () => {
     const { store, dispatcher } = build([hydrate()]);
-    const blocker = await seedOf(store, 'history-import');
+    const blocker = await seed(store, { type: 'history-import' });
     await store.claim({
       id: blocker,
       fromStatus: 'PENDING',
@@ -652,35 +650,47 @@ describe('cross-type exclusion', () => {
       leaseOwner: 'other-worker',
       leaseExpiresAt: new Date(Date.now() - 1),
     });
-    const target = await seedOf(store, 'track-hydrate');
+    const target = await seed(store, { type: 'track-hydrate' });
 
     await tick(dispatcher);
 
-    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
-    expect(job?.status).toBe('PENDING');
+    expect(await statusOf(store, target)).toBe('PENDING');
   });
 
-  it('claims once no excluded job remains', async () => {
+  it('ignores an awaited job that is not due yet', async () => {
     const { store, dispatcher } = build([hydrate()]);
-    const blocker = await seedOf(store, 'history-import');
-    const target = await seedOf(store, 'track-hydrate');
+    await store.create({
+      type: 'history-import',
+      payload: '{}',
+      scopeType: null,
+      scopeId: null,
+      runAt: new Date(Date.now() + 3_600_000),
+      maxAttempts: 3,
+    });
+    const target = await seed(store, { type: 'track-hydrate' });
 
     await tick(dispatcher);
-    expect(
-      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
-    ).toBe('PENDING');
+
+    expect(await statusOf(store, target)).toBe('SUCCEEDED');
+  });
+
+  it('claims once the backlog drains', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    const blocker = await seed(store, { type: 'history-import' });
+    const target = await seed(store, { type: 'track-hydrate' });
+
+    await tick(dispatcher);
+    expect(await statusOf(store, target)).toBe('PENDING');
 
     await store.deleteByIds([blocker]);
     await tick(dispatcher);
 
-    expect(
-      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
-    ).toBe('SUCCEEDED');
+    expect(await statusOf(store, target)).toBe('SUCCEEDED');
   });
 
-  it('refuses a claim when an excluded job appears after candidates are read', async () => {
+  it('refuses a claim when an awaited job appears after candidates are read', async () => {
     const { store, dispatcher } = build([hydrate()]);
-    const target = await seedOf(store, 'track-hydrate');
+    const target = await seed(store, { type: 'track-hydrate' });
 
     const original = store.findClaimCandidates.bind(store);
     let raced = false;
@@ -688,57 +698,108 @@ describe('cross-type exclusion', () => {
       const candidates = await original(input);
       if (!raced) {
         raced = true;
-        await seedOf(store, 'history-import');
+        await seed(store, { type: 'history-import' });
       }
       return candidates;
     };
 
     await tick(dispatcher);
 
-    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
-    expect(job?.status).toBe('PENDING');
+    expect(await statusOf(store, target)).toBe('PENDING');
   });
 
-  it('enforces exclusion against a type this process has no handler for', async () => {
+  it('enforces against a type this process has no handler for', async () => {
     const { store, dispatcher } = build([hydrate()]);
-    await seedOf(store, 'history-import');
-    const target = await seedOf(store, 'track-hydrate');
+    await seed(store, { type: 'history-import' });
+    const target = await seed(store, { type: 'track-hydrate' });
 
     await tick(dispatcher);
 
-    expect(
-      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
-    ).toBe('PENDING');
+    expect(await statusOf(store, target)).toBe('PENDING');
   });
 
-  it('leaves handlers without exclusions untouched', async () => {
-    const { store, dispatcher } = build([handler(() => Promise.resolve())]);
-    const id = await seed(store);
+  it('still recovers its own dead leases while blocked', async () => {
+    const { store, dispatcher } = build([hydrate({ maxAttempts: 1 } as never)]);
+    await seed(store, { type: 'history-import' });
+    const dead = await seed(store, { type: 'track-hydrate', maxAttempts: 1 });
+    await store.claim({
+      id: dead,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'dead-worker',
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
 
     await tick(dispatcher);
 
-    expect(
-      (await store.findJobs({ limit: 10 })).find((row) => row.id === id)?.status,
-    ).toBe('SUCCEEDED');
+    expect(await statusOf(store, dead)).toBe('FAILED');
   });
 
-  it('refuses to start when two handlers exclude each other', () => {
+  it('refuses to start when two handlers wait for each other', () => {
     const { dispatcher } = build([
-      handler(() => Promise.resolve(), { type: 'a', excludes: ['b'] }),
-      handler(() => Promise.resolve(), { type: 'b', excludes: ['a'] }),
+      handler(() => Promise.resolve(), { type: 'a', waitsFor: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b', waitsFor: ['a'] }),
     ]);
 
-    expect(() => dispatcher.start()).toThrow(/exclude each other in a cycle/);
+    expect(() => dispatcher.start()).toThrow(/wait for each other in a cycle/);
   });
+});
 
-  it('starts when exclusions form no cycle', () => {
-    const { dispatcher } = build([
-      handler(() => Promise.resolve(), { type: 'a', excludes: ['b'] }),
-      handler(() => Promise.resolve(), { type: 'b', excludes: ['c'] }),
-    ]);
+describe('notWhileRunning — never overlap', () => {
+  const statusOf = async (store: InMemoryJobStore, id: string) =>
+    (await store.findJobs({ limit: 20 })).find((row) => row.id === id)?.status;
+
+  function pair() {
+    const releases: Array<() => void> = [];
+    const hold = () => new Promise<void>((resolve) => releases.push(resolve));
+    return {
+      releases,
+      handlers: [
+        handler(hold, { type: 'a', notWhileRunning: ['b'], timeoutMs: 5_000 }),
+        handler(hold, { type: 'b', notWhileRunning: ['a'], timeoutMs: 5_000 }),
+      ],
+    };
+  }
+
+  it('permits a mutual declaration rather than calling it a cycle', () => {
+    const { handlers } = pair();
+    const { dispatcher } = build(handlers);
 
     expect(() => dispatcher.start()).not.toThrow();
     void dispatcher.onModuleDestroy();
+  });
+
+  it('lets only one side run when both have work', async () => {
+    const { releases, handlers } = pair();
+    const { store, dispatcher } = build(handlers);
+    await seed(store, { type: 'a' });
+    await seed(store, { type: 'b' });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+
+    const rows = await store.findJobs({ limit: 20 });
+    expect(rows.filter((row) => row.status === 'RUNNING')).toHaveLength(1);
+    for (const release of releases) release();
+  });
+
+  it('does not block on a lease that has expired', async () => {
+    const { store, dispatcher } = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+    ]);
+    const stale = await seed(store, { type: 'b' });
+    await store.claim({
+      id: stale,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'dead-worker',
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+    const target = await seed(store, { type: 'a' });
+
+    await tick(dispatcher);
+
+    expect(await statusOf(store, target)).toBe('SUCCEEDED');
   });
 });
 
@@ -935,5 +996,38 @@ describe('resource pools', () => {
 
     const job = (await store.findJobs({ limit: 20 })).find((row) => row.id === starved);
     expect(job?.status).not.toBe('PENDING');
+  });
+});
+
+describe('store capability', () => {
+  it('refuses to start a guarded handler against a store that ignores guards', () => {
+    const store = new InMemoryJobStore() as InMemoryJobStore & {
+      enforcesClaimGuards?: boolean;
+    };
+    Object.defineProperty(store, 'enforcesClaimGuards', { value: undefined });
+    const dispatcher = new JobDispatcher(
+      store,
+      [handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] })],
+      new JobCancellationRegistry(),
+      resolveQueueOptions({ workerId: WORKER }),
+      observerRegistry([]),
+    );
+
+    expect(() => dispatcher.start()).toThrow(/does not declare enforcesClaimGuards/);
+  });
+
+  it('starts an unguarded handler against any store', () => {
+    const store = new InMemoryJobStore();
+    Object.defineProperty(store, 'enforcesClaimGuards', { value: undefined });
+    const dispatcher = new JobDispatcher(
+      store,
+      [handler(() => Promise.resolve())],
+      new JobCancellationRegistry(),
+      resolveQueueOptions({ workerId: WORKER }),
+      observerRegistry([]),
+    );
+
+    expect(() => dispatcher.start()).not.toThrow();
+    void dispatcher.onModuleDestroy();
   });
 });

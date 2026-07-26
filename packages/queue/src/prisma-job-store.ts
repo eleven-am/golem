@@ -57,8 +57,8 @@ export interface PrismaClientLike {
   readonly job: PrismaJobDelegate;
   /**
    * Required only when a handler uses a claim guard: `serializeByScope`,
-   * `excludes`, or a resource pool. Guards need a serialization point, and the
-   * JobGuard row is it.
+   * `waitsFor`, `notWhileRunning`, or a resource pool. Guards need a
+   * serialization point, and the JobGuard row is it.
    */
   readonly jobGuard?: PrismaGuardDelegate;
   /**
@@ -112,6 +112,8 @@ function ids(rows: Record<string, unknown>[]): string[] {
 }
 
 export class PrismaJobStore implements JobStore {
+  readonly enforcesClaimGuards = true;
+
   private readonly table: string;
 
   constructor(
@@ -185,7 +187,7 @@ export class PrismaJobStore implements JobStore {
     const guards = this.prisma.jobGuard;
     if (!runTransaction || !guards) {
       throw new Error(
-        'A handler uses a claim guard (serializeByScope, excludes, or a resource pool), which needs $transaction and a jobGuard delegate on the Prisma client passed to PrismaJobStore. Add the JobGuard model to your schema and migrate.',
+        'A handler uses a claim guard (serializeByScope, waitsFor, notWhileRunning, or a resource pool), which needs $transaction and a jobGuard delegate on the Prisma client passed to PrismaJobStore. Add the JobGuard model to your schema and migrate.',
       );
     }
     await this.ensureGuardRows(guardKeys);
@@ -240,15 +242,30 @@ export class PrismaJobStore implements JobStore {
       });
       if (holders > 0) return false;
     }
-    const excluded = input.excludeTypes ?? [];
-    if (excluded.length > 0) {
-      const blockers = await tx.job.count({
+    const waitsFor = input.waitsForTypes ?? [];
+    if (waitsFor.length > 0) {
+      const outstanding = await tx.job.count({
         where: {
-          type: { in: [...excluded] },
-          status: { in: ['PENDING', 'RUNNING'] },
+          type: { in: [...waitsFor] },
+          OR: [
+            { status: 'PENDING', runAt: { lte: input.now } },
+            { status: 'RUNNING' },
+          ],
         },
       });
-      if (blockers > 0) return false;
+      if (outstanding > 0) return false;
+    }
+    const notWhileRunning = input.notWhileRunningTypes ?? [];
+    if (notWhileRunning.length > 0) {
+      const live = await tx.job.count({
+        where: {
+          id: { not: input.id },
+          type: { in: [...notWhileRunning] },
+          status: 'RUNNING',
+          leaseExpiresAt: { gt: input.now },
+        },
+      });
+      if (live > 0) return false;
     }
     const pool = input.pool;
     if (pool !== undefined) {

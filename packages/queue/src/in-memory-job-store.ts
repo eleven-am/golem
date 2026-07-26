@@ -38,6 +38,8 @@ interface StoredJob {
 }
 
 export class InMemoryJobStore implements JobStore {
+  readonly enforcesClaimGuards = true;
+
   private readonly jobs = new Map<string, StoredJob>();
   private sequence = 0;
 
@@ -122,7 +124,12 @@ export class InMemoryJobStore implements JobStore {
     if (input.serializeScope && job.scopeType !== null && this.scopeIsBusy(job, input.now)) {
       return Promise.resolve(false);
     }
-    if (this.typesAreActive(input.excludeTypes ?? [])) {
+    if (this.outstandingOf(input.waitsForTypes ?? [], input.now)) {
+      return Promise.resolve(false);
+    }
+    if (
+      this.liveOf(input.notWhileRunningTypes ?? [], input.now, input.id)
+    ) {
       return Promise.resolve(false);
     }
     const pool = input.pool;
@@ -169,13 +176,31 @@ export class InMemoryJobStore implements JobStore {
     return Promise.resolve(this.usageOf(input.types, input.costs, input.now));
   }
 
-  private typesAreActive(types: readonly string[]): boolean {
+  private outstandingOf(types: readonly string[], now: Date): boolean {
+    if (types.length === 0) return false;
+    const blocking = new Set(types);
+    for (const job of this.jobs.values()) {
+      if (!blocking.has(job.type)) continue;
+      if (job.status === 'RUNNING') return true;
+      if (job.status === 'PENDING' && job.runAt <= now) return true;
+    }
+    return false;
+  }
+
+  private liveOf(
+    types: readonly string[],
+    now: Date,
+    exceptId?: string,
+  ): boolean {
     if (types.length === 0) return false;
     const blocking = new Set(types);
     for (const job of this.jobs.values()) {
       if (
+        job.id !== exceptId &&
         blocking.has(job.type) &&
-        (job.status === 'PENDING' || job.status === 'RUNNING')
+        job.status === 'RUNNING' &&
+        job.leaseExpiresAt !== null &&
+        job.leaseExpiresAt > now
       ) {
         return true;
       }
@@ -183,8 +208,15 @@ export class InMemoryJobStore implements JobStore {
     return false;
   }
 
-  hasActiveOfTypes(input: { types: readonly string[] }): Promise<boolean> {
-    return Promise.resolve(this.typesAreActive(input.types));
+  hasActiveOfTypes(input: {
+    waitsFor?: readonly string[];
+    notWhileRunning?: readonly string[];
+    now: Date;
+  }): Promise<boolean> {
+    return Promise.resolve(
+      this.outstandingOf(input.waitsFor ?? [], input.now) ||
+        this.liveOf(input.notWhileRunning ?? [], input.now),
+    );
   }
 
   private scopeIsBusy(

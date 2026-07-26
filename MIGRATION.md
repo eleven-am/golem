@@ -1,5 +1,49 @@
 # Migrating `@eleven-am/golem-queue` to 0.5.0
 
+Add two things to your schema and migrate:
+
+```prisma
+model Job {
+  // ...
+  startedAt      DateTime?
+
+  @@index([type, startedAt])
+}
+
+model JobGuard {
+  key String @id
+  seq Int    @default(0)
+}
+```
+
+`JobGuard` is the serialization point for claim guards. Every worker competing for the same guard writes one shared row before reading, which is what makes the guard hold across processes and across engines. Rows are created as needed; there is nothing to seed or prune.
+
+`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery. Nothing reads it yet — it is here so that per-minute rate budgets, which need a window over job starts, do not require a second migration.
+
+## `excludes` splits into two constraints
+
+`excludes` promised non-overlap and delivered something else: it stopped the declaring type from *starting*, but the other type was free to start while the declarer was already running. Replace it with whichever you actually meant.
+
+```diff
+-@QueueHandler({ type: 'track-hydrate', excludes: ['history-import'] })
++@QueueHandler({ type: 'track-hydrate', notWhileRunning: ['history-import'] })
++@QueueHandler({ type: 'history-import', notWhileRunning: ['track-hydrate'] })
+```
+
+`notWhileRunning` prevents overlap and is safe to declare on both sides — **declare it on both**, or the undeclared side can still start underneath the other. Use `waitsFor` instead if you meant "drain that queue before I run"; it blocks on outstanding work rather than only running work, and so remains one-way.
+
+## Custom stores must declare that they enforce guards
+
+If you implement `JobStore` yourself and any handler uses `serializeByScope`, `waitsFor`, `notWhileRunning`, or a resource pool, evaluate those guards inside the statement or transaction that claims, then set:
+
+```ts
+readonly enforcesClaimGuards = true;
+```
+
+The dispatcher refuses to start otherwise. The guards are optional fields on `ClaimInput`, so a store written before they existed type-checks and silently runs every guarded job unguarded — the refusal replaces that with a loud failure.
+
+# Migrating `@eleven-am/golem-queue` to 0.5.0
+
 The `Job` model gains a column. Add it and migrate before upgrading:
 
 ```prisma

@@ -69,7 +69,8 @@ export interface ClaimInput {
    * of `serializeScope`, where an expired lease must not block, because there
    * the blocked work and the expired row are the same job.
    */
-  readonly excludeTypes?: readonly string[];
+  readonly waitsForTypes?: readonly string[];
+  readonly notWhileRunningTypes?: readonly string[];
   /**
    * Refuse the claim when the resource pool this job draws on is already at
    * its limit.
@@ -184,6 +185,13 @@ export interface PruneInput {
  * throughput beyond what poll-and-CAS claiming provides.
  */
 export interface JobStore {
+  /**
+   * Set to true once the store evaluates every guard on `ClaimInput` inside the
+   * statement or transaction that claims. The dispatcher refuses to start a
+   * guarded handler against a store that does not, because the guards are
+   * optional fields a store can silently ignore.
+   */
+  readonly enforcesClaimGuards?: boolean;
   create(input: CreateJobInput): Promise<boolean>;
   findClaimCandidates(input: {
     type: string;
@@ -200,7 +208,11 @@ export interface JobStore {
    * handler that has been blocked for a long time. Correctness does not depend
    * on it: `ClaimInput.excludeTypes` is the enforcing predicate.
    */
-  hasActiveOfTypes?(input: { types: readonly string[] }): Promise<boolean>;
+  hasActiveOfTypes?(input: {
+    waitsFor?: readonly string[];
+    notWhileRunning?: readonly string[];
+    now: Date;
+  }): Promise<boolean>;
   /**
    * Summed cost of pool members holding a live lease.
    *

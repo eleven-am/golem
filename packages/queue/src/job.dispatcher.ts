@@ -143,7 +143,8 @@ export class JobDispatcher implements OnModuleDestroy {
       if (rootA !== rootB) parent.set(rootA, rootB);
     };
     for (const [type, handler] of this.handlers) {
-      for (const other of handler.excludes ?? []) union(type, other);
+      for (const other of handler.waitsFor ?? []) union(type, other);
+      for (const other of handler.notWhileRunning ?? []) union(type, other);
     }
     const members = new Map<string, string[]>();
     for (const type of parent.keys()) {
@@ -157,10 +158,34 @@ export class JobDispatcher implements OnModuleDestroy {
     }
   }
 
+  /**
+   * A store is free to omit the optional port methods, but not to accept a
+   * guarded claim it will not enforce. ClaimInput carries guards as optional
+   * fields, so a store written before they existed still type-checks and would
+   * silently run every guarded job unguarded.
+   */
+  private assertStoreEnforcesGuards(): void {
+    const guarded = [...this.handlers.values()].filter(
+      (handler) =>
+        (handler.waitsFor?.length ?? 0) > 0 ||
+        (handler.notWhileRunning?.length ?? 0) > 0 ||
+        handler.serializeByScope === true ||
+        this.pools.has(handler.type),
+    );
+    if (guarded.length === 0) return;
+    const store = this.store as { enforcesClaimGuards?: boolean };
+    if (store.enforcesClaimGuards !== true) {
+      throw new Error(
+        `${guarded.map((handler) => handler.type).sort().join(', ')} use claim guards, but ${this.store.constructor?.name ?? 'the configured JobStore'} does not declare enforcesClaimGuards. A store that ignores waitsFor, notWhileRunning, serializeByScope or a resource pool would run those jobs unguarded. Implement the guards and set enforcesClaimGuards = true.`,
+      );
+    }
+  }
+
   start(): void {
     if (this.timer || this.stopped) return;
     this.assertNoExclusionCycle();
     this.resolveExclusionGroups();
+    this.assertStoreEnforcesGuards();
     this.schedule();
   }
 
@@ -172,11 +197,11 @@ export class JobDispatcher implements OnModuleDestroy {
       if (visiting.has(type)) {
         const cycle = [...path.slice(path.indexOf(type)), type];
         throw new Error(
-          `Queue handlers exclude each other in a cycle: ${cycle.join(' -> ')}. No job of these types could ever be claimed.`,
+          `Queue handlers wait for each other in a cycle: ${cycle.join(' -> ')}. No job of these types could ever be claimed. Use notWhileRunning if the types must not overlap; unlike waitsFor it is safe in both directions.`,
         );
       }
       visiting.add(type);
-      for (const next of this.handlers.get(type)?.excludes ?? []) {
+      for (const next of this.handlers.get(type)?.waitsFor ?? []) {
         walk(next, [...path, type]);
       }
       visiting.delete(type);
@@ -244,12 +269,24 @@ export class JobDispatcher implements OnModuleDestroy {
       if (this.stopped) return;
       let capacity = handler.concurrency - (this.inFlight.get(type) ?? 0);
       if (capacity <= 0) continue;
-      if (await this.isExcluded(handler)) continue;
-      const room = await this.poolRoom(handler);
-      if (room !== undefined) {
-        if (room <= 0) continue;
-        capacity = Math.min(capacity, room);
+      if (await this.isOrderBlocked(handler)) {
+        this.reportBlocked(
+          handler,
+          `waiting on ${[...(handler.waitsFor ?? []), ...(handler.notWhileRunning ?? [])].join(', ')}`,
+        );
+        // Recovery still has to run: a blocked handler owns expired leases of
+        // its own, and leaving them RUNNING would stall any type waiting on it.
+        await this.claim(handler, capacity, true);
+        continue;
       }
+      const room = await this.poolRoom(handler);
+      if (room !== undefined && room <= 0) {
+        this.reportBlocked(handler, `resource pool ${this.poolFor(type)?.name} is full`);
+        await this.claim(handler, capacity, true);
+        continue;
+      }
+      if (room !== undefined) capacity = Math.min(capacity, room);
+      this.blockedTicks.delete(type);
       const claimed = await this.claim(handler, capacity);
       for (const job of claimed) this.startExecution(handler, job);
     }
@@ -258,6 +295,7 @@ export class JobDispatcher implements OnModuleDestroy {
   private async claim(
     handler: JobHandler,
     limit: number,
+    recoverOnly = false,
   ): Promise<ClaimCandidate[]> {
     const now = new Date();
     const claimPool = this.claimPool(handler);
@@ -297,6 +335,7 @@ export class JobDispatcher implements OnModuleDestroy {
         }
         continue;
       }
+      if (recoverOnly) continue;
       const leaseExpiresAt = new Date(Date.now() + this.leaseMs(handler));
       const won = await this.store.claim({
         id: candidate.id,
@@ -305,8 +344,11 @@ export class JobDispatcher implements OnModuleDestroy {
         leaseOwner: this.workerId,
         leaseExpiresAt,
         ...(handler.serializeByScope ? { serializeScope: true } : {}),
-        ...((handler.excludes?.length ?? 0) > 0
-          ? { excludeTypes: handler.excludes }
+        ...((handler.waitsFor?.length ?? 0) > 0
+          ? { waitsForTypes: handler.waitsFor }
+          : {}),
+        ...((handler.notWhileRunning?.length ?? 0) > 0
+          ? { notWhileRunningTypes: handler.notWhileRunning }
           : {}),
         ...(claimPool === undefined ? {} : { pool: claimPool }),
         scopeType: candidate.scopeType,
@@ -332,7 +374,7 @@ export class JobDispatcher implements OnModuleDestroy {
     const pool = this.poolFor(handler.type);
     if (pool !== undefined) keys.push(`pool:${pool.name}`);
     const group = this.exclusionGroups.get(handler.type);
-    if (group !== undefined) keys.push(`excl:${group}`);
+    if (group !== undefined) keys.push(`order:${group}`);
     if (handler.serializeByScope && candidate.scopeType !== null) {
       keys.push(`scope:${candidate.scopeType}`);
     }
@@ -352,25 +394,33 @@ export class JobDispatcher implements OnModuleDestroy {
     return Math.floor((pool.limit - used) / cost);
   }
 
-  private async isExcluded(handler: JobHandler): Promise<boolean> {
-    const excludes = handler.excludes ?? [];
+  private async isOrderBlocked(handler: JobHandler): Promise<boolean> {
+    const waitsFor = handler.waitsFor ?? [];
+    const notWhileRunning = handler.notWhileRunning ?? [];
     const hasActive = this.store.hasActiveOfTypes?.bind(this.store);
-    if (excludes.length === 0 || hasActive === undefined) {
-      this.blockedTicks.delete(handler.type);
+    if (
+      (waitsFor.length === 0 && notWhileRunning.length === 0) ||
+      hasActive === undefined
+    ) {
       return false;
     }
-    if (!(await hasActive({ types: excludes }))) {
-      this.blockedTicks.delete(handler.type);
-      return false;
-    }
+    return hasActive({ waitsFor, notWhileRunning, now: new Date() });
+  }
+
+  /**
+   * A handler that cannot claim reports it, whatever the reason. Waiting on
+   * another type or on a full pool is legitimate and often brief, so this stays
+   * quiet until it has lasted long enough to look like starvation rather than
+   * scheduling.
+   */
+  private reportBlocked(handler: JobHandler, reason: string): void {
     const ticks = (this.blockedTicks.get(handler.type) ?? 0) + 1;
     this.blockedTicks.set(handler.type, ticks);
     if (ticks === BLOCKED_TICKS_BEFORE_WARNING) {
       this.logger.warn(
-        `Job type blocked: type=${handler.type} excludedBy=${excludes.join(', ')} forTicks=${ticks} reason=excluded-types-still-active`,
+        `Job type blocked: type=${handler.type} forTicks=${ticks} reason=${reason}`,
       );
     }
-    return true;
   }
 
   private leaseMs(handler: JobHandler): number {

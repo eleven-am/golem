@@ -10,7 +10,18 @@ export interface QueueHandlerConfig<TType extends JobType = JobType> {
   readonly concurrency?: number;
   readonly timeoutMs?: number;
   readonly serializeByScope?: boolean;
-  readonly excludes?: readonly TType[];
+  /**
+   * Do not claim while any of these types has work outstanding — a due PENDING
+   * job or a RUNNING one. Drains their backlog before this type runs, so it is
+   * one-way by nature: two types that wait for each other could never start.
+   */
+  readonly waitsFor?: readonly TType[];
+  /**
+   * Do not claim while any of these types holds a live lease. Prevents overlap
+   * rather than ordering, so it is safe to declare on both sides and that is
+   * usually what you want.
+   */
+  readonly notWhileRunning?: readonly TType[];
 }
 
 export interface ResolvedQueueHandlerConfig {
@@ -18,7 +29,8 @@ export interface ResolvedQueueHandlerConfig {
   readonly concurrency: number;
   readonly timeoutMs: number;
   readonly serializeByScope: boolean;
-  readonly excludes: readonly string[];
+  readonly waitsFor: readonly string[];
+  readonly notWhileRunning: readonly string[];
 }
 
 const DEFAULT_CONCURRENCY = 1;
@@ -32,7 +44,8 @@ export function QueueHandler<TType extends JobType>(
     concurrency: config.concurrency ?? DEFAULT_CONCURRENCY,
     timeoutMs: config.timeoutMs ?? DEFAULT_TIMEOUT_MS,
     serializeByScope: config.serializeByScope ?? false,
-    excludes: [...new Set(config.excludes ?? [])],
+    waitsFor: [...new Set(config.waitsFor ?? [])],
+    notWhileRunning: [...new Set(config.notWhileRunning ?? [])],
   };
   return (target) => {
     SetMetadata(QUEUE_HANDLER_METADATA, resolved)(target);

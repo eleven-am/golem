@@ -179,8 +179,8 @@ describe('PrismaJobStore guarded claims', () => {
 
     await store.claim({
       ...base,
-      guardKeys: ['excl:a|b', 'pool:spotify'],
-      excludeTypes: ['b'],
+      guardKeys: ['order:a|b', 'pool:spotify'],
+      waitsForTypes: ['b'],
       pool: { types: ['a'], costs: {}, limit: 2, cost: 1 },
     });
 
@@ -201,12 +201,12 @@ describe('PrismaJobStore guarded claims', () => {
 
     await store.claim({
       ...base,
-      guardKeys: ['excl:a|b', 'pool:spotify', 'scope:Article'],
+      guardKeys: ['order:a|b', 'pool:spotify', 'scope:Article'],
     });
 
     const acquired = calls.filter((c) => c.startsWith('guard.update:'));
     expect(acquired).toEqual([
-      'guard.update:excl:a|b',
+      'guard.update:order:a|b',
       'guard.update:pool:spotify',
       'guard.update:scope:Article',
     ]);
@@ -249,22 +249,47 @@ describe('PrismaJobStore guarded claims', () => {
     });
   });
 
-  it('refuses the claim while an excluded type is pending or running', async () => {
+  it('refuses the claim while an awaited type has due work', async () => {
     const { job, prisma } = client({ holders: 1 });
     const store = new PrismaJobStore(prisma as never);
 
     expect(
       await store.claim({
         ...base,
-        guardKeys: ['excl:history-import|track-hydrate'],
-        excludeTypes: ['history-import'],
+        guardKeys: ['order:history-import|track-hydrate'],
+        waitsForTypes: ['history-import'],
       }),
     ).toBe(false);
 
     expect(job.count).toHaveBeenCalledWith({
       where: {
         type: { in: ['history-import'] },
-        status: { in: ['PENDING', 'RUNNING'] },
+        OR: [
+          { status: 'PENDING', runAt: { lte: base.now } },
+          { status: 'RUNNING' },
+        ],
+      },
+    });
+  });
+
+  it('refuses the claim while a non-overlapping type holds a live lease', async () => {
+    const { job, prisma } = client({ holders: 1 });
+    const store = new PrismaJobStore(prisma as never);
+
+    expect(
+      await store.claim({
+        ...base,
+        guardKeys: ['order:a|b'],
+        notWhileRunningTypes: ['b'],
+      }),
+    ).toBe(false);
+
+    expect(job.count).toHaveBeenCalledWith({
+      where: {
+        id: { not: 'job-1' },
+        type: { in: ['b'] },
+        status: 'RUNNING',
+        leaseExpiresAt: { gt: base.now },
       },
     });
   });

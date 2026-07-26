@@ -118,17 +118,17 @@ async function main(): Promise<void> {
         scopeType: 'Article',
         scopeId: 's0',
       },
-      { guardKeys: ['excl:other'], excludeTypes: ['other'] },
+      { guardKeys: ['order:other'], waitsForTypes: ['other'] },
       {
         guardKeys: ['pool:api'],
         pool: { types: ['hydrate'], costs: {}, limit: 8, cost: 1 },
       },
       {
-        guardKeys: ['excl:other', 'pool:api', 'scope:Article'],
+        guardKeys: ['order:other', 'pool:api', 'scope:Article'],
         serializeScope: true,
         scopeType: 'Article',
         scopeId: 's3',
-        excludeTypes: ['other'],
+        waitsForTypes: ['other'],
         pool: { types: ['hydrate'], costs: { hydrate: 2 }, limit: 8, cost: 2 },
       },
     ];
@@ -174,15 +174,15 @@ async function main(): Promise<void> {
     assert.equal(await running(), 1);
   });
 
-  await test('refuses claims while an excluded type is pending', async () => {
+  await test('refuses claims while an awaited type is pending', async () => {
     await seed('blocker', { type: 'import' });
     for (let i = 0; i < 3; i += 1) await seed(`e${i}`);
     const results = await Promise.all(
       Array.from({ length: 3 }, (_, i) =>
         store.claim(
           claimOf(`e${i}`, {
-            guardKeys: ['excl:hydrate|import'],
-            excludeTypes: ['import'],
+            guardKeys: ['order:hydrate|import'],
+            waitsForTypes: ['import'],
           }),
         ),
       ),
