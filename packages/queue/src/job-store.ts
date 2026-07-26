@@ -55,6 +55,21 @@ export interface ClaimInput {
    * lease would block on itself.
    */
   readonly serializeScope?: boolean;
+  /**
+   * Refuse the claim while any job of these types is PENDING or RUNNING.
+   *
+   * Like `serializeScope`, a store MUST evaluate this predicate and the claim
+   * in one statement. Checking first and claiming after leaves the window the
+   * flag exists to close: an excluded job enqueued between the two is invisible
+   * to the check and runs concurrently anyway.
+   *
+   * A RUNNING row whose lease has expired still blocks. Its work is not done —
+   * lease recovery will reclaim and rerun it — so treating it as finished would
+   * admit exactly the overlap the caller asked to prevent. This is the opposite
+   * of `serializeScope`, where an expired lease must not block, because there
+   * the blocked work and the expired row are the same job.
+   */
+  readonly excludeTypes?: readonly string[];
 }
 
 export interface FailExpiredLeaseInput {
@@ -144,6 +159,15 @@ export interface JobStore {
   }): Promise<ClaimCandidate[]>;
   claim(input: ClaimInput): Promise<boolean>;
   renewLease?(input: RenewLeaseInput): Promise<boolean>;
+  /**
+   * Whether any job of these types is PENDING or RUNNING.
+   *
+   * Optional. The dispatcher uses it to skip a handler whose exclusions are
+   * active rather than fetching candidates it cannot claim, and to report a
+   * handler that has been blocked for a long time. Correctness does not depend
+   * on it: `ClaimInput.excludeTypes` is the enforcing predicate.
+   */
+  hasActiveOfTypes?(input: { types: readonly string[] }): Promise<boolean>;
   failExpiredLease(input: FailExpiredLeaseInput): Promise<boolean>;
   findOwnedRunningIds(input: {
     ids: readonly string[];

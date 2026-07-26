@@ -27,6 +27,7 @@ import {
 
 const DEFAULT_SWEEP_INTERVAL_MS = 60_000;
 const TERMINAL_STATUSES: readonly JobStatus[] = ['SUCCEEDED', 'FAILED'];
+const BLOCKED_TICKS_BEFORE_WARNING = 60;
 
 function toScope(job: {
   scopeType: string | null;
@@ -46,6 +47,7 @@ export class JobDispatcher implements OnModuleDestroy {
   private readonly logger = new Logger(JobDispatcher.name);
   private readonly handlers = new Map<string, JobHandler>();
   private readonly inFlight = new Map<string, number>();
+  private readonly blockedTicks = new Map<string, number>();
   private readonly executions = new Map<
     string,
     { controller: AbortController; completion: Promise<void> }
@@ -98,7 +100,29 @@ export class JobDispatcher implements OnModuleDestroy {
 
   start(): void {
     if (this.timer || this.stopped) return;
+    this.assertNoExclusionCycle();
     this.schedule();
+  }
+
+  private assertNoExclusionCycle(): void {
+    const visiting = new Set<string>();
+    const settled = new Set<string>();
+    const walk = (type: string, path: string[]): void => {
+      if (settled.has(type)) return;
+      if (visiting.has(type)) {
+        const cycle = [...path.slice(path.indexOf(type)), type];
+        throw new Error(
+          `Queue handlers exclude each other in a cycle: ${cycle.join(' -> ')}. No job of these types could ever be claimed.`,
+        );
+      }
+      visiting.add(type);
+      for (const next of this.handlers.get(type)?.excludes ?? []) {
+        walk(next, [...path, type]);
+      }
+      visiting.delete(type);
+      settled.add(type);
+    };
+    for (const type of this.handlers.keys()) walk(type, []);
   }
 
   async onModuleDestroy(): Promise<void> {
@@ -154,6 +178,7 @@ export class JobDispatcher implements OnModuleDestroy {
       if (this.stopped) return;
       const capacity = handler.concurrency - (this.inFlight.get(type) ?? 0);
       if (capacity <= 0) continue;
+      if (await this.isExcluded(handler)) continue;
       const claimed = await this.claim(handler, capacity);
       for (const job of claimed) this.startExecution(handler, job);
     }
@@ -208,6 +233,9 @@ export class JobDispatcher implements OnModuleDestroy {
         leaseOwner: this.workerId,
         leaseExpiresAt,
         ...(handler.serializeByScope ? { serializeScope: true } : {}),
+        ...((handler.excludes?.length ?? 0) > 0
+          ? { excludeTypes: handler.excludes }
+          : {}),
         ...(recoveringExpiredLease
           ? {
               attempts: recoveredAttempts,
@@ -218,6 +246,27 @@ export class JobDispatcher implements OnModuleDestroy {
       if (won) claimed.push(candidate);
     }
     return claimed;
+  }
+
+  private async isExcluded(handler: JobHandler): Promise<boolean> {
+    const excludes = handler.excludes ?? [];
+    const hasActive = this.store.hasActiveOfTypes?.bind(this.store);
+    if (excludes.length === 0 || hasActive === undefined) {
+      this.blockedTicks.delete(handler.type);
+      return false;
+    }
+    if (!(await hasActive({ types: excludes }))) {
+      this.blockedTicks.delete(handler.type);
+      return false;
+    }
+    const ticks = (this.blockedTicks.get(handler.type) ?? 0) + 1;
+    this.blockedTicks.set(handler.type, ticks);
+    if (ticks === BLOCKED_TICKS_BEFORE_WARNING) {
+      this.logger.warn(
+        `Job type blocked: type=${handler.type} excludedBy=${excludes.join(', ')} forTicks=${ticks} reason=excluded-types-still-active`,
+      );
+    }
+    return true;
   }
 
   private leaseMs(handler: JobHandler): number {

@@ -617,3 +617,127 @@ describe('lease renewal', () => {
     await running;
   });
 });
+
+describe('cross-type exclusion', () => {
+  function hydrate(overrides: Partial<JobHandler> = {}) {
+    return handler(() => Promise.resolve(), {
+      type: 'track-hydrate',
+      excludes: ['history-import'],
+      ...overrides,
+    });
+  }
+
+  async function seedOf(store: InMemoryJobStore, type: string): Promise<string> {
+    return seed(store, { type });
+  }
+
+  it('does not claim while an excluded job is PENDING', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    await seedOf(store, 'history-import');
+    const target = await seedOf(store, 'track-hydrate');
+
+    await tick(dispatcher);
+
+    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
+    expect(job?.status).toBe('PENDING');
+  });
+
+  it('does not claim while an excluded job is RUNNING, including with an expired lease', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    const blocker = await seedOf(store, 'history-import');
+    await store.claim({
+      id: blocker,
+      fromStatus: 'PENDING',
+      now: new Date(),
+      leaseOwner: 'other-worker',
+      leaseExpiresAt: new Date(Date.now() - 1),
+    });
+    const target = await seedOf(store, 'track-hydrate');
+
+    await tick(dispatcher);
+
+    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
+    expect(job?.status).toBe('PENDING');
+  });
+
+  it('claims once no excluded job remains', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    const blocker = await seedOf(store, 'history-import');
+    const target = await seedOf(store, 'track-hydrate');
+
+    await tick(dispatcher);
+    expect(
+      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
+    ).toBe('PENDING');
+
+    await store.deleteByIds([blocker]);
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('refuses a claim when an excluded job appears after candidates are read', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    const target = await seedOf(store, 'track-hydrate');
+
+    const original = store.findClaimCandidates.bind(store);
+    let raced = false;
+    store.findClaimCandidates = async (input) => {
+      const candidates = await original(input);
+      if (!raced) {
+        raced = true;
+        await seedOf(store, 'history-import');
+      }
+      return candidates;
+    };
+
+    await tick(dispatcher);
+
+    const job = (await store.findJobs({ limit: 10 })).find((row) => row.id === target);
+    expect(job?.status).toBe('PENDING');
+  });
+
+  it('enforces exclusion against a type this process has no handler for', async () => {
+    const { store, dispatcher } = build([hydrate()]);
+    await seedOf(store, 'history-import');
+    const target = await seedOf(store, 'track-hydrate');
+
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 10 })).find((row) => row.id === target)?.status,
+    ).toBe('PENDING');
+  });
+
+  it('leaves handlers without exclusions untouched', async () => {
+    const { store, dispatcher } = build([handler(() => Promise.resolve())]);
+    const id = await seed(store);
+
+    await tick(dispatcher);
+
+    expect(
+      (await store.findJobs({ limit: 10 })).find((row) => row.id === id)?.status,
+    ).toBe('SUCCEEDED');
+  });
+
+  it('refuses to start when two handlers exclude each other', () => {
+    const { dispatcher } = build([
+      handler(() => Promise.resolve(), { type: 'a', excludes: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b', excludes: ['a'] }),
+    ]);
+
+    expect(() => dispatcher.start()).toThrow(/exclude each other in a cycle/);
+  });
+
+  it('starts when exclusions form no cycle', () => {
+    const { dispatcher } = build([
+      handler(() => Promise.resolve(), { type: 'a', excludes: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b', excludes: ['c'] }),
+    ]);
+
+    expect(() => dispatcher.start()).not.toThrow();
+    void dispatcher.onModuleDestroy();
+  });
+});

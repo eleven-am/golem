@@ -162,8 +162,8 @@ export class PrismaJobStore implements JobStore {
   }
 
   async claim(input: ClaimInput): Promise<boolean> {
-    if (input.serializeScope) {
-      return this.claimSerializedByScope(input);
+    if (input.serializeScope || (input.excludeTypes?.length ?? 0) > 0) {
+      return this.claimGuarded(input);
     }
     const guard =
       input.fromStatus === 'PENDING'
@@ -184,11 +184,12 @@ export class PrismaJobStore implements JobStore {
     return result.count === 1;
   }
 
-  private async claimSerializedByScope(input: ClaimInput): Promise<boolean> {
+  private async claimGuarded(input: ClaimInput): Promise<boolean> {
     const execute = this.prisma.$executeRawUnsafe;
     if (!execute) {
+      const flag = input.serializeScope ? 'serializeByScope' : 'excludes';
       throw new Error(
-        'A handler sets serializeByScope, which needs $executeRawUnsafe on the Prisma client passed to PrismaJobStore. The scope predicate and the claim must be one statement.',
+        `A handler sets ${flag}, which needs $executeRawUnsafe on the Prisma client passed to PrismaJobStore. The guard predicate and the claim must be one statement.`,
       );
     }
     const table = quoteIdentifier(this.table);
@@ -210,13 +211,10 @@ export class PrismaJobStore implements JobStore {
       sets.push(`"lastError" = ?`);
       values.push(input.lastError);
     }
-    values.push(input.id, input.now, input.now);
-    const affected = await execute.call(
-      this.prisma,
-      `UPDATE ${table} SET ${sets.join(', ')}
-       WHERE "id" = ?
-         AND ${guard}
-         AND NOT EXISTS (
+    values.push(input.id, input.now);
+    const predicates: string[] = [];
+    if (input.serializeScope) {
+      predicates.push(`AND NOT EXISTS (
            SELECT 1 FROM ${table} AS active
            WHERE active."id" <> ${table}."id"
              AND active."scopeType" IS NOT NULL
@@ -224,10 +222,40 @@ export class PrismaJobStore implements JobStore {
              AND active."scopeId" = ${table}."scopeId"
              AND active."status" = 'RUNNING'
              AND active."leaseExpiresAt" > ?
-         )`,
+         )`);
+      values.push(input.now);
+    }
+    const excluded = input.excludeTypes ?? [];
+    if (excluded.length > 0) {
+      predicates.push(`AND NOT EXISTS (
+           SELECT 1 FROM ${table} AS blocker
+           WHERE blocker."type" IN (${excluded.map(() => '?').join(', ')})
+             AND blocker."status" IN ('PENDING', 'RUNNING')
+         )`);
+      values.push(...excluded);
+    }
+    const affected = await execute.call(
+      this.prisma,
+      `UPDATE ${table} SET ${sets.join(', ')}
+       WHERE "id" = ?
+         AND ${guard}
+         ${predicates.join('\n         ')}`,
       ...values,
     );
     return affected === 1;
+  }
+
+  async hasActiveOfTypes(input: { types: readonly string[] }): Promise<boolean> {
+    if (input.types.length === 0) return false;
+    const rows = await this.prisma.job.findMany({
+      where: {
+        type: { in: [...input.types] },
+        status: { in: ['PENDING', 'RUNNING'] },
+      },
+      select: { id: true },
+      take: 1,
+    });
+    return rows.length > 0;
   }
 
   async renewLease(input: RenewLeaseInput): Promise<boolean> {

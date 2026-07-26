@@ -197,3 +197,84 @@ describe('PrismaJobStore scope serialization', () => {
     expect(calls[0].sql).toContain('"queue_jobs"');
   });
 });
+
+describe('PrismaJobStore cross-type exclusion', () => {
+  function client(affected: number) {
+    const calls: Array<{ sql: string; values: unknown[] }> = [];
+    return {
+      calls,
+      prisma: {
+        job: {} as never,
+        $executeRawUnsafe(sql: string, ...values: unknown[]) {
+          calls.push({ sql, values });
+          return Promise.resolve(affected);
+        },
+      },
+    };
+  }
+
+  const base = {
+    id: 'job-1',
+    fromStatus: 'PENDING' as const,
+    now: new Date('2026-01-01T00:00:00.000Z'),
+    leaseOwner: 'worker-1',
+    leaseExpiresAt: new Date('2026-01-01T00:01:00.000Z'),
+  };
+
+  it('claims and checks excluded types in one statement', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    expect(
+      await store.claim({ ...base, excludeTypes: ['history-import'] }),
+    ).toBe(true);
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toMatch(/UPDATE[\s\S]*NOT EXISTS[\s\S]*blocker/);
+    expect(calls[0].sql).toMatch(/blocker\."status" IN \('PENDING', 'RUNNING'\)/);
+    expect(calls[0].values).toContain('history-import');
+  });
+
+  it('binds one placeholder per excluded type', async () => {
+    const { calls, prisma } = client(0);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({ ...base, excludeTypes: ['a', 'b', 'c'] });
+
+    expect(calls[0].sql).toContain('IN (?, ?, ?)');
+    expect(calls[0].values.slice(-3)).toEqual(['a', 'b', 'c']);
+  });
+
+  it('composes the scope and exclusion predicates in the same statement', async () => {
+    const { calls, prisma } = client(1);
+    const store = new PrismaJobStore(prisma);
+
+    await store.claim({
+      ...base,
+      serializeScope: true,
+      excludeTypes: ['history-import'],
+    });
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0].sql).toContain('active."scopeType"');
+    expect(calls[0].sql).toContain('blocker."type"');
+  });
+
+  it('names excludes when the client cannot run a guarded claim', async () => {
+    const store = new PrismaJobStore({ job: {} as never });
+
+    await expect(
+      store.claim({ ...base, excludeTypes: ['history-import'] }),
+    ).rejects.toThrow(/excludes.*\$executeRawUnsafe/s);
+  });
+
+  it('reports whether any job of the given types is active', async () => {
+    const job = {
+      findMany: jest.fn().mockResolvedValue([{ id: 'x' }]),
+    } as never;
+    const store = new PrismaJobStore({ job });
+
+    await expect(store.hasActiveOfTypes({ types: ['a'] })).resolves.toBe(true);
+    await expect(store.hasActiveOfTypes({ types: [] })).resolves.toBe(false);
+  });
+});

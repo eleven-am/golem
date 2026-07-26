@@ -120,12 +120,33 @@ export class InMemoryJobStore implements JobStore {
     if (input.serializeScope && job.scopeType !== null && this.scopeIsBusy(job, input.now)) {
       return Promise.resolve(false);
     }
+    if (this.typesAreActive(input.excludeTypes ?? [])) {
+      return Promise.resolve(false);
+    }
     job.status = 'RUNNING';
     job.leaseOwner = input.leaseOwner;
     job.leaseExpiresAt = input.leaseExpiresAt;
     if (input.attempts !== undefined) job.attempts = input.attempts;
     if (input.lastError !== undefined) job.lastError = input.lastError;
     return Promise.resolve(true);
+  }
+
+  private typesAreActive(types: readonly string[]): boolean {
+    if (types.length === 0) return false;
+    const blocking = new Set(types);
+    for (const job of this.jobs.values()) {
+      if (
+        blocking.has(job.type) &&
+        (job.status === 'PENDING' || job.status === 'RUNNING')
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  hasActiveOfTypes(input: { types: readonly string[] }): Promise<boolean> {
+    return Promise.resolve(this.typesAreActive(input.types));
   }
 
   private scopeIsBusy(

@@ -187,6 +187,26 @@ Renewal engages only when `leaseDurationMs` is set **and** the store implements 
 
 Renewal is fenced like every other lease write: it updates only a `RUNNING` row still owned by this worker whose lease has **not** already expired. An expired lease cannot be renewed even by its original owner, because another worker may have claimed it in the meantime.
 
+## Ordering between job types
+
+Handlers are independent by default: any two types can run at the same time. When one type's correctness depends on another not running, say so and the dispatcher enforces it at claim time:
+
+```ts
+@QueueHandler({ type: 'track-hydrate', excludes: ['history-import'] })
+```
+
+`track-hydrate` claims nothing while any `history-import` job is PENDING or RUNNING, and resumes on the next poll once none remain. The check and the claim are one statement, so a job enqueued between them cannot slip through — that race is the whole reason this is not a thing you can write yourself around `add()`.
+
+An excluded type does not need a handler in this process. Excluding work that runs on a different worker is the normal case, and the type name is checked against your declared job map at compile time.
+
+A RUNNING job whose lease has expired still blocks: it will be reclaimed and rerun, so its work is not finished.
+
+Two handlers that exclude each other would deadlock, so that is refused at startup naming the cycle. Indefinite one-way starvation is still possible — a type excluded by work that never stops arriving never runs — so a handler blocked for many consecutive polls logs a warning naming what is blocking it.
+
+**Prefer an idempotent handler to an ordered one.** Exclusion makes an assumption enforceable, but a handler that can safely run at any time needs no assumption at all. Ordering constrains *when* work may run; idempotence removes the constraint. Where you have the choice, take idempotence — it also covers the case no exclusion rule can, which is work arriving long after the job that would have excluded it.
+
+If you do write a repair or backfill handler that processes a pending set in chunks, **the pending predicate must exclude rows the work cannot change.** A predicate that re-selects rows every pass without shrinking the set spins until the job times out. The symptom is a hung job rather than an error, and it does not reproduce against small fixtures.
+
 ## Inspecting the queue
 
 The queue is the source of truth for "is this still running?" — useful for driving UI state and for operator tooling.
