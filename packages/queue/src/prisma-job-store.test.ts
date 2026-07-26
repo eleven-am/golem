@@ -1,4 +1,6 @@
 import { PrismaJobStore } from './prisma-job-store';
+import { InMemoryJobStore } from './in-memory-job-store';
+import type { JobStore } from './job-store';
 
 function build() {
   const job = {
@@ -339,5 +341,31 @@ describe('PrismaJobStore guarded claims', () => {
     await expect(
       store.claim({ ...base, guardKeys: ['pool:spotify'] }),
     ).rejects.toThrow(/\$transaction and a jobGuard delegate/);
+  });
+});
+
+describe('bundled stores implement the whole port', () => {
+  // Every method the dispatcher calls through `?.` degrades silently when a
+  // store omits it. That is deliberate for third-party stores and a defect in
+  // ours: dropping one costs a documented behaviour and no test, because the
+  // in-memory store still has it.
+  const OPTIONAL: ReadonlyArray<keyof JobStore> = [
+    'renewLease',
+    'hasActiveOfTypes',
+    'poolUsage',
+  ];
+
+  it.each(OPTIONAL)('PrismaJobStore implements %s', (method) => {
+    const store = new PrismaJobStore({ job: {} as never });
+    expect(typeof (store as unknown as Record<string, unknown>)[method]).toBe(
+      'function',
+    );
+  });
+
+  it.each(OPTIONAL)('InMemoryJobStore implements %s', (method) => {
+    const store = new InMemoryJobStore();
+    expect(typeof (store as unknown as Record<string, unknown>)[method]).toBe(
+      'function',
+    );
   });
 });

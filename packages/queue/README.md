@@ -31,14 +31,23 @@ model Job {
   dedupeKey      String?   @unique
   leaseOwner     String?
   leaseExpiresAt DateTime?
+  startedAt      DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
 
   @@index([status, runAt])
   @@index([status, leaseExpiresAt])
   @@index([scopeType, scopeId, status])
+  @@index([type, startedAt])
+}
+
+model JobGuard {
+  key String @id
+  seq BigInt @default(0)
 }
 ```
+
+`JobGuard` is the serialization point for claim guards; rows are created as needed. `startedAt` records when a job most recently entered RUNNING and is written on every claim, so both are required even if you never declare a guard.
 
 ## 2. Declare your job types
 
@@ -99,7 +108,7 @@ Concurrency still applies across scopes: eight accounts send in parallel, one jo
 
 This is enforced in the store, not in the process, so it holds across N workers. A candidate is skipped when another job in its scope holds a **live** lease — `status = 'RUNNING' AND leaseExpiresAt > now`. A crashed worker's stranded row is not a blocker, or it would freeze its whole scope until lease recovery ran, which is precisely what recovery exists to fix.
 
-`PrismaJobStore` needs `$executeRawUnsafe` on the client for this: the predicate and the claim have to be a single statement, and a same-table `NOT EXISTS` cannot be expressed through the delegate's where-shape. Check-then-claim across two statements races, on every engine — SQLite's single writer serializes statements, not a transaction with a read in the middle. If your `Job` model is `@@map`ped, pass the physical name: `new PrismaJobStore(prisma, { table: 'queue_jobs' })`.
+`PrismaJobStore` needs `$transaction` and a `jobGuard` delegate on the client for this: the predicate and the claim have to be a single statement, and a same-table `NOT EXISTS` cannot be expressed through the delegate's where-shape. Check-then-claim across two statements races, on every engine — SQLite's single writer serializes statements, not a transaction with a read in the middle. If your `Job` model is `@@map`ped, pass the physical name: `new PrismaJobStore(prisma, { table: 'queue_jobs' })`.
 
 `InMemoryJobStore` enforces the same rule, so tests exercise production semantics.
 
@@ -352,6 +361,8 @@ const store = new InMemoryJobStore();
 Implement the full `JobStore` port to back the queue with something other than Prisma.
 
 The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable across SQLite, Postgres and MySQL, and it is the right default for most apps.
+
+Claims that carry a guard serialize on a shared row, which bounds their throughput. A pool serializes every claim of its member types on one row; `serializeByScope` serializes on the **scope type**, not the individual scope, so all scopes of a type share one claim serialization point across the fleet; `waitsFor` and `notWhileRunning` serialize per declared pair. Execution is unaffected — this bounds how fast work is *handed out*, not how much runs at once.
 
 A claim that carries a guard — `serializeByScope`, `waitsFor`, `notWhileRunning`, or a resource pool — needs a serialization point, because the condition it tests is about *other* rows and engines do not serialize a read against a concurrent uncommitted write. Every competing claimer for a guard therefore writes one shared `JobGuard` row before reading anything, inside the transaction that claims. Writing first is what makes it work: competitors queue on a row lock rather than racing, and on SQLite it takes the writer lock up front instead of leaving a deferred reader that cannot upgrade. Guards are acquired in sorted order, so a claim needing several cannot deadlock against one acquiring the same guards in another order.
 

@@ -56,20 +56,27 @@ export interface ClaimInput {
    */
   readonly serializeScope?: boolean;
   /**
-   * Refuse the claim while any job of these types is PENDING or RUNNING.
+   * Refuse the claim while any of these types has work outstanding: a PENDING
+   * job whose `runAt` has arrived, or a RUNNING one. Drains their backlog
+   * before this type runs.
    *
-   * Like `serializeScope`, a store MUST evaluate this predicate and the claim
-   * in one statement. Checking first and claiming after leaves the window the
-   * flag exists to close: an excluded job enqueued between the two is invisible
-   * to the check and runs concurrently anyway.
+   * A job scheduled for later, or parked in retry backoff, is not outstanding
+   * and must not block — it would otherwise hold the waiter for the whole delay.
    *
-   * A RUNNING row whose lease has expired still blocks. Its work is not done —
-   * lease recovery will reclaim and rerun it — so treating it as finished would
-   * admit exactly the overlap the caller asked to prevent. This is the opposite
-   * of `serializeScope`, where an expired lease must not block, because there
-   * the blocked work and the expired row are the same job.
+   * A RUNNING row whose lease has expired still blocks: its work is unfinished
+   * and recovery will rerun it.
    */
   readonly waitsForTypes?: readonly string[];
+  /**
+   * Refuse the claim while any of these types holds a **live** lease, meaning
+   * `status = 'RUNNING' AND leaseExpiresAt > now`. Prevents overlap rather than
+   * ordering, and is safe when both types declare it about each other.
+   *
+   * Unlike `waitsForTypes`, an expired lease must NOT block. Both sides
+   * declaring this would otherwise deadlock on each other's dead rows, and
+   * neither could reclaim, because reclaiming is itself a claim of that type.
+   * The candidate's own row is never its own blocker.
+   */
   readonly notWhileRunningTypes?: readonly string[];
   /**
    * Refuse the claim when the resource pool this job draws on is already at
@@ -222,7 +229,7 @@ export interface JobStore {
    * Optional. The dispatcher uses it to skip a handler whose exclusions are
    * active rather than fetching candidates it cannot claim, and to report a
    * handler that has been blocked for a long time. Correctness does not depend
-   * on it: `ClaimInput.excludeTypes` is the enforcing predicate.
+   * on it: the guards on `ClaimInput` are the enforcing predicates.
    */
   hasActiveOfTypes?(input: {
     waitsFor?: readonly string[];

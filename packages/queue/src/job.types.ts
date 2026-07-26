@@ -278,6 +278,13 @@ export function resolveJobPools(
         'must be an integer of at least 1',
       );
     }
+    if (resource.costs !== undefined && resource.concurrency === undefined) {
+      invalidOption(
+        `resources.${name}.costs`,
+        Object.keys(resource.costs).join(', '),
+        `weighs a limit that resources.${name} does not declare; add concurrency`,
+      );
+    }
     if (resource.rateCosts !== undefined && resource.ratePerMinute === undefined) {
       invalidOption(
         `resources.${name}.rateCosts`,

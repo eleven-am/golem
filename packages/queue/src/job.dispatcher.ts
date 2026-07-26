@@ -51,7 +51,7 @@ export class JobDispatcher implements OnModuleDestroy {
   private readonly inFlight = new Map<string, number>();
   private readonly blockedTicks = new Map<string, number>();
   private readonly pools: Map<string, ResolvedJobPool>;
-  private readonly exclusionGroups = new Map<string, string>();
+  private readonly exclusionGroups = new Map<string, readonly string[]>();
   private tickOffset = 0;
   private readonly executions = new Map<
     string,
@@ -80,6 +80,11 @@ export class JobDispatcher implements OnModuleDestroy {
 
   register(handler: JobHandler): void {
     const identity = handler.constructor?.name || '<anonymous provider>';
+    if (this.timer !== null) {
+      throw new Error(
+        `Cannot register ${identity} after the dispatcher has started: guard keys and store capability are resolved once at start, so a late handler would claim without them.`,
+      );
+    }
     if (typeof handler.type !== 'string' || handler.type.trim().length === 0) {
       throw new Error(`Invalid queue handler type=${JSON.stringify(handler.type)} on ${identity}: must not be empty`);
     }
@@ -127,41 +132,27 @@ export class JobDispatcher implements OnModuleDestroy {
   }
 
   /**
-   * Claimers that can block one another must serialize on the same guard row,
-   * so every type joined by an exclusion edge shares a group. The group name is
-   * derived from its members rather than assigned, so every worker computes the
-   * same key without coordinating.
+   * One guard row per declared edge, named from the pair alone.
+   *
+   * Naming a row after the connected component looked tidier and was wrong: the
+   * component is computed from locally registered handlers, so a worker hosting
+   * a different subset derives a different name for the same relationship, the
+   * two claims never contend on a row, and the guard silently stops holding.
+   * A pair derives the same key from either side regardless of what else its
+   * worker hosts.
    */
   private resolveExclusionGroups(): void {
-    const parent = new Map<string, string>();
-    const find = (type: string): string => {
-      const seen = parent.get(type);
-      if (seen === undefined || seen === type) {
-        parent.set(type, type);
-        return type;
-      }
-      const root = find(seen);
-      parent.set(type, root);
-      return root;
-    };
-    const union = (a: string, b: string): void => {
-      const rootA = find(a);
-      const rootB = find(b);
-      if (rootA !== rootB) parent.set(rootA, rootB);
-    };
     for (const [type, handler] of this.handlers) {
-      for (const other of handler.waitsFor ?? []) union(type, other);
-      for (const other of handler.notWhileRunning ?? []) union(type, other);
-    }
-    const members = new Map<string, string[]>();
-    for (const type of parent.keys()) {
-      const root = find(type);
-      members.set(root, [...(members.get(root) ?? []), type]);
-    }
-    for (const [root, group] of members) {
-      const name = [...group].sort().join('|');
-      for (const type of group) this.exclusionGroups.set(type, name);
-      void root;
+      const edges = new Set<string>();
+      for (const other of [
+        ...(handler.waitsFor ?? []),
+        ...(handler.notWhileRunning ?? []),
+      ]) {
+        edges.add(`order:${[type, other].sort().join('|')}`);
+      }
+      if (edges.size > 0) {
+        this.exclusionGroups.set(type, [...edges].sort());
+      }
     }
   }
 
@@ -256,10 +247,18 @@ export class JobDispatcher implements OnModuleDestroy {
   private schedule(): void {
     if (this.stopped) return;
     this.timer = setTimeout(() => {
-      this.tickCompletion = this.tick().finally(() => {
-        this.tickCompletion = null;
-        this.schedule();
-      });
+      this.tickCompletion = this.tick()
+        // A poll that throws must cost this cycle, not the worker. Guarded
+        // claims wait on a row lock, so a busy database can exceed the
+        // transaction timeout, and an unhandled rejection would end the
+        // process rather than skip a claim.
+        .catch((error: unknown) => {
+          this.logger.error(`Queue poll failed: ${errorMessage(error)}`);
+        })
+        .finally(() => {
+          this.tickCompletion = null;
+          this.schedule();
+        });
     }, this.options.pollIntervalMs);
   }
 
@@ -380,8 +379,7 @@ export class JobDispatcher implements OnModuleDestroy {
     const keys: string[] = [];
     const pool = this.poolFor(handler.type);
     if (pool !== undefined) keys.push(`pool:${pool.name}`);
-    const group = this.exclusionGroups.get(handler.type);
-    if (group !== undefined) keys.push(`order:${group}`);
+    keys.push(...(this.exclusionGroups.get(handler.type) ?? []));
     if (handler.serializeByScope && candidate.scopeType !== null) {
       keys.push(`scope:${candidate.scopeType}`);
     }
@@ -522,6 +520,15 @@ export class JobDispatcher implements OnModuleDestroy {
     this.executions.set(job.id, { controller, completion });
   }
 
+  private rateWindowFloor(): Date | undefined {
+    const windows = [...this.pools.values()]
+      .map((pool) => pool.rateWindowMs ?? 0)
+      .filter((window) => window > 0);
+    return windows.length === 0
+      ? undefined
+      : new Date(Date.now() - Math.max(...windows));
+  }
+
   private async sweepRetention(): Promise<void> {
     const retention = this.options.retention;
     if (!retention) return;
@@ -530,9 +537,11 @@ export class JobDispatcher implements OnModuleDestroy {
     if (now - this.lastSweepAt < interval) return;
     this.lastSweepAt = now;
     try {
+      const floor = this.rateWindowFloor();
       const pruned = await this.store.deleteTerminalBefore({
         statuses: retention.statuses ?? TERMINAL_STATUSES,
         before: new Date(now - retention.olderThanMs),
+        ...(floor === undefined ? {} : { keepStartedAfter: floor }),
       });
       if (pruned > 0) {
         this.logger.log(`Pruned ${pruned} terminal job(s)`);

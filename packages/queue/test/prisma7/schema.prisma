@@ -41,5 +41,5 @@ model Job {
 
 model JobGuard {
   key String @id
-  seq Int    @default(0)
+  seq BigInt @default(0)
 }

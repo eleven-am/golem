@@ -32,6 +32,10 @@ model JobGuard {
 
 `notWhileRunning` prevents overlap and is safe to declare on both sides — **declare it on both**, or the undeclared side can still start underneath the other. Use `waitsFor` instead if you meant "drain that queue before I run"; it blocks on outstanding work rather than only running work, and so remains one-way.
 
+## The `table` option on `PrismaJobStore` is gone
+
+It only existed to interpolate a table name into hand-written SQL. Claims now go through Prisma's query API, which resolves `@@map` itself, so the option had no effect. Delete it; your mapped table keeps working.
+
 ## Custom stores must declare that they enforce guards
 
 If you implement `JobStore` yourself and any handler uses `serializeByScope`, `waitsFor`, `notWhileRunning`, or a resource pool, evaluate those guards inside the statement or transaction that claims, then set:
@@ -41,41 +45,6 @@ readonly enforcesClaimGuards = true;
 ```
 
 The dispatcher refuses to start otherwise. The guards are optional fields on `ClaimInput`, so a store written before they existed type-checks and silently runs every guarded job unguarded — the refusal replaces that with a loud failure.
-
-# Migrating `@eleven-am/golem-queue` to 0.5.0
-
-The `Job` model gains a column. Add it and migrate before upgrading:
-
-```prisma
-model Job {
-  // ...
-  startedAt      DateTime?
-
-  @@index([type, startedAt])
-}
-```
-
-`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery — a retried job did its work twice and must count twice. Resource pools do not read it; it is here so that per-minute rate budgets, which need a window over job starts, do not require a second migration.
-
-## Sharing a budget across handlers
-
-Nothing else changes. Handlers, enqueues, and existing config all behave as before. To bound several job types against one third-party budget:
-
-```ts
-GolemQueueModule.forRootAsync({
-  resources: {
-    spotify: {
-      concurrency: 4,
-      types: ['spotify-sync', 'track-hydrate', 'artist-enrich'],
-      costs: { 'spotify-sync': 2 },
-    },
-  },
-})
-```
-
-Membership belongs in config rather than on the handler: a worker bounds only the types it is told about, so a member handled by another process must still be listed or the pool admits more than its limit on every worker independently.
-
-See the README for what a pool can and cannot bound.
 
 # Migrating `@eleven-am/golem-queue` to 0.3.0
 

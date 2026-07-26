@@ -1156,3 +1156,89 @@ describe('rate budgets', () => {
     expect(await statusOf(store, recent)).toBe('SUCCEEDED');
   });
 });
+
+describe('guard keys across workers hosting different handlers', () => {
+  function keysFor(dispatcher: JobDispatcher, type: string): string[] {
+    const internals = dispatcher as unknown as {
+      resolveExclusionGroups(): void;
+      guardKeysFor(handler: JobHandler, candidate: unknown): string[];
+      handlers: Map<string, JobHandler>;
+    };
+    internals.resolveExclusionGroups();
+    return internals.guardKeysFor(internals.handlers.get(type)!, {
+      scopeType: null,
+    });
+  }
+
+  it('derives the same key for a pair however the fleet is partitioned', () => {
+    // Chain a<->b, b<->c. Each worker hosts a different subset, which is the
+    // deployment the README recommends. Keying by connected component gave the
+    // three workers three different names for the same relationship, so their
+    // claims never contended and the guard stopped holding.
+    const onlyA = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+    ]).dispatcher;
+    const onlyB = build([
+      handler(() => Promise.resolve(), { type: 'b', notWhileRunning: ['a', 'c'] }),
+    ]).dispatcher;
+    const onlyC = build([
+      handler(() => Promise.resolve(), { type: 'c', notWhileRunning: ['b'] }),
+    ]).dispatcher;
+
+    expect(keysFor(onlyA, 'a')).toEqual(['order:a|b']);
+    expect(keysFor(onlyB, 'b')).toEqual(['order:a|b', 'order:b|c']);
+    expect(keysFor(onlyC, 'c')).toEqual(['order:b|c']);
+  });
+
+  it('gives both sides of a pair the same key regardless of co-registration', () => {
+    const split = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+    ]).dispatcher;
+    const together = build([
+      handler(() => Promise.resolve(), { type: 'a', notWhileRunning: ['b'] }),
+      handler(() => Promise.resolve(), { type: 'b', notWhileRunning: ['a'] }),
+      handler(() => Promise.resolve(), { type: 'z', waitsFor: ['a'] }),
+    ]).dispatcher;
+
+    expect(keysFor(split, 'a')).toEqual(keysFor(together, 'a'));
+  });
+
+  it('keeps guard keys sorted so multiple guards cannot deadlock', () => {
+    const { dispatcher } = build(
+      [
+        handler(() => Promise.resolve(), {
+          type: 'hydrate',
+          notWhileRunning: ['zeta', 'alpha'],
+        }),
+      ],
+      { resources: { api: { concurrency: 1, types: ['hydrate'] } } },
+    );
+
+    const keys = keysFor(dispatcher, 'hydrate');
+    expect(keys).toEqual([...keys].sort());
+  });
+});
+
+describe('retention and the rate window', () => {
+  it('does not let the automatic sweep free budget that was spent', async () => {
+    const { store, dispatcher } = build(
+      [handler(() => Promise.resolve(), { type: 'hydrate' })],
+      {
+        retention: { olderThanMs: 1 },
+        resources: { api: { ratePerMinute: 5, types: ['hydrate'] } },
+      },
+    );
+    const id = await seed(store, { type: 'hydrate' });
+
+    await tick(dispatcher);
+    expect(
+      (await store.findJobs({ limit: 10 })).find((row) => row.id === id)?.status,
+    ).toBe('SUCCEEDED');
+
+    const internals = dispatcher as unknown as { sweepRetention(): Promise<void> };
+    (dispatcher as unknown as { lastSweepAt: number }).lastSweepAt = 0;
+    await internals.sweepRetention();
+
+    expect(await store.findJobs({ limit: 10 })).toHaveLength(1);
+  });
+});

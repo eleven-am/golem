@@ -69,20 +69,9 @@ export interface PrismaClientLike {
   $transaction?<T>(fn: (tx: PrismaClientLike) => Promise<T>): Promise<T>;
 }
 
-export interface PrismaJobStoreOptions {
-  /** Physical table name, when the Job model is mapped to something else. */
-  readonly table?: string;
-}
-
 const UNIQUE_VIOLATION = 'P2002';
 
 
-function quoteIdentifier(name: string): string {
-  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) {
-    throw new Error(`Unsupported job table name: ${name}`);
-  }
-  return `"${name}"`;
-}
 
 const CANCELLABLE_SELECT = {
   id: true,
@@ -114,19 +103,16 @@ function ids(rows: Record<string, unknown>[]): string[] {
 export class PrismaJobStore implements JobStore {
   readonly enforcesClaimGuards = true;
 
-  private readonly table: string;
 
   constructor(
     private readonly prisma: PrismaClientLike,
-    options: PrismaJobStoreOptions = {},
   ) {
-    this.table = options.table ?? 'Job';
   }
 
   private readonly knownGuards = new Set<string>();
 
   withClient(client: PrismaClientLike): PrismaJobStore {
-    return new PrismaJobStore(client, { table: this.table });
+    return new PrismaJobStore(client);
   }
 
   async create(input: CreateJobInput): Promise<boolean> {
@@ -326,6 +312,72 @@ export class PrismaJobStore implements JobStore {
       },
     });
     return result.count === 1;
+  }
+
+  async hasActiveOfTypes(input: {
+    waitsFor?: readonly string[];
+    notWhileRunning?: readonly string[];
+    now: Date;
+  }): Promise<boolean> {
+    const clauses: Where[] = [];
+    if ((input.waitsFor?.length ?? 0) > 0) {
+      clauses.push({
+        type: { in: [...(input.waitsFor ?? [])] },
+        OR: [
+          { status: 'PENDING', runAt: { lte: input.now } },
+          { status: 'RUNNING' },
+        ],
+      });
+    }
+    if ((input.notWhileRunning?.length ?? 0) > 0) {
+      clauses.push({
+        type: { in: [...(input.notWhileRunning ?? [])] },
+        status: 'RUNNING',
+        leaseExpiresAt: { gt: input.now },
+      });
+    }
+    if (clauses.length === 0) return false;
+    const rows = await this.prisma.job.findMany({
+      where: clauses.length === 1 ? clauses[0] : { OR: clauses },
+      select: { id: true },
+      take: 1,
+    });
+    return rows.length > 0;
+  }
+
+  async poolUsage(input: {
+    types: readonly string[];
+    costs: Readonly<Record<string, number>>;
+    rateCosts: Readonly<Record<string, number>>;
+    rateWindowStart?: Date;
+    now: Date;
+  }): Promise<{ concurrency: number; rate: number }> {
+    if (input.types.length === 0) return { concurrency: 0, rate: 0 };
+    const live = await this.prisma.job.findMany({
+      where: {
+        type: { in: [...input.types] },
+        status: 'RUNNING',
+        leaseExpiresAt: { gt: input.now },
+      },
+      select: { type: true },
+    });
+    const concurrency = live.reduce(
+      (total, row) => total + (input.costs[row.type as string] ?? 1),
+      0,
+    );
+    if (input.rateWindowStart === undefined) return { concurrency, rate: 0 };
+    const started = await this.prisma.job.findMany({
+      where: {
+        type: { in: [...input.types] },
+        startedAt: { gt: input.rateWindowStart },
+      },
+      select: { type: true },
+    });
+    const rate = started.reduce(
+      (total, row) => total + (input.rateCosts[row.type as string] ?? 1),
+      0,
+    );
+    return { concurrency, rate };
   }
 
   async renewLease(input: RenewLeaseInput): Promise<boolean> {
