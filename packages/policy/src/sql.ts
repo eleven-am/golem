@@ -12,7 +12,7 @@ export interface SqlFragment {
   readonly parameters: readonly SqlParameter[];
 }
 
-export type NullSafeEqualityStyle = 'is-not-distinct-from' | 'null-safe-equals' | 'is';
+export type NullSafeEqualityStyle = 'is-not-distinct-from' | 'is';
 
 export interface SqlLikeSupport {
   readonly escape: string;
@@ -105,9 +105,6 @@ export const SQL_FALSE: SqlNode = sqlText('(1 = 0)');
 
 export function sqlNullSafeEquals(column: SqlNode, value: SqlNode): SqlNode {
   return sqlDialectal((dialect) => {
-    if (dialect.nullSafeEquality === 'null-safe-equals') {
-      return sqlSequence([column, sqlText(' <=> '), value]);
-    }
     if (dialect.nullSafeEquality === 'is') {
       return sqlSequence([column, sqlText(' IS '), value]);
     }
@@ -216,29 +213,6 @@ const postgresJsonDialect: SqlJsonDialect = {
   containsDocument: (value, candidate) => sqlGroup(sqlSequence([value, sqlText(' @> '), candidate])),
 };
 
-const mysqlJsonDialect: SqlJsonDialect = {
-  pathStyle: 'jsonpath',
-  normalisesDocuments: true,
-  supportsContainment: true,
-  supportsOrdering: true,
-  typeNames: {
-    null: ['NULL'],
-    boolean: ['BOOLEAN'],
-    number: ['INTEGER', 'DOUBLE', 'DECIMAL'],
-    string: ['STRING'],
-    array: ['ARRAY'],
-    object: ['OBJECT'],
-  },
-  at: (column, path) => sqlCall('JSON_EXTRACT', [column, jsonPathExpression(path)]),
-  child: (value, position) =>
-    sqlCall('JSON_EXTRACT', [value, sqlParameter(position === 'first' ? '$[0]' : '$[last]')]),
-  typeOf: (value) => sqlCall('JSON_TYPE', [value]),
-  text: (value) => sqlCall('JSON_UNQUOTE', [value]),
-  document: (json) => sqlSequence([sqlText('CAST('), sqlParameter(json), sqlText(' AS JSON)')]),
-  containsDocument: (value, candidate) =>
-    sqlGroup(sqlSequence([sqlCall('JSON_CONTAINS', [value, candidate]), sqlText(' = 1')])),
-};
-
 const sqliteJsonDialect: SqlJsonDialect = {
   pathStyle: 'jsonpath',
   normalisesDocuments: false,
@@ -269,17 +243,6 @@ export const postgresDialect: SqlDialect = {
   json: postgresJsonDialect,
   placeholder: (position) => `$${position}`,
   quoteIdentifier: (identifier) => `"${identifier.replace(/"/g, '""')}"`,
-};
-
-export const mysqlDialect: SqlDialect = {
-  name: 'mysql',
-  nullSafeEquality: 'null-safe-equals',
-  binaryCollation: 'utf8mb4_bin',
-  textType: 'CHAR',
-  like: { escape: "'\\\\'", insensitive: null },
-  json: mysqlJsonDialect,
-  placeholder: () => '?',
-  quoteIdentifier: (identifier) => `\`${identifier.replace(/`/g, '``')}\``,
 };
 
 export const sqliteDialect: SqlDialect = {

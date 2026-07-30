@@ -312,7 +312,7 @@ function readPath(filter: Record<string, unknown>): JsonPath | string {
     }
     return { style: 'jsonpath', segments, source };
   }
-  return `"path" is an array of segments on Postgres and a JSONPath string on MySQL and SQLite, received ${describeValue(source)}`;
+  return `"path" is an array of segments on Postgres and a JSONPath string on SQLite, received ${describeValue(source)}`;
 }
 
 export function navigateJson(value: unknown, segments: readonly JsonPathSegment[]): JsonSlot {

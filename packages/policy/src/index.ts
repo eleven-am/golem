@@ -78,7 +78,6 @@ export type {
 export {
   SQL_FALSE,
   SQL_TRUE,
-  mysqlDialect,
   postgresDialect,
   renderSql,
   sqlArrayCardinality,

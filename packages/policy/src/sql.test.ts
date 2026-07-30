@@ -4,7 +4,6 @@ import {
   SqlDialect,
   SqlFragment,
   SqlScope,
-  mysqlDialect,
   postgresDialect,
   renderSql,
   sqlIdentifier,
@@ -326,14 +325,13 @@ describe('string operators', () => {
     expect(render({ v: { contains: 'a%b_c\\d' } }, sqliteDialect).parameters).toEqual(['a%b_c\\d']);
   });
 
-  it('spells the escape literal the way each engine parses a string literal', () => {
+  it('spells the escape literal the way Postgres parses a string literal', () => {
     expect(render({ v: { contains: 'a' } }, postgresDialect).text).toContain(`ESCAPE '\\'`);
-    expect(render({ v: { contains: 'a' } }, mysqlDialect).text).toContain(`ESCAPE '\\\\'`);
   });
 
   it('renders an empty operand as a presence test, which is what it means', () => {
     for (const operator of ['contains', 'startsWith', 'endsWith']) {
-      for (const dialect of [postgresDialect, mysqlDialect, sqliteDialect]) {
+      for (const dialect of [postgresDialect, sqliteDialect]) {
         expect(render({ v: { [operator]: '' } }, dialect).parameters).toEqual([]);
       }
       expect(render({ v: { [operator]: '' } }).text).toBe('("Post"."v" IS NOT NULL)');
@@ -370,16 +368,16 @@ describe('string operators', () => {
     expect(render({ v: { mode: 'insensitive' } })).toEqual({ text: '(1 = 1)', parameters: [] });
   });
 
-  it.each([
-    [mysqlDialect, 'mysql'],
-    [sqliteDialect, 'sqlite'],
-  ])('refuses insensitive mode on an engine without one, naming it', (dialect, name) => {
-    expect(() => render({ v: { contains: 'a', mode: 'insensitive' } }, dialect)).toThrow(SqlRenderError);
-    expect(() => render({ v: { contains: 'a', mode: 'insensitive' } }, dialect)).toThrow(name);
-  });
+  it.each([[sqliteDialect, 'sqlite']])(
+    'refuses insensitive mode on an engine without one, naming it',
+    (dialect, name) => {
+      expect(() => render({ v: { contains: 'a', mode: 'insensitive' } }, dialect)).toThrow(SqlRenderError);
+      expect(() => render({ v: { contains: 'a', mode: 'insensitive' } }, dialect)).toThrow(name);
+    },
+  );
 
   it('binds the operand as a parameter, never as inlined pattern text', () => {
-    for (const dialect of [postgresDialect, mysqlDialect, sqliteDialect]) {
+    for (const dialect of [postgresDialect, sqliteDialect]) {
       const fragment = render({ v: { contains: "x'; DROP TABLE Post; --" } }, dialect);
       expect(fragment.text).not.toContain('DROP');
       expect(fragment.parameters).toHaveLength(1);
@@ -398,27 +396,24 @@ describe('string operators', () => {
 describe('dialects', () => {
   it('renders null-safe equality per engine', () => {
     expect(render({ a: 1 }, postgresDialect).text).toBe('("Post"."a" IS NOT DISTINCT FROM $1)');
-    expect(render({ a: 1 }, mysqlDialect).text).toBe('(`Post`.`a` <=> ?)');
     expect(render({ a: 1 }, sqliteDialect).text).toBe('("Post"."a" IS ?)');
   });
 
   it('renders placeholders per engine', () => {
     expect(render({ a: 1, b: 2 }, postgresDialect).text).toContain('$2');
-    expect(render({ a: 1, b: 2 }, mysqlDialect).text).not.toContain('$');
+    expect(render({ a: 1, b: 2 }, sqliteDialect).text).not.toContain('$');
   });
 
   it('escapes identifier quoting', () => {
     expect(postgresDialect.quoteIdentifier('we"ird')).toBe('"we""ird"');
-    expect(mysqlDialect.quoteIdentifier('we`ird')).toBe('`we``ird`');
     expect(sqliteDialect.quoteIdentifier('we"ird')).toBe('"we""ird"');
   });
 
   it('keeps parameters identical across dialects', () => {
     const conditions = { OR: [{ a: 1 }, { b: { in: [2, 3] } }] };
-    const parameters = [postgresDialect, mysqlDialect, sqliteDialect].map(
+    const parameters = [postgresDialect, sqliteDialect].map(
       (dialect) => render(conditions, dialect).parameters,
     );
     expect(parameters[0]).toEqual(parameters[1]);
-    expect(parameters[1]).toEqual(parameters[2]);
   });
 });

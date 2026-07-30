@@ -1,5 +1,5 @@
 import { PrismaPg } from '@prisma/adapter-pg';
-import { SqlRenderError, mysqlDialect, postgresDialect, sqliteDialect } from '../src/index';
+import { SqlRenderError, postgresDialect, sqliteDialect } from '../src/index';
 import { PrismaClient } from './prisma-arrays/generated/client';
 import {
   Agreement,
@@ -269,7 +269,7 @@ pair('scalar list operators do not depend on the database collation', () => {
 });
 
 describe('scalar list operators refuse the providers that have no list columns', () => {
-  for (const dialect of [sqliteDialect, mysqlDialect]) {
+  for (const dialect of [sqliteDialect]) {
     it(`refuses every list case on ${dialect.name}`, () => {
       for (const entry of LIST_LEAF_CASES) {
         expect(() => render(LIST_DATAMODEL, 'ListRow', dialect, entry.where)).toThrow(SqlRenderError);

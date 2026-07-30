@@ -7,7 +7,6 @@ import {
   SqlDialect,
   SqlParameter,
   SqlRenderError,
-  mysqlDialect,
   postgresDialect,
   sqliteDialect,
 } from '../src/index';
@@ -278,17 +277,15 @@ describe('the scalar list operators reach only the provider that has list column
     }
   });
 
-  it('refuses every folded rendering on sqlite and mysql, whatever the operand', () => {
+  it('refuses every folded rendering on sqlite, whatever the operand', () => {
     const rendered: string[] = [];
     for (const probe of INSENSITIVE_PROBES) {
-      for (const dialect of [sqliteDialect, mysqlDialect]) {
-        try {
-          renderProbe(probe, dialect);
-          rendered.push(`${probe.id}/${dialect.name}`);
-        } catch (error) {
-          if (!(error instanceof SqlRenderError)) {
-            rendered.push(`${probe.id}/${dialect.name}:${(error as Error).name}`);
-          }
+      try {
+        renderProbe(probe, sqliteDialect);
+        rendered.push(`${probe.id}/${sqliteDialect.name}`);
+      } catch (error) {
+        if (!(error instanceof SqlRenderError)) {
+          rendered.push(`${probe.id}/${sqliteDialect.name}:${(error as Error).name}`);
         }
       }
     }

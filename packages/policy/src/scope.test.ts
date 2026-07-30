@@ -9,7 +9,6 @@ import {
 import {
   SqlDialect,
   SqlScope,
-  mysqlDialect,
   postgresDialect,
   renderSql,
   sqlIdentifier,
@@ -308,7 +307,6 @@ describe('every operator against the datamodel scope', () => {
       { views: 3 },
       {
         postgres: '("t0"."view_count" IS NOT DISTINCT FROM $1)',
-        mysql: '(`t0`.`view_count` <=> ?)',
         sqlite: '("t0"."view_count" IS ?)',
       },
       [3],
@@ -318,7 +316,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { equals: 3 } },
       {
         postgres: '("t0"."view_count" IS NOT DISTINCT FROM $1)',
-        mysql: '(`t0`.`view_count` <=> ?)',
         sqlite: '("t0"."view_count" IS ?)',
       },
       [3],
@@ -328,7 +325,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { equals: null } },
       {
         postgres: '("t0"."view_count" IS NULL)',
-        mysql: '(`t0`.`view_count` IS NULL)',
         sqlite: '("t0"."view_count" IS NULL)',
       },
       [],
@@ -338,7 +334,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { not: 3 } },
       {
         postgres: 'NOT ("t0"."view_count" IS NOT DISTINCT FROM $1)',
-        mysql: 'NOT (`t0`.`view_count` <=> ?)',
         sqlite: 'NOT ("t0"."view_count" IS ?)',
       },
       [3],
@@ -348,7 +343,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { not: null } },
       {
         postgres: '("t0"."view_count" IS NOT NULL)',
-        mysql: '(`t0`.`view_count` IS NOT NULL)',
         sqlite: '("t0"."view_count" IS NOT NULL)',
       },
       [],
@@ -358,7 +352,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { in: [1, 2] } },
       {
         postgres: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" IN ($1, $2))',
-        mysql: '(`t0`.`view_count` IS NOT NULL AND `t0`.`view_count` IN (?, ?))',
         sqlite: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" IN (?, ?))',
       },
       [1, 2],
@@ -368,7 +361,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { notIn: [1] } },
       {
         postgres: '("t0"."view_count" IS NULL OR "t0"."view_count" NOT IN ($1))',
-        mysql: '(`t0`.`view_count` IS NULL OR `t0`.`view_count` NOT IN (?))',
         sqlite: '("t0"."view_count" IS NULL OR "t0"."view_count" NOT IN (?))',
       },
       [1],
@@ -378,7 +370,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { lt: 5 } },
       {
         postgres: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" < $1)',
-        mysql: '(`t0`.`view_count` IS NOT NULL AND `t0`.`view_count` < ?)',
         sqlite: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" < ?)',
       },
       [5],
@@ -388,7 +379,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { lte: 5 } },
       {
         postgres: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" <= $1)',
-        mysql: '(`t0`.`view_count` IS NOT NULL AND `t0`.`view_count` <= ?)',
         sqlite: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" <= ?)',
       },
       [5],
@@ -398,7 +388,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { gt: 5 } },
       {
         postgres: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" > $1)',
-        mysql: '(`t0`.`view_count` IS NOT NULL AND `t0`.`view_count` > ?)',
         sqlite: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" > ?)',
       },
       [5],
@@ -408,7 +397,6 @@ describe('every operator against the datamodel scope', () => {
       { views: { gte: 5 } },
       {
         postgres: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" >= $1)',
-        mysql: '(`t0`.`view_count` IS NOT NULL AND `t0`.`view_count` >= ?)',
         sqlite: '("t0"."view_count" IS NOT NULL AND "t0"."view_count" >= ?)',
       },
       [5],
@@ -419,8 +407,6 @@ describe('every operator against the datamodel scope', () => {
       {
         postgres:
           '(EXISTS (SELECT 1 FROM "user_rows" AS "t0_1" WHERE "t0_1"."user_pk" COLLATE "C" = "t0"."author_ref" COLLATE "C" AND (("t0_1"."org_ref" IS NOT DISTINCT FROM $1))))',
-        mysql:
-          '(EXISTS (SELECT 1 FROM `user_rows` AS `t0_1` WHERE `t0_1`.`user_pk` COLLATE utf8mb4_bin = `t0`.`author_ref` COLLATE utf8mb4_bin AND ((`t0_1`.`org_ref` <=> ?))))',
         sqlite:
           '(EXISTS (SELECT 1 FROM "user_rows" AS "t0_1" WHERE "t0_1"."user_pk" COLLATE BINARY = "t0"."author_ref" COLLATE BINARY AND (("t0_1"."org_ref" IS ?))))',
       },
@@ -429,7 +415,7 @@ describe('every operator against the datamodel scope', () => {
   ];
 
   it.each(cases)('renders %s on every dialect', (_name, constraint, expected, parameters) => {
-    for (const dialect of [postgresDialect, mysqlDialect, sqliteDialect]) {
+    for (const dialect of [postgresDialect, sqliteDialect]) {
       const rendered = sql(constraint, dialect);
       expect(rendered.text).toBe(expected[dialect.name]);
       expect(rendered.parameters).toEqual(parameters);
@@ -438,9 +424,8 @@ describe('every operator against the datamodel scope', () => {
 
   it('binds identical parameters on every dialect', () => {
     const constraint = { OR: [{ views: 1 }, { title: { in: ['a', 'b'] } }] };
-    const rendered = [postgresDialect, mysqlDialect, sqliteDialect].map((dialect) => sql(constraint, dialect).parameters);
+    const rendered = [postgresDialect, sqliteDialect].map((dialect) => sql(constraint, dialect).parameters);
     expect(rendered[0]).toEqual(rendered[1]);
-    expect(rendered[1]).toEqual(rendered[2]);
   });
 
   it('never inlines a value into the text', () => {
@@ -526,7 +511,7 @@ describe('the to-many quantifiers', () => {
     );
   });
 
-  it.each([postgresDialect, mysqlDialect, sqliteDialect])(
+  it.each([postgresDialect, sqliteDialect])(
     'spells the null-safe negation identically on %s',
     (dialect) => {
       const rendered = text({ comments: { every: { body: 'x' } } }, dialect);
@@ -686,9 +671,6 @@ describe('the string collation', () => {
     expect(text({ title: { lt: 'Zulu' } }, postgresDialect)).toBe(
       '("t0"."title_text" COLLATE "C" IS NOT NULL AND "t0"."title_text" COLLATE "C" < $1)',
     );
-    expect(text({ title: { lt: 'Zulu' } }, mysqlDialect)).toBe(
-      '(`t0`.`title_text` COLLATE utf8mb4_bin IS NOT NULL AND `t0`.`title_text` COLLATE utf8mb4_bin < ?)',
-    );
     expect(text({ title: { lt: 'Zulu' } }, sqliteDialect)).toBe(
       '("t0"."title_text" COLLATE BINARY IS NOT NULL AND "t0"."title_text" COLLATE BINARY < ?)',
     );
@@ -699,16 +681,20 @@ describe('the string collation', () => {
   });
 
   it.each(['equals', 'not'])('forces byte order on %s so a case-insensitive collation cannot widen it', (operator) => {
-    expect(text({ title: { [operator]: 'a' } }, mysqlDialect)).toContain('COLLATE utf8mb4_bin');
     expect(text({ title: { [operator]: 'a' } }, postgresDialect)).toContain('COLLATE "C"');
     expect(text({ title: { [operator]: 'a' } }, sqliteDialect)).toContain('COLLATE BINARY');
   });
 
   it.each(['in', 'notIn'])('forces byte order on %s', (operator) => {
-    expect(text({ title: { [operator]: ['a'] } }, mysqlDialect)).toBe(
+    expect(text({ title: { [operator]: ['a'] } }, postgresDialect)).toBe(
       operator === 'in'
-        ? '(`t0`.`title_text` COLLATE utf8mb4_bin IS NOT NULL AND `t0`.`title_text` COLLATE utf8mb4_bin IN (?))'
-        : '(`t0`.`title_text` COLLATE utf8mb4_bin IS NULL OR `t0`.`title_text` COLLATE utf8mb4_bin NOT IN (?))',
+        ? '("t0"."title_text" COLLATE "C" IS NOT NULL AND "t0"."title_text" COLLATE "C" IN ($1))'
+        : '("t0"."title_text" COLLATE "C" IS NULL OR "t0"."title_text" COLLATE "C" NOT IN ($1))',
+    );
+    expect(text({ title: { [operator]: ['a'] } }, sqliteDialect)).toBe(
+      operator === 'in'
+        ? '("t0"."title_text" COLLATE BINARY IS NOT NULL AND "t0"."title_text" COLLATE BINARY IN (?))'
+        : '("t0"."title_text" COLLATE BINARY IS NULL OR "t0"."title_text" COLLATE BINARY NOT IN (?))',
     );
   });
 
@@ -717,9 +703,6 @@ describe('the string collation', () => {
     (operator) => {
       expect(text({ title: { [operator]: 'a' } }, postgresDialect)).toContain(
         '"t0"."title_text" COLLATE "C" LIKE $1',
-      );
-      expect(text({ title: { [operator]: 'a' } }, mysqlDialect)).toContain(
-        '`t0`.`title_text` COLLATE utf8mb4_bin LIKE ?',
       );
     },
   );
@@ -762,9 +745,6 @@ describe('the string collation', () => {
   it('compares an enum by its label in byte order, not by its declaration order', () => {
     expect(text({ status: { gt: 'DRAFT' } }, postgresDialect)).toBe(
       '(CAST("t0"."status_value" AS TEXT) COLLATE "C" IS NOT NULL AND CAST("t0"."status_value" AS TEXT) COLLATE "C" > $1)',
-    );
-    expect(text({ status: { gt: 'DRAFT' } }, mysqlDialect)).toBe(
-      '(CAST(`t0`.`status_value` AS CHAR) COLLATE utf8mb4_bin IS NOT NULL AND CAST(`t0`.`status_value` AS CHAR) COLLATE utf8mb4_bin > ?)',
     );
     expect(text({ status: { gt: 'DRAFT' } }, sqliteDialect)).toBe(
       '(CAST("t0"."status_value" AS TEXT) COLLATE BINARY IS NOT NULL AND CAST("t0"."status_value" AS TEXT) COLLATE BINARY > ?)',

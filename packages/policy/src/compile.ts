@@ -359,7 +359,7 @@ function textOperatorIssue(
   return {
     reason: 'unsupported-operator',
     operator,
-    message: `operator "${operator}" matches text, and ${qualify(context, field)} is a ${definition.type} column; Prisma generates contains, startsWith and endsWith on a String field only, and SQLite and MySQL would answer this by coercing the column to text where the evaluator matches nothing at all`,
+    message: `operator "${operator}" matches text, and ${qualify(context, field)} is a ${definition.type} column; Prisma generates contains, startsWith and endsWith on a String field only, and SQLite would answer this by coercing the column to text where the evaluator matches nothing at all`,
   };
 }
 

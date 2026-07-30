@@ -1,4 +1,4 @@
-import { SqlRenderError, evaluateConditions, mysqlDialect, postgresDialect, sqliteDialect } from '../src/index';
+import { SqlRenderError, evaluateConditions, postgresDialect, sqliteDialect } from '../src/index';
 import { Agreement, agree, answerRecord, disagreementRecord, discriminating, explainAll, render } from './support/agreement';
 import {
   POSTGRES_C_URL_ENV,
@@ -201,16 +201,11 @@ suite('golem JS versus golem SQL on SQLite', () => {
         text: { contains: 'a', mode: 'insensitive' },
       }),
     ).toThrow('sqlite');
-    expect(() =>
-      render(STRING_DATAMODEL, 'StringRow', mysqlDialect, {
-        text: { contains: 'a', mode: 'insensitive' },
-      }),
-    ).toThrow('mysql');
   });
 
   it('refuses an empty insensitive operand too, so renderability never turns on the operand', () => {
     for (const operator of ['contains', 'startsWith', 'endsWith']) {
-      for (const dialect of [sqliteDialect, mysqlDialect]) {
+      for (const dialect of [sqliteDialect]) {
         expect(() =>
           render(STRING_DATAMODEL, 'StringRow', dialect, {
             text: { [operator]: '', mode: 'insensitive' },

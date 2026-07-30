@@ -3,7 +3,7 @@ import { PolicyDatamodel } from './datamodel';
 import { SqlRenderError } from './errors';
 import { SCALAR_LIST_OPERATORS, SUPPORTED_SCALAR_LIST_OPERATORS, isScalarListOperatorName } from './operators';
 import { createDatamodelSqlScope } from './scope';
-import { SqlDialect, mysqlDialect, postgresDialect, renderSql, sqliteDialect } from './sql';
+import { SqlDialect, postgresDialect, renderSql, sqliteDialect } from './sql';
 
 const DATAMODEL: PolicyDatamodel = {
   models: [
@@ -203,7 +203,7 @@ describe('scalar list operators render Postgres', () => {
 });
 
 describe('scalar list operators refuse providers without list columns', () => {
-  const unsupported: readonly SqlDialect[] = [sqliteDialect, mysqlDialect];
+  const unsupported: readonly SqlDialect[] = [sqliteDialect];
   const filters: readonly unknown[] = [
     { tags: { has: 'a' } },
     { tags: { has: null } },

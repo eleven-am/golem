@@ -16,7 +16,6 @@ import {
   SqlDialect,
   SqlNode,
   SqlScope,
-  mysqlDialect,
   postgresDialect,
   renderSql,
   sqlIdentifier,
@@ -354,9 +353,6 @@ describe('json filter rendering on sqlite', () => {
     expect(refusal({ path: '$."a"', string_starts_with: '', mode: 'insensitive' }, sqliteDialect)).toContain(
       'operator "string_starts_with" was given mode "insensitive", and sqlite',
     );
-    expect(refusal({ path: '$."a"', string_contains: '', mode: 'insensitive' }, mysqlDialect)).toContain(
-      'operator "string_contains" was given mode "insensitive", and mysql',
-    );
     expect(render({ path: ['a'], string_contains: '', mode: 'insensitive' }, postgresDialect).text).toContain(
       'jsonb_typeof',
     );
@@ -365,38 +361,6 @@ describe('json filter rendering on sqlite', () => {
   it('keeps the array edges as element comparisons', () => {
     expect(render({ path: '$.a', array_starts_with: 1 }, sqliteDialect).text).toContain("-> '$[0]'");
     expect(render({ path: '$.a', array_ends_with: 1 }, sqliteDialect).text).toContain("-> '$[#-1]'");
-  });
-});
-
-describe('json filter rendering on mysql', () => {
-  it('navigates with JSON_EXTRACT and a JSONPath string', () => {
-    const { text, parameters } = render({ path: '$.a', equals: 1 }, mysqlDialect);
-    expect(text).toContain('JSON_EXTRACT(`t0`.`payload`, ?)');
-    expect(text).toContain('CAST(? AS JSON)');
-    expect(parameters).toEqual(['$.a', '$.a', '1']);
-  });
-
-  it('renders containment with JSON_CONTAINS', () => {
-    expect(render({ path: '$.a', array_contains: 1 }, mysqlDialect).text).toContain('JSON_CONTAINS(');
-  });
-
-  it('names the mysql JSON type in the guard', () => {
-    expect(render({ path: '$.a', lt: 5 }, mysqlDialect).parameters).toEqual([
-      '$.a',
-      '$.a',
-      'INTEGER',
-      'DOUBLE',
-      'DECIMAL',
-      '$.a',
-      '5',
-    ]);
-  });
-
-  it('refuses an array path and insensitive matching', () => {
-    expect(refusal({ path: ['a'], equals: 1 }, mysqlDialect)).toContain('mysql takes a JSONPath string');
-    expect(refusal({ string_contains: 'x', mode: 'insensitive' }, mysqlDialect)).toContain(
-      'operator "string_contains" was given mode "insensitive", and mysql',
-    );
   });
 });
 
