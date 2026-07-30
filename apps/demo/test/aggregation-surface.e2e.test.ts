@@ -1,13 +1,16 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
 import { bootDemoApp, shutdownDemoApp } from './harness';
+import { GolemPrismaService } from '../src/generated/golem/client';
 
 describe('generated aggregation surface (e2e)', () => {
   let app: INestApplication;
+  let prisma: GolemPrismaService;
 
   beforeAll(async () => {
     const context = await bootDemoApp(__filename);
     app = context.app;
+    prisma = context.prisma;
   });
 
   afterAll(async () => {
@@ -161,6 +164,65 @@ describe('generated aggregation surface (e2e)', () => {
     });
   });
 
+  it('takes min and max over String and DateTime columns', async () => {
+    const response = await query(`{
+      postsAggregate(measures: { min: [title, createdAt], max: [title, createdAt] }) {
+        min { title createdAt }
+        max { title createdAt }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    const { min, max } = response.body.data.postsAggregate;
+    expect(min.title).toBe('Draft post');
+    expect(max.title).toBe('Memory systems');
+    expect(Number.isNaN(Date.parse(min.createdAt))).toBe(false);
+    expect(Number.isNaN(Date.parse(max.createdAt))).toBe(false);
+    expect(Date.parse(min.createdAt)).toBeLessThanOrEqual(Date.parse(max.createdAt));
+  });
+
+  it('refuses to sum a non-numeric column', async () => {
+    const response = await query('{ postsAggregate(measures: { sum: [title] }) { sum { rating } } }');
+
+    expect(response.body.errors?.[0].message).toMatch(/title/);
+    expect(response.body.data).toBeFalsy();
+  });
+
+  it('counts non-null values per field alongside the row total', async () => {
+    const response = await query(`{
+      postsAggregate(measures: { count: true, countFields: [rating, title] }) {
+        count
+        countBy { rating title }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.postsAggregate).toEqual({
+      count: 3,
+      countBy: { rating: 2, title: 3 },
+    });
+  });
+
+  it('carries per-field counts through a grouped query', async () => {
+    const response = await query(`{
+      postsGrouped(by: [published], measures: { count: true, countFields: [rating] }) {
+        key { published }
+        count
+        countBy { rating }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    const groups = response.body.data.postsGrouped as {
+      key: { published: boolean };
+      count: number;
+      countBy: { rating: number };
+    }[];
+    const draft = groups.find((group) => group.key.published === false)!;
+    expect(draft.count).toBe(1);
+    expect(draft.countBy.rating).toBe(0);
+  });
+
   it('uses operation-specific aggregate field types in the GraphQL schema', async () => {
     const response = await query(`{
       sum: __type(name: "PostSumValues") { fields { name type { name } } }
@@ -201,6 +263,78 @@ describe('generated aggregation surface (e2e)', () => {
       sum: { viewCount: '9007199254741093', rating: '0.30000000000000004' },
       min: { viewCount: '100', rating: '0.1' },
       max: { viewCount: '9007199254740993', rating: '0.2' },
+    });
+  });
+
+  describe('having and ordering over String and DateTime measures', () => {
+    beforeAll(async () => {
+      await prisma.post.updateMany({
+        where: { title: 'First post' },
+        data: { createdAt: new Date('2020-01-01T00:00:00.000Z') },
+      });
+      await prisma.post.updateMany({
+        where: { title: 'Draft post' },
+        data: { createdAt: new Date('2021-01-01T00:00:00.000Z') },
+      });
+      await prisma.post.updateMany({
+        where: { title: 'Memory systems' },
+        data: { createdAt: new Date('2022-01-01T00:00:00.000Z') },
+      });
+    });
+
+    async function publishedKeys(args: string): Promise<boolean[]> {
+      const response = await query(`{
+        postsGrouped(by: [published], ${args}) {
+          key { published }
+        }
+      }`);
+
+      expect(response.body.errors).toBeUndefined();
+      return (response.body.data.postsGrouped as { key: { published: boolean } }[]).map(
+        (group) => group.key.published,
+      );
+    }
+
+    it('filters groups by a bound on a String minimum', async () => {
+      expect(await publishedKeys('having: { min: { title: { gte: "A" } } }')).toHaveLength(2);
+      expect(await publishedKeys('having: { min: { title: { gte: "E" } } }')).toEqual([true]);
+      expect(await publishedKeys('having: { min: { title: { lt: "E" } } }')).toEqual([false]);
+    });
+
+    it('filters groups by a bound on a DateTime minimum', async () => {
+      expect(
+        await publishedKeys('having: { min: { createdAt: { gte: "2021-01-01T00:00:00.000Z" } } }'),
+      ).toEqual([false]);
+      expect(
+        await publishedKeys('having: { min: { createdAt: { lt: "2021-01-01T00:00:00.000Z" } } }'),
+      ).toEqual([true]);
+    });
+
+    it('filters groups by a bound on a DateTime maximum', async () => {
+      expect(
+        await publishedKeys('having: { max: { createdAt: { gte: "2021-06-01T00:00:00.000Z" } } }'),
+      ).toEqual([true]);
+      expect(
+        await publishedKeys('having: { max: { createdAt: { lt: "2021-06-01T00:00:00.000Z" } } }'),
+      ).toEqual([false]);
+    });
+
+    it('orders groups by a String minimum', async () => {
+      expect(
+        await publishedKeys('measures: { min: [title] }, orderBy: { min: { title: asc } }'),
+      ).toEqual([false, true]);
+      expect(
+        await publishedKeys('measures: { min: [title] }, orderBy: { min: { title: desc } }'),
+      ).toEqual([true, false]);
+    });
+
+    it('orders groups by a DateTime maximum', async () => {
+      expect(
+        await publishedKeys('measures: { max: [createdAt] }, orderBy: { max: { createdAt: asc } }'),
+      ).toEqual([false, true]);
+      expect(
+        await publishedKeys('measures: { max: [createdAt] }, orderBy: { max: { createdAt: desc } }'),
+      ).toEqual([true, false]);
     });
   });
 });

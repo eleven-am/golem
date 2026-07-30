@@ -1,4 +1,4 @@
-import { graphql, printSchema } from 'graphql';
+import { graphql, parse, printSchema, validate } from 'graphql';
 import { DatamodelDocument } from './datamodel';
 import { buildGolemSchema } from './schema';
 import { field } from './testing';
@@ -380,6 +380,137 @@ describe('aggregation schema surface', () => {
     );
   });
 
+  it('maps countFields onto a per-field prisma count', async () => {
+    const client = fakeClient([], { _count: { trackId: 4, userId: 3 } });
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsAggregate(measures: { countFields: [trackId, userId] }) {
+          count countBy { trackId userId }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsAggregate).toEqual({
+      count: null,
+      countBy: { trackId: 4, userId: 3 },
+    });
+    expect(client.play.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ _count: { trackId: true, userId: true } }),
+    );
+  });
+
+  it('asks for _all alongside per-field counts when both are requested', async () => {
+    const client = fakeClient([], { _count: { _all: 9, trackId: 4 } });
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsAggregate(measures: { count: true, countFields: [trackId] }) {
+          count countBy { trackId }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsAggregate).toEqual({
+      count: 9,
+      countBy: { trackId: 4 },
+    });
+    expect(client.play.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ _count: { _all: true, trackId: true } }),
+    );
+  });
+
+  it('keeps a bare count scalar when no fields are named', async () => {
+    const client = fakeClient([], { _count: 7 });
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: '{ playsAggregate(measures: { count: true }) { count countBy { trackId } } }',
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsAggregate).toEqual({ count: 7, countBy: null });
+    expect(client.play.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ _count: true }),
+    );
+  });
+
+  it('asks prisma for no count at all when countFields is empty', async () => {
+    const client = fakeClient([], {});
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: '{ playsAggregate(measures: { countFields: [] }) { count countBy { trackId } } }',
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(client.play.aggregate).toHaveBeenCalledWith(
+      expect.not.objectContaining({ _count: expect.anything() }),
+    );
+    expect(Object.keys(client.play.aggregate.mock.calls[0][0])).not.toContain('_count');
+  });
+
+  it('carries per-field counts through a grouped query', async () => {
+    const client = fakeClient([
+      { trackId: 't1', _count: { _all: 5, userId: 2 } },
+    ]);
+    const schema = buildGolemSchema({ datamodel, client, models: enabled });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        playsGrouped(by: [trackId], measures: { count: true, countFields: [userId] }) {
+          key { trackId } count countBy { userId }
+        }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.playsGrouped).toEqual([
+      { key: { trackId: 't1' }, count: 5, countBy: { userId: 2 } },
+    ]);
+    expect(client.play.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ _count: { _all: true, userId: true } }),
+    );
+  });
+
+  it('counts fields the dimensions allowlist keeps out of grouping', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel,
+        client: fakeClient(),
+        models: { Play: { aggregations: { dimensions: ['trackId'] } } },
+      }),
+    );
+    const groupFields = /enum PlayGroupField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    const countFields = /enum PlayCountField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+
+    expect(groupFields).not.toContain('userId');
+    expect(countFields).toContain('userId');
+    expect(countFields).toContain('trackId');
+  });
+
+  it('keeps hidden fields out of the countable set', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel,
+        client: fakeClient(),
+        models: { Play: { aggregations: true, hidden: ['userId'] } },
+      }),
+    );
+    const countValues = /type PlayCountValues \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    expect(countValues).not.toContain('userId');
+    expect(countValues).toContain('trackId');
+  });
+
   it('does not expose hidden fields as dimensions or measures', () => {
     const sdl = printSchema(
       buildGolemSchema({
@@ -390,5 +521,305 @@ describe('aggregation schema surface', () => {
     );
     const groupFields = /enum PlayGroupField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
     expect(groupFields).not.toContain('userId');
+  });
+});
+
+const sessionDatamodel: DatamodelDocument<{
+  Session: 'id' | 'label' | 'startedAt' | 'duration';
+}> = {
+  models: [
+    {
+      name: 'Session',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'label', type: 'String' }),
+        field({ name: 'startedAt', type: 'DateTime' }),
+        field({ name: 'duration', type: 'Int' }),
+        field({ name: 'active', type: 'Boolean' }),
+      ],
+    },
+  ],
+  enums: [],
+};
+
+const noteDatamodel: DatamodelDocument<{ Note: 'id' | 'body' | 'writtenAt' }> = {
+  models: [
+    {
+      name: 'Note',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'body', type: 'String' }),
+        field({ name: 'writtenAt', type: 'DateTime' }),
+      ],
+    },
+  ],
+  enums: [],
+};
+
+const counterDatamodel: DatamodelDocument<{ Counter: 'id' | 'value' }> = {
+  models: [
+    {
+      name: 'Counter',
+      fields: [
+        field({ name: 'id', type: 'Int', isId: true, hasDefaultValue: true }),
+        field({ name: 'value', type: 'Int' }),
+      ],
+    },
+  ],
+  enums: [],
+};
+
+function fakeDelegate(aggregate: unknown = {}) {
+  return {
+    findMany: jest.fn().mockResolvedValue([]),
+    findUnique: jest.fn().mockResolvedValue(null),
+    create: jest.fn().mockResolvedValue({ id: '1' }),
+    update: jest.fn().mockResolvedValue({ id: '1' }),
+    updateMany: jest.fn().mockResolvedValue({ count: 0 }),
+    delete: jest.fn().mockResolvedValue({ id: '1' }),
+    deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+    upsert: jest.fn().mockResolvedValue({ id: '1' }),
+    count: jest.fn().mockResolvedValue(0),
+    aggregate: jest.fn().mockResolvedValue(aggregate),
+    groupBy: jest.fn().mockResolvedValue([]),
+  };
+}
+
+describe('orderable measures', () => {
+  const sessionEnabled = { Session: { aggregations: true as const } };
+
+  it('admits DateTime and String to min and max but not to sum or avg', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel: sessionDatamodel,
+        client: { session: fakeDelegate() },
+        models: sessionEnabled,
+      }),
+    );
+
+    const measureFields = /enum SessionMeasureField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    const orderableFields = /enum SessionOrderableField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+
+    expect(measureFields).toContain('duration');
+    expect(measureFields).not.toContain('startedAt');
+    expect(measureFields).not.toContain('label');
+
+    expect(orderableFields).toContain('duration');
+    expect(orderableFields).toContain('startedAt');
+    expect(orderableFields).toContain('label');
+    expect(orderableFields).not.toContain('active');
+
+    const measuresInput = /input SessionMeasuresInput \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    expect(measuresInput).toContain('sum: [SessionMeasureField!]');
+    expect(measuresInput).toContain('avg: [SessionMeasureField!]');
+    expect(measuresInput).toContain('min: [SessionOrderableField!]');
+    expect(measuresInput).toContain('max: [SessionOrderableField!]');
+  });
+
+  it('types min and max outputs by the field, and keeps sum numeric', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel: sessionDatamodel,
+        client: { session: fakeDelegate() },
+        models: sessionEnabled,
+      }),
+    );
+
+    expect(sdl).toMatch(/type SessionMinValues \{[^}]*startedAt: DateTime/);
+    expect(sdl).toMatch(/type SessionMaxValues \{[^}]*label: String/);
+    expect(sdl).not.toMatch(/type SessionSumValues \{[^}]*startedAt/);
+    expect(sdl).not.toMatch(/type SessionAvgValues \{[^}]*label/);
+  });
+
+  it('resolves a DateTime max through the aggregate query', async () => {
+    const startedAt = new Date('2026-07-18T16:44:09.000Z');
+    const delegate = fakeDelegate({ _max: { startedAt, label: 'zulu' } });
+    const schema = buildGolemSchema({
+      datamodel: sessionDatamodel,
+      client: { session: delegate },
+      models: sessionEnabled,
+    });
+
+    const result = await graphql({
+      schema,
+      source: '{ sessionsAggregate(measures: { max: [startedAt, label] }) { max { startedAt label } } }',
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(result.data?.sessionsAggregate).toEqual({
+      max: { startedAt: startedAt.toISOString(), label: 'zulu' },
+    });
+    expect(delegate.aggregate).toHaveBeenCalledWith(
+      expect.objectContaining({ _max: { startedAt: true, label: true } }),
+    );
+  });
+
+  it('respects the measures allowlist for orderables', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel: sessionDatamodel,
+        client: { session: fakeDelegate() },
+        models: { Session: { aggregations: { measures: ['duration', 'startedAt'] } } },
+      }),
+    );
+    const orderableFields = /enum SessionOrderableField \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    expect(orderableFields).toContain('startedAt');
+    expect(orderableFields).not.toContain('label');
+  });
+
+  it('translates a String min filter into a prisma having clause', async () => {
+    const delegate = fakeDelegate();
+    const schema = buildGolemSchema({
+      datamodel: sessionDatamodel,
+      client: { session: delegate },
+      models: sessionEnabled,
+    });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        sessionsGrouped(
+          by: [active]
+          measures: { min: [label] }
+          having: { min: { label: { contains: "x" } } }
+        ) { count }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(delegate.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({ having: { label: { _min: { contains: 'x' } } } }),
+    );
+  });
+
+  it('translates a DateTime max filter into a prisma having clause', async () => {
+    const delegate = fakeDelegate();
+    const schema = buildGolemSchema({
+      datamodel: sessionDatamodel,
+      client: { session: delegate },
+      models: sessionEnabled,
+    });
+
+    const result = await graphql({
+      schema,
+      source: `{
+        sessionsGrouped(
+          by: [active]
+          measures: { max: [startedAt] }
+          having: { max: { startedAt: { gte: "2026-07-18T16:44:09.000Z" } } }
+        ) { count }
+      }`,
+    });
+
+    expect(result.errors).toBeUndefined();
+    expect(delegate.groupBy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        having: {
+          startedAt: { _max: { gte: new Date('2026-07-18T16:44:09.000Z') } },
+        },
+      }),
+    );
+  });
+
+  it('orders grouped rows by a DateTime min and a String max', async () => {
+    const delegate = fakeDelegate();
+    const schema = buildGolemSchema({
+      datamodel: sessionDatamodel,
+      client: { session: delegate },
+      models: sessionEnabled,
+    });
+
+    const byDate = await graphql({
+      schema,
+      source: `{
+        sessionsGrouped(by: [active], measures: { min: [startedAt] }, orderBy: { min: { startedAt: desc } }) { count }
+      }`,
+    });
+    const byLabel = await graphql({
+      schema,
+      source: `{
+        sessionsGrouped(by: [active], measures: { max: [label] }, orderBy: { max: { label: asc } }) { count }
+      }`,
+    });
+
+    expect(byDate.errors).toBeUndefined();
+    expect(byLabel.errors).toBeUndefined();
+    expect(delegate.groupBy).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ orderBy: [{ _min: { startedAt: 'desc' } }] }),
+    );
+    expect(delegate.groupBy).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ orderBy: [{ _max: { label: 'asc' } }] }),
+    );
+  });
+
+  it('offers min and max but no sum or avg to a model without numeric columns', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel: noteDatamodel,
+        client: { note: fakeDelegate() },
+        models: { Note: { aggregations: true } },
+      }),
+    );
+
+    const measuresInput = /input NoteMeasuresInput \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    expect(measuresInput).toContain('min: [NoteOrderableField!]');
+    expect(measuresInput).toContain('max: [NoteOrderableField!]');
+    expect(measuresInput).not.toContain('sum:');
+    expect(measuresInput).not.toContain('avg:');
+
+    expect(sdl).not.toContain('NoteSumValues');
+    expect(sdl).not.toContain('NoteAvgValues');
+    expect(sdl).not.toContain('NoteMeasureField');
+    expect(sdl).toMatch(/type NoteMinValues \{[^}]*writtenAt: DateTime/);
+    expect(sdl).toMatch(/type NoteMaxValues \{[^}]*body: String/);
+  });
+
+  it('breaks a measure-typed variable in a min position while keeping sum and literals valid', () => {
+    const schema = buildGolemSchema({
+      datamodel: sessionDatamodel,
+      client: { session: fakeDelegate() },
+      models: sessionEnabled,
+    });
+    const errorsFor = (source: string) =>
+      validate(schema, parse(source)).map((error) => error.message);
+
+    expect(
+      errorsFor(
+        'query ($f: [SessionMeasureField!]) { sessionsAggregate(measures: { min: $f }) { count } }',
+      ),
+    ).toEqual([
+      'Variable "$f" of type "[SessionMeasureField!]" used in position expecting type "[SessionOrderableField!]".',
+    ]);
+    expect(
+      errorsFor(
+        'query ($f: [SessionMeasureField!]) { sessionsAggregate(measures: { sum: $f }) { count } }',
+      ),
+    ).toEqual([]);
+    expect(
+      errorsFor('{ sessionsAggregate(measures: { min: [duration] }) { count } }'),
+    ).toEqual([]);
+    expect(
+      errorsFor(
+        'query ($f: [SessionOrderableField!]) { sessionsAggregate(measures: { min: $f }) { count } }',
+      ),
+    ).toEqual([]);
+  });
+
+  it('emits no orderable enum when it would duplicate the measure enum', () => {
+    const sdl = printSchema(
+      buildGolemSchema({
+        datamodel: counterDatamodel,
+        client: { counter: fakeDelegate() },
+        models: { Counter: { aggregations: true } },
+      }),
+    );
+    expect(sdl).toContain('enum CounterMeasureField');
+    expect(sdl).not.toContain('CounterOrderableField');
+    expect(sdl).not.toContain('CounterOrderableOrderInput');
+
+    const measuresInput = /input CounterMeasuresInput \{([^}]*)\}/.exec(sdl)?.[1] ?? '';
+    expect(measuresInput).toContain('min: [CounterMeasureField!]');
   });
 });

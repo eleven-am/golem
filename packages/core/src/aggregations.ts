@@ -17,6 +17,7 @@ import {
 import type { DatamodelField, DatamodelModel } from './datamodel';
 
 const NUMERIC_TYPES = new Set(['Int', 'Float', 'BigInt', 'Decimal']);
+const ORDERABLE_TYPES = new Set([...NUMERIC_TYPES, 'DateTime', 'String']);
 
 function coerceSafeInt(value: unknown): number {
   if (typeof value === 'number' && Number.isSafeInteger(value)) {
@@ -48,6 +49,8 @@ export type MeasureKind = (typeof MEASURE_KINDS)[number];
 export interface AggregationFieldSets {
   dimensions: readonly DatamodelField[];
   measures: readonly DatamodelField[];
+  orderables?: readonly DatamodelField[];
+  countables?: readonly DatamodelField[];
 }
 
 export interface AggregationTypeDeps {
@@ -80,35 +83,74 @@ export function isMeasurable(field: DatamodelField): boolean {
   );
 }
 
+export function isOrderable(field: DatamodelField): boolean {
+  return (
+    field.kind === 'scalar' && !field.isList && ORDERABLE_TYPES.has(field.type)
+  );
+}
+
 export function isGroupable(field: DatamodelField): boolean {
   return field.kind !== 'object' && !field.isList;
 }
 
-const ORDERED_NUMBER_OPERATORS = ['lt', 'lte', 'gt', 'gte'];
+const ORDERED_OPERATORS = ['lt', 'lte', 'gt', 'gte'];
+const STRING_OPERATORS = ['contains', 'startsWith', 'endsWith'];
+
+export function scalarFilterOperators(scalar: string): readonly string[] {
+  return scalar === 'String'
+    ? [...ORDERED_OPERATORS, ...STRING_OPERATORS]
+    : ORDERED_OPERATORS;
+}
+
+const NUMERIC_KINDS: readonly MeasureKind[] = ['sum', 'avg'];
+
+function sameFields(
+  a: readonly DatamodelField[],
+  b: readonly DatamodelField[],
+): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const names = new Set(b.map((field) => field.name));
+  return a.every((field) => names.has(field.name));
+}
+
+function enumOf(
+  name: string,
+  entries: readonly DatamodelField[],
+): GraphQLEnumType | undefined {
+  if (entries.length === 0) {
+    return undefined;
+  }
+  return new GraphQLEnumType({
+    name,
+    values: Object.fromEntries(
+      entries.map((field) => [field.name, { value: field.name }]),
+    ),
+  });
+}
 
 export function buildAggregationTypes(
   deps: AggregationTypeDeps,
 ): AggregationTypes {
   const { model, fields, sortOrder, dimensionType, filterTypeFor } = deps;
-  const measureEnum =
-    fields.measures.length > 0
-      ? new GraphQLEnumType({
-          name: `${model.name}MeasureField`,
-          values: Object.fromEntries(
-            fields.measures.map((field) => [field.name, { value: field.name }]),
-          ),
-        })
-      : undefined;
+  const orderables = fields.orderables ?? fields.measures;
+  const countables = fields.countables ?? fields.dimensions;
+  const orderablesMatchMeasures = sameFields(orderables, fields.measures);
 
-  const dimensionEnum =
-    fields.dimensions.length > 0
-      ? new GraphQLEnumType({
-          name: `${model.name}GroupField`,
-          values: Object.fromEntries(
-            fields.dimensions.map((field) => [field.name, { value: field.name }]),
-          ),
-        })
-      : undefined;
+  const measureEnum = enumOf(`${model.name}MeasureField`, fields.measures);
+  const orderableEnum = orderablesMatchMeasures
+    ? measureEnum
+    : enumOf(`${model.name}OrderableField`, orderables);
+  const dimensionEnum = enumOf(`${model.name}GroupField`, fields.dimensions);
+  const countEnum = sameFields(countables, fields.dimensions)
+    ? dimensionEnum
+    : enumOf(`${model.name}CountField`, countables);
+
+  const fieldsForKind = (kind: MeasureKind): readonly DatamodelField[] =>
+    NUMERIC_KINDS.includes(kind) ? fields.measures : orderables;
+  const enumForKind = (kind: MeasureKind): GraphQLEnumType | undefined =>
+    NUMERIC_KINDS.includes(kind) ? measureEnum : orderableEnum;
 
   const measuresInput = new GraphQLInputObjectType({
     name: `${model.name}MeasuresInput`,
@@ -116,18 +158,22 @@ export function buildAggregationTypes(
       const config: GraphQLInputFieldConfigMap = {
         count: { type: GraphQLBoolean },
       };
-      if (measureEnum) {
-        for (const kind of MEASURE_KINDS) {
+      if (countEnum) {
+        config.countFields = {
+          type: new GraphQLList(new GraphQLNonNull(countEnum)),
+        };
+      }
+      for (const kind of MEASURE_KINDS) {
+        const kindEnum = enumForKind(kind);
+        if (kindEnum) {
           config[kind] = {
-            type: new GraphQLList(new GraphQLNonNull(measureEnum)),
+            type: new GraphQLList(new GraphQLNonNull(kindEnum)),
           };
         }
       }
       return config;
     },
   });
-
-  const hasMeasures = fields.measures.length > 0;
 
   const measureOutputScalar = (field: DatamodelField, kind: MeasureKind) => {
     if (kind === 'avg') {
@@ -154,40 +200,57 @@ export function buildAggregationTypes(
     return dimensionType(model, field);
   };
 
-  const measureValues = Object.fromEntries(
-    MEASURE_KINDS.map((kind) => [
-      kind,
-      new GraphQLObjectType({
-        name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}Values`,
-        fields: () => {
-          const config: GraphQLFieldConfigMap<unknown, unknown> = {};
-          for (const field of fields.measures) {
-            config[field.name] = { type: measureOutputScalar(field, kind) };
-          }
-          return config;
-        },
-      }),
-    ]),
-  ) as Record<MeasureKind, GraphQLObjectType>;
+  const measureValues: Partial<Record<MeasureKind, GraphQLObjectType>> = {};
+  for (const kind of MEASURE_KINDS) {
+    const kindFields = fieldsForKind(kind);
+    if (kindFields.length === 0) {
+      continue;
+    }
+    measureValues[kind] = new GraphQLObjectType({
+      name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}Values`,
+      fields: () => {
+        const config: GraphQLFieldConfigMap<unknown, unknown> = {};
+        for (const field of kindFields) {
+          config[field.name] = { type: measureOutputScalar(field, kind) };
+        }
+        return config;
+      },
+    });
+  }
 
-  const measureFieldsFor = (
-    prefix: string,
-  ): GraphQLFieldConfigMap<unknown, unknown> => {
+  const countValues =
+    countables.length > 0
+      ? new GraphQLObjectType({
+          name: `${model.name}CountValues`,
+          fields: () => {
+            const config: GraphQLFieldConfigMap<unknown, unknown> = {};
+            for (const field of countables) {
+              config[field.name] = { type: GraphQLInt };
+            }
+            return config;
+          },
+        })
+      : undefined;
+
+  const measureFieldsFor = (): GraphQLFieldConfigMap<unknown, unknown> => {
     const config: GraphQLFieldConfigMap<unknown, unknown> = {
       count: { type: GraphQLInt },
     };
-    if (hasMeasures) {
-      for (const kind of MEASURE_KINDS) {
-        config[kind] = { type: measureValues[kind] };
+    if (countValues) {
+      config.countBy = { type: countValues };
+    }
+    for (const kind of MEASURE_KINDS) {
+      const values = measureValues[kind];
+      if (values) {
+        config[kind] = { type: values };
       }
     }
-    void prefix;
     return config;
   };
 
   const aggregateOutput = new GraphQLObjectType({
     name: `${model.name}Aggregate`,
-    fields: () => measureFieldsFor('aggregate'),
+    fields: () => measureFieldsFor(),
   });
 
   if (!dimensionEnum) {
@@ -209,40 +272,36 @@ export function buildAggregationTypes(
     name: `${model.name}Group`,
     fields: () => ({
       key: { type: new GraphQLNonNull(groupKey) },
-      ...measureFieldsFor('group'),
+      ...measureFieldsFor(),
     }),
   });
 
-  const intFilter = filterTypeFor(
-    'IntFilter',
-    GraphQLInt,
-    ORDERED_NUMBER_OPERATORS,
-  );
+  const intFilter = filterTypeFor('IntFilter', GraphQLInt, ORDERED_OPERATORS);
 
-  const measureFilters = hasMeasures
-    ? Object.fromEntries(
-        MEASURE_KINDS.map((kind) => [
-          kind,
-          new GraphQLInputObjectType({
-            name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}FilterInput`,
-            fields: () => {
-              const config: GraphQLInputFieldConfigMap = {};
-              for (const field of fields.measures) {
-                const scalar = measureInputScalar(field, kind);
-                config[field.name] = {
-                  type: filterTypeFor(
-                    `${scalar.name}Filter`,
-                    scalar,
-                    ORDERED_NUMBER_OPERATORS,
-                  ),
-                };
-              }
-              return config;
-            },
-          }),
-        ]),
-      ) as Record<MeasureKind, GraphQLInputObjectType>
-    : undefined;
+  const measureFilters: Partial<Record<MeasureKind, GraphQLInputObjectType>> = {};
+  for (const kind of MEASURE_KINDS) {
+    const kindFields = fieldsForKind(kind);
+    if (kindFields.length === 0) {
+      continue;
+    }
+    measureFilters[kind] = new GraphQLInputObjectType({
+      name: `${model.name}${kind[0].toUpperCase()}${kind.slice(1)}FilterInput`,
+      fields: () => {
+        const config: GraphQLInputFieldConfigMap = {};
+        for (const field of kindFields) {
+          const scalar = measureInputScalar(field, kind);
+          config[field.name] = {
+            type: filterTypeFor(
+              `${scalar.name}Filter`,
+              scalar,
+              scalarFilterOperators(scalar.name),
+            ),
+          };
+        }
+        return config;
+      },
+    });
+  }
 
   const havingInput = new GraphQLInputObjectType({
     name: `${model.name}HavingInput`,
@@ -250,27 +309,37 @@ export function buildAggregationTypes(
       const config: GraphQLInputFieldConfigMap = {
         count: { type: intFilter },
       };
-      if (measureFilters) {
-        for (const kind of MEASURE_KINDS) {
-          config[kind] = { type: measureFilters[kind] };
+      for (const kind of MEASURE_KINDS) {
+        const filter = measureFilters[kind];
+        if (filter) {
+          config[kind] = { type: filter };
         }
       }
       return config;
     },
   });
 
-  const measureOrder = hasMeasures
-    ? new GraphQLInputObjectType({
-        name: `${model.name}MeasureOrderInput`,
-        fields: () => {
-          const config: GraphQLInputFieldConfigMap = {};
-          for (const field of fields.measures) {
-            config[field.name] = { type: sortOrder };
-          }
-          return config;
-        },
-      })
-    : undefined;
+  const orderInputOf = (name: string, entries: readonly DatamodelField[]) =>
+    entries.length > 0
+      ? new GraphQLInputObjectType({
+          name,
+          fields: () => {
+            const config: GraphQLInputFieldConfigMap = {};
+            for (const field of entries) {
+              config[field.name] = { type: sortOrder };
+            }
+            return config;
+          },
+        })
+      : undefined;
+
+  const measureOrder = orderInputOf(
+    `${model.name}MeasureOrderInput`,
+    fields.measures,
+  );
+  const orderableOrder = orderablesMatchMeasures
+    ? measureOrder
+    : orderInputOf(`${model.name}OrderableOrderInput`, orderables);
 
   const orderByInput = new GraphQLInputObjectType({
     name: `${model.name}GroupOrderByInput`,
@@ -278,9 +347,10 @@ export function buildAggregationTypes(
       const config: GraphQLInputFieldConfigMap = {
         count: { type: sortOrder },
       };
-      if (measureOrder) {
-        for (const kind of MEASURE_KINDS) {
-          config[kind] = { type: measureOrder };
+      for (const kind of MEASURE_KINDS) {
+        const order = NUMERIC_KINDS.includes(kind) ? measureOrder : orderableOrder;
+        if (order) {
+          config[kind] = { type: order };
         }
       }
       return config;
@@ -303,6 +373,7 @@ export function byFieldsOrder(by: readonly string[]): unknown {
 
 export interface MeasuresArg {
   count?: boolean | null;
+  countFields?: readonly string[] | null;
   sum?: readonly string[] | null;
   avg?: readonly string[] | null;
   min?: readonly string[] | null;
@@ -329,7 +400,12 @@ export function toPrismaMeasures(measures: MeasuresArg | null | undefined): Pris
   if (!measures) {
     return result;
   }
-  if (measures.count) {
+  const countFields = trueMap(measures.countFields) as
+    | Record<string, true>
+    | undefined;
+  if (countFields) {
+    result._count = measures.count ? { _all: true, ...countFields } : countFields;
+  } else if (measures.count) {
     result._count = true;
   }
   for (const kind of MEASURE_KINDS) {
@@ -392,11 +468,32 @@ export function toPrismaGroupOrderBy(
   return entries;
 }
 
+function splitCount(value: unknown): {
+  count?: number;
+  countBy?: Record<string, unknown>;
+} {
+  if (typeof value === 'number') {
+    return { count: value };
+  }
+  if (!value || typeof value !== 'object') {
+    return {};
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  const all = entries.find(([key]) => key === '_all')?.[1];
+  const rest = entries.filter(([key]) => key !== '_all');
+  return {
+    count: typeof all === 'number' ? all : undefined,
+    countBy: rest.length > 0 ? Object.fromEntries(rest) : undefined,
+  };
+}
+
 export function toAggregateResult(
   result: Record<string, unknown>,
 ): Record<string, unknown> {
+  const { count, countBy } = splitCount(result._count);
   return {
-    count: typeof result._count === 'number' ? result._count : undefined,
+    count,
+    countBy,
     sum: result._sum,
     avg: result._avg,
     min: result._min,

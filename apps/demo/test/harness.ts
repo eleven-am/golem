@@ -16,18 +16,18 @@ export interface DemoTestContext {
   prisma: GolemPrismaService;
 }
 
-function databaseFileFor(testPath: string): string {
+export function databaseFileFor(testPath: string): string {
   const suite = basename(testPath).replace(/\.e2e\.test\.ts$/, '');
   return join(ARTIFACT_ROOT, `${suite}.db`);
 }
 
-function removeDatabaseFiles(databaseFile: string): void {
+export function removeDatabaseFiles(databaseFile: string): void {
   for (const suffix of ['', '-journal', '-wal', '-shm']) {
     rmSync(`${databaseFile}${suffix}`, { force: true });
   }
 }
 
-function provisionDatabase(testPath: string): string {
+export function provisionDatabase(testPath: string): string {
   if (!existsSync(SCHEMA_TEMPLATE)) {
     throw new Error(`Demo schema template missing at ${SCHEMA_TEMPLATE}; run "npm run push -w demo" first`);
   }

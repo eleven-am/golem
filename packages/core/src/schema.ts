@@ -56,6 +56,8 @@ import {
   byFieldsOrder,
   isGroupable,
   isMeasurable,
+  isOrderable,
+  scalarFilterOperators,
   toAggregateResult,
   toGroupResults,
   toPrismaGroupOrderBy,
@@ -156,9 +158,6 @@ const SCALAR_MAP: Record<string, GraphQLScalarType> = {
   BigInt: BigIntScalar,
   Decimal: DecimalScalar,
 };
-
-const ORDERED_OPERATORS = ['lt', 'lte', 'gt', 'gte'] as const;
-const STRING_OPERATORS = ['contains', 'startsWith', 'endsWith'] as const;
 
 export interface BuildGolemSchemaOptions<TModels = Record<string, string>> {
   datamodel: DatamodelDocument<TModels>;
@@ -520,13 +519,14 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
       return filterTypeFor(`${field.type}EnumFilter`, enumType, []);
     }
     const type = scalarType(model, field);
-    if (field.type === 'String') {
-      return filterTypeFor('StringFilter', type, [...ORDERED_OPERATORS, ...STRING_OPERATORS]);
-    }
     if (field.type === 'Boolean') {
       return filterTypeFor('BoolFilter', type, []);
     }
-    return filterTypeFor(`${field.type}Filter`, type, ORDERED_OPERATORS);
+    return filterTypeFor(
+      `${field.type}Filter`,
+      type,
+      scalarFilterOperators(field.type),
+    );
   }
 
   const objectTypes = new Map<string, GraphQLObjectType>();
@@ -764,9 +764,20 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           isMeasurable(field) &&
           (!modelSettings.measures || modelSettings.measures.has(field.name)),
       );
+      const orderable = visibleFields(model).filter(
+        (field) =>
+          isOrderable(field) &&
+          (!modelSettings.measures || modelSettings.measures.has(field.name)),
+      );
+      const countable = visibleFields(model).filter(isGroupable);
       const types = buildAggregationTypes({
         model,
-        fields: { dimensions: groupable, measures: measurable },
+        fields: {
+          dimensions: groupable,
+          measures: measurable,
+          orderables: orderable,
+          countables: countable,
+        },
         sortOrder,
         dimensionType,
         filterTypeFor,

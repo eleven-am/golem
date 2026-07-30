@@ -185,6 +185,35 @@ describe('engine aggregate', () => {
     expect(client.user.aggregate).not.toHaveBeenCalled();
   });
 
+  it('refuses a per-field count over a never-readable field', async () => {
+    const client = fakeClient();
+    const provider = classifyProvider({
+      email: { access: 'always' },
+      phone: { access: 'never' },
+    });
+    const engine = new GolemEngine(client, models, {
+      authorization: provider,
+      checkWriteResults: false,
+      checkReadFields: true,
+    });
+
+    await expect(
+      engine.aggregate({
+        model: 'User',
+        _count: { _all: true, phone: true },
+        context: ctx,
+      }),
+    ).rejects.toBeInstanceOf(GolemValidationError);
+
+    expect(provider.classifyFields).toHaveBeenCalledWith(
+      'read',
+      'User',
+      expect.arrayContaining(['phone']),
+      ctx,
+    );
+    expect(client.user.aggregate).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['orderBy', { orderBy: { phone: 'desc' } }],
     ['cursor', { cursor: { phone: '555-0100' } }],
