@@ -10,12 +10,25 @@ import {
 } from '@eleven-am/golem-core';
 import { AuthorizationService } from '@eleven-am/authorizer';
 import { PrismaAuthorizationService } from '@eleven-am/authorizer/prisma';
+import { AbilityLike, CaslRule } from './casl';
+import { assertAbilityConformance } from './conformance';
+import { installGolemAbilityFactory } from './install';
 import { golemContextStore, ensureGolemTransportRegistered, wrapFresh } from './transport';
 
 export { ensureGolemTransportRegistered } from './transport';
 
-export const BIGINT_EXACT_ABILITY_ERROR =
-  'Golem authorization requires a BigInt-exact ability factory: the configured Authenticator.abilityFactory() does not match a rule condition { equals: 1n } against a numeric 1, so in-memory checks would be wrong for BigInt columns. Use createAbility from @eleven-am/authorizer/prisma, or omit abilityFactory to use the safe default.';
+export type { ConformanceCase } from './conformance';
+export { ABILITY_CONFORMANCE_ERROR, BIGINT_EXACT_ABILITY_ERROR, conformanceCases } from './conformance';
+
+export type { InstalledFactory } from './install';
+export { installGolemAbilityFactory } from './install';
+
+export {
+  GolemPolicyRuleError,
+  UNSUPPORTED_POLICY_CONDITION_ERROR,
+  assertRulesSupported,
+  createGolemAbility,
+} from './policy';
 
 function translate(error: unknown): never {
   const status =
@@ -42,29 +55,19 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
   }
 
   onModuleInit(): void {
-    const factory = this.authorizationService.resolvedAbilityFactory();
-    let ability: ResolvedAbilityLike;
-    try {
-      const builder = factory();
-      builder.can('read', 'GolemBigIntProbe', { v: { equals: 1n } });
-      ability = builder.build() as unknown as ResolvedAbilityLike;
-    } catch (error) {
-      throw new Error(BIGINT_EXACT_ABILITY_ERROR, { cause: error });
-    }
-    if (!ability.can('read', subject('GolemBigIntProbe', { v: 1 }))) {
-      throw new Error(BIGINT_EXACT_ABILITY_ERROR);
-    }
+    installGolemAbilityFactory(this.authorizationService);
+    assertAbilityConformance(this.authorizationService.resolvedAbilityFactory());
   }
 
-  private ability(context: unknown): Promise<ResolvedAbilityLike> {
+  private ability(context: unknown): Promise<AbilityLike> {
     const store = golemContextStore(context);
     const key = '__golemResolvedAbility';
     if (!store) {
-      return this.authorizationService.getAbility(context as never) as unknown as Promise<ResolvedAbilityLike>;
+      return this.authorizationService.getAbility(context as never) as unknown as Promise<AbilityLike>;
     }
-    const existing = store[key] as Promise<ResolvedAbilityLike> | undefined;
+    const existing = store[key] as Promise<AbilityLike> | undefined;
     if (existing) return existing;
-    const pending = this.authorizationService.getAbility(context as never) as unknown as Promise<ResolvedAbilityLike>;
+    const pending = this.authorizationService.getAbility(context as never) as unknown as Promise<AbilityLike>;
     store[key] = pending;
     return pending;
   }
@@ -175,17 +178,6 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
   freshContext(context: unknown): unknown {
     return wrapFresh(context);
   }
-}
-
-interface CaslRule {
-  fields?: string[];
-  conditions?: unknown;
-  inverted: boolean;
-}
-
-interface ResolvedAbilityLike {
-  can(action: string, subject: unknown, field?: string): boolean;
-  rulesFor(action: string, subject: string, field: string): readonly CaslRule[];
 }
 
 function collectConditionKeys(conditions: unknown, into: Set<string>): void {

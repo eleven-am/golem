@@ -9,7 +9,8 @@
   },
   "dependencies": {
     "@casl/prisma": "^2.0.0",
-    "@eleven-am/golem-core": "^0.5.2"
+    "@eleven-am/golem-core": "^0.5.2",
+    "@eleven-am/golem-policy": "^0.5.2"
   },
   "peerDependencies": {
     "@eleven-am/authorizer": "^2.2.1",

@@ -1,0 +1,85 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider            = "prisma-client"
+  output              = "./generated"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+model Related {
+  id       Int       @id
+  tag      String
+  tagNull  String?
+  num      Int
+  numNull  Int?
+  big      BigInt
+  at       DateTime
+  nextId   Int?
+  next     Related?  @relation("RelatedChain", fields: [nextId], references: [id])
+  previous Related[] @relation("RelatedChain")
+  parents  Parent[]
+}
+
+model Parent {
+  id        Int       @id
+  name      String
+  nameNull  String?
+  count     Int
+  countNull Int?
+  big       BigInt
+  bigNull   BigInt?
+  at        DateTime
+  atNull    DateTime?
+  relatedId Int?
+  related   Related?  @relation(fields: [relatedId], references: [id])
+}
+model Region {
+  code   String  @id @map("region_code")
+  name   String  @map("region_name")
+  owners Owner[]
+
+  @@map("region_rows")
+}
+
+model Owner {
+  id         Int      @id @map("owner_pk")
+  kind       String   @map("kind_text")
+  rank       Int      @map("rank_value")
+  rankNull   Int?     @map("rank_null")
+  regionCode String?  @map("region_ref")
+  region     Region?  @relation(fields: [regionCode], references: [code])
+  tagged     Tagged[]
+
+  @@map("owner_rows")
+}
+
+model Tagged {
+  id         Int      @id @map("row_pk")
+  label      String   @map("label_text")
+  labelNull  String?  @map("label_null")
+  amount     Int      @map("amount_value")
+  amountNull Int?     @map("amount_null")
+  big        BigInt   @map("big_value")
+  at         DateTime @map("at_value")
+  flag       Boolean  @map("flag_value")
+  flagNull   Boolean? @map("flag_null")
+  state      State    @map("state_value")
+  stateNull  State?   @map("state_null")
+  ownerId    Int?     @map("owner_ref")
+  owner      Owner?   @relation(fields: [ownerId], references: [id])
+  parentId   Int?     @map("parent_ref")
+  parent     Tagged?  @relation("TaggedSelf", fields: [parentId], references: [id])
+  children   Tagged[] @relation("TaggedSelf")
+
+  @@map("tagged_rows")
+}
+
+
+enum State {
+  OPEN
+  CLOSED
+  ON_HOLD
+}

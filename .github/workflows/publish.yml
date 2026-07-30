@@ -31,11 +31,13 @@ jobs:
           npm rebuild better-sqlite3
       - name: Build libraries
         run: |
-          npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
+          npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator -w @eleven-am/golem-policy
           npm rebuild -w @eleven-am/golem-generator
+          # golem-authorizer resolves @eleven-am/golem-policy from its dist/, which
+          # is gitignored, so policy has to be built in the batch above.
           npm run build -w @eleven-am/golem-authorizer -w @eleven-am/golem -w @eleven-am/golem-queue -w @eleven-am/golem-render
       - name: Test libraries
-        run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-queue -w @eleven-am/golem-render --if-present
+        run: npm run test -w @eleven-am/golem-core -w @eleven-am/golem-policy -w @eleven-am/golem-authorizer -w @eleven-am/golem-generator -w @eleven-am/golem -w @eleven-am/golem-queue -w @eleven-am/golem-render --if-present
       - name: Publish packages in dependency order
         run: |
           publish() {
@@ -49,6 +51,7 @@ jobs:
           }
           publish @eleven-am/golem-core packages/core
           publish @eleven-am/golem-generator packages/generator
+          publish @eleven-am/golem-policy packages/policy
           publish @eleven-am/golem-authorizer packages/authorizer
           publish @eleven-am/golem packages/nest
           publish @eleven-am/golem-queue packages/queue

@@ -1,0 +1,20 @@
+datasource db {
+  provider = "postgresql"
+}
+
+generator client {
+  provider            = "prisma-client"
+  output              = "./generated"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+model ListRow {
+  id       Int        @id
+  tags     String[]
+  scores   Int[]
+  bigs     BigInt[]
+  moments  DateTime[]
+  flags    Boolean[]
+  optional String?
+}
