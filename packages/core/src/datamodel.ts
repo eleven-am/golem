@@ -4,6 +4,7 @@ export type DatamodelFieldKind = 'scalar' | 'object' | 'enum';
 
 export interface DatamodelField {
   name: string;
+  dbName?: string;
   kind: DatamodelFieldKind;
   type: string;
   isList: boolean;
@@ -30,6 +31,7 @@ export interface DatamodelUniqueIndex {
 
 export interface DatamodelModel {
   name: string;
+  dbName?: string;
   fields: readonly DatamodelField[];
   primaryKey?: DatamodelPrimaryKey;
   uniqueIndexes?: readonly DatamodelUniqueIndex[];

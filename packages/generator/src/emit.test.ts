@@ -40,6 +40,8 @@ function model(
 function parseEmitted(output: string): {
   models: Array<{
     name: string;
+    dbName?: string;
+    fields: Array<{ name: string; dbName?: string }>;
     primaryKey?: { name?: string; fields: string[] };
     uniqueIndexes?: Array<{ name?: string; fields: string[] }>;
   }>;
@@ -116,6 +118,39 @@ describe('emitDatamodelModule compound unique indexes', () => {
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].uniqueIndexes).toBeUndefined();
+  });
+});
+
+describe('emitDatamodelModule physical names', () => {
+  it('emits the mapped physical name for a model and its fields', () => {
+    const mapped = {
+      name: 'User',
+      dbName: 'users',
+      fields: [
+        { ...scalar('id'), isId: true, dbName: null },
+        { ...scalar('createdAt'), dbName: 'created_at' },
+      ],
+      primaryKey: null,
+      uniqueFields: [],
+      uniqueIndexes: [],
+    } as unknown as DMMF.Model;
+
+    const parsed = parseEmitted(emitDatamodelModule(datamodel([mapped])));
+
+    expect(parsed.models[0].dbName).toBe('users');
+    expect(parsed.models[0].fields).toEqual([
+      expect.objectContaining({ name: 'id', dbName: 'id' }),
+      expect.objectContaining({ name: 'createdAt', dbName: 'created_at' }),
+    ]);
+  });
+
+  it('falls back to the Prisma name when no mapping is present', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(datamodel([model('Post', [scalar('id'), scalar('title')], null)])),
+    );
+
+    expect(parsed.models[0].dbName).toBe('Post');
+    expect(parsed.models[0].fields.map((field) => field.dbName)).toEqual(['id', 'title']);
   });
 });
 
