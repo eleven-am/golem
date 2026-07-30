@@ -1,7 +1,15 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { SqlRenderError, mysqlDialect, postgresDialect, sqliteDialect } from '../src/index';
 import { PrismaClient } from './prisma-arrays/generated/client';
-import { Agreement, agree, answerRecord, disagreementRecord, explainAll, render } from './support/agreement';
+import {
+  Agreement,
+  agree,
+  answerRecord,
+  disagreementRecord,
+  discriminating,
+  explainAll,
+  render,
+} from './support/agreement';
 import {
   LIST_CASES,
   LIST_DATAMODEL,
@@ -197,7 +205,7 @@ suite('scalar list operators agree with the evaluator on Postgres', () => {
       'owner/some-equals-null': '1',
       'owner/some-scores-has-0': '3',
       'owner/some-bigs-has-beyond': '1,2',
-      'owner/some-moments-hasEvery-d0-d1': '1',
+      'owner/some-moments-hasEvery-d0-d1': '1,2',
       'owner/every-isEmpty-false': '2,3,4',
       'owner/every-has-a': '2,4',
       'owner/none-has-b': '3,4',
