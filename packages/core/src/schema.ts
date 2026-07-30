@@ -350,7 +350,13 @@ function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): Resol
 }
 
 export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TModels>): GolemEngine {
-  const { engineModels, takeLimits, groupLimits } = resolveGolem(options);
+  const { engineModels, settings, takeLimits, groupLimits } = resolveGolem(options);
+  const hiddenFields = new Map<string, ReadonlySet<string>>();
+  for (const [name, resolved] of settings) {
+    if (resolved.hidden.size > 0) {
+      hiddenFields.set(name, resolved.hidden);
+    }
+  }
   return new GolemEngine(options.client, engineModels, {
     hooks: options.hooks,
     takeLimits,
@@ -359,6 +365,8 @@ export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TMod
     maxDepth: options.defaults?.maxDepth,
     checkWriteResults: options.defaults?.checkWriteResults,
     checkReadFields: options.defaults?.checkReadFields,
+    provider: options.datamodel.provider,
+    hiddenFields,
   });
 }
 
@@ -400,6 +408,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
       maxDepth: options.defaults?.maxDepth,
       checkWriteResults: options.defaults?.checkWriteResults,
       checkReadFields: options.defaults?.checkReadFields,
+      provider: options.datamodel.provider,
     });
 
   const hiddenFor = (name: string): ReadonlySet<string> => settings.get(name)?.hidden ?? new Set();
@@ -724,6 +733,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             where: args.where,
             select: buildSelect(info, model, modelsByName, computedRequires),
             context: ctx,
+            compiled: true,
           }),
         ),
       };
@@ -747,6 +757,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             skip: args.skip ?? undefined,
             select: buildSelect(info, model, modelsByName, computedRequires),
             context: ctx,
+            compiled: true,
           }),
         ),
       };

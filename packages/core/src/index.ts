@@ -1,4 +1,5 @@
 export * from './authorization';
+export * from './compiled-read';
 export * from './datamodel';
 export * from './event-buffer';
 export * from './errors';
@@ -11,6 +12,7 @@ export * from './publisher';
 export * from './naming';
 export * from './operations';
 export * from './schema';
+export * from './scoped';
 export * from './select';
 export * from './typemap';
 export * from './verify';

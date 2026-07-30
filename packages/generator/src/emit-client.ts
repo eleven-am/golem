@@ -6,7 +6,7 @@ export function emitClientModule(modelNames: readonly string[], clientImport: st
 
   return `import { Prisma, PrismaClient } from '${clientImport}';
 import { withBufferedEvents } from '@eleven-am/golem-core';
-import type { GolemEngineRef, GolemQueryInterceptor } from '@eleven-am/golem-core';
+import type { GolemEngineRef, GolemQueryInterceptor, ScopedQuery } from '@eleven-am/golem-core';
 
 export type GolemClientOptions = ConstructorParameters<typeof PrismaClient>[0];
 
@@ -111,9 +111,15 @@ type ContextBoundDelegate<TDelegate> = {
   ): Promise<Prisma.Result<TDelegate, TArgs, 'groupBy'>>;
 };
 
+export type GolemModelName = (typeof GOLEM_MODELS)[keyof typeof GOLEM_MODELS];
+
+export type ScopedRoot = {
+  $scoped(model: GolemModelName, alias?: string): ScopedQuery;
+};
+
 export type ContextBoundDelegates = {
   [K in ${delegateUnion}]: ContextBoundDelegate<GolemBaseClient[K]>;
-};
+} & ScopedRoot;
 
 export interface ContextBoundTransactionOptions {
   timeout?: number;
@@ -137,9 +143,13 @@ function bindContext(engineRef: GolemEngineRef, context: unknown): ContextBoundC
   };
   const boundDelegates = (
     resolve: () => Record<string, (request: unknown) => Promise<unknown>>,
+    scoped: (model: GolemModelName, alias?: string) => ScopedQuery,
   ): ContextBoundDelegates =>
     new Proxy({} as Record<string, unknown>, {
       get: (_target, delegateName) => {
+        if (delegateName === '$scoped') {
+          return scoped;
+        }
         const model = GOLEM_MODELS[delegateName as keyof typeof GOLEM_MODELS];
         if (!model) {
           return undefined;
@@ -151,12 +161,18 @@ function bindContext(engineRef: GolemEngineRef, context: unknown): ContextBoundC
               return undefined;
             }
             return (args: Record<string, unknown> = {}) =>
-              resolve()[engineOp]({ model, ...args, context });
+              resolve()[engineOp]({ model, ...args, context, compiled: false });
           },
         });
       },
     }) as unknown as ContextBoundDelegates;
-  const engineDelegates = boundDelegates(requireEngine);
+  const engineDelegates = boundDelegates(requireEngine, (model, alias) =>
+    (
+      requireEngine() as unknown as {
+        scoped(request: { model: string; alias?: string; context: unknown }): ScopedQuery;
+      }
+    ).scoped({ model, alias, context }),
+  );
   return new Proxy({} as Record<string, unknown>, {
     get: (_target, prop, receiver) => {
       if (prop === '$transaction') {
@@ -174,7 +190,18 @@ function bindContext(engineRef: GolemEngineRef, context: unknown): ContextBoundC
             }
           ).transaction(
             context,
-            (txView) => fn(boundDelegates(() => txView)),
+            (txView) =>
+              fn(
+                boundDelegates(
+                  () => txView,
+                  (model, alias) =>
+                    (
+                      txView as unknown as {
+                        scoped(request: { model: string; alias?: string }): ScopedQuery;
+                      }
+                    ).scoped({ model, alias }),
+                ),
+              ),
             options,
           );
       }

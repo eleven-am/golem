@@ -51,6 +51,18 @@ describe('generated Golem client', () => {
     expect(output).toContain('): Promise<number>;');
   });
 
+  it('exposes the scoped query root on the context-bound surface', () => {
+    expect(output).toContain("import type { GolemEngineRef, GolemQueryInterceptor, ScopedQuery } from '@eleven-am/golem-core'");
+    expect(output).toContain('$scoped(model: GolemModelName, alias?: string): ScopedQuery;');
+    expect(output).toContain("if (delegateName === '$scoped')");
+    expect(output).toContain('.scoped({ model, alias, context })');
+  });
+
+  it('binds the scoped query root to the open transaction inside $transaction', () => {
+    expect(output).toContain('.scoped({ model, alias })');
+    expect(output).toContain('txView as unknown as {');
+  });
+
   it('routes context-bound $transaction through the engine transaction', () => {
     expect(output).toContain("if (prop === '$transaction')");
     expect(output).toContain('.transaction(');

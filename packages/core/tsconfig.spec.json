@@ -1,0 +1,9 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": ["node", "jest"]
+  },
+  "include": ["src/scoped*.ts", "src/compiled-read*.ts", "test/**/*.ts"],
+  "exclude": ["test/prisma/generated/**", "test/prisma-postgres/generated/**"]
+}

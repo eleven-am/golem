@@ -7,6 +7,12 @@ import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
 import { runPolicyChecks } from './concurrency';
 import { withBufferedEvents } from './event-buffer';
+import {
+  CompiledReadEvent,
+  CompiledReadInput,
+  CompiledReadOperation,
+  planCompiledRead,
+} from './compiled-read';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
 import { buildModelMetadata, ModelMetadata, ModelMetadataIndex } from './model-meta';
@@ -18,6 +24,12 @@ import {
   prepareReadTree,
   stripInjectedFields,
 } from './readtree';
+import {
+  ScopedHost,
+  ScopedQuery,
+  ScopedRequest,
+  createScopedQuery,
+} from './scoped';
 import { PrismaSelect } from './select';
 import {
   VerifyContext,
@@ -33,6 +45,7 @@ export interface FindOneRequest {
   select?: PrismaSelect;
   include?: unknown;
   omit?: unknown;
+  compiled?: boolean;
 }
 
 export interface FindManyRequest {
@@ -47,6 +60,7 @@ export interface FindManyRequest {
   select?: PrismaSelect;
   include?: unknown;
   omit?: unknown;
+  compiled?: boolean;
 }
 
 export interface CreateRequest {
@@ -175,6 +189,7 @@ export interface GolemEngineTransaction {
   count(request: CountRequest): Promise<number>;
   aggregate(request: AggregateRequest): Promise<unknown>;
   groupBy(request: GroupByRequest): Promise<unknown[]>;
+  scoped(request: Omit<ScopedRequest, 'context'>): ScopedQuery;
 }
 
 export interface GolemEngineOptions {
@@ -185,6 +200,8 @@ export interface GolemEngineOptions {
   maxDepth?: number;
   checkWriteResults?: boolean;
   checkReadFields?: boolean;
+  provider?: string;
+  hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;
 }
 
 export interface GolemEngineRef {
@@ -365,13 +382,20 @@ export class GolemEngine {
   private readonly maxDepth: number;
   private readonly checkWriteResults: boolean;
   private readonly checkReadFields: boolean;
+  private readonly provider?: string;
+  private readonly hiddenFields: ReadonlyMap<string, ReadonlySet<string>>;
+  private readonly models: readonly DatamodelModel[];
   private readonly authorizationSessions = new WeakMap<object, AuthorizationProvider>();
+  private readonly compiledReadListeners = new Set<(event: CompiledReadEvent) => void>();
 
   constructor(
     private readonly client: Record<string, any>,
     models: readonly DatamodelModel[],
     options: GolemEngineOptions = {},
   ) {
+    this.models = models;
+    this.provider = options.provider;
+    this.hiddenFields = options.hiddenFields ?? new Map();
     this.modelsByName = new Map(models.map((m) => [m.name, m]));
     this.metadata = buildModelMetadata(models);
     this.hooks = options.hooks;
@@ -730,26 +754,107 @@ export class GolemEngine {
     }
   }
 
+  observeCompiledRead(listener: (event: CompiledReadEvent) => void): () => void {
+    this.compiledReadListeners.add(listener);
+    return () => {
+      this.compiledReadListeners.delete(listener);
+    };
+  }
+
+  private emitCompiledRead(event: CompiledReadEvent): void {
+    for (const listener of this.compiledReadListeners) {
+      listener(event);
+    }
+  }
+
+  private rawRunner(
+    client: Record<string, any>,
+  ): ((sql: string, ...values: unknown[]) => Promise<unknown[]>) | undefined {
+    const runner = (client as { $queryRawUnsafe?: unknown }).$queryRawUnsafe;
+    return typeof runner === 'function'
+      ? (runner as (sql: string, ...values: unknown[]) => Promise<unknown[]>)
+      : undefined;
+  }
+
+  private async compiledRead(
+    operation: CompiledReadOperation,
+    model: string,
+    input: Omit<CompiledReadInput, 'model' | 'models' | 'metadata' | 'provider'>,
+    scope?: GolemOpScope,
+  ): Promise<Record<string, unknown>[] | undefined> {
+    const client = scope?.client ?? this.client;
+    const runner = this.rawRunner(client);
+    if (runner === undefined) {
+      this.emitCompiledRead({
+        model,
+        operation,
+        outcome: 'fallback',
+        reason: 'client',
+        detail: 'the Prisma client exposes no $queryRawUnsafe to run a compiled read on',
+      });
+      return undefined;
+    }
+    const plan = await planCompiledRead({
+      ...input,
+      model: this.modelsByName.get(model)!,
+      models: this.models,
+      metadata: this.metadata,
+      provider: this.provider,
+    });
+    if (plan.kind === 'fallback') {
+      this.emitCompiledRead({
+        model,
+        operation,
+        outcome: 'fallback',
+        reason: plan.reason,
+        detail: plan.detail,
+      });
+      return undefined;
+    }
+    this.emitCompiledRead({ model, operation, outcome: 'compiled', sql: plan.sql });
+    const rows = (await this.run(model, () =>
+      runner.call(client, plan.sql, ...plan.parameters),
+    )) as Record<string, unknown>[];
+    return plan.reversed ? [...rows].reverse() : rows;
+  }
+
   async findOne(request: FindOneRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findOne', request);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
-    const found = await this.run(req.model, () =>
-      constraint === undefined
-        ? delegate.findUnique({
-            where: req.where,
-            select: prepared.select,
-            include: prepared.include,
-            ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-          })
-        : delegate.findFirst({
-            where: mergeConstraint(req.where, constraint),
-            select: prepared.select,
-            include: prepared.include,
-            ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-          }),
-    );
+    const compiled =
+      request.compiled === true
+        ? await this.compiledRead(
+            'findOne',
+            req.model,
+            {
+              prepared,
+              where: this.filterableWhere(req.model, req.where),
+              constraint,
+              single: true,
+            },
+            scope,
+          )
+        : undefined;
+    const found =
+      compiled !== undefined
+        ? compiled[0] ?? null
+        : await this.run(req.model, () =>
+            constraint === undefined
+              ? delegate.findUnique({
+                  where: req.where,
+                  select: prepared.select,
+                  include: prepared.include,
+                  ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+                })
+              : delegate.findFirst({
+                  where: mergeConstraint(req.where, constraint),
+                  select: prepared.select,
+                  include: prepared.include,
+                  ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+                }),
+          );
     await this.finishRead(found, prepared, req.context);
     await this.runAfter('findOne', req.model, found, req.context);
     return found;
@@ -761,19 +866,39 @@ export class GolemEngine {
     this.enforceTakeLimit(req);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
-    const found = (await this.run(req.model, () =>
-      delegate.findMany({
-        where: mergeConstraint(req.where, constraint),
-        orderBy: req.orderBy,
-        take: req.take,
-        skip: req.skip,
-        cursor: req.cursor,
-        distinct: req.distinct,
-        select: prepared.select,
-        include: prepared.include,
-        ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-      }),
-    )) as unknown[];
+    const compiled =
+      request.compiled === true
+        ? await this.compiledRead(
+            'findMany',
+            req.model,
+            {
+              prepared,
+              where: req.where,
+              constraint,
+              orderBy: req.orderBy,
+              take: req.take,
+              skip: req.skip,
+              cursor: req.cursor,
+              distinct: req.distinct,
+            },
+            scope,
+          )
+        : undefined;
+    const found =
+      compiled ??
+      ((await this.run(req.model, () =>
+        delegate.findMany({
+          where: mergeConstraint(req.where, constraint),
+          orderBy: req.orderBy,
+          take: req.take,
+          skip: req.skip,
+          cursor: req.cursor,
+          distinct: req.distinct,
+          select: prepared.select,
+          include: prepared.include,
+          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+        }),
+      )) as unknown[]);
     await this.finishRead(found, prepared, req.context);
     await this.runAfter('findMany', req.model, found, req.context);
     return found;
@@ -1140,6 +1265,26 @@ export class GolemEngine {
     }
   }
 
+  scoped(request: ScopedRequest, scope?: GolemOpScope): ScopedQuery {
+    const client = scope?.client ?? this.client;
+    const host: ScopedHost = {
+      models: this.models,
+      provider: this.provider,
+      hiddenFields: (model) => this.hiddenFields.get(model) ?? new Set(),
+      constraint: (model) => this.constraintFor('read', model, request.context),
+      execute: (model, sql, parameters) => {
+        const runner = this.rawRunner(client);
+        if (runner === undefined) {
+          throw new GolemValidationError(
+            'a scoped query needs a Prisma client exposing $queryRawUnsafe, and this client does not expose one',
+          );
+        }
+        return this.run(model, () => runner.call(client, sql, ...parameters));
+      },
+    };
+    return createScopedQuery(host, request);
+  }
+
   async transaction<T>(
     context: unknown,
     fn: (tx: GolemEngineTransaction) => Promise<T>,
@@ -1167,6 +1312,7 @@ export class GolemEngine {
         count: (request) => this.count({ context, ...request }, scope),
         aggregate: (request) => this.aggregate({ context, ...request }, scope),
         groupBy: (request) => this.groupBy({ context, ...request }, scope),
+        scoped: (request) => this.scoped({ context, ...request }, scope),
       };
       return fn(view);
     }, options);

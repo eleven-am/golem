@@ -1,0 +1,53 @@
+datasource db {
+  provider = "sqlite"
+}
+
+generator client {
+  provider            = "prisma-client"
+  output              = "./generated"
+  moduleFormat        = "cjs"
+  importFileExtension = ""
+}
+
+model Post {
+  id         Int     @id @map("post_id")
+  title      String
+  authorId   Int     @map("author_id")
+  published  Boolean
+  views      Int
+  secretNote String  @map("secret_note")
+  author     User    @relation(fields: [authorId], references: [id])
+
+  @@map("posts")
+}
+
+model User {
+  id       Int    @id @map("user_id")
+  name     String
+  tenantId Int    @map("tenant_id")
+  posts    Post[]
+
+  @@map("users")
+}
+
+model Secret {
+  id    Int    @id
+  value String
+
+  @@map("secrets")
+}
+
+model Metric {
+  id         Int      @id @map("metric_id")
+  label      String
+  ownerId    Int      @map("owner_id")
+  note       String?
+  rank       Int?     @map("rank_value")
+  score      Decimal?
+  hits       BigInt
+  ratio      Float
+  active     Boolean
+  recordedAt DateTime @map("recorded_at")
+
+  @@map("metrics")
+}
