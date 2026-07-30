@@ -35,6 +35,30 @@ const models: readonly DatamodelModel[] = [
     fields: [
       field({ name: 'id', dbName: 'user_id', type: 'Int', isId: true }),
       field({ name: 'name', dbName: 'name', type: 'String' }),
+      field({
+        name: 'assets',
+        kind: 'object',
+        type: 'Asset',
+        isList: true,
+        isRequired: false,
+        relationName: 'AssetToUser',
+      }),
+      field({
+        name: 'posts',
+        kind: 'object',
+        type: 'Post',
+        isList: true,
+        isRequired: false,
+        relationName: 'PostToUser',
+      }),
+      field({
+        name: 'groups',
+        kind: 'object',
+        type: 'Group',
+        isList: true,
+        isRequired: false,
+        relationName: 'GroupToUser',
+      }),
     ],
   },
   {
@@ -47,6 +71,43 @@ const models: readonly DatamodelModel[] = [
     fields: [
       field({ name: 'id', dbName: 'id', type: 'Int', isId: true }),
       field({ name: 'shadow', type: 'String' }),
+    ],
+  },
+  {
+    name: 'Asset',
+    dbName: 'assets',
+    fields: [
+      field({ name: 'id', dbName: 'asset_id', type: 'Int', isId: true }),
+      field({ name: 'payload', dbName: 'payload', type: 'Bytes', isRequired: false }),
+      field({ name: 'meta', dbName: 'meta', type: 'Json', isRequired: false }),
+      field({ name: 'size', dbName: 'size', type: 'BigInt' }),
+      field({ name: 'cost', dbName: 'cost', type: 'Decimal', isRequired: false }),
+      field({ name: 'createdAt', dbName: 'created_at', type: 'DateTime' }),
+      field({ name: 'ownerId', dbName: 'owner_id', type: 'Int' }),
+      field({
+        name: 'owner',
+        kind: 'object',
+        type: 'User',
+        relationName: 'AssetToUser',
+        relationFromFields: ['ownerId'],
+        relationToFields: ['id'],
+      }),
+    ],
+  },
+  {
+    name: 'Group',
+    dbName: 'groups',
+    fields: [
+      field({ name: 'id', dbName: 'group_id', type: 'Int', isId: true }),
+      field({ name: 'label', dbName: 'label', type: 'String' }),
+      field({
+        name: 'members',
+        kind: 'object',
+        type: 'User',
+        isList: true,
+        isRequired: false,
+        relationName: 'GroupToUser',
+      }),
     ],
   },
 ];
@@ -197,6 +258,355 @@ describe('planning a compiled read', () => {
   });
 });
 
+describe('planning a compiled read that reaches a relation', () => {
+  const user = models[1];
+
+  it('aggregates a to-many into a correlated json array', async () => {
+    const compiled = await statement({
+      model: user,
+      prepared: tree({ select: { id: true, posts: { select: { id: true, title: true } } } }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."user_id" as "id", cast((select coalesce(json_group_array(json_object(' +
+        `'id', "agg"."id", 'title', "agg"."title")), '[]') from (select "t1"."post_id" as "id", ` +
+        '"t1"."title" as "title" from "posts" as "t1" where "t1"."author_id" = "t0"."user_id") ' +
+        'as agg) as text) as "posts" from "users" as "t0"',
+    );
+    expect(compiled.relations).toEqual([
+      {
+        name: 'posts',
+        list: true,
+        fields: [
+          { name: 'id', kind: 'plain' },
+          { name: 'title', kind: 'plain' },
+        ],
+        relations: [],
+      },
+    ]);
+  });
+
+  it('aggregates a to-one into a correlated json object', async () => {
+    const compiled = await statement({
+      prepared: tree({ select: { id: true, author: { select: { name: true } } } }),
+    });
+
+    expect(compiled.sql).toBe(
+      `select "t0"."post_id" as "id", cast((select json_object('name', "obj"."name") from ` +
+        '(select "t1"."name" as "name" from "users" as "t1" where "t1"."user_id" = ' +
+        '"t0"."author_id") as obj) as text) as "author" from "posts" as "t0"',
+    );
+    expect(compiled.relations[0].list).toBe(false);
+  });
+
+  it('aggregates a to-many on postgres with json_agg and a to-one with to_json', async () => {
+    const many = await statement({
+      model: user,
+      provider: 'postgresql',
+      prepared: tree({ select: { id: true, posts: { select: { id: true } } } }),
+    });
+    expect(many.sql).toBe(
+      'select "t0"."user_id" as "id", cast((select coalesce(json_agg(agg), \'[]\') from ' +
+        '(select "t1"."post_id" as "id" from "posts" as "t1" where "t1"."author_id" = ' +
+        '"t0"."user_id") as agg) as text) as "posts" from "users" as "t0"',
+    );
+
+    const one = await statement({
+      provider: 'postgresql',
+      prepared: tree({ select: { id: true, author: { select: { name: true } } } }),
+    });
+    expect(one.sql).toBe(
+      'select "t0"."post_id" as "id", cast((select to_json(obj) from (select "t1"."name" as ' +
+        '"name" from "users" as "t1" where "t1"."user_id" = "t0"."author_id") as obj) as text) ' +
+        'as "author" from "posts" as "t0"',
+    );
+  });
+
+  it('puts the policy predicate of the nested model inside its own subquery', async () => {
+    const compiled = await statement({
+      model: user,
+      prepared: tree({
+        select: {
+          id: true,
+          posts: { select: { id: true }, where: { published: true } },
+        },
+      }),
+      constraint: { name: 'Ada' },
+    });
+
+    const subquery = compiled.sql.slice(
+      compiled.sql.indexOf('from (select'),
+      compiled.sql.indexOf(') as agg'),
+    );
+    expect(subquery).toContain('"t1"."author_id" = "t0"."user_id"');
+    expect(subquery).toContain('"t1"."published"');
+    expect(compiled.sql.slice(compiled.sql.indexOf('from "users" as "t0"'))).toContain(
+      '"t0"."name"',
+    );
+    expect(compiled.parameters).toEqual([true, 'Ada']);
+  });
+
+  it('reads every scalar column of a relation the projection asks for by name only', async () => {
+    const compiled = await statement({
+      prepared: tree({ select: { id: true, author: true } }),
+    });
+
+    expect(compiled.relations[0].fields.map((entry) => entry.name)).toEqual(['id', 'name']);
+  });
+
+  it('carries a BigInt and a Decimal out of a relation as text, and dates as they are', async () => {
+    const compiled = await statement({
+      model: user,
+      prepared: tree({
+        select: {
+          id: true,
+          assets: { select: { size: true, cost: true, createdAt: true } },
+        },
+      }),
+    });
+
+    expect(compiled.relations[0].fields).toEqual([
+      { name: 'size', kind: 'bigint' },
+      { name: 'cost', kind: 'decimal' },
+      { name: 'createdAt', kind: 'datetime' },
+    ]);
+    expect(compiled.sql).toContain('cast("t1"."size" as text) as "size"');
+    expect(compiled.sql).toContain('cast("t1"."cost" as text) as "cost"');
+    expect(compiled.sql).toContain('"t1"."created_at" as "createdAt"');
+  });
+
+  it('nests a relation of a relation', async () => {
+    const compiled = await statement({
+      model: user,
+      prepared: tree({
+        select: { id: true, posts: { select: { id: true, author: { select: { name: true } } } } },
+      }),
+    });
+
+    expect(compiled.relations[0].relations).toEqual([
+      { name: 'author', list: false, fields: [{ name: 'name', kind: 'plain' }], relations: [] },
+    ]);
+    expect(compiled.sql).toContain('"t2"."user_id" = "t1"."author_id"');
+  });
+
+  it('adds the relations an include asks for to the columns of the model', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        include: { author: { select: { name: true } } },
+        omit: { tags: true },
+      }),
+    });
+
+    expect(compiled.columns.map((column) => column.name)).toEqual([
+      'id',
+      'title',
+      'authorId',
+      'published',
+    ]);
+    expect(compiled.relations.map((relation) => relation.name)).toEqual(['author']);
+  });
+});
+
+describe('refusing to compile a read that reaches a relation', () => {
+  it('hands back a relation golem cannot page, order or narrow to distinct rows', async () => {
+    const nested = (entry: Record<string, unknown>) =>
+      refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, posts: { select: { id: true }, ...entry } } }),
+      });
+
+    expect(await nested({ take: 1 })).toMatchObject({ reason: 'take' });
+    expect(await nested({ skip: 1 })).toMatchObject({ reason: 'take' });
+    expect(await nested({ orderBy: { id: 'asc' } })).toMatchObject({ reason: 'orderBy' });
+    expect(await nested({ distinct: ['id'] })).toMatchObject({ reason: 'distinct' });
+    expect(await nested({ cursor: { id: 1 } })).toMatchObject({ reason: 'cursor' });
+  });
+
+  it('hands back a relation carrying a Bytes or a Json column', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, assets: { select: { payload: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'projection' });
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, assets: { select: { meta: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'projection' });
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, assets: true } }),
+      }),
+    ).toMatchObject({ reason: 'projection' });
+  });
+
+  it('hands back a relation with no foreign key to correlate a subquery on', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, groups: { select: { id: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+  });
+
+  it('hands back a relation matching more than one foreign key on the model it points at', async () => {
+    const ticket: DatamodelModel = {
+      name: 'Ticket',
+      dbName: 'tickets',
+      fields: [
+        field({ name: 'id', dbName: 'ticket_id', type: 'Int', isId: true }),
+        field({ name: 'reporterId', dbName: 'reporter_id', type: 'Int' }),
+        field({ name: 'assigneeId', dbName: 'assignee_id', type: 'Int' }),
+        field({
+          name: 'reporter',
+          kind: 'object',
+          type: 'Person',
+          relationName: 'PersonToTicket',
+          relationFromFields: ['reporterId'],
+          relationToFields: ['id'],
+        }),
+        field({
+          name: 'assignee',
+          kind: 'object',
+          type: 'Person',
+          relationName: 'PersonToTicket',
+          relationFromFields: ['assigneeId'],
+          relationToFields: ['id'],
+        }),
+      ],
+    };
+    const person: DatamodelModel = {
+      name: 'Person',
+      dbName: 'people',
+      fields: [
+        field({ name: 'id', dbName: 'person_id', type: 'Int', isId: true }),
+        field({
+          name: 'tickets',
+          kind: 'object',
+          type: 'Ticket',
+          isList: true,
+          isRequired: false,
+          relationName: 'PersonToTicket',
+        }),
+      ],
+    };
+    const ambiguous = [person, ticket];
+
+    expect(
+      await planCompiledRead({
+        model: person,
+        models: ambiguous,
+        metadata: buildModelMetadata(ambiguous),
+        provider: 'sqlite',
+        prepared: tree({ select: { id: true, tickets: { select: { id: true } } } }),
+      }),
+    ).toMatchObject({
+      kind: 'fallback',
+      reason: 'relation',
+      detail: 'Person.tickets matches 2 foreign keys on Ticket, and golem cannot tell which one holds it',
+    });
+  });
+
+  it('hands back a relation whose where the policy condition language does not render', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({
+          select: {
+            id: true,
+            posts: { select: { id: true }, where: { title: { mode: 'insensitive', search: 'x' } } },
+          },
+        }),
+      }),
+    ).toMatchObject({ reason: 'where' });
+  });
+
+  it('hands back a to-one a where narrows, which Prisma rejects rather than filtering', async () => {
+    expect(
+      await refusal({
+        prepared: tree({
+          select: { id: true, author: { select: { name: true }, where: { name: 'Ada' } } },
+        }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+  });
+
+  it('hands sqlite back a relation projecting more fields than json_object takes', async () => {
+    const wide: DatamodelModel = {
+      name: 'Wide',
+      dbName: 'wide',
+      fields: [
+        field({ name: 'id', dbName: 'id', type: 'Int', isId: true }),
+        field({ name: 'ownerId', dbName: 'owner_id', type: 'Int' }),
+        ...Array.from({ length: 70 }, (_, index) =>
+          field({ name: `c${index}`, dbName: `c${index}`, type: 'String' }),
+        ),
+        field({
+          name: 'owner',
+          kind: 'object',
+          type: 'User',
+          relationName: 'WideToUser',
+          relationFromFields: ['ownerId'],
+          relationToFields: ['id'],
+        }),
+      ],
+    };
+    const owner: DatamodelModel = {
+      name: 'User',
+      dbName: 'users',
+      fields: [
+        field({ name: 'id', dbName: 'user_id', type: 'Int', isId: true }),
+        field({
+          name: 'wides',
+          kind: 'object',
+          type: 'Wide',
+          isList: true,
+          isRequired: false,
+          relationName: 'WideToUser',
+        }),
+      ],
+    };
+    const wideModels = [owner, wide];
+    const prepared = {
+      select: { id: true, wides: true },
+      toOneChecks: [],
+      maskChecks: [],
+      injected: [],
+    };
+
+    expect(
+      await planCompiledRead({
+        model: owner,
+        models: wideModels,
+        metadata: buildModelMetadata(wideModels),
+        provider: 'sqlite',
+        prepared,
+      }),
+    ).toMatchObject({ kind: 'fallback', reason: 'projection' });
+    expect(
+      await planCompiledRead({
+        model: owner,
+        models: wideModels,
+        metadata: buildModelMetadata(wideModels),
+        provider: 'postgresql',
+        prepared,
+      }),
+    ).toMatchObject({ kind: 'compiled' });
+  });
+
+  it('hands back a relation projecting nothing at all', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, posts: { select: {} } } }),
+      }),
+    ).toMatchObject({ reason: 'projection' });
+  });
+});
+
 describe('refusing to compile a read', () => {
   it('hands back a read whose provider golem does not render SQL for', async () => {
     expect(await refusal({ provider: 'mongodb' })).toMatchObject({ reason: 'provider' });
@@ -212,15 +622,6 @@ describe('refusing to compile a read', () => {
   it('hands back a read that asks for a cursor or for distinct rows', async () => {
     expect(await refusal({ cursor: { id: 1 } })).toMatchObject({ reason: 'cursor' });
     expect(await refusal({ distinct: ['title'] })).toMatchObject({ reason: 'distinct' });
-  });
-
-  it('hands back a read whose selection set reaches a relation', async () => {
-    expect(
-      await refusal({ prepared: tree({ select: { id: true, author: { select: { id: true } } } }) }),
-    ).toMatchObject({ reason: 'relation' });
-    expect(await refusal({ prepared: tree({ include: { author: true } }) })).toMatchObject({
-      reason: 'relation',
-    });
   });
 
   it('hands back a read selecting something that is not a column of the model', async () => {

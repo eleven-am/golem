@@ -1,3 +1,4 @@
+import { CompiledReadEvent } from './compiled-read';
 import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
 import { GolemEngine } from './operations';
 import { field } from './testing';
@@ -299,5 +300,25 @@ describe('compound unique selectors in filterable where', () => {
       where: { authorId_name: { contains: 'x' } },
       select: { id: true },
     });
+  });
+
+  it('falls back to Prisma when the client exposes no $queryRawUnsafe to run a compiled read on', async () => {
+    const findMany = jest.fn().mockResolvedValue([{ id: '1' }]);
+    const engine = new GolemEngine({ user: { findMany } }, models, { provider: 'sqlite' });
+    const events: CompiledReadEvent[] = [];
+    engine.observeCompiledRead((event) => events.push(event));
+
+    const rows = await engine.findMany({ model: 'User', select: { id: true }, compiled: true });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        model: 'User',
+        operation: 'findMany',
+        outcome: 'fallback',
+        reason: 'client',
+      }),
+    ]);
+    expect(rows).toEqual([{ id: '1' }]);
+    expect(findMany).toHaveBeenCalledWith({ select: { id: true } });
   });
 });

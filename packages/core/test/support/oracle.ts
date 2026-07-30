@@ -423,14 +423,371 @@ export function oracleSuite(subject: () => OracleSubject): void {
     expect(run.events[0]!.sql).toContain('author_id');
   });
 
-  it('falls back to Prisma, and answers identically, when the read reaches a relation', async () => {
-    const run = await runBothMany(engineOn(), {
+  it('reads a to-one relation as a nested object on both paths', async () => {
+    const run = await agree({
       model: 'Post',
-      select: { id: true, author: { select: { name: true } } },
+      select: { id: true, author: { select: { name: true, tenantId: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, author: { name: 'Ada', tenantId: 1 } },
+      { id: 2, author: { name: 'Ada', tenantId: 1 } },
+      { id: 3, author: { name: 'Ada', tenantId: 1 } },
+      { id: 4, author: { name: 'Bob', tenantId: 1 } },
+      { id: 5, author: { name: 'Bob', tenantId: 1 } },
+      { id: 6, author: { name: 'Cleo', tenantId: 2 } },
+    ]);
+  });
+
+  it('reads a to-one that matches nothing as null on both paths', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, profile: { select: { bio: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, profile: { bio: 'writes about analysis' } },
+      { id: 2, profile: { bio: 'writes about nothing' } },
+      { id: 3, profile: null },
+      { id: 4, profile: null },
+    ]);
+  });
+
+  it('reads a to-many that matches nothing as an empty array on both paths', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect((run.compiled as { id: number; posts: unknown[] }[])[3]).toStrictEqual({
+      id: 4,
+      posts: [],
+    });
+  });
+
+  it('carries every scalar type through a nested array exactly as Prisma carries it', async () => {
+    const run = await agree({
+      model: 'User',
+      select: {
+        id: true,
+        metrics: {
+          select: {
+            id: true,
+            hits: true,
+            score: true,
+            recordedAt: true,
+            active: true,
+            note: true,
+            rank: true,
+            ratio: true,
+            label: true,
+          },
+        },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+    const rows = run.compiled as {
+      metrics: {
+        id: number;
+        hits: bigint;
+        score: unknown;
+        recordedAt: Date;
+        active: boolean;
+        note: string | null;
+        rank: number | null;
+        ratio: number;
+      }[];
+    }[];
+    const first = rows[0]!.metrics[0]!;
+    expect(first.hits).toBe(9007199254740993n);
+    expect(typeof first.hits).toBe('bigint');
+    expect(rows[1]!.metrics[0]!.hits).toBe(-9007199254740993n);
+    expect(String(rows[1]!.metrics[1]!.score)).toBe('10.5');
+    expect(first.score).toStrictEqual(
+      (run.prisma as { metrics: { score: unknown }[] }[])[0]!.metrics[0]!.score,
+    );
+    expect(first.recordedAt).toBeInstanceOf(Date);
+    expect(first.recordedAt.toISOString()).toBe('2024-01-01T00:00:00.000Z');
+    expect(rows[0]!.metrics[1]!.recordedAt.toISOString()).toBe('2024-02-02T12:30:45.123Z');
+    expect(first.active).toBe(true);
+    expect(rows[0]!.metrics[1]!.active).toBe(false);
+    expect(rows[0]!.metrics[1]!.note).toBeNull();
+    expect(rows[0]!.metrics[1]!.ratio).toBe(-0.25);
+    expect(rows[1]!.metrics[0]!.rank).toBeNull();
+  });
+
+  it('reads two levels of relation identically on both paths', async () => {
+    const run = await agree({
+      model: 'User',
+      select: {
+        id: true,
+        posts: { select: { id: true, author: { select: { name: true } } } },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect((run.compiled as { posts: unknown[] }[])[0]!.posts).toEqual([
+      { id: 1, author: { name: 'Ada' } },
+      { id: 2, author: { name: 'Ada' } },
+      { id: 3, author: { name: 'Ada' } },
+    ]);
+  });
+
+  it('carries the nested policy predicate into the subquery, filtering it to a subset', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: { id: true, metrics: { select: { id: true, active: true } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Metric: { active: true } },
+    );
+    expect(run.compiled).toEqual([
+      { id: 1, metrics: [{ id: 1, active: true }] },
+      { id: 2, metrics: [{ id: 3, active: true }] },
+      { id: 3, metrics: [{ id: 5, active: true }] },
+      { id: 4, metrics: [] },
+    ]);
+    expect(run.events[0]!.sql).toContain('active');
+  });
+
+  it('filters a nested relation by the where the caller asked for, on both paths', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, where: { published: false } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, posts: [{ id: 3 }] },
+      { id: 2, posts: [] },
+      { id: 3, posts: [] },
+      { id: 4, posts: [] },
+    ]);
+  });
+
+  it('intersects the caller where on a relation with the policy predicate on it', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: { id: true, posts: { select: { id: true }, where: { views: { gte: 20 } } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Post: { published: true } },
+    );
+    expect(run.compiled).toEqual([
+      { id: 1, posts: [{ id: 2 }] },
+      { id: 2, posts: [{ id: 4 }, { id: 5 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
+    ]);
+  });
+
+  it('empties a nested relation the policy denies entirely, on both paths', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: { id: true, metrics: { select: { id: true } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Metric: { ownerId: -1 } },
+    );
+    expect(run.compiled).toEqual([
+      { id: 1, metrics: [] },
+      { id: 2, metrics: [] },
+      { id: 3, metrics: [] },
+      { id: 4, metrics: [] },
+    ]);
+  });
+
+  it('carries the nested policy predicate two levels down, under a relation the policy leaves alone', async () => {
+    const request: Omit<FindManyRequest, 'context' | 'compiled'> = {
+      model: 'Post',
+      select: {
+        id: true,
+        author: { select: { id: true, metrics: { select: { id: true, active: true } } } },
+      },
+      orderBy: [{ id: 'asc' }],
+    };
+    const run = await agree(request, { Metric: { active: true } });
+    const expected = [
+      { id: 1, author: { id: 1, metrics: [{ id: 1, active: true }] } },
+      { id: 2, author: { id: 1, metrics: [{ id: 1, active: true }] } },
+      { id: 3, author: { id: 1, metrics: [{ id: 1, active: true }] } },
+      { id: 4, author: { id: 2, metrics: [{ id: 3, active: true }] } },
+      { id: 5, author: { id: 2, metrics: [{ id: 3, active: true }] } },
+      { id: 6, author: { id: 3, metrics: [{ id: 5, active: true }] } },
+    ];
+    expect(run.compiled).toEqual(expected);
+    expect(run.prisma).toEqual(expected);
+
+    const unscoped = await runBothMany(engineOn(), request);
+    expectCompiled(unscoped);
+    const nested = (rows: unknown): number[] =>
+      (rows as { author: { metrics: { id: number }[] } }[])[0]!.author.metrics
+        .map((metric) => metric.id)
+        .sort((left, right) => left - right);
+    expect(nested(unscoped.compiled)).toEqual([1, 2]);
+    expect(nested(unscoped.prisma)).toEqual([1, 2]);
+  });
+
+  it('carries the nested policy predicate three levels down, on both paths', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: {
+          id: true,
+          posts: { select: { id: true, author: { select: { metrics: { select: { id: true } } } } } },
+        },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Metric: { active: true } },
+    );
+    const expected = [
+      {
+        id: 1,
+        posts: [
+          { id: 1, author: { metrics: [{ id: 1 }] } },
+          { id: 2, author: { metrics: [{ id: 1 }] } },
+          { id: 3, author: { metrics: [{ id: 1 }] } },
+        ],
+      },
+      {
+        id: 2,
+        posts: [
+          { id: 4, author: { metrics: [{ id: 3 }] } },
+          { id: 5, author: { metrics: [{ id: 3 }] } },
+        ],
+      },
+      { id: 3, posts: [{ id: 6, author: { metrics: [{ id: 5 }] } }] },
+      { id: 4, posts: [] },
+    ];
+    expect(run.compiled).toEqual(expected);
+    expect(run.prisma).toEqual(expected);
+  });
+
+  it('KNOWN SHARP EDGE, pinned rather than endorsed: a nested constraint of null or false reads as no constraint at all and grants the whole relation on both paths', async () => {
+    const request: Omit<FindManyRequest, 'context' | 'compiled'> = {
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+    };
+    const everyMetric = [
+      { id: 1, metrics: [{ id: 1 }, { id: 2 }] },
+      { id: 2, metrics: [{ id: 3 }, { id: 4 }] },
+      { id: 3, metrics: [{ id: 5 }] },
+      { id: 4, metrics: [] },
+    ];
+
+    const nulled = await agree(request, { Metric: null });
+    expect(nulled.compiled).toEqual(everyMetric);
+    expect(nulled.prisma).toEqual(everyMetric);
+
+    const denied = await agree(request, { Metric: false });
+    expect(denied.compiled).toEqual(everyMetric);
+    expect(denied.prisma).toEqual(everyMetric);
+  });
+
+  it('nulls a to-one the policy denies and strips what it hydrated, on both paths', async () => {
+    const run = await agree(
+      {
+        model: 'Post',
+        select: { id: true, author: { select: { name: true } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { User: { tenantId: 2 } },
+    );
+    expect(run.compiled).toEqual([
+      { id: 1, author: null },
+      { id: 2, author: null },
+      { id: 3, author: null },
+      { id: 4, author: null },
+      { id: 5, author: null },
+      { id: 6, author: { name: 'Cleo' } },
+    ]);
+    const visible = (run.compiled as { author: Record<string, unknown> | null }[])[5]!.author!;
+    expect(Object.keys(visible)).toEqual(['name']);
+  });
+
+  it('nulls a to-one two levels down and strips what it hydrated there', async () => {
+    const run = await agree(
+      {
+        model: 'Post',
+        select: {
+          id: true,
+          author: { select: { name: true, profile: { select: { bio: true } } } },
+        },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Profile: { userId: 1 } },
+    );
+    const rows = run.compiled as {
+      author: { name: string; profile: Record<string, unknown> | null };
+    }[];
+    expect(rows[0]!.author.profile).toEqual({ bio: 'writes about analysis' });
+    expect(Object.keys(rows[0]!.author.profile!)).toEqual(['bio']);
+    expect(rows[3]!.author.profile).toBeNull();
+    expect(rows[5]!.author.profile).toBeNull();
+  });
+
+  it('reads a nested relation through include identically on both paths', async () => {
+    const run = await agree({
+      model: 'Post',
+      omit: { secretNote: true },
+      include: { author: { select: { name: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    const rows = run.compiled as Record<string, unknown>[];
+    expect(Object.keys(rows[0]!).sort()).toEqual([
+      'author',
+      'authorId',
+      'id',
+      'published',
+      'title',
+      'views',
+    ]);
+  });
+
+  it('falls back to Prisma, and answers identically, when a nested relation is ordered', async () => {
+    const run = await runBothMany(engineOn(), {
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, orderBy: { id: 'desc' } } },
       orderBy: [{ id: 'asc' }],
     });
     expect(run.events).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'relation' }),
+      expect.objectContaining({ outcome: 'fallback', reason: 'orderBy' }),
+    ]);
+    expectIdentical(run);
+  });
+
+  it('falls back to Prisma, and answers identically, when a nested relation is paged', async () => {
+    const take = await runBothMany(engineOn(), {
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, take: 1 } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(take.events).toEqual([
+      expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
+    ]);
+    expectIdentical(take);
+
+    const skip = await runBothMany(engineOn(), {
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, skip: 1 } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(skip.events).toEqual([
+      expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
+    ]);
+    expectIdentical(skip);
+  });
+
+  it('falls back to Prisma, and answers identically, when a nested relation is distinct', async () => {
+    const run = await runBothMany(engineOn(), {
+      model: 'User',
+      select: { id: true, posts: { select: { published: true }, distinct: ['published'] } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.events).toEqual([
+      expect.objectContaining({ outcome: 'fallback', reason: 'distinct' }),
     ]);
     expectIdentical(run);
   });

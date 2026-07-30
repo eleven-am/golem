@@ -22,10 +22,12 @@ model Post {
 }
 
 model User {
-  id       Int    @id @map("user_id")
+  id       Int      @id @map("user_id")
   name     String
-  tenantId Int    @map("tenant_id")
+  tenantId Int      @map("tenant_id")
   posts    Post[]
+  metrics  Metric[]
+  profile  Profile?
 
   @@map("users")
 }
@@ -48,6 +50,16 @@ model Metric {
   ratio      Float
   active     Boolean
   recordedAt DateTime @map("recorded_at")
+  owner      User     @relation(fields: [ownerId], references: [id])
 
   @@map("metrics")
+}
+
+model Profile {
+  id     Int    @id @map("profile_id")
+  bio    String
+  userId Int    @unique @map("user_id")
+  user   User   @relation(fields: [userId], references: [id])
+
+  @@map("profiles")
 }

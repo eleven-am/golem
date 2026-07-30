@@ -15,6 +15,7 @@ export const users = [
   { id: 1, name: 'Ada', tenantId: 1 },
   { id: 2, name: 'Bob', tenantId: 1 },
   { id: 3, name: 'Cleo', tenantId: 2 },
+  { id: 4, name: 'Dee', tenantId: 2 },
 ];
 
 export const posts: readonly SeedRow[] = [
@@ -29,6 +30,11 @@ export const posts: readonly SeedRow[] = [
 export const secrets = [
   { id: 1, value: 'never' },
   { id: 2, value: 'ever' },
+];
+
+export const profiles = [
+  { id: 1, bio: 'writes about analysis', userId: 1 },
+  { id: 2, bio: 'writes about nothing', userId: 2 },
 ];
 
 export const context = { caller: 'analyst' };
@@ -148,6 +154,35 @@ export async function seed(client: {
       secret.value,
     );
   }
+  for (const profile of profiles) {
+    await client.$executeRawUnsafe(
+      `INSERT INTO "profiles" ("profile_id", "bio", "user_id") VALUES (${p(3)})`,
+      profile.id,
+      profile.bio,
+      profile.userId,
+    );
+  }
+}
+
+export function satisfies(entity: unknown, constraint: unknown): boolean {
+  if (!constraint || typeof constraint !== 'object' || !entity || typeof entity !== 'object') {
+    return true;
+  }
+  const row = entity as Record<string, unknown>;
+  for (const [key, expected] of Object.entries(constraint as Record<string, unknown>)) {
+    const actual = row[key];
+    if (expected !== null && typeof expected === 'object' && !Array.isArray(expected)) {
+      const operators = expected as Record<string, unknown>;
+      if (Array.isArray(operators.in) && operators.in.includes(actual)) {
+        continue;
+      }
+      return false;
+    }
+    if (actual !== expected) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function engineFor(
@@ -159,6 +194,7 @@ export function engineFor(
   const authorization: AuthorizationProvider = {
     authorize: async () => undefined,
     constrain: async (_action, model) => constraints[model],
+    check: async (_action, model, entity) => satisfies(entity, constraints[model]),
   };
   return new GolemEngine(client, scopedModels, {
     provider,

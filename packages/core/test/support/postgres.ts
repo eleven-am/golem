@@ -17,9 +17,10 @@ export const POSTGRES_URL_HINT =
 
 const DDL = [
   `DROP TABLE IF EXISTS "posts"`,
+  `DROP TABLE IF EXISTS "profiles"`,
+  `DROP TABLE IF EXISTS "metrics"`,
   `DROP TABLE IF EXISTS "users"`,
   `DROP TABLE IF EXISTS "secrets"`,
-  `DROP TABLE IF EXISTS "metrics"`,
   `CREATE TABLE "users" (
      "user_id" INTEGER PRIMARY KEY,
      "name" TEXT NOT NULL,
@@ -37,6 +38,11 @@ const DDL = [
      "id" INTEGER PRIMARY KEY,
      "value" TEXT NOT NULL
    )`,
+  `CREATE TABLE "profiles" (
+     "profile_id" INTEGER PRIMARY KEY,
+     "bio" TEXT NOT NULL,
+     "user_id" INTEGER NOT NULL UNIQUE REFERENCES "users"("user_id")
+   )`,
   `CREATE TABLE "metrics" (
      "metric_id" INTEGER PRIMARY KEY,
      "label" TEXT NOT NULL,
@@ -47,7 +53,8 @@ const DDL = [
      "hits" BIGINT NOT NULL,
      "ratio" DOUBLE PRECISION NOT NULL,
      "active" BOOLEAN NOT NULL,
-     "recorded_at" TIMESTAMP(3) NOT NULL
+     "recorded_at" TIMESTAMP(3) NOT NULL,
+     FOREIGN KEY ("owner_id") REFERENCES "users"("user_id")
    )`,
 ];
 

@@ -59,3 +59,8 @@ export type Secret = Prisma.SecretModel
  * 
  */
 export type Metric = Prisma.MetricModel
+/**
+ * Model Profile
+ * 
+ */
+export type Profile = Prisma.ProfileModel

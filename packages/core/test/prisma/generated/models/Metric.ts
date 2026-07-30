@@ -276,6 +276,7 @@ export type MetricWhereInput = {
   ratio?: Prisma.FloatFilter<"Metric"> | number
   active?: Prisma.BoolFilter<"Metric"> | boolean
   recordedAt?: Prisma.DateTimeFilter<"Metric"> | Date | string
+  owner?: Prisma.XOR<Prisma.UserScalarRelationFilter, Prisma.UserWhereInput>
 }
 
 export type MetricOrderByWithRelationInput = {
@@ -289,6 +290,7 @@ export type MetricOrderByWithRelationInput = {
   ratio?: Prisma.SortOrder
   active?: Prisma.SortOrder
   recordedAt?: Prisma.SortOrder
+  owner?: Prisma.UserOrderByWithRelationInput
 }
 
 export type MetricWhereUniqueInput = Prisma.AtLeast<{
@@ -305,6 +307,7 @@ export type MetricWhereUniqueInput = Prisma.AtLeast<{
   ratio?: Prisma.FloatFilter<"Metric"> | number
   active?: Prisma.BoolFilter<"Metric"> | boolean
   recordedAt?: Prisma.DateTimeFilter<"Metric"> | Date | string
+  owner?: Prisma.XOR<Prisma.UserScalarRelationFilter, Prisma.UserWhereInput>
 }, "id">
 
 export type MetricOrderByWithAggregationInput = {
@@ -344,7 +347,6 @@ export type MetricScalarWhereWithAggregatesInput = {
 export type MetricCreateInput = {
   id: number
   label: string
-  ownerId: number
   note?: string | null
   rank?: number | null
   score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
@@ -352,6 +354,7 @@ export type MetricCreateInput = {
   ratio: number
   active: boolean
   recordedAt: Date | string
+  owner: Prisma.UserCreateNestedOneWithoutMetricsInput
 }
 
 export type MetricUncheckedCreateInput = {
@@ -370,7 +373,6 @@ export type MetricUncheckedCreateInput = {
 export type MetricUpdateInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   label?: Prisma.StringFieldUpdateOperationsInput | string
-  ownerId?: Prisma.IntFieldUpdateOperationsInput | number
   note?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   rank?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
@@ -378,6 +380,7 @@ export type MetricUpdateInput = {
   ratio?: Prisma.FloatFieldUpdateOperationsInput | number
   active?: Prisma.BoolFieldUpdateOperationsInput | boolean
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+  owner?: Prisma.UserUpdateOneRequiredWithoutMetricsNestedInput
 }
 
 export type MetricUncheckedUpdateInput = {
@@ -409,7 +412,6 @@ export type MetricCreateManyInput = {
 export type MetricUpdateManyMutationInput = {
   id?: Prisma.IntFieldUpdateOperationsInput | number
   label?: Prisma.StringFieldUpdateOperationsInput | string
-  ownerId?: Prisma.IntFieldUpdateOperationsInput | number
   note?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
   rank?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
   score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
@@ -430,6 +432,16 @@ export type MetricUncheckedUpdateManyInput = {
   ratio?: Prisma.FloatFieldUpdateOperationsInput | number
   active?: Prisma.BoolFieldUpdateOperationsInput | boolean
   recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+}
+
+export type MetricListRelationFilter = {
+  every?: Prisma.MetricWhereInput
+  some?: Prisma.MetricWhereInput
+  none?: Prisma.MetricWhereInput
+}
+
+export type MetricOrderByRelationAggregateInput = {
+  _count?: Prisma.SortOrder
 }
 
 export type MetricCountOrderByAggregateInput = {
@@ -489,6 +501,48 @@ export type MetricSumOrderByAggregateInput = {
   ratio?: Prisma.SortOrder
 }
 
+export type MetricCreateNestedManyWithoutOwnerInput = {
+  create?: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput> | Prisma.MetricCreateWithoutOwnerInput[] | Prisma.MetricUncheckedCreateWithoutOwnerInput[]
+  connectOrCreate?: Prisma.MetricCreateOrConnectWithoutOwnerInput | Prisma.MetricCreateOrConnectWithoutOwnerInput[]
+  createMany?: Prisma.MetricCreateManyOwnerInputEnvelope
+  connect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+}
+
+export type MetricUncheckedCreateNestedManyWithoutOwnerInput = {
+  create?: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput> | Prisma.MetricCreateWithoutOwnerInput[] | Prisma.MetricUncheckedCreateWithoutOwnerInput[]
+  connectOrCreate?: Prisma.MetricCreateOrConnectWithoutOwnerInput | Prisma.MetricCreateOrConnectWithoutOwnerInput[]
+  createMany?: Prisma.MetricCreateManyOwnerInputEnvelope
+  connect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+}
+
+export type MetricUpdateManyWithoutOwnerNestedInput = {
+  create?: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput> | Prisma.MetricCreateWithoutOwnerInput[] | Prisma.MetricUncheckedCreateWithoutOwnerInput[]
+  connectOrCreate?: Prisma.MetricCreateOrConnectWithoutOwnerInput | Prisma.MetricCreateOrConnectWithoutOwnerInput[]
+  upsert?: Prisma.MetricUpsertWithWhereUniqueWithoutOwnerInput | Prisma.MetricUpsertWithWhereUniqueWithoutOwnerInput[]
+  createMany?: Prisma.MetricCreateManyOwnerInputEnvelope
+  set?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  disconnect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  delete?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  connect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  update?: Prisma.MetricUpdateWithWhereUniqueWithoutOwnerInput | Prisma.MetricUpdateWithWhereUniqueWithoutOwnerInput[]
+  updateMany?: Prisma.MetricUpdateManyWithWhereWithoutOwnerInput | Prisma.MetricUpdateManyWithWhereWithoutOwnerInput[]
+  deleteMany?: Prisma.MetricScalarWhereInput | Prisma.MetricScalarWhereInput[]
+}
+
+export type MetricUncheckedUpdateManyWithoutOwnerNestedInput = {
+  create?: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput> | Prisma.MetricCreateWithoutOwnerInput[] | Prisma.MetricUncheckedCreateWithoutOwnerInput[]
+  connectOrCreate?: Prisma.MetricCreateOrConnectWithoutOwnerInput | Prisma.MetricCreateOrConnectWithoutOwnerInput[]
+  upsert?: Prisma.MetricUpsertWithWhereUniqueWithoutOwnerInput | Prisma.MetricUpsertWithWhereUniqueWithoutOwnerInput[]
+  createMany?: Prisma.MetricCreateManyOwnerInputEnvelope
+  set?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  disconnect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  delete?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  connect?: Prisma.MetricWhereUniqueInput | Prisma.MetricWhereUniqueInput[]
+  update?: Prisma.MetricUpdateWithWhereUniqueWithoutOwnerInput | Prisma.MetricUpdateWithWhereUniqueWithoutOwnerInput[]
+  updateMany?: Prisma.MetricUpdateManyWithWhereWithoutOwnerInput | Prisma.MetricUpdateManyWithWhereWithoutOwnerInput[]
+  deleteMany?: Prisma.MetricScalarWhereInput | Prisma.MetricScalarWhereInput[]
+}
+
 export type NullableStringFieldUpdateOperationsInput = {
   set?: string | null
 }
@@ -529,6 +583,119 @@ export type DateTimeFieldUpdateOperationsInput = {
   set?: Date | string
 }
 
+export type MetricCreateWithoutOwnerInput = {
+  id: number
+  label: string
+  note?: string | null
+  rank?: number | null
+  score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits: bigint | number
+  ratio: number
+  active: boolean
+  recordedAt: Date | string
+}
+
+export type MetricUncheckedCreateWithoutOwnerInput = {
+  id: number
+  label: string
+  note?: string | null
+  rank?: number | null
+  score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits: bigint | number
+  ratio: number
+  active: boolean
+  recordedAt: Date | string
+}
+
+export type MetricCreateOrConnectWithoutOwnerInput = {
+  where: Prisma.MetricWhereUniqueInput
+  create: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput>
+}
+
+export type MetricCreateManyOwnerInputEnvelope = {
+  data: Prisma.MetricCreateManyOwnerInput | Prisma.MetricCreateManyOwnerInput[]
+}
+
+export type MetricUpsertWithWhereUniqueWithoutOwnerInput = {
+  where: Prisma.MetricWhereUniqueInput
+  update: Prisma.XOR<Prisma.MetricUpdateWithoutOwnerInput, Prisma.MetricUncheckedUpdateWithoutOwnerInput>
+  create: Prisma.XOR<Prisma.MetricCreateWithoutOwnerInput, Prisma.MetricUncheckedCreateWithoutOwnerInput>
+}
+
+export type MetricUpdateWithWhereUniqueWithoutOwnerInput = {
+  where: Prisma.MetricWhereUniqueInput
+  data: Prisma.XOR<Prisma.MetricUpdateWithoutOwnerInput, Prisma.MetricUncheckedUpdateWithoutOwnerInput>
+}
+
+export type MetricUpdateManyWithWhereWithoutOwnerInput = {
+  where: Prisma.MetricScalarWhereInput
+  data: Prisma.XOR<Prisma.MetricUpdateManyMutationInput, Prisma.MetricUncheckedUpdateManyWithoutOwnerInput>
+}
+
+export type MetricScalarWhereInput = {
+  AND?: Prisma.MetricScalarWhereInput | Prisma.MetricScalarWhereInput[]
+  OR?: Prisma.MetricScalarWhereInput[]
+  NOT?: Prisma.MetricScalarWhereInput | Prisma.MetricScalarWhereInput[]
+  id?: Prisma.IntFilter<"Metric"> | number
+  label?: Prisma.StringFilter<"Metric"> | string
+  ownerId?: Prisma.IntFilter<"Metric"> | number
+  note?: Prisma.StringNullableFilter<"Metric"> | string | null
+  rank?: Prisma.IntNullableFilter<"Metric"> | number | null
+  score?: Prisma.DecimalNullableFilter<"Metric"> | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits?: Prisma.BigIntFilter<"Metric"> | bigint | number
+  ratio?: Prisma.FloatFilter<"Metric"> | number
+  active?: Prisma.BoolFilter<"Metric"> | boolean
+  recordedAt?: Prisma.DateTimeFilter<"Metric"> | Date | string
+}
+
+export type MetricCreateManyOwnerInput = {
+  id: number
+  label: string
+  note?: string | null
+  rank?: number | null
+  score?: runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits: bigint | number
+  ratio: number
+  active: boolean
+  recordedAt: Date | string
+}
+
+export type MetricUpdateWithoutOwnerInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  label?: Prisma.StringFieldUpdateOperationsInput | string
+  note?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  rank?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  ratio?: Prisma.FloatFieldUpdateOperationsInput | number
+  active?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+}
+
+export type MetricUncheckedUpdateWithoutOwnerInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  label?: Prisma.StringFieldUpdateOperationsInput | string
+  note?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  rank?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  ratio?: Prisma.FloatFieldUpdateOperationsInput | number
+  active?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+}
+
+export type MetricUncheckedUpdateManyWithoutOwnerInput = {
+  id?: Prisma.IntFieldUpdateOperationsInput | number
+  label?: Prisma.StringFieldUpdateOperationsInput | string
+  note?: Prisma.NullableStringFieldUpdateOperationsInput | string | null
+  rank?: Prisma.NullableIntFieldUpdateOperationsInput | number | null
+  score?: Prisma.NullableDecimalFieldUpdateOperationsInput | runtime.Decimal | runtime.DecimalJsLike | number | string | null
+  hits?: Prisma.BigIntFieldUpdateOperationsInput | bigint | number
+  ratio?: Prisma.FloatFieldUpdateOperationsInput | number
+  active?: Prisma.BoolFieldUpdateOperationsInput | boolean
+  recordedAt?: Prisma.DateTimeFieldUpdateOperationsInput | Date | string
+}
+
 
 
 export type MetricSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -542,6 +709,7 @@ export type MetricSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs =
   ratio?: boolean
   active?: boolean
   recordedAt?: boolean
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["metric"]>
 
 export type MetricSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -555,6 +723,7 @@ export type MetricSelectCreateManyAndReturn<ExtArgs extends runtime.Types.Extens
   ratio?: boolean
   active?: boolean
   recordedAt?: boolean
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["metric"]>
 
 export type MetricSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
@@ -568,6 +737,7 @@ export type MetricSelectUpdateManyAndReturn<ExtArgs extends runtime.Types.Extens
   ratio?: boolean
   active?: boolean
   recordedAt?: boolean
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["metric"]>
 
 export type MetricSelectScalar = {
@@ -584,10 +754,21 @@ export type MetricSelectScalar = {
 }
 
 export type MetricOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"id" | "label" | "ownerId" | "note" | "rank" | "score" | "hits" | "ratio" | "active" | "recordedAt", ExtArgs["result"]["metric"]>
+export type MetricInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
+}
+export type MetricIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
+}
+export type MetricIncludeUpdateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  owner?: boolean | Prisma.UserDefaultArgs<ExtArgs>
+}
 
 export type $MetricPayload<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   name: "Metric"
-  objects: {}
+  objects: {
+    owner: Prisma.$UserPayload<ExtArgs>
+  }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     id: number
     label: string
@@ -993,6 +1174,7 @@ readonly fields: MetricFieldRefs;
  */
 export interface Prisma__MetricClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
+  owner<T extends Prisma.UserDefaultArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.UserDefaultArgs<ExtArgs>>): Prisma.Prisma__UserClient<runtime.Types.Result.GetResult<Prisma.$UserPayload<ExtArgs>, T, "findUniqueOrThrow", GlobalOmitOptions> | Null, Null, ExtArgs, GlobalOmitOptions>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1049,6 +1231,10 @@ export type MetricFindUniqueArgs<ExtArgs extends runtime.Types.Extensions.Intern
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
   /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
+  /**
    * Filter, which Metric to fetch.
    */
   where: Prisma.MetricWhereUniqueInput
@@ -1067,6 +1253,10 @@ export type MetricFindUniqueOrThrowArgs<ExtArgs extends runtime.Types.Extensions
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
   /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
+  /**
    * Filter, which Metric to fetch.
    */
   where: Prisma.MetricWhereUniqueInput
@@ -1084,6 +1274,10 @@ export type MetricFindFirstArgs<ExtArgs extends runtime.Types.Extensions.Interna
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
   /**
    * Filter, which Metric to fetch.
    */
@@ -1133,6 +1327,10 @@ export type MetricFindFirstOrThrowArgs<ExtArgs extends runtime.Types.Extensions.
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
   /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
+  /**
    * Filter, which Metric to fetch.
    */
   where?: Prisma.MetricWhereInput
@@ -1180,6 +1378,10 @@ export type MetricFindManyArgs<ExtArgs extends runtime.Types.Extensions.Internal
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
   /**
    * Filter, which Metrics to fetch.
    */
@@ -1229,6 +1431,10 @@ export type MetricCreateArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
   /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
+  /**
    * The data needed to create a Metric.
    */
   data: Prisma.XOR<Prisma.MetricCreateInput, Prisma.MetricUncheckedCreateInput>
@@ -1260,6 +1466,10 @@ export type MetricCreateManyAndReturnArgs<ExtArgs extends runtime.Types.Extensio
    * The data used to create many Metrics.
    */
   data: Prisma.MetricCreateManyInput | Prisma.MetricCreateManyInput[]
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricIncludeCreateManyAndReturn<ExtArgs> | null
 }
 
 /**
@@ -1274,6 +1484,10 @@ export type MetricUpdateArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
   /**
    * The data needed to update a Metric.
    */
@@ -1326,6 +1540,10 @@ export type MetricUpdateManyAndReturnArgs<ExtArgs extends runtime.Types.Extensio
    * Limit how many Metrics to update.
    */
   limit?: number
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricIncludeUpdateManyAndReturn<ExtArgs> | null
 }
 
 /**
@@ -1340,6 +1558,10 @@ export type MetricUpsertArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
   /**
    * The filter to search for the Metric to update in case it exists.
    */
@@ -1366,6 +1588,10 @@ export type MetricDeleteArgs<ExtArgs extends runtime.Types.Extensions.InternalAr
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
   /**
    * Filter which Metric to delete.
    */
@@ -1398,4 +1624,8 @@ export type MetricDefaultArgs<ExtArgs extends runtime.Types.Extensions.InternalA
    * Omit specific fields from the Metric
    */
   omit?: Prisma.MetricOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.MetricInclude<ExtArgs> | null
 }

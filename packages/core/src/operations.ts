@@ -13,6 +13,7 @@ import {
   CompiledReadOperation,
   planCompiledRead,
 } from './compiled-read';
+import { decodeCompiledRelations } from './compiled-read-decode';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
 import { buildModelMetadata, ModelMetadata, ModelMetadataIndex } from './model-meta';
@@ -815,7 +816,11 @@ export class GolemEngine {
     const rows = (await this.run(model, () =>
       runner.call(client, plan.sql, ...plan.parameters),
     )) as Record<string, unknown>[];
-    return plan.reversed ? [...rows].reverse() : rows;
+    const decoded = decodeCompiledRelations(rows, plan.relations, plan.decimal) as Record<
+      string,
+      unknown
+    >[];
+    return plan.reversed ? [...decoded].reverse() : decoded;
   }
 
   async findOne(request: FindOneRequest, scope?: GolemOpScope): Promise<unknown> {

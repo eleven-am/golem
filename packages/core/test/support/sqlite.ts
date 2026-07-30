@@ -22,6 +22,11 @@ const DDL = [
      "id" INTEGER PRIMARY KEY,
      "value" TEXT NOT NULL
    )`,
+  `CREATE TABLE "profiles" (
+     "profile_id" INTEGER PRIMARY KEY,
+     "bio" TEXT NOT NULL,
+     "user_id" INTEGER NOT NULL UNIQUE REFERENCES "users"("user_id")
+   )`,
   `CREATE TABLE "metrics" (
      "metric_id" INTEGER PRIMARY KEY,
      "label" TEXT NOT NULL,
@@ -32,7 +37,8 @@ const DDL = [
      "hits" BIGINT NOT NULL,
      "ratio" REAL NOT NULL,
      "active" BOOLEAN NOT NULL,
-     "recorded_at" DATETIME NOT NULL
+     "recorded_at" DATETIME NOT NULL,
+     FOREIGN KEY ("owner_id") REFERENCES "users"("user_id")
    )`,
 ];
 

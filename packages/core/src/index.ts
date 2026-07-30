@@ -1,5 +1,6 @@
 export * from './authorization';
 export * from './compiled-read';
+export * from './compiled-read-decode';
 export * from './datamodel';
 export * from './event-buffer';
 export * from './errors';

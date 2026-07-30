@@ -54,7 +54,8 @@ export const ModelName = {
   Post: 'Post',
   User: 'User',
   Secret: 'Secret',
-  Metric: 'Metric'
+  Metric: 'Metric',
+  Profile: 'Profile'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -116,6 +117,15 @@ export const MetricScalarFieldEnum = {
 } as const
 
 export type MetricScalarFieldEnum = (typeof MetricScalarFieldEnum)[keyof typeof MetricScalarFieldEnum]
+
+
+export const ProfileScalarFieldEnum = {
+  id: 'id',
+  bio: 'bio',
+  userId: 'userId'
+} as const
+
+export type ProfileScalarFieldEnum = (typeof ProfileScalarFieldEnum)[keyof typeof ProfileScalarFieldEnum]
 
 
 export const SortOrder = {
