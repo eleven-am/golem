@@ -1,6 +1,18 @@
 import type { DMMF } from '@prisma/generator-helper';
 import { emitDatamodelModule } from './emit';
 
+describe('the emitted datasource provider', () => {
+  const empty = { models: [], enums: [], types: [], indexes: [] } as unknown as DMMF.Datamodel;
+
+  it('carries the provider so the scoped root knows which dialect to render', () => {
+    expect(emitDatamodelModule(empty, 'postgresql')).toContain('"provider": "postgresql"');
+  });
+
+  it('omits the provider rather than guessing one when the generator did not supply it', () => {
+    expect(emitDatamodelModule(empty)).not.toContain('"provider"');
+  });
+});
+
 function scalar(name: string): DMMF.Field {
   return {
     name,

@@ -45,6 +45,7 @@ export interface DatamodelEnum {
 export interface DatamodelDocument<TModels = Record<string, string>> {
   models: readonly DatamodelModel[];
   enums: readonly DatamodelEnum[];
+  provider?: string;
   __models?: TModels;
 }
 

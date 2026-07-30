@@ -29,7 +29,7 @@
   "license": "GPL-3.0",
   "author": "Roy OSSAI",
   "engines": {
-    "node": ">=20"
+    "node": ">=20.19"
   },
   "publishConfig": {
     "access": "public"

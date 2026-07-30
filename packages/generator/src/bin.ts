@@ -18,7 +18,10 @@ generatorHandler({
     }
     const clientImport = (options.generator.config.clientImport as string | undefined) ?? '../prisma/client';
     await mkdir(output, { recursive: true });
-    await writeFile(join(output, 'index.ts'), emitDatamodelModule(options.dmmf.datamodel));
+    await writeFile(
+      join(output, 'index.ts'),
+      emitDatamodelModule(options.dmmf.datamodel, options.datasources[0]?.provider),
+    );
     await writeFile(
       join(output, 'client.ts'),
       emitClientModule(options.dmmf.datamodel.models.map((m) => m.name), clientImport),

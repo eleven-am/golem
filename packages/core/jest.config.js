@@ -5,4 +5,5 @@ module.exports = {
   transform: {
     '^.+\\.ts$': ['ts-jest', { tsconfig: { isolatedModules: true } }],
   },
+  testPathIgnorePatterns: ['/node_modules/', '/test/prisma/generated/', '/test/prisma-postgres/generated/'],
 };

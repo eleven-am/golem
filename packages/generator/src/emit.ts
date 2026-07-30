@@ -2,7 +2,7 @@ import type { DMMF } from '@prisma/generator-helper';
 
 const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
 
-export function emitDatamodelModule(datamodel: DMMF.Datamodel): string {
+export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string): string {
   const models = datamodel.models.map((model) => ({
     name: model.name,
     dbName: model.dbName ?? model.name,
@@ -65,7 +65,11 @@ declare global {
   }
 }
 
-export const datamodel = ${JSON.stringify({ models, enums }, null, 2)} as const;
+export const datamodel = ${JSON.stringify(
+    provider === undefined ? { models, enums } : { models, enums, provider },
+    null,
+    2,
+  )} as const;
 
 export function getDatamodel(): DatamodelDocument<GolemModels> {
   return datamodel as unknown as DatamodelDocument<GolemModels>;

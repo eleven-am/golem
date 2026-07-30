@@ -9,5 +9,12 @@ module.exports = {
         diagnostics: { ignoreCodes: [151002] },
       },
     ],
+    'node_modules[/\\\\]kysely[/\\\\].+\\.js$': [
+      'ts-jest',
+      {
+        tsconfig: { isolatedModules: true, allowJs: true, module: 'commonjs', target: 'es2022' },
+      },
+    ],
   },
+  transformIgnorePatterns: ['/node_modules/(?!kysely/)'],
 };
