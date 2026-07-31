@@ -1,4 +1,6 @@
 export * from './authorization';
+export * from './compiled-aggregate';
+export * from './compiled-aggregate-decode';
 export * from './compiled-read';
 export * from './compiled-read-decode';
 export * from './datamodel';

@@ -38,7 +38,7 @@ const PAGING_ENTRY_REASONS: Readonly<Record<string, CompiledReadFallbackReason>>
   distinct: 'distinct',
 };
 
-export type CompiledReadOperation = 'findOne' | 'findMany';
+export type CompiledReadOperation = 'findOne' | 'findMany' | 'aggregate' | 'groupBy';
 
 export type CompiledReadFallbackReason =
   | 'client'
@@ -50,7 +50,10 @@ export type CompiledReadFallbackReason =
   | 'distinct'
   | 'where'
   | 'orderBy'
-  | 'take';
+  | 'take'
+  | 'measure'
+  | 'group'
+  | 'having';
 
 export interface CompiledReadColumn {
   readonly name: string;

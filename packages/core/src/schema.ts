@@ -807,6 +807,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             where: args.where ?? undefined,
             ...measures,
             context: ctx,
+            compiled: true,
           })) as Record<string, unknown>;
           return toAggregateResult(result);
         }),
@@ -866,6 +867,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
               skip: args.skip ?? undefined,
               ...measures,
               context: ctx,
+              compiled: true,
             })) as Record<string, unknown>[];
             if (
               groupLimit !== undefined &&

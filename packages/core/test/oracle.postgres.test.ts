@@ -1,5 +1,6 @@
 import { seed, seedMetrics } from './support/analytics';
 import { oracleSuite } from './support/oracle';
+import { aggregateOracleSuite } from './support/oracle-aggregate';
 import {
   POSTGRES_OPTIONAL,
   POSTGRES_URL_ENV,
@@ -8,6 +9,8 @@ import {
   ensureDatabase,
   openPostgres,
 } from './support/postgres';
+
+jest.setTimeout(120000);
 
 const ORACLE_DATABASE = 'golem_core_oracle';
 
@@ -36,6 +39,10 @@ describe('the compiled read path against a live postgres database', () => {
     it.skip(`skipped: ${POSTGRES_URL_HINT}`, () => undefined);
   } else {
     oracleSuite(() => ({
+      provider: 'postgresql',
+      client: handle.prisma as unknown as Record<string, any>,
+    }));
+    aggregateOracleSuite(() => ({
       provider: 'postgresql',
       client: handle.prisma as unknown as Record<string, any>,
     }));

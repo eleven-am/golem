@@ -8,6 +8,8 @@ import {
   openPostgres,
 } from './support/postgres';
 
+jest.setTimeout(120000);
+
 const url = process.env[POSTGRES_URL_ENV] ?? '';
 
 describe('a scoped analytical query against a live postgres database', () => {

@@ -13,6 +13,11 @@ import {
   CompiledReadOperation,
   planCompiledRead,
 } from './compiled-read';
+import {
+  CompiledAggregateInput,
+  planCompiledAggregate,
+} from './compiled-aggregate';
+import { decodeAggregateRow } from './compiled-aggregate-decode';
 import { decodeCompiledRelations } from './compiled-read-decode';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
@@ -149,6 +154,7 @@ export interface AggregateRequest {
   _min?: unknown;
   _max?: unknown;
   _count?: unknown;
+  compiled?: boolean;
 }
 
 export interface GroupByRequest {
@@ -165,6 +171,7 @@ export interface GroupByRequest {
   _min?: unknown;
   _max?: unknown;
   _count?: unknown;
+  compiled?: boolean;
 }
 
 export interface GolemOpScope {
@@ -823,6 +830,48 @@ export class GolemEngine {
     return plan.reversed ? [...decoded].reverse() : decoded;
   }
 
+  private async compiledAggregate(
+    operation: 'aggregate' | 'groupBy',
+    model: string,
+    input: Omit<CompiledAggregateInput, 'model' | 'models' | 'metadata' | 'provider'>,
+    scope?: GolemOpScope,
+  ): Promise<Record<string, unknown>[] | undefined> {
+    const client = scope?.client ?? this.client;
+    const runner = this.rawRunner(client);
+    if (runner === undefined) {
+      this.emitCompiledRead({
+        model,
+        operation,
+        outcome: 'fallback',
+        reason: 'client',
+        detail: 'the Prisma client exposes no $queryRawUnsafe to run a compiled aggregate on',
+      });
+      return undefined;
+    }
+    const plan = await planCompiledAggregate({
+      ...input,
+      model: this.modelsByName.get(model)!,
+      models: this.models,
+      metadata: this.metadata,
+      provider: this.provider,
+    });
+    if (plan.kind === 'fallback') {
+      this.emitCompiledRead({
+        model,
+        operation,
+        outcome: 'fallback',
+        reason: plan.reason,
+        detail: plan.detail,
+      });
+      return undefined;
+    }
+    this.emitCompiledRead({ model, operation, outcome: 'compiled', sql: plan.sql });
+    const rows = (await this.run(model, () =>
+      runner.call(client, plan.sql, ...plan.parameters),
+    )) as Record<string, unknown>[];
+    return rows.map((row) => decodeAggregateRow(row, plan.measures, plan.keys, plan.decimal));
+  }
+
   async findOne(request: FindOneRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findOne', request);
@@ -1190,6 +1239,29 @@ export class GolemEngine {
       'aggregate',
     );
     const constraint = await this.constraintFor('read', request.model, request.context);
+    if (request.compiled === true) {
+      const compiled = await this.compiledAggregate(
+        'aggregate',
+        request.model,
+        {
+          where: request.where,
+          constraint,
+          orderBy: request.orderBy,
+          cursor: request.cursor,
+          take: request.take,
+          skip: request.skip,
+          _sum: request._sum,
+          _avg: request._avg,
+          _min: request._min,
+          _max: request._max,
+          _count: request._count,
+        },
+        scope,
+      );
+      if (compiled !== undefined) {
+        return compiled[0]!;
+      }
+    }
     const args: Record<string, unknown> = {
       where: mergeConstraint(request.where, constraint),
     };
@@ -1222,6 +1294,30 @@ export class GolemEngine {
       'group',
     );
     const constraint = await this.constraintFor('read', request.model, request.context);
+    if (request.compiled === true) {
+      const compiled = await this.compiledAggregate(
+        'groupBy',
+        request.model,
+        {
+          by: [...by],
+          where: request.where,
+          constraint,
+          having: request.having,
+          orderBy: request.orderBy,
+          take: request.take,
+          skip: request.skip,
+          _sum: request._sum,
+          _avg: request._avg,
+          _min: request._min,
+          _max: request._max,
+          _count: request._count,
+        },
+        scope,
+      );
+      if (compiled !== undefined) {
+        return compiled;
+      }
+    }
     const args: Record<string, unknown> = {
       by: [...by],
       where: mergeConstraint(request.where, constraint),

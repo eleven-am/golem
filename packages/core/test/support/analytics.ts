@@ -116,52 +116,48 @@ export const metrics: readonly MetricSeed[] = [
 ];
 
 export async function seedMetrics(client: {
-  metric: { create(args: { data: Record<string, unknown> }): Promise<unknown> };
+  metric: { createMany(args: { data: MetricSeed[] }): Promise<unknown> };
 }): Promise<void> {
-  for (const metric of metrics) {
-    await client.metric.create({ data: { ...metric } });
-  }
+  await client.metric.createMany({ data: metrics.map((metric) => ({ ...metric })) });
 }
 
 export async function seed(client: {
   $executeRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown>;
 }, placeholder: (position: number) => string): Promise<void> {
-  const p = (count: number, offset = 0) =>
-    Array.from({ length: count }, (_, index) => placeholder(offset + index + 1)).join(', ');
-  for (const user of users) {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "users" ("user_id", "name", "tenant_id") VALUES (${p(3)})`,
-      user.id,
-      user.name,
-      user.tenantId,
-    );
-  }
-  for (const post of posts) {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "posts" ("post_id", "title", "author_id", "published", "views", "secret_note") VALUES (${p(6)})`,
-      post.id,
-      post.title,
-      post.authorId,
-      post.published,
-      post.views,
-      post.secretNote,
-    );
-  }
-  for (const secret of secrets) {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "secrets" ("id", "value") VALUES (${p(2)})`,
-      secret.id,
-      secret.value,
-    );
-  }
-  for (const profile of profiles) {
-    await client.$executeRawUnsafe(
-      `INSERT INTO "profiles" ("profile_id", "bio", "user_id") VALUES (${p(3)})`,
-      profile.id,
-      profile.bio,
-      profile.userId,
-    );
-  }
+  const rows = (count: number, width: number) =>
+    Array.from(
+      { length: count },
+      (_, row) =>
+        `(${Array.from({ length: width }, (_, column) =>
+          placeholder(row * width + column + 1),
+        ).join(', ')})`,
+    ).join(', ');
+  await client.$executeRawUnsafe(
+    `INSERT INTO "users" ("user_id", "name", "tenant_id") VALUES ${rows(users.length, 3)}`,
+    ...users.flatMap((user) => [user.id, user.name, user.tenantId]),
+  );
+  await Promise.all([
+    client.$executeRawUnsafe(
+      `INSERT INTO "posts" ("post_id", "title", "author_id", "published", "views", "secret_note") ` +
+        `VALUES ${rows(posts.length, 6)}`,
+      ...posts.flatMap((post) => [
+        post.id,
+        post.title,
+        post.authorId,
+        post.published,
+        post.views,
+        post.secretNote,
+      ]),
+    ),
+    client.$executeRawUnsafe(
+      `INSERT INTO "secrets" ("id", "value") VALUES ${rows(secrets.length, 2)}`,
+      ...secrets.flatMap((secret) => [secret.id, secret.value]),
+    ),
+    client.$executeRawUnsafe(
+      `INSERT INTO "profiles" ("profile_id", "bio", "user_id") VALUES ${rows(profiles.length, 3)}`,
+      ...profiles.flatMap((profile) => [profile.id, profile.bio, profile.userId]),
+    ),
+  ]);
 }
 
 export function satisfies(entity: unknown, constraint: unknown): boolean {

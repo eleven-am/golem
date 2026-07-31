@@ -4,6 +4,7 @@ import { GolemEngine } from '../src/operations';
 import { scopedModels } from './support/fixture';
 import { context, seed, seedMetrics } from './support/analytics';
 import { oracleSuite } from './support/oracle';
+import { aggregateOracleSuite } from './support/oracle-aggregate';
 import { SqliteHandle, openSqlite } from './support/sqlite';
 
 describe('the compiled read path against a live sqlite database', () => {
@@ -20,6 +21,11 @@ describe('the compiled read path against a live sqlite database', () => {
   });
 
   oracleSuite(() => ({
+    provider: 'sqlite',
+    client: handle.prisma as unknown as Record<string, any>,
+  }));
+
+  aggregateOracleSuite(() => ({
     provider: 'sqlite',
     client: handle.prisma as unknown as Record<string, any>,
   }));
