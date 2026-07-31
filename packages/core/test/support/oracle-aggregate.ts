@@ -79,6 +79,24 @@ function rows(run: AggregateRun): Record<string, any>[] {
   return run.compiled as Record<string, any>[];
 }
 
+interface KeyType {
+  readonly key: string;
+  readonly groups: number;
+  readonly holds: (value: unknown) => boolean;
+}
+
+const KEY_TYPES: readonly KeyType[] = [
+  { key: 'recordedAt', groups: 5, holds: (value) => value instanceof Date },
+  { key: 'hits', groups: 5, holds: (value) => typeof value === 'bigint' },
+  {
+    key: 'score',
+    groups: 4,
+    holds: (value) => value === null || (typeof value === 'object' && value !== null),
+  },
+  { key: 'ratio', groups: 5, holds: (value) => typeof value === 'number' },
+  { key: 'label', groups: 5, holds: (value) => typeof value === 'string' },
+];
+
 export function aggregateOracleSuite(subject: () => AggregateSubject): void {
   const engineOn = (constraints: Record<string, unknown> = {}): GolemEngine =>
     engineFor(subject().client, subject().provider, constraints);
@@ -128,7 +146,7 @@ export function aggregateOracleSuite(subject: () => AggregateSubject): void {
     });
     const sum = values(run)._sum;
     expect(sum.id).toBe(15);
-    expect(sum.rank).toBe(6);
+    expect(sum.rank).toBe(7);
     expect(typeof sum.rank).toBe('number');
     expect(sum.ratio).toBeCloseTo(7, 10);
     expect(sum.hits).toBe(43n);
@@ -152,7 +170,8 @@ export function aggregateOracleSuite(subject: () => AggregateSubject): void {
   it('holds the average of a non-Decimal column to the tolerance golem promises across engines', async () => {
     const run = await agree({ model: 'Metric', _avg: { rank: true, ratio: true, hits: true } });
     const avg = values(run)._avg;
-    expect(Math.abs(avg.rank - 2)).toBeLessThanOrEqual(AVG_TOLERANCE * 2);
+    expect(Number.isInteger(avg.rank)).toBe(false);
+    expect(Math.abs(avg.rank - 7 / 3)).toBeLessThanOrEqual(AVG_TOLERANCE * (7 / 3));
     expect(Math.abs(avg.ratio - 1.4)).toBeLessThanOrEqual(AVG_TOLERANCE * 1.4);
     expect(Math.abs(avg.hits - 8.6)).toBeLessThanOrEqual(AVG_TOLERANCE * 8.6);
   });
@@ -328,6 +347,41 @@ export function aggregateOracleSuite(subject: () => AggregateSubject): void {
     expect(rows(run)).toHaveLength(4);
   });
 
+  it('carries a DateTime, a BigInt, a Decimal, a Float and a String grouping key out as Prisma carries it', async () => {
+    const engine = engineOn();
+    for (const { key, groups, holds } of KEY_TYPES) {
+      const run = await runBothGroup(engine, {
+        model: 'Metric',
+        by: [key],
+        _count: { _all: true },
+        orderBy: { [key]: 'asc' },
+      });
+      expectCompiled(run);
+      expectAgreed(run);
+      expect(rows(run)).toHaveLength(groups);
+      for (const row of rows(run)) {
+        expect(Object.keys(row).sort()).toEqual(['_count', key].sort());
+        expect(holds(row[key])).toBe(true);
+      }
+    }
+  });
+
+  it('groups by a Decimal key, counting the rows that carry no Decimal as their own group', async () => {
+    const run = await agreeGrouped({
+      model: 'Metric',
+      by: ['score'],
+      _count: { _all: true, score: true },
+      orderBy: { score: 'asc' },
+    });
+    const nulled = rows(run).find((row) => row.score === null);
+    expect(nulled).toStrictEqual({ score: null, _count: { _all: 2, score: 0 } });
+    const scored = rows(run).filter((row) => row.score !== null);
+    expect(scored).toHaveLength(3);
+    expect(scored[0]!.score.constructor).toBe(
+      (run.prisma as Record<string, any>[]).find((row) => row.score !== null)!.score.constructor,
+    );
+  });
+
   it('groups by two keys identically on both paths', async () => {
     const run = await agreeGrouped({
       model: 'Metric',
@@ -375,6 +429,56 @@ export function aggregateOracleSuite(subject: () => AggregateSubject): void {
       orderBy: { ownerId: 'asc' },
     });
     expect(rows(run).map((row) => row.ownerId)).toEqual([1, 2]);
+  });
+
+  it('filters groups by a DateTime measure against a Date operand, on both paths', async () => {
+    const engine = engineOn();
+    const from = await runBothGroup(engine, {
+      model: 'Metric',
+      by: ['ownerId'],
+      _min: { recordedAt: true },
+      having: { recordedAt: { _min: { gte: new Date('2024-03-01T00:00:00.000Z') } } },
+      orderBy: { ownerId: 'asc' },
+    });
+    expectCompiled(from);
+    expectAgreed(from);
+    expect(rows(from).map((row) => row.ownerId)).toEqual([2, 3]);
+
+    const exact = await runBothGroup(engine, {
+      model: 'Metric',
+      by: ['ownerId'],
+      _min: { recordedAt: true },
+      having: { recordedAt: { _min: { equals: new Date('2024-05-05T05:05:05.005Z') } } },
+      orderBy: { ownerId: 'asc' },
+    });
+    expectCompiled(exact);
+    expectAgreed(exact);
+    expect(rows(exact).map((row) => row.ownerId)).toEqual([3]);
+  });
+
+  it('filters groups by a Decimal sum against a number operand, on both paths', async () => {
+    const engine = engineOn();
+    const above = await runBothGroup(engine, {
+      model: 'Metric',
+      by: ['ownerId'],
+      _sum: { score: true },
+      having: { score: { _sum: { gt: 11 } } },
+      orderBy: { ownerId: 'asc' },
+    });
+    expectCompiled(above);
+    expectAgreed(above);
+    expect(rows(above).map((row) => row.ownerId)).toEqual([1]);
+
+    const within = await runBothGroup(engine, {
+      model: 'Metric',
+      by: ['ownerId'],
+      _sum: { score: true },
+      having: { score: { _sum: { lte: 11 } } },
+      orderBy: { ownerId: 'asc' },
+    });
+    expectCompiled(within);
+    expectAgreed(within);
+    expect(rows(within).map((row) => row.ownerId)).toEqual([2]);
   });
 
   it('compiles every having operator golem offers, agreeing with Prisma on each', async () => {

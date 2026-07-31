@@ -8,6 +8,12 @@ import { DatamodelModel } from './datamodel';
 import { buildModelMetadata } from './model-meta';
 import { field } from './testing';
 
+const LONG_FIELD = `grouped${'x'.repeat(57)}`;
+
+const EXACT_FIELD = `grouped${'x'.repeat(56)}`;
+
+const LONG_COLUMN = `measured${'x'.repeat(56)}`;
+
 const models: readonly DatamodelModel[] = [
   {
     name: 'Metric',
@@ -23,6 +29,9 @@ const models: readonly DatamodelModel[] = [
       field({ name: 'active', dbName: 'active', type: 'Boolean' }),
       field({ name: 'recordedAt', dbName: 'recorded_at', type: 'DateTime' }),
       field({ name: 'tags', dbName: 'tags', type: 'String', isList: true }),
+      field({ name: LONG_FIELD, dbName: 'long_key', type: 'Int' }),
+      field({ name: EXACT_FIELD, dbName: 'exact_key', type: 'Int' }),
+      field({ name: 'wide', dbName: LONG_COLUMN, type: 'Int' }),
       field({
         name: 'owner',
         kind: 'object',
@@ -212,6 +221,19 @@ describe('planning a compiled aggregate', () => {
     expect(
       await refused({ by: ['ownerId', 'ownerId'], _count: { _all: true } }),
     ).toMatchObject({ reason: 'group' });
+  });
+
+  it('hands back a grouping key postgres would truncate, the way it hands back the measure', async () => {
+    expect(LONG_FIELD).toHaveLength(64);
+    expect(EXACT_FIELD).toHaveLength(63);
+    expect(await refused({ by: [LONG_FIELD], _count: { _all: true } })).toMatchObject({
+      reason: 'group',
+    });
+    expect(await refused({ _sum: { wide: true } })).toMatchObject({ reason: 'measure' });
+
+    const statement = await compiled({ by: [EXACT_FIELD], _count: { _all: true } });
+    expect(statement.keys).toEqual([EXACT_FIELD]);
+    expect(statement.sql).toContain(`as "${EXACT_FIELD}"`);
   });
 
   it('hands back a having it cannot render', async () => {

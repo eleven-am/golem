@@ -58,7 +58,7 @@ describe('a sum postgres widens past what a JavaScript number holds', () => {
       expect((prisma as { code?: unknown }).code).toBe('P2023');
       expect((compiled as Error).message).toBe(
         `Integer value in column '_sum$rank_value' is too large to represent as a JavaScript number` +
-          ` without loss of precision, got: 9007199254740996. Consider using BigInt type.`,
+          ` without loss of precision, got: 9007199254740998. Consider using BigInt type.`,
       );
       expect((prisma as Error).message).toContain((compiled as Error).message);
     });

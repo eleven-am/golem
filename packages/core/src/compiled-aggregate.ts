@@ -268,6 +268,12 @@ function planKeys(
         `${model.name}.${name} is grouped by under a name golem reserves for a measure`,
       );
     }
+    if (name.length > MAX_IDENTIFIER) {
+      return fallback(
+        'group',
+        `${model.name}.${name} needs the result column "${name}", which is longer than the ${MAX_IDENTIFIER} characters postgres keeps before it truncates an identifier`,
+      );
+    }
     keys.push({ name, dbName: field.dbName });
   }
   return keys;
@@ -325,9 +331,6 @@ function havingFilter(
   const sql = kysely.sql;
   if (filter === null) {
     return sql`${expression} is null`;
-  }
-  if (filter === undefined) {
-    return fallback('having', `${label} is filtered by undefined`);
   }
   if (typeof filter !== 'object' || Array.isArray(filter) || filter instanceof Date) {
     return sql`${expression} = ${sql.val(filter)}`;

@@ -47,6 +47,6 @@ describe('a sum the sqlite engine cannot hold', () => {
       compiled: true,
     })) as Record<string, any>;
     expect(compiled._count._all).toBe(9);
-    expect(compiled._sum.rank).toBe(6);
+    expect(compiled._sum.rank).toBe(7);
   });
 });
