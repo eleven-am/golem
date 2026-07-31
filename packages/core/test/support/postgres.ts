@@ -16,11 +16,7 @@ export const POSTGRES_URL_HINT =
   `Set ${POSTGRES_OPTIONAL_ENV}=1 to skip the Postgres suite while iterating locally.`;
 
 const DDL = [
-  `DROP TABLE IF EXISTS "posts"`,
-  `DROP TABLE IF EXISTS "profiles"`,
-  `DROP TABLE IF EXISTS "metrics"`,
-  `DROP TABLE IF EXISTS "users"`,
-  `DROP TABLE IF EXISTS "secrets"`,
+  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets"`,
   `CREATE TABLE "users" (
      "user_id" INTEGER PRIMARY KEY,
      "name" TEXT NOT NULL,
