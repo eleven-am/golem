@@ -13,6 +13,7 @@ const models: readonly DatamodelModel[] = [
   {
     name: 'Post',
     dbName: 'posts',
+    indexes: [{ kind: 'normal', fields: ['authorId'] }],
     fields: [
       field({ name: 'id', dbName: 'post_id', type: 'Int', isId: true }),
       field({ name: 'title', dbName: 'title', type: 'String' }),
@@ -76,6 +77,7 @@ const models: readonly DatamodelModel[] = [
   {
     name: 'Asset',
     dbName: 'assets',
+    indexes: [{ kind: 'normal', fields: ['ownerId'] }],
     fields: [
       field({ name: 'id', dbName: 'asset_id', type: 'Int', isId: true }),
       field({ name: 'payload', dbName: 'payload', type: 'Bytes', isRequired: false }),
@@ -408,18 +410,26 @@ describe('planning a compiled read that reaches a relation', () => {
 });
 
 describe('refusing to compile a read that reaches a relation', () => {
-  it('hands back a relation golem cannot page, order or narrow to distinct rows', async () => {
+  it('hands back a relation golem cannot narrow to distinct rows or position a cursor in', async () => {
     const nested = (entry: Record<string, unknown>) =>
       refusal({
         model: models[1],
         prepared: tree({ select: { id: true, posts: { select: { id: true }, ...entry } } }),
       });
 
+    expect(await nested({ distinct: ['id'] })).toMatchObject({ reason: 'distinct' });
+    expect(await nested({ cursor: { id: 1 } })).toMatchObject({ reason: 'cursor' });
+  });
+
+  it('hands back a to-one asked to page, which Prisma rejects as an unknown argument', async () => {
+    const nested = (entry: Record<string, unknown>) =>
+      refusal({
+        prepared: tree({ select: { id: true, author: { select: { id: true }, ...entry } } }),
+      });
+
     expect(await nested({ take: 1 })).toMatchObject({ reason: 'take' });
     expect(await nested({ skip: 1 })).toMatchObject({ reason: 'take' });
     expect(await nested({ orderBy: { id: 'asc' } })).toMatchObject({ reason: 'orderBy' });
-    expect(await nested({ distinct: ['id'] })).toMatchObject({ reason: 'distinct' });
-    expect(await nested({ cursor: { id: 1 } })).toMatchObject({ reason: 'cursor' });
   });
 
   it('hands back a relation carrying a Bytes or a Json column', async () => {
@@ -538,6 +548,7 @@ describe('refusing to compile a read that reaches a relation', () => {
     const wide: DatamodelModel = {
       name: 'Wide',
       dbName: 'wide',
+      indexes: [{ kind: 'normal', fields: ['ownerId'] }],
       fields: [
         field({ name: 'id', dbName: 'id', type: 'Int', isId: true }),
         field({ name: 'ownerId', dbName: 'owner_id', type: 'Int' }),
@@ -619,9 +630,16 @@ describe('refusing to compile a read', () => {
     ).toMatchObject({ reason: 'projection' });
   });
 
-  it('hands back a read that asks for a cursor or for distinct rows', async () => {
-    expect(await refusal({ cursor: { id: 1 } })).toMatchObject({ reason: 'cursor' });
-    expect(await refusal({ distinct: ['title'] })).toMatchObject({ reason: 'distinct' });
+  it('hands back a cursor golem cannot position and a distinct golem cannot group by', async () => {
+    expect(await refusal({ cursor: { nope: 1 } })).toMatchObject({ reason: 'cursor' });
+    expect(await refusal({ cursor: { id: { in: [1] } } })).toMatchObject({ reason: 'cursor' });
+    expect(await refusal({ cursor: {} })).toMatchObject({ reason: 'cursor' });
+    expect(await refusal({ cursor: { id: 1 }, orderBy: [{ author: { name: 'asc' } }] })).toMatchObject(
+      { reason: 'cursor' },
+    );
+    expect(await refusal({ distinct: ['author'] })).toMatchObject({ reason: 'distinct' });
+    expect(await refusal({ distinct: ['tags'] })).toMatchObject({ reason: 'distinct' });
+    expect(await refusal({ distinct: [] })).toMatchObject({ reason: 'distinct' });
   });
 
   it('hands back a read selecting something that is not a column of the model', async () => {
@@ -641,7 +659,16 @@ describe('refusing to compile a read', () => {
 
   it('hands back a read ordered by something the compiled path cannot order by', async () => {
     expect(await refusal({ orderBy: [{ author: 'asc' }] })).toMatchObject({ reason: 'orderBy' });
-    expect(await refusal({ orderBy: [{ id: { sort: 'asc', nulls: 'first' } }] })).toMatchObject({
+    expect(await refusal({ orderBy: [{ id: { sort: 'sideways' } }] })).toMatchObject({
+      reason: 'orderBy',
+    });
+    expect(await refusal({ orderBy: [{ id: { sort: 'asc', nulls: 'middle' } }] })).toMatchObject({
+      reason: 'orderBy',
+    });
+    expect(await refusal({ orderBy: [{ id: { sort: 'asc', mode: 'insensitive' } }] })).toMatchObject({
+      reason: 'orderBy',
+    });
+    expect(await refusal({ orderBy: [{ author: { _count: 'asc' } }] })).toMatchObject({
       reason: 'orderBy',
     });
     expect(await refusal({ orderBy: [{ _count: 'asc' }] })).toMatchObject({ reason: 'orderBy' });

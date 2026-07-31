@@ -12,7 +12,7 @@ import {
   DecimalConstructor,
   prismaDecimal,
 } from './compiled-read-decode';
-import { DatamodelField, DatamodelModel } from './datamodel';
+import { DatamodelField, DatamodelModel, isEqualityIndexed } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
 import { PreparedReadTree } from './readtree';
 import {
@@ -26,9 +26,15 @@ import {
 
 const ROOT_ALIAS = 't0';
 
+const CURSOR_ALIAS = 'c0';
+
+const COUNT_COLUMN = '_golem_count';
+
 const COMPILABLE_PROVIDERS = new Set(['sqlite', 'postgresql', 'postgres']);
 
 const RELATION_ENTRY_KEYS = new Set(['where', 'select', 'include', 'omit']);
+
+const RELATION_PAGING_KEYS = new Set(['take', 'skip', 'orderBy']);
 
 const PAGING_ENTRY_REASONS: Readonly<Record<string, CompiledReadFallbackReason>> = {
   take: 'take',
@@ -67,6 +73,8 @@ export interface CompiledReadEvent {
   readonly reason?: CompiledReadFallbackReason;
   readonly detail?: string;
   readonly sql?: string;
+  readonly statements?: readonly string[];
+  readonly batched?: readonly string[];
 }
 
 export interface CompiledReadInput {
@@ -85,6 +93,31 @@ export interface CompiledReadInput {
   readonly single?: boolean;
 }
 
+export interface CompiledReadQuery {
+  readonly sql: string;
+  readonly parameters: readonly unknown[];
+}
+
+export interface CompiledReadBatch {
+  readonly path: string;
+  readonly name: string;
+  readonly parentKey: string;
+  readonly childKey: string;
+  readonly relations: readonly CompiledReadNestedProjection[];
+  readonly batches: readonly CompiledReadBatch[];
+  readonly drop: readonly string[];
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly reversed: boolean;
+  build(values: readonly unknown[]): CompiledReadQuery;
+}
+
+export interface CompiledReadDistinct {
+  readonly keys: readonly string[];
+  readonly limit?: number;
+  readonly offset?: number;
+}
+
 export interface CompiledReadStatement {
   readonly kind: 'compiled';
   readonly sql: string;
@@ -92,6 +125,9 @@ export interface CompiledReadStatement {
   readonly reversed: boolean;
   readonly columns: readonly CompiledReadColumn[];
   readonly relations: readonly CompiledReadNestedProjection[];
+  readonly batches: readonly CompiledReadBatch[];
+  readonly drop: readonly string[];
+  readonly distinct?: CompiledReadDistinct;
   readonly decimal: DecimalConstructor | null;
 }
 
@@ -108,9 +144,27 @@ export interface JsonAggregationHelpers {
   jsonObjectFrom(expression: unknown): RawBuilder<unknown>;
 }
 
-interface OrderTerm {
+export interface OrderTerm {
+  readonly alias: string;
   readonly dbName: string;
   readonly direction: 'asc' | 'desc';
+  readonly nulls?: 'first' | 'last';
+  readonly counted?: boolean;
+  readonly field?: string;
+  readonly nullable?: boolean;
+}
+
+interface OrderJoin {
+  readonly alias: string;
+  readonly table: string;
+  readonly parentAlias: string;
+  readonly pairs: readonly Correlation[];
+  readonly counted: boolean;
+}
+
+interface OrderPlan {
+  readonly terms: readonly OrderTerm[];
+  readonly joins: readonly OrderJoin[];
 }
 
 interface Projection {
@@ -126,10 +180,15 @@ interface PlannedColumn extends CompiledReadColumn {
 interface Correlation {
   readonly child: string;
   readonly parent: string;
+  readonly childField: string;
+  readonly parentField: string;
 }
+
+type RelationShape = 'row' | 'json';
 
 interface PlannedRelation {
   readonly name: string;
+  readonly path: string;
   readonly list: boolean;
   readonly table: string;
   readonly alias: string;
@@ -137,11 +196,17 @@ interface PlannedRelation {
   readonly where?: unknown;
   readonly model: DatamodelModel;
   readonly node: PlannedNode;
+  readonly shape: RelationShape;
+  readonly order: readonly OrderTerm[];
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly reversed: boolean;
 }
 
 interface PlannedNode {
-  readonly columns: readonly PlannedColumn[];
-  readonly relations: readonly PlannedRelation[];
+  readonly columns: PlannedColumn[];
+  readonly relations: PlannedRelation[];
+  readonly drop: string[];
 }
 
 interface PlanContext {
@@ -266,6 +331,26 @@ function scalarColumn(
   return { name, dbName: field.dbName, kind };
 }
 
+function ensureColumn(
+  node: PlannedNode,
+  model: DatamodelModel,
+  metadata: ModelMetadataIndex,
+  name: string,
+  nested: boolean,
+): PlannedColumn | CompiledReadFallback {
+  const existing = node.columns.find((column) => column.name === name);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const column = scalarColumn(model, metadata, name, nested);
+  if (isFallback(column)) {
+    return column;
+  }
+  node.columns.push(column);
+  node.drop.push(name);
+  return column;
+}
+
 function correlate(
   metadata: ModelMetadataIndex,
   parent: DatamodelModel,
@@ -320,11 +405,268 @@ function correlate(
     }
     pairs.push(
       owning
-        ? { child: referencedColumn, parent: holderColumn }
-        : { child: holderColumn, parent: referencedColumn },
+        ? {
+            child: referencedColumn,
+            parent: holderColumn,
+            childField: to[index]!,
+            parentField: name,
+          }
+        : {
+            child: holderColumn,
+            parent: referencedColumn,
+            childField: name,
+            parentField: to[index]!,
+          },
     );
   }
   return pairs;
+}
+
+function primaryOrder(
+  model: DatamodelModel,
+  metadata: ModelMetadataIndex,
+  alias: string,
+): readonly OrderTerm[] | CompiledReadFallback {
+  const keys = metadata.get(model.name)?.primaryKeys ?? [];
+  if (keys.length === 0) {
+    return fallback(
+      'orderBy',
+      `${model.name} is paged without an order and carries no primary key golem can order it by`,
+    );
+  }
+  const terms: OrderTerm[] = [];
+  for (const key of keys) {
+    if (key.dbName == null) {
+      return fallback(
+        'orderBy',
+        `${model.name}.${key.name} carries no physical column name; regenerate the golem client`,
+      );
+    }
+    terms.push({
+      alias,
+      dbName: key.dbName,
+      direction: 'asc',
+      field: key.name,
+      nullable: !key.isRequired,
+    });
+  }
+  return terms;
+}
+
+function planOrder(
+  context: PlanContext,
+  model: DatamodelModel,
+  alias: string,
+  orderBy: unknown,
+  relations: boolean,
+): OrderPlan | CompiledReadFallback {
+  if (orderBy === undefined || orderBy === null) {
+    return { terms: [], joins: [] };
+  }
+  const entries = Array.isArray(orderBy) ? orderBy : [orderBy];
+  const terms: OrderTerm[] = [];
+  const joins: OrderJoin[] = [];
+
+  const walk = (
+    current: DatamodelModel,
+    currentAlias: string,
+    entry: Record<string, unknown>,
+    trail: readonly string[],
+  ): CompiledReadFallback | undefined => {
+    for (const [name, value] of Object.entries(entry)) {
+      if (value === undefined) {
+        continue;
+      }
+      const field = context.metadata.get(current.name)?.fieldsByName.get(name);
+      if (field?.kind === 'object') {
+        if (!relations) {
+          return fallback(
+            'orderBy',
+            `${describePath([...trail, name])} orders by a relation, which golem compiles only at the top level of a read`,
+          );
+        }
+        const nested = value as Record<string, unknown>;
+        if (!nested || typeof nested !== 'object' || Array.isArray(nested)) {
+          return fallback('orderBy', `${current.name}.${name} is ordered by ${JSON.stringify(value)}`);
+        }
+        const target = context.metadata.get(field.type)?.model;
+        if (target?.dbName == null) {
+          return fallback(
+            'orderBy',
+            `${current.name}.${name} orders by ${field.type}, which golem has no physical table name for`,
+          );
+        }
+        const pairs = correlate(context.metadata, current, target, field);
+        if (isFallback(pairs)) {
+          return { ...pairs, reason: 'orderBy' };
+        }
+        const joinAlias = `o${context.aliases++}`;
+        const count = nested._count;
+        if (count !== undefined) {
+          if (!field.isList) {
+            return fallback(
+              'orderBy',
+              `${current.name}.${name} is a to-one ordered by _count, which Prisma offers only on a list`,
+            );
+          }
+          if (Object.keys(nested).length > 1) {
+            return fallback(
+              'orderBy',
+              `${current.name}.${name} orders by _count alongside ${Object.keys(nested).join(', ')}`,
+            );
+          }
+          if (count !== 'asc' && count !== 'desc') {
+            return fallback(
+              'orderBy',
+              `${current.name}.${name} orders by a _count of ${JSON.stringify(count)}`,
+            );
+          }
+          if (pairs.length !== 1) {
+            return fallback(
+              'orderBy',
+              `${current.name}.${name} orders by _count across ${pairs.length} foreign key columns`,
+            );
+          }
+          joins.push({
+            alias: joinAlias,
+            table: target.dbName,
+            parentAlias: currentAlias,
+            pairs,
+            counted: true,
+          });
+          terms.push({
+            alias: joinAlias,
+            dbName: COUNT_COLUMN,
+            direction: count,
+            counted: true,
+          });
+          continue;
+        }
+        if (field.isList) {
+          return fallback(
+            'orderBy',
+            `${current.name}.${name} is a list ordered by ${JSON.stringify(value)}`,
+          );
+        }
+        joins.push({
+          alias: joinAlias,
+          table: target.dbName,
+          parentAlias: currentAlias,
+          pairs,
+          counted: false,
+        });
+        const nestedFallback = walk(target, joinAlias, nested, [...trail, name]);
+        if (nestedFallback !== undefined) {
+          return nestedFallback;
+        }
+        continue;
+      }
+      let direction: unknown = value;
+      let nulls: 'first' | 'last' | undefined;
+      if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+        const shape = value as Record<string, unknown>;
+        const extra = Object.keys(shape).filter((key) => key !== 'sort' && key !== 'nulls');
+        if (extra.length > 0) {
+          return fallback(
+            'orderBy',
+            `${current.name}.${name} is ordered by ${JSON.stringify(value)}`,
+          );
+        }
+        direction = shape.sort;
+        if (shape.nulls !== undefined) {
+          if (shape.nulls !== 'first' && shape.nulls !== 'last') {
+            return fallback(
+              'orderBy',
+              `${current.name}.${name} places nulls ${JSON.stringify(shape.nulls)}`,
+            );
+          }
+          nulls = shape.nulls;
+        }
+      }
+      if (direction !== 'asc' && direction !== 'desc') {
+        return fallback(
+          'orderBy',
+          `${current.name}.${name} is ordered by ${JSON.stringify(direction)}`,
+        );
+      }
+      const column = scalarColumn(current, context.metadata, name, false);
+      if (isFallback(column)) {
+        return { ...column, reason: 'orderBy' };
+      }
+      terms.push({
+        alias: currentAlias,
+        dbName: column.dbName,
+        direction,
+        nulls,
+        field: currentAlias === alias ? name : undefined,
+        nullable: field?.isRequired === false,
+      });
+    }
+    return undefined;
+  };
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      return fallback('orderBy', `${model.name} is ordered by ${JSON.stringify(entry)}`);
+    }
+    const refused = walk(model, alias, entry as Record<string, unknown>, []);
+    if (refused !== undefined) {
+      return refused;
+    }
+  }
+  return { terms, joins };
+}
+
+export function orderTerms(
+  model: DatamodelModel,
+  metadata: ModelMetadataIndex,
+  orderBy: unknown,
+): readonly OrderTerm[] | CompiledReadFallback {
+  const plan = planOrder({ models: [], metadata, aliases: 1 }, model, ROOT_ALIAS, orderBy, false);
+  return isFallback(plan) ? plan : plan.terms;
+}
+
+function pageBounds(
+  model: DatamodelModel,
+  take: number | undefined,
+  skip: number | undefined,
+  ordered: boolean,
+): { limit?: number; offset?: number; reversed: boolean } | CompiledReadFallback {
+  if (take !== undefined && !Number.isInteger(take)) {
+    return fallback('take', `take ${take} on ${model.name} is not an integer`);
+  }
+  if (skip !== undefined && (!Number.isInteger(skip) || skip < 0)) {
+    return fallback('take', `skip ${skip} on ${model.name} is not a non-negative integer`);
+  }
+  const reversed = take !== undefined && take < 0;
+  if (reversed && !ordered) {
+    return fallback(
+      'take',
+      `take ${take} on ${model.name} walks backwards from an order the query does not define`,
+    );
+  }
+  return {
+    limit: take === undefined ? undefined : Math.abs(take),
+    offset: skip,
+    reversed,
+  };
+}
+
+function batchable(
+  metadata: ModelMetadataIndex,
+  target: DatamodelModel,
+  field: DatamodelField,
+  correlation: readonly Correlation[],
+): boolean {
+  if (!field.isList || correlation.length !== 1) {
+    return false;
+  }
+  const pair = correlation[0]!;
+  const childField = metadata.get(target.name)?.fieldsByName.get(pair.childField);
+  if (childField === undefined || nestedScalarKind(childField) !== 'plain') {
+    return false;
+  }
+  return !isEqualityIndexed(target, pair.childField);
 }
 
 function planRelation(
@@ -333,6 +675,7 @@ function planRelation(
   field: DatamodelField,
   entry: unknown,
   path: readonly string[],
+  parentShape: RelationShape,
 ): PlannedRelation | CompiledReadFallback {
   const target = context.metadata.get(field.type)?.model;
   if (target === undefined) {
@@ -364,6 +707,9 @@ function planRelation(
     if (value === undefined || RELATION_ENTRY_KEYS.has(key)) {
       continue;
     }
+    if (field.isList && RELATION_PAGING_KEYS.has(key)) {
+      continue;
+    }
     const reason = PAGING_ENTRY_REASONS[key];
     return fallback(
       reason ?? 'relation',
@@ -375,12 +721,39 @@ function planRelation(
     return correlation;
   }
   const alias = `t${context.aliases++}`;
-  const node = planNode(context, target, projection as Projection, path, true);
+  const order = planOrder(context, target, alias, projection.orderBy, false);
+  if (isFallback(order)) {
+    return order;
+  }
+  const paged = projection.take !== undefined || projection.skip !== undefined;
+  let terms = order.terms;
+  if (terms.length === 0 && paged) {
+    const implied = primaryOrder(target, context.metadata, alias);
+    if (isFallback(implied)) {
+      return implied;
+    }
+    terms = implied;
+  }
+  const bounds = pageBounds(
+    target,
+    projection.take as number | undefined,
+    projection.skip as number | undefined,
+    terms.length > 0,
+  );
+  if (isFallback(bounds)) {
+    return bounds;
+  }
+  const shape: RelationShape =
+    parentShape === 'json' || !batchable(context.metadata, target, field, correlation)
+      ? 'json'
+      : 'row';
+  const node = planNode(context, target, projection as Projection, path, shape);
   if (isFallback(node)) {
     return node;
   }
   return {
     name: field.name,
+    path: describePath(path),
     list: field.isList,
     table: target.dbName,
     alias,
@@ -388,6 +761,11 @@ function planRelation(
     where: projection.where,
     model: target,
     node,
+    shape,
+    order: terms,
+    limit: bounds.limit,
+    offset: bounds.offset,
+    reversed: bounds.reversed,
   };
 }
 
@@ -396,8 +774,9 @@ function planNode(
   model: DatamodelModel,
   projection: Projection,
   path: readonly string[],
-  nested: boolean,
+  shape: RelationShape,
 ): PlannedNode | CompiledReadFallback {
+  const nested = shape === 'json';
   const columns: PlannedColumn[] = [];
   const relations: PlannedRelation[] = [];
   const fields = context.metadata.get(model.name);
@@ -420,7 +799,7 @@ function planNode(
       }
       const field = fields.fieldsByName.get(name);
       if (field?.kind === 'object') {
-        const relation = planRelation(context, model, field, value, [...path, name]);
+        const relation = planRelation(context, model, field, value, [...path, name], shape);
         if (isFallback(relation)) {
           return relation;
         }
@@ -461,7 +840,7 @@ function planNode(
           `${model.name}.${name} is included but is not a relation of the model`,
         );
       }
-      const relation = planRelation(context, model, field, value, [...path, name]);
+      const relation = planRelation(context, model, field, value, [...path, name], shape);
       if (isFallback(relation)) {
         return relation;
       }
@@ -471,18 +850,53 @@ function planNode(
   if (columns.length === 0 && relations.length === 0) {
     return fallback('projection', `${describePath(path)} is read with an empty projection`);
   }
-  return { columns, relations };
+  return { columns, relations, drop: [] };
+}
+
+function correlateBatches(
+  node: PlannedNode,
+  model: DatamodelModel,
+  metadata: ModelMetadataIndex,
+  nested: boolean,
+): CompiledReadFallback | undefined {
+  for (const relation of node.relations) {
+    if (relation.shape === 'row') {
+      const pair = relation.correlation[0]!;
+      const onParent = ensureColumn(node, model, metadata, pair.parentField, nested);
+      if (isFallback(onParent)) {
+        return onParent;
+      }
+      const onChild = ensureColumn(
+        relation.node,
+        relation.model,
+        metadata,
+        pair.childField,
+        false,
+      );
+      if (isFallback(onChild)) {
+        return onChild;
+      }
+      const refused = correlateBatches(relation.node, relation.model, metadata, false);
+      if (refused !== undefined) {
+        return refused;
+      }
+    }
+  }
+  return undefined;
 }
 
 function nestedProjection(relation: PlannedRelation): CompiledReadNestedProjection {
   return {
     name: relation.name,
     list: relation.list,
+    ...(relation.reversed ? { reversed: true } : {}),
     fields: relation.node.columns.map((column) => ({
       name: column.name,
       kind: column.kind!,
     })),
-    relations: relation.node.relations.map(nestedProjection),
+    relations: relation.node.relations
+      .filter((child) => child.shape === 'json')
+      .map(nestedProjection),
   };
 }
 
@@ -490,7 +904,10 @@ const SQLITE_JSON_OBJECT_ENTRIES = 63;
 
 function tooWideForSqlite(relations: readonly PlannedRelation[]): PlannedRelation | undefined {
   for (const relation of relations) {
-    if (relation.node.columns.length + relation.node.relations.length > SQLITE_JSON_OBJECT_ENTRIES) {
+    if (
+      relation.shape === 'json' &&
+      relation.node.columns.length + relation.node.relations.length > SQLITE_JSON_OBJECT_ENTRIES
+    ) {
       return relation;
     }
     const nested = tooWideForSqlite(relation.node.relations);
@@ -504,69 +921,96 @@ function tooWideForSqlite(relations: readonly PlannedRelation[]): PlannedRelatio
 function relationsNeedDecimal(relations: readonly PlannedRelation[]): boolean {
   return relations.some(
     (relation) =>
-      relation.node.columns.some((column) => column.kind === 'decimal') ||
+      (relation.shape === 'json' &&
+        relation.node.columns.some((column) => column.kind === 'decimal')) ||
       relationsNeedDecimal(relation.node.relations),
   );
 }
 
-export function orderTerms(
-  model: DatamodelModel,
-  metadata: ModelMetadataIndex,
-  orderBy: unknown,
-): readonly OrderTerm[] | CompiledReadFallback {
-  if (orderBy === undefined || orderBy === null) {
-    return [];
-  }
-  const entries = Array.isArray(orderBy) ? orderBy : [orderBy];
-  const terms: OrderTerm[] = [];
-  for (const entry of entries) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
-      return fallback('orderBy', `${model.name} is ordered by ${JSON.stringify(entry)}`);
-    }
-    for (const [name, direction] of Object.entries(entry as Record<string, unknown>)) {
-      if (direction === undefined) {
-        continue;
-      }
-      if (direction !== 'asc' && direction !== 'desc') {
-        return fallback(
-          'orderBy',
-          `${model.name}.${name} is ordered by ${JSON.stringify(direction)}`,
-        );
-      }
-      const column = scalarColumn(model, metadata, name, false);
-      if (isFallback(column)) {
-        return { ...column, reason: 'orderBy' };
-      }
-      terms.push({ dbName: column.dbName, direction });
-    }
-  }
-  return terms;
+interface CursorSelector {
+  readonly dbName: string;
+  readonly value: unknown;
 }
 
-function pageBounds(
+function cursorSelectors(
   model: DatamodelModel,
-  take: number | undefined,
-  skip: number | undefined,
-  ordered: boolean,
-): { limit?: number; offset?: number; reversed: boolean } | CompiledReadFallback {
-  if (take !== undefined && !Number.isInteger(take)) {
-    return fallback('take', `take ${take} on ${model.name} is not an integer`);
+  metadata: ModelMetadataIndex,
+  cursor: unknown,
+): readonly CursorSelector[] | CompiledReadFallback {
+  if (!cursor || typeof cursor !== 'object' || Array.isArray(cursor)) {
+    return fallback('cursor', `${model.name} is read from the cursor ${JSON.stringify(cursor)}`);
   }
-  if (skip !== undefined && (!Number.isInteger(skip) || skip < 0)) {
-    return fallback('take', `skip ${skip} on ${model.name} is not a non-negative integer`);
-  }
-  const reversed = take !== undefined && take < 0;
-  if (reversed && !ordered) {
-    return fallback(
-      'take',
-      `take ${take} on ${model.name} walks backwards from an order the query does not define`,
-    );
-  }
-  return {
-    limit: take === undefined ? undefined : Math.abs(take),
-    offset: skip,
-    reversed,
+  const meta = metadata.get(model.name);
+  const selectors: CursorSelector[] = [];
+  const take = (name: string, value: unknown): CompiledReadFallback | undefined => {
+    const field = meta?.fieldsByName.get(name);
+    if (field === undefined || field.kind === 'object' || field.dbName == null) {
+      return fallback('cursor', `${model.name}.${name} is not a column golem can position a cursor on`);
+    }
+    if (value === null || (typeof value === 'object' && !(value instanceof Date))) {
+      return fallback(
+        'cursor',
+        `${model.name}.${name} is positioned at ${JSON.stringify(value)}, which golem cannot bind as a single value`,
+      );
+    }
+    selectors.push({ dbName: field.dbName, value });
+    return undefined;
   };
+  for (const [name, value] of Object.entries(cursor as Record<string, unknown>)) {
+    if (value === undefined) {
+      continue;
+    }
+    const compound = meta?.compoundUniqueSelectors.get(name);
+    if (compound !== undefined) {
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        return fallback(
+          'cursor',
+          `${model.name} is read from the compound cursor ${name} of ${JSON.stringify(value)}`,
+        );
+      }
+      for (const part of compound) {
+        const refused = take(part, (value as Record<string, unknown>)[part]);
+        if (refused !== undefined) {
+          return refused;
+        }
+      }
+      continue;
+    }
+    const refused = take(name, value);
+    if (refused !== undefined) {
+      return refused;
+    }
+  }
+  if (selectors.length === 0) {
+    return fallback('cursor', `${model.name} is read from a cursor that names no column`);
+  }
+  return selectors;
+}
+
+function distinctKeys(
+  model: DatamodelModel,
+  metadata: ModelMetadataIndex,
+  distinct: unknown,
+): readonly string[] | CompiledReadFallback {
+  const names = Array.isArray(distinct) ? distinct : [distinct];
+  const keys: string[] = [];
+  for (const name of names) {
+    if (typeof name !== 'string') {
+      return fallback('distinct', `${model.name} is read distinct on ${JSON.stringify(name)}`);
+    }
+    const field = metadata.get(model.name)?.fieldsByName.get(name);
+    if (field === undefined || field.kind === 'object' || field.isList) {
+      return fallback(
+        'distinct',
+        `${model.name}.${name} is not a scalar column golem can read distinct on`,
+      );
+    }
+    keys.push(name);
+  }
+  if (keys.length === 0) {
+    return fallback('distinct', `${model.name} is read distinct on no column at all`);
+  }
+  return keys;
 }
 
 class NestedBuilder {
@@ -603,7 +1047,47 @@ class NestedBuilder {
     return expression.as(column.name) as AliasedRawBuilder<unknown, string>;
   }
 
-  aggregate(relation: PlannedRelation, parentAlias: string): RawBuilder<unknown> {
+  order<T>(query: T, terms: readonly OrderTerm[], reversed: boolean): T {
+    const sql = this.kysely.sql;
+    let built = query as unknown as SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>>;
+    for (const term of terms) {
+      const direction = reversed
+        ? term.direction === 'asc'
+          ? 'desc'
+          : 'asc'
+        : term.direction;
+      const reference = term.counted
+        ? sql`coalesce(${sql.id(term.alias, term.dbName)}, 0)`
+        : sql`${sql.id(term.alias, term.dbName)}`;
+      if (term.nulls !== undefined) {
+        const first = (term.nulls === 'first') !== reversed;
+        built = built.orderBy(
+          sql`case when ${sql.id(term.alias, term.dbName)} is null then ${sql.lit(
+            first ? 0 : 1,
+          )} else ${sql.lit(first ? 1 : 0)} end` as never,
+        );
+      }
+      built = built.orderBy(reference as never, direction);
+    }
+    return built as unknown as T;
+  }
+
+  private bound<T>(query: T, limit: number | undefined, offset: number | undefined): T {
+    let built = query as unknown as SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>>;
+    if (limit !== undefined) {
+      built = built.limit(limit);
+    } else if (offset !== undefined && this.dialect.provider === 'sqlite') {
+      built = built.limit(-1);
+    }
+    if (offset !== undefined) {
+      built = built.offset(offset);
+    }
+    return built as unknown as T;
+  }
+
+  private child(
+    relation: PlannedRelation,
+  ): SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>> {
     const sql = this.kysely.sql;
     let child = this.db.selectFrom(
       sql`${sql.id(relation.table)}`.as(relation.alias) as never,
@@ -612,13 +1096,11 @@ class NestedBuilder {
       child = child.select(this.column(relation.alias, column) as never);
     }
     for (const nested of relation.node.relations) {
+      if (nested.shape !== 'json') {
+        continue;
+      }
       child = child.select(
         this.aggregate(nested, relation.alias).as(nested.name) as never,
-      );
-    }
-    for (const pair of relation.correlation) {
-      child = child.where(
-        sql`${sql.id(relation.alias, pair.child)} = ${sql.id(parentAlias, pair.parent)}` as never,
       );
     }
     if (relation.where !== undefined) {
@@ -626,16 +1108,123 @@ class NestedBuilder {
         sql`(${this.predicate(relation.model, relation.alias, relation.where)})` as never,
       );
     }
+    return child;
+  }
+
+  aggregate(relation: PlannedRelation, parentAlias: string): RawBuilder<unknown> {
+    const sql = this.kysely.sql;
+    let child = this.child(relation);
+    for (const pair of relation.correlation) {
+      child = child.where(
+        sql`${sql.id(relation.alias, pair.child)} = ${sql.id(parentAlias, pair.parent)}` as never,
+      );
+    }
+    child = this.order(child, relation.order, relation.reversed);
+    child = this.bound(child, relation.limit, relation.offset);
     return relation.list
       ? this.aggregation.jsonArrayFrom(child)
       : this.aggregation.jsonObjectFrom(child);
   }
 
-  root(relation: PlannedRelation): AliasedRawBuilder<unknown, string> {
+  root(relation: PlannedRelation, parentAlias: string): AliasedRawBuilder<unknown, string> {
     const sql = this.kysely.sql;
-    return sql`cast(${this.aggregate(relation, ROOT_ALIAS)} as text)`.as(
+    return sql`cast(${this.aggregate(relation, parentAlias)} as text)`.as(
       relation.name,
     ) as AliasedRawBuilder<unknown, string>;
+  }
+
+  join<T>(query: T, joins: readonly OrderJoin[]): T {
+    const sql = this.kysely.sql;
+    let built = query as unknown as SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>>;
+    for (const join of joins) {
+      const pair = join.pairs[0]!;
+      const source = join.counted
+        ? sql`(select ${sql.id(pair.child)}, count(*) as ${sql.id(COUNT_COLUMN)} from ${sql.id(
+            join.table,
+          )} group by ${sql.id(pair.child)})`
+        : sql`${sql.id(join.table)}`;
+      const condition = sql.join(
+        join.pairs.map(
+          (entry) => sql`${sql.id(join.alias, entry.child)} = ${sql.id(join.parentAlias, entry.parent)}`,
+        ),
+        sql.raw(' and '),
+      );
+      built = built.leftJoin(source.as(join.alias) as never, (on) =>
+        (on as unknown as { on(expression: unknown): unknown }).on(condition) as never,
+      ) as unknown as SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>>;
+    }
+    return built as unknown as T;
+  }
+
+  cursor(
+    table: string,
+    selectors: readonly CursorSelector[],
+    terms: readonly OrderTerm[],
+    reversed: boolean,
+  ): RawBuilder<unknown> {
+    const sql = this.kysely.sql;
+    const anchor = (term: OrderTerm): RawBuilder<unknown> =>
+      sql`(select ${sql.id(CURSOR_ALIAS, term.dbName)} from ${sql.id(table)} as ${sql.id(
+        CURSOR_ALIAS,
+      )} where (${sql.join(
+        selectors.map((selector) => sql`${sql.id(CURSOR_ALIAS, selector.dbName)}`),
+        sql.raw(', '),
+      )}) = (${sql.join(
+        selectors.map((selector) => sql`${sql.val(selector.value)}`),
+        sql.raw(', '),
+      )}))`;
+    const compare = (term: OrderTerm, operator: string): RawBuilder<unknown> =>
+      sql`(${sql.id(ROOT_ALIAS, term.dbName)} ${sql.raw(operator)} ${anchor(term)})`;
+    const direction = (term: OrderTerm): 'asc' | 'desc' =>
+      reversed ? (term.direction === 'asc' ? 'desc' : 'asc') : term.direction;
+    const branches: RawBuilder<unknown>[] = [];
+    for (let depth = terms.length; depth > 0; depth -= 1) {
+      const parts: RawBuilder<unknown>[] = [];
+      for (let index = 0; index < depth - 1; index += 1) {
+        parts.push(compare(terms[index]!, '='));
+      }
+      const last = terms[depth - 1]!;
+      const strict = direction(last) === 'asc' ? '>' : '<';
+      parts.push(compare(last, depth === terms.length ? `${strict}=` : strict));
+      branches.push(sql`(${sql.join(parts, sql.raw(' and '))})`);
+    }
+    return sql`(${sql.join(branches, sql.raw(' or '))})`;
+  }
+
+  batch(relation: PlannedRelation, dialect: ScopedDialect): CompiledReadBatch {
+    const sql = this.kysely.sql;
+    const pair = relation.correlation[0]!;
+    const nested = relation.node.relations
+      .filter((child) => child.shape === 'row')
+      .map((child) => this.batch(child, dialect));
+    return {
+      path: relation.path,
+      name: relation.name,
+      parentKey: pair.parentField,
+      childKey: pair.childField,
+      relations: relation.node.relations
+        .filter((child) => child.shape === 'json')
+        .map(nestedProjection),
+      batches: nested,
+      drop: relation.node.drop,
+      limit: relation.limit,
+      offset: relation.offset,
+      reversed: relation.reversed,
+      build: (values) => {
+        let query = this.child(relation);
+        query = query.where(
+          sql`${sql.id(relation.alias, pair.child)} in (${sql.join(
+            values.map((value) => sql`${sql.val(value)}`),
+            sql.raw(', '),
+          )})` as never,
+        );
+        query = this.order(query, relation.order, relation.reversed);
+        const compiled = dialect
+          .createCompiler(this.kysely)
+          .compileQuery(query.toOperationNode() as never, this.kysely.createQueryId());
+        return { sql: compiled.sql, parameters: compiled.parameters };
+      },
+    };
   }
 }
 
@@ -652,12 +1241,6 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
       `model ${input.model.name} carries no physical table name; regenerate the golem client`,
     );
   }
-  if (input.cursor !== undefined) {
-    return fallback('cursor', `${input.model.name} is read with a cursor`);
-  }
-  if (input.distinct !== undefined) {
-    return fallback('distinct', `${input.model.name} is read with distinct`);
-  }
   if (input.where === null) {
     return fallback('where', `${input.model.name} is read with a null where`);
   }
@@ -669,10 +1252,74 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
   }
 
   const context: PlanContext = { models: input.models, metadata: input.metadata, aliases: 1 };
-  const node = planNode(context, input.model, input.prepared, [], false);
+  const node = planNode(context, input.model, input.prepared, [], 'row');
   if (isFallback(node)) {
     return node;
   }
+  const order = planOrder(context, input.model, ROOT_ALIAS, input.orderBy, true);
+  if (isFallback(order)) {
+    return order;
+  }
+  let terms = order.terms;
+
+  const keys =
+    input.distinct === undefined
+      ? undefined
+      : distinctKeys(input.model, input.metadata, input.distinct);
+  if (isFallback(keys)) {
+    return keys;
+  }
+
+  let selectors: readonly CursorSelector[] | undefined;
+  if (input.cursor !== undefined) {
+    const resolved = cursorSelectors(input.model, input.metadata, input.cursor);
+    if (isFallback(resolved)) {
+      return resolved;
+    }
+    selectors = resolved;
+    if (terms.length === 0) {
+      const implied = primaryOrder(input.model, input.metadata, ROOT_ALIAS);
+      if (isFallback(implied)) {
+        return { ...implied, reason: 'cursor' };
+      }
+      terms = implied;
+    }
+    const foreign = terms.find((term) => term.field === undefined);
+    if (foreign !== undefined) {
+      return fallback(
+        'cursor',
+        `${input.model.name} is read from a cursor against an order that leaves the table golem positions the cursor in`,
+      );
+    }
+    const nullable = terms.find((term) => term.nullable === true);
+    if (nullable !== undefined) {
+      return fallback(
+        'cursor',
+        `${input.model.name} is read from a cursor against the nullable column ${nullable.dbName}, where Prisma's own predicate keeps rows on either side of the cursor and it settles the page by finding the cursor row among the rows it read back`,
+      );
+    }
+  }
+
+  const bounds = input.single
+    ? { limit: 1, offset: undefined, reversed: false }
+    : pageBounds(input.model, input.take, input.skip, terms.length > 0);
+  if (isFallback(bounds)) {
+    return bounds;
+  }
+
+  if (keys !== undefined) {
+    for (const key of keys) {
+      const column = ensureColumn(node, input.model, input.metadata, key, false);
+      if (isFallback(column)) {
+        return { ...column, reason: 'distinct' };
+      }
+    }
+  }
+  const correlated = correlateBatches(node, input.model, input.metadata, false);
+  if (correlated !== undefined) {
+    return correlated;
+  }
+
   if (input.provider === 'sqlite') {
     const wide = tooWideForSqlite(node.relations);
     if (wide !== undefined) {
@@ -689,16 +1336,6 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
       `${input.model.name} is read with a Decimal through a relation, and golem could not load the Decimal class Prisma decodes one into`,
     );
   }
-  const terms = orderTerms(input.model, input.metadata, input.orderBy);
-  if (isFallback(terms)) {
-    return terms;
-  }
-  const bounds = input.single
-    ? { limit: 1, offset: undefined, reversed: false }
-    : pageBounds(input.model, input.take, input.skip, terms.length > 0);
-  if (isFallback(bounds)) {
-    return bounds;
-  }
 
   const kysely = await kyselyModule();
   const dialect = resolveScopedDialect(input.provider);
@@ -711,12 +1348,16 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
   let query = db.selectFrom(
     sql`${sql.id(input.model.dbName)}`.as(ROOT_ALIAS) as never,
   ) as unknown as SelectQueryBuilder<ScopedDatabase, string, Record<string, unknown>>;
+  query = builder.join(query, order.joins);
   try {
     for (const column of node.columns) {
       query = query.select(sql`${sql.id(ROOT_ALIAS, column.dbName)}`.as(column.name) as never);
     }
     for (const relation of node.relations) {
-      query = query.select(builder.root(relation) as never);
+      if (relation.shape !== 'json') {
+        continue;
+      }
+      query = query.select(builder.root(relation, ROOT_ALIAS) as never);
     }
     if (merged !== undefined) {
       query = query.where(
@@ -740,19 +1381,22 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     }
     throw error;
   }
-  for (const term of terms) {
-    const direction = bounds.reversed
-      ? term.direction === 'asc' ? 'desc' : 'asc'
-      : term.direction;
-    query = query.orderBy(sql`${sql.id(ROOT_ALIAS, term.dbName)}` as never, direction);
+  if (selectors !== undefined) {
+    query = query.where(
+      builder.cursor(input.model.dbName, selectors, terms, bounds.reversed) as never,
+    );
   }
-  if (bounds.limit !== undefined) {
-    query = query.limit(bounds.limit);
-  } else if (bounds.offset !== undefined && dialect.provider === 'sqlite') {
-    query = query.limit(-1);
-  }
-  if (bounds.offset !== undefined) {
-    query = query.offset(bounds.offset);
+  query = builder.order(query, terms, bounds.reversed);
+  const pushed = keys === undefined;
+  if (pushed) {
+    if (bounds.limit !== undefined) {
+      query = query.limit(bounds.limit);
+    } else if (bounds.offset !== undefined && dialect.provider === 'sqlite') {
+      query = query.limit(-1);
+    }
+    if (bounds.offset !== undefined) {
+      query = query.offset(bounds.offset);
+    }
   }
 
   const compiled = dialect
@@ -764,7 +1408,27 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     parameters: compiled.parameters,
     reversed: bounds.reversed,
     columns: node.columns.map((column) => ({ name: column.name, dbName: column.dbName })),
-    relations: node.relations.map(nestedProjection),
+    relations: node.relations.filter((relation) => relation.shape === 'json').map(nestedProjection),
+    batches: node.relations
+      .filter((relation) => relation.shape === 'row')
+      .map((relation) => builder.batch(relation, dialect)),
+    drop: node.drop,
+    distinct:
+      keys === undefined
+        ? undefined
+        : { keys, limit: bounds.limit, offset: bounds.offset },
     decimal,
   };
+}
+
+export function compiledReadBatchPaths(plan: CompiledReadStatement): readonly string[] {
+  const paths: string[] = [];
+  const walk = (batches: readonly CompiledReadBatch[]): void => {
+    for (const batch of batches) {
+      paths.push(batch.path);
+      walk(batch.batches);
+    }
+  };
+  walk(plan.batches);
+  return paths;
 }

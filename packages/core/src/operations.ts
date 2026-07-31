@@ -11,6 +11,7 @@ import {
   CompiledReadEvent,
   CompiledReadInput,
   CompiledReadOperation,
+  compiledReadBatchPaths,
   planCompiledRead,
 } from './compiled-read';
 import {
@@ -18,7 +19,7 @@ import {
   planCompiledAggregate,
 } from './compiled-aggregate';
 import { decodeAggregateRow } from './compiled-aggregate-decode';
-import { decodeCompiledRelations } from './compiled-read-decode';
+import { runCompiledRead } from './compiled-read-run';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
 import { buildModelMetadata, ModelMetadata, ModelMetadataIndex } from './model-meta';
@@ -819,15 +820,27 @@ export class GolemEngine {
       });
       return undefined;
     }
-    this.emitCompiledRead({ model, operation, outcome: 'compiled', sql: plan.sql });
-    const rows = (await this.run(model, () =>
-      runner.call(client, plan.sql, ...plan.parameters),
-    )) as Record<string, unknown>[];
-    const decoded = decodeCompiledRelations(rows, plan.relations, plan.decimal) as Record<
-      string,
-      unknown
-    >[];
-    return plan.reversed ? [...decoded].reverse() : decoded;
+    const executed: string[] = [];
+    const batched = compiledReadBatchPaths(plan);
+    try {
+      return await runCompiledRead(
+        plan,
+        (sql, parameters) =>
+          this.run(model, () => runner.call(client, sql, ...parameters)) as Promise<
+            Record<string, unknown>[]
+          >,
+        executed,
+      );
+    } finally {
+      this.emitCompiledRead({
+        model,
+        operation,
+        outcome: 'compiled',
+        sql: plan.sql,
+        statements: executed,
+        batched,
+      });
+    }
   }
 
   private async compiledAggregate(

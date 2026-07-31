@@ -8,6 +8,7 @@ export interface CompiledReadNestedField {
 export interface CompiledReadNestedProjection {
   readonly name: string;
   readonly list: boolean;
+  readonly reversed?: boolean;
   readonly fields: readonly CompiledReadNestedField[];
   readonly relations: readonly CompiledReadNestedProjection[];
 }
@@ -104,9 +105,11 @@ function decodeRelation(
         ? (JSON.parse(value) as unknown)
         : value;
   if (projection.list) {
-    return Array.isArray(parsed)
-      ? parsed.map((entry) => decodeEntry(entry, projection, decimal))
-      : [];
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const entries = parsed.map((entry) => decodeEntry(entry, projection, decimal));
+    return projection.reversed === true ? entries.reverse() : entries;
   }
   return parsed === null ? null : decodeEntry(parsed, projection, decimal);
 }

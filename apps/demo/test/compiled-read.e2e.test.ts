@@ -129,7 +129,7 @@ describe('the compiled read path (e2e)', () => {
     expect(outcomes('User').map((event) => event.outcome)).toEqual(['compiled']);
   });
 
-  it('compiles two levels of relation in one statement', async () => {
+  it('compiles two levels of relation', async () => {
     const response = await gql(`{
       users(where: { email: { equals: "roy@example.com" } }) {
         email
@@ -209,22 +209,25 @@ describe('the compiled read path (e2e)', () => {
     expect(outcomes('User').map((event) => event.outcome)).toEqual(['compiled']);
   });
 
-  it('falls back to Prisma when a nested relation asks to be paged', async () => {
+  it('pages a nested relation per parent rather than handing the read to Prisma', async () => {
     const found = await engine.findMany({
       model: 'User',
-      select: { email: true, posts: { select: { title: true }, take: 1 } },
+      select: { email: true, posts: { select: { title: true }, take: 1, orderBy: [{ title: 'asc' }] } },
       orderBy: [{ email: 'asc' }],
       context: ctxFor('roy@example.com'),
       compiled: true,
     });
 
-    expect((found[0] as { email: string }).email).toBe('ada@example.com');
-    expect(outcomes('User')).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
+    expect(found).toEqual([
+      { email: 'ada@example.com', posts: [{ title: 'Memory systems' }] },
+      { email: 'guest@example.com', posts: [] },
+      { email: 'mod@example.com', posts: [] },
+      { email: 'roy@example.com', posts: [{ title: 'Draft post' }] },
     ]);
+    expect(outcomes('User').map((event) => event.outcome)).toEqual(['compiled']);
   });
 
-  it('falls back to Prisma when a cursor is asked for', async () => {
+  it('compiles a cursor rather than handing the read to Prisma', async () => {
     const rows = await prisma.post.findMany({ select: { id: true }, orderBy: { id: 'asc' } });
     const found = await engine.findMany({
       model: 'Post',
@@ -235,12 +238,10 @@ describe('the compiled read path (e2e)', () => {
     });
 
     expect(found).toEqual([{ id: rows[1].id }, { id: rows[2].id }]);
-    expect(outcomes('Post')).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'cursor' }),
-    ]);
+    expect(outcomes('Post').map((event) => event.outcome)).toEqual(['compiled']);
   });
 
-  it('falls back to Prisma when distinct is asked for', async () => {
+  it('compiles distinct rather than handing the read to Prisma', async () => {
     const found = (await engine.findMany({
       model: 'Post',
       select: { published: true },
@@ -250,9 +251,100 @@ describe('the compiled read path (e2e)', () => {
     })) as { published: boolean }[];
 
     expect(found.map((row) => row.published)).toEqual([false, true]);
-    expect(outcomes('Post')).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'distinct' }),
+    expect(outcomes('Post').map((event) => event.outcome)).toEqual(['compiled']);
+  });
+
+  it('orders a read by a column of the relation it reaches', async () => {
+    const found = await engine.findMany({
+      model: 'Post',
+      select: { title: true },
+      orderBy: [{ author: { email: 'asc' } }, { title: 'asc' }],
+      compiled: true,
+    });
+
+    expect(found).toEqual([
+      { title: 'Memory systems' },
+      { title: 'Draft post' },
+      { title: 'First post' },
     ]);
+    const compiled = outcomes('Post')[0];
+    expect(compiled.outcome).toBe('compiled');
+    expect(compiled.sql).toContain('left join');
+  });
+
+  it('orders a read by how many rows a to-many holds', async () => {
+    const found = await engine.findMany({
+      model: 'User',
+      select: { email: true },
+      orderBy: [{ posts: { _count: 'desc' } }, { email: 'asc' }],
+      compiled: true,
+    });
+
+    expect(found).toEqual([
+      { email: 'roy@example.com' },
+      { email: 'ada@example.com' },
+      { email: 'guest@example.com' },
+      { email: 'mod@example.com' },
+    ]);
+    expect(outcomes('User').map((event) => event.outcome)).toEqual(['compiled']);
+  });
+
+  it('reaches an unindexed foreign key in two statements and an indexed one in one', async () => {
+    const owner = await prisma.user.findFirst({ where: { email: 'roy@example.com' } });
+    await prisma.branch.createMany({
+      data: [
+        { name: 'main', authorId: owner!.id },
+        { name: 'next', authorId: owner!.id },
+      ],
+    });
+
+    const unindexed = await engine.findMany({
+      model: 'User',
+      select: { email: true, posts: { select: { title: true } } },
+      where: { email: 'roy@example.com' },
+      compiled: true,
+    });
+    const batched = outcomes('User')[0];
+    expect(batched.outcome).toBe('compiled');
+    expect(batched.batched).toEqual(['posts']);
+    expect(batched.statements).toHaveLength(2);
+    expect(batched.statements![1]).toContain('"authorId" in (');
+    expect((unindexed[0] as { posts: unknown[] }).posts).toHaveLength(2);
+
+    events = [];
+    const indexed = await engine.findMany({
+      model: 'User',
+      select: { email: true, branches: { select: { name: true }, orderBy: [{ name: 'asc' }] } },
+      where: { email: 'roy@example.com' },
+      compiled: true,
+    });
+    const correlated = outcomes('User')[0];
+    expect(correlated.outcome).toBe('compiled');
+    expect(correlated.batched).toEqual([]);
+    expect(correlated.statements).toHaveLength(1);
+    expect(indexed).toEqual([
+      { email: 'roy@example.com', branches: [{ name: 'main' }, { name: 'next' }] },
+    ]);
+  });
+
+  it('answers a batched relation exactly as Prisma answers it', async () => {
+    const request = {
+      select: {
+        email: true,
+        posts: { select: { title: true, viewCount: true }, orderBy: [{ title: 'asc' }], take: 1 },
+      },
+      orderBy: [{ email: 'asc' }] as const,
+    };
+    const compiled = await engine.findMany({
+      model: 'User',
+      ...request,
+      orderBy: [{ email: 'asc' }],
+      compiled: true,
+    });
+    const plain = await engine.findMany({ model: 'User', ...request, orderBy: [{ email: 'asc' }] });
+
+    expect(compiled).toStrictEqual(plain);
+    expect(outcomes('User')[0].batched).toEqual(['posts']);
   });
 
   it('leaves the programmatic client on Prisma', async () => {

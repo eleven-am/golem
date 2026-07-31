@@ -83,6 +83,10 @@ export function expectCompiled(run: OracleRun): CompiledReadEvent {
   return run.events[0]!;
 }
 
+export function statements(run: OracleRun): readonly string[] {
+  return expectCompiled(run).statements ?? [];
+}
+
 const METRIC_COLUMNS = {
   id: true,
   label: true,
@@ -547,7 +551,7 @@ export function oracleSuite(subject: () => OracleSubject): void {
       { id: 3, metrics: [{ id: 5, active: true }] },
       { id: 4, metrics: [] },
     ]);
-    expect(run.events[0]!.sql).toContain('active');
+    expect(statements(run).join(' ')).toContain('active');
   });
 
   it('filters a nested relation by the where the caller asked for, on both paths', async () => {
@@ -746,38 +750,205 @@ export function oracleSuite(subject: () => OracleSubject): void {
     ]);
   });
 
-  it('falls back to Prisma, and answers identically, when a nested relation is ordered', async () => {
-    const run = await runBothMany(engineOn(), {
+  it('orders a nested relation the way Prisma orders it, per parent', async () => {
+    const run = await agree({
       model: 'User',
       select: { id: true, posts: { select: { id: true }, orderBy: { id: 'desc' } } },
       orderBy: [{ id: 'asc' }],
     });
-    expect(run.events).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'orderBy' }),
+    expect(run.compiled).toEqual([
+      { id: 1, posts: [{ id: 3 }, { id: 2 }, { id: 1 }] },
+      { id: 2, posts: [{ id: 5 }, { id: 4 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
     ]);
-    expectIdentical(run);
   });
 
-  it('falls back to Prisma, and answers identically, when a nested relation is paged', async () => {
-    const take = await runBothMany(engineOn(), {
+  it('orders a nested relation by several columns, in the order they were asked for', async () => {
+    await agree({
+      model: 'User',
+      select: {
+        id: true,
+        posts: { select: { id: true }, orderBy: [{ published: 'asc' }, { id: 'desc' }] },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+  });
+
+  it('pages a nested relation per parent, not across the whole read', async () => {
+    const take = await agree({
       model: 'User',
       select: { id: true, posts: { select: { id: true }, take: 1 } },
       orderBy: [{ id: 'asc' }],
     });
-    expect(take.events).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
+    expect(take.compiled).toEqual([
+      { id: 1, posts: [{ id: 1 }] },
+      { id: 2, posts: [{ id: 4 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
     ]);
-    expectIdentical(take);
 
-    const skip = await runBothMany(engineOn(), {
+    const skip = await agree({
       model: 'User',
       select: { id: true, posts: { select: { id: true }, skip: 1 } },
       orderBy: [{ id: 'asc' }],
     });
-    expect(skip.events).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
+    expect(skip.compiled).toEqual([
+      { id: 1, posts: [{ id: 2 }, { id: 3 }] },
+      { id: 2, posts: [{ id: 5 }] },
+      { id: 3, posts: [] },
+      { id: 4, posts: [] },
     ]);
-    expectIdentical(skip);
+
+    const both = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, skip: 1, take: 2, orderBy: { id: 'desc' } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(both.compiled).toEqual([
+      { id: 1, posts: [{ id: 2 }, { id: 1 }] },
+      { id: 2, posts: [{ id: 4 }] },
+      { id: 3, posts: [] },
+      { id: 4, posts: [] },
+    ]);
+  });
+
+  it('takes the last rows of each parent when the nested take is negative', async () => {
+    const ordered = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, take: -2, orderBy: { id: 'asc' } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(ordered.compiled).toEqual([
+      { id: 1, posts: [{ id: 2 }, { id: 3 }] },
+      { id: 2, posts: [{ id: 4 }, { id: 5 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
+    ]);
+
+    const implied = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, take: -1 } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(implied.compiled).toEqual([
+      { id: 1, posts: [{ id: 3 }] },
+      { id: 2, posts: [{ id: 5 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
+    ]);
+  });
+
+  it('empties a nested relation taken zero rows deep, and one skipped past its end', async () => {
+    const zero = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, take: 0 } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect((zero.compiled as { posts: unknown[] }[]).every((row) => row.posts.length === 0)).toBe(
+      true,
+    );
+
+    const past = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true }, skip: 9 } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect((past.compiled as { posts: unknown[] }[]).every((row) => row.posts.length === 0)).toBe(
+      true,
+    );
+  });
+
+  it('pages a nested relation the caller also narrowed with a where', async () => {
+    const run = await agree({
+      model: 'User',
+      select: {
+        id: true,
+        posts: { select: { id: true }, where: { published: true }, take: 1 },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, posts: [{ id: 1 }] },
+      { id: 2, posts: [{ id: 4 }] },
+      { id: 3, posts: [{ id: 6 }] },
+      { id: 4, posts: [] },
+    ]);
+  });
+
+  it('pages a relation it loads in a second statement, per parent and not across the batch', async () => {
+    const forwards = await agree({
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true }, take: 1, orderBy: { id: 'asc' } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(forwards)).toHaveLength(2);
+    expect(forwards.compiled).toEqual([
+      { id: 1, metrics: [{ id: 1 }] },
+      { id: 2, metrics: [{ id: 3 }] },
+      { id: 3, metrics: [{ id: 5 }] },
+      { id: 4, metrics: [] },
+    ]);
+
+    const backwards = await agree({
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true }, take: -1, orderBy: { id: 'asc' } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(backwards.compiled).toEqual([
+      { id: 1, metrics: [{ id: 2 }] },
+      { id: 2, metrics: [{ id: 4 }] },
+      { id: 3, metrics: [{ id: 5 }] },
+      { id: 4, metrics: [] },
+    ]);
+
+    await agree({
+      model: 'User',
+      select: {
+        id: true,
+        metrics: { select: { id: true }, skip: 1, take: 2, orderBy: { id: 'desc' } },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+  });
+
+  it('pages a nested relation the policy also narrows', async () => {
+    await agree(
+      {
+        model: 'User',
+        select: { id: true, metrics: { select: { id: true }, take: 1, orderBy: { id: 'desc' } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Metric: { active: true } },
+    );
+  });
+
+  it('pages a nested relation two levels down, under a to-one', async () => {
+    await agree({
+      model: 'Post',
+      select: {
+        id: true,
+        author: {
+          select: { metrics: { select: { id: true }, orderBy: { id: 'desc' }, take: 1 } },
+        },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+  });
+
+  it('pages a nested relation of a nested relation', async () => {
+    await agree({
+      model: 'User',
+      select: {
+        id: true,
+        posts: {
+          select: { id: true, author: { select: { metrics: { select: { id: true }, take: 1 } } } },
+          take: 2,
+          orderBy: { id: 'desc' },
+        },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
   });
 
   it('falls back to Prisma, and answers identically, when a nested relation is distinct', async () => {
@@ -807,32 +978,426 @@ export function oracleSuite(subject: () => OracleSubject): void {
     ]);
   });
 
-  it('falls back to Prisma, and answers identically, when a cursor is asked for', async () => {
-    const run = await runBothMany(engineOn(), {
+  it('starts a cursored read at the cursor row itself, which it keeps', async () => {
+    const whole = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 3 },
+    });
+    expect(whole.compiled).toEqual([{ id: 3 }, { id: 4 }, { id: 5 }]);
+
+    const taken = await agree({
       model: 'Metric',
       select: { id: true },
       orderBy: [{ id: 'asc' }],
       cursor: { id: 3 },
       take: 2,
     });
+    expect(taken.compiled).toEqual([{ id: 3 }, { id: 4 }]);
+  });
+
+  it('skips past the cursor row when a cursored read also skips', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 3 },
+      skip: 1,
+      take: 2,
+    });
+    expect(run.compiled).toEqual([{ id: 4 }, { id: 5 }]);
+  });
+
+  it('walks backwards from the cursor row, keeping it, when the cursored take is negative', async () => {
+    const back = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 3 },
+      take: -2,
+    });
+    expect(back.compiled).toEqual([{ id: 2 }, { id: 3 }]);
+
+    const skipped = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 3 },
+      skip: 1,
+      take: -2,
+    });
+    expect(skipped.compiled).toEqual([{ id: 1 }, { id: 2 }]);
+  });
+
+  it('walks a descending cursored read the way the order runs', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'desc' }],
+      cursor: { id: 3 },
+      take: 2,
+    });
+    expect(run.compiled).toEqual([{ id: 3 }, { id: 2 }]);
+  });
+
+  it('positions a cursored read with no order of its own by the primary key', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true },
+      cursor: { id: 3 },
+      take: 2,
+    });
+    expect(run.compiled).toEqual([{ id: 3 }, { id: 4 }]);
+  });
+
+  it('positions a cursor across several ordering columns', async () => {
+    await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true, active: true },
+      orderBy: [{ ownerId: 'asc' }, { active: 'desc' }, { id: 'asc' }],
+      cursor: { id: 3 },
+      take: 3,
+    });
+    await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ ownerId: 'desc' }, { id: 'desc' }],
+      cursor: { id: 3 },
+      take: 3,
+    });
+  });
+
+  it('falls back to Prisma, and answers identically, when a cursor rests on a nullable order', async () => {
+    const run = await runBothMany(engineOn(), {
+      model: 'Metric',
+      select: { id: true, rank: true },
+      orderBy: [{ rank: 'asc' }, { id: 'asc' }],
+      cursor: { id: 3 },
+      take: 3,
+    });
     expect(run.events).toEqual([
       expect.objectContaining({ outcome: 'fallback', reason: 'cursor' }),
     ]);
     expectIdentical(run);
-    expect(run.compiled).toEqual([{ id: 3 }, { id: 4 }]);
   });
 
-  it('falls back to Prisma, and answers identically, when distinct is asked for', async () => {
-    const run = await runBothMany(engineOn(), {
+  it('positions a cursor on a unique column that is not the primary key', async () => {
+    await agree({
+      model: 'Profile',
+      select: { id: true, userId: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { userId: 2 },
+    });
+  });
+
+  it('returns nothing at all from a cursor no row answers', async () => {
+    const run = await agree({
       model: 'Metric',
-      select: { ownerId: true },
-      orderBy: [{ ownerId: 'asc' }],
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 4242 },
+      take: 2,
+    });
+    expect(run.compiled).toEqual([]);
+  });
+
+  it('positions a cursor at a row the where itself excludes', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true },
+      where: { active: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 2 },
+      take: 3,
+    });
+    expect(run.compiled).toEqual([{ id: 3 }, { id: 5 }]);
+  });
+
+  it('positions a cursor at a row the policy hides', async () => {
+    await agree(
+      {
+        model: 'Metric',
+        select: { id: true },
+        orderBy: [{ id: 'asc' }],
+        cursor: { id: 2 },
+        take: 3,
+      },
+      { Metric: { ownerId: 2 } },
+    );
+  });
+
+  it('reads a cursored page of a relation-bearing row identically on both paths', async () => {
+    await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 2 },
+      take: 2,
+    });
+  });
+
+  it('keeps the first row of each distinct group, in the order the read runs', async () => {
+    const ascending = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'asc' }],
       distinct: ['ownerId'],
     });
-    expect(run.events).toEqual([
-      expect.objectContaining({ outcome: 'fallback', reason: 'distinct' }),
+    expect(ascending.compiled).toEqual([
+      { id: 1, ownerId: 1 },
+      { id: 3, ownerId: 2 },
+      { id: 5, ownerId: 3 },
     ]);
-    expectIdentical(run);
+
+    const descending = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'desc' }],
+      distinct: ['ownerId'],
+    });
+    expect(descending.compiled).toEqual([
+      { id: 5, ownerId: 3 },
+      { id: 4, ownerId: 2 },
+      { id: 2, ownerId: 1 },
+    ]);
+  });
+
+  it('pages a distinct read after it has deduplicated, not before', async () => {
+    const taken = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId'],
+      take: 2,
+    });
+    expect(taken.compiled).toEqual([
+      { id: 1, ownerId: 1 },
+      { id: 3, ownerId: 2 },
+    ]);
+
+    const skipped = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId'],
+      skip: 1,
+    });
+    expect(skipped.compiled).toEqual([
+      { id: 3, ownerId: 2 },
+      { id: 5, ownerId: 3 },
+    ]);
+
+    const backwards = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId'],
+      take: -2,
+    });
+    expect(backwards.compiled).toEqual([
+      { id: 4, ownerId: 2 },
+      { id: 5, ownerId: 3 },
+    ]);
+  });
+
+  it('deduplicates on a column the caller never selected, and does not return it', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId'],
+    });
+    expect(run.compiled).toEqual([{ id: 1 }, { id: 3 }, { id: 5 }]);
+    expect(Object.keys((run.compiled as Record<string, unknown>[])[0]!)).toEqual(['id']);
+  });
+
+  it('treats null as a value of its own when it deduplicates', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true, note: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['note'],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, note: 'first' },
+      { id: 2, note: null },
+      { id: 3, note: 'third' },
+      { id: 5, note: 'fifth' },
+    ]);
+  });
+
+  it('deduplicates on several columns at once, and on columns of every scalar type', async () => {
+    await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true, active: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId', 'active'],
+    });
+    await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['hits'],
+    });
+    await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['score'],
+    });
+    await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['recordedAt'],
+    });
+    await agree({
+      model: 'Metric',
+      select: { id: true },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ratio'],
+    });
+  });
+
+  it('deduplicates a cursored read after the cursor has cut it', async () => {
+    const run = await agree({
+      model: 'Metric',
+      select: { id: true, ownerId: true },
+      orderBy: [{ id: 'asc' }],
+      cursor: { id: 2 },
+      distinct: ['ownerId'],
+    });
+    expect(run.compiled).toEqual([
+      { id: 2, ownerId: 1 },
+      { id: 3, ownerId: 2 },
+      { id: 5, ownerId: 3 },
+    ]);
+  });
+
+  it('deduplicates a read that also reaches a relation', async () => {
+    await agree({
+      model: 'Metric',
+      select: { id: true, owner: { select: { name: true } } },
+      orderBy: [{ id: 'asc' }],
+      distinct: ['ownerId'],
+    });
+  });
+
+  it('orders by a column of a to-one relation, the way Prisma joins to it', async () => {
+    const run = await agree({
+      model: 'Post',
+      select: { id: true },
+      orderBy: [{ author: { name: 'desc' } }, { id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 6 },
+      { id: 4 },
+      { id: 5 },
+      { id: 1 },
+      { id: 2 },
+      { id: 3 },
+    ]);
+    expect(statements(run)[0]).toContain('left join');
+  });
+
+  it('orders by a column two relations away', async () => {
+    await agree({
+      model: 'Post',
+      select: { id: true },
+      orderBy: [{ author: { profile: { bio: 'desc' } } }, { id: 'asc' }],
+    });
+  });
+
+  it('orders by a nullable column of a relation no row reaches', async () => {
+    await agree({
+      model: 'User',
+      select: { id: true },
+      orderBy: [{ profile: { bio: 'asc' } }],
+    });
+  });
+
+  it('orders by the same relation twice, on two different columns', async () => {
+    await agree({
+      model: 'Post',
+      select: { id: true },
+      orderBy: [{ author: { tenantId: 'desc' } }, { author: { name: 'asc' } }, { id: 'asc' }],
+    });
+  });
+
+  it('orders by how many rows a to-many holds, counting an empty one as zero', async () => {
+    const descending = await agree({
+      model: 'User',
+      select: { id: true },
+      orderBy: [{ posts: { _count: 'desc' } }],
+    });
+    expect(descending.compiled).toEqual([{ id: 1 }, { id: 2 }, { id: 3 }, { id: 4 }]);
+
+    const ascending = await agree({
+      model: 'User',
+      select: { id: true },
+      orderBy: [{ posts: { _count: 'asc' } }],
+    });
+    expect(ascending.compiled).toEqual([{ id: 4 }, { id: 3 }, { id: 2 }, { id: 1 }]);
+  });
+
+  it('pages and filters a read ordered by a relation column', async () => {
+    const run = await agree({
+      model: 'Post',
+      select: { id: true },
+      where: { published: true },
+      orderBy: [{ author: { name: 'desc' } }, { id: 'asc' }],
+      take: 2,
+      skip: 1,
+    });
+    expect(run.compiled).toEqual([{ id: 4 }, { id: 5 }]);
+  });
+
+  it('orders a read by a relation column while the policy narrows both models', async () => {
+    await agree(
+      {
+        model: 'Post',
+        select: { id: true },
+        orderBy: [{ author: { name: 'asc' } }, { id: 'asc' }],
+      },
+      { Post: { published: true }, User: { tenantId: 1 } },
+    );
+  });
+
+  it('places nulls where the caller asked for them rather than where the engine puts them', async () => {
+    const last = await agree({
+      model: 'Metric',
+      select: { id: true, rank: true },
+      orderBy: [{ rank: { sort: 'asc', nulls: 'last' } }, { id: 'asc' }],
+    });
+    expect((last.compiled as { rank: number | null }[]).map((row) => row.rank)).toEqual([
+      1,
+      2,
+      4,
+      null,
+      null,
+    ]);
+
+    const first = await agree({
+      model: 'Metric',
+      select: { id: true, rank: true },
+      orderBy: [{ rank: { sort: 'desc', nulls: 'first' } }, { id: 'asc' }],
+    });
+    expect((first.compiled as { rank: number | null }[]).map((row) => row.rank)).toEqual([
+      null,
+      null,
+      4,
+      2,
+      1,
+    ]);
+  });
+
+  it('orders by a bare sort with no nulls placement of its own', async () => {
+    await agree({
+      model: 'Metric',
+      select: { id: true, rank: true },
+      orderBy: [{ rank: { sort: 'asc' } }, { id: 'asc' }],
+    });
   });
 
   it('falls back to Prisma when take is negative and nothing orders the rows', async () => {
@@ -845,6 +1410,84 @@ export function oracleSuite(subject: () => OracleSubject): void {
       expect.objectContaining({ outcome: 'fallback', reason: 'take' }),
     ]);
     expectIdentical(run);
+  });
+
+  it('reaches an indexed to-many in one statement and an unindexed one in two', async () => {
+    const indexed = await agree({
+      model: 'User',
+      select: { id: true, posts: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(indexed)).toHaveLength(1);
+    expect(expectCompiled(indexed).batched).toEqual([]);
+    expect(statements(indexed)[0]).toContain('"t1"."author_id" = "t0"."user_id"');
+
+    const unindexed = await agree({
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(unindexed)).toHaveLength(2);
+    expect(expectCompiled(unindexed).batched).toEqual(['metrics']);
+    expect(statements(unindexed)[0]).not.toContain('metrics');
+    expect(statements(unindexed)[1]).toContain('"t1"."owner_id" in (');
+  });
+
+  it('reaches a unique-backed to-one in one statement', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, profile: { select: { bio: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(run)).toHaveLength(1);
+    expect(expectCompiled(run).batched).toEqual([]);
+  });
+
+  it('runs one statement per unindexed relation level, not one per row', async () => {
+    const run = await agree({
+      model: 'User',
+      select: {
+        id: true,
+        posts: {
+          select: { id: true, author: { select: { metrics: { select: { id: true } } } } },
+        },
+      },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(run)).toHaveLength(1);
+    expect(expectCompiled(run).batched).toEqual([]);
+
+    const batched = await agree({
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true, owner: { select: { name: true } } } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(batched)).toHaveLength(2);
+    expect(expectCompiled(batched).batched).toEqual(['metrics']);
+  });
+
+  it('adds the column it correlates a second statement on, and does not return it', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { metrics: { select: { id: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(statements(run)).toHaveLength(2);
+    expect(Object.keys((run.compiled as Record<string, unknown>[])[0]!)).toEqual(['metrics']);
+    const nested = (run.compiled as { metrics: Record<string, unknown>[] }[])[0]!.metrics[0]!;
+    expect(Object.keys(nested)).toEqual(['id']);
+  });
+
+  it('runs no second statement at all when the first one matched nothing', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, metrics: { select: { id: true } } },
+      where: { id: -1 },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([]);
+    expect(statements(run)).toHaveLength(1);
+    expect(expectCompiled(run).batched).toEqual(['metrics']);
   });
 
   it('hands a flat denial to Prisma, which rejects it on both paths alike', async () => {

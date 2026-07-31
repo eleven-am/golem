@@ -25,6 +25,7 @@ const models: readonly DatamodelModel[] = [
   {
     name: 'Asset',
     dbName: 'assets',
+    indexes: [{ kind: 'normal', fields: ['ownerId'] }],
     fields: [
       field({ name: 'id', dbName: 'id', type: 'Int', isId: true }),
       field({ name: 'cost', dbName: 'cost', type: 'Decimal', isRequired: false }),

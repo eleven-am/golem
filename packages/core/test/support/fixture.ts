@@ -7,6 +7,7 @@ export const scopedModels: readonly DatamodelModel[] = [
   {
     name: 'Post',
     dbName: 'posts',
+    indexes: [{ kind: 'normal', name: 'posts_author_id_idx', fields: ['authorId'] }],
     fields: [
       field({ name: 'id', dbName: 'post_id', type: 'Int', isId: true }),
       field({ name: 'title', dbName: 'title', type: 'String' }),

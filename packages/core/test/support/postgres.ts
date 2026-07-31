@@ -52,6 +52,7 @@ const DDL = [
      "recorded_at" TIMESTAMP(3) NOT NULL,
      FOREIGN KEY ("owner_id") REFERENCES "users"("user_id")
    )`,
+  `CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id")`,
 ];
 
 export interface PostgresHandle {
