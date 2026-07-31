@@ -3,6 +3,22 @@ import type { DMMF } from '@prisma/generator-helper';
 const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
 
 export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string): string {
+  const indexesByModel = new Map<string, Array<{ kind: string; name?: string; dbName?: string; fields: string[] }>>();
+  for (const index of datamodel.indexes ?? []) {
+    const entry = {
+      kind: index.type,
+      ...(index.name ? { name: index.name } : {}),
+      ...(index.dbName ? { dbName: index.dbName } : {}),
+      fields: index.fields.map((field) => field.name),
+    };
+    const existing = indexesByModel.get(index.model);
+    if (existing) {
+      existing.push(entry);
+    } else {
+      indexesByModel.set(index.model, [entry]);
+    }
+  }
+
   const models = datamodel.models.map((model) => ({
     name: model.name,
     dbName: model.dbName ?? model.name,
@@ -40,6 +56,10 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
           fields: [...index.fields],
         }));
       return compound.length > 0 ? { uniqueIndexes: compound } : {};
+    })(),
+    ...(() => {
+      const indexes = indexesByModel.get(model.name) ?? [];
+      return indexes.length > 0 ? { indexes } : {};
     })(),
   }));
   const enums = datamodel.enums.map((e) => ({

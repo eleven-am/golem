@@ -29,8 +29,23 @@ function scalar(name: string): DMMF.Field {
   } as DMMF.Field;
 }
 
-function datamodel(models: DMMF.Model[]): DMMF.Datamodel {
-  return { models, enums: [], types: [], indexes: [] } as unknown as DMMF.Datamodel;
+function datamodel(models: DMMF.Model[], indexes: DMMF.Index[] = []): DMMF.Datamodel {
+  return { models, enums: [], types: [], indexes } as unknown as DMMF.Datamodel;
+}
+
+function index(
+  model: string,
+  type: DMMF.IndexType,
+  fields: string[],
+  extra: { name?: string; dbName?: string } = {},
+): DMMF.Index {
+  return {
+    model,
+    type,
+    isDefinedOnField: fields.length === 1,
+    ...extra,
+    fields: fields.map((name) => ({ name })),
+  } as unknown as DMMF.Index;
 }
 
 function model(
@@ -56,6 +71,7 @@ function parseEmitted(output: string): {
     fields: Array<{ name: string; dbName?: string }>;
     primaryKey?: { name?: string; fields: string[] };
     uniqueIndexes?: Array<{ name?: string; fields: string[] }>;
+    indexes?: Array<{ kind: string; name?: string; dbName?: string; fields: string[] }>;
   }>;
 } {
   const marker = 'export const datamodel = ';
@@ -130,6 +146,142 @@ describe('emitDatamodelModule compound unique indexes', () => {
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].uniqueIndexes).toBeUndefined();
+  });
+});
+
+describe('emitDatamodelModule declared indexes', () => {
+  const idField = { ...scalar('id'), isId: true } as DMMF.Field;
+
+  function leads(
+    emitted: { indexes?: Array<{ kind: string; fields: string[] }> },
+    field: string,
+  ): boolean {
+    return (emitted.indexes ?? []).some(
+      (entry) => entry.kind !== 'fulltext' && entry.fields[0] === field,
+    );
+  }
+
+  it('emits a single-column @@index and answers the leading-column question for it', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [model('Article', [idField, scalar('a')], null)],
+          [index('Article', 'id', ['id']), index('Article', 'normal', ['a'])],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toEqual([
+      { kind: 'id', fields: ['id'] },
+      { kind: 'normal', fields: ['a'] },
+    ]);
+    expect(leads(parsed.models[0], 'a')).toBe(true);
+  });
+
+  it('treats only the leading column of a composite @@index as indexed', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [model('Article', [idField, scalar('b'), scalar('c')], null)],
+          [index('Article', 'id', ['id']), index('Article', 'normal', ['b', 'c'])],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toContainEqual({ kind: 'normal', fields: ['b', 'c'] });
+    expect(leads(parsed.models[0], 'b')).toBe(true);
+    expect(leads(parsed.models[0], 'c')).toBe(false);
+  });
+
+  it('emits the index a field-level @unique implies', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [model('Article', [idField, { ...scalar('slug'), isUnique: true } as DMMF.Field], null)],
+          [index('Article', 'id', ['id']), index('Article', 'unique', ['slug'])],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toContainEqual({ kind: 'unique', fields: ['slug'] });
+    expect(leads(parsed.models[0], 'slug')).toBe(true);
+  });
+
+  it('emits a compound @@unique with both its client name and its physical name', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [model('Naming', [idField, scalar('c'), scalar('d')], null)],
+          [
+            index('Naming', 'id', ['id']),
+            index('Naming', 'unique', ['c', 'd'], { name: 'clientName', dbName: 'db_name_here' }),
+          ],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toContainEqual({
+      kind: 'unique',
+      name: 'clientName',
+      dbName: 'db_name_here',
+      fields: ['c', 'd'],
+    });
+    expect(leads(parsed.models[0], 'c')).toBe(true);
+    expect(leads(parsed.models[0], 'd')).toBe(false);
+  });
+
+  it('emits a compound primary key as an index led by its first column', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [
+            model('Membership', [scalar('userId'), scalar('orgId')], {
+              name: null,
+              fields: ['userId', 'orgId'],
+            }),
+          ],
+          [index('Membership', 'id', ['userId', 'orgId'])],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toEqual([{ kind: 'id', fields: ['userId', 'orgId'] }]);
+    expect(leads(parsed.models[0], 'userId')).toBe(true);
+    expect(leads(parsed.models[0], 'orgId')).toBe(false);
+  });
+
+  it('keeps each index against the model that declared it', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(
+        datamodel(
+          [
+            model('Article', [idField, scalar('a')], null),
+            model('Rel', [idField, scalar('ownerId')], null),
+          ],
+          [
+            index('Article', 'id', ['id']),
+            index('Article', 'normal', ['a']),
+            index('Rel', 'id', ['id']),
+          ],
+        ),
+      ),
+    );
+
+    expect(parsed.models[0].indexes).toEqual([
+      { kind: 'id', fields: ['id'] },
+      { kind: 'normal', fields: ['a'] },
+    ]);
+    expect(parsed.models[1].indexes).toEqual([{ kind: 'id', fields: ['id'] }]);
+    expect(leads(parsed.models[1], 'ownerId')).toBe(false);
+  });
+
+  it('omits indexes entirely for a model that declares none', () => {
+    const parsed = parseEmitted(
+      emitDatamodelModule(datamodel([model('Bare', [scalar('note')], null)])),
+    );
+
+    expect(parsed.models[0].indexes).toBeUndefined();
+    expect(leads(parsed.models[0], 'note')).toBe(false);
   });
 });
 

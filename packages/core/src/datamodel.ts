@@ -29,12 +29,38 @@ export interface DatamodelUniqueIndex {
   fields: readonly string[];
 }
 
+export type DatamodelIndexKind = 'id' | 'unique' | 'normal' | 'fulltext';
+
+export interface DatamodelIndex {
+  kind: DatamodelIndexKind;
+  name?: string;
+  dbName?: string;
+  fields: readonly string[];
+}
+
 export interface DatamodelModel {
   name: string;
   dbName?: string;
   fields: readonly DatamodelField[];
   primaryKey?: DatamodelPrimaryKey;
   uniqueIndexes?: readonly DatamodelUniqueIndex[];
+  indexes?: readonly DatamodelIndex[];
+}
+
+export function isEqualityIndexed(model: DatamodelModel, fieldName: string): boolean {
+  const leadsAnIndex = (model.indexes ?? []).some(
+    (index) => index.kind !== 'fulltext' && index.fields[0] === fieldName,
+  );
+  if (leadsAnIndex) {
+    return true;
+  }
+  if (model.primaryKey && model.primaryKey.fields[0] === fieldName) {
+    return true;
+  }
+  if ((model.uniqueIndexes ?? []).some((index) => index.fields[0] === fieldName)) {
+    return true;
+  }
+  return model.fields.some((field) => field.name === fieldName && (field.isId || field.isUnique));
 }
 
 export interface DatamodelEnum {
