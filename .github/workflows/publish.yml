@@ -31,7 +31,7 @@ jobs:
           npm rebuild better-sqlite3
       - name: Build libraries
         run: |
-          npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator -w @eleven-am/golem-policy
+          npm run build -w @eleven-am/golem-policy -w @eleven-am/golem-core -w @eleven-am/golem-generator
           npm rebuild -w @eleven-am/golem-generator
           # golem-authorizer resolves @eleven-am/golem-policy from its dist/, which
           # is gitignored, so policy has to be built in the batch above.
@@ -49,9 +49,11 @@ jobs:
               npm publish -w "$name" --access public
             fi
           }
+          # golem-core depends on golem-policy, and golem-authorizer on both,
+          # so policy publishes first or their installs resolve nothing.
+          publish @eleven-am/golem-policy packages/policy
           publish @eleven-am/golem-core packages/core
           publish @eleven-am/golem-generator packages/generator
-          publish @eleven-am/golem-policy packages/policy
           publish @eleven-am/golem-authorizer packages/authorizer
           publish @eleven-am/golem packages/nest
           publish @eleven-am/golem-queue packages/queue
