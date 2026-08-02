@@ -231,6 +231,99 @@ describe('nested relation constraints', () => {
   });
 });
 
+describe('relation counts', () => {
+  it('narrows a counted relation by the policy on the model it counts', async () => {
+    const client = fakeClient();
+    const provider = providerWith({ Post: { published: true }, User: {} }, jest.fn());
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    await engine.findMany({
+      model: 'User',
+      select: { email: true, _count: { select: { posts: true } } },
+      context: ctx,
+    });
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          email: true,
+          _count: { select: { posts: { where: { published: true } } } },
+        },
+      }),
+    );
+  });
+
+  it('intersects a caller filter on a counted relation with the policy on it', async () => {
+    const client = fakeClient();
+    const provider = providerWith({ Post: { published: true }, User: {} }, jest.fn());
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    await engine.findMany({
+      model: 'User',
+      select: { _count: { select: { posts: { where: { title: { contains: 'x' } } } } } },
+      context: ctx,
+    });
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          _count: {
+            select: {
+              posts: { where: { AND: [{ title: { contains: 'x' } }, { published: true }] } },
+            },
+          },
+        },
+      }),
+    );
+  });
+
+  it('leaves a counted relation nothing constrains untouched', async () => {
+    const client = fakeClient();
+    const provider = providerWith({ Post: {}, User: {} }, jest.fn());
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    await engine.findMany({
+      model: 'User',
+      select: { _count: { select: { posts: true } } },
+      context: ctx,
+    });
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { _count: { select: { posts: true } } } }),
+    );
+  });
+
+  it('refuses a count of a model the caller may not read at all', async () => {
+    const client = fakeClient();
+    const provider: AuthorizationProvider = {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async (_action: string, model: string) => {
+        if (model === 'Post') {
+          throw new GolemForbiddenError('Cannot read Post');
+        }
+        return {};
+      }),
+      check: jest.fn(async () => true),
+    };
+    const engine = new GolemEngine(client, datamodel.models, relationPolicy(provider));
+
+    await expect(
+      engine.findMany({
+        model: 'User',
+        select: { _count: { select: { posts: true } } },
+        context: ctx,
+      }),
+    ).rejects.toBeInstanceOf(GolemForbiddenError);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('counts a relation against the depth the read is allowed to reach', async () => {
+    const client = fakeClient();
+    const strict = new GolemEngine(client, datamodel.models, { maxDepth: 1 });
+
+    await expect(
+      strict.findMany({ model: 'User', select: { _count: { select: { posts: true } } } }),
+    ).rejects.toThrow('Query depth 2 exceeds the maximum of 1');
+  });
+});
+
 describe('maxDepth', () => {
   it('rejects selections beyond the default depth of five', async () => {
     const client = fakeClient();

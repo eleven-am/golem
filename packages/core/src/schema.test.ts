@@ -110,6 +110,68 @@ describe('buildGolemSchema queries', () => {
     );
   });
 
+  it('offers a relation count on every model holding a to-many relation, and on no other', () => {
+    const sdl = printSchema(buildGolemSchema({ datamodel, client: fakeClient() }));
+    expect(sdl).toContain('_count: UserCountOutputType');
+    expect(sdl).toContain('type UserCountOutputType {\n  posts: Int!\n}');
+    expect(sdl).not.toContain('PostCountOutputType');
+    expect(sdl).not.toContain('type Post {\n  id: String!\n  title: String!\n  published: Boolean!\n  author: User!\n  authorId: String!\n  _count');
+  });
+
+  it('counts no relation the model configuration hides', () => {
+    const sdl = printSchema(
+      buildGolemSchema({ datamodel, client: fakeClient(), models: { User: { hidden: ['posts'] } } }),
+    );
+    expect(sdl).not.toContain('CountOutputType');
+    expect(sdl).not.toContain('_count');
+  });
+
+  it('counts no relation whose model is off the surface', () => {
+    const sdl = printSchema(
+      buildGolemSchema({ datamodel, client: fakeClient(), models: { Post: false } }),
+    );
+    expect(sdl).not.toContain('CountOutputType');
+  });
+
+  it('asks prisma for the relation counts the selection set names', async () => {
+    const client = fakeClient();
+    client.user.findMany.mockResolvedValue([{ id: '1', _count: { posts: 2 } }]);
+    const schema = buildGolemSchema({ datamodel, client });
+    const result = await graphql({ schema, source: '{ users { id _count { posts } } }' });
+    expect(result.errors).toBeUndefined();
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, _count: { select: { posts: true } } } }),
+    );
+    expect(result.data).toEqual({ users: [{ id: '1', _count: { posts: 2 } }] });
+  });
+
+  it('carries a relation count through an alias on the count and on the relation', async () => {
+    const client = fakeClient();
+    client.user.findMany.mockResolvedValue([{ id: '1', _count: { posts: 7 } }]);
+    const schema = buildGolemSchema({ datamodel, client });
+    const result = await graphql({ schema, source: '{ users { id howMany: _count { written: posts } } }' });
+    expect(result.errors).toBeUndefined();
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, _count: { select: { posts: true } } } }),
+    );
+    expect(result.data).toEqual({ users: [{ id: '1', howMany: { written: 7 } }] });
+  });
+
+  it('counts a relation on the row a mutation hands back', async () => {
+    const client = fakeClient();
+    client.user.create.mockResolvedValue({ id: '1', _count: { posts: 0 } });
+    const schema = buildGolemSchema({ datamodel, client });
+    const result = await graphql({
+      schema,
+      source: 'mutation { createUser(data: { email: "a@b.c" }) { id _count { posts } } }',
+    });
+    expect(result.errors).toBeUndefined();
+    expect(client.user.create).toHaveBeenCalledWith(
+      expect.objectContaining({ select: { id: true, _count: { select: { posts: true } } } }),
+    );
+    expect(result.data).toEqual({ createUser: { id: '1', _count: { posts: 0 } } });
+  });
+
   it('excludes models configured as false', () => {
     const schema = buildGolemSchema({ datamodel, client: fakeClient(), models: { Post: false } });
     const sdl = printSchema(schema);

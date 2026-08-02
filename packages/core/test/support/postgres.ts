@@ -16,7 +16,7 @@ export const POSTGRES_URL_HINT =
   `Set ${POSTGRES_OPTIONAL_ENV}=1 to skip the Postgres suite while iterating locally.`;
 
 const DDL = [
-  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets"`,
+  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets", "plays"`,
   `CREATE TABLE "users" (
      "user_id" INTEGER PRIMARY KEY,
      "name" TEXT NOT NULL,
@@ -51,6 +51,17 @@ const DDL = [
      "active" BOOLEAN NOT NULL,
      "recorded_at" TIMESTAMP(3) NOT NULL,
      FOREIGN KEY ("owner_id") REFERENCES "users"("user_id")
+   )`,
+  `CREATE TABLE "plays" (
+     "play_id" INTEGER PRIMARY KEY,
+     "user_id" INTEGER NOT NULL,
+     "ts" TIMESTAMP(3) NOT NULL,
+     "ms_played" INTEGER NOT NULL,
+     "reason_start" TEXT NOT NULL,
+     "reason_end" TEXT NOT NULL,
+     "track_uri" TEXT NOT NULL,
+     "track_name" TEXT NOT NULL,
+     "artist_name" TEXT NOT NULL
    )`,
   `CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id")`,
 ];

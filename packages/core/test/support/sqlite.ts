@@ -40,6 +40,17 @@ const DDL = [
      "recorded_at" DATETIME NOT NULL,
      FOREIGN KEY ("owner_id") REFERENCES "users"("user_id")
    )`,
+  `CREATE TABLE "plays" (
+     "play_id" INTEGER PRIMARY KEY,
+     "user_id" INTEGER NOT NULL,
+     "ts" TEXT NOT NULL,
+     "ms_played" INTEGER NOT NULL,
+     "reason_start" TEXT NOT NULL,
+     "reason_end" TEXT NOT NULL,
+     "track_uri" TEXT NOT NULL,
+     "track_name" TEXT NOT NULL,
+     "artist_name" TEXT NOT NULL
+   )`,
   `CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id")`,
 ];
 

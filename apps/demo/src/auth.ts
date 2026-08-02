@@ -82,6 +82,7 @@ export class DemoRules implements WillAuthorize {
       }
     }
     can(['update', 'delete'], 'Post', { authorId: demoUser.id, type: 'PERSONAL' });
+    can('read', 'Play', { userId: demoUser.id });
     can('read', 'Profile', { userId: demoUser.id });
     can('read', 'PostTag');
     can(['create', 'update', 'delete'], 'PostTag', { post: { is: { authorId: demoUser.id } } });

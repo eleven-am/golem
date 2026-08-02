@@ -608,6 +608,172 @@ describe('refusing to compile a read that reaches a relation', () => {
     ).toMatchObject({ kind: 'compiled' });
   });
 
+  it('counts a to-many relation with a correlated subquery in the projection', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({ select: { id: true, _count: { select: { posts: true } } } }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."user_id" as "id", (select count(*) from "posts" as "t1" ' +
+        'where "t1"."author_id" = "t0"."user_id") as "_count$posts" from "users" as "t0"',
+    );
+    expect(compiled.counts).toEqual([{ name: 'posts', column: '_count$posts' }]);
+    expect(compiled.parameters).toEqual([]);
+  });
+
+  it('counts a to-many relation on postgres with the same correlated subquery', async () => {
+    const compiled = await statement({
+      model: models[1],
+      provider: 'postgresql',
+      prepared: tree({ select: { id: true, _count: { select: { posts: true } } } }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."user_id" as "id", (select count(*) from "posts" as "t1" ' +
+        'where "t1"."author_id" = "t0"."user_id") as "_count$posts" from "users" as "t0"',
+    );
+  });
+
+  it('carries the counted relation policy predicate into the count subquery, bound not inlined', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, _count: { select: { posts: { where: { published: true } } } } },
+      }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."user_id" as "id", (select count(*) from "posts" as "t1" ' +
+        'where "t1"."author_id" = "t0"."user_id" and (("t1"."published" IS ?))) as "_count$posts" ' +
+        'from "users" as "t0"',
+    );
+    expect(compiled.sql).not.toContain('true');
+    expect(compiled.parameters).toEqual([true]);
+  });
+
+  it('counts several relations, each under its own alias and its own predicate', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: {
+          id: true,
+          _count: { select: { posts: true, assets: { where: { ownerId: 3 } } } },
+        },
+      }),
+    });
+
+    expect(compiled.sql).toContain('from "posts" as "t1" where "t1"."author_id" = "t0"."user_id"');
+    expect(compiled.sql).toContain('from "assets" as "t2" where "t2"."owner_id" = "t0"."user_id"');
+    expect(compiled.counts).toEqual([
+      { name: 'posts', column: '_count$posts' },
+      { name: 'assets', column: '_count$assets' },
+    ]);
+    expect(compiled.parameters).toEqual([3]);
+  });
+
+  it('counts a relation alongside the rows of another one', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: {
+          id: true,
+          posts: { select: { id: true } },
+          _count: { select: { assets: true } },
+        },
+      }),
+    });
+
+    expect(compiled.counts).toEqual([{ name: 'assets', column: '_count$assets' }]);
+    expect(compiled.sql).toContain('"_count$assets"');
+    expect(compiled.batches.map((batch) => batch.name)).toEqual([]);
+    expect(compiled.relations.map((relation) => relation.name)).toEqual(['posts']);
+  });
+
+  it('counts a relation named only through an include', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({ include: { _count: { select: { posts: true } } } }),
+    });
+
+    expect(compiled.counts).toEqual([{ name: 'posts', column: '_count$posts' }]);
+    expect(compiled.columns.map((column) => column.name)).toEqual(['id', 'name']);
+  });
+
+  it('counts a relation asked for on its own, with no column beside it', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({ select: { _count: { select: { posts: true } } } }),
+    });
+
+    expect(compiled.columns).toEqual([]);
+    expect(compiled.counts).toEqual([{ name: 'posts', column: '_count$posts' }]);
+  });
+
+  it('hands back a count of a relation under another relation', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({
+          select: {
+            id: true,
+            posts: { select: { id: true, _count: { select: { author: true } } } },
+          },
+        }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+  });
+
+  it('hands back a count of something that is not a to-many relation', async () => {
+    expect(
+      await refusal({
+        prepared: tree({ select: { id: true, _count: { select: { author: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+    expect(
+      await refusal({
+        prepared: tree({ select: { id: true, _count: { select: { title: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+    expect(
+      await refusal({
+        prepared: tree({ select: { id: true, _count: { select: { nope: true } } } }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+  });
+
+  it('hands back a count golem was handed in a shape it does not read as a count', async () => {
+    expect(
+      await refusal({ model: models[1], prepared: tree({ select: { id: true, _count: true } }) }),
+    ).toMatchObject({ reason: 'relation' });
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, _count: { select: { posts: { take: 2 } } } } }),
+      }),
+    ).toMatchObject({ reason: 'relation' });
+  });
+
+  it('hands back a count whose policy is a flat denial, which Prisma rejects', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({ select: { id: true, _count: { select: { posts: { where: null } } } } }),
+      }),
+    ).toMatchObject({ reason: 'where' });
+  });
+
+  it('hands back a count whose predicate the policy condition language does not render', async () => {
+    expect(
+      await refusal({
+        model: models[1],
+        prepared: tree({
+          select: { id: true, _count: { select: { posts: { where: { notAColumn: 1 } } } } },
+        }),
+      }),
+    ).toMatchObject({ reason: 'where' });
+  });
+
   it('hands back a relation projecting nothing at all', async () => {
     expect(
       await refusal({

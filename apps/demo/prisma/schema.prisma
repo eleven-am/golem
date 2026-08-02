@@ -76,6 +76,20 @@ model Branch {
   @@unique([authorId, name])
 }
 
+model Play {
+  id          Int      @id
+  userId      String
+  ts          DateTime
+  msPlayed    Int
+  reasonStart String
+  reasonEnd   String
+  trackUri    String
+  trackName   String
+  artistName  String
+
+  @@index([userId, trackUri])
+}
+
 model ReadingSession {
   id       String  @id @default(cuid())
   progress Int     @default(0)

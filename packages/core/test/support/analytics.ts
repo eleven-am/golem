@@ -1,3 +1,4 @@
+import { DatamodelModel } from '../../src/datamodel';
 import { GolemEngine } from '../../src/operations';
 import { scopedModels } from './fixture';
 import { AuthorizationProvider } from '../../src/authorization';
@@ -121,17 +122,24 @@ export async function seedMetrics(client: {
   await client.metric.createMany({ data: metrics.map((metric) => ({ ...metric })) });
 }
 
+export function tuples(
+  count: number,
+  width: number,
+  placeholder: (position: number) => string,
+): string {
+  return Array.from(
+    { length: count },
+    (_, row) =>
+      `(${Array.from({ length: width }, (_, column) =>
+        placeholder(row * width + column + 1),
+      ).join(', ')})`,
+  ).join(', ');
+}
+
 export async function seed(client: {
   $executeRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown>;
 }, placeholder: (position: number) => string): Promise<void> {
-  const rows = (count: number, width: number) =>
-    Array.from(
-      { length: count },
-      (_, row) =>
-        `(${Array.from({ length: width }, (_, column) =>
-          placeholder(row * width + column + 1),
-        ).join(', ')})`,
-    ).join(', ');
+  const rows = (count: number, width: number) => tuples(count, width, placeholder);
   await client.$executeRawUnsafe(
     `INSERT INTO "users" ("user_id", "name", "tenant_id") VALUES ${rows(users.length, 3)}`,
     ...users.flatMap((user) => [user.id, user.name, user.tenantId]),
@@ -160,6 +168,93 @@ export async function seed(client: {
   ]);
 }
 
+export interface PlaySeed {
+  readonly id: number;
+  readonly userId: number;
+  readonly ts: string;
+  readonly msPlayed: number;
+  readonly reasonStart: string;
+  readonly reasonEnd: string;
+  readonly trackUri: string;
+  readonly trackName: string;
+  readonly artistName: string;
+}
+
+const play = (
+  id: number,
+  userId: number,
+  ts: string,
+  msPlayed: number,
+  reasonStart: string,
+  reasonEnd: string,
+  trackUri: string,
+  trackName: string,
+  artistName: string,
+): PlaySeed => ({
+  id,
+  userId,
+  ts,
+  msPlayed,
+  reasonStart,
+  reasonEnd,
+  trackUri,
+  trackName,
+  artistName,
+});
+
+export const plays: readonly PlaySeed[] = [
+  play(1, 1, '2020-01-05 09:00:00', 200000, 'clickrow', 'trackdone', 'alpha', 'Alpha', 'Nova'),
+  play(2, 1, '2020-06-05 09:00:00', 210000, 'fwdbtn', 'trackdone', 'alpha', 'Alpha', 'Nova'),
+  play(3, 1, '2021-02-05 09:00:00', 220000, 'playbtn', 'trackdone', 'alpha', 'Alpha', 'Nova'),
+  play(4, 1, '2021-08-05 09:00:00', 30000, 'fwdbtn', 'endplay', 'alpha', 'Alpha', 'Nova'),
+  play(5, 1, '2021-03-05 09:00:00', 180000, 'fwdbtn', 'trackdone', 'beta', 'Beta', 'Nova'),
+  play(6, 1, '2021-09-05 09:00:00', 40000, 'clickrow', 'endplay', 'beta', 'Beta', 'Nova'),
+  play(7, 1, '2022-01-05 09:00:00', 190000, 'playbtn', 'trackdone', 'beta', 'Beta', 'Nova'),
+  play(8, 1, '2022-07-05 09:00:00', 20000, 'fwdbtn', 'endplay', 'beta', 'Beta', 'Nova'),
+  play(9, 1, '2019-05-05 09:00:00', 15000, 'clickrow', 'endplay', 'gamma', 'Gamma', 'Nova'),
+  play(10, 2, '2015-01-01 09:00:00', 11000, 'fwdbtn', 'endplay', 'alpha', 'Alpha', 'Nova'),
+  play(11, 2, '2015-02-01 09:00:00', 12000, 'fwdbtn', 'endplay', 'alpha', 'Alpha', 'Nova'),
+  play(12, 2, '2016-01-01 09:00:00', 13000, 'fwdbtn', 'endplay', 'alpha', 'Alpha', 'Nova'),
+  play(13, 2, '2015-03-01 09:00:00', 14000, 'fwdbtn', 'endplay', 'zeta', 'Zeta', 'Nova'),
+];
+
+export async function seedPlays(
+  client: { $executeRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown> },
+  placeholder: (position: number) => string,
+): Promise<void> {
+  await client.$executeRawUnsafe(
+    `INSERT INTO "plays" ("play_id", "user_id", "ts", "ms_played", "reason_start", "reason_end", ` +
+      `"track_uri", "track_name", "artist_name") VALUES ${tuples(plays.length, 9, placeholder)}`,
+    ...plays.flatMap((row) => [
+      row.id,
+      row.userId,
+      row.ts,
+      row.msPlayed,
+      row.reasonStart,
+      row.reasonEnd,
+      row.trackUri,
+      row.trackName,
+      row.artistName,
+    ]),
+  );
+}
+
+export function toNumber(value: unknown): number {
+  if (typeof value === 'number') {
+    return value;
+  }
+  if (typeof value === 'bigint') {
+    return Number(value);
+  }
+  if (typeof value === 'string') {
+    return Number(value);
+  }
+  if (value !== null && value !== undefined && typeof value === 'object') {
+    return Number(String(value));
+  }
+  throw new Error(`the database returned ${String(value)} where a number was expected`);
+}
+
 export function satisfies(entity: unknown, constraint: unknown): boolean {
   if (!constraint || typeof constraint !== 'object' || !entity || typeof entity !== 'object') {
     return true;
@@ -186,13 +281,14 @@ export function engineFor(
   provider: string,
   constraints: Record<string, unknown>,
   hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>,
+  models: readonly DatamodelModel[] = scopedModels,
 ): GolemEngine {
   const authorization: AuthorizationProvider = {
     authorize: async () => undefined,
     constrain: async (_action, model) => constraints[model],
     check: async (_action, model, entity) => satisfies(entity, constraints[model]),
   };
-  return new GolemEngine(client, scopedModels, {
+  return new GolemEngine(client, models, {
     provider,
     authorization,
     hiddenFields,

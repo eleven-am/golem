@@ -7,7 +7,7 @@ import {
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError, GolemValidationError } from './errors';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
-import { PrismaSelect } from './select';
+import { PrismaSelect, RELATION_COUNT_FIELD } from './select';
 
 export interface ToOneCheck {
   path: readonly string[];
@@ -429,6 +429,46 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
     }
   }
 
+  async function walkRelationCounts(
+    model: DatamodelModel,
+    entry: unknown,
+    depth: number,
+  ): Promise<unknown> {
+    const requested = (entry as { select?: unknown } | null)?.select;
+    if (!requested || typeof requested !== 'object' || Array.isArray(requested)) {
+      return entry;
+    }
+    const counted: Record<string, unknown> = {};
+    for (const [name, value] of Object.entries(requested as Record<string, unknown>)) {
+      const field = metadata.get(model.name)?.fieldsByName.get(name);
+      const target = field?.kind === 'object' ? options.modelsByName.get(field.type) : undefined;
+      if (
+        value === false || value === undefined || !field || field.kind !== 'object' ||
+        !field.isList || !target
+      ) {
+        counted[name] = value;
+        continue;
+      }
+      if (depth + 1 > options.maxDepth) {
+        throw new GolemValidationError(
+          `Query depth ${depth + 1} exceeds the maximum of ${options.maxDepth}`,
+        );
+      }
+      const constraint = options.provider
+        ? await options.provider.constrain('read', target.name, options.context)
+        : undefined;
+      if (!isConditionalConstraint(constraint)) {
+        counted[name] = value;
+        continue;
+      }
+      const narrowed: Record<string, unknown> =
+        value === true ? {} : { ...(value as Record<string, unknown>) };
+      narrowed.where = mergeConstraint(narrowed.where, constraint);
+      counted[name] = narrowed;
+    }
+    return { ...(entry as Record<string, unknown>), select: counted };
+  }
+
   async function walkTree(
     model: DatamodelModel,
     tree: Record<string, unknown> | undefined,
@@ -442,6 +482,10 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
     }
     const rewritten: Record<string, unknown> = {};
     for (const [key, entry] of Object.entries(tree)) {
+      if (key === RELATION_COUNT_FIELD && entry !== false && entry !== undefined) {
+        rewritten[key] = await walkRelationCounts(model, entry, depth);
+        continue;
+      }
       const field = options.metadata?.get(model.name)?.fieldsByName.get(key) ??
         model.fields.find((f) => f.name === key);
       if (!field || field.kind !== 'object' || entry === false || entry === undefined) {

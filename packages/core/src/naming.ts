@@ -45,6 +45,10 @@ export function eventsFieldName(model: string): string {
   return `${lcFirst(model)}Events`;
 }
 
+export function relationCountTypeName(model: string): string {
+  return `${model}CountOutputType`;
+}
+
 export function aggregateFieldName(model: string): string {
   return `${pluralOrList(lcFirst(model))}Aggregate`;
 }

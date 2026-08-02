@@ -108,6 +108,24 @@ export const scopedModels: readonly DatamodelModel[] = [
   },
 ];
 
+export const playModel: DatamodelModel = {
+  name: 'Play',
+  dbName: 'plays',
+  fields: [
+    field({ name: 'id', dbName: 'play_id', type: 'Int', isId: true }),
+    field({ name: 'userId', dbName: 'user_id', type: 'Int' }),
+    field({ name: 'ts', dbName: 'ts', type: 'DateTime' }),
+    field({ name: 'msPlayed', dbName: 'ms_played', type: 'Int' }),
+    field({ name: 'reasonStart', dbName: 'reason_start', type: 'String' }),
+    field({ name: 'reasonEnd', dbName: 'reason_end', type: 'String' }),
+    field({ name: 'trackUri', dbName: 'track_uri', type: 'String' }),
+    field({ name: 'trackName', dbName: 'track_name', type: 'String' }),
+    field({ name: 'artistName', dbName: 'artist_name', type: 'String' }),
+  ],
+};
+
+export const playModels: readonly DatamodelModel[] = [...scopedModels, playModel];
+
 export interface ScopedEngineOptions extends Omit<GolemEngineOptions, 'authorization'> {
   constraints?: Record<string, unknown>;
   client?: Record<string, any>;

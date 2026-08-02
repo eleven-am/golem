@@ -166,6 +166,29 @@ Every path comparison is a sequential scan unless an expression index exists
 for that exact path, and a policy predicate runs on every read of the model.
 Prefer a real column for anything a policy filters on.
 
+**`LEAST` and `GREATEST` treat a null argument differently on each engine.**
+This bites the ordinary way of clamping a ratio, because the guard against
+dividing by zero produces the null:
+
+```sql
+LEAST(AVG(observed) / NULLIF(AVG(expected), 0), 4)
+```
+
+When the divisor is zero, `NULLIF` makes it null, the division is null, and
+then Postgres's `LEAST` ignores the null and returns `4` while SQLite's
+`min()` propagates it and returns null. Same query, same rows, two answers.
+
+Write the guard explicitly if you need one answer:
+
+```sql
+CASE WHEN AVG(expected) = 0 THEN 4
+     ELSE MIN(AVG(observed) / AVG(expected), 4) END
+```
+
+This is a difference between the engines rather than anything golem does —
+a hand-written version of the same query hits it too — but a scoped
+analytical query is exactly where it shows up.
+
 **In-memory and database answers can differ on null.** Golem's evaluator and
 its SQL agree with each other — that is enforced by an oracle that runs both
 against SQLite and both Postgres collations — but neither is obliged to

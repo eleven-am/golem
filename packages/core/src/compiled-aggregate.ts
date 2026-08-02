@@ -10,13 +10,16 @@ import {
   AggregateDecodeKind,
   AggregateGroup,
   CompiledMeasure,
-  unsafeIntegerError,
 } from './compiled-aggregate-decode';
 import {
   CompiledReadFallback,
   CompiledReadFallbackReason,
 } from './compiled-read';
-import { DecimalConstructor, prismaDecimal } from './compiled-read-decode';
+import {
+  DecimalConstructor,
+  prismaDecimal,
+  unsafeIntegerError,
+} from './compiled-read-decode';
 import { DatamodelField, DatamodelModel } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
 import {

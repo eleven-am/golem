@@ -1,9 +1,5 @@
-import {
-  CompiledMeasure,
-  decodeAggregateRow,
-  unsafeIntegerError,
-} from './compiled-aggregate-decode';
-import { prismaDecimal } from './compiled-read-decode';
+import { CompiledMeasure, decodeAggregateRow } from './compiled-aggregate-decode';
+import { prismaDecimal, unsafeIntegerError } from './compiled-read-decode';
 
 const decimal = prismaDecimal();
 

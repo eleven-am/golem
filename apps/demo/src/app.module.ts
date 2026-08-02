@@ -45,6 +45,7 @@ export class AppModule {
             },
             Profile: { operations: ['findOne', 'findMany', 'create'] },
             PostTag: false,
+            Play: false,
           },
           extensions: [UserExtension],
           authorization: GolemAuthorizationAdapter,

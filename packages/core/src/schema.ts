@@ -48,6 +48,7 @@ import {
   findManyFieldName,
   findOneFieldName,
   groupByFieldName,
+  relationCountTypeName,
   updateFieldName,
   updateManyFieldName,
 } from './naming';
@@ -66,7 +67,12 @@ import {
   type MeasuresArg,
 } from './aggregations';
 import { GolemEngine } from './operations';
-import { buildEventEntitySelect, buildSelect, primaryKeySelect } from './select';
+import {
+  RELATION_COUNT_FIELD,
+  buildEventEntitySelect,
+  buildSelect,
+  primaryKeySelect,
+} from './select';
 
 export const DateTimeScalar = new GraphQLScalarType({
   name: 'DateTime',
@@ -539,6 +545,27 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
   }
 
   const objectTypes = new Map<string, GraphQLObjectType>();
+  const countOutputTypes = new Map<string, GraphQLObjectType>();
+
+  function relationCountType(
+    model: DatamodelModel,
+    counted: readonly DatamodelField[],
+  ): GraphQLObjectType {
+    const existing = countOutputTypes.get(model.name);
+    if (existing) {
+      return existing;
+    }
+    const type = new GraphQLObjectType({
+      name: relationCountTypeName(model.name),
+      fields: () =>
+        Object.fromEntries(
+          counted.map((field) => [field.name, { type: new GraphQLNonNull(GraphQLInt) }]),
+        ),
+    });
+    countOutputTypes.set(model.name, type);
+    return type;
+  }
+
   const whereInputs = new Map<string, GraphQLInputObjectType>();
   const whereUniqueInputs = new Map<string, GraphQLInputObjectType>();
   const orderByInputs = new Map<string, GraphQLInputObjectType>();
@@ -567,6 +594,12 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
                 type: field.isRequired ? new GraphQLNonNull(base) : base,
               };
             }
+          }
+          const counted = visibleFields(model).filter(
+            (field) => field.kind === 'object' && field.isList && objectTypes.has(field.type),
+          );
+          if (counted.length > 0) {
+            fields[RELATION_COUNT_FIELD] = { type: relationCountType(model, counted) };
           }
           for (const spec of computedByModel.get(model.name) ?? []) {
             const args: GraphQLFieldConfigArgumentMap = {};

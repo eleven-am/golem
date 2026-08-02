@@ -469,6 +469,122 @@ export function oracleSuite(subject: () => OracleSubject): void {
     });
   });
 
+  it('counts a to-many relation identically on both paths, without reading its rows', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, _count: { select: { posts: true, metrics: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.compiled).toEqual([
+      { id: 1, _count: { posts: 3, metrics: 2 } },
+      { id: 2, _count: { posts: 2, metrics: 2 } },
+      { id: 3, _count: { posts: 1, metrics: 1 } },
+      { id: 4, _count: { posts: 0, metrics: 0 } },
+    ]);
+    expect(statements(run)).toHaveLength(1);
+    expect(statements(run)[0]).toContain('count(*)');
+    const counted = (run.compiled as { _count: Record<string, number> }[])[0]!._count;
+    expect(Object.values(counted).every((value) => typeof value === 'number')).toBe(true);
+  });
+
+  it('counts a relation the policy narrows, to the subset the caller may read, on both paths', async () => {
+    const scoped = await agree(
+      {
+        model: 'User',
+        select: { id: true, _count: { select: { posts: true } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Post: { published: true } },
+    );
+    expect(scoped.compiled).toEqual([
+      { id: 1, _count: { posts: 2 } },
+      { id: 2, _count: { posts: 2 } },
+      { id: 3, _count: { posts: 1 } },
+      { id: 4, _count: { posts: 0 } },
+    ]);
+    expect(statements(scoped)[0]).toContain('published');
+
+    const unscoped = await agree({
+      model: 'User',
+      select: { id: true, _count: { select: { posts: true } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect((unscoped.compiled as { _count: { posts: number } }[])[0]!._count.posts).toBe(3);
+  });
+
+  it('counts nothing for a caller the policy allows nothing, on both paths', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: { id: true, _count: { select: { posts: true, metrics: true } } },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Post: { authorId: -1 }, Metric: { ownerId: -1 } },
+    );
+    expect(run.compiled).toEqual([
+      { id: 1, _count: { posts: 0, metrics: 0 } },
+      { id: 2, _count: { posts: 0, metrics: 0 } },
+      { id: 3, _count: { posts: 0, metrics: 0 } },
+      { id: 4, _count: { posts: 0, metrics: 0 } },
+    ]);
+  });
+
+  it('counts a relation it also reads, agreeing with the rows it read, on both paths', async () => {
+    const run = await agree(
+      {
+        model: 'User',
+        select: {
+          id: true,
+          posts: { select: { id: true } },
+          _count: { select: { posts: true } },
+        },
+        orderBy: [{ id: 'asc' }],
+      },
+      { Post: { published: true } },
+    );
+    for (const row of run.compiled as { posts: unknown[]; _count: { posts: number } }[]) {
+      expect(row._count.posts).toBe(row.posts.length);
+    }
+  });
+
+  it('counts a relation through findOne identically on both paths', async () => {
+    const run = await runBothOne(engineOn({ Post: { published: true } }), {
+      model: 'User',
+      where: { id: 1 },
+      select: { id: true, _count: { select: { posts: true } } },
+    });
+    expectCompiled(run);
+    expectIdentical(run);
+    expect(run.compiled).toEqual({ id: 1, _count: { posts: 2 } });
+  });
+
+  it('counts a relation beside a paged, ordered read of the parent, on both paths', async () => {
+    const run = await agree({
+      model: 'User',
+      select: { id: true, _count: { select: { posts: true } } },
+      orderBy: [{ id: 'desc' }],
+      take: 2,
+      skip: 1,
+    });
+    expect(run.compiled).toEqual([
+      { id: 3, _count: { posts: 1 } },
+      { id: 2, _count: { posts: 2 } },
+    ]);
+  });
+
+  it('falls back rather than compiling a count under a relation, and still agrees', async () => {
+    const run = await runBothMany(engineOn({ Post: { published: true } }), {
+      model: 'Post',
+      select: { id: true, author: { select: { id: true, _count: { select: { posts: true } } } } },
+      orderBy: [{ id: 'asc' }],
+    });
+    expect(run.events.map((event) => `${event.outcome}:${event.reason ?? ''}`)).toEqual([
+      'fallback:relation',
+    ]);
+    expectIdentical(run);
+    expect((run.compiled as { author: { _count: { posts: number } } }[])[0]!.author._count.posts).toBe(2);
+  });
+
   it('carries every scalar type through a nested array exactly as Prisma carries it', async () => {
     const run = await agree({
       model: 'User',

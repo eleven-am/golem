@@ -2,6 +2,9 @@ import { GraphQLResolveInfo } from 'graphql';
 import { parseResolveInfo, ResolveTree } from 'graphql-parse-resolve-info';
 import { DatamodelModel } from './datamodel';
 import { ComputedRequiresMap } from './extensions';
+import { relationCountTypeName } from './naming';
+
+export const RELATION_COUNT_FIELD = '_count';
 
 export interface PrismaSelectRelation {
   select?: PrismaSelect;
@@ -25,6 +28,21 @@ export function primaryKeySelect(model: DatamodelModel): PrismaSelect {
   return select;
 }
 
+function relationCountSelect(tree: ResolveTree, model: DatamodelModel): PrismaSelect | undefined {
+  const counted = tree.fieldsByTypeName[relationCountTypeName(model.name)] ?? {};
+  const countable = new Set(
+    model.fields.filter((field) => field.kind === 'object' && field.isList).map((field) => field.name),
+  );
+  const select: PrismaSelect = {};
+  for (const key of Object.keys(counted)) {
+    const name = counted[key].name;
+    if (countable.has(name)) {
+      select[name] = true;
+    }
+  }
+  return Object.keys(select).length > 0 ? select : undefined;
+}
+
 function selectFromFields(
   fields: Record<string, ResolveTree>,
   model: DatamodelModel,
@@ -37,6 +55,13 @@ function selectFromFields(
     const tree = fields[key];
     const field = model.fields.find((f) => f.name === tree.name);
     if (!field) {
+      if (tree.name === RELATION_COUNT_FIELD) {
+        const counted = relationCountSelect(tree, model);
+        if (counted) {
+          select[RELATION_COUNT_FIELD] = { select: counted };
+        }
+        continue;
+      }
       const requires = modelComputed?.get(tree.name);
       if (requires) {
         for (const column of requires) {

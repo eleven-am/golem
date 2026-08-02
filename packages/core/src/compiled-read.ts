@@ -7,14 +7,17 @@ import {
 } from '@eleven-am/golem-policy';
 import { mergeConstraint } from './authorization';
 import {
+  CompiledReadCount,
   CompiledReadNestedProjection,
   CompiledReadScalarKind,
   DecimalConstructor,
+  RELATION_COUNT_ALIAS,
   prismaDecimal,
 } from './compiled-read-decode';
 import { DatamodelField, DatamodelModel, isEqualityIndexed } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
 import { PreparedReadTree } from './readtree';
+import { RELATION_COUNT_FIELD } from './select';
 import {
   ScopedDatabase,
   ScopedDialect,
@@ -29,6 +32,8 @@ const ROOT_ALIAS = 't0';
 const CURSOR_ALIAS = 'c0';
 
 const COUNT_COLUMN = '_golem_count';
+
+const MAX_IDENTIFIER = 63;
 
 const COMPILABLE_PROVIDERS = new Set(['sqlite', 'postgresql', 'postgres']);
 
@@ -124,6 +129,7 @@ export interface CompiledReadStatement {
   readonly parameters: readonly unknown[];
   readonly reversed: boolean;
   readonly columns: readonly CompiledReadColumn[];
+  readonly counts: readonly CompiledReadCount[];
   readonly relations: readonly CompiledReadNestedProjection[];
   readonly batches: readonly CompiledReadBatch[];
   readonly drop: readonly string[];
@@ -203,8 +209,19 @@ interface PlannedRelation {
   readonly reversed: boolean;
 }
 
+interface PlannedCount {
+  readonly name: string;
+  readonly column: string;
+  readonly table: string;
+  readonly alias: string;
+  readonly correlation: readonly Correlation[];
+  readonly where?: unknown;
+  readonly model: DatamodelModel;
+}
+
 interface PlannedNode {
   readonly columns: PlannedColumn[];
+  readonly counts: PlannedCount[];
   readonly relations: PlannedRelation[];
   readonly drop: string[];
 }
@@ -769,6 +786,93 @@ function planRelation(
   };
 }
 
+function planCounts(
+  context: PlanContext,
+  model: DatamodelModel,
+  entry: unknown,
+  path: readonly string[],
+): readonly PlannedCount[] | CompiledReadFallback {
+  if (path.length > 0) {
+    return fallback(
+      'relation',
+      `${describePath([...path, RELATION_COUNT_FIELD])} counts a relation of a relation, which golem compiles only at the top level of a read`,
+    );
+  }
+  const requested = (entry as { select?: unknown } | null)?.select;
+  if (!requested || typeof requested !== 'object' || Array.isArray(requested)) {
+    return fallback(
+      'relation',
+      `${model.name} counts relations with ${JSON.stringify(entry)} rather than with a select`,
+    );
+  }
+  const counts: PlannedCount[] = [];
+  for (const [name, value] of Object.entries(requested as Record<string, unknown>)) {
+    if (value === false || value === undefined) {
+      continue;
+    }
+    const field = context.metadata.get(model.name)?.fieldsByName.get(name);
+    if (field === undefined || field.kind !== 'object') {
+      return fallback(
+        'relation',
+        `${model.name}.${name} is counted but is not a relation of the model`,
+      );
+    }
+    if (!field.isList) {
+      return fallback(
+        'relation',
+        `${model.name}.${name} is counted but is a to-one relation, which Prisma counts only on a list`,
+      );
+    }
+    const target = context.metadata.get(field.type)?.model;
+    if (target === undefined || target.dbName == null) {
+      return fallback(
+        'relation',
+        `${model.name}.${name} counts ${field.type}, which golem has no physical table name for`,
+      );
+    }
+    let where: unknown;
+    if (value !== true) {
+      if (typeof value !== 'object' || Array.isArray(value)) {
+        return fallback('relation', `${model.name}.${name} is counted with ${JSON.stringify(value)}`);
+      }
+      const extra = Object.entries(value as Record<string, unknown>)
+        .filter(([key, held]) => key !== 'where' && held !== undefined)
+        .map(([key]) => key);
+      if (extra.length > 0) {
+        return fallback('relation', `${model.name}.${name} is counted with ${extra.join(', ')}`);
+      }
+      where = (value as Record<string, unknown>).where;
+      if (where === null) {
+        return fallback(
+          'where',
+          `the read policy on ${target.name} counted through ${model.name}.${name} is null, which Prisma rejects rather than reading as a denial`,
+        );
+      }
+    }
+    const correlation = correlate(context.metadata, model, target, field);
+    if (isFallback(correlation)) {
+      return correlation;
+    }
+    const column = `${RELATION_COUNT_ALIAS}${name}`;
+    if (column.length > MAX_IDENTIFIER) {
+      return fallback(
+        'projection',
+        `${model.name}.${name} is counted into the result column "${column}", which is longer than the ${MAX_IDENTIFIER} characters postgres keeps before it truncates an identifier`,
+      );
+    }
+    counts.push({
+      name,
+      column,
+      table: target.dbName,
+      alias: `t${context.aliases++}`,
+      correlation,
+      where,
+      model: target,
+    });
+  }
+  return counts;
+}
+
 function planNode(
   context: PlanContext,
   model: DatamodelModel,
@@ -778,6 +882,7 @@ function planNode(
 ): PlannedNode | CompiledReadFallback {
   const nested = shape === 'json';
   const columns: PlannedColumn[] = [];
+  const counts: PlannedCount[] = [];
   const relations: PlannedRelation[] = [];
   const fields = context.metadata.get(model.name);
   if (fields === undefined) {
@@ -795,6 +900,14 @@ function planNode(
   if (projection.select !== undefined) {
     for (const [name, value] of Object.entries(projection.select)) {
       if (value === false || value === undefined) {
+        continue;
+      }
+      if (name === RELATION_COUNT_FIELD) {
+        const planned = planCounts(context, model, value, path);
+        if (isFallback(planned)) {
+          return planned;
+        }
+        counts.push(...planned);
         continue;
       }
       const field = fields.fieldsByName.get(name);
@@ -833,6 +946,14 @@ function planNode(
       if (value === false || value === undefined) {
         continue;
       }
+      if (name === RELATION_COUNT_FIELD) {
+        const planned = planCounts(context, model, value, path);
+        if (isFallback(planned)) {
+          return planned;
+        }
+        counts.push(...planned);
+        continue;
+      }
       const field = fields.fieldsByName.get(name);
       if (field?.kind !== 'object') {
         return fallback(
@@ -847,10 +968,10 @@ function planNode(
       relations.push(relation);
     }
   }
-  if (columns.length === 0 && relations.length === 0) {
+  if (columns.length === 0 && relations.length === 0 && counts.length === 0) {
     return fallback('projection', `${describePath(path)} is read with an empty projection`);
   }
-  return { columns, relations, drop: [] };
+  return { columns, counts, relations, drop: [] };
 }
 
 function correlateBatches(
@@ -1126,6 +1247,21 @@ class NestedBuilder {
       : this.aggregation.jsonObjectFrom(child);
   }
 
+  count(count: PlannedCount, parentAlias: string): AliasedRawBuilder<unknown, string> {
+    const sql = this.kysely.sql;
+    const conditions: RawBuilder<unknown>[] = count.correlation.map(
+      (pair) => sql`${sql.id(count.alias, pair.child)} = ${sql.id(parentAlias, pair.parent)}`,
+    );
+    if (count.where !== undefined) {
+      conditions.push(sql`(${this.predicate(count.model, count.alias, count.where)})`);
+    }
+    return sql`(select count(*) from ${sql.id(count.table)} as ${sql.id(
+      count.alias,
+    )} where ${sql.join(conditions, sql.raw(' and '))})`.as(
+      count.column,
+    ) as AliasedRawBuilder<unknown, string>;
+  }
+
   root(relation: PlannedRelation, parentAlias: string): AliasedRawBuilder<unknown, string> {
     const sql = this.kysely.sql;
     return sql`cast(${this.aggregate(relation, parentAlias)} as text)`.as(
@@ -1353,6 +1489,9 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     for (const column of node.columns) {
       query = query.select(sql`${sql.id(ROOT_ALIAS, column.dbName)}`.as(column.name) as never);
     }
+    for (const count of node.counts) {
+      query = query.select(builder.count(count, ROOT_ALIAS) as never);
+    }
     for (const relation of node.relations) {
       if (relation.shape !== 'json') {
         continue;
@@ -1408,6 +1547,7 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     parameters: compiled.parameters,
     reversed: bounds.reversed,
     columns: node.columns.map((column) => ({ name: column.name, dbName: column.dbName })),
+    counts: node.counts.map((count) => ({ name: count.name, column: count.column })),
     relations: node.relations.filter((relation) => relation.shape === 'json').map(nestedProjection),
     batches: node.relations
       .filter((relation) => relation.shape === 'row')
