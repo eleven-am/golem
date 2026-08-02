@@ -1,5 +1,6 @@
-import { context, engineFor, seed } from './support/analytics';
+import { context, engineFor, seed, seedPlays } from './support/analytics';
 import { analyticsSuite } from './support/expectations';
+import { multiPassSuite } from './support/multipass';
 import { SqliteHandle, openSqlite } from './support/sqlite';
 
 describe('a scoped analytical query against a live sqlite database', () => {
@@ -8,6 +9,7 @@ describe('a scoped analytical query against a live sqlite database', () => {
   beforeAll(async () => {
     handle = await openSqlite();
     await seed(handle.prisma, () => '?');
+    await seedPlays(handle.prisma, () => '?');
   });
 
   afterAll(async () => {
@@ -15,6 +17,11 @@ describe('a scoped analytical query against a live sqlite database', () => {
   });
 
   analyticsSuite(() => ({ provider: 'sqlite', client: handle.prisma as unknown as Record<string, any> }));
+
+  multiPassSuite(() => ({
+    provider: 'sqlite',
+    client: handle.prisma as unknown as Record<string, any>,
+  }));
 
   it('binds the policy parameter rather than inlining it', async () => {
     const compiled = await engineFor(

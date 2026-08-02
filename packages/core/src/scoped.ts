@@ -5,6 +5,7 @@ import type {
   Kysely,
   OperationNode,
   QueryCompiler,
+  QueryCreator,
   RawBuilder,
   SelectQueryBuilder,
   Sql,
@@ -71,6 +72,13 @@ export interface ScopedStatement<O> {
   execute(): Promise<O[]>;
 }
 
+export type ScopedQueryCreator = Pick<QueryCreator<ScopedDatabase>, 'with' | 'selectFrom'>;
+
+export type ScopedQueryBuilder<O> = (
+  builder: ScopedSelectBuilder,
+  creator: ScopedQueryCreator,
+) => SelectQueryBuilder<ScopedDatabase, string, O>;
+
 export interface ScopedQuery {
   join(
     kind: ScopedJoinKind,
@@ -78,11 +86,7 @@ export interface ScopedQuery {
     alias: string,
     on: ScopedJoinCondition,
   ): ScopedQuery;
-  query<O>(
-    build: (
-      builder: ScopedSelectBuilder,
-    ) => SelectQueryBuilder<ScopedDatabase, string, O>,
-  ): ScopedStatement<O>;
+  query<O>(build: ScopedQueryBuilder<O>): ScopedStatement<O>;
 }
 
 export interface ScopedRequest {
@@ -283,6 +287,85 @@ export interface ScopedValidationInput {
   readonly node: unknown;
   readonly roots: ReadonlyMap<string, unknown>;
   readonly rawNodes: ReadonlySet<unknown>;
+  readonly physicalTables: ReadonlyMap<string, string>;
+}
+
+function foldedName(name: string): string {
+  return name.toLowerCase();
+}
+
+function commonTableNames(withNode: unknown): readonly (string | undefined)[] {
+  const expressions = (readProp(withNode, 'expressions') ?? []) as readonly unknown[];
+  return expressions.map((expression) =>
+    tableIdentifier(readProp(readProp(expression, 'name'), 'table')).name,
+  );
+}
+
+function walkScopedNodes(
+  root: unknown,
+  rawNodes: ReadonlySet<unknown>,
+  visit: (node: OperationNode, visible: ReadonlySet<string>) => void,
+): void {
+  const seen = new WeakMap<object, Set<string>>();
+  const descendWith = (withNode: unknown, outer: ReadonlySet<string>): ReadonlySet<string> => {
+    const expressions = (readProp(withNode, 'expressions') ?? []) as readonly unknown[];
+    const names = commonTableNames(withNode);
+    const recursive = readProp(withNode, 'recursive') === true;
+    const visible = new Set(outer);
+    if (recursive) {
+      for (const name of names) {
+        if (name !== undefined) {
+          visible.add(name);
+        }
+      }
+    }
+    expressions.forEach((expression, index) => {
+      step(expression, new Set(visible));
+      const name = names[index];
+      if (!recursive && name !== undefined) {
+        visible.add(name);
+      }
+    });
+    return visible;
+  };
+  const step = (value: unknown, visible: ReadonlySet<string>): void => {
+    if (Array.isArray(value)) {
+      for (const entry of value) {
+        step(entry, visible);
+      }
+      return;
+    }
+    if (!value || typeof value !== 'object') {
+      return;
+    }
+    if (rawNodes.has(value)) {
+      return;
+    }
+    const reached = [...visible].sort().join(' ');
+    let scopes = seen.get(value);
+    if (scopes === undefined) {
+      scopes = new Set<string>();
+      seen.set(value, scopes);
+    }
+    if (scopes.has(reached)) {
+      return;
+    }
+    scopes.add(reached);
+    if (typeof (value as { kind?: unknown }).kind === 'string') {
+      visit(value as OperationNode, visible);
+    }
+    const withNode =
+      nodeKind(value) === 'SelectQueryNode' ? readProp(value, 'with') : undefined;
+    const inner =
+      withNode === undefined || withNode === null ? visible : descendWith(withNode, visible);
+    for (const [property, child] of Object.entries(value as Record<string, unknown>)) {
+      if (property === 'with' && inner !== visible) {
+        continue;
+      }
+      step(child, inner);
+    }
+  };
+  step(root, new Set<string>());
 }
 
 function assertSingleSelect(input: ScopedValidationInput): void {
@@ -311,67 +394,117 @@ function assertNoSetOperations(input: ScopedValidationInput): void {
   }
 }
 
+function unwrapAlias(node: unknown): unknown {
+  return nodeKind(node) === 'AliasNode' ? readProp(node, 'node') : node;
+}
+
+function assertCommonTableExpressionNames(input: ScopedValidationInput): void {
+  const aliases = new Map<string, string>();
+  for (const alias of input.roots.keys()) {
+    aliases.set(foldedName(alias), alias);
+  }
+  walkNodes(input.node, (node) => {
+    if (input.rawNodes.has(node)) {
+      return false;
+    }
+    if (nodeKind(node) !== 'CommonTableExpressionNameNode') {
+      return true;
+    }
+    const name = tableIdentifier(readProp(node, 'table')).name;
+    if (name === undefined) {
+      return true;
+    }
+    const model = input.physicalTables.get(foldedName(name));
+    if (model !== undefined) {
+      refuse(
+        `a scoped query may not name a common table expression "${name}", which is the physical table of model "${model}": the name would shadow the table its own body reads, which sqlite rejects as a circular reference and postgres silently resolves the other way`,
+      );
+    }
+    const alias = aliases.get(foldedName(name));
+    if (alias !== undefined) {
+      refuse(
+        `a scoped query may not name a common table expression "${name}", which is already the alias of the scoped root "${alias}": a read of that name would resolve to one or the other depending on where it stands`,
+      );
+    }
+    return true;
+  });
+}
+
 function assertScopedRootsIntact(input: ScopedValidationInput): void {
   const registered = new Set(input.roots.values());
+  const declared = new Set(
+    commonTableNames(readProp(input.node, 'with')).filter(
+      (name): name is string => name !== undefined,
+    ),
+  );
+  const namesDeclaredTable = (candidate: unknown): boolean => {
+    const unwrapped = unwrapAlias(candidate);
+    if (nodeKind(unwrapped) !== 'TableNode') {
+      return false;
+    }
+    const name = tableIdentifier(unwrapped).name;
+    return name !== undefined && declared.has(name);
+  };
   const froms = (readProp(readProp(input.node, 'from'), 'froms') ?? []) as readonly OperationNode[];
   if (froms.length === 0) {
     refuse('a scoped query must read from a scoped root, but its FROM clause is empty');
   }
   for (const from of froms) {
-    if (!registered.has(from)) {
-      refuse(
-        `the FROM clause of a scoped query must be a scoped root golem created, but it carries a ${nodeKind(
-          from,
-        )} golem did not create; the policy predicate is not applied to it`,
-      );
+    if (registered.has(from) || namesDeclaredTable(from)) {
+      continue;
     }
+    if (nodeKind(unwrapAlias(from)) === 'SelectQueryNode') {
+      continue;
+    }
+    refuse(
+      `the FROM clause of a scoped query must be a scoped root golem created, a subquery over one, or a common table expression it declares, but it carries a ${nodeKind(
+        from,
+      )} golem did not create; the policy predicate is not applied to it`,
+    );
   }
   const joins = (readProp(input.node, 'joins') ?? []) as readonly OperationNode[];
   for (const join of joins) {
     const joined = readProp(join, 'table');
-    if (!registered.has(joined)) {
-      refuse(
-        `a scoped query may only join scoped roots golem created, but it joins a ${nodeKind(
-          joined,
-        )} golem did not create; the policy predicate is not applied to it`,
-      );
+    if (registered.has(joined) || namesDeclaredTable(joined)) {
+      continue;
     }
-  }
-  if (readProp(input.node, 'with') !== undefined) {
     refuse(
-      'a scoped query cannot carry a common table expression: a CTE named after the model would shadow the table its own body reads, which sqlite rejects as a circular reference and postgres silently resolves the other way',
+      `a scoped query may only join scoped roots golem created and the common table expressions it declares, but it joins a ${nodeKind(
+        joined,
+      )} golem did not create; the policy predicate is not applied to it`,
     );
   }
 }
 
 function assertNoTableRead(input: ScopedValidationInput): void {
   const registered = new Set(input.roots.values());
-  const check = (candidate: unknown, clause: string): void => {
+  const check = (candidate: unknown, clause: string, visible: ReadonlySet<string>): void => {
     if (registered.has(candidate)) {
       return;
     }
-    const unwrapped = nodeKind(candidate) === 'AliasNode' ? readProp(candidate, 'node') : candidate;
-    if (nodeKind(unwrapped) === 'TableNode') {
-      refuse(
-        `a scoped query may not read the table "${
-          tableIdentifier(unwrapped).name ?? 'unknown'
-        }" in a ${clause} clause; only the scoped roots golem created carry a policy predicate`,
-      );
+    const unwrapped = unwrapAlias(candidate);
+    if (nodeKind(unwrapped) !== 'TableNode') {
+      return;
     }
+    const name = tableIdentifier(unwrapped).name;
+    if (name !== undefined && visible.has(name)) {
+      return;
+    }
+    refuse(
+      `a scoped query may not read the table "${
+        name ?? 'unknown'
+      }" in a ${clause} clause; only the scoped roots golem created carry a policy predicate`,
+    );
   };
-  walkNodes(input.node, (node) => {
-    if (input.rawNodes.has(node)) {
-      return false;
-    }
+  walkScopedNodes(input.node, input.rawNodes, (node, visible) => {
     if (nodeKind(node) === 'FromNode') {
       for (const from of (readProp(node, 'froms') ?? []) as readonly unknown[]) {
-        check(from, 'FROM');
+        check(from, 'FROM', visible);
       }
     }
     if (nodeKind(node) === 'JoinNode') {
-      check(readProp(node, 'table'), 'JOIN');
+      check(readProp(node, 'table'), 'JOIN', visible);
     }
-    return true;
   });
 }
 
@@ -470,6 +603,7 @@ export function validateScopedQuery(input: ScopedValidationInput): void {
   assertSingleSelect(input);
   assertNoSetOperations(input);
   assertNoDataModification(input);
+  assertCommonTableExpressionNames(input);
   assertScopedRootsIntact(input);
   assertNoForeignRaw(input);
   assertNoTableRead(input);
@@ -547,9 +681,7 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
   constructor(
     private readonly host: ScopedHost,
     private readonly plans: readonly ScopedRootPlan[],
-    private readonly build: (
-      builder: ScopedSelectBuilder,
-    ) => SelectQueryBuilder<ScopedDatabase, string, O>,
+    private readonly build: ScopedQueryBuilder<O>,
   ) {}
 
   private async prepare(): Promise<CompiledScopedQuery> {
@@ -607,7 +739,7 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
       const joined = readProp(join, 'table');
       roots.set(identifierName(readProp(joined, 'alias')) ?? '', joined);
     }
-    const shaped = this.build(rooted as ScopedSelectBuilder);
+    const shaped = this.build(rooted as ScopedSelectBuilder, db as ScopedQueryCreator);
     if (
       !shaped ||
       typeof (shaped as unknown as { toOperationNode?: unknown }).toOperationNode !== 'function'
@@ -617,7 +749,13 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
       );
     }
     const node = shaped.toOperationNode() as unknown as OperationNode;
-    validateScopedQuery({ node, roots, rawNodes });
+    const physicalTables = new Map<string, string>();
+    for (const model of this.host.models) {
+      if (model.dbName != null) {
+        physicalTables.set(foldedName(model.dbName), model.name);
+      }
+    }
+    validateScopedQuery({ node, roots, rawNodes, physicalTables });
     const compiled: CompiledQuery = dialect
       .createCompiler(kysely)
       .compileQuery(node as never, kysely.createQueryId());
@@ -654,11 +792,7 @@ class ScopedQueryImpl implements ScopedQuery {
     return new ScopedQueryImpl(this.host, [...this.plans, { model, alias, kind, on }]);
   }
 
-  query<O>(
-    build: (
-      builder: ScopedSelectBuilder,
-    ) => SelectQueryBuilder<ScopedDatabase, string, O>,
-  ): ScopedStatement<O> {
+  query<O>(build: ScopedQueryBuilder<O>): ScopedStatement<O> {
     return new ScopedStatementImpl(this.host, this.plans, build);
   }
 }

@@ -56,6 +56,12 @@ function attempt(build: (builder: any) => unknown): Promise<CompiledScopedQuery>
     .compile();
 }
 
+function compose(build: (builder: any, creator: any) => unknown): Promise<CompiledScopedQuery> {
+  return scoped()
+    .query((builder, creator) => build(builder, creator) as never)
+    .compile();
+}
+
 describe('the narrowed builder type', () => {
   it('removes every documented escape from the type golem hands out', () => {
     expect(escapesRemovedFromTheType).toBe(true);
@@ -234,7 +240,7 @@ describe('the thirteen escapes, each cast past the type', () => {
     );
   });
 
-  it('refuses withPlugin when the plugin adds a common table expression', async () => {
+  it('refuses withPlugin when the plugin adds a common table expression over a raw table', async () => {
     const smuggler: KyselyPlugin = {
       transformQuery: ({ node }) =>
         node.kind === 'SelectQueryNode'
@@ -255,7 +261,7 @@ describe('the thirteen escapes, each cast past the type', () => {
       transformResult: async ({ result }) => result,
     };
     await expect(attempt((qb) => qb.select('Post.id').withPlugin(smuggler))).rejects.toThrow(
-      'cannot carry a common table expression',
+      'may not read the table "secrets" in a FROM clause',
     );
   });
 });
@@ -405,6 +411,163 @@ describe('escapes the thirteen do not cover', () => {
     await expect(
       attempt((qb) => qb.innerJoin('secrets', 'secrets.id', 'Post.id')),
     ).rejects.toBeInstanceOf(GolemValidationError);
+  });
+});
+
+describe('the composition a multi-pass query needs, turned against the root', () => {
+  it('refuses a common table expression whose body reads a raw table', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('leak', (c: any) => c.selectFrom('secrets').select('secrets.value as value'))
+          .selectFrom('leak')
+          .select('leak.value'),
+      ),
+    ).rejects.toThrow('may not read the table "secrets" in a FROM clause');
+  });
+
+  it('refuses a common table expression named after a physical table', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('posts', () => qb.select('Post.id'))
+          .selectFrom('posts')
+          .select('posts.id'),
+      ),
+    ).rejects.toThrow(
+      'may not name a common table expression "posts", which is the physical table of model "Post"',
+    );
+  });
+
+  it('refuses a common table expression named after a physical table in any letter case', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('POSTS', () => qb.select('Post.id'))
+          .selectFrom('POSTS')
+          .select('POSTS.id'),
+      ),
+    ).rejects.toThrow('which is the physical table of model "Post"');
+  });
+
+  it('refuses a common table expression named after a physical table no root reads', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('metrics', () => qb.select('Post.id'))
+          .selectFrom('metrics')
+          .select('metrics.id'),
+      ),
+    ).rejects.toThrow('which is the physical table of model "Metric"');
+  });
+
+  it('refuses a common table expression named after a scoped root', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('Post', () => qb.select('Post.id'))
+          .selectFrom('Post')
+          .select('Post.id'),
+      ),
+    ).rejects.toThrow('which is already the alias of the scoped root "Post"');
+  });
+
+  it('refuses a subquery in FROM that reaches a raw table at depth three', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .selectFrom(
+            db
+              .selectFrom(
+                db.selectFrom('secrets').select('secrets.value as value').as('third'),
+              )
+              .select('third.value as value')
+              .as('second'),
+          )
+          .select('second.value'),
+      ),
+    ).rejects.toThrow('may not read the table "secrets" in a FROM clause');
+  });
+
+  it('refuses a data-modifying common table expression, which on postgres is still a SELECT', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('gone', () => foreign.deleteFrom('posts'))
+          .selectFrom(qb.select('Post.id').as('base'))
+          .select('base.id'),
+      ),
+    ).rejects.toThrow('must be a SELECT, but "gone" is a DeleteQueryNode');
+  });
+
+  it('refuses a join inside a common table expression body onto a raw table', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('mixed', (c: any) =>
+            c
+              .selectFrom(qb.select('Post.id').as('base'))
+              .innerJoin('secrets', 'secrets.id', 'base.id')
+              .select('base.id as id'),
+          )
+          .selectFrom('mixed')
+          .select('mixed.id'),
+      ),
+    ).rejects.toThrow('may not read the table "secrets" in a JOIN clause');
+  });
+
+  it('refuses a read of a common table expression declared out of scope', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .selectFrom(qb.select('Post.id').as('base'))
+          .select('base.id')
+          .where((eb: any) => eb.exists(eb.selectFrom('hidden').select('hidden.id')))
+          .where((eb: any) =>
+            eb.exists(
+              db
+                .with('hidden', () => qb.select('Post.id'))
+                .selectFrom('hidden')
+                .select('hidden.id'),
+            ),
+          ),
+      ),
+    ).rejects.toThrow('may not read the table "hidden" in a FROM clause');
+  });
+
+  it('refuses a common table expression that reads a sibling declared after it', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('first', (c: any) => c.selectFrom('second').select('second.id as id'))
+          .with('second', () => qb.select('Post.id'))
+          .selectFrom('first')
+          .select('first.id'),
+      ),
+    ).rejects.toThrow('may not read the table "second" in a FROM clause');
+  });
+
+  it('refuses a common table expression that reads the physical table it is named for', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('shadow', (c: any) => c.selectFrom('shadow').select('shadow.id as id'))
+          .selectFrom('shadow')
+          .select('shadow.id'),
+      ),
+    ).rejects.toThrow('may not read the table "shadow" in a FROM clause');
+  });
+
+  it('still refuses a join onto a raw table at the top level of a composed query', async () => {
+    await expect(
+      compose((qb, db) =>
+        db
+          .with('base', () => qb.select('Post.id'))
+          .selectFrom('base')
+          .innerJoin('secrets', 'secrets.id', 'base.id')
+          .select('base.id'),
+      ),
+    ).rejects.toThrow('may only join scoped roots golem created');
   });
 });
 

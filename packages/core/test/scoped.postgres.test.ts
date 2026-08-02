@@ -1,5 +1,6 @@
-import { context, engineFor, seed } from './support/analytics';
+import { context, engineFor, seed, seedPlays } from './support/analytics';
 import { analyticsSuite } from './support/expectations';
+import { multiPassSuite } from './support/multipass';
 import {
   POSTGRES_OPTIONAL,
   POSTGRES_URL_ENV,
@@ -24,6 +25,7 @@ describe('a scoped analytical query against a live postgres database', () => {
     }
     handle = await openPostgres(url);
     await seed(handle.prisma, (position) => `$${position}`);
+    await seedPlays(handle.prisma, (position) => `$${position}`);
   });
 
   afterAll(async () => {
@@ -34,6 +36,11 @@ describe('a scoped analytical query against a live postgres database', () => {
     it.skip(`skipped: ${POSTGRES_URL_HINT}`, () => undefined);
   } else {
     analyticsSuite(() => ({
+      provider: 'postgresql',
+      client: handle.prisma as unknown as Record<string, any>,
+    }));
+
+    multiPassSuite(() => ({
       provider: 'postgresql',
       client: handle.prisma as unknown as Record<string, any>,
     }));

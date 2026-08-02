@@ -135,6 +135,53 @@ describe('the scoped root', () => {
     expect(compiled.sql).toContain('group by "magnitude"');
   });
 
+  it('compiles a subquery over the scoped root in the FROM clause', async () => {
+    const engine = scopedEngine({ constraints: { Post: { authorId: 7 } } });
+    const compiled = await engine
+      .scoped({ model: 'Post', context: scopedContext })
+      .query((qb, db) =>
+        db
+          .selectFrom(qb.select(['Post.id', 'Post.views']).as('inner') as never)
+          .select('inner.id' as never)
+          .select((eb) => eb.fn.sum('inner.views' as never).as('views')) as never,
+      )
+      .compile();
+
+    expect(compiled.sql).toBe(
+      'select "inner"."id", sum("inner"."views") as "views" from ' +
+        `(select "Post"."id", "Post"."views" from ${SCOPED_POST}) as "inner"`,
+    );
+    expect(compiled.parameters).toEqual([7]);
+  });
+
+  it('compiles a chain of common table expressions carrying the predicate once', async () => {
+    const engine = scopedEngine({ constraints: { Post: { authorId: 7 } } });
+    const compiled = await engine
+      .scoped({ model: 'Post', context: scopedContext })
+      .query((qb, db) =>
+        db
+          .with('first', () => qb.select(['Post.id', 'Post.authorId', 'Post.views']))
+          .with('second', (c) =>
+            (c as never as typeof db)
+              .selectFrom('first')
+              .select('first.authorId as authorId' as never)
+              .select((eb) => eb.fn.avg('first.views' as never).as('mean')) as never,
+          )
+          .selectFrom('second')
+          .select(['second.authorId' as never, 'second.mean' as never]) as never,
+      )
+      .compile();
+
+    expect(compiled.sql).toBe(
+      'with "first" as (select "Post"."id", "Post"."authorId", "Post"."views" from ' +
+        `${SCOPED_POST}), ` +
+        '"second" as (select "first"."authorId" as "authorId", avg("first"."views") as "mean" ' +
+        'from "first") select "second"."authorId", "second"."mean" from "second"',
+    );
+    expect(compiled.sql.match(/"g0"."author_id" IS \?/g)).toHaveLength(1);
+    expect(compiled.parameters).toEqual([7]);
+  });
+
   it('refuses to read a scoped alias as a table inside a subquery, where no predicate reaches', async () => {
     const engine = scopedEngine({ constraints: { Post: { published: true } } });
     await expect(
