@@ -1,7 +1,12 @@
+import { evaluateConditions } from '@eleven-am/golem-policy';
 import { DatamodelModel } from '../../src/datamodel';
 import { GolemEngine } from '../../src/operations';
 import { scopedModels } from './fixture';
-import { AuthorizationProvider } from '../../src/authorization';
+import {
+  AuthorizationProvider,
+  FieldClassification,
+  FieldDependencyTree,
+} from '../../src/authorization';
 
 export interface SeedRow {
   readonly id: number;
@@ -294,6 +299,75 @@ export function engineFor(
     hiddenFields,
     checkWriteResults: false,
     checkReadFields: false,
+  });
+}
+
+export interface FieldMaskSpec {
+  readonly model: string;
+  readonly field: string;
+  readonly condition: unknown;
+  readonly requires?: readonly string[];
+  readonly dependencies?: FieldDependencyTree;
+  readonly withheld?: boolean;
+  readonly discharged?: boolean;
+  readonly evaluate?: (entity: Record<string, unknown>) => boolean;
+}
+
+export interface MaskingEngineOptions {
+  readonly client: Record<string, any>;
+  readonly provider: string;
+  readonly masks: readonly FieldMaskSpec[];
+  readonly constraints?: Record<string, unknown>;
+  readonly models?: readonly DatamodelModel[];
+  readonly onCheckField?: (model: string, field: string) => void;
+}
+
+export function maskingEngineFor(options: MaskingEngineOptions): GolemEngine {
+  const models = options.models ?? scopedModels;
+  const constraints = options.constraints ?? {};
+  const specFor = (model: string, field: string): FieldMaskSpec | undefined =>
+    options.masks.find((mask) => mask.model === model && mask.field === field);
+  const authorization: AuthorizationProvider = {
+    authorize: async () => undefined,
+    constrain: async (_action, model) => constraints[model],
+    check: async (_action, model, entity) => satisfies(entity, constraints[model]),
+    checkField: async (_action, model, entity, field) => {
+      options.onCheckField?.(model, field);
+      const spec = specFor(model, field);
+      if (spec === undefined) {
+        return true;
+      }
+      if (spec.evaluate !== undefined) {
+        return spec.evaluate(entity as Record<string, unknown>);
+      }
+      return evaluateConditions(spec.condition, entity, { datamodel: { models }, model });
+    },
+    constrainField: async (_action, model, field) => {
+      const spec = specFor(model, field);
+      return spec === undefined || spec.withheld === true ? undefined : spec.condition;
+    },
+    classifyFields: async (_action, model, fields) => {
+      const classification: Record<string, FieldClassification> = {};
+      for (const field of fields) {
+        const spec = specFor(model, field);
+        classification[field] =
+          spec === undefined
+            ? { access: 'always' }
+            : {
+                access: 'conditional',
+                requires: spec.requires ?? [],
+                dependencies: spec.dependencies,
+                dischargedByConstraint: spec.discharged === true,
+              };
+      }
+      return classification;
+    },
+  };
+  return new GolemEngine(options.client, models, {
+    provider: options.provider,
+    authorization,
+    checkWriteResults: false,
+    checkReadFields: true,
   });
 }
 

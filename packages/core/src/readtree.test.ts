@@ -1,7 +1,8 @@
-import { AuthorizationProvider } from './authorization';
+import { AuthorizationProvider, FieldClassification } from './authorization';
 import { DatamodelDocument } from './datamodel';
 import { GolemForbiddenError, GolemValidationError } from './errors';
 import { GolemEngine } from './operations';
+import { prepareReadTree } from './readtree';
 import { field } from './testing';
 
 const datamodel: DatamodelDocument = {
@@ -949,5 +950,142 @@ describe('relation-scoped read hydration', () => {
       engine.findMany({ model: 'Session', select: { progress: true }, context: ctx }),
     ).rejects.toThrow('relation dependency "post" has no exact hydration tree');
     expect(client.session.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('what a prepared read tree records about a masked field', () => {
+  const models: DatamodelDocument = {
+    models: [
+      {
+        name: 'Note',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'body', type: 'String' }),
+          field({ name: 'secret', type: 'String', isRequired: false }),
+          field({ name: 'ownerId', type: 'String' }),
+          field({
+            name: 'owner',
+            type: 'Owner',
+            kind: 'object',
+            relationName: 'NoteToOwner',
+            relationFromFields: ['ownerId'],
+            relationToFields: ['id'],
+          }),
+        ],
+      },
+      {
+        name: 'Owner',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'tenant', type: 'String' }),
+        ],
+      },
+    ],
+    enums: [],
+  };
+
+  function noteProvider(
+    classification: Record<string, FieldClassification>,
+    constrainField?: jest.Mock,
+  ): AuthorizationProvider {
+    return {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async () => ({})),
+      checkField: jest.fn(async () => true),
+      classifyFields: jest.fn(async (_action, _model, fields: readonly string[]) =>
+        Object.fromEntries(
+          fields.map((name) => [name, classification[name] ?? { access: 'always' as const }]),
+        ),
+      ),
+      ...(constrainField ? { constrainField } : {}),
+    };
+  }
+
+  function prepare(provider: AuthorizationProvider, select?: Record<string, unknown>) {
+    return prepareReadTree({
+      model: models.models[0],
+      modelsByName: new Map(models.models.map((model) => [model.name, model])),
+      select,
+      provider,
+      context: { req: {} },
+      maxDepth: 5,
+      readFieldChecks: true,
+    });
+  }
+
+  it('carries the condition the provider hands over for each masked field', async () => {
+    const constrainField = jest.fn(async () => ({ ownerId: 'me' }));
+    const prepared = await prepare(
+      noteProvider({ secret: { access: 'conditional', requires: ['ownerId'] } }, constrainField),
+      { body: true, secret: true },
+    );
+
+    expect(prepared.maskChecks).toEqual([
+      { path: [], model: 'Note', field: 'secret', constraint: { ownerId: 'me' } },
+    ]);
+    expect(constrainField).toHaveBeenCalledWith('read', 'Note', 'secret', { req: {} });
+  });
+
+  it('carries no condition at all when the provider offers none', async () => {
+    const prepared = await prepare(
+      noteProvider({ secret: { access: 'conditional', requires: ['ownerId'] } }),
+      { body: true, secret: true },
+    );
+
+    expect(prepared.maskChecks).toEqual([
+      { path: [], model: 'Note', field: 'secret', constraint: undefined },
+    ]);
+  });
+
+  it('names the masked field each column was hydrated for', async () => {
+    const prepared = await prepare(
+      noteProvider(
+        { secret: { access: 'conditional', requires: ['ownerId'] } },
+        jest.fn(async () => ({ ownerId: 'me' })),
+      ),
+      { body: true, secret: true },
+    );
+
+    expect(prepared.injected).toEqual([{ path: [], field: 'ownerId', masks: ['secret'] }]);
+  });
+
+  it('names every masked field a shared column was hydrated for', async () => {
+    const prepared = await prepare(
+      noteProvider(
+        {
+          secret: { access: 'conditional', requires: ['ownerId'] },
+          body: { access: 'conditional', requires: ['ownerId'] },
+        },
+        jest.fn(async () => ({ ownerId: 'me' })),
+      ),
+      { body: true, secret: true },
+    );
+
+    expect(prepared.injected).toEqual([
+      { path: [], field: 'ownerId', masks: ['body', 'secret'] },
+    ]);
+  });
+
+  it('names the masked field a hydrated relation was injected for', async () => {
+    const prepared = await prepare(
+      noteProvider(
+        {
+          secret: {
+            access: 'conditional',
+            requires: ['owner'],
+            dependencies: { owner: { tenant: true } },
+          },
+        },
+        jest.fn(async () => ({ owner: { is: { tenant: 'acme' } } })),
+      ),
+      { body: true, secret: true },
+    );
+
+    expect(prepared.injected).toEqual([{ path: [], field: 'owner', masks: ['secret'] }]);
+    expect(prepared.select).toEqual({
+      body: true,
+      secret: true,
+      owner: { select: { tenant: true } },
+    });
   });
 });

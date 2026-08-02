@@ -1,6 +1,12 @@
 import { CompiledReadEvent } from '../../src/compiled-read';
 import { FindManyRequest, FindOneRequest, GolemEngine } from '../../src/operations';
-import { context, engineFor, metrics } from './analytics';
+import {
+  FieldMaskSpec,
+  context,
+  engineFor,
+  maskingEngineFor,
+  metrics,
+} from './analytics';
 
 export interface OracleSubject {
   readonly provider: string;
@@ -1622,5 +1628,428 @@ export function oracleSuite(subject: () => OracleSubject): void {
     expect(compiled).toBeInstanceOf(Error);
     expect(prisma).toBeInstanceOf(Error);
     expect((compiled as Error).constructor).toBe((prisma as Error).constructor);
+  });
+
+  const maskedEngine = (
+    masks: readonly FieldMaskSpec[],
+    onCheckField?: (model: string, field: string) => void,
+  ): GolemEngine =>
+    maskingEngineFor({
+      client: subject().client,
+      provider: subject().provider,
+      masks,
+      onCheckField,
+    });
+
+  describe('a field the caller may read only on some rows', () => {
+    const ownedByAda: FieldMaskSpec = {
+      model: 'Metric',
+      field: 'note',
+      condition: { ownerId: 1 },
+      requires: ['ownerId'],
+    };
+
+    it('nulls the same rows whether the database or golem masks it', async () => {
+      const run = await runBothMany(maskedEngine([ownedByAda]), {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+      });
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['note']);
+      expect(event.sql).toContain('case when');
+      expect(run.compiled).toEqual([
+        { id: 1, note: 'first' },
+        { id: 2, note: null },
+        { id: 3, note: null },
+        { id: 4, note: null },
+        { id: 5, note: null },
+      ]);
+    });
+
+    it('answers each masked column of a row on its own condition, not its neighbour', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          ownedByAda,
+          { model: 'Metric', field: 'label', condition: { ownerId: 2 }, requires: ['ownerId'] },
+        ]),
+        {
+          model: 'Metric',
+          select: { id: true, label: true, note: true },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['label', 'note']);
+      expect(event.deferred).toEqual([]);
+      expect(run.compiled).toEqual([
+        { id: 1, label: null, note: 'first' },
+        { id: 2, label: null, note: null },
+        { id: 3, label: 'gamma', note: null },
+        { id: 4, label: 'delta', note: null },
+        { id: 5, label: null, note: null },
+      ]);
+    });
+
+    it('still masks a relation field in memory when the root masks one of the same name', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'User', field: 'name', condition: { tenantId: 2 }, requires: ['tenantId'] },
+        ]),
+        {
+          model: 'User',
+          select: { id: true, name: true, profile: { select: { user: { select: { name: true } } } } },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['name']);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ path: 'profile.user', field: 'name', reason: 'relation' }),
+      ]);
+      expect(run.compiled).toEqual([
+        { id: 1, name: null, profile: { user: { name: null } } },
+        { id: 2, name: null, profile: { user: { name: null } } },
+        { id: 3, name: 'Cleo', profile: null },
+        { id: 4, name: 'Dee', profile: null },
+      ]);
+    });
+
+    it('checks a field row by row when the condition handed over is a null denial', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Metric',
+            field: 'note',
+            condition: null,
+            requires: ['ownerId'],
+            evaluate: (row) => row.ownerId === 1,
+          },
+        ]),
+        { model: 'Metric', select: { id: true, note: true }, orderBy: [{ id: 'asc' }] },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ field: 'note', reason: 'unconstrained' }),
+      ]);
+      expect(event.sql).not.toContain('case when');
+      expect(run.compiled).toEqual([
+        { id: 1, note: 'first' },
+        { id: 2, note: null },
+        { id: 3, note: null },
+        { id: 4, note: null },
+        { id: 5, note: null },
+      ]);
+    });
+
+    it('keeps the key a batched relation correlates on whole, and masks it after the batch', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'User', field: 'id', condition: { tenantId: 1 }, requires: ['tenantId'] },
+        ]),
+        {
+          model: 'User',
+          select: { id: true, name: true, metrics: { select: { id: true } } },
+          orderBy: [{ name: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.batched).toEqual(['metrics']);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ field: 'id', reason: 'correlated' }),
+      ]);
+      expect(run.compiled).toEqual([
+        { id: 1, name: 'Ada', metrics: [{ id: 1 }, { id: 2 }] },
+        { id: 2, name: 'Bob', metrics: [{ id: 3 }, { id: 4 }] },
+        { id: null, name: 'Cleo', metrics: [{ id: 5 }] },
+        { id: null, name: 'Dee', metrics: [] },
+      ]);
+    });
+
+    it('asks the database for no column it only needed to run the check in memory', async () => {
+      const run = await runBothMany(maskedEngine([ownedByAda]), {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+      });
+
+      expectIdentical(run);
+      expect(expectCompiled(run).sql).not.toContain('as "ownerId"');
+      expect(statements(run)[0]).not.toContain('owner_id" as');
+    });
+
+    it('never asks the provider about a row once the database masks the field', async () => {
+      const asked: string[] = [];
+      const engine = maskedEngine([ownedByAda], (model, field) => asked.push(`${model}.${field}`));
+      const request = {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+        context,
+      } as const;
+
+      const compiled = await engine.findMany({ ...request, compiled: true });
+      expect(asked).toEqual([]);
+
+      const prisma = await engine.findMany({ ...request });
+      expect(asked).toEqual(
+        metrics.filter((metric) => metric.note !== null).map(() => 'Metric.note'),
+      );
+      expect(compiled).toStrictEqual(prisma);
+    });
+
+    it('shows two callers of the same row different values', async () => {
+      const request = {
+        model: 'Metric',
+        select: { id: true, note: true },
+        where: { id: 3 },
+        orderBy: [{ id: 'asc' }],
+      } as const;
+      const mine = await runBothMany(maskedEngine([ownedByAda]), { ...request });
+      const theirs = await runBothMany(
+        maskedEngine([{ ...ownedByAda, condition: { ownerId: 2 } }]),
+        { ...request },
+      );
+
+      expectIdentical(mine);
+      expectIdentical(theirs);
+      expect(mine.compiled).toEqual([{ id: 3, note: null }]);
+      expect(theirs.compiled).toEqual([{ id: 3, note: 'third' }]);
+    });
+
+    it('masks per row within one statement rather than per query', async () => {
+      const run = await runBothMany(
+        maskedEngine([{ model: 'Metric', field: 'note', condition: { rank: { not: null } }, requires: ['rank'] }]),
+        { model: 'Metric', select: { id: true, note: true, rank: true }, orderBy: [{ id: 'asc' }] },
+      );
+
+      expectIdentical(run);
+      expect(statements(run)).toHaveLength(1);
+      expect(run.compiled).toEqual([
+        { id: 1, note: 'first', rank: 2 },
+        { id: 2, note: null, rank: 1 },
+        { id: 3, note: null, rank: null },
+        { id: 4, note: null, rank: 4 },
+        { id: 5, note: null, rank: null },
+      ]);
+    });
+
+    it('agrees on a condition that leaves a nullable column under a NOT', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'Metric', field: 'note', condition: { NOT: { rank: 2 } }, requires: ['rank'] },
+        ]),
+        { model: 'Metric', select: { id: true, note: true }, orderBy: [{ id: 'asc' }] },
+      );
+
+      expectIdentical(run);
+      expect(run.compiled).toEqual([
+        { id: 1, note: null },
+        { id: 2, note: null },
+        { id: 3, note: 'third' },
+        { id: 4, note: null },
+        { id: 5, note: 'fifth' },
+      ]);
+    });
+
+    it('agrees on a condition that hops a relation', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Metric',
+            field: 'note',
+            condition: { owner: { is: { tenantId: 2 } } },
+            requires: ['owner'],
+            dependencies: { owner: { tenantId: true } },
+          },
+        ]),
+        { model: 'Metric', select: { id: true, note: true }, orderBy: [{ id: 'asc' }] },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['note']);
+      expect(event.sql).toContain('EXISTS');
+      expect(event.sql).not.toContain('json');
+      expect(run.compiled).toEqual([
+        { id: 1, note: null },
+        { id: 2, note: null },
+        { id: 3, note: null },
+        { id: 4, note: null },
+        { id: 5, note: 'fifth' },
+      ]);
+    });
+
+    it('orders by a column the database masks without disturbing the page', async () => {
+      const run = await runBothMany(maskedEngine([{ ...ownedByAda, discharged: true }]), {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ note: 'asc' }, { id: 'asc' }],
+        take: 3,
+      });
+
+      expectIdentical(run);
+      expectCompiled(run);
+    });
+
+    it('refuses to order by a column the caller may not read on every row', async () => {
+      const engine = maskedEngine([ownedByAda]);
+      const request = {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ note: 'asc' }, { id: 'asc' }],
+        context,
+      } as const;
+
+      await expect(engine.findMany({ ...request, compiled: true })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
+      await expect(engine.findMany({ ...request })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
+    });
+
+    it('refuses to filter on a column the caller may not read on every row', async () => {
+      const engine = maskedEngine([ownedByAda]);
+      const request = {
+        model: 'Metric',
+        select: { id: true },
+        where: { OR: [{ note: { startsWith: 'fi' } }] },
+        context,
+      } as const;
+
+      await expect(engine.findMany({ ...request, compiled: true })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
+      await expect(engine.findMany({ ...request })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
+    });
+
+    it('hands a field the read is distinct on back to the in-memory path', async () => {
+      const run = await runBothMany(maskedEngine([ownedByAda]), {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+        distinct: ['note'],
+      });
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ field: 'note', reason: 'distinct' }),
+      ]);
+    });
+
+    it('hands a field whose condition it cannot render back to the in-memory path', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Metric',
+            field: 'note',
+            condition: { label: { search: 'alpha' } },
+            requires: ['label'],
+            evaluate: (row) => row.label === 'alpha',
+          },
+        ]),
+        { model: 'Metric', select: { id: true, note: true }, orderBy: [{ id: 'asc' }] },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ field: 'note', reason: 'unrenderable' }),
+      ]);
+      expect(event.sql).toContain('as "label"');
+      expect(run.compiled).toEqual([
+        { id: 1, note: 'first' },
+        { id: 2, note: null },
+        { id: 3, note: null },
+        { id: 4, note: null },
+        { id: 5, note: null },
+      ]);
+    });
+
+    it('carries every column type it masks out as Prisma carries it', async () => {
+      const carried = subject().provider === 'sqlite'
+        ? (['label', 'note', 'ratio', 'hits'] as const)
+        : (['label', 'note', 'rank', 'score', 'hits', 'ratio', 'active', 'recordedAt'] as const);
+      for (const column of carried) {
+        const run = await runBothMany(
+          maskedEngine([
+            { model: 'Metric', field: column, condition: { ownerId: 2 }, requires: ['ownerId'] },
+          ]),
+          { model: 'Metric', select: { id: true, [column]: true }, orderBy: [{ id: 'asc' }] },
+        );
+
+        expect({ column, masked: expectCompiled(run).masked }).toEqual({ column, masked: [column] });
+        expect({ column, rows: describeShape(run.compiled) }).toEqual({
+          column,
+          rows: describeShape(run.prisma),
+        });
+      }
+    });
+
+    it('leaves a column sqlite would hand back under another type to the in-memory path', async () => {
+      const lossy = subject().provider === 'sqlite'
+        ? (['rank', 'score', 'active', 'recordedAt'] as const)
+        : ([] as const);
+      for (const column of lossy) {
+        const run = await runBothMany(
+          maskedEngine([
+            { model: 'Metric', field: column, condition: { ownerId: 2 }, requires: ['ownerId'] },
+          ]),
+          { model: 'Metric', select: { id: true, [column]: true }, orderBy: [{ id: 'asc' }] },
+        );
+
+        const event = expectCompiled(run);
+        expect({ column, masked: event.masked }).toEqual({ column, masked: [] });
+        expect({ column, reason: event.deferred?.map((entry) => entry.reason) }).toEqual({
+          column,
+          reason: ['decoder'],
+        });
+        expect({ column, rows: describeShape(run.compiled) }).toEqual({
+          column,
+          rows: describeShape(run.prisma),
+        });
+      }
+    });
+
+    it('hands a field the provider hands over no condition for back to the in-memory path', async () => {
+      const run = await runBothMany(maskedEngine([{ ...ownedByAda, withheld: true }]), {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+      });
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ field: 'note', reason: 'unconstrained' }),
+      ]);
+      expect(event.sql).toContain('as "ownerId"');
+      expect(run.compiled).toEqual([
+        { id: 1, note: 'first' },
+        { id: 2, note: null },
+        { id: 3, note: null },
+        { id: 4, note: null },
+        { id: 5, note: null },
+      ]);
+    });
   });
 }

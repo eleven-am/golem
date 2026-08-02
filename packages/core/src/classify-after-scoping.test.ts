@@ -141,7 +141,7 @@ describe('R3 — field classification runs after scoping', () => {
         client,
         provider(
           { article: { is: { userId: 'user-1' } } },
-          { progressEnd: relationScoped },
+          { progressEnd: relationScoped, articleId: { access: 'always' } },
         ),
       );
 

@@ -60,6 +60,14 @@ const models: readonly DatamodelModel[] = [
         isRequired: false,
         relationName: 'GroupToUser',
       }),
+      field({
+        name: 'notes',
+        kind: 'object',
+        type: 'Note',
+        isList: true,
+        isRequired: false,
+        relationName: 'NoteToUser',
+      }),
     ],
   },
   {
@@ -109,6 +117,23 @@ const models: readonly DatamodelModel[] = [
         isList: true,
         isRequired: false,
         relationName: 'GroupToUser',
+      }),
+    ],
+  },
+  {
+    name: 'Note',
+    dbName: 'notes',
+    fields: [
+      field({ name: 'id', dbName: 'note_id', type: 'Int', isId: true }),
+      field({ name: 'body', dbName: 'body', type: 'String' }),
+      field({ name: 'userId', dbName: 'user_id', type: 'Int' }),
+      field({
+        name: 'user',
+        kind: 'object',
+        type: 'User',
+        relationName: 'NoteToUser',
+        relationFromFields: ['userId'],
+        relationToFields: ['id'],
       }),
     ],
   },
@@ -860,5 +885,305 @@ describe('refusing to compile a read', () => {
       reason: 'where',
     });
     expect(await refusal({ where: { notAColumn: 1 } })).toMatchObject({ reason: 'where' });
+  });
+});
+
+describe('masking a field the caller may not always read', () => {
+  const masked = (
+    field: string,
+    constraint: unknown,
+    model = 'Post',
+    path: readonly string[] = [],
+  ) => ({ path, model, field, constraint });
+
+  it('renders the condition into the projection instead of fetching the value', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+      }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."post_id" as "id", ' +
+        'case when (("t0"."author_id" IS ?)) then "t0"."title" else null end as "title" ' +
+        'from "posts" as "t0"',
+    );
+    expect(compiled.parameters).toEqual([7]);
+    expect(compiled.masked).toEqual(['title']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('guards each masked column with its own condition when a model masks two', async () => {
+    const compiled = await statement({
+      provider: 'postgresql',
+      prepared: tree({
+        select: { id: true, title: true, published: true },
+        maskChecks: [masked('title', { authorId: 7 }), masked('published', { id: 3 })],
+      }),
+    });
+
+    expect(compiled.sql).toBe(
+      'select "t0"."post_id" as "id", ' +
+        'case when (("t0"."author_id" IS NOT DISTINCT FROM $1)) then "t0"."title" else null end as "title", ' +
+        'case when (("t0"."post_id" IS NOT DISTINCT FROM $2)) then "t0"."published" else null end as "published" ' +
+        'from "posts" as "t0"',
+    );
+    expect(compiled.parameters).toEqual([7, 3]);
+    expect(compiled.masked).toEqual(['title', 'published']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('binds the mask condition before the row predicate', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+      }),
+      constraint: { published: true },
+    });
+
+    expect(compiled.parameters).toEqual([7, true]);
+  });
+
+  it('evaluates the condition per row rather than once for the query', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+      }),
+    });
+
+    expect(compiled.sql).toContain('"t0"."author_id"');
+    expect(compiled.sql).not.toContain('where');
+  });
+
+  it('drops the hydration column the in-memory check was fed', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true, authorId: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+        injected: [{ path: [], field: 'authorId', masks: ['title'] }],
+      }),
+    });
+
+    expect(compiled.columns.map((column) => column.name)).toEqual(['id', 'title']);
+    expect(compiled.sql).not.toContain('as "authorId"');
+    expect(compiled.masked).toEqual(['title']);
+  });
+
+  it('restores a hydration column an omit had removed', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        omit: { id: false },
+        maskChecks: [masked('name', { id: 7 }, 'User')],
+        injected: [{ path: [], field: 'id', masks: ['name'] }],
+      }),
+    });
+
+    expect(compiled.columns.map((column) => column.name)).toEqual(['name']);
+  });
+
+  it('keeps a hydration column another field still masked in memory depends on', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true, published: true, authorId: true },
+        maskChecks: [
+          masked('title', { authorId: 7 }),
+          masked('published', undefined),
+        ],
+        injected: [{ path: [], field: 'authorId', masks: ['title', 'published'] }],
+      }),
+    });
+
+    expect(compiled.columns.map((column) => column.name)).toEqual([
+      'id',
+      'title',
+      'published',
+      'authorId',
+    ]);
+    expect(compiled.masked).toEqual(['title']);
+  });
+
+  it('leaves a field whose provider hands over no condition to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', undefined)],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred).toEqual([
+      expect.objectContaining({ field: 'title', reason: 'unconstrained' }),
+    ]);
+    expect(compiled.sql).not.toContain('case when');
+  });
+
+  it('reads a null condition as a denial it will not render as a grant', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', null)],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unconstrained' });
+  });
+
+  it('refuses to read an empty condition as a grant of the field', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', {})],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unconstrained' });
+    expect(compiled.sql).not.toContain('case when');
+  });
+
+  it('renders a flat denial as a condition no row satisfies', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { OR: [] })],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['title']);
+    expect(compiled.sql).toContain('case when ((1 = 0)) then "t0"."title" else null end');
+  });
+
+  it('leaves a field whose condition the policy language does not render to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true, authorId: true },
+        maskChecks: [masked('title', { notAColumn: 1 })],
+        injected: [{ path: [], field: 'authorId', masks: ['title'] }],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unrenderable' });
+    expect(compiled.columns.map((column) => column.name)).toContain('authorId');
+  });
+
+  it('leaves a field whose condition this dialect cannot answer to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { tags: { has: 'x' } })],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unrenderable' });
+  });
+
+  it('leaves a field carrying the key a batched relation correlates on to the in-memory path', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, name: true, notes: { select: { body: true } } },
+        maskChecks: [masked('id', { name: 'ada' }, 'User')],
+      }),
+    });
+
+    expect(compiled.batches.map((batch) => batch.parentKey)).toEqual(['id']);
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'id', reason: 'correlated' });
+  });
+
+  it('leaves a field the read is distinct on to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+      }),
+      distinct: 'title',
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'distinct' });
+  });
+
+  it('leaves a column sqlite hands back under another type to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, published: true, authorId: true },
+        maskChecks: [masked('published', { authorId: 7 })],
+        injected: [{ path: [], field: 'authorId', masks: ['published'] }],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'published', reason: 'decoder' });
+    expect(compiled.columns.map((column) => column.name)).toContain('authorId');
+  });
+
+  it('masks the same column for postgres, which keeps the column type through a case', async () => {
+    const compiled = await statement({
+      provider: 'postgresql',
+      prepared: tree({
+        select: { id: true, published: true, authorId: true },
+        maskChecks: [masked('published', { authorId: 7 })],
+        injected: [{ path: [], field: 'authorId', masks: ['published'] }],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['published']);
+    expect(compiled.deferred).toEqual([]);
+    expect(compiled.columns.map((column) => column.name)).toEqual(['id', 'published']);
+  });
+
+  it('leaves a field the read does not project to the in-memory path', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true },
+        maskChecks: [masked('title', { authorId: 7 })],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unprojected' });
+  });
+
+  it('leaves a field masked through a relation to the in-memory path', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, posts: { select: { title: true } } },
+        maskChecks: [masked('title', { authorId: 7 }, 'Post', ['posts'])],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({
+      path: 'posts',
+      field: 'title',
+      reason: 'relation',
+    });
+  });
+
+  it('masks on a condition that hops a relation without hydrating the relation', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: { id: true, title: true },
+        maskChecks: [masked('title', { author: { is: { name: 'ada' } } })],
+        injected: [{ path: [], field: 'author', masks: ['title'] }],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['title']);
+    expect(compiled.sql).toContain(
+      'case when ((EXISTS (SELECT 1 FROM "users" AS "t0_1" WHERE "t0_1"."user_id" = "t0"."author_id"',
+    );
+    expect(compiled.sql).not.toContain('as "author"');
+    expect(compiled.relations).toEqual([]);
+    expect(compiled.parameters).toEqual(['ada']);
   });
 });

@@ -4,7 +4,12 @@ import {
   mergeConstraint,
 } from './authorization';
 import { DatamodelField, DatamodelModel } from './datamodel';
-import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
+import {
+  GolemConflictError,
+  GolemForbiddenError,
+  GolemNotFoundError,
+  GolemValidationError,
+} from './errors';
 import { runPolicyChecks } from './concurrency';
 import { withBufferedEvents } from './event-buffer';
 import {
@@ -44,6 +49,11 @@ import {
   verifyCreatedTree,
   verifyUpdatedRow,
 } from './verify';
+
+interface CompiledReadOutcome {
+  rows: Record<string, unknown>[];
+  masked: readonly string[];
+}
 
 export interface FindOneRequest {
   context?: unknown;
@@ -281,28 +291,104 @@ function translateError(error: unknown, model: string): never {
 
 const MEASURE_KEYS = ['_sum', '_avg', '_min', '_max', '_count'] as const;
 
-function addTrueKeys(fields: Set<string>, source: unknown): void {
+const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
+
+type FieldReferences = Map<string, Set<string>>;
+
+function referenceField(into: FieldReferences, model: string, field: string): void {
+  const existing = into.get(model);
+  if (existing) {
+    existing.add(field);
+    return;
+  }
+  into.set(model, new Set([field]));
+}
+
+function addTrueKeys(into: FieldReferences, model: string, source: unknown): void {
   if (source && typeof source === 'object') {
     for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
       if (value === true) {
-        fields.add(key);
+        referenceField(into, model, key);
       }
     }
   }
 }
 
-function addMeasureFields(fields: Set<string>, request: AggregateRequest): void {
-  addTrueKeys(fields, request._sum);
-  addTrueKeys(fields, request._avg);
-  addTrueKeys(fields, request._min);
-  addTrueKeys(fields, request._max);
+function addMeasureFields(
+  into: FieldReferences,
+  model: string,
+  request: AggregateRequest,
+): void {
+  addTrueKeys(into, model, request._sum);
+  addTrueKeys(into, model, request._avg);
+  addTrueKeys(into, model, request._min);
+  addTrueKeys(into, model, request._max);
   if (typeof request._count === 'object') {
-    addTrueKeys(fields, request._count);
-    fields.delete('_all');
+    addTrueKeys(into, model, request._count);
+    into.get(model)?.delete('_all');
   }
 }
 
-function addNestedFields(fields: Set<string>, source: unknown): void {
+function addObservedKeys(into: FieldReferences, model: string, source: unknown): void {
+  if (!source || typeof source !== 'object') {
+    return;
+  }
+  for (const key of Object.keys(source as Record<string, unknown>)) {
+    if (key !== '_all') {
+      referenceField(into, model, key);
+    }
+  }
+}
+
+function addNestedFields(
+  into: FieldReferences,
+  metadata: ModelMetadataIndex,
+  model: string,
+  source: unknown,
+): void {
+  if (!source || typeof source !== 'object') {
+    return;
+  }
+  const meta = metadata.get(model);
+  for (const entry of Array.isArray(source) ? source : [source]) {
+    if (!entry || typeof entry !== 'object') {
+      continue;
+    }
+    for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
+      if ((MEASURE_KEYS as readonly string[]).includes(key)) {
+        addObservedKeys(into, model, value);
+        continue;
+      }
+      if (key === 'AND' || key === 'OR' || key === 'NOT') {
+        addNestedFields(into, metadata, model, value);
+        continue;
+      }
+      const field = meta?.fieldsByName.get(key);
+      if (field === undefined) {
+        const compoundFields = key === meta?.compoundKeyName
+          ? meta.primaryKeys.map((primaryKey) => primaryKey.name)
+          : meta?.compoundUniqueSelectors.get(key);
+        if (compoundFields) {
+          for (const name of compoundFields) referenceField(into, model, name);
+          continue;
+        }
+        referenceField(into, model, key);
+        continue;
+      }
+      referenceField(into, model, key);
+      if (field.kind === 'object' && metadata.has(field.type)) {
+        addRelationFilterFields(into, metadata, field.type, value);
+      }
+    }
+  }
+}
+
+function addRelationFilterFields(
+  into: FieldReferences,
+  metadata: ModelMetadataIndex,
+  model: string,
+  source: unknown,
+): void {
   if (!source || typeof source !== 'object') {
     return;
   }
@@ -310,33 +396,21 @@ function addNestedFields(fields: Set<string>, source: unknown): void {
     if (!entry || typeof entry !== 'object') {
       continue;
     }
-    for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-      if ((MEASURE_KEYS as readonly string[]).includes(key)) {
-        addObservedKeys(fields, value);
-        continue;
-      }
-      if (key === 'AND' || key === 'OR' || key === 'NOT') {
-        addNestedFields(fields, value);
-        continue;
-      }
-      fields.add(key);
+    const record = entry as Record<string, unknown>;
+    const operators = RELATION_FILTER_KEYS.filter((operator) => operator in record);
+    if (operators.length === 0) {
+      addNestedFields(into, metadata, model, record);
+      continue;
     }
-  }
-}
-
-function addObservedKeys(fields: Set<string>, source: unknown): void {
-  if (!source || typeof source !== 'object') {
-    return;
-  }
-  for (const key of Object.keys(source as Record<string, unknown>)) {
-    if (key !== '_all') {
-      fields.add(key);
+    for (const operator of operators) {
+      addNestedFields(into, metadata, model, record[operator]);
     }
   }
 }
 
 function addCursorFields(
-  fields: Set<string>,
+  into: FieldReferences,
+  model: string,
   source: unknown,
   metadata: ModelMetadata,
 ): void {
@@ -345,40 +419,60 @@ function addCursorFields(
   }
   for (const key of Object.keys(source as Record<string, unknown>)) {
     if (metadata.fieldsByName.has(key)) {
-      fields.add(key);
+      referenceField(into, model, key);
       continue;
     }
     const compoundFields = key === metadata.compoundKeyName
       ? metadata.primaryKeys.map((field) => field.name)
       : metadata.compoundUniqueSelectors.get(key);
     if (compoundFields) {
-      for (const field of compoundFields) fields.add(field);
+      for (const field of compoundFields) referenceField(into, model, field);
       continue;
     }
-    fields.add(key);
+    referenceField(into, model, key);
   }
 }
 
 function collectAggregateFields(
   request: AggregateRequest,
-  metadata: ModelMetadata,
-): string[] {
-  const fields = new Set<string>();
-  addMeasureFields(fields, request);
-  addNestedFields(fields, request.orderBy);
-  addCursorFields(fields, request.cursor, metadata);
-  return [...fields];
+  model: string,
+  index: ModelMetadataIndex,
+): FieldReferences {
+  const references: FieldReferences = new Map();
+  addMeasureFields(references, model, request);
+  addNestedFields(references, index, model, request.orderBy);
+  addCursorFields(references, model, request.cursor, index.get(model)!);
+  return references;
 }
 
-function collectGroupByFields(request: GroupByRequest): string[] {
-  const fields = new Set<string>();
-  addMeasureFields(fields, request);
+function collectGroupByFields(
+  request: GroupByRequest,
+  model: string,
+  index: ModelMetadataIndex,
+): FieldReferences {
+  const references: FieldReferences = new Map();
+  addMeasureFields(references, model, request);
   for (const key of request.by ?? []) {
-    fields.add(key);
+    referenceField(references, model, key);
   }
-  addNestedFields(fields, request.having);
-  addNestedFields(fields, request.orderBy);
-  return [...fields];
+  addNestedFields(references, index, model, request.having);
+  addNestedFields(references, index, model, request.orderBy);
+  return references;
+}
+
+function collectFilterFields(
+  request: { where?: unknown; orderBy?: unknown; cursor?: unknown },
+  model: string,
+  index: ModelMetadataIndex,
+): FieldReferences {
+  const references: FieldReferences = new Map();
+  addNestedFields(references, index, model, request.where);
+  addNestedFields(references, index, model, request.orderBy);
+  const metadata = index.get(model);
+  if (metadata) {
+    addCursorFields(references, model, request.cursor, metadata);
+  }
+  return references;
 }
 
 export class GolemEngine {
@@ -556,6 +650,7 @@ export class GolemEngine {
     result: T,
     prepared: PreparedReadTree,
     context: unknown,
+    masked: readonly string[] = [],
   ): Promise<T> {
     if (!result) {
       return result;
@@ -563,8 +658,11 @@ export class GolemEngine {
     if (prepared.toOneChecks.length > 0) {
       await applyToOneChecks(result, prepared.toOneChecks, this.authorization!, context);
     }
-    if (prepared.maskChecks.length > 0) {
-      await applyFieldMasks(result, prepared.maskChecks, this.authorization!, context);
+    const outstanding = prepared.maskChecks.filter(
+      (check) => check.path.length > 0 || !masked.includes(check.field),
+    );
+    if (outstanding.length > 0) {
+      await applyFieldMasks(result, outstanding, this.authorization!, context);
     }
     if (prepared.injected.length > 0) {
       await stripInjectedFields(result, prepared.injected);
@@ -593,6 +691,13 @@ export class GolemEngine {
         memo(`authorize:${action}:${model}`, () => source.authorize(action, model, ctx)),
       constrain: (action, model, ctx) =>
         memo(`constrain:${action}:${model}`, () => source.constrain(action, model, ctx)),
+      constrainField: source.constrainField
+        ? (action, model, name, ctx) =>
+            memo(
+              `constrainField:${action}:${model}:${name}`,
+              () => source.constrainField!(action, model, name, ctx),
+            )
+        : undefined,
       check: source.check?.bind(source),
       checkField: source.checkField?.bind(source),
       classifyFields: source.classifyFields
@@ -790,7 +895,7 @@ export class GolemEngine {
     model: string,
     input: Omit<CompiledReadInput, 'model' | 'models' | 'metadata' | 'provider'>,
     scope?: GolemOpScope,
-  ): Promise<Record<string, unknown>[] | undefined> {
+  ): Promise<CompiledReadOutcome | undefined> {
     const client = scope?.client ?? this.client;
     const runner = this.rawRunner(client);
     if (runner === undefined) {
@@ -823,7 +928,7 @@ export class GolemEngine {
     const executed: string[] = [];
     const batched = compiledReadBatchPaths(plan);
     try {
-      return await runCompiledRead(
+      const rows = await runCompiledRead(
         plan,
         (sql, parameters) =>
           this.run(model, () => runner.call(client, sql, ...parameters)) as Promise<
@@ -831,6 +936,7 @@ export class GolemEngine {
           >,
         executed,
       );
+      return { rows, masked: plan.masked };
     } finally {
       this.emitCompiledRead({
         model,
@@ -839,6 +945,8 @@ export class GolemEngine {
         sql: plan.sql,
         statements: executed,
         batched,
+        masked: plan.masked,
+        deferred: plan.deferred,
       });
     }
   }
@@ -888,6 +996,9 @@ export class GolemEngine {
   async findOne(request: FindOneRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findOne', request);
+    await this.classifyFilterFields(req.model, req.context, {
+      where: this.filterableWhere(req.model, req.where),
+    });
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
     const compiled =
@@ -906,7 +1017,7 @@ export class GolemEngine {
         : undefined;
     const found =
       compiled !== undefined
-        ? compiled[0] ?? null
+        ? compiled.rows[0] ?? null
         : await this.run(req.model, () =>
             constraint === undefined
               ? delegate.findUnique({
@@ -922,7 +1033,7 @@ export class GolemEngine {
                   ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
                 }),
           );
-    await this.finishRead(found, prepared, req.context);
+    await this.finishRead(found, prepared, req.context, compiled?.masked);
     await this.runAfter('findOne', req.model, found, req.context);
     return found;
   }
@@ -931,6 +1042,7 @@ export class GolemEngine {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findMany', request);
     this.enforceTakeLimit(req);
+    await this.classifyFilterFields(req.model, req.context, req);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
     const compiled =
@@ -952,7 +1064,7 @@ export class GolemEngine {
           )
         : undefined;
     const found =
-      compiled ??
+      compiled?.rows ??
       ((await this.run(req.model, () =>
         delegate.findMany({
           where: mergeConstraint(req.where, constraint),
@@ -966,7 +1078,7 @@ export class GolemEngine {
           ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
         }),
       )) as unknown[]);
-    await this.finishRead(found, prepared, req.context);
+    await this.finishRead(found, prepared, req.context, compiled?.masked);
     await this.runAfter('findMany', req.model, found, req.context);
     return found;
   }
@@ -974,6 +1086,7 @@ export class GolemEngine {
   async findFirst(request: FindFirstRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('findFirst', request);
+    await this.classifyFilterFields(req.model, req.context, req);
     const prepared = await this.prepareRead(req);
     const constraint = await this.constraintFor('read', req.model, req.context);
     const found = await this.run(req.model, () =>
@@ -1237,6 +1350,7 @@ export class GolemEngine {
 
   async count(request: CountRequest, scope?: GolemOpScope): Promise<number> {
     const delegate = this.delegate(request.model, scope?.client);
+    await this.classifyFilterFields(request.model, request.context, { where: request.where });
     const constraint = await this.constraintFor('read', request.model, request.context);
     return (await this.run(request.model, () =>
       delegate.count({ where: mergeConstraint(request.where, constraint) }),
@@ -1245,12 +1359,12 @@ export class GolemEngine {
 
   async aggregate(request: AggregateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
-    await this.classifyAggregateFields(
-      request.model,
+    await this.classifyReferencedFields(
       request.context,
-      collectAggregateFields(request, this.metadata.get(request.model)!),
+      collectAggregateFields(request, request.model, this.metadata),
       'aggregate',
     );
+    await this.classifyFilterFields(request.model, request.context, { where: request.where });
     const constraint = await this.constraintFor('read', request.model, request.context);
     if (request.compiled === true) {
       const compiled = await this.compiledAggregate(
@@ -1300,12 +1414,12 @@ export class GolemEngine {
     }
     assertPageArgument(request.model, 'take', request.take);
     assertPageArgument(request.model, 'skip', request.skip);
-    await this.classifyAggregateFields(
-      request.model,
+    await this.classifyReferencedFields(
       request.context,
-      collectGroupByFields(request),
+      collectGroupByFields(request, request.model, this.metadata),
       'group',
     );
+    await this.classifyFilterFields(request.model, request.context, { where: request.where });
     const constraint = await this.constraintFor('read', request.model, request.context);
     if (request.compiled === true) {
       const compiled = await this.compiledAggregate(
@@ -1347,36 +1461,59 @@ export class GolemEngine {
     return (await this.run(request.model, () => delegate.groupBy(args))) as unknown[];
   }
 
-  private async classifyAggregateFields(
-    model: string,
+  private async classifyReferencedFields(
     context: unknown,
-    fields: readonly string[],
-    kind: 'aggregate' | 'group',
+    references: FieldReferences,
+    kind: 'aggregate' | 'group' | 'filter',
   ): Promise<void> {
-    if (!this.checkReadFields || fields.length === 0) {
+    if (!this.checkReadFields || references.size === 0) {
       return;
     }
     const provider = this.enforced(context);
     if (!provider?.classifyFields) {
       return;
     }
-    const classification = await provider.classifyFields('read', model, [...fields], context);
-    for (const field of fields) {
-      const entry = classification[field];
-      if (entry?.access === 'always') {
+    const verb = kind === 'group'
+      ? 'group or aggregate'
+      : kind === 'filter' ? 'filter or order by' : 'aggregate';
+    for (const [model, names] of references) {
+      const fields = [...names];
+      if (fields.length === 0) {
         continue;
       }
-      if (entry?.access === 'conditional' && entry.dischargedByConstraint) {
-        continue;
-      }
-      const verb = kind === 'group' ? 'group or aggregate' : 'aggregate';
-      const undischarged = entry?.requires?.join(', ');
-      throw new GolemValidationError(
-        undischarged
+      const classification = await provider.classifyFields('read', model, fields, context);
+      for (const field of fields) {
+        const entry = classification[field];
+        if (entry?.access === 'always') {
+          continue;
+        }
+        if (entry?.access === 'conditional' && entry.dischargedByConstraint) {
+          continue;
+        }
+        const undischarged = entry?.requires?.join(', ');
+        const message = undischarged
           ? `Cannot ${verb} field "${field}" on ${model}: readability depends on ${undischarged}, which the query constraint does not discharge`
-          : `Cannot ${verb} field "${field}" on ${model}`,
-      );
+          : `Cannot ${verb} field "${field}" on ${model}`;
+        throw kind === 'filter'
+          ? new GolemForbiddenError(message)
+          : new GolemValidationError(message);
+      }
     }
+  }
+
+  private async classifyFilterFields(
+    model: string,
+    context: unknown,
+    request: { where?: unknown; orderBy?: unknown; cursor?: unknown },
+  ): Promise<void> {
+    if (!this.checkReadFields) {
+      return;
+    }
+    await this.classifyReferencedFields(
+      context,
+      collectFilterFields(request, model, this.metadata),
+      'filter',
+    );
   }
 
   scoped(request: ScopedRequest, scope?: GolemOpScope): ScopedQuery {

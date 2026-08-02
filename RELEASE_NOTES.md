@@ -71,6 +71,44 @@ the operator.
 Kysely is ESM-only, and `require` of an ESM module is unflagged from Node
 20.19. Every published package declares it.
 
+### A read may no longer filter or order by a field it may not read
+
+Field-level authorization used to govern the projection only. A caller who
+saw `phone: null` on every row could still write
+`users(where: { phone: { startsWith: "+44" } })`, and the rows that came back
+disclosed the value — `startsWith` turning it into a character-by-character
+search. `aggregate` counted over the same hidden values.
+
+`where`, `orderBy` and `cursor` are now classified the same way a measure
+already was, on `findOne`, `findFirst`, `findMany`, `count`, `aggregate` and
+`groupBy`. A field the caller can never read is refused; a field readable
+only conditionally is refused unless the query constraint already discharges
+the condition, which is the case whenever the row policy alone decides
+readability. Fields the caller may always read are unaffected.
+
+Field references are collected at every depth — through `AND`, `OR` and
+`NOT`, through the operators on a field, and through relation filters.
+A field named across a relation, as in `{ author: { is: { phone: … } } }`,
+is classified against the **related** model, so a rule that hides
+`User.phone` also blocks filtering posts by it.
+
+Refusals report `FORBIDDEN` and name the field and model:
+
+```
+Cannot filter or order by field "phone" on User: readability depends on id,
+which the query constraint does not discharge
+```
+
+This only reaches an application that writes **field-scoped** CASL rules
+(`can('read', 'User', ['phone'], …)` or `cannot('read', 'User', ['phone'])`).
+An ability with row conditions but no field lists classifies every field as
+discharged by the constraint and is unaffected. Refusals over a measure,
+a grouping key, `having` or an aggregate `orderBy` keep the
+`BAD_USER_INPUT` code they already had.
+
+Filtering a **nested** relation inside `select`/`include`, and the `where` of
+`updateMany`/`deleteMany`, are not yet classified.
+
 ### MySQL is not supported
 
 The dialect rendered but nothing ever executed it against a MySQL server. It

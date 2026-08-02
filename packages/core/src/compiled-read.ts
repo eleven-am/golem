@@ -5,7 +5,7 @@ import {
   createDatamodelSqlScope,
   renderConstraintNode,
 } from '@eleven-am/golem-policy';
-import { mergeConstraint } from './authorization';
+import { isConditionalConstraint, mergeConstraint } from './authorization';
 import {
   CompiledReadCount,
   CompiledReadNestedProjection,
@@ -16,7 +16,7 @@ import {
 } from './compiled-read-decode';
 import { DatamodelField, DatamodelModel, isEqualityIndexed } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
-import { PreparedReadTree } from './readtree';
+import { InjectedField, PreparedReadTree } from './readtree';
 import { RELATION_COUNT_FIELD } from './select';
 import {
   ScopedDatabase,
@@ -36,6 +36,8 @@ const COUNT_COLUMN = '_golem_count';
 const MAX_IDENTIFIER = 63;
 
 const COMPILABLE_PROVIDERS = new Set(['sqlite', 'postgresql', 'postgres']);
+
+const SQLITE_MASKABLE_TYPES = new Set(['String', 'Float', 'BigInt']);
 
 const RELATION_ENTRY_KEYS = new Set(['where', 'select', 'include', 'omit']);
 
@@ -71,6 +73,22 @@ export interface CompiledReadColumn {
   readonly dbName: string;
 }
 
+export type CompiledReadDeferredReason =
+  | 'relation'
+  | 'unconstrained'
+  | 'unprojected'
+  | 'unrenderable'
+  | 'correlated'
+  | 'distinct'
+  | 'decoder';
+
+export interface CompiledReadDeferredMask {
+  readonly path: string;
+  readonly field: string;
+  readonly reason: CompiledReadDeferredReason;
+  readonly detail: string;
+}
+
 export interface CompiledReadEvent {
   readonly model: string;
   readonly operation: CompiledReadOperation;
@@ -80,6 +98,8 @@ export interface CompiledReadEvent {
   readonly sql?: string;
   readonly statements?: readonly string[];
   readonly batched?: readonly string[];
+  readonly masked?: readonly string[];
+  readonly deferred?: readonly CompiledReadDeferredMask[];
 }
 
 export interface CompiledReadInput {
@@ -135,6 +155,8 @@ export interface CompiledReadStatement {
   readonly drop: readonly string[];
   readonly distinct?: CompiledReadDistinct;
   readonly decimal: DecimalConstructor | null;
+  readonly masked: readonly string[];
+  readonly deferred: readonly CompiledReadDeferredMask[];
 }
 
 export interface CompiledReadFallback {
@@ -1364,6 +1386,168 @@ class NestedBuilder {
   }
 }
 
+interface RootMasks {
+  readonly rendered: ReadonlyMap<string, RawBuilder<unknown>>;
+  readonly deferred: readonly CompiledReadDeferredMask[];
+}
+
+function planRootNode(
+  context: PlanContext,
+  input: CompiledReadInput,
+  projection: Projection,
+  keys: readonly string[] | undefined,
+): PlannedNode | CompiledReadFallback {
+  const node = planNode(context, input.model, projection, [], 'row');
+  if (isFallback(node)) {
+    return node;
+  }
+  if (keys !== undefined) {
+    for (const key of keys) {
+      const column = ensureColumn(node, input.model, input.metadata, key, false);
+      if (isFallback(column)) {
+        return { ...column, reason: 'distinct' };
+      }
+    }
+  }
+  const correlated = correlateBatches(node, input.model, input.metadata, false);
+  if (correlated !== undefined) {
+    return correlated;
+  }
+  return node;
+}
+
+function planRootMasks(
+  input: CompiledReadInput,
+  node: PlannedNode,
+  keys: readonly string[] | undefined,
+  dialect: ScopedDialect,
+  sql: KyselyModule['sql'],
+): RootMasks {
+  const rendered = new Map<string, RawBuilder<unknown>>();
+  const deferred: CompiledReadDeferredMask[] = [];
+  if (input.prepared.maskChecks.length === 0) {
+    return { rendered, deferred };
+  }
+  const correlated = new Set(
+    node.relations
+      .filter((relation) => relation.shape === 'row')
+      .map((relation) => relation.correlation[0]!.parentField),
+  );
+  const distinct = new Set(keys ?? []);
+  const scope = createDatamodelSqlScope({
+    datamodel: { models: input.models },
+    model: input.model.name,
+    alias: ROOT_ALIAS,
+  });
+  for (const check of input.prepared.maskChecks) {
+    const defer = (reason: CompiledReadDeferredReason, detail: string): void => {
+      deferred.push({ path: describePath(check.path), field: check.field, reason, detail });
+    };
+    if (check.path.length > 0) {
+      defer(
+        'relation',
+        `${check.model}.${check.field} is masked through ${describePath(check.path)}, and golem masks in SQL only at the top level of a read`,
+      );
+      continue;
+    }
+    if (!isConditionalConstraint(check.constraint)) {
+      defer(
+        'unconstrained',
+        `${check.model}.${check.field} is masked by an authorization provider that hands golem no condition for the field, and an absent condition must not be read as a grant`,
+      );
+      continue;
+    }
+    if (!node.columns.some((column) => column.name === check.field)) {
+      defer(
+        'unprojected',
+        `${check.model}.${check.field} is masked but the compiled read projects no column for it`,
+      );
+      continue;
+    }
+    if (correlated.has(check.field)) {
+      defer(
+        'correlated',
+        `${check.model}.${check.field} is masked but carries the key golem batches a relation of ${check.model} on`,
+      );
+      continue;
+    }
+    if (distinct.has(check.field)) {
+      defer(
+        'distinct',
+        `${check.model}.${check.field} is masked but the read is distinct on it, and Prisma reads distinct on the value before the mask nulls it`,
+      );
+      continue;
+    }
+    const column = input.metadata.get(check.model)?.fieldsByName.get(check.field);
+    if (
+      dialect.provider === 'sqlite' &&
+      (column === undefined || column.kind !== 'scalar' || !SQLITE_MASKABLE_TYPES.has(column.type))
+    ) {
+      defer(
+        'decoder',
+        `${check.model}.${check.field} is a ${column?.type ?? 'column golem cannot type'} sqlite carries no declared type for once it is wrapped in a case expression, and Prisma decodes such a column by its declared type`,
+      );
+      continue;
+    }
+    try {
+      rendered.set(
+        check.field,
+        sqlNodeToRaw(
+          renderConstraintNode(check.constraint, { scope, absent: 'deny-all' }),
+          dialect.policy,
+          sql,
+        ),
+      );
+    } catch (error) {
+      if (!isUnsupported(error)) {
+        throw error;
+      }
+      defer('unrenderable', (error as Error).message);
+    }
+  }
+  return { rendered, deferred };
+}
+
+function droppableHydration(
+  injected: readonly InjectedField[],
+  masked: ReadonlyMap<string, RawBuilder<unknown>>,
+): readonly InjectedField[] {
+  return injected.filter(
+    (entry) =>
+      entry.path.length === 0 &&
+      entry.masks !== undefined &&
+      entry.masks.length > 0 &&
+      entry.masks.every((field) => masked.has(field)),
+  );
+}
+
+function withoutHydration(
+  prepared: PreparedReadTree,
+  drop: readonly InjectedField[],
+): { projection: Projection; dropped: readonly string[] } {
+  const select = prepared.select === undefined ? undefined : { ...prepared.select };
+  const include = prepared.include === undefined ? undefined : { ...prepared.include };
+  const omit = prepared.omit === undefined ? undefined : { ...prepared.omit };
+  const dropped: string[] = [];
+  for (const entry of drop) {
+    if (select !== undefined && entry.field in select) {
+      delete select[entry.field];
+      dropped.push(entry.field);
+      continue;
+    }
+    if (include !== undefined && entry.field in include) {
+      delete include[entry.field];
+      dropped.push(entry.field);
+      continue;
+    }
+    if (omit !== undefined && select === undefined) {
+      omit[entry.field] = true;
+      dropped.push(entry.field);
+    }
+  }
+  return { projection: { select, include, omit }, dropped };
+}
+
 export async function planCompiledRead(input: CompiledReadInput): Promise<CompiledReadPlan> {
   if (input.provider === undefined || !COMPILABLE_PROVIDERS.has(input.provider)) {
     return fallback(
@@ -1387,17 +1571,6 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     );
   }
 
-  const context: PlanContext = { models: input.models, metadata: input.metadata, aliases: 1 };
-  const node = planNode(context, input.model, input.prepared, [], 'row');
-  if (isFallback(node)) {
-    return node;
-  }
-  const order = planOrder(context, input.model, ROOT_ALIAS, input.orderBy, true);
-  if (isFallback(order)) {
-    return order;
-  }
-  let terms = order.terms;
-
   const keys =
     input.distinct === undefined
       ? undefined
@@ -1405,6 +1578,33 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
   if (isFallback(keys)) {
     return keys;
   }
+
+  const kysely = await kyselyModule();
+  const dialect = resolveScopedDialect(input.provider);
+
+  let context: PlanContext = { models: input.models, metadata: input.metadata, aliases: 1 };
+  let node = planRootNode(context, input, input.prepared, keys);
+  if (isFallback(node)) {
+    return node;
+  }
+  const masks = planRootMasks(input, node, keys, dialect, kysely.sql);
+  const hydration = withoutHydration(
+    input.prepared,
+    droppableHydration(input.prepared.injected, masks.rendered),
+  );
+  if (hydration.dropped.length > 0) {
+    context = { models: input.models, metadata: input.metadata, aliases: 1 };
+    const reduced = planRootNode(context, input, hydration.projection, keys);
+    if (isFallback(reduced)) {
+      return reduced;
+    }
+    node = reduced;
+  }
+  const order = planOrder(context, input.model, ROOT_ALIAS, input.orderBy, true);
+  if (isFallback(order)) {
+    return order;
+  }
+  let terms = order.terms;
 
   let selectors: readonly CursorSelector[] | undefined;
   if (input.cursor !== undefined) {
@@ -1443,19 +1643,6 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     return bounds;
   }
 
-  if (keys !== undefined) {
-    for (const key of keys) {
-      const column = ensureColumn(node, input.model, input.metadata, key, false);
-      if (isFallback(column)) {
-        return { ...column, reason: 'distinct' };
-      }
-    }
-  }
-  const correlated = correlateBatches(node, input.model, input.metadata, false);
-  if (correlated !== undefined) {
-    return correlated;
-  }
-
   if (input.provider === 'sqlite') {
     const wide = tooWideForSqlite(node.relations);
     if (wide !== undefined) {
@@ -1473,8 +1660,6 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
     );
   }
 
-  const kysely = await kyselyModule();
-  const dialect = resolveScopedDialect(input.provider);
   const aggregation = await jsonAggregationHelpers(dialect.provider);
   const sql = kysely.sql;
   const db = dialect.createKysely(kysely);
@@ -1487,7 +1672,13 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
   query = builder.join(query, order.joins);
   try {
     for (const column of node.columns) {
-      query = query.select(sql`${sql.id(ROOT_ALIAS, column.dbName)}`.as(column.name) as never);
+      const mask = masks.rendered.get(column.name);
+      const reference = sql`${sql.id(ROOT_ALIAS, column.dbName)}`;
+      const expression =
+        mask === undefined
+          ? reference
+          : sql`case when (${mask}) then ${reference} else null end`;
+      query = query.select(expression.as(column.name) as never);
     }
     for (const count of node.counts) {
       query = query.select(builder.count(count, ROOT_ALIAS) as never);
@@ -1558,6 +1749,8 @@ export async function planCompiledRead(input: CompiledReadInput): Promise<Compil
         ? undefined
         : { keys, limit: bounds.limit, offset: bounds.offset },
     decimal,
+    masked: [...masks.rendered.keys()],
+    deferred: masks.deferred,
   };
 }
 

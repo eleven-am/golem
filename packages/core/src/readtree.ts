@@ -18,11 +18,13 @@ export interface FieldMaskCheck {
   path: readonly string[];
   model: string;
   field: string;
+  constraint?: unknown;
 }
 
 export interface InjectedField {
   path: readonly string[];
   field: string;
+  masks?: readonly string[];
 }
 
 export interface PreparedReadTree {
@@ -388,6 +390,15 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       options.context,
     );
     const needed: PrismaSelect = {};
+    const contributors = new Map<string, Set<string>>();
+    const contributed = (name: string, field: string): void => {
+      const existing = contributors.get(name);
+      if (existing) {
+        existing.add(field);
+        return;
+      }
+      contributors.set(name, new Set([field]));
+    };
     for (const field of requested) {
       const entry = classification[field];
       if (!entry || entry.access === 'always') {
@@ -396,13 +407,20 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       if (entry.access === 'never') {
         throw new GolemForbiddenError(`Cannot read field "${field}" on ${model.name}`);
       }
-      maskChecks.push({ path, model: model.name, field });
+      const constraint =
+        path.length === 0 && options.provider?.constrainField !== undefined
+          ? await options.provider.constrainField('read', model.name, field, options.context)
+          : undefined;
+      maskChecks.push({ path, model: model.name, field, constraint });
       if (entry.dependencies) {
         const hydration = dependencyHydrationSelect(metadata, model, entry.dependencies);
         if (!hydration.complete) {
           throw new GolemForbiddenError(
             `Cannot read field "${field}" on ${model.name}: its authorization dependencies cannot be hydrated safely`,
           );
+        }
+        for (const name of Object.keys(hydration.select)) {
+          contributed(name, field);
         }
         mergeSelect(needed, hydration.select);
       }
@@ -421,11 +439,22 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
           }
           continue;
         }
+        contributed(required, field);
         needed[required] = true;
       }
     }
     if (Object.keys(needed).length > 0) {
+      const mark = injected.length;
       injectHydrationIntoProjection(metadata, model, projection, needed, path, injected);
+      for (let index = mark; index < injected.length; index += 1) {
+        const entry = injected[index]!;
+        const owners = entry.path.length === path.length
+          ? contributors.get(entry.field)
+          : undefined;
+        if (owners !== undefined) {
+          injected[index] = { ...entry, masks: [...owners] };
+        }
+      }
     }
   }
 
