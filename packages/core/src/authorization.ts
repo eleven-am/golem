@@ -3,6 +3,12 @@ export type GolemAction = 'read' | 'create' | 'update' | 'delete';
 export interface AuthorizationProvider {
   authorize(action: GolemAction, model: string, context: unknown): Promise<void>;
   constrain(action: GolemAction, model: string, context: unknown): Promise<unknown>;
+  constrainField?(
+    action: GolemAction,
+    model: string,
+    field: string,
+    context: unknown,
+  ): Promise<unknown>;
   check?(action: GolemAction, model: string, entity: unknown, context: unknown): Promise<boolean>;
   checkField?(
     action: GolemAction,

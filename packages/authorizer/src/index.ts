@@ -12,6 +12,7 @@ import { AuthorizationService } from '@eleven-am/authorizer';
 import { PrismaAuthorizationService } from '@eleven-am/authorizer/prisma';
 import { AbilityLike, CaslRule } from './casl';
 import { assertAbilityConformance } from './conformance';
+import { deriveFieldConstraint } from './field-constraint';
 import { installGolemAbilityFactory } from './install';
 import { golemContextStore, ensureGolemTransportRegistered, wrapFresh } from './transport';
 
@@ -22,6 +23,8 @@ export { ABILITY_CONFORMANCE_ERROR, BIGINT_EXACT_ABILITY_ERROR, conformanceCases
 
 export type { InstalledFactory } from './install';
 export { installGolemAbilityFactory } from './install';
+
+export { deriveFieldConstraint } from './field-constraint';
 
 export {
   GolemPolicyRuleError,
@@ -83,6 +86,20 @@ export class GolemAuthorizationAdapter implements AuthorizationProvider, OnModul
   async constrain(action: GolemAction, model: string, context: unknown): Promise<unknown> {
     try {
       return await this.port.constrain(action, model, context as never);
+    } catch (error) {
+      translate(error);
+    }
+  }
+
+  async constrainField(
+    action: GolemAction,
+    model: string,
+    field: string,
+    context: unknown,
+  ): Promise<unknown> {
+    try {
+      const ability = await this.ability(context);
+      return deriveFieldConstraint(ability.rulesFor(action, model, field));
     } catch (error) {
       translate(error);
     }
