@@ -6,6 +6,12 @@ import {
 } from './authorization';
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError, GolemValidationError } from './errors';
+import {
+  FilterClauses,
+  RELATION_FILTER_KEYS,
+  collectFilterFields,
+  refuseUnreadableReferences,
+} from './field-references';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { PrismaSelect, RELATION_COUNT_FIELD } from './select';
 
@@ -88,8 +94,6 @@ export function mergeSelect(into: PrismaSelect, source: PrismaSelect): void {
     }
   }
 }
-
-const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
 
 interface DependencyHydration {
   select: PrismaSelect;
@@ -390,6 +394,27 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
     options.provider?.classifyFields !== undefined &&
     options.provider?.checkField !== undefined;
 
+  async function classifyFilterClauses(
+    model: DatamodelModel,
+    clauses: FilterClauses,
+  ): Promise<void> {
+    if (
+      !classifying ||
+      (clauses.where === undefined &&
+        clauses.orderBy === undefined &&
+        clauses.cursor === undefined)
+    ) {
+      return;
+    }
+    await refuseUnreadableReferences(
+      options.provider!,
+      options.context,
+      collectFilterFields(clauses, model.name, metadata),
+      'filter or order by',
+      (message) => new GolemForbiddenError(message),
+    );
+  }
+
   async function classifyModelFields(
     model: DatamodelModel,
     projection: RelationEntry,
@@ -510,6 +535,9 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
           `Query depth ${depth + 1} exceeds the maximum of ${options.maxDepth}`,
         );
       }
+      if (value !== true && typeof value === 'object' && value !== null) {
+        await classifyFilterClauses(target, value as FilterClauses);
+      }
       const constraint = options.provider
         ? await options.provider.constrain('read', target.name, options.context)
         : undefined;
@@ -581,6 +609,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
           `select and omit cannot be used together at ${relationPath.join('.')}`,
         );
       }
+      await classifyFilterClauses(target, entryObject);
       if (entryObject.select !== undefined) {
         entryObject.select = await walkTree(
           target,

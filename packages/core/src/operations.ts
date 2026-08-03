@@ -11,6 +11,16 @@ import {
   GolemValidationError,
 } from './errors';
 import { runPolicyChecks } from './concurrency';
+import {
+  FieldReferences,
+  FilterClauses,
+  addCursorFields,
+  addNestedFields,
+  addTrueKeys,
+  collectFilterFields,
+  referenceField,
+  refuseUnreadableReferences,
+} from './field-references';
 import { withBufferedEvents } from './event-buffer';
 import {
   CompiledReadEvent,
@@ -27,8 +37,8 @@ import { decodeAggregateRow } from './compiled-aggregate-decode';
 import { runCompiledRead } from './compiled-read-run';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
-import { buildModelMetadata, ModelMetadata, ModelMetadataIndex } from './model-meta';
-import { planNestedWrites } from './nested-writes';
+import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
+import { NestedWriteKind, NestedWriteOperation, planNestedWrites } from './nested-writes';
 import {
   PreparedReadTree,
   applyFieldMasks,
@@ -290,30 +300,19 @@ function translateError(error: unknown, model: string): never {
   throw error;
 }
 
-const MEASURE_KEYS = ['_sum', '_avg', '_min', '_max', '_count'] as const;
-
-const RELATION_FILTER_KEYS = ['is', 'isNot', 'some', 'every', 'none'] as const;
-
-type FieldReferences = Map<string, Set<string>>;
-
-function referenceField(into: FieldReferences, model: string, field: string): void {
-  const existing = into.get(model);
-  if (existing) {
-    existing.add(field);
-    return;
-  }
-  into.set(model, new Set([field]));
-}
-
-function addTrueKeys(into: FieldReferences, model: string, source: unknown): void {
-  if (source && typeof source === 'object') {
-    for (const [key, value] of Object.entries(source as Record<string, unknown>)) {
-      if (value === true) {
-        referenceField(into, model, key);
-      }
-    }
-  }
-}
+const NESTED_WRITE_FILTERS: Record<NestedWriteKind, 'payload' | 'where' | 'none'> = {
+  create: 'none',
+  createMany: 'none',
+  connectOrCreate: 'where',
+  connect: 'payload',
+  disconnect: 'payload',
+  set: 'payload',
+  update: 'where',
+  updateMany: 'where',
+  upsert: 'where',
+  delete: 'payload',
+  deleteMany: 'payload',
+};
 
 function addMeasureFields(
   into: FieldReferences,
@@ -327,110 +326,6 @@ function addMeasureFields(
   if (typeof request._count === 'object') {
     addTrueKeys(into, model, request._count);
     into.get(model)?.delete('_all');
-  }
-}
-
-function addObservedKeys(into: FieldReferences, model: string, source: unknown): void {
-  if (!source || typeof source !== 'object') {
-    return;
-  }
-  for (const key of Object.keys(source as Record<string, unknown>)) {
-    if (key !== '_all') {
-      referenceField(into, model, key);
-    }
-  }
-}
-
-function addNestedFields(
-  into: FieldReferences,
-  metadata: ModelMetadataIndex,
-  model: string,
-  source: unknown,
-): void {
-  if (!source || typeof source !== 'object') {
-    return;
-  }
-  const meta = metadata.get(model);
-  for (const entry of Array.isArray(source) ? source : [source]) {
-    if (!entry || typeof entry !== 'object') {
-      continue;
-    }
-    for (const [key, value] of Object.entries(entry as Record<string, unknown>)) {
-      if ((MEASURE_KEYS as readonly string[]).includes(key)) {
-        addObservedKeys(into, model, value);
-        continue;
-      }
-      if (key === 'AND' || key === 'OR' || key === 'NOT') {
-        addNestedFields(into, metadata, model, value);
-        continue;
-      }
-      const field = meta?.fieldsByName.get(key);
-      if (field === undefined) {
-        const compoundFields = key === meta?.compoundKeyName
-          ? meta.primaryKeys.map((primaryKey) => primaryKey.name)
-          : meta?.compoundUniqueSelectors.get(key);
-        if (compoundFields) {
-          for (const name of compoundFields) referenceField(into, model, name);
-          continue;
-        }
-        referenceField(into, model, key);
-        continue;
-      }
-      referenceField(into, model, key);
-      if (field.kind === 'object' && metadata.has(field.type)) {
-        addRelationFilterFields(into, metadata, field.type, value);
-      }
-    }
-  }
-}
-
-function addRelationFilterFields(
-  into: FieldReferences,
-  metadata: ModelMetadataIndex,
-  model: string,
-  source: unknown,
-): void {
-  if (!source || typeof source !== 'object') {
-    return;
-  }
-  for (const entry of Array.isArray(source) ? source : [source]) {
-    if (!entry || typeof entry !== 'object') {
-      continue;
-    }
-    const record = entry as Record<string, unknown>;
-    const operators = RELATION_FILTER_KEYS.filter((operator) => operator in record);
-    if (operators.length === 0) {
-      addNestedFields(into, metadata, model, record);
-      continue;
-    }
-    for (const operator of operators) {
-      addNestedFields(into, metadata, model, record[operator]);
-    }
-  }
-}
-
-function addCursorFields(
-  into: FieldReferences,
-  model: string,
-  source: unknown,
-  metadata: ModelMetadata,
-): void {
-  if (!source || typeof source !== 'object' || Array.isArray(source)) {
-    return;
-  }
-  for (const key of Object.keys(source as Record<string, unknown>)) {
-    if (metadata.fieldsByName.has(key)) {
-      referenceField(into, model, key);
-      continue;
-    }
-    const compoundFields = key === metadata.compoundKeyName
-      ? metadata.primaryKeys.map((field) => field.name)
-      : metadata.compoundUniqueSelectors.get(key);
-    if (compoundFields) {
-      for (const field of compoundFields) referenceField(into, model, field);
-      continue;
-    }
-    referenceField(into, model, key);
   }
 }
 
@@ -458,21 +353,6 @@ function collectGroupByFields(
   }
   addNestedFields(references, index, model, request.having);
   addNestedFields(references, index, model, request.orderBy);
-  return references;
-}
-
-function collectFilterFields(
-  request: { where?: unknown; orderBy?: unknown; cursor?: unknown },
-  model: string,
-  index: ModelMetadataIndex,
-): FieldReferences {
-  const references: FieldReferences = new Map();
-  addNestedFields(references, index, model, request.where);
-  addNestedFields(references, index, model, request.orderBy);
-  const metadata = index.get(model);
-  if (metadata) {
-    addCursorFields(references, model, request.cursor, metadata);
-  }
   return references;
 }
 
@@ -755,10 +635,43 @@ export class GolemEngine {
       for (const action of relation.modelActions) {
         await provider.authorize(action, relation.target.name, context);
       }
+      await this.classifyNestedWriteFilters(relation.target.name, relation.operations, context);
       for (const nested of [...relation.createPayloads, ...relation.updatePayloads]) {
         await this.walkNestedWrites(provider, relation.target.name, nested, context);
       }
     }
+  }
+
+  private async classifyNestedWriteFilters(
+    model: string,
+    operations: readonly NestedWriteOperation[],
+    context: unknown,
+  ): Promise<void> {
+    if (!this.checkReadFields) {
+      return;
+    }
+    const references: FieldReferences = new Map();
+    for (const operation of operations) {
+      const position = NESTED_WRITE_FILTERS[operation.kind];
+      if (position === 'none') {
+        continue;
+      }
+      for (const payload of operation.payloads) {
+        const clause = position === 'payload'
+          ? payload
+          : (payload as { where?: unknown } | null)?.where;
+        if (!clause || typeof clause !== 'object') {
+          continue;
+        }
+        for (const entry of Array.isArray(clause) ? clause : [clause]) {
+          if (!entry || typeof entry !== 'object') {
+            continue;
+          }
+          addNestedFields(references, this.metadata, model, this.filterableWhere(model, entry));
+        }
+      }
+    }
+    await this.classifyReferencedFields(context, references, 'filter');
   }
 
   private async resolveConstrainedTarget(
@@ -1169,6 +1082,9 @@ export class GolemEngine {
   async update(request: UpdateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
+    await this.classifyFilterFields(req.model, req.context, {
+      where: this.filterableWhere(req.model, req.where),
+    });
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
@@ -1235,6 +1151,7 @@ export class GolemEngine {
   async updateMany(request: UpdateManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('updateMany', request);
+    await this.classifyFilterFields(req.model, req.context, { where: req.where });
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
@@ -1290,6 +1207,9 @@ export class GolemEngine {
   async delete(request: DeleteRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('delete', request);
+    await this.classifyFilterFields(req.model, req.context, {
+      where: this.filterableWhere(req.model, req.where),
+    });
     const { where } = await this.resolveConstrainedTarget('delete', req, scope?.client);
     const prepared = await this.prepareRead(req);
     const deleted = await this.run(req.model, () =>
@@ -1307,6 +1227,9 @@ export class GolemEngine {
 
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
+    await this.classifyFilterFields(request.model, request.context, {
+      where: this.filterableWhere(request.model, request.where),
+    });
     const pkSelect = this.pkSelect(request.model);
     const existing = await this.run(request.model, () =>
       delegate.findFirst({ where: this.filterableWhere(request.model, request.where), select: pkSelect }),
@@ -1341,6 +1264,7 @@ export class GolemEngine {
   async deleteMany(request: DeleteManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('deleteMany', request);
+    await this.classifyFilterFields(req.model, req.context, { where: req.where });
     const constraint = await this.constraintFor('delete', req.model, req.context);
     const result = (await this.run(req.model, () =>
       delegate.deleteMany({ where: mergeConstraint(req.where, constraint) }),
@@ -1360,10 +1284,8 @@ export class GolemEngine {
 
   async aggregate(request: AggregateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
-    await this.classifyReferencedFields(
-      request.context,
+    await this.classifyCollectedFields(request.context, 'aggregate', () =>
       collectAggregateFields(request, request.model, this.metadata),
-      'aggregate',
     );
     await this.classifyFilterFields(request.model, request.context, { where: request.where });
     const constraint = await this.constraintFor('read', request.model, request.context);
@@ -1415,10 +1337,8 @@ export class GolemEngine {
     }
     assertPageArgument(request.model, 'take', request.take);
     assertPageArgument(request.model, 'skip', request.skip);
-    await this.classifyReferencedFields(
-      request.context,
+    await this.classifyCollectedFields(request.context, 'group', () =>
       collectGroupByFields(request, request.model, this.metadata),
-      'group',
     );
     await this.classifyFilterFields(request.model, request.context, { where: request.where });
     const constraint = await this.constraintFor('read', request.model, request.context);
@@ -1477,35 +1397,33 @@ export class GolemEngine {
     const verb = kind === 'group'
       ? 'group or aggregate'
       : kind === 'filter' ? 'filter or order by' : 'aggregate';
-    for (const [model, names] of references) {
-      const fields = [...names];
-      if (fields.length === 0) {
-        continue;
-      }
-      const classification = await provider.classifyFields('read', model, fields, context);
-      for (const field of fields) {
-        const entry = classification[field];
-        if (entry?.access === 'always') {
-          continue;
-        }
-        if (entry?.access === 'conditional' && entry.dischargedByConstraint) {
-          continue;
-        }
-        const undischarged = entry?.requires?.join(', ');
-        const message = undischarged
-          ? `Cannot ${verb} field "${field}" on ${model}: readability depends on ${undischarged}, which the query constraint does not discharge`
-          : `Cannot ${verb} field "${field}" on ${model}`;
-        throw kind === 'filter'
+    await refuseUnreadableReferences(
+      provider,
+      context,
+      references,
+      verb,
+      (message) =>
+        kind === 'filter'
           ? new GolemForbiddenError(message)
-          : new GolemValidationError(message);
-      }
+          : new GolemValidationError(message),
+    );
+  }
+
+  private async classifyCollectedFields(
+    context: unknown,
+    kind: 'aggregate' | 'group' | 'filter',
+    collect: () => FieldReferences,
+  ): Promise<void> {
+    if (!this.checkReadFields) {
+      return;
     }
+    await this.classifyReferencedFields(context, collect(), kind);
   }
 
   private async classifyFilterFields(
     model: string,
     context: unknown,
-    request: { where?: unknown; orderBy?: unknown; cursor?: unknown },
+    request: FilterClauses,
   ): Promise<void> {
     if (!this.checkReadFields) {
       return;
