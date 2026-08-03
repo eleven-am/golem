@@ -1722,7 +1722,13 @@ export function oracleSuite(subject: () => OracleSubject): void {
     it('still checks the root in memory when it masks the same field name in a relation', async () => {
       const run = await runBothMany(
         maskedEngine([
-          { model: 'User', field: 'name', condition: { tenantId: 2 }, requires: ['tenantId'] },
+          {
+            model: 'User',
+            field: 'name',
+            condition: { tenantId: 2 },
+            requires: ['tenantId'],
+            discharged: true,
+          },
         ]),
         {
           model: 'User',
@@ -2298,7 +2304,7 @@ export function oracleSuite(subject: () => OracleSubject): void {
     });
 
     it('hands a field the read is distinct on back to the in-memory path', async () => {
-      const run = await runBothMany(maskedEngine([ownedByAda]), {
+      const run = await runBothMany(maskedEngine([{ ...ownedByAda, discharged: true }]), {
         model: 'Metric',
         select: { id: true, note: true },
         orderBy: [{ id: 'asc' }],
@@ -2311,6 +2317,24 @@ export function oracleSuite(subject: () => OracleSubject): void {
       expect(event.deferred).toEqual([
         expect.objectContaining({ field: 'note', reason: 'distinct' }),
       ]);
+    });
+
+    it('refuses to read distinct on a column the caller may not read on every row', async () => {
+      const engine = maskedEngine([ownedByAda]);
+      const request = {
+        model: 'Metric',
+        select: { id: true, note: true },
+        orderBy: [{ id: 'asc' }],
+        distinct: ['note'],
+        context,
+      } as const;
+
+      await expect(engine.findMany({ ...request, compiled: true })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
+      await expect(engine.findMany({ ...request })).rejects.toThrow(
+        'Cannot filter or order by field "note" on Metric',
+      );
     });
 
     it('hands a field whose condition it cannot render back to the in-memory path', async () => {

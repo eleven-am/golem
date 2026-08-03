@@ -14,6 +14,7 @@ export interface FilterClauses {
   where?: unknown;
   orderBy?: unknown;
   cursor?: unknown;
+  distinct?: unknown;
 }
 
 export function referenceField(into: FieldReferences, model: string, field: string): void {
@@ -171,6 +172,25 @@ export function addCursorFields(
   }
 }
 
+export function addDistinctFields(
+  into: FieldReferences,
+  model: string,
+  source: unknown,
+  metadata: ModelMetadata,
+): void {
+  if (source === undefined || source === null) {
+    return;
+  }
+  for (const name of Array.isArray(source) ? source : [source]) {
+    if (typeof name !== 'string' || !metadata.fieldsByName.has(name)) {
+      throw new GolemValidationError(
+        `Cannot read ${model} distinct on ${JSON.stringify(name)}: no such field`,
+      );
+    }
+    referenceField(into, model, name);
+  }
+}
+
 export function collectFilterFields(
   request: FilterClauses,
   model: string,
@@ -182,6 +202,7 @@ export function collectFilterFields(
   const metadata = index.get(model);
   if (metadata) {
     addCursorFields(references, model, request.cursor, metadata);
+    addDistinctFields(references, model, request.distinct, metadata);
   }
   return references;
 }

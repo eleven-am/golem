@@ -142,16 +142,33 @@ borrowed. It is now golem's own, checked against the model metadata, and it
 covers the fields named inside an `orderBy: { _relevance: { fields: […] } }`,
 which the collector previously stepped over entirely.
 
-`distinct` remains unclassified: returning one row per distinct value
-discloses the partition a hidden field induces over rows the caller can
-otherwise select, and combined with the right to insert rows it degrades to
-testing a whole value for equality. It is not a prefix search — no operator
-compares the hidden value against attacker input. Two smaller edges: a batch
-write discharges a conditional field against the **read** constraint while
-it selects rows with the write constraint, so an ability whose write reach
-exceeds its read reach can still count over the difference; and an ability
-that grants `update` without `read` can no longer filter an `updateMany` or
-`deleteMany` at all, since every field classifies as unreadable.
+`distinct` is classified too, by the same rule. It disclosed nothing by
+value and everything by count: returning one row per distinct value hands
+back the partition a hidden field induces over rows the caller narrows with
+fields it may read, and for a low-cardinality field the partition is close
+to the value. Narrowing to two rows and counting one back said their hidden
+values are equal. It is weaker than the positions above — no operator
+compares the hidden value against anything the caller supplies, so there is
+no character-by-character recovery — but it is the same disclosure and it is
+now refused in the same place: on `findMany` and `findFirst` at the root,
+and on a relation entry in a `select` or `include` tree, classified against
+the model that owns the field. A name that is no field on the model is
+refused rather than passed along, as it is for a `where`, an `orderBy` and a
+`cursor`.
+
+A field readable only conditionally whose condition the query constraint
+already discharges stays usable, here as everywhere. Such a field is still
+masked row by row, and where the statement is compiled the mask on a column
+the read is distinct on is handed back to the in-memory path rather than
+rendered — the database deduplicates on the value, and masking it in SQL
+first would drop rows Prisma keeps.
+
+Two smaller edges remain: a batch write discharges a conditional field
+against the **read** constraint while it selects rows with the write
+constraint, so an ability whose write reach exceeds its read reach can still
+count over the difference; and an ability that grants `update` without
+`read` can no longer filter an `updateMany` or `deleteMany` at all, since
+every field classifies as unreadable.
 
 Reach is worth stating plainly, because the generated GraphQL API is not the
 whole threat surface and in these cases is not the threat surface at all.

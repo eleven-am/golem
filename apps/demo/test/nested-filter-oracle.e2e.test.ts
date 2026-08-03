@@ -311,6 +311,117 @@ describe('filtering by an unreadable field through a nested clause or a batch wr
       expect(answered).toEqual([{ title: 'Memory systems' }]);
     });
   });
+
+  describe('a distinct read counting rows a field the caller may not read partitions', () => {
+    type Counted = { disclosed: true; count: number } | { disclosed: false };
+
+    async function probe(run: () => Promise<{ length: number }>): Promise<Counted> {
+      try {
+        return { disclosed: true, count: (await run()).length };
+      } catch {
+        return { disclosed: false };
+      }
+    }
+
+    function asMod() {
+      return prisma.forContext(ctxFor('mod@example.com'));
+    }
+
+    beforeAll(async () => {
+      const adaPost = await prisma.post.findFirstOrThrow({ where: { title: 'Memory systems' } });
+      await prisma.readingSession.createMany({
+        data: [
+          { postId: adaPost.id, progress: 60, note: 'shared note' },
+          { postId: adaPost.id, progress: 70, note: 'shared note' },
+          { postId: adaPost.id, progress: 80, note: 'other note' },
+        ],
+      });
+    });
+
+    it('reports the same row count either way for a root distinct', async () => {
+      const query = (progress: number[]) =>
+        asMod().readingSession.findMany({
+          where: { progress: { in: progress } },
+          distinct: ['note'],
+          orderBy: [{ progress: 'asc' }],
+          select: { progress: true, note: true },
+        });
+
+      const equal = await probe(() => query([60, 70]));
+      const different = await probe(() => query([60, 80]));
+
+      expect(equal).toEqual({ disclosed: false });
+      expect(equal).toEqual(different);
+    });
+
+    it('reports the same row count either way for a distinct inside a relation entry', async () => {
+      const query = async (progress: number[]) => {
+        const posts = await asMod().post.findMany({
+          where: { title: 'Memory systems' },
+          select: {
+            title: true,
+            readingSessions: {
+              where: { progress: { in: progress } },
+              distinct: ['note'],
+              orderBy: [{ progress: 'asc' }],
+              select: { progress: true, note: true },
+            },
+          },
+        });
+        return posts[0]?.readingSessions ?? [];
+      };
+
+      const equal = await probe(() => query([60, 70]));
+      const different = await probe(() => query([60, 80]));
+
+      expect(equal).toEqual({ disclosed: false });
+      expect(equal).toEqual(different);
+    });
+
+    it('reports the same row count either way through findFirst', async () => {
+      const query = async (progress: number[]) => {
+        const session = await asMod().readingSession.findFirst({
+          where: { progress: { in: progress } },
+          distinct: ['note'],
+          orderBy: [{ progress: 'asc' }],
+          skip: 1,
+          select: { progress: true, note: true },
+        });
+        return session === null ? [] : [session];
+      };
+
+      const equal = await probe(() => query([60, 70]));
+      const different = await probe(() => query([60, 80]));
+
+      expect(equal).toEqual({ disclosed: false });
+      expect(equal).toEqual(different);
+    });
+
+    it('still reads distinct for a caller whose row constraint discharges the field', async () => {
+      const sessions = await prisma.forContext(ctxFor('ada@example.com')).readingSession.findMany({
+        distinct: ['note'],
+        orderBy: [{ progress: 'asc' }],
+        select: { progress: true, note: true },
+      });
+
+      expect(sessions).toEqual([
+        { progress: 30, note: 'ada private note' },
+        { progress: 60, note: 'shared note' },
+        { progress: 80, note: 'other note' },
+      ]);
+    });
+
+    it('still reads distinct over a field the caller may always read', async () => {
+      const sessions = await asMod().readingSession.findMany({
+        where: { progress: { in: [60, 70, 80] } },
+        distinct: ['progress'],
+        orderBy: [{ progress: 'asc' }],
+        select: { progress: true },
+      });
+
+      expect(sessions).toEqual([{ progress: 60 }, { progress: 70 }, { progress: 80 }]);
+    });
+  });
 });
 
 @Authorizer()

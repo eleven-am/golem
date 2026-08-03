@@ -402,7 +402,8 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
       !classifying ||
       (clauses.where === undefined &&
         clauses.orderBy === undefined &&
-        clauses.cursor === undefined)
+        clauses.cursor === undefined &&
+        clauses.distinct === undefined)
     ) {
       return;
     }

@@ -882,6 +882,181 @@ describe('classifying the fields a relevance ordering searches', () => {
   });
 });
 
+describe('classifying the fields a distinct read groups rows by', () => {
+  it.each([
+    ['an array', ['secret']],
+    ['a bare name', 'secret'],
+  ] as const)('refuses a root distinct naming a never-readable field as %s', async (
+    _shape,
+    distinct,
+  ) => {
+    const client = fakeClient();
+    const { engine, classifyFields } = engineFor(client);
+
+    await expect(
+      engine.findMany({ model: 'Post', distinct, select: { title: true }, context: ctx }),
+    ).rejects.toThrow('Cannot filter or order by field "secret" on Post');
+    expect(classifyFields).toHaveBeenCalledWith('read', 'Post', ['secret'], ctx);
+    expect(client.post.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a distinct on findFirst', async () => {
+    const client = fakeClient();
+    const { engine } = engineFor(client);
+
+    await expect(
+      engine.findFirst({
+        model: 'Post',
+        distinct: ['secret'],
+        select: { title: true },
+        context: ctx,
+      }),
+    ).rejects.toThrow('Cannot filter or order by field "secret" on Post');
+    expect(client.post.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('refuses a distinct inside a relation entry against the model that owns the field', async () => {
+    const client = fakeClient();
+    const { engine, classifyFields } = engineFor(client);
+
+    await expect(
+      engine.findMany({
+        model: 'User',
+        select: {
+          email: true,
+          posts: { distinct: ['secret'], select: { title: true } },
+        },
+        context: ctx,
+      }),
+    ).rejects.toThrow('Cannot filter or order by field "secret" on Post');
+    expect(classifyFields).toHaveBeenCalledWith('read', 'Post', ['secret'], ctx);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a distinct two relations deep', async () => {
+    const client = fakeClient();
+    const { engine, classifyFields } = engineFor(client);
+
+    await expect(
+      engine.findMany({
+        model: 'User',
+        select: {
+          email: true,
+          posts: {
+            select: {
+              title: true,
+              comments: { distinct: ['secret'], select: { body: true } },
+            },
+          },
+        },
+        context: ctx,
+      }),
+    ).rejects.toThrow('Cannot filter or order by field "secret" on Comment');
+    expect(classifyFields).toHaveBeenCalledWith('read', 'Comment', ['secret'], ctx);
+    expect(client.user.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a distinct on a conditional field the constraint does not discharge', async () => {
+    const client = fakeClient();
+    const { engine } = engineFor(client, {
+      ...open,
+      Post: {
+        ...open.Post,
+        secret: { access: 'conditional', requires: ['authorId'], dischargedByConstraint: false },
+      },
+    });
+
+    await expect(
+      engine.findMany({
+        model: 'Post',
+        distinct: ['secret'],
+        select: { title: true },
+        context: ctx,
+      }),
+    ).rejects.toThrow(
+      'Cannot filter or order by field "secret" on Post: readability depends on authorId, ' +
+        'which the query constraint does not discharge',
+    );
+    expect(client.post.findMany).not.toHaveBeenCalled();
+  });
+
+  it('still reads distinct on a conditional field the constraint discharges', async () => {
+    const client = fakeClient();
+    const { engine } = engineFor(client, {
+      ...open,
+      Post: {
+        ...open.Post,
+        secret: { access: 'conditional', requires: ['authorId'], dischargedByConstraint: true },
+      },
+    });
+
+    await engine.findMany({
+      model: 'Post',
+      distinct: ['secret'],
+      select: { title: true },
+      context: ctx,
+    });
+
+    expect(client.post.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ distinct: ['secret'] }),
+    );
+  });
+
+  it('leaves a distinct over readable fields alone', async () => {
+    const client = fakeClient();
+    const { engine } = engineFor(client);
+
+    await engine.findMany({
+      model: 'User',
+      distinct: ['note', 'email'],
+      select: {
+        email: true,
+        posts: { distinct: ['title'], select: { title: true } },
+      },
+      context: ctx,
+    });
+
+    expect(client.user.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ distinct: ['note', 'email'] }),
+    );
+  });
+
+  it.each([
+    ['an unknown name', ['sekret']],
+    ['a name that is not a string', [7]],
+  ] as const)('refuses a distinct naming %s', async (_shape, distinct) => {
+    const client = fakeClient();
+    const { engine } = engineFor(client);
+
+    await expect(
+      engine.findMany({ model: 'Post', distinct, select: { title: true }, context: ctx }),
+    ).rejects.toBeInstanceOf(GolemValidationError);
+    expect(client.post.findMany).not.toHaveBeenCalled();
+  });
+
+  it('leaves a distinct alone when field checks are off', async () => {
+    const client = fakeClient();
+    const authorization = {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async () => undefined),
+    } as unknown as AuthorizationProvider;
+    const engine = new GolemEngine(client, models, {
+      authorization,
+      checkReadFields: false,
+      checkWriteResults: false,
+    });
+
+    await engine.findMany({
+      model: 'Post',
+      distinct: ['secret'],
+      select: { title: true },
+      context: ctx,
+    });
+
+    expect(client.post.findMany).toHaveBeenCalled();
+  });
+});
+
 describe('classifying every key a relation filter carries', () => {
   it('never runs a read whose relation filter carries an unreadable sibling key', async () => {
     const client = fakeClient();
