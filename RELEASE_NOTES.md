@@ -402,6 +402,18 @@ These are fixes, and they are behaviour changes.
   `ILIKE`, so `{ equals: '100%', mode: 'insensitive' }` is a wildcard match
   there. This is the one place golem deliberately does not match Prisma:
   a policy author writing `100%` means the literal string.
+- A subscription stops when its client leaves. It previously did not. The
+  resolver waited on the event bus inside an `await`, and a JavaScript async
+  generator cannot honour `return()` while it is parked there — the request
+  is queued until the generator next yields. A subscription that filters, or
+  that an authorization rule silences, never yields again, so it stayed on
+  the bus forever: one `findFirst` per event, for a client that had gone,
+  holding its GraphQL context and the batch loaders keyed on it. Memory grew
+  with subscriptions **opened**, not subscriptions **held**. Golem now races
+  the bus against its own close signal, so teardown is immediate and does not
+  depend on where the resolver happened to be waiting. It also no longer
+  blocks on the bus's own `return()`, which for an `async *iterate()`
+  implementation cannot resolve while that generator is itself parked.
 
 ---
 

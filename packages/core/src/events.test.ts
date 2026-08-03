@@ -7,6 +7,8 @@ import { AuthorizationProvider } from './authorization';
 
 class FakeBus implements GolemEventBus {
   published: Array<{ topic: string; payload: GolemEventPayload }> = [];
+  closedIterators = 0;
+  returnable = true;
   private buffer: GolemEventPayload[] = [];
   private notify: (() => void) | null = null;
 
@@ -20,15 +22,32 @@ class FakeBus implements GolemEventBus {
     this.notify = null;
   }
 
-  async *iterate(): AsyncIterableIterator<GolemEventPayload> {
-    while (true) {
-      while (this.buffer.length > 0) {
-        yield this.buffer.shift()!;
+  iterate(): AsyncIterableIterator<GolemEventPayload> {
+    const owner = this;
+    const inner = (async function* (): AsyncIterableIterator<GolemEventPayload> {
+      while (true) {
+        while (owner.buffer.length > 0) {
+          yield owner.buffer.shift()!;
+        }
+        await new Promise<void>((resolve) => {
+          owner.notify = resolve;
+        });
       }
-      await new Promise<void>((resolve) => {
-        this.notify = resolve;
-      });
+    })();
+    const source: AsyncIterableIterator<GolemEventPayload> = {
+      next: () => inner.next(),
+      throw: (error?: unknown) => inner.throw(error),
+      [Symbol.asyncIterator]() {
+        return this;
+      },
+    };
+    if (this.returnable) {
+      source.return = (value?: never) => {
+        owner.closedIterators += 1;
+        return inner.return(value as never);
+      };
     }
+    return source;
   }
 }
 
@@ -188,5 +207,60 @@ describe('schema subscription wiring', () => {
     bus.push({ type: 'UPDATED', model: 'User', id: 'visible' });
     expect((await next).value.data.userEvents.type).toBe('UPDATED');
     await iterator.return?.();
+  });
+
+  async function settle(closing: Promise<unknown>): Promise<string> {
+    return Promise.race([
+      closing.then(() => 'closed'),
+      new Promise<string>((resolve) => setTimeout(() => resolve('still running'), 250)),
+    ]);
+  }
+
+  it('stops reading the bus when a subscriber disconnects mid-wait', async () => {
+    const bus = new FakeBus();
+    const client = fakeClient();
+    const schema = subscribedSchema(client, bus);
+    const iterator = (await subscribe({
+      schema,
+      document: parse(
+        'subscription { userEvents(where: { email: { contains: "match" } }) { type id } }',
+      ),
+    })) as AsyncIterableIterator<any>;
+
+    const pending = iterator.next();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(await settle(iterator.return!())).toBe('closed');
+    expect(bus.closedIterators).toBe(1);
+    expect((await pending).done).toBe(true);
+
+    client.user.findFirst.mockResolvedValue({ email: 'match@b.c' });
+    bus.push({ type: 'UPDATED', model: 'User', id: 'u1' });
+    bus.push({ type: 'UPDATED', model: 'User', id: 'u2' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(client.user.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('stops even when the bus hands back an iterator that cannot be returned', async () => {
+    const bus = new FakeBus();
+    bus.returnable = false;
+    const client = fakeClient();
+    const schema = subscribedSchema(client, bus);
+    const iterator = (await subscribe({
+      schema,
+      document: parse('subscription { userEvents { type id } }'),
+    })) as AsyncIterableIterator<any>;
+
+    const pending = iterator.next();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    expect(await settle(iterator.return!())).toBe('closed');
+    expect((await pending).done).toBe(true);
+
+    bus.push({ type: 'UPDATED', model: 'User', id: 'u1' });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(client.user.findFirst).not.toHaveBeenCalled();
   });
 });

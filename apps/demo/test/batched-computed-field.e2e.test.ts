@@ -163,6 +163,39 @@ describe('batched computed fields (e2e)', () => {
     expect(groupBy).toHaveBeenCalledTimes(1);
   });
 
+  it('recounts on every subscription event rather than holding the first answer', async () => {
+    const events: any[] = [];
+    const errors: unknown[] = [];
+    const unsubscribe = socket.subscribe(
+      { query: 'subscription { userEvents { type entity { email postCount } } }' },
+      {
+        next: (value) => events.push(value),
+        error: (error) => errors.push(error),
+        complete: () => undefined,
+      },
+    );
+    await sleep(400);
+
+    const subject = await prisma.user.findUniqueOrThrow({ where: { email: 'nina@example.com' } });
+    await gql(`mutation { updateUser(where: { email: "nina@example.com" }, data: { name: "Nina" }) { id } }`);
+    await sleep(400);
+
+    await prisma.post.create({
+      data: { title: 'nina second published', published: true, authorId: subject.id },
+    });
+    await gql(`mutation { updateUser(where: { email: "nina@example.com" }, data: { name: "Nina II" }) { id } }`);
+    await sleep(400);
+    unsubscribe();
+    await sleep(400);
+
+    expect(errors).toEqual([]);
+    expect(events.map((event) => event.data.userEvents.entity)).toEqual([
+      { email: 'nina@example.com', postCount: 2 },
+      { email: 'nina@example.com', postCount: 3 },
+    ]);
+    expect(groupBy).toHaveBeenCalledTimes(2);
+  });
+
   it('reads what the same mutation wrote a field earlier', async () => {
     await prisma.user.create({
       data: {
@@ -193,38 +226,6 @@ describe('batched computed fields (e2e)', () => {
       '{ users(where: { email: { equals: "stale@example.com" } }) { postCount } }',
     );
     expect(follow.body.data.users).toEqual([{ postCount: 3 }]);
-  });
-
-  it('recounts on every subscription event rather than holding the first answer', async () => {
-    const events: any[] = [];
-    const errors: unknown[] = [];
-    const unsubscribe = socket.subscribe(
-      { query: 'subscription { userEvents { type entity { email postCount } } }' },
-      {
-        next: (value) => events.push(value),
-        error: (error) => errors.push(error),
-        complete: () => undefined,
-      },
-    );
-    await sleep(400);
-
-    const subject = await prisma.user.findUniqueOrThrow({ where: { email: 'nina@example.com' } });
-    await gql(`mutation { updateUser(where: { email: "nina@example.com" }, data: { name: "Nina" }) { id } }`);
-    await sleep(400);
-
-    await prisma.post.create({
-      data: { title: 'nina second published', published: true, authorId: subject.id },
-    });
-    await gql(`mutation { updateUser(where: { email: "nina@example.com" }, data: { name: "Nina II" }) { id } }`);
-    await sleep(400);
-    unsubscribe();
-
-    expect(errors).toEqual([]);
-    expect(events.map((event) => event.data.userEvents.entity)).toEqual([
-      { email: 'nina@example.com', postCount: 2 },
-      { email: 'nina@example.com', postCount: 3 },
-    ]);
-    expect(groupBy).toHaveBeenCalledTimes(2);
   });
 
   it('leaves a pure computed field resolving from the row it was given', async () => {

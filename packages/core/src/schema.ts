@@ -84,6 +84,8 @@ export const DateTimeScalar = new GraphQLScalarType({
   parseLiteral: (ast) => (ast.kind === Kind.STRING ? new Date(ast.value) : null),
 });
 
+const SUBSCRIPTION_ABANDONED = Symbol('golem.subscription.abandoned');
+
 const BIGINT_STRING = /^-?\d+$/;
 
 function coerceBigInt(value: unknown): bigint {
@@ -1056,64 +1058,89 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
         args: {
           where: { type: whereInput },
         },
-        subscribe: async function* (_root, args, ctx, info) {
+        subscribe: (_root, args, ctx, info) => {
           const authz = options.authorization;
           const eventContext = () => (authz ? authz.freshContext?.(ctx) ?? ctx : undefined);
-          if (authz) {
-            await authz.authorize('read', model.name, eventContext());
-          }
-          const entitySelect = buildEventEntitySelect(info, eventTypeName, model, modelsByName, computedRequires);
-          for await (const payload of eventBus.iterate(eventTopic(model.name))) {
-            if (payload.type === 'DELETED') {
-              // A deleted row can no longer be queried safely. Filtered deletion events are
-              // therefore suppressed, and authorized subscriptions require a pre-delete
-              // snapshot that passes a fresh instance check.
-              if (args.where) continue;
-              if (authz) {
-                if (!payload.entity || !authz.check) continue;
+          let abandon!: () => void;
+          const abandoned = new Promise<typeof SUBSCRIPTION_ABANDONED>((resolve) => {
+            abandon = () => resolve(SUBSCRIPTION_ABANDONED);
+          });
+          const events = (async function* () {
+            if (authz) {
+              await authz.authorize('read', model.name, eventContext());
+            }
+            const entitySelect = buildEventEntitySelect(info, eventTypeName, model, modelsByName, computedRequires);
+            const source = eventBus.iterate(eventTopic(model.name));
+            try {
+              while (true) {
+                const step = await Promise.race([source.next(), abandoned]);
+                if (step === SUBSCRIPTION_ABANDONED || step.done) break;
+                const payload = step.value;
+                if (payload.type === 'DELETED') {
+                  // A deleted row can no longer be queried safely. Filtered deletion events are
+                  // therefore suppressed, and authorized subscriptions require a pre-delete
+                  // snapshot that passes a fresh instance check.
+                  if (args.where) continue;
+                  if (authz) {
+                    if (!payload.entity || !authz.check) continue;
+                    try {
+                      const allowed = await authz.check('read', model.name, payload.entity, eventContext());
+                      if (!allowed) continue;
+                    } catch (error) {
+                      if (
+                        error instanceof GolemError &&
+                        (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
+                      ) continue;
+                      throw error;
+                    }
+                  }
+                  yield { type: payload.type, id: payload.id, entity: null };
+                  continue;
+                }
+                if (!args.where && !entitySelect && !authz) {
+                  yield { type: payload.type, id: payload.id, entity: null };
+                  continue;
+                }
+                const where = args.where
+                  ? { AND: [{ [pkField.name]: payload.id }, args.where] }
+                  : { [pkField.name]: payload.id };
+                let entity: unknown;
                 try {
-                  const allowed = await authz.check('read', model.name, payload.entity, eventContext());
-                  if (!allowed) continue;
+                  entity = await engine.findFirst({
+                    model: model.name,
+                    where,
+                    select: entitySelect ?? primaryKeySelect(model),
+                    context: eventContext(),
+                  });
                 } catch (error) {
                   if (
                     error instanceof GolemError &&
                     (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
-                  ) continue;
+                  ) {
+                    continue;
+                  }
                   throw error;
                 }
+                if (!entity && (args.where || authz)) {
+                  continue;
+                }
+                yield { type: payload.type, id: payload.id, entity: entitySelect ? entity : null };
               }
-              yield { type: payload.type, id: payload.id, entity: null };
-              continue;
+            } finally {
+              void Promise.resolve(source.return?.()).catch(() => undefined);
             }
-            if (!args.where && !entitySelect && !authz) {
-              yield { type: payload.type, id: payload.id, entity: null };
-              continue;
-            }
-            const where = args.where
-              ? { AND: [{ [pkField.name]: payload.id }, args.where] }
-              : { [pkField.name]: payload.id };
-            let entity: unknown;
-            try {
-              entity = await engine.findFirst({
-                model: model.name,
-                where,
-                select: entitySelect ?? primaryKeySelect(model),
-                context: eventContext(),
-              });
-            } catch (error) {
-              if (
-                error instanceof GolemError &&
-                (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
-              ) {
-                continue;
-              }
-              throw error;
-            }
-            if (!entity && (args.where || authz)) {
-              continue;
-            }
-            yield { type: payload.type, id: payload.id, entity: entitySelect ? entity : null };
-          }
+          })();
+          return {
+            next: () => events.next(),
+            return: (value?: unknown) => {
+              abandon();
+              return events.return(value as never);
+            },
+            throw: (error?: unknown) => events.throw(error),
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+          };
         },
         resolve: (payload: unknown) => payload,
       };
