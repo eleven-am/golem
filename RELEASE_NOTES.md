@@ -186,9 +186,11 @@ through a relation, as in `{ author: { is: { phone: … } } }`, is classified
 against the related model, and no statement narrows the interrogated rows to
 that model's read constraint. A filter nested inside `data` selects the
 children of whatever parent row the statement matched, which no single
-constraint describes. And `upsert` probes for the existing row without a
-constraint of any kind, so the rule above does not cover the `where` it
-probes with.
+constraint describes. And the `where` an `upsert` probes with is classified
+before the branch is chosen, against the read constraint, even though the
+probe itself now selects with the update constraint — an ability whose update
+reach exceeds its read reach can still name a conditionally-readable field
+there.
 
 Reach is worth stating plainly, because the generated GraphQL API is not the
 whole threat surface and in these cases is not the threat surface at all.
@@ -200,6 +202,54 @@ which is where these classifications earn their place. Compiled reads are the
 mirror image: only GraphQL asks for one, and the generated client hard-codes
 `compiled: false`, so a compiled nested filter is reachable only by calling
 the engine yourself.
+
+### `upsert` chooses its branch from rows the caller may update
+
+`upsert` probed for the existing row with no authorization constraint at all.
+The branch it took was decided by whether a row existed **anywhere in the
+table**, not by whether the caller could see or touch it, and the `where` of
+an upsert is a unique selector — so the branch was an existence oracle over
+unique keys, which is account enumeration when the key is an email.
+
+The probe now runs under the caller's **update** constraint. That is the
+constraint the branch commits to: an existing row leads to the update branch,
+and the update branch selects with the update constraint anyway, so a row
+outside it could never have been written. Probing with anything wider only
+routed the caller to a branch that was going to refuse. A caller with no
+`update` rule for the model at all reaches no row through that branch, so the
+probe is skipped and the upsert creates.
+
+The disclosure this closes is narrow and worth naming exactly. A caller who
+may **create** could already learn that a unique key is taken by attempting
+the create and reading the unique violation; golem does not hide that and
+cannot. What leaked beyond it was the branch, visible to a caller who may
+**not** create: an existing row produced a `NOT_FOUND` from the update
+branch, a missing one produced a `FORBIDDEN` from the create branch, and two
+different refusals for the same request separate the two cases. Both are now
+the create branch's `FORBIDDEN`, whatever exists.
+
+Two outcomes change for a caller who may create:
+
+- A key held by a row outside the caller's update reach used to answer
+  `NOT_FOUND`. It now takes the create branch and answers `CONFLICT` —
+  exactly what the same `create` answers, and no more than it.
+- An `upsert` whose `where` names a row outside that reach but whose `create`
+  payload does not reproduce the selector now **creates** that payload rather
+  than refusing. For that caller the row does not exist, so `upsert` creates,
+  and the create is one they could have issued directly.
+
+The rule the branch now follows is that an `upsert` tells its caller nothing a
+`create` and an `update` issued directly with the same permissions would not.
+What a unique constraint discloses to anyone who may create is unchanged, and
+so is a row-condition refusal on the create payload: a caller allowed to
+create at model level but not for these values sees `CONFLICT` on a taken key
+and a row-check refusal on a free one, which is what the direct `create`
+already showed them.
+
+`upsert` has no field in the generated GraphQL schema. It is reachable
+through the generated programmatic client and through the engine directly,
+which is where this applies. The nested `upsert` inside a relation write is
+Prisma's and is governed by the nested-write rules, not by this branch.
 
 ### A GraphQL context reused across requests is refused
 

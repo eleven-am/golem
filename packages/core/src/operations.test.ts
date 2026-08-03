@@ -1,5 +1,11 @@
 import { CompiledReadEvent } from './compiled-read';
-import { GolemConflictError, GolemNotFoundError, GolemValidationError } from './errors';
+import {
+  GolemConflictError,
+  GolemForbiddenError,
+  GolemNotFoundError,
+  GolemUnauthorizedError,
+  GolemValidationError,
+} from './errors';
 import { GolemEngine } from './operations';
 import { field } from './testing';
 
@@ -320,5 +326,149 @@ describe('compound unique selectors in filterable where', () => {
     ]);
     expect(rows).toEqual([{ id: '1' }]);
     expect(findMany).toHaveBeenCalledWith({ select: { id: true } });
+  });
+});
+
+describe('the upsert branch probe', () => {
+  const probeModels = [
+    {
+      name: 'User',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'email', type: 'String' }),
+        field({ name: 'name', type: 'String' }),
+      ],
+      uniqueIndexes: [{ fields: ['email'] }],
+    },
+  ];
+
+  function provider(constrain: jest.Mock) {
+    return {
+      authorize: jest.fn(async () => undefined),
+      constrain,
+      check: jest.fn(async () => true),
+      checkField: jest.fn(async () => true),
+    } as never;
+  }
+
+  function engineWithProvider(delegate: Record<string, jest.Mock>, constrain: jest.Mock) {
+    return new GolemEngine({ user: delegate }, probeModels, {
+      authorization: provider(constrain),
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
+  }
+
+  it('looks for the existing row only inside the update constraint', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockResolvedValue({ id: 'u1' });
+    const constrain = jest.fn(async () => ({ id: 'mine' }));
+    const engine = engineWithProvider({ findFirst, create, update: jest.fn() }, constrain);
+
+    await engine.upsert({
+      model: 'User',
+      where: { email: 'taken@example.com' },
+      create: { email: 'taken@example.com' },
+      update: { name: 'edited' },
+      select: { id: true },
+      context: { req: {} },
+    });
+
+    expect(constrain).toHaveBeenCalledWith('update', 'User', { req: {} });
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { AND: [{ email: 'taken@example.com' }, { id: 'mine' }] },
+      select: { id: true },
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('takes the update branch for a row the update constraint admits', async () => {
+    const findFirst = jest.fn().mockResolvedValue({ id: 'mine' });
+    const update = jest.fn().mockResolvedValue({ id: 'mine' });
+    const create = jest.fn();
+    const engine = engineWithProvider(
+      { findFirst, update, create },
+      jest.fn(async () => ({ id: 'mine' })),
+    );
+
+    await engine.upsert({
+      model: 'User',
+      where: { email: 'mine@example.com' },
+      create: { email: 'mine@example.com' },
+      update: { name: 'edited' },
+      select: { id: true },
+      context: { req: {} },
+    });
+
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('creates without probing when the caller may not update the model at all', async () => {
+    const findFirst = jest.fn().mockResolvedValue({ id: 'theirs' });
+    const create = jest.fn().mockResolvedValue({ id: 'u1' });
+    const constrain = jest.fn(async (action: string) => {
+      if (action === 'update') {
+        throw new GolemForbiddenError('Cannot update User');
+      }
+      return {};
+    }) as unknown as jest.Mock;
+    const engine = engineWithProvider({ findFirst, create, update: jest.fn() }, constrain);
+
+    await engine.upsert({
+      model: 'User',
+      where: { email: 'taken@example.com' },
+      create: { email: 'taken@example.com' },
+      update: { name: 'edited' },
+      select: { id: true },
+      context: { req: {} },
+    });
+
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('surfaces a unique violation on the create branch as a conflict, not a not-found', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn().mockRejectedValue(
+      Object.assign(new Error('unique'), { code: 'P2002' }),
+    );
+    const engine = engineWithProvider(
+      { findFirst, create, update: jest.fn() },
+      jest.fn(async () => ({ id: 'mine' })),
+    );
+
+    await expect(
+      engine.upsert({
+        model: 'User',
+        where: { email: 'taken@example.com' },
+        create: { email: 'taken@example.com' },
+        update: { name: 'edited' },
+        select: { id: true },
+        context: { req: {} },
+      }),
+    ).rejects.toBeInstanceOf(GolemConflictError);
+  });
+
+  it('lets an unauthenticated refusal on the update constraint through', async () => {
+    const findFirst = jest.fn().mockResolvedValue(null);
+    const create = jest.fn();
+    const constrain = jest.fn(async () => {
+      throw new GolemUnauthorizedError('no session');
+    }) as unknown as jest.Mock;
+    const engine = engineWithProvider({ findFirst, create, update: jest.fn() }, constrain);
+
+    await expect(
+      engine.upsert({
+        model: 'User',
+        where: { email: 'taken@example.com' },
+        create: { email: 'taken@example.com' },
+        update: { name: 'edited' },
+        select: { id: true },
+        context: { req: {} },
+      }),
+    ).rejects.toBeInstanceOf(GolemUnauthorizedError);
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 });

@@ -607,6 +607,20 @@ export class GolemEngine {
     return provider.constrain(action, model, context);
   }
 
+  private async updateReach(
+    model: string,
+    context: unknown,
+  ): Promise<{ denied: boolean; constraint?: unknown }> {
+    try {
+      return { denied: false, constraint: await this.constraintFor('update', model, context) };
+    } catch (error) {
+      if (error instanceof GolemForbiddenError) {
+        return { denied: true };
+      }
+      throw error;
+    }
+  }
+
   private async authorizeNestedWrites(
     model: string,
     data: unknown,
@@ -1238,9 +1252,18 @@ export class GolemEngine {
       where: this.filterableWhere(request.model, request.where),
     });
     const pkSelect = this.pkSelect(request.model);
-    const existing = await this.run(request.model, () =>
-      delegate.findFirst({ where: this.filterableWhere(request.model, request.where), select: pkSelect }),
-    );
+    const reach = await this.updateReach(request.model, request.context);
+    const existing = reach.denied
+      ? null
+      : await this.run(request.model, () =>
+          delegate.findFirst({
+            where: mergeConstraint(
+              this.filterableWhere(request.model, request.where),
+              reach.constraint,
+            ),
+            select: pkSelect,
+          }),
+        );
     if (existing) {
       return this.update(
         {

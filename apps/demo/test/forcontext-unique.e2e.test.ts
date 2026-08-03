@@ -1,5 +1,5 @@
 import { INestApplication } from '@nestjs/common';
-import { GolemNotFoundError } from '@eleven-am/golem';
+import { GolemConflictError } from '@eleven-am/golem';
 import { GolemPrismaService } from '../src/generated/golem/client';
 import { seed } from '../src/seed';
 import { bootDemoApp, shutdownDemoApp } from './harness';
@@ -68,20 +68,49 @@ describe('forContext compound-unique upsert (e2e)', () => {
     expect(updated.name).toBe('feature-2');
   });
 
-  it('rejects a cross-tenant upsert against another owner branch as NOT_FOUND', async () => {
+  it('answers a cross-tenant upsert exactly as it answers the same create', async () => {
     await prisma.branch.create({ data: { authorId: royId, name: 'main' } });
+    const ada = prisma.forContext(ctxFor('ada@example.com'));
 
     await expect(
-      prisma.forContext(ctxFor('ada@example.com')).branch.upsert({
+      ada.branch.upsert({
         where: { authorId_name: { authorId: royId, name: 'main' } },
         create: { authorId: royId, name: 'main' },
         update: { name: 'stolen' },
       }),
-    ).rejects.toBeInstanceOf(GolemNotFoundError);
+    ).rejects.toBeInstanceOf(GolemConflictError);
+    await expect(
+      ada.branch.create({ data: { authorId: royId, name: 'main' } }),
+    ).rejects.toBeInstanceOf(GolemConflictError);
 
     const roysBranch = await prisma.branch.findUniqueOrThrow({
       where: { authorId_name: { authorId: royId, name: 'main' } },
     });
     expect(roysBranch.name).toBe('main');
+  });
+
+  it('answers a cross-tenant upsert on a free selector exactly as it answers the same create', async () => {
+    const ada = prisma.forContext(ctxFor('ada@example.com'));
+    const refusal = async (run: () => Promise<unknown>) => {
+      try {
+        await run();
+        return 'answered';
+      } catch (error) {
+        return (error as { code?: string }).code ?? 'UNKNOWN';
+      }
+    };
+
+    const viaUpsert = await refusal(() =>
+      ada.branch.upsert({
+        where: { authorId_name: { authorId: royId, name: 'free' } },
+        create: { authorId: royId, name: 'free' },
+        update: { name: 'stolen' },
+      }),
+    );
+    const viaCreate = await refusal(() => ada.branch.create({ data: { authorId: royId, name: 'free' } }));
+
+    expect(viaUpsert).toEqual(viaCreate);
+    expect(viaUpsert).toBe('FORBIDDEN');
+    expect(await prisma.branch.count({ where: { authorId: royId } })).toBe(0);
   });
 });

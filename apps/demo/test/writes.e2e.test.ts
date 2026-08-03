@@ -2,7 +2,7 @@ import { INestApplication } from '@nestjs/common';
 import { Client, createClient } from 'graphql-ws';
 import request from 'supertest';
 import WebSocket from 'ws';
-import { GolemNotFoundError } from '@eleven-am/golem';
+import { GolemForbiddenError } from '@eleven-am/golem';
 import { GolemPrismaService } from '../src/generated/golem/client';
 import { bootDemoApp, shutdownDemoApp } from './harness';
 
@@ -184,16 +184,19 @@ describe('predicted-row checks (e2e)', () => {
     expect(none).toBeNull();
   });
 
-  it('hides inaccessible rows from the upsert update branch as NOT_FOUND', async () => {
+  it('refuses an inaccessible upsert target exactly as it refuses a missing one', async () => {
     const roy = await prisma.user.findUnique({ where: { email: 'roy@example.com' } });
-    await expect(
+    const attempt = (id: string) =>
       prisma.forContext(ctxFor('ada@example.com')).user.upsert({
-        where: { id: roy!.id },
-        create: { email: 'never@example.com' },
+        where: { id },
+        create: { email: `never-${id}@example.com` },
         update: { name: 'hijacked' },
-      }),
-    ).rejects.toBeInstanceOf(GolemNotFoundError);
+      });
+
+    await expect(attempt(roy!.id)).rejects.toBeInstanceOf(GolemForbiddenError);
+    await expect(attempt('no-such-user')).rejects.toBeInstanceOf(GolemForbiddenError);
     const untouched = await prisma.user.findUnique({ where: { email: 'roy@example.com' } });
     expect(untouched!.name).not.toBe('hijacked');
+    expect(await prisma.user.count({ where: { email: { startsWith: 'never-' } } })).toBe(0);
   });
 });
