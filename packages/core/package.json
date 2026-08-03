@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@eleven-am/golem-policy": "^0.5.2",
+    "dataloader": "^2.2.3",
     "graphql-parse-resolve-info": "^4.14.1",
     "kysely": "^0.29.4",
     "pluralize": "^8.0.0"

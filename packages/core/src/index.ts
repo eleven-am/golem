@@ -1,4 +1,5 @@
 export * from './authorization';
+export * from './batch';
 export * from './compiled-aggregate';
 export * from './compiled-aggregate-decode';
 export * from './compiled-read';

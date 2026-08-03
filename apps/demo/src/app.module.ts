@@ -9,6 +9,7 @@ import type { GolemGraphQLArtifacts } from '@eleven-am/golem';
 import { DemoAuthenticator, DemoRules } from './auth';
 import { getDatamodel } from './generated/golem';
 import { GolemPrismaService } from './generated/golem/client';
+import { UserCountsExtension } from './user-counts.extension';
 import { UserExtension } from './user.extension';
 import { UserHooks } from './user.hooks';
 import { SearchPostsAccessModule } from './search-posts.guard';
@@ -17,7 +18,10 @@ const DEFAULT_DATABASE_URL = 'file:./prisma/dev.db';
 
 @Module({})
 export class AppModule {
-  static forDatabase(databaseUrl: string = DEFAULT_DATABASE_URL): DynamicModule {
+  static forDatabase(
+    databaseUrl: string = DEFAULT_DATABASE_URL,
+    graphql: Partial<ApolloDriverConfig> = {},
+  ): DynamicModule {
     return {
       module: AppModule,
       providers: [UserHooks, DemoRules],
@@ -47,7 +51,7 @@ export class AppModule {
             PostTag: false,
             Play: false,
           },
-          extensions: [UserExtension],
+          extensions: [UserExtension, UserCountsExtension],
           authorization: GolemAuthorizationAdapter,
         }),
         GraphQLModule.forRootAsync<ApolloDriverConfig>({
@@ -58,6 +62,7 @@ export class AppModule {
             transformResolvers: golem.transformResolvers,
             fieldResolverEnhancers: golem.fieldResolverEnhancers,
             subscriptions: { 'graphql-ws': true },
+            ...graphql,
           }),
         }),
       ],

@@ -22,6 +22,7 @@ import {
   Kind,
 } from 'graphql';
 import { AuthorizationProvider } from './authorization';
+import { BatchScope, clearBatchCaches } from './batch';
 import {
   GolemDefaults,
   DatamodelDocument,
@@ -36,6 +37,8 @@ import {
   ComputedFieldSpec,
   CustomOperationSpec,
   buildComputedRequiresMap,
+  computedFieldRequires,
+  computedFieldResolver,
 } from './extensions';
 import { ALL_OPERATIONS, GolemOperation, HookRegistry } from './hooks';
 import { InputTypeRegistry } from './inputs';
@@ -284,6 +287,13 @@ function resolveAggregations(
   };
 }
 
+function written<T>(ctx: unknown, scope: BatchScope, result: Promise<T>): Promise<T> {
+  return result.then((value) => {
+    clearBatchCaches(ctx, scope);
+    return value;
+  });
+}
+
 function wrapResolve(
   resolve: GraphQLFieldResolver<unknown, unknown>,
 ): GraphQLFieldResolver<unknown, unknown> {
@@ -439,7 +449,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
       throw new Error(`Computed field ${spec.model}.${spec.name} collides with an existing field`);
     }
     const fieldNames = new Set(model.fields.map((f) => f.name));
-    for (const required of spec.requires) {
+    for (const required of computedFieldRequires(spec)) {
       if (!fieldNames.has(required)) {
         throw new Error(
           `Computed field ${spec.model}.${spec.name} requires unknown field ${required}`,
@@ -453,6 +463,9 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
     list.push(spec);
     computedByModel.set(spec.model, list);
   }
+  const computedResolvers = new Map(
+    computedSpecs.map((spec) => [spec, computedFieldResolver(spec)] as const),
+  );
   const computedRequires = buildComputedRequiresMap(computedSpecs);
 
   const enumTypes = new Map<string, GraphQLEnumType>(
@@ -611,9 +624,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             fields[spec.name] = {
               type: resolveTypeRef(spec.type, outputTypeByName) as GraphQLOutputType,
               args,
-              resolve: wrapResolve((parent, resolvedArgs, ctx, info) =>
-                spec.resolve(parent, resolvedArgs, ctx, info),
-              ),
+              resolve: wrapResolve(computedResolvers.get(spec)!),
             };
           }
           return fields;
@@ -924,12 +935,16 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           data: { type: new GraphQLNonNull(inputs.createInput(model)) },
         },
         resolve: wrapResolve((_root, args, ctx, info) =>
-          engine.create({
-            model: model.name,
-            data: args.data,
-            select: buildSelect(info, model, modelsByName, computedRequires),
-            context: ctx,
-          }),
+          written(
+            ctx,
+            info,
+            engine.create({
+              model: model.name,
+              data: args.data,
+              select: buildSelect(info, model, modelsByName, computedRequires),
+              context: ctx,
+            }),
+          ),
         ),
       };
     }
@@ -942,13 +957,17 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           data: { type: new GraphQLNonNull(inputs.updateInput(model)) },
         },
         resolve: wrapResolve((_root, args, ctx, info) =>
-          engine.update({
-            model: model.name,
-            where: args.where,
-            data: args.data,
-            select: buildSelect(info, model, modelsByName, computedRequires),
-            context: ctx,
-          }),
+          written(
+            ctx,
+            info,
+            engine.update({
+              model: model.name,
+              where: args.where,
+              data: args.data,
+              select: buildSelect(info, model, modelsByName, computedRequires),
+              context: ctx,
+            }),
+          ),
         ),
       };
     }
@@ -960,12 +979,16 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           where: { type: new GraphQLNonNull(whereUniqueInput) },
         },
         resolve: wrapResolve((_root, args, ctx, info) =>
-          engine.delete({
-            model: model.name,
-            where: args.where,
-            select: buildSelect(info, model, modelsByName, computedRequires),
-            context: ctx,
-          }),
+          written(
+            ctx,
+            info,
+            engine.delete({
+              model: model.name,
+              where: args.where,
+              select: buildSelect(info, model, modelsByName, computedRequires),
+              context: ctx,
+            }),
+          ),
         ),
       };
     }
@@ -977,13 +1000,17 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           where: { type: whereInput },
           data: { type: new GraphQLNonNull(inputs.updateManyInput(model)) },
         },
-        resolve: wrapResolve((_root, args, ctx) =>
-          engine.updateMany({
-            model: model.name,
-            where: args.where ?? undefined,
-            data: args.data,
-            context: ctx,
-          }),
+        resolve: wrapResolve((_root, args, ctx, info) =>
+          written(
+            ctx,
+            info,
+            engine.updateMany({
+              model: model.name,
+              where: args.where ?? undefined,
+              data: args.data,
+              context: ctx,
+            }),
+          ),
         ),
       };
     }
@@ -994,12 +1021,16 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
         args: {
           where: { type: whereInput },
         },
-        resolve: wrapResolve((_root, args, ctx) =>
-          engine.deleteMany({
-            model: model.name,
-            where: args.where ?? undefined,
-            context: ctx,
-          }),
+        resolve: wrapResolve((_root, args, ctx, info) =>
+          written(
+            ctx,
+            info,
+            engine.deleteMany({
+              model: model.name,
+              where: args.where ?? undefined,
+              context: ctx,
+            }),
+          ),
         ),
       };
     }

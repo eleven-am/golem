@@ -49,7 +49,12 @@ function provider(overrides: Partial<AuthorizationProvider> = {}): Authorization
     check: jest.fn(async () => true),
     checkField: jest.fn(async () => true),
     classifyFields: jest.fn(async (_a, _m, fields: readonly string[]) =>
-      Object.fromEntries(fields.map((fieldName) => [fieldName, { access: 'conditional' }]))),
+      Object.fromEntries(
+        fields.map((fieldName) => [
+          fieldName,
+          { access: 'conditional', dischargedByConstraint: true },
+        ]),
+      )),
     ...overrides,
   } as never;
 }

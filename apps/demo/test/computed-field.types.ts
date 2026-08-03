@@ -1,4 +1,10 @@
-import { ComputedField, GolemHooks, GolemRequest, GolemResult } from '@eleven-am/golem';
+import {
+  BatchedComputedField,
+  ComputedField,
+  GolemHooks,
+  GolemRequest,
+  GolemResult,
+} from '@eleven-am/golem';
 import '../src/generated/golem';
 
 class ValidComputedFields {
@@ -90,3 +96,45 @@ class ReturnTypes {
 }
 
 void ReturnTypes;
+
+class BatchReturnTypes {
+  @BatchedComputedField('User', { type: 'Int!', key: 'id' })
+  okMap(): Promise<Map<string, number>> {
+    return Promise.resolve(new Map());
+  }
+
+  @BatchedComputedField('User', { type: 'Int!', key: 'id' })
+  okArray(keys: readonly string[]): number[] {
+    return keys.map(() => 1);
+  }
+
+  @BatchedComputedField('User', { type: 'Int!', key: 'id' })
+  okArrayWithErrors(keys: readonly string[]): Array<number | Error> {
+    return keys.map(() => new Error(''));
+  }
+
+  @BatchedComputedField('User', { type: 'Int!', key: (parent: { id: string }) => parent.id })
+  okKeyFunction(): Promise<Map<string, number>> {
+    return Promise.resolve(new Map());
+  }
+
+  // @ts-expect-error the registered schema rejects keys that do not belong to the model
+  @BatchedComputedField('User', { type: 'Int!', key: 'title' })
+  unknownKey(): Promise<Map<string, number>> {
+    return Promise.resolve(new Map());
+  }
+
+  // @ts-expect-error Int! cannot be satisfied by a map of strings
+  @BatchedComputedField('User', { type: 'Int!', key: 'id' })
+  wrongValue(): Promise<Map<string, string>> {
+    return Promise.resolve(new Map());
+  }
+
+  // @ts-expect-error a batch loader must answer for every key, not once
+  @BatchedComputedField('User', { type: 'Int!', key: 'id' })
+  wrongShape(): Promise<number> {
+    return Promise.resolve(1);
+  }
+}
+
+void BatchReturnTypes;

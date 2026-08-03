@@ -1,4 +1,5 @@
 import type {
+  BatchLoadResult,
   GolemHookOperation,
   GolemTypesMap,
   HookRequestFor,
@@ -60,3 +61,7 @@ export type GraphQLToTS<TRef extends string> = TRef extends `${infer TBase}!`
 export type ComputedFieldReturn<TRef extends string> =
   | GraphQLToTS<TRef>
   | Promise<GraphQLToTS<TRef>>;
+
+export type ComputedFieldBatchReturn<TRef extends string, TKey> =
+  | BatchLoadResult<TKey, GraphQLToTS<TRef>>
+  | PromiseLike<BatchLoadResult<TKey, GraphQLToTS<TRef>>>;

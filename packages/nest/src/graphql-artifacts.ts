@@ -7,7 +7,8 @@ import {
   printSchema,
 } from 'graphql';
 import type { ComputedFieldSpec, CustomOperationSpec } from '@eleven-am/golem-core';
-import type { GraphQLField, GraphQLSchema } from 'graphql';
+import type { GraphQLField, GraphQLFieldResolver, GraphQLSchema } from 'graphql';
+import { assertContextWithinRequest } from './request-boundary';
 
 type ResolverMap = Record<string, any>;
 type ResolverTransform = NonNullable<GqlModuleOptions['transformResolvers']>;
@@ -18,14 +19,23 @@ export interface GolemGraphQLArtifacts {
   fieldResolverEnhancers: NonNullable<GqlModuleOptions['fieldResolverEnhancers']>;
 }
 
-function fieldResolver(field: GraphQLField<unknown, unknown>): unknown {
+function boundToRequest(
+  resolve: GraphQLFieldResolver<unknown, unknown>,
+): GraphQLFieldResolver<unknown, unknown> {
+  return function resolveWithinRequest(this: unknown, parent, args, ctx, info) {
+    assertContextWithinRequest(ctx);
+    return resolve.call(this, parent, args, ctx, info);
+  };
+}
+
+function fieldResolver(field: GraphQLField<unknown, unknown>, atRoot: boolean): unknown {
   if (field.subscribe) {
     return {
       subscribe: field.subscribe,
       ...(field.resolve ? { resolve: field.resolve } : {}),
     };
   }
-  return field.resolve;
+  return atRoot && field.resolve ? boundToRequest(field.resolve) : field.resolve;
 }
 
 function generatedResolvers(
@@ -44,6 +54,11 @@ function generatedResolvers(
     computedByModel.set(spec.model, fields);
   }
   const resolvers: ResolverMap = {};
+  const rootTypeNames = new Set(
+    [schema.getQueryType()?.name, schema.getMutationType()?.name].filter(
+      (name): name is string => typeof name === 'string',
+    ),
+  );
 
   for (const type of Object.values(schema.getTypeMap())) {
     if (type.name.startsWith('__')) {
@@ -66,7 +81,7 @@ function generatedResolvers(
       ) {
         continue;
       }
-      const resolve = fieldResolver(field);
+      const resolve = fieldResolver(field, rootTypeNames.has(type.name));
       if (resolve) {
         fields[fieldName] = resolve;
       }

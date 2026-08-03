@@ -2,8 +2,10 @@ import {
   DynamicModule,
   FactoryProvider,
   Logger,
+  MiddlewareConsumer,
   Module,
   ModuleMetadata,
+  NestModule,
   OnModuleDestroy,
   OnModuleInit,
   Type,
@@ -31,8 +33,10 @@ import type { ExtractedExtensions } from './extensions';
 import { createGolemGraphQLArtifacts } from './graphql-artifacts';
 import type { GolemGraphQLArtifacts } from './graphql-artifacts';
 import { GOLEM_MODEL_NAMES, GolemHooksExplorer } from './hooks-explorer';
+import { golemRequestBoundary } from './request-boundary';
 
 export { PubSubEventBus } from './event-bus';
+export { golemSharedContext } from './request-boundary';
 export type { GolemGraphQLArtifacts } from './graphql-artifacts';
 export * from './decorators';
 export * from './register';
@@ -99,7 +103,11 @@ function subscriptionsEnabled<TModels>(options: GolemModuleOptions<TModels>): bo
 }
 
 @Module({})
-export class GolemModule {
+export class GolemModule implements NestModule {
+  configure(consumer: MiddlewareConsumer): void {
+    consumer.apply(golemRequestBoundary).forRoutes('*');
+  }
+
   static forRoot<TModels>(options: GolemModuleOptions<TModels>): DynamicModule {
     return this.createDynamicModule(options, {
       provide: GOLEM_CLIENT_OPTIONS,

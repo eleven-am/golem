@@ -1,9 +1,11 @@
 import 'reflect-metadata';
 import { Injectable } from '@nestjs/common';
+import type { MiddlewareConsumer } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import type { DatamodelDocument } from '@eleven-am/golem-core';
 import { BeforeCreate, ComputedField, GolemHooks } from './decorators';
 import { GolemModule } from './index';
+import { golemRequestBoundary } from './request-boundary';
 
 const datamodel: DatamodelDocument<{ User: 'id'; Post: 'id' }> = {
   models: [
@@ -118,5 +120,27 @@ describe('GolemModule extension validation', () => {
 
     await expect(moduleRef.init()).resolves.toBeDefined();
     await moduleRef.close();
+  });
+});
+
+describe('GolemModule request boundary', () => {
+  it('applies the boundary middleware to every route', () => {
+    const applied: unknown[] = [];
+    const routes: unknown[] = [];
+    const consumer = {
+      apply: (...middleware: unknown[]) => {
+        applied.push(...middleware);
+        return {
+          forRoutes: (...routeArgs: unknown[]) => {
+            routes.push(...routeArgs);
+          },
+        };
+      },
+    } as unknown as MiddlewareConsumer;
+
+    new GolemModule().configure(consumer);
+
+    expect(applied).toEqual([golemRequestBoundary]);
+    expect(routes).toEqual(['*']);
   });
 });

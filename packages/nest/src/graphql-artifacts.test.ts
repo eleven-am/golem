@@ -5,6 +5,7 @@ import {
 } from 'graphql';
 import type { ComputedFieldSpec, CustomOperationSpec } from '@eleven-am/golem-core';
 import { createGolemGraphQLArtifacts } from './graphql-artifacts';
+import { SHARED_CONTEXT_MESSAGE, golemRequestBoundary } from './request-boundary';
 
 function fixture() {
   const generatedUsers = jest.fn(() => []);
@@ -68,11 +69,46 @@ describe('Nest GraphQL artifacts', () => {
 
     expect(artifacts.typeDefs).toContain('searchUsers: String');
     expect(artifacts.fieldResolverEnhancers).toEqual(['guards', 'interceptors', 'filters']);
-    expect(resolvers.Query.users).toBe(generatedUsers);
+    const users = resolvers.Query.users as (...callArgs: unknown[]) => unknown;
+    expect(users(undefined, { take: 1 }, { user: 'roy' }, {})).toEqual([]);
+    expect(generatedUsers).toHaveBeenCalledWith(undefined, { take: 1 }, { user: 'roy' }, {});
     expect(resolvers.Query.searchUsers).toBe(nestCustomResolver);
     expect(resolvers.Query.searchUsers).not.toBe(directCustomResolver);
     expect(resolvers.User.displayName).toBe(nestComputedResolver);
     expect(resolvers.User.displayName).not.toBe(directComputedResolver);
+  });
+
+  it('refuses a generated root resolver handed a context from another request', async () => {
+    const { schema, computedFields, customOperations, generatedUsers } = fixture();
+    const artifacts = createGolemGraphQLArtifacts(schema, computedFields, customOperations);
+    const resolvers = await artifacts.transformResolvers({
+      Query: { searchUsers: () => [] },
+      User: { displayName: () => 'nest' },
+    }) as Record<string, Record<string, (...callArgs: unknown[]) => unknown>>;
+    const users = resolvers.Query.users;
+    const ctx = {};
+
+    golemRequestBoundary({}, {}, () => users(undefined, {}, ctx, {}));
+
+    expect(() => golemRequestBoundary({}, {}, () => users(undefined, {}, ctx, {}))).toThrow(
+      SHARED_CONTEXT_MESSAGE,
+    );
+    expect(generatedUsers).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a generated root resolver alone when each request builds its own context', () => {
+    const { schema, computedFields, customOperations, generatedUsers } = fixture();
+    const artifacts = createGolemGraphQLArtifacts(schema, computedFields, customOperations);
+    const resolvers = artifacts.transformResolvers({
+      Query: { searchUsers: () => [] },
+      User: { displayName: () => 'nest' },
+    }) as Record<string, Record<string, (...callArgs: unknown[]) => unknown>>;
+    const users = resolvers.Query.users;
+
+    golemRequestBoundary({}, {}, () => users(undefined, {}, {}, {}));
+    golemRequestBoundary({}, {}, () => users(undefined, {}, {}, {}));
+
+    expect(generatedUsers).toHaveBeenCalledTimes(2);
   });
 
   it('fails when Nest did not discover a declared custom operation', () => {
