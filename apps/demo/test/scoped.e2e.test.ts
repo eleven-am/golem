@@ -68,6 +68,77 @@ describe('the scoped query root (e2e)', () => {
     }
   });
 
+  it('refuses to select a field the caller may never read', async () => {
+    await expect(
+      prisma
+        .forContext(ctxFor('guest@example.com'))
+        .$scoped('User')
+        .query((qb) => qb.select(['User.email', 'User.phone' as never]))
+        .execute(),
+    ).rejects.toThrow('may not reference "User"."phone"');
+  });
+
+  it('refuses to filter by a field the caller may never read', async () => {
+    await expect(
+      prisma
+        .forContext(ctxFor('guest@example.com'))
+        .$scoped('User')
+        .query((qb) => qb.select('User.email').where('User.phone' as never, '=', '+1-555-0100' as never))
+        .execute(),
+    ).rejects.toThrow('may not reference "User"."phone"');
+  });
+
+  it('refuses to order by a field the caller may never read', async () => {
+    await expect(
+      prisma
+        .forContext(ctxFor('guest@example.com'))
+        .$scoped('User')
+        .query((qb) => qb.select('User.email').orderBy('User.phone' as never))
+        .execute(),
+    ).rejects.toThrow('may not reference "User"."phone"');
+  });
+
+  it('keeps a field the caller may never read out of a scoped star projection', async () => {
+    const rows = (await prisma
+      .forContext(ctxFor('guest@example.com'))
+      .$scoped('User')
+      .query((qb) => qb.selectAll())
+      .execute()) as Record<string, unknown>[];
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(Object.keys(row)).not.toContain('phone');
+      expect(Object.keys(row)).toContain('email');
+    }
+  });
+
+  it('projects a conditionally readable field through its mask', async () => {
+    const rows = await prisma
+      .forContext(ctxFor('ada@example.com'))
+      .$scoped('User')
+      .query((qb) => qb.select(['User.email', 'User.phone' as never]).orderBy('User.email'))
+      .execute();
+
+    expect(rows).toEqual([
+      { email: 'ada@example.com', phone: '+44-555-0200' },
+      { email: 'guest@example.com', phone: null },
+      { email: 'mod@example.com', phone: null },
+      { email: 'roy@example.com', phone: null },
+    ]);
+  });
+
+  it('cannot recover a masked value by filtering for it', async () => {
+    const rows = await prisma
+      .forContext(ctxFor('ada@example.com'))
+      .$scoped('User')
+      .query((qb) =>
+        qb.select('User.email').where('User.phone' as never, '=', '+1-555-0100' as never),
+      )
+      .execute();
+
+    expect(rows).toEqual([]);
+  });
+
   it('refuses a join onto a table golem did not scope', async () => {
     await expect(
       prisma

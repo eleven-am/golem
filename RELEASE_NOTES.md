@@ -107,7 +107,14 @@ a grouping key, `having` or an aggregate `orderBy` keep the
 `BAD_USER_INPUT` code they already had.
 
 Filtering a **nested** relation inside `select`/`include`, and the `where` of
-`updateMany`/`deleteMany`, are not yet classified.
+`updateMany`/`deleteMany`, are not yet classified. The nested case is the
+sharper of the two now that the compiled statement renders that `where`
+against the column itself rather than against the masked projection:
+`select: { posts: { where: { secretNote: … } } }` still probes a value the
+same filter at the root of the read is refused. Classifying it is the next
+step, and until it lands a field-scoped rule is enforced at the root of a
+read and in a scoped query, not inside a nested relation's own `where` or
+`orderBy`.
 
 ### MySQL is not supported
 
@@ -138,6 +145,28 @@ Every table reference must be a scoped root golem itself constructed; joins,
 set operations, CTEs, raw fragments and plugin transforms are refused. The
 type hides the escapes, but the check on the tree is the guarantee — the
 type is convenience.
+
+The scoped root carries field policy as well as the row predicate, on every
+root a join carries and not only the first. A column the caller may never
+read is absent from the derived table golem roots the query at, and naming
+it anyway — in a projection, a `where`, an `order by`, anywhere in the tree
+— is refused with `FORBIDDEN` naming the root and the column. A column
+readable only on some rows is projected as its condition: a `case`
+expression handing back the value on the rows that satisfy it and null on
+the rest, so filtering or ordering by it reaches the null rather than the
+value. Columns the caller may always read are projected as they were.
+
+Two limits carry over from the masked projection. A conditional field the
+provider hands golem no renderable condition for is withheld entirely
+rather than trusted; and on sqlite only `String`, `Float` and `BigInt`
+columns are masked, because a case expression strips the declared type
+sqlite hands Prisma to decode the value by — any other conditional column
+is projected plainly when the row constraint already discharges its
+condition and withheld when it does not.
+
+A scoped request carrying no context is not a way around this: golem
+classifies against the absent context rather than reading the absence as a
+grant.
 
 ### Aggregations
 
@@ -171,6 +200,15 @@ between one scan and one per row.
 
 **If you want the single-statement shape, index the foreign key.** Golem
 will use it.
+
+A field the caller may read only on some rows is masked in the statement
+that reads it, at every depth and on both shapes: inside the correlated
+subquery when the foreign key is indexed, and inside the second statement
+when it is not. The value never leaves the database on either. A field
+whose condition golem cannot render there — one carrying a key a batch
+correlates on, one the read is distinct on, or a column sqlite hands back
+under another type once it is wrapped in a case expression — is fetched and
+nulled in memory as before, and the read reports it as deferred.
 
 Developer-written `ctx.post.findMany` is unaffected and stays on Prisma.
 Golem compiles the queries golem writes.

@@ -14,13 +14,16 @@ import {
   PolicyDatamodel,
   SqlDialect,
   SqlNode,
+  SqlRenderError,
+  UNSUPPORTED_CONDITION_ERROR_NAME,
   createDatamodelSqlScope,
   postgresDialect,
   renderConstraintNode,
   sqliteDialect,
 } from '@eleven-am/golem-policy';
-import { DatamodelModel } from './datamodel';
-import { GolemValidationError } from './errors';
+import { AuthorizationProvider, isConditionalConstraint } from './authorization';
+import { DatamodelField, DatamodelModel } from './datamodel';
+import { GolemForbiddenError, GolemValidationError } from './errors';
 
 export interface ScopedDatabase {
   [alias: string]: Record<string, any>;
@@ -95,12 +98,55 @@ export interface ScopedRequest {
   alias?: string;
 }
 
+export interface ScopedFieldPolicy {
+  readonly access: 'conditional' | 'never';
+  readonly dischargedByConstraint?: boolean;
+  readonly condition?: unknown;
+}
+
 export interface ScopedHost {
   readonly models: readonly DatamodelModel[];
   readonly provider?: string;
   hiddenFields(model: string): ReadonlySet<string>;
   constraint(model: string): Promise<unknown>;
+  fieldPolicy?(
+    model: string,
+    fields: readonly string[],
+  ): Promise<ReadonlyMap<string, ScopedFieldPolicy>>;
   execute(model: string, sql: string, parameters: readonly unknown[]): Promise<unknown[]>;
+}
+
+export async function resolveScopedFieldPolicy(
+  provider: AuthorizationProvider | undefined,
+  model: string,
+  fields: readonly string[],
+  context: unknown,
+): Promise<ReadonlyMap<string, ScopedFieldPolicy>> {
+  const policies = new Map<string, ScopedFieldPolicy>();
+  if (provider?.classifyFields === undefined || fields.length === 0) {
+    return policies;
+  }
+  const classification = await provider.classifyFields('read', model, fields, context);
+  for (const field of fields) {
+    const entry = classification[field];
+    if (entry === undefined || entry.access === 'always') {
+      continue;
+    }
+    if (entry.access === 'never') {
+      policies.set(field, { access: 'never' });
+      continue;
+    }
+    const condition =
+      provider.constrainField === undefined
+        ? undefined
+        : await provider.constrainField('read', model, field, context);
+    policies.set(field, {
+      access: 'conditional',
+      dischargedByConstraint: entry.dischargedByConstraint === true,
+      condition,
+    });
+  }
+  return policies;
 }
 
 interface ScopedRootPlan {
@@ -154,6 +200,10 @@ const PROVIDER_HINT =
 
 function refuse(message: string): never {
   throw new GolemValidationError(message);
+}
+
+function refuseRead(message: string): never {
+  throw new GolemForbiddenError(message);
 }
 
 function sqliteScopedDialect(): ScopedDialect {
@@ -288,6 +338,7 @@ export interface ScopedValidationInput {
   readonly roots: ReadonlyMap<string, unknown>;
   readonly rawNodes: ReadonlySet<unknown>;
   readonly physicalTables: ReadonlyMap<string, string>;
+  readonly withheldColumns?: ReadonlyMap<string, ReadonlyMap<string, string>>;
 }
 
 function foldedName(name: string): string {
@@ -599,6 +650,38 @@ function assertNoDataModification(input: ScopedValidationInput): void {
   });
 }
 
+function assertNoWithheldColumn(input: ScopedValidationInput): void {
+  const withheldColumns = input.withheldColumns;
+  if (withheldColumns === undefined || withheldColumns.size === 0) {
+    return;
+  }
+  walkNodes(input.node, (node) => {
+    if (input.rawNodes.has(node)) {
+      return false;
+    }
+    if (nodeKind(node) !== 'ReferenceNode') {
+      return true;
+    }
+    const alias = tableIdentifier(readProp(node, 'table')).name;
+    if (alias === undefined) {
+      return true;
+    }
+    const withheld = withheldColumns.get(alias);
+    if (withheld === undefined) {
+      return true;
+    }
+    const column = identifierName(readProp(readProp(node, 'column'), 'column'));
+    if (column === undefined) {
+      return true;
+    }
+    const reason = withheld.get(column);
+    if (reason !== undefined) {
+      refuseRead(`a scoped query may not reference "${alias}"."${column}": ${reason}`);
+    }
+    return true;
+  });
+}
+
 export function validateScopedQuery(input: ScopedValidationInput): void {
   assertSingleSelect(input);
   assertNoSetOperations(input);
@@ -608,6 +691,7 @@ export function validateScopedQuery(input: ScopedValidationInput): void {
   assertNoForeignRaw(input);
   assertNoTableRead(input);
   assertNoForeignTable(input);
+  assertNoWithheldColumn(input);
 }
 
 function policyDatamodel(models: readonly DatamodelModel[]): PolicyDatamodel {
@@ -622,19 +706,105 @@ function resolveModel(models: readonly DatamodelModel[], name: string): Datamode
   return model;
 }
 
+const SQLITE_MASKABLE_TYPES = new Set(['String', 'Float', 'BigInt']);
+
+function isUnsupported(error: unknown): boolean {
+  return (
+    error instanceof SqlRenderError ||
+    (error as Error | undefined)?.name === UNSUPPORTED_CONDITION_ERROR_NAME
+  );
+}
+
+interface ScopedColumn {
+  readonly name: string;
+  readonly dbName: string;
+  readonly mask?: RawBuilder<unknown>;
+}
+
+interface ScopedProjection {
+  readonly columns: readonly ScopedColumn[];
+  readonly withheld: ReadonlyMap<string, string>;
+}
+
+type ScopedSqlScope = ReturnType<typeof createDatamodelSqlScope>;
+
+function renderedMask(
+  field: DatamodelField,
+  policy: ScopedFieldPolicy,
+  dialect: ScopedDialect,
+  sql: Sql,
+  scope: ScopedSqlScope,
+): RawBuilder<unknown> | string {
+  if (!isConditionalConstraint(policy.condition)) {
+    return 'its readability is conditional and the authorization provider hands golem no condition for it, and an absent condition must not be read as a grant';
+  }
+  if (
+    dialect.provider === 'sqlite' &&
+    (field.kind !== 'scalar' || !SQLITE_MASKABLE_TYPES.has(field.type))
+  ) {
+    return `its readability is conditional and masking a ${field.type} column strips the declared type sqlite hands Prisma to decode the value by`;
+  }
+  try {
+    return sqlNodeToRaw(
+      renderConstraintNode(policy.condition, { scope, absent: 'deny-all' }),
+      dialect.policy,
+      sql,
+    );
+  } catch (error) {
+    if (!isUnsupported(error)) {
+      throw error;
+    }
+    return `its readability is conditional and golem cannot render the condition as SQL: ${
+      (error as Error).message
+    }`;
+  }
+}
+
 function projectedColumns(
   model: DatamodelModel,
   hidden: ReadonlySet<string>,
-): readonly { name: string; dbName: string }[] {
-  const columns = model.fields
-    .filter((field) => field.kind !== 'object' && !hidden.has(field.name))
-    .map((field) => ({ name: field.name, dbName: field.dbName ?? field.name }));
+  policies: ReadonlyMap<string, ScopedFieldPolicy>,
+  dialect: ScopedDialect,
+  sql: Sql,
+  scope: ScopedSqlScope,
+): ScopedProjection {
+  const columns: ScopedColumn[] = [];
+  const withheld = new Map<string, string>();
+  for (const field of model.fields) {
+    if (field.kind === 'object') {
+      continue;
+    }
+    const dbName = field.dbName ?? field.name;
+    if (hidden.has(field.name)) {
+      withheld.set(field.name, 'it is hidden on the model');
+      continue;
+    }
+    const policy = policies.get(field.name);
+    if (policy === undefined) {
+      columns.push({ name: field.name, dbName });
+      continue;
+    }
+    if (policy.access === 'never') {
+      withheld.set(field.name, 'the caller may not read it');
+      continue;
+    }
+    const mask = renderedMask(field, policy, dialect, sql, scope);
+    if (typeof mask !== 'string') {
+      columns.push({ name: field.name, dbName, mask });
+      continue;
+    }
+    if (policy.dischargedByConstraint === true) {
+      columns.push({ name: field.name, dbName });
+      continue;
+    }
+    withheld.set(field.name, mask);
+  }
   if (columns.length === 0) {
     refuse(
-      `a scoped query on "${model.name}" would expose no columns; every column of the model is either a relation or hidden`,
+      `a scoped query on "${model.name}" would expose no columns; every column of the model is either a relation, hidden, or one the caller may not read`,
     );
   }
-  return columns;
+  return { columns, withheld };
 }
 
 function physicalTable(model: DatamodelModel): string {
@@ -642,6 +812,11 @@ function physicalTable(model: DatamodelModel): string {
     refuse(`model "${model.name}" carries no physical table name: ${PHYSICAL_NAME_HINT}`);
   }
   return model.dbName;
+}
+
+interface ScopedRoot {
+  readonly root: AliasedRawBuilder<unknown, string>;
+  readonly withheld: ReadonlyMap<string, string>;
 }
 
 function buildScopedRoot(
@@ -652,7 +827,8 @@ function buildScopedRoot(
   alias: string,
   innerAlias: string,
   constraint: unknown,
-): AliasedRawBuilder<unknown, string> {
+  policies: ReadonlyMap<string, ScopedFieldPolicy>,
+): ScopedRoot {
   const scope = createDatamodelSqlScope({
     datamodel: policyDatamodel(host.models),
     model: model.name,
@@ -662,19 +838,31 @@ function buildScopedRoot(
     scope,
     absent: constraint === null ? 'deny-all' : 'grant-all',
   });
-  const columns = projectedColumns(model, host.hiddenFields(model.name));
+  const projected = projectedColumns(
+    model,
+    host.hiddenFields(model.name),
+    policies,
+    dialect,
+    sql,
+    scope,
+  );
   const projection = sql.join(
-    columns.map(
-      (column) => sql`${sql.id(innerAlias, column.dbName)} as ${sql.id(column.name)}`,
+    projected.columns.map((column) =>
+      column.mask === undefined
+        ? sql`${sql.id(innerAlias, column.dbName)} as ${sql.id(column.name)}`
+        : sql`case when (${column.mask}) then ${sql.id(innerAlias, column.dbName)} else null end as ${sql.id(
+            column.name,
+          )}`,
     ),
     sql.raw(', '),
   );
-  return sql`(select ${projection} from ${sql.id(physicalTable(model))} as ${sql.id(
+  const root = sql`(select ${projection} from ${sql.id(physicalTable(model))} as ${sql.id(
     innerAlias,
   )} where ${sqlNodeToRaw(predicate, dialect.policy, sql)})`.as(alias) as AliasedRawBuilder<
     unknown,
     string
   >;
+  return { root, withheld: projected.withheld };
 }
 
 class ScopedStatementImpl<O> implements ScopedStatement<O> {
@@ -684,6 +872,22 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
     private readonly build: ScopedQueryBuilder<O>,
   ) {}
 
+  private async fieldPolicies(
+    model: DatamodelModel,
+  ): Promise<ReadonlyMap<string, ScopedFieldPolicy>> {
+    if (this.host.fieldPolicy === undefined) {
+      return new Map();
+    }
+    const hidden = this.host.hiddenFields(model.name);
+    const fields = model.fields
+      .filter((field) => field.kind !== 'object' && !hidden.has(field.name))
+      .map((field) => field.name);
+    if (fields.length === 0) {
+      return new Map();
+    }
+    return this.host.fieldPolicy(model.name, fields);
+  }
+
   private async prepare(): Promise<CompiledScopedQuery> {
     const kysely = await kyselyModule();
     const dialect = resolveScopedDialect(this.host.provider);
@@ -691,6 +895,7 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
     const sql = kysely.sql;
     const claimed = new Set<string>();
     const built: AliasedRawBuilder<unknown, string>[] = [];
+    const withheldColumns = new Map<string, ReadonlyMap<string, string>>();
     for (const [index, plan] of this.plans.entries()) {
       if (plan.alias.length === 0) {
         refuse('a scoped root needs a non-empty alias');
@@ -703,9 +908,21 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
       claimed.add(plan.alias);
       const model = resolveModel(this.host.models, plan.model);
       const constraint = await this.host.constraint(plan.model);
-      built.push(
-        buildScopedRoot(this.host, dialect, sql, model, plan.alias, `g${index}`, constraint),
+      const policies = await this.fieldPolicies(model);
+      const scoped = buildScopedRoot(
+        this.host,
+        dialect,
+        sql,
+        model,
+        plan.alias,
+        `g${index}`,
+        constraint,
+        policies,
       );
+      built.push(scoped.root);
+      if (scoped.withheld.size > 0) {
+        withheldColumns.set(plan.alias, scoped.withheld);
+      }
     }
     let rooted = db.selectFrom(built[0]!) as unknown as SelectQueryBuilder<
       ScopedDatabase,
@@ -755,7 +972,7 @@ class ScopedStatementImpl<O> implements ScopedStatement<O> {
         physicalTables.set(foldedName(model.dbName), model.name);
       }
     }
-    validateScopedQuery({ node, roots, rawNodes, physicalTables });
+    validateScopedQuery({ node, roots, rawNodes, physicalTables, withheldColumns });
     const compiled: CompiledQuery = dialect
       .createCompiler(kysely)
       .compileQuery(node as never, kysely.createQueryId());

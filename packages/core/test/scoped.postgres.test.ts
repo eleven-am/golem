@@ -1,5 +1,6 @@
 import { context, engineFor, seed, seedPlays } from './support/analytics';
 import { analyticsSuite } from './support/expectations';
+import { engineFieldScopeSuite, fieldScopeSuite } from './support/field-scope';
 import { multiPassSuite } from './support/multipass';
 import {
   POSTGRES_OPTIONAL,
@@ -41,6 +42,16 @@ describe('a scoped analytical query against a live postgres database', () => {
     }));
 
     multiPassSuite(() => ({
+      provider: 'postgresql',
+      client: handle.prisma as unknown as Record<string, any>,
+    }));
+
+    fieldScopeSuite(() => ({
+      provider: 'postgresql',
+      client: handle.prisma as unknown as Record<string, any>,
+    }));
+
+    engineFieldScopeSuite(() => ({
       provider: 'postgresql',
       client: handle.prisma as unknown as Record<string, any>,
     }));

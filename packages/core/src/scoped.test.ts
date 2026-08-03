@@ -1,4 +1,9 @@
-import { scopedContext, scopedEngine } from '../test/support/fixture';
+import {
+  scopedContext,
+  scopedEngine,
+  scopedFieldEngine,
+  scopedFieldQuery,
+} from '../test/support/fixture';
 
 const SCOPED_POST =
   '(select "g0"."post_id" as "id", "g0"."title" as "title", "g0"."author_id" as "authorId", ' +
@@ -318,5 +323,232 @@ describe('executing a scoped query', () => {
     expect(rows).toEqual([{ id: 2 }]);
     expect(ambient).toHaveBeenCalledTimes(1);
     expect(outer).not.toHaveBeenCalled();
+  });
+});
+
+describe('a field policy over the scoped root', () => {
+  it('leaves the projection alone when every field is readable', async () => {
+    const compiled = await scopedFieldQuery(
+      { constraints: { Post: { authorId: 7 } } },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select(['Post.id', 'Post.title']))
+      .compile();
+
+    expect(compiled.sql).toBe(`select "Post"."id", "Post"."title" from ${SCOPED_POST}`);
+    expect(compiled.parameters).toEqual([7]);
+  });
+
+  it('projects a conditionally readable field as its mask, not as the column', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', condition: { published: true } }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain(
+      'case when (("g0"."published" IS ?)) then "g0"."secret_note" else null end as "secretNote"',
+    );
+    expect(compiled.sql).not.toContain('"g0"."secret_note" as "secretNote"');
+    expect(compiled.parameters).toEqual([true, 7]);
+  });
+
+  it('renders the mask for the postgres dialect too', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        provider: 'postgresql',
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', condition: { published: true } }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain(
+      'case when (("g0"."published" IS NOT DISTINCT FROM $1)) then "g0"."secret_note" else null end as "secretNote"',
+    );
+    expect(compiled.parameters).toEqual([true, 7]);
+  });
+
+  it('masks a field on every scoped root a join carries, not only the first', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 }, User: { tenantId: 3 } },
+        fields: [{ model: 'User', field: 'name', condition: { tenantId: 3 } }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .join('inner', 'User', 'Author', (join) => join.onRef('Author.id', '=', 'Post.authorId'))
+      .query((qb) => qb.select(['Post.id', 'Author.name']))
+      .compile();
+
+    expect(compiled.sql).toContain(
+      'case when (("g1"."tenant_id" IS ?)) then "g1"."name" else null end as "name"',
+    );
+  });
+
+  it('projects the column plainly when the row constraint discharges the condition', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', discharged: true }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain('"g0"."secret_note" as "secretNote"');
+    expect(compiled.sql).not.toContain('case when');
+  });
+
+  it('masks rather than trusts the constraint when the provider hands golem a condition', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [
+          {
+            model: 'Post',
+            field: 'secretNote',
+            discharged: true,
+            condition: { published: true },
+          },
+        ],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain('case when (("g0"."published" IS ?)) then "g0"."secret_note"');
+  });
+
+  it('keeps a field the caller may never read out of the projection', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', access: 'never' }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.id'))
+      .compile();
+
+    expect(compiled.sql).not.toContain('secret_note');
+    expect(compiled.sql).not.toContain('secretNote');
+  });
+
+  it('keeps a conditional field out of the projection when no condition renders it', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote' }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.id'))
+      .compile();
+
+    expect(compiled.sql).not.toContain('secret_note');
+  });
+
+  it('keeps a conditional column sqlite cannot carry a declared type for out of the projection', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'views', condition: { published: true } }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.id'))
+      .compile();
+
+    expect(compiled.sql).not.toContain('"views"');
+  });
+
+  it('masks that same column on postgres, which types the case expression itself', async () => {
+    const compiled = await scopedFieldQuery(
+      {
+        provider: 'postgresql',
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'views', condition: { published: true } }],
+      },
+      { model: 'Post', context: scopedContext },
+    )
+      .query((qb) => qb.select('Post.views'))
+      .compile();
+
+    expect(compiled.sql).toContain('then "g0"."views" else null end as "views"');
+  });
+
+  it('hands its own scoped query the field policy of the caller', async () => {
+    const compiled = await scopedFieldEngine({
+      constraints: { Post: { authorId: 7 } },
+      fields: [{ model: 'Post', field: 'secretNote', condition: { published: true } }],
+    })
+      .scoped({ model: 'Post', context: scopedContext })
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain('then "g0"."secret_note" else null end as "secretNote"');
+  });
+
+  it('refuses its own scoped query the column the caller may never read', async () => {
+    await expect(
+      scopedFieldEngine({
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', access: 'never' }],
+      })
+        .scoped({ model: 'Post', context: scopedContext })
+        .query((qb) => qb.select('Post.secretNote'))
+        .compile(),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('reads a request that carries no context as no grant rather than as a bypass', async () => {
+    await expect(
+      scopedFieldEngine({
+        fields: [{ model: 'Post', field: 'secretNote', access: 'never' }],
+      })
+        .scoped({ model: 'Post' })
+        .query((qb) => qb.select('Post.secretNote'))
+        .compile(),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('asks no field policy at all when the engine runs no read field checks', async () => {
+    const compiled = await scopedFieldEngine(
+      {
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', access: 'never' }],
+      },
+      false,
+    )
+      .scoped({ model: 'Post', context: scopedContext })
+      .query((qb) => qb.select('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain('"g0"."secret_note" as "secretNote"');
+  });
+
+  it('refuses a scoped root whose every column the caller may not read', async () => {
+    await expect(
+      scopedFieldQuery(
+        {
+          fields: [
+            { model: 'Secret', field: 'id', access: 'never' },
+            { model: 'Secret', field: 'value', access: 'never' },
+          ],
+        },
+        { model: 'Secret', context: scopedContext },
+      )
+        .query((qb) => qb.select('Secret.id' as never))
+        .compile(),
+    ).rejects.toThrow('would expose no columns');
   });
 });

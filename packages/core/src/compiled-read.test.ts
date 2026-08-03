@@ -137,6 +137,32 @@ const models: readonly DatamodelModel[] = [
       }),
     ],
   },
+  {
+    name: 'Folder',
+    dbName: 'folders',
+    fields: [
+      field({ name: 'id', dbName: 'folder_id', type: 'Int', isId: true }),
+      field({ name: 'label', dbName: 'label', type: 'String' }),
+      field({ name: 'parentId', dbName: 'parent_id', type: 'Int', isRequired: false }),
+      field({
+        name: 'parent',
+        kind: 'object',
+        type: 'Folder',
+        isRequired: false,
+        relationName: 'FolderTree',
+        relationFromFields: ['parentId'],
+        relationToFields: ['id'],
+      }),
+      field({
+        name: 'children',
+        kind: 'object',
+        type: 'Folder',
+        isList: true,
+        isRequired: false,
+        relationName: 'FolderTree',
+      }),
+    ],
+  },
 ];
 
 const metadata = buildModelMetadata(models);
@@ -1152,7 +1178,7 @@ describe('masking a field the caller may not always read', () => {
     expect(compiled.deferred[0]).toMatchObject({ field: 'title', reason: 'unprojected' });
   });
 
-  it('leaves a field masked through a relation to the in-memory path', async () => {
+  it('renders the condition inside the correlated json subquery of a relation', async () => {
     const compiled = await statement({
       model: models[1],
       prepared: tree({
@@ -1161,12 +1187,251 @@ describe('masking a field the caller may not always read', () => {
       }),
     });
 
+    expect(compiled.batches).toEqual([]);
+    expect(compiled.sql).toContain(
+      'case when (("t1"."author_id" IS ?)) then "t1"."title" else null end as "title" ' +
+        'from "posts" as "t1"',
+    );
+    expect(compiled.masked).toEqual(['posts.title']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('renders the condition inside the batched second statement of a relation', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, notes: { select: { body: true } } },
+        maskChecks: [masked('body', { userId: 7 }, 'Note', ['notes'])],
+      }),
+    });
+
+    expect(compiled.batches.map((batch) => batch.path)).toEqual(['notes']);
+    expect(compiled.sql).not.toContain('case when');
+    const batched = compiled.batches[0].build([1, 2]);
+    expect(batched.sql).toContain(
+      'case when (("t1"."user_id" IS ?)) then "t1"."body" else null end as "body"',
+    );
+    expect(batched.parameters).toEqual([7, 1, 2]);
+    expect(compiled.masked).toEqual(['notes.body']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('masks a field two relations deep on the correlated strategy', async () => {
+    const compiled = await statement({
+      prepared: tree({
+        select: {
+          id: true,
+          author: { select: { assets: { select: { size: true } } } },
+        },
+        maskChecks: [masked('size', { ownerId: 7 }, 'Asset', ['author', 'assets'])],
+      }),
+    });
+
+    expect(compiled.batches).toEqual([]);
+    expect(compiled.sql).toContain(
+      'case when (("t2"."owner_id" IS ?)) then cast("t2"."size" as text) else null end as "size"',
+    );
+    expect(compiled.masked).toEqual(['author.assets.size']);
+  });
+
+  it('masks a field two relations deep on the batched strategy', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: {
+          id: true,
+          notes: { select: { id: true, user: { select: { name: true } } } },
+        },
+        maskChecks: [masked('name', { id: 7 }, 'User', ['notes', 'user'])],
+      }),
+    });
+
+    expect(compiled.batches.map((batch) => batch.path)).toEqual(['notes']);
+    const batched = compiled.batches[0].build([1]);
+    expect(batched.sql).toContain(
+      'case when (("t2"."user_id" IS ?)) then "t2"."name" else null end as "name"',
+    );
+    expect(compiled.masked).toEqual(['notes.user.name']);
+  });
+
+  it('masks a field on a self-referencing relation, on either strategy', async () => {
+    const folder = models.find((model) => model.name === 'Folder')!;
+    const compiled = await statement({
+      model: folder,
+      prepared: tree({
+        select: {
+          id: true,
+          label: true,
+          parent: { select: { label: true } },
+          children: { select: { label: true } },
+        },
+        maskChecks: [
+          masked('label', { parentId: 1 }, 'Folder', ['parent']),
+          masked('label', { parentId: 2 }, 'Folder', ['children']),
+        ],
+      }),
+    });
+
+    expect(compiled.batches.map((batch) => batch.path)).toEqual(['children']);
+    expect(compiled.sql).toContain(
+      'case when (("t1"."parent_id" IS ?)) then "t1"."label" else null end as "label"',
+    );
+    expect(compiled.batches[0].build([1]).sql).toContain(
+      'case when (("t2"."parent_id" IS ?)) then "t2"."label" else null end as "label"',
+    );
+    expect(compiled.masked).toEqual(['parent.label', 'children.label']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('tells a field of the same name at two depths apart', async () => {
+    const folder = models.find((model) => model.name === 'Folder')!;
+    const compiled = await statement({
+      model: folder,
+      prepared: tree({
+        select: { id: true, label: true, parent: { select: { label: true } } },
+        maskChecks: [
+          masked('label', undefined, 'Folder', []),
+          masked('label', { parentId: 2 }, 'Folder', ['parent']),
+        ],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['parent.label']);
+    expect(compiled.deferred).toEqual([
+      expect.objectContaining({ path: 'the read', field: 'label', reason: 'unconstrained' }),
+    ]);
+    expect(compiled.sql).toContain('"t0"."label" as "label"');
+  });
+
+  it('drops the hydration a relation only fed a mask it now renders', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, posts: { select: { title: true, authorId: true } } },
+        maskChecks: [masked('title', { authorId: 7 }, 'Post', ['posts'])],
+        injected: [{ path: ['posts'], field: 'authorId', masks: ['title'] }],
+      }),
+    });
+
+    expect(compiled.relations[0].fields.map((entry) => entry.name)).toEqual(['title']);
+    expect(compiled.masked).toEqual(['posts.title']);
+  });
+
+  it('keeps the hydration a relation still needs for a mask it defers', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: {
+          id: true,
+          posts: { select: { title: true, published: true, authorId: true, tags: false } },
+        },
+        maskChecks: [
+          masked('title', { authorId: 7 }, 'Post', ['posts']),
+          masked('published', undefined, 'Post', ['posts']),
+        ],
+        injected: [{ path: ['posts'], field: 'authorId', masks: ['title', 'published'] }],
+      }),
+    });
+
+    expect(compiled.relations[0].fields.map((entry) => entry.name)).toEqual([
+      'title',
+      'published',
+      'authorId',
+    ]);
+    expect(compiled.masked).toEqual(['posts.title']);
+    expect(compiled.deferred).toEqual([
+      expect.objectContaining({ path: 'posts', field: 'published', reason: 'unconstrained' }),
+    ]);
+  });
+
+  it('drops one hydration column of a relation and keeps the other', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: {
+          id: true,
+          posts: { select: { title: true, published: true, authorId: true, id: true } },
+        },
+        maskChecks: [
+          masked('title', { authorId: 7 }, 'Post', ['posts']),
+          masked('published', undefined, 'Post', ['posts']),
+        ],
+        injected: [
+          { path: ['posts'], field: 'authorId', masks: ['title'] },
+          { path: ['posts'], field: 'id', masks: ['published'] },
+        ],
+      }),
+    });
+
+    expect(compiled.relations[0].fields.map((entry) => entry.name)).toEqual([
+      'title',
+      'published',
+      'id',
+    ]);
+  });
+
+  it('leaves the key a nested batch correlates on to the in-memory path, on both sides', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, notes: { select: { id: true, userId: true, body: true } } },
+        maskChecks: [masked('userId', { id: 7 }, 'Note', ['notes'])],
+      }),
+    });
+
+    expect(compiled.batches[0].childKey).toBe('userId');
     expect(compiled.masked).toEqual([]);
     expect(compiled.deferred[0]).toMatchObject({
-      path: 'posts',
-      field: 'title',
-      reason: 'relation',
+      path: 'notes',
+      field: 'userId',
+      reason: 'correlated',
     });
+  });
+
+  it('carries a column sqlite hands back under another type through a json relation', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, assets: { select: { createdAt: true } } },
+        maskChecks: [masked('createdAt', { ownerId: 7 }, 'Asset', ['assets'])],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['assets.createdAt']);
+    expect(compiled.deferred).toEqual([]);
+  });
+
+  it('leaves a column sqlite hands back under another type in a batch to the in-memory path', async () => {
+    const compiled = await statement({
+      model: models[1],
+      prepared: tree({
+        select: { id: true, notes: { select: { id: true, body: true } } },
+        maskChecks: [masked('id', { userId: 7 }, 'Note', ['notes'])],
+      }),
+    });
+
+    expect(compiled.masked).toEqual([]);
+    expect(compiled.deferred[0]).toMatchObject({
+      path: 'notes',
+      field: 'id',
+      reason: 'decoder',
+    });
+  });
+
+  it('masks the same column of a batch for postgres', async () => {
+    const compiled = await statement({
+      model: models[1],
+      provider: 'postgresql',
+      prepared: tree({
+        select: { id: true, notes: { select: { id: true, body: true } } },
+        maskChecks: [masked('id', { userId: 7 }, 'Note', ['notes'])],
+      }),
+    });
+
+    expect(compiled.masked).toEqual(['notes.id']);
+    expect(compiled.batches[0].build([1]).sql).toContain(
+      'case when (("t1"."user_id" IS NOT DISTINCT FROM $1)) then "t1"."note_id" else null end as "id"',
+    );
   });
 
   it('masks on a condition that hops a relation without hydrating the relation', async () => {

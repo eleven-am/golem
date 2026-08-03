@@ -41,6 +41,7 @@ import {
   ScopedQuery,
   ScopedRequest,
   createScopedQuery,
+  resolveScopedFieldPolicy,
 } from './scoped';
 import { PrismaSelect } from './select';
 import {
@@ -659,7 +660,7 @@ export class GolemEngine {
       await applyToOneChecks(result, prepared.toOneChecks, this.authorization!, context);
     }
     const outstanding = prepared.maskChecks.filter(
-      (check) => check.path.length > 0 || !masked.includes(check.field),
+      (check) => !masked.includes([...check.path, check.field].join('.')),
     );
     if (outstanding.length > 0) {
       await applyFieldMasks(result, outstanding, this.authorization!, context);
@@ -1518,11 +1519,18 @@ export class GolemEngine {
 
   scoped(request: ScopedRequest, scope?: GolemOpScope): ScopedQuery {
     const client = scope?.client ?? this.client;
+    const classifier = this.enforced(request.context) ?? this.authorization;
+    const fieldPolicy =
+      this.checkReadFields && classifier?.classifyFields !== undefined
+        ? (model: string, fields: readonly string[]) =>
+            resolveScopedFieldPolicy(classifier, model, fields, request.context)
+        : undefined;
     const host: ScopedHost = {
       models: this.models,
       provider: this.provider,
       hiddenFields: (model) => this.hiddenFields.get(model) ?? new Set(),
       constraint: (model) => this.constraintFor('read', model, request.context),
+      fieldPolicy,
       execute: (model, sql, parameters) => {
         const runner = this.rawRunner(client);
         if (runner === undefined) {

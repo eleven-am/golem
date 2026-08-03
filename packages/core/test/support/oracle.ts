@@ -1695,7 +1695,7 @@ export function oracleSuite(subject: () => OracleSubject): void {
       ]);
     });
 
-    it('still masks a relation field in memory when the root masks one of the same name', async () => {
+    it('masks the same field of the same model at the root and two relations down', async () => {
       const run = await runBothMany(
         maskedEngine([
           { model: 'User', field: 'name', condition: { tenantId: 2 }, requires: ['tenantId'] },
@@ -1709,9 +1709,34 @@ export function oracleSuite(subject: () => OracleSubject): void {
 
       expectIdentical(run);
       const event = expectCompiled(run);
-      expect(event.masked).toEqual(['name']);
+      expect(event.masked).toEqual(['profile.user.name', 'name']);
+      expect(event.deferred).toEqual([]);
+      expect(run.compiled).toEqual([
+        { id: 1, name: null, profile: { user: { name: null } } },
+        { id: 2, name: null, profile: { user: { name: null } } },
+        { id: 3, name: 'Cleo', profile: null },
+        { id: 4, name: 'Dee', profile: null },
+      ]);
+    });
+
+    it('still checks the root in memory when it masks the same field name in a relation', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'User', field: 'name', condition: { tenantId: 2 }, requires: ['tenantId'] },
+        ]),
+        {
+          model: 'User',
+          select: { id: true, name: true, profile: { select: { user: { select: { name: true } } } } },
+          orderBy: [{ id: 'asc' }],
+          distinct: ['name'],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['profile.user.name']);
       expect(event.deferred).toEqual([
-        expect.objectContaining({ path: 'profile.user', field: 'name', reason: 'relation' }),
+        expect.objectContaining({ path: 'the read', field: 'name', reason: 'distinct' }),
       ]);
       expect(run.compiled).toEqual([
         { id: 1, name: null, profile: { user: { name: null } } },
@@ -1719,6 +1744,340 @@ export function oracleSuite(subject: () => OracleSubject): void {
         { id: 3, name: 'Cleo', profile: null },
         { id: 4, name: 'Dee', profile: null },
       ]);
+    });
+
+    it('masks a field of a relation the database reaches in one correlated statement', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Post',
+            field: 'secretNote',
+            condition: { published: true },
+            requires: ['published'],
+          },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            posts: { select: { id: true, secretNote: true }, orderBy: [{ id: 'asc' }] },
+          },
+          where: { id: { in: [1, 2] } },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.batched).toEqual([]);
+      expect(statements(run)).toHaveLength(1);
+      expect(event.masked).toEqual(['posts.secretNote']);
+      expect(run.compiled).toEqual([
+        {
+          id: 1,
+          posts: [
+            { id: 1, secretNote: 'n1' },
+            { id: 2, secretNote: 'n2' },
+            { id: 3, secretNote: null },
+          ],
+        },
+        {
+          id: 2,
+          posts: [
+            { id: 4, secretNote: 'n4' },
+            { id: 5, secretNote: 'n5' },
+          ],
+        },
+      ]);
+    });
+
+    it('masks a field of a relation the database reaches in a second statement', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'Metric', field: 'note', condition: { ownerId: 1 }, requires: ['ownerId'] },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            metrics: { select: { id: true, note: true }, orderBy: [{ id: 'asc' }] },
+          },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.batched).toEqual(['metrics']);
+      expect(statements(run)).toHaveLength(2);
+      expect(statements(run)[1]).toContain('case when');
+      expect(event.masked).toEqual(['metrics.note']);
+      expect(run.compiled).toEqual([
+        { id: 1, metrics: [{ id: 1, note: 'first' }, { id: 2, note: null }] },
+        { id: 2, metrics: [{ id: 3, note: null }, { id: 4, note: null }] },
+        { id: 3, metrics: [{ id: 5, note: null }] },
+        { id: 4, metrics: [] },
+      ]);
+    });
+
+    it('masks a field two relations down, through a batch and into a json aggregate', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'User', field: 'name', condition: { tenantId: 2 }, requires: ['tenantId'] },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            metrics: {
+              select: { id: true, owner: { select: { name: true } } },
+              orderBy: [{ id: 'asc' }],
+            },
+          },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.batched).toEqual(['metrics']);
+      expect(event.masked).toEqual(['metrics.owner.name']);
+      expect(event.deferred).toEqual([]);
+      expect(run.compiled).toEqual([
+        { id: 1, metrics: [{ id: 1, owner: { name: null } }, { id: 2, owner: { name: null } }] },
+        { id: 2, metrics: [{ id: 3, owner: { name: null } }, { id: 4, owner: { name: null } }] },
+        { id: 3, metrics: [{ id: 5, owner: { name: 'Cleo' } }] },
+        { id: 4, metrics: [] },
+      ]);
+    });
+
+    it('keeps the hydration one mask of a relation still needs and drops the other', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Post',
+            field: 'secretNote',
+            condition: { published: true },
+            requires: ['published'],
+          },
+          {
+            model: 'Post',
+            field: 'title',
+            condition: { views: { gte: 20 } },
+            requires: ['views'],
+            withheld: true,
+          },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            posts: { select: { id: true, title: true, secretNote: true }, orderBy: [{ id: 'asc' }] },
+          },
+          where: { id: 1 },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['posts.secretNote']);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ path: 'posts', field: 'title', reason: 'unconstrained' }),
+      ]);
+      expect(event.sql).toContain('as "views"');
+      expect(event.sql).not.toContain('as "published"');
+      expect(run.compiled).toEqual([
+        {
+          id: 1,
+          posts: [
+            { id: 1, title: null, secretNote: 'n1' },
+            { id: 2, title: 'a2', secretNote: 'n2' },
+            { id: 3, title: null, secretNote: null },
+          ],
+        },
+      ]);
+    });
+
+    it('keeps a column of a relation the mask it defers there still reads', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          {
+            model: 'Post',
+            field: 'secretNote',
+            condition: { published: true },
+            requires: ['published'],
+          },
+          {
+            model: 'Post',
+            field: 'title',
+            condition: { published: false },
+            requires: ['published'],
+            withheld: true,
+          },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            posts: { select: { id: true, title: true, secretNote: true }, orderBy: [{ id: 'asc' }] },
+          },
+          where: { id: 1 },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.masked).toEqual(['posts.secretNote']);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ path: 'posts', field: 'title', reason: 'unconstrained' }),
+      ]);
+      expect(event.sql).toContain('as "published"');
+      expect(run.compiled).toEqual([
+        {
+          id: 1,
+          posts: [
+            { id: 1, title: null, secretNote: 'n1' },
+            { id: 2, title: null, secretNote: 'n2' },
+            { id: 3, title: 'a3', secretNote: null },
+          ],
+        },
+      ]);
+    });
+
+    it('leaves the key a batched relation groups its rows by to the in-memory path', async () => {
+      const run = await runBothMany(
+        maskedEngine([
+          { model: 'Metric', field: 'ownerId', condition: { rank: { not: null } }, requires: ['rank'] },
+        ]),
+        {
+          model: 'User',
+          select: {
+            id: true,
+            metrics: { select: { id: true, ownerId: true }, orderBy: [{ id: 'asc' }] },
+          },
+          where: { id: { in: [1, 2] } },
+          orderBy: [{ id: 'asc' }],
+        },
+      );
+
+      expectIdentical(run);
+      const event = expectCompiled(run);
+      expect(event.batched).toEqual(['metrics']);
+      expect(event.masked).toEqual([]);
+      expect(event.deferred).toEqual([
+        expect.objectContaining({ path: 'metrics', field: 'ownerId', reason: 'correlated' }),
+      ]);
+      expect(run.compiled).toEqual([
+        { id: 1, metrics: [{ id: 1, ownerId: 1 }, { id: 2, ownerId: 1 }] },
+        { id: 2, metrics: [{ id: 3, ownerId: null }, { id: 4, ownerId: 2 }] },
+      ]);
+    });
+
+    it('carries every column type it masks inside a json aggregate as Prisma carries it', async () => {
+      const carried = [
+        'label',
+        'note',
+        'rank',
+        'score',
+        'hits',
+        'ratio',
+        'active',
+        'recordedAt',
+      ] as const;
+      for (const column of carried) {
+        const run = await runBothMany(
+          maskedEngine([
+            { model: 'Metric', field: column, condition: { ownerId: 2 }, requires: ['ownerId'] },
+          ]),
+          {
+            model: 'Profile',
+            select: {
+              id: true,
+              user: {
+                select: { metrics: { select: { [column]: true }, orderBy: [{ id: 'asc' }] } },
+              },
+            },
+            orderBy: [{ id: 'asc' }],
+          },
+        );
+
+        const event = expectCompiled(run);
+        expect({ column, batched: event.batched }).toEqual({ column, batched: [] });
+        expect({ column, masked: event.masked }).toEqual({
+          column,
+          masked: [`user.metrics.${column}`],
+        });
+        expect({ column, rows: describeShape(run.compiled) }).toEqual({
+          column,
+          rows: describeShape(run.prisma),
+        });
+      }
+    });
+
+    it('carries a column it masks inside a batch out under the type Prisma reads it as', async () => {
+      const carried = subject().provider === 'sqlite'
+        ? (['label', 'note', 'ratio', 'hits'] as const)
+        : (['label', 'note', 'rank', 'score', 'hits', 'ratio', 'active', 'recordedAt'] as const);
+      for (const column of carried) {
+        const run = await runBothMany(
+          maskedEngine([
+            { model: 'Metric', field: column, condition: { ownerId: 2 }, requires: ['ownerId'] },
+          ]),
+          {
+            model: 'User',
+            select: {
+              id: true,
+              metrics: { select: { [column]: true }, orderBy: [{ id: 'asc' }] },
+            },
+            orderBy: [{ id: 'asc' }],
+          },
+        );
+
+        const event = expectCompiled(run);
+        expect({ column, batched: event.batched }).toEqual({ column, batched: ['metrics'] });
+        expect({ column, masked: event.masked }).toEqual({
+          column,
+          masked: [`metrics.${column}`],
+        });
+        expect({ column, rows: describeShape(run.compiled) }).toEqual({
+          column,
+          rows: describeShape(run.prisma),
+        });
+      }
+    });
+
+    it('leaves a column sqlite would retype inside a batch to the in-memory path', async () => {
+      const lossy = subject().provider === 'sqlite'
+        ? (['rank', 'score', 'active', 'recordedAt'] as const)
+        : ([] as const);
+      for (const column of lossy) {
+        const run = await runBothMany(
+          maskedEngine([
+            { model: 'Metric', field: column, condition: { ownerId: 2 }, requires: ['ownerId'] },
+          ]),
+          {
+            model: 'User',
+            select: {
+              id: true,
+              metrics: { select: { [column]: true }, orderBy: [{ id: 'asc' }] },
+            },
+            orderBy: [{ id: 'asc' }],
+          },
+        );
+
+        const event = expectCompiled(run);
+        expect({ column, masked: event.masked }).toEqual({ column, masked: [] });
+        expect({ column, reason: event.deferred?.map((entry) => entry.reason) }).toEqual({
+          column,
+          reason: ['decoder'],
+        });
+        expect({ column, rows: describeShape(run.compiled) }).toEqual({
+          column,
+          rows: describeShape(run.prisma),
+        });
+      }
     });
 
     it('checks a field row by row when the condition handed over is a null denial', async () => {

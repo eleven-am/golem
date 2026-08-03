@@ -1,6 +1,6 @@
 import type { Kysely, KyselyPlugin, Sql } from 'kysely';
 import { GolemValidationError } from './errors';
-import { scopedContext, scopedEngine } from '../test/support/fixture';
+import { scopedContext, scopedEngine, scopedFieldQuery } from '../test/support/fixture';
 import { CompiledScopedQuery, ScopedSelectBuilder } from './scoped';
 
 type MustBeRemoved =
@@ -608,5 +608,212 @@ describe('builder methods that do not defeat the scoped root', () => {
     };
     const compiled = await attempt((qb) => qb.select('Post.id').withPlugin(noop));
     expect(compiled.sql).toContain('where ("g0"."author_id" IS ?)');
+  });
+});
+
+const WITHHELD = [{ model: 'Post', field: 'secretNote', access: 'never' as const }];
+
+function withheld(provider = 'sqlite') {
+  return scopedFieldQuery(
+    {
+      provider,
+      constraints: { Post: { authorId: 7 }, User: { tenantId: 3 } },
+      fields: WITHHELD,
+    },
+    { model: 'Post', context: scopedContext },
+  );
+}
+
+function reach(build: (builder: any, creator: any) => unknown): Promise<CompiledScopedQuery> {
+  return withheld()
+    .query((builder, creator) => build(builder, creator) as never)
+    .compile();
+}
+
+describe('a field the caller may not read, reached through every clause the builder offers', () => {
+  it('refuses to select it', async () => {
+    await expect(reach((qb) => qb.select(['Post.id', 'Post.secretNote']))).rejects.toThrow(
+      'may not reference "Post"."secretNote"',
+    );
+  });
+
+  it('refuses to filter by it', async () => {
+    await expect(
+      reach((qb) => qb.select('Post.id').where('Post.secretNote', '=', 'n3')),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses to order by it', async () => {
+    await expect(reach((qb) => qb.select('Post.id').orderBy('Post.secretNote'))).rejects.toThrow(
+      'may not reference "Post"."secretNote"',
+    );
+  });
+
+  it('refuses to group by it', async () => {
+    await expect(reach((qb) => qb.select('Post.id').groupBy('Post.secretNote'))).rejects.toThrow(
+      'may not reference "Post"."secretNote"',
+    );
+  });
+
+  it('refuses it inside the body of a common table expression', async () => {
+    await expect(
+      reach((qb, db) =>
+        db
+          .with('leak', () => qb.select(['Post.id', 'Post.secretNote']))
+          .selectFrom('leak')
+          .select('leak.id'),
+      ),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses it inside a subquery in the FROM clause', async () => {
+    await expect(
+      reach((qb, db) =>
+        db.selectFrom(qb.select(['Post.id', 'Post.secretNote']).as('inner')).select('inner.id'),
+      ),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses it inside a correlated subquery', async () => {
+    await expect(
+      reach((qb, db) =>
+        db
+          .with('peers', () => qb.select(['Post.id', 'Post.title']))
+          .selectFrom(
+            qb
+              .select(['Post.id'])
+              .where((eb: any) =>
+                eb.exists(
+                  eb
+                    .selectFrom('peers')
+                    .select('peers.id')
+                    .whereRef('peers.title', '=', 'Post.secretNote'),
+                ),
+              )
+              .as('p'),
+          )
+          .select('p.id'),
+      ),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses it in the condition joining two scoped roots', async () => {
+    await expect(
+      withheld()
+        .join('inner', 'User', 'Author', (join: any) =>
+          join.onRef('Author.name', '=', 'Post.secretNote'),
+        )
+        .query((qb: any) => qb.select('Post.id'))
+        .compile(),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses a withheld field of the joined root, not only of the first', async () => {
+    await expect(
+      scopedFieldQuery(
+        {
+          constraints: { Post: { authorId: 7 }, User: { tenantId: 3 } },
+          fields: [{ model: 'User', field: 'name', access: 'never' }],
+        },
+        { model: 'Post', context: scopedContext },
+      )
+        .join('inner', 'User', 'Author', (join: any) => join.onRef('Author.id', '=', 'Post.authorId'))
+        .query((qb: any) => qb.select(['Post.id', 'Author.name']))
+        .compile(),
+    ).rejects.toThrow('may not reference "Author"."name"');
+  });
+
+  it('refuses it on postgres as readily as on sqlite', async () => {
+    await expect(
+      withheld('postgresql')
+        .query((qb: any) => qb.select('Post.id').where('Post.secretNote', '=', 'n3'))
+        .compile(),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('refuses a hidden field reached the same way', async () => {
+    await expect(
+      scopedFieldQuery(
+        {
+          constraints: { Post: { authorId: 7 } },
+          hiddenFields: new Map([['Post', new Set(['secretNote'])]]),
+        },
+        { model: 'Post', context: scopedContext },
+      )
+        .query((qb: any) => qb.select('Post.id').orderBy('Post.secretNote'))
+        .compile(),
+    ).rejects.toThrow('may not reference "Post"."secretNote"');
+  });
+
+  it('leaves a field the caller may read reachable in every one of those clauses', async () => {
+    const compiled = await reach((qb, db) =>
+      db
+        .with('leak', () => qb.select(['Post.id', 'Post.title']).where('Post.title', '=', 'a1'))
+        .selectFrom('leak')
+        .select('leak.id')
+        .orderBy('leak.title')
+        .groupBy(['leak.id', 'leak.title']),
+    );
+    expect(compiled.sql).toContain('where "Post"."title" = ?');
+    expect(compiled.sql).toContain('order by "leak"."title"');
+  });
+});
+
+describe('a conditionally readable field, whose mask the whole query reads through', () => {
+  function masked(provider = 'sqlite') {
+    return scopedFieldQuery(
+      {
+        provider,
+        constraints: { Post: { authorId: 7 } },
+        fields: [{ model: 'Post', field: 'secretNote', condition: { published: true } }],
+      },
+      { model: 'Post', context: scopedContext },
+    );
+  }
+
+  it('filters through the mask, never through the column', async () => {
+    const compiled = await masked()
+      .query((qb: any) => qb.select('Post.id').where('Post.secretNote', '=', 'n3'))
+      .compile();
+
+    expect(compiled.sql).toContain('where "Post"."secretNote" = ?');
+    expect(compiled.sql).toContain('case when (("g0"."published" IS ?)) then "g0"."secret_note"');
+    expect(compiled.sql).not.toContain('"g0"."secret_note" as "secretNote"');
+  });
+
+  it('orders through the mask, never through the column', async () => {
+    const compiled = await masked()
+      .query((qb: any) => qb.select('Post.id').orderBy('Post.secretNote'))
+      .compile();
+
+    expect(compiled.sql).toContain('order by "Post"."secretNote"');
+    expect(compiled.sql.match(/"g0"\."secret_note"/g)).toHaveLength(1);
+    expect(compiled.sql).toContain('case when');
+  });
+
+  it('carries the mask into a common table expression that reads the field', async () => {
+    const compiled = await masked()
+      .query((qb: any, db: any) =>
+        db
+          .with('notes', () => qb.select(['Post.id', 'Post.secretNote']))
+          .selectFrom('notes')
+          .select(['notes.id', 'notes.secretNote'])
+          .where('notes.secretNote', 'is not', null),
+      )
+      .compile();
+
+    expect(compiled.sql.match(/"g0"\."secret_note"/g)).toHaveLength(1);
+    expect(compiled.sql).toContain('case when');
+  });
+
+  it('carries the mask on postgres too', async () => {
+    const compiled = await masked('postgresql')
+      .query((qb: any) => qb.select('Post.secretNote').where('Post.secretNote', '=', 'n3'))
+      .compile();
+
+    expect(compiled.sql).toContain(
+      'case when (("g0"."published" IS NOT DISTINCT FROM $1)) then "g0"."secret_note" else null end',
+    );
+    expect(compiled.sql).toContain('where "Post"."secretNote" = $3');
   });
 });

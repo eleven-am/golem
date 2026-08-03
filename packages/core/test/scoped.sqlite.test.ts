@@ -1,5 +1,6 @@
 import { context, engineFor, seed, seedPlays } from './support/analytics';
 import { analyticsSuite } from './support/expectations';
+import { engineFieldScopeSuite, fieldScopeSuite } from './support/field-scope';
 import { multiPassSuite } from './support/multipass';
 import { SqliteHandle, openSqlite } from './support/sqlite';
 
@@ -19,6 +20,16 @@ describe('a scoped analytical query against a live sqlite database', () => {
   analyticsSuite(() => ({ provider: 'sqlite', client: handle.prisma as unknown as Record<string, any> }));
 
   multiPassSuite(() => ({
+    provider: 'sqlite',
+    client: handle.prisma as unknown as Record<string, any>,
+  }));
+
+  fieldScopeSuite(() => ({
+    provider: 'sqlite',
+    client: handle.prisma as unknown as Record<string, any>,
+  }));
+
+  engineFieldScopeSuite(() => ({
     provider: 'sqlite',
     client: handle.prisma as unknown as Record<string, any>,
   }));

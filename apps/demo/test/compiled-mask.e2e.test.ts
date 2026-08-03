@@ -130,6 +130,121 @@ describe('masking a field in the compiled statement (e2e)', () => {
     expect(compiled.sql).toContain('else null end as "note"');
   });
 
+  it('masks a field of a relation the database reaches in one correlated statement', async () => {
+    const response = await gql(
+      '{ posts(orderBy: [{ title: asc }]) { title author { email phone } } }',
+      'ada@example.com',
+    );
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.posts).toEqual([
+      { title: 'Draft post', author: { email: 'roy@example.com', phone: null } },
+      { title: 'First post', author: { email: 'roy@example.com', phone: null } },
+      { title: 'Memory systems', author: { email: 'ada@example.com', phone: '+44-555-0200' } },
+    ]);
+    const compiled = compiledFor('Post');
+    expect(compiled.batched).toEqual([]);
+    expect(compiled.statements).toHaveLength(1);
+    expect(compiled.masked).toEqual(['author.phone']);
+    expect(compiled.deferred).toEqual([]);
+    expect(compiled.sql).toContain('else null end as "phone"');
+  });
+
+  it('masks a field of a relation the database reaches in a second statement', async () => {
+    await seed(prisma);
+    const modId = (await prisma.user.findUniqueOrThrow({ where: { email: 'mod@example.com' } })).id;
+    const adaPost = await prisma.post.findFirstOrThrow({ where: { title: 'Memory systems' } });
+    const modPost = await prisma.post.create({ data: { title: 'Mod post', authorId: modId } });
+    await prisma.readingSession.create({ data: { postId: adaPost.id, progress: 10, note: 'ada note' } });
+    await prisma.readingSession.create({ data: { postId: modPost.id, progress: 20, note: 'mod note' } });
+
+    const response = await gql(
+      '{ posts(orderBy: [{ title: asc }]) { title readingSessions { progress note } } }',
+      'mod@example.com',
+    );
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.posts).toEqual([
+      { title: 'Draft post', readingSessions: [] },
+      { title: 'First post', readingSessions: [] },
+      { title: 'Memory systems', readingSessions: [{ progress: 10, note: null }] },
+      { title: 'Mod post', readingSessions: [{ progress: 20, note: 'mod note' }] },
+    ]);
+    const compiled = compiledFor('Post');
+    expect(compiled.batched).toEqual(['readingSessions']);
+    expect(compiled.statements).toHaveLength(2);
+    expect(compiled.masked).toEqual(['readingSessions.note']);
+    expect(compiled.sql).not.toContain('case when');
+    expect(compiled.statements![1]).toContain('else null end as "note"');
+  });
+
+  it('answers a mask two relations down exactly as the uncompiled path answers it', async () => {
+    await seed(prisma);
+    const adaPost = await prisma.post.findFirstOrThrow({ where: { title: 'Memory systems' } });
+    await prisma.readingSession.create({ data: { postId: adaPost.id, progress: 10, note: 'ada note' } });
+
+    const response = await gql(
+      '{ readingSessions { progress post { title author { email phone } } } }',
+      'ada@example.com',
+    );
+    const uncompiled = await prisma.forContext(ctxFor('ada@example.com')).readingSession.findMany({
+      select: {
+        progress: true,
+        post: { select: { title: true, author: { select: { email: true, phone: true } } } },
+      },
+    });
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.readingSessions).toEqual(uncompiled);
+    expect(response.body.data.readingSessions).toEqual([
+      {
+        progress: 10,
+        post: {
+          title: 'Memory systems',
+          author: { email: 'ada@example.com', phone: '+44-555-0200' },
+        },
+      },
+    ]);
+    const compiled = compiledFor('ReadingSession');
+    expect(compiled.masked).toEqual(['post.author.phone']);
+    expect(compiled.deferred).toEqual([
+      expect.objectContaining({ path: 'the read', field: 'progress', reason: 'decoder' }),
+    ]);
+  });
+
+  it('renders every mask against the aliases the dropped hydration leaves behind', async () => {
+    await seed(prisma);
+    const modId = (await prisma.user.findUniqueOrThrow({ where: { email: 'mod@example.com' } })).id;
+    const modPost = await prisma.post.create({ data: { title: 'Alias post', authorId: modId } });
+    await prisma.readingSession.create({ data: { postId: modPost.id, progress: 30, note: 'mod note' } });
+
+    const response = await gql(
+      '{ posts(orderBy: [{ title: asc }]) { title readingSessions { note } author { email phone } } }',
+      'mod@example.com',
+    );
+    const uncompiled = await prisma.forContext(ctxFor('mod@example.com')).post.findMany({
+      orderBy: { title: 'asc' },
+      select: {
+        title: true,
+        readingSessions: { select: { note: true } },
+        author: { select: { email: true, phone: true } },
+      },
+    });
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.posts).toEqual(uncompiled);
+    const compiled = compiledFor('Post');
+    expect(compiled.masked).toEqual(['readingSessions.note', 'author.phone']);
+    expect(compiled.sql).not.toContain('as "post"');
+    for (const statement of compiled.statements ?? []) {
+      const declared = [...statement.matchAll(/as "(t\d+)"/g)].map((match) => match[1]);
+      const referenced = [...statement.matchAll(/"(t\d+)"\./g)].map((match) => match[1]);
+      for (const alias of new Set(referenced)) {
+        expect(declared).toContain(alias);
+      }
+    }
+  });
+
   it('masks a field whose condition hops a relation', async () => {
     await seed(prisma);
     const modId = (await prisma.user.findUniqueOrThrow({ where: { email: 'mod@example.com' } })).id;

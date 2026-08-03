@@ -1,6 +1,13 @@
-import { AuthorizationProvider } from '../../src/authorization';
+import { AuthorizationProvider, FieldClassification } from '../../src/authorization';
 import { DatamodelModel } from '../../src/datamodel';
 import { GolemEngine, GolemEngineOptions } from '../../src/operations';
+import {
+  ScopedHost,
+  ScopedQuery,
+  ScopedRequest,
+  createScopedQuery,
+  resolveScopedFieldPolicy,
+} from '../../src/scoped';
 import { field } from '../../src/testing';
 
 export const scopedModels: readonly DatamodelModel[] = [
@@ -149,4 +156,92 @@ export function scopedEngine(options: ScopedEngineOptions = {}): GolemEngine {
     checkWriteResults: false,
     checkReadFields: false,
   });
+}
+
+export interface ScopedFieldSpec {
+  readonly model: string;
+  readonly field: string;
+  readonly access?: 'conditional' | 'never';
+  readonly condition?: unknown;
+  readonly discharged?: boolean;
+}
+
+export interface ScopedFieldHostOptions {
+  readonly provider?: string;
+  readonly models?: readonly DatamodelModel[];
+  readonly constraints?: Record<string, unknown>;
+  readonly hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly fields?: readonly ScopedFieldSpec[];
+  readonly client?: Record<string, any>;
+  readonly context?: unknown;
+}
+
+export function scopedFieldAuthorization(
+  options: ScopedFieldHostOptions = {},
+): AuthorizationProvider {
+  const specs = options.fields ?? [];
+  const specFor = (model: string, name: string): ScopedFieldSpec | undefined =>
+    specs.find((spec) => spec.model === model && spec.field === name);
+  return {
+    authorize: async () => undefined,
+    constrain: async (_action, model) => options.constraints?.[model],
+    check: async () => true,
+    checkField: async () => true,
+    classifyFields: async (_action, model, names) => {
+      const classification: Record<string, FieldClassification> = {};
+      for (const name of names) {
+        const spec = specFor(model, name);
+        classification[name] =
+          spec === undefined
+            ? { access: 'always' }
+            : {
+                access: spec.access ?? 'conditional',
+                dischargedByConstraint: spec.discharged === true,
+              };
+      }
+      return classification;
+    },
+    constrainField: async (_action, model, name) => specFor(model, name)?.condition,
+  };
+}
+
+export function scopedFieldEngine(
+  options: ScopedFieldHostOptions = {},
+  checkReadFields = true,
+): GolemEngine {
+  return new GolemEngine(options.client ?? {}, options.models ?? scopedModels, {
+    provider: options.provider ?? 'sqlite',
+    authorization: scopedFieldAuthorization(options),
+    hiddenFields: options.hiddenFields,
+    checkWriteResults: false,
+    checkReadFields,
+  });
+}
+
+export function scopedFieldHost(options: ScopedFieldHostOptions = {}): ScopedHost {
+  const models = options.models ?? scopedModels;
+  const context = options.context ?? scopedContext;
+  const authorization = scopedFieldAuthorization(options);
+  return {
+    models,
+    provider: options.provider ?? 'sqlite',
+    hiddenFields: (model) => options.hiddenFields?.get(model) ?? new Set(),
+    constraint: (model) => authorization.constrain('read', model, context),
+    fieldPolicy: (model, names) =>
+      resolveScopedFieldPolicy(authorization, model, names, context),
+    execute: async (_model, sql, parameters) => {
+      const runner = options.client?.$queryRawUnsafe;
+      if (typeof runner !== 'function') {
+        throw new Error('the scoped field fixture needs a client exposing $queryRawUnsafe');
+      }
+      return (await runner.call(options.client, sql, ...parameters)) as unknown[];
+    },
+  };
+}
+
+export function scopedFieldQuery(
+  options: ScopedFieldHostOptions,
+  request: ScopedRequest,
+): ScopedQuery {
+  return createScopedQuery(scopedFieldHost(options), request);
 }

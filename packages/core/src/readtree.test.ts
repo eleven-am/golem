@@ -1088,4 +1088,41 @@ describe('what a prepared read tree records about a masked field', () => {
       owner: { select: { tenant: true } },
     });
   });
+
+  it('asks the provider for the condition on a field read through a relation', async () => {
+    const constrainField = jest.fn(async () => ({ id: 'o1' }));
+    const prepared = await prepare(
+      noteProvider({ tenant: { access: 'conditional', requires: ['id'] } }, constrainField),
+      { body: true, owner: { select: { tenant: true } } },
+    );
+
+    expect(prepared.maskChecks).toEqual([
+      { path: ['owner'], model: 'Owner', field: 'tenant', constraint: { id: 'o1' } },
+    ]);
+    expect(constrainField).toHaveBeenCalledWith('read', 'Owner', 'tenant', { req: {} });
+  });
+
+  it('stops calling a column droppable once a relation check reads it too', async () => {
+    const provider: AuthorizationProvider = {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async (_action, model) => (model === 'Owner' ? { id: 'o1' } : undefined)),
+      check: jest.fn(async () => true),
+      checkField: jest.fn(async () => true),
+      constrainField: jest.fn(async () => ({ id: 'o1' })),
+      classifyFields: jest.fn(async (_action, _model, fields: readonly string[]) =>
+        Object.fromEntries(
+          fields.map((name) => [
+            name,
+            name === 'tenant'
+              ? { access: 'conditional' as const, requires: ['id'] }
+              : { access: 'always' as const },
+          ]),
+        ),
+      ),
+    };
+    const prepared = await prepare(provider, { body: true, owner: { select: { tenant: true } } });
+
+    expect(prepared.toOneChecks).toEqual([{ path: ['owner'], model: 'Owner' }]);
+    expect(prepared.injected).toEqual([{ path: ['owner'], field: 'id' }]);
+  });
 });

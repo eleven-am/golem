@@ -348,6 +348,33 @@ function injectHydrationIntoSelect(
   }
 }
 
+function retainHydration(
+  metadata: ModelMetadataIndex,
+  model: DatamodelModel,
+  hydration: PrismaSelect,
+  path: readonly string[],
+  injected: InjectedField[],
+): void {
+  for (const [key, shape] of Object.entries(hydration)) {
+    for (const [index, entry] of injected.entries()) {
+      if (
+        entry.masks !== undefined &&
+        entry.field === key &&
+        entry.path.length === path.length &&
+        entry.path.every((segment, depth) => segment === path[depth])
+      ) {
+        injected[index] = { path: entry.path, field: entry.field };
+      }
+    }
+    const field = metadata.get(model.name)?.fieldsByName.get(key);
+    const target = field?.kind === 'object' ? metadata.get(field.type)?.model : undefined;
+    const nested = shape === true ? undefined : (shape as { select?: PrismaSelect }).select;
+    if (nested !== undefined && target !== undefined) {
+      retainHydration(metadata, target, nested, [...path, key], injected);
+    }
+  }
+}
+
 export async function prepareReadTree(options: PrepareOptions): Promise<PreparedReadTree> {
   if (options.select !== undefined && options.omit !== undefined) {
     throw new GolemValidationError('select and omit cannot be used together');
@@ -408,7 +435,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
         throw new GolemForbiddenError(`Cannot read field "${field}" on ${model.name}`);
       }
       const constraint =
-        path.length === 0 && options.provider?.constrainField !== undefined
+        options.provider?.constrainField !== undefined
           ? await options.provider.constrainField('read', model.name, field, options.context)
           : undefined;
       maskChecks.push({ path, model: model.name, field, constraint });
@@ -602,6 +629,7 @@ export async function prepareReadTree(options: PrepareOptions): Promise<Prepared
             relationPath,
             injected,
           );
+          retainHydration(metadata, target, hydration, relationPath, injected);
           checks.push({ path: relationPath, model: target.name });
         } else {
           throw new GolemForbiddenError(
