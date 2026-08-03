@@ -11,6 +11,36 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
+    env:
+      GOLEM_POLICY_PG_URL: postgresql://postgres:golem@127.0.0.1:55432/golem
+      GOLEM_POLICY_PG_C_URL: postgresql://postgres:golem@127.0.0.1:55433/golem
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres-c:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -18,7 +48,9 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build -w @eleven-am/golem-core -w @eleven-am/golem-generator
+      # golem-core imports @eleven-am/golem-policy, whose dist is gitignored, so
+      # policy builds first or core cannot resolve it.
+      - run: npm run build -w @eleven-am/golem-policy -w @eleven-am/golem-core -w @eleven-am/golem-generator
       - run: npm rebuild -w @eleven-am/golem-generator
       - run: npm run generate -w demo
       - run: npm run push -w demo
