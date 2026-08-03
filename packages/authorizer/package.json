@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem-authorizer",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
@@ -9,8 +9,8 @@
   },
   "dependencies": {
     "@casl/prisma": "^2.0.0",
-    "@eleven-am/golem-core": "^0.5.2",
-    "@eleven-am/golem-policy": "^0.5.2"
+    "@eleven-am/golem-core": "^0.6.0",
+    "@eleven-am/golem-policy": "^0.6.0"
   },
   "peerDependencies": {
     "@eleven-am/authorizer": "^2.2.1",
