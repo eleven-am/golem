@@ -1,3 +1,139 @@
+# Migrating to 0.6.0
+
+Most of this release fails loudly at startup, which is the easy kind. Four
+things do not: they fail on traffic that works today. Check those first.
+
+`@eleven-am/golem-queue` and `@eleven-am/golem-render` carry no golem
+dependency and did not change. Leave them where they are.
+
+## Check these four before you deploy
+
+**1. Your GraphQL `context` must be a function.**
+
+```diff
+  GraphQLModule.forRoot<ApolloDriverConfig>({
+-   context: { pubSub },
++   context: ({ req }) => ({ req, pubSub }),
+  })
+```
+
+Given an object, `@nestjs/apollo` attaches the first request's `req` to it and
+hands the same object to every request afterwards. Every later caller then
+executes with the first caller's identity. Golem now refuses this rather than
+letting it run, so the failure is visible instead of silent — but it arrives on
+request #2, so a single smoke test passes and the deploy does not.
+
+If you share a context deliberately, opt out with the exported symbol:
+
+```ts
+import { golemSharedContext } from '@eleven-am/golem';
+const context = { [golemSharedContext]: true, pubSub };
+```
+
+**2. Do you write field-scoped CASL rules?**
+
+Search your ability for a rule carrying a field list:
+
+```ts
+can('read', 'User', ['phone'], { id: me });
+cannot('read', 'User', ['phone']);
+```
+
+If you have none, skip to step 3 — nothing here reaches you. If you do, queries
+that **filter, order, paginate or deduplicate** by one of those fields are now
+refused where they previously returned rows:
+
+```
+Cannot filter or order by field "phone" on User: readability depends on id,
+which the query constraint does not discharge
+```
+
+This is deliberate. Masking the projection was never enough: a caller who saw
+`phone: null` could still write `users(where: { phone: { startsWith: "+44" } })`
+and read the value out of which rows came back, one character at a time. The
+refusal now covers `where`, `orderBy`, `cursor` and `distinct`, at the root of a
+read, inside a relation entry in `select`/`include`, and in the filter a batch
+or nested write selects rows with.
+
+Grep your callers for those field names in a filter position. A field the caller
+may **always** read is unaffected.
+
+**3. Does any ability grant `update` or `delete` without `read`?**
+
+```ts
+can('update', 'Post');   // and no can('read', 'Post')
+```
+
+Such a caller can no longer filter `updateMany` or `deleteMany` at all — every
+field, including `id`, is refused. A `where` interrogates the database and its
+count discloses which rows matched, so it is a read, and a caller who may not
+read the model is told nothing by one. Grant `read` alongside the write if the
+caller legitimately needs to select rows.
+
+**4. Re-run GraphQL codegen.**
+
+`min` and `max` now accept `DateTime` and `String`, so on models whose
+aggregatable columns are not all numeric they reference a new
+`<Model>OrderableField` enum. Literals keep working; **typed variables fail
+validation**, because GraphQL has no enum subtyping:
+
+```graphql
+# no longer valid where the model gained orderable measures
+query ($f: [PostMeasureField!]) { postsAggregate(measures: { min: $f }) { … } }
+```
+
+## What fails at startup
+
+**Abilities built with `createAbility`.** It is backed by `@casl/prisma`, whose
+conditions matcher is exactly what golem now replaces.
+
+```diff
+- import { createAbility } from '@eleven-am/authorizer/prisma';
++ import { createGolemAbility } from '@eleven-am/golem-authorizer';
+
+  abilityFactory() {
+-   return new AbilityBuilder(createAbility);
++   return new AbilityBuilder(createGolemAbility);
+  }
+```
+
+If you never set `abilityFactory`, golem installs its own and nothing changes.
+
+**Policy conditions golem cannot render exactly.** Conditions are Prisma's
+`WhereInput`. Anything outside it is refused when the ability is built, naming
+the rule and the operator, rather than approximated.
+
+**Node below 20.19**, and **any MySQL dialect**. Kysely is ESM-only, and MySQL
+is removed rather than left as a claim that was never executed against a server.
+SQLite and Postgres are both tested against live ones.
+
+## Behaviour that changed without failing
+
+**`upsert` picks its branch from rows you may update.** A row that exists beyond
+your reach used to count as existing and route you to the update branch, which
+answered differently from a missing row — enough to enumerate unique keys. Both
+now answer alike. A caller who may create still learns a key is taken from the
+unique violation; that is the database's disclosure, not golem's to hide.
+
+**Subscriptions end when the subscriber leaves.** One parked at an `await` could
+not honour `return`, so a subscription that filtered its events, or whose events
+an ability silenced, never unwound — it kept querying for a departed client and
+held its context alive. No action needed; your event bus needs nothing new.
+
+## New, and opt-in
+
+**`@BatchedComputedField`** answers a computed field for a whole page in one
+query instead of one per row. Scoped per request and per subscription event, so
+a cache never crosses a caller.
+
+**`ctx.$scoped(model)`** gives you a Kysely builder rooted at a model with the
+policy predicate and field policy already applied, for analytical reads the
+generated surface cannot express.
+
+Full detail, including where these guarantees stop, is in `RELEASE_NOTES.md`.
+
+---
+
 # Migrating `@eleven-am/golem-queue` to 0.5.0
 
 Add two things to your schema and migrate:
