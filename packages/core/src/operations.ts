@@ -14,6 +14,7 @@ import { runPolicyChecks } from './concurrency';
 import {
   FieldReferences,
   FilterClauses,
+  SelectedRows,
   addCursorFields,
   addNestedFields,
   addTrueKeys,
@@ -1082,9 +1083,12 @@ export class GolemEngine {
   async update(request: UpdateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
-    await this.classifyFilterFields(req.model, req.context, {
-      where: this.filterableWhere(req.model, req.where),
-    });
+    await this.classifyFilterFields(
+      req.model,
+      req.context,
+      { where: this.filterableWhere(req.model, req.where) },
+      'update',
+    );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
@@ -1151,7 +1155,7 @@ export class GolemEngine {
   async updateMany(request: UpdateManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('updateMany', request);
-    await this.classifyFilterFields(req.model, req.context, { where: req.where });
+    await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'update');
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
@@ -1207,9 +1211,12 @@ export class GolemEngine {
   async delete(request: DeleteRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('delete', request);
-    await this.classifyFilterFields(req.model, req.context, {
-      where: this.filterableWhere(req.model, req.where),
-    });
+    await this.classifyFilterFields(
+      req.model,
+      req.context,
+      { where: this.filterableWhere(req.model, req.where) },
+      'delete',
+    );
     const { where } = await this.resolveConstrainedTarget('delete', req, scope?.client);
     const prepared = await this.prepareRead(req);
     const deleted = await this.run(req.model, () =>
@@ -1264,7 +1271,7 @@ export class GolemEngine {
   async deleteMany(request: DeleteManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('deleteMany', request);
-    await this.classifyFilterFields(req.model, req.context, { where: req.where });
+    await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'delete');
     const constraint = await this.constraintFor('delete', req.model, req.context);
     const result = (await this.run(req.model, () =>
       delegate.deleteMany({ where: mergeConstraint(req.where, constraint) }),
@@ -1386,6 +1393,7 @@ export class GolemEngine {
     context: unknown,
     references: FieldReferences,
     kind: 'aggregate' | 'group' | 'filter',
+    selected?: SelectedRows,
   ): Promise<void> {
     if (!this.checkReadFields || references.size === 0) {
       return;
@@ -1406,6 +1414,7 @@ export class GolemEngine {
         kind === 'filter'
           ? new GolemForbiddenError(message)
           : new GolemValidationError(message),
+      selected,
     );
   }
 
@@ -1424,6 +1433,7 @@ export class GolemEngine {
     model: string,
     context: unknown,
     request: FilterClauses,
+    selects?: GolemAction,
   ): Promise<void> {
     if (!this.checkReadFields) {
       return;
@@ -1432,6 +1442,7 @@ export class GolemEngine {
       context,
       collectFilterFields(request, model, this.metadata),
       'filter',
+      selects === undefined ? undefined : { model, action: selects },
     );
   }
 

@@ -1,4 +1,4 @@
-import { AuthorizationProvider } from './authorization';
+import { AuthorizationProvider, GolemAction } from './authorization';
 import { GolemValidationError } from './errors';
 import { ModelMetadata, ModelMetadataIndex } from './model-meta';
 
@@ -207,12 +207,130 @@ export function collectFilterFields(
   return references;
 }
 
+export interface SelectedRows {
+  model: string;
+  action: GolemAction;
+}
+
+function constraintConjuncts(constraint: unknown, into: unknown[]): void {
+  if (constraint === undefined || constraint === null) {
+    return;
+  }
+  if (Array.isArray(constraint)) {
+    for (const entry of constraint) {
+      constraintConjuncts(entry, into);
+    }
+    return;
+  }
+  if (typeof constraint !== 'object') {
+    into.push(constraint);
+    return;
+  }
+  for (const [key, value] of Object.entries(constraint as Record<string, unknown>)) {
+    if (key === 'AND') {
+      constraintConjuncts(value, into);
+      continue;
+    }
+    into.push({ [key]: value });
+  }
+}
+
+function disjunctionOf(conjunct: unknown): readonly unknown[] | undefined {
+  if (!conjunct || typeof conjunct !== 'object' || Array.isArray(conjunct)) {
+    return undefined;
+  }
+  const entries = Object.entries(conjunct as Record<string, unknown>);
+  if (entries.length !== 1 || entries[0]![0] !== 'OR') {
+    return undefined;
+  }
+  const branches = entries[0]![1];
+  return Array.isArray(branches) ? branches : [branches];
+}
+
+function sameConstraint(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) {
+    return true;
+  }
+  if (left instanceof Date || right instanceof Date) {
+    return (
+      left instanceof Date && right instanceof Date && left.getTime() === right.getTime()
+    );
+  }
+  if (!left || !right || typeof left !== 'object' || typeof right !== 'object') {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((entry, index) => sameConstraint(entry, right[index]))
+    );
+  }
+  const keys = Object.keys(left as Record<string, unknown>);
+  const other = right as Record<string, unknown>;
+  return (
+    keys.length === Object.keys(other).length &&
+    keys.every(
+      (key) =>
+        Object.prototype.hasOwnProperty.call(other, key) &&
+        sameConstraint((left as Record<string, unknown>)[key], other[key]),
+    )
+  );
+}
+
+function conjunctImplied(held: readonly unknown[], need: unknown): boolean {
+  if (held.some((entry) => sameConstraint(entry, need))) {
+    return true;
+  }
+  const branches = disjunctionOf(need);
+  if (branches !== undefined) {
+    return branches.some((branch) => constraintImplies({ AND: [...held] }, branch));
+  }
+  return held.some((entry) => {
+    const alternatives = disjunctionOf(entry);
+    return (
+      alternatives !== undefined &&
+      alternatives.length > 0 &&
+      alternatives.every((alternative) => constraintImplies(alternative, need))
+    );
+  });
+}
+
+export function constraintImplies(selecting: unknown, required: unknown): boolean {
+  const needed: unknown[] = [];
+  constraintConjuncts(required, needed);
+  if (needed.length === 0) {
+    return true;
+  }
+  const held: unknown[] = [];
+  constraintConjuncts(selecting, held);
+  return needed.every((need) => conjunctImplied(held, need));
+}
+
+async function selectedRowsStayReadable(
+  provider: AuthorizationProvider,
+  context: unknown,
+  model: string,
+  selected: SelectedRows | undefined,
+): Promise<boolean> {
+  if (selected === undefined || selected.action === 'read' || selected.model !== model) {
+    return true;
+  }
+  const [selecting, readable] = await Promise.all([
+    provider.constrain(selected.action, model, context),
+    provider.constrain('read', model, context),
+  ]);
+  return constraintImplies(selecting, readable);
+}
+
 export async function refuseUnreadableReferences(
   provider: AuthorizationProvider,
   context: unknown,
   references: FieldReferences,
   verb: string,
   fail: (message: string) => Error,
+  selected?: SelectedRows,
 ): Promise<void> {
   for (const [model, names] of references) {
     const fields = [...names];
@@ -220,13 +338,17 @@ export async function refuseUnreadableReferences(
       continue;
     }
     const classification = await provider.classifyFields!('read', model, fields, context);
+    let readableSelection: boolean | undefined;
     for (const field of fields) {
       const entry = classification[field];
       if (entry?.access === 'always') {
         continue;
       }
       if (entry?.access === 'conditional' && entry.dischargedByConstraint) {
-        continue;
+        readableSelection ??= await selectedRowsStayReadable(provider, context, model, selected);
+        if (readableSelection) {
+          continue;
+        }
       }
       const undischarged = entry?.requires?.join(', ');
       throw fail(

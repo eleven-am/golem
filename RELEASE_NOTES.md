@@ -163,12 +163,32 @@ the read is distinct on is handed back to the in-memory path rather than
 rendered — the database deduplicates on the value, and masking it in SQL
 first would drop rows Prisma keeps.
 
-Two smaller edges remain: a batch write discharges a conditional field
-against the **read** constraint while it selects rows with the write
-constraint, so an ability whose write reach exceeds its read reach can still
-count over the difference; and an ability that grants `update` without
-`read` can no longer filter an `updateMany` or `deleteMany` at all, since
-every field classifies as unreadable.
+Discharge is decided against the constraint that **selects the rows the
+statement can touch**, not against the read constraint unconditionally.
+`update`, `updateMany`, `delete` and `deleteMany` select with the write
+constraint, so the write constraint is what has to imply the read constraint
+before a conditionally-readable field may be named in their `where`. An
+ability whose write reach exceeds its read reach — reads `Post` only where
+`published`, updates every `Post` — is refused there, because the count such
+a statement reports ranges over rows the caller may not read. Where the write
+reach is the read reach, one branch of it, or narrower still, the filter is
+answered exactly as before, and reads are untouched: a read selects with the
+read constraint, which discharges itself.
+
+An ability that grants `update` without `read` cannot filter an `updateMany`
+or a `deleteMany` at all, not even by `id`. That is deliberate. A `where` is
+a read — it interrogates the database and answers through the count and
+through which rows changed — so a caller who may not read the model is told
+nothing by one.
+
+Three positions still discharge against the read constraint. A field reached
+through a relation, as in `{ author: { is: { phone: … } } }`, is classified
+against the related model, and no statement narrows the interrogated rows to
+that model's read constraint. A filter nested inside `data` selects the
+children of whatever parent row the statement matched, which no single
+constraint describes. And `upsert` probes for the existing row without a
+constraint of any kind, so the rule above does not cover the `where` it
+probes with.
 
 Reach is worth stating plainly, because the generated GraphQL API is not the
 whole threat surface and in these cases is not the threat surface at all.

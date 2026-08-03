@@ -1087,3 +1087,183 @@ describe('classifying every key a relation filter carries', () => {
     expect(client.comment.findMany).toHaveBeenCalled();
   });
 });
+
+describe('discharging a filtered field against the rows the statement selects', () => {
+  const conditional: Record<string, Record<string, FieldClassification>> = {
+    ...open,
+    Post: {
+      ...open.Post,
+      title: { access: 'conditional', requires: ['published'], dischargedByConstraint: true },
+    },
+  };
+
+  function engineFor(
+    client: ReturnType<typeof fakeClient>,
+    constraints: Record<string, unknown>,
+    classification: Record<string, Record<string, FieldClassification>> = conditional,
+  ): GolemEngine {
+    const authorization = {
+      authorize: jest.fn(async () => undefined),
+      constrain: jest.fn(async (action: string) => constraints[action]),
+      check: jest.fn(async () => true),
+      checkField: jest.fn(async () => true),
+      classifyFields: jest.fn(
+        async (_action: string, model: string, fields: readonly string[]) =>
+          Object.fromEntries(
+            fields.map((name) => [
+              name,
+              classification[model]?.[name] ??
+                classification[model]?.['*'] ?? { access: 'never' },
+            ]),
+          ),
+      ),
+    } as unknown as AuthorizationProvider;
+    return new GolemEngine(client, models, {
+      authorization,
+      checkReadFields: true,
+      checkWriteResults: false,
+    });
+  }
+
+  const readOnlyPublished = { OR: [{ published: true }] };
+
+  it('refuses an updateMany whose update reach is wider than its read reach', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: readOnlyPublished, update: {} });
+
+    await expect(
+      engine.updateMany({
+        model: 'Post',
+        where: { title: { startsWith: 'a' } },
+        data: { note: 'x' },
+        context: ctx,
+      }),
+    ).rejects.toThrow(
+      'Cannot filter or order by field "title" on Post: readability depends on published, ' +
+        'which the query constraint does not discharge',
+    );
+    expect(client.post.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a deleteMany whose delete reach is wider than its read reach', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: readOnlyPublished, delete: undefined });
+
+    await expect(
+      engine.deleteMany({
+        model: 'Post',
+        where: { title: { startsWith: 'a' } },
+        context: ctx,
+      }),
+    ).rejects.toBeInstanceOf(GolemForbiddenError);
+    expect(client.post.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a single update whose update reach is wider than its read reach', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: readOnlyPublished, update: {} });
+
+    await expect(
+      engine.update({
+        model: 'Post',
+        where: { title: 'a' },
+        data: { note: 'x' },
+        context: ctx,
+      }),
+    ).rejects.toThrow('Cannot filter or order by field "title" on Post');
+    expect(client.post.update).not.toHaveBeenCalled();
+  });
+
+  it('still runs a batch write whose reaches match', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, {
+      read: readOnlyPublished,
+      update: { OR: [{ published: true }] },
+    });
+
+    await engine.updateMany({
+      model: 'Post',
+      where: { title: { startsWith: 'a' } },
+      data: { note: 'x' },
+      context: ctx,
+    });
+
+    expect(client.post.updateMany).toHaveBeenCalled();
+  });
+
+  it('still runs a batch write whose write reach is one branch of the read reach', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, {
+      read: { OR: [{ published: true }, { authorId: 'u1' }] },
+      delete: { OR: [{ authorId: 'u1' }] },
+    });
+
+    await engine.deleteMany({
+      model: 'Post',
+      where: { title: { startsWith: 'a' } },
+      context: ctx,
+    });
+
+    expect(client.post.deleteMany).toHaveBeenCalled();
+  });
+
+  it('still runs a batch write whose write reach narrows the read reach further', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, {
+      read: readOnlyPublished,
+      update: { AND: [{ OR: [{ published: true }] }, { authorId: 'u1' }] },
+    });
+
+    await engine.updateMany({
+      model: 'Post',
+      where: { title: { startsWith: 'a' } },
+      data: { note: 'x' },
+      context: ctx,
+    });
+
+    expect(client.post.updateMany).toHaveBeenCalled();
+  });
+
+  it('leaves the read path filtering on the same field', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: readOnlyPublished, update: {} });
+
+    await engine.findMany({
+      model: 'Post',
+      where: { title: { startsWith: 'a' } },
+      select: { id: true },
+      context: ctx,
+    });
+
+    expect(client.post.findMany).toHaveBeenCalled();
+  });
+
+  it('leaves a nested model in a batch write filter classified against its own read reach', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: readOnlyPublished, update: {} });
+
+    await engine.updateMany({
+      model: 'Post',
+      where: { author: { is: { email: 'a@b.c' } } },
+      data: { note: 'x' },
+      context: ctx,
+    });
+
+    expect(client.post.updateMany).toHaveBeenCalled();
+  });
+
+  it('refuses every field of a batch write filter for a caller that may not read the model', async () => {
+    const client = fakeClient();
+    const engine = engineFor(client, { read: undefined, update: {} }, { ...open, Post: {} });
+
+    await expect(
+      engine.updateMany({
+        model: 'Post',
+        where: { id: 'p1' },
+        data: { note: 'x' },
+        context: ctx,
+      }),
+    ).rejects.toThrow('Cannot filter or order by field "id" on Post');
+    expect(client.post.updateMany).not.toHaveBeenCalled();
+  });
+});
