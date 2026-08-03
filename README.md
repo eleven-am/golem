@@ -101,6 +101,8 @@ Three artifacts land in `src/generated/golem`: the datamodel, a fully typed inst
 export class AppModule {}
 ```
 
+If you set `GraphQLModule`'s `context`, it must be a function — `context: ({ req }) => ({ req })` — never a static object. `@nestjs/apollo` reuses a static object across requests with the first caller's `req` still attached, so every later caller would be served as the first one. Golem detects a context that belongs to another request and fails the operation instead of answering with the wrong caller's rows.
+
 **5. Use the API**
 
 ```graphql
@@ -325,7 +327,27 @@ export class ArticleExtension {
 
 Import `ComputedField` from the generated Golem module so the model and every entry in `requires` are checked against the Prisma datamodel. The `requires` list feeds the query planner: those columns are fetched only when the computed field is requested. Computed fields and custom operations are mounted as real Nest GraphQL resolvers, so Nest guards, pipes, interceptors, filters, request-scoped providers, and parameter decorators apply normally. Pass `golem.fieldResolverEnhancers` into `GraphQLModule` alongside `typeDefs` and `transformResolvers`; Nest disables guards, interceptors, and filters on field resolvers unless that option is enabled. Existing computed fields written as positional callbacks must migrate from `method(parent)` to `method(@Parent() parent)`. They inherit row and field policy when they use `forContext`.
 
-For relation-backed computed fields, use a request-scoped DataLoader from `@Context()` or dependency injection to batch distinct parent keys. Golem deliberately does not add a separate batching API: Nest owns resolver invocation and the ordinary GraphQL DataLoader pattern applies.
+A computed field that queries for other rows costs one query per parent row. Declare it with `@BatchedComputedField` instead and it costs one query per page: the decorated method is handed every parent key resolved in the same tick and returns a map from key to value.
+
+```typescript
+@BatchedComputedField('Article', { type: 'Int!', key: 'id' })
+async commentCount(keys: readonly string[], ctx: unknown): Promise<Map<string, number>> {
+  const groups = await this.prisma.forContext(ctx).comment.groupBy({
+    by: ['articleId'],
+    where: { articleId: { in: [...keys] } },
+    _count: true,
+  });
+  const counts = new Map(keys.map((key) => [key, 0]));
+  for (const group of groups) {
+    counts.set(group.articleId, group._count);
+  }
+  return counts;
+}
+```
+
+`key` names the parent column that identifies the row (or a function of the parent for a compound key); it is added to `requires`, so the planner fetches it. The method may also return an array aligned with `keys`, with an `Error` in any slot that failed. It receives the same `ctx` the per-row form receives, so `forContext(ctx)` enforces the caller's policy exactly as before, and the declared field `args` arrive as its third parameter — each distinct set of arguments batches on its own.
+
+Batching is scoped to one request and, within it, to one execution. The loader is keyed by the GraphQL context object, so two requests never share a batch or a cached value and nothing survives the response; it is keyed again by the execution's root value, so a subscription — which holds one context open for the life of the connection — loads afresh for every event instead of serving the first event's answer forever. A parent whose key is null resolves to null without joining the batch. If the batch throws, every parent waiting on it receives that error. A computed field without a batch loader is untouched and still resolves per row.
 
 ## Configuration reference
 
@@ -413,7 +435,7 @@ Stated here because you will hit them eventually, and finding them in a README b
 - **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.
 - **Batch mutations publish no events.** `updateMany` and `deleteMany` return counts, and there are deliberately no per-row events for them.
 - **Composite primary keys are `forContext`-only.** Models with a Prisma composite `@@id` are supported for policy-enforced reads and verified writes through `forContext(ctx)` (and plain delegate access). Identity is the compound unique key — `{ postId_tagId: { postId, tagId } }` for `@@id([postId, tagId])`, or the two columns as scalar fields in a filter `where`; every key column is selected across the verified read/write/re-read cycle, so relation-scoped rules like `{ post: { is: { authorId } } }` verify correctly. Such models are not supported on the generated GraphQL surface (their `where`-unique input cannot be expressed) and cannot enable subscriptions (event ids are single-column); both are rejected at schema build naming the model. Set the model to `false` in the `models` config to keep it off the GraphQL surface while it stays reachable through `forContext`.
-- **Excluding a model prunes the relations pointing at it.** A relation field cannot reference a GraphQL type that does not exist, so `Artist.genres` disappears from the surface when the join model `ArtistGenre` is `false`. This is silent, and you notice it as an absence rather than an error. Expose what you actually want through a `@ComputedField` — `Artist.genreNames: [String!]!` — which is the better API in any case, since a join table is a storage decision and not something an API should promise. Computed fields resolve per row with no batching layer, so a computed field backed by its own query costs one query per row of the parent list.
+- **Excluding a model prunes the relations pointing at it.** A relation field cannot reference a GraphQL type that does not exist, so `Artist.genres` disappears from the surface when the join model `ArtistGenre` is `false`. This is silent, and you notice it as an absence rather than an error. Expose what you actually want through a `@ComputedField` — `Artist.genreNames: [String!]!` — which is the better API in any case, since a join table is a storage decision and not something an API should promise. Computed fields resolve per row, so a computed field backed by its own query costs one query per row of the parent list unless it is declared with `@BatchedComputedField`.
 
 ## License
 

@@ -106,15 +106,98 @@ discharged by the constraint and is unaffected. Refusals over a measure,
 a grouping key, `having` or an aggregate `orderBy` keep the
 `BAD_USER_INPUT` code they already had.
 
-Filtering a **nested** relation inside `select`/`include`, and the `where` of
-`updateMany`/`deleteMany`, are not yet classified. The nested case is the
-sharper of the two now that the compiled statement renders that `where`
-against the column itself rather than against the masked projection:
-`select: { posts: { where: { secretNote: … } } }` still probes a value the
-same filter at the root of the read is refused. Classifying it is the next
-step, and until it lands a field-scoped rule is enforced at the root of a
-read and in a scoped query, not inside a nested relation's own `where` or
-`orderBy`.
+The same classification applies inside a projection. A relation entry in a
+`select` or `include` tree — its `where`, its `orderBy`, its `cursor`, and
+the `where` of a relation counted under `_count` — is classified at every
+depth against the model that **owns** the field, so
+`select: { posts: { where: { secretNote: … } } }` is refused by the rule
+that hides `Post.secretNote` rather than by a rule about the model being
+queried. A projection is prepared for writes too, so a nested filter in the
+tree a `create`, `update` or `delete` returns is classified alongside it.
+Where the statement is compiled rather than handed to Prisma, that nested
+`where` is rendered against the column itself rather than against the masked
+projection, and the classification happens before anything is compiled.
+
+Writes classify the filter they select rows with, at the root and nested
+inside `data`. `updateMany` and `deleteMany` disclosed by count what a read
+could not disclose by value; their `where` is now classified like a read's,
+and so is the `where` of a nested `update`, `updateMany`, `upsert`,
+`delete`, `deleteMany`, `connect`, `disconnect`, `set` and
+`connectOrCreate`. The nested case was the sharper one: row verification
+runs **after** the statement, inside the transaction, so a matching row the
+caller may not write became a rollback rather than a change — telling the
+caller their filter matched and costing them nothing. Driven as a prefix
+search that recovered a hidden string in 155 queries with no row ever
+written. `update`, `delete` and `upsert` are classified too: a unique
+`where` may carry ordinary filters beside the unique field, and
+not-found-versus-success makes that the same search, so `upsert` is checked
+before it probes for the existing row. A field the caller may always read
+stays usable in every one of these positions.
+
+A filter key that names no field on the model is now refused rather than
+passed along. Under a blanket `can('read', 'Post')`, CASL answers `always`
+for any string it is handed, so an unknown key used to reach the query layer
+and be stopped there — the fail-closed behaviour was the query layer's,
+borrowed. It is now golem's own, checked against the model metadata, and it
+covers the fields named inside an `orderBy: { _relevance: { fields: […] } }`,
+which the collector previously stepped over entirely.
+
+`distinct` remains unclassified: returning one row per distinct value
+discloses the partition a hidden field induces over rows the caller can
+otherwise select, and combined with the right to insert rows it degrades to
+testing a whole value for equality. It is not a prefix search — no operator
+compares the hidden value against attacker input. Two smaller edges: a batch
+write discharges a conditional field against the **read** constraint while
+it selects rows with the write constraint, so an ability whose write reach
+exceeds its read reach can still count over the difference; and an ability
+that grants `update` without `read` can no longer filter an `updateMany` or
+`deleteMany` at all, since every field classifies as unreadable.
+
+Reach is worth stating plainly, because the generated GraphQL API is not the
+whole threat surface and in these cases is not the threat surface at all.
+Relation fields in the generated schema take no arguments and `WhereInput`
+omits relations, so a nested `where`/`orderBy`/`cursor`, a relation filter,
+`distinct` and `cursor` cannot be written through GraphQL. They are reachable
+through the generated programmatic client and through the engine directly,
+which is where these classifications earn their place. Compiled reads are the
+mirror image: only GraphQL asks for one, and the generated client hard-codes
+`compiled: false`, so a compiled nested filter is reachable only by calling
+the engine yourself.
+
+### A GraphQL context reused across requests is refused
+
+`@nestjs/apollo` accepts a static object as `GraphQLModule`'s `context`. It
+attaches the first request's `req` to that object and then hands the same
+object — still carrying the first caller's `req` — to every request that
+follows. Every later caller is served with the first caller's identity, and
+everything keyed on the context stops meaning "this request". The failure
+was silent: requests kept answering, with the wrong caller's rows.
+
+Golem now registers a middleware that stamps each HTTP request, and every
+generated root resolver and batched computed field verifies that the
+context it is handed belongs to the request being served. A context that
+carries another request's `req`, or one context object observed across two
+requests, fails the operation with an error naming the fix. The boundary is
+observed from the Nest request lifecycle, not inferred from resolver
+arguments, so graphql-ws multiplexing, long-lived subscriptions, and
+batched HTTP requests are untouched: their operations run either inside
+the one request they belong to or outside any HTTP request, where the
+check stands down.
+
+The fix is one line — `context` must be a function, so each request builds
+its own object:
+
+```diff
+- context: {},
++ context: ({ req }) => ({ req }),
+```
+
+An application that genuinely means to share one context across requests
+can say so: mark the shared object with `[golemSharedContext]: true`, using
+the `golemSharedContext` symbol exported from `@eleven-am/golem` (it is
+`Symbol.for('@eleven-am/golem.shared-context')`, so no import is required).
+The check leaves a marked context alone, and what that sharing does to
+authorization and caching becomes that application's own trade-off.
 
 ### MySQL is not supported
 

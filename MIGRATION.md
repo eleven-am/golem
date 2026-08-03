@@ -185,7 +185,7 @@ GraphQLModule.forRootAsync<ApolloDriverConfig>({
 
 Nest disables guards, interceptors, and filters on field resolvers unless this option is enabled. Parameter decorators, pipes, request-scoped providers, guards, interceptors, and Golem exception mapping now run through Nest rather than a Golem-bound callback.
 
-For relation-backed computed fields, use a request-scoped DataLoader. Golem does not add a separate batching API.
+For relation-backed computed fields, declare `@BatchedComputedField` instead of `@ComputedField`: the method receives every parent key resolved in the same tick and returns a map from key to value, loaded once per request through the caller's own context. Existing `@ComputedField` declarations are unaffected.
 
 ## Optional SPA rendering package
 
