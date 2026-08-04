@@ -122,6 +122,52 @@ describe('forContext interactive transactions (e2e)', () => {
     await events.return?.();
   });
 
+  it('emits ordered batch events from the policy-aware forContext surface', async () => {
+    const selected = await prisma.post.findMany({
+      where: { title: { in: ['First post', 'Draft post'] } },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const received = selected.map(() => events.next());
+
+    await expect(
+      prisma.forContext(ctxFor('roy@example.com')).post.updateMany({
+        where: { id: { in: selected.map(({ id }) => id) } },
+        data: { published: true },
+      }),
+    ).resolves.toEqual({ count: selected.length });
+
+    await expect(Promise.all(received)).resolves.toEqual(selected.map(({ id }) => ({
+      value: { type: 'UPDATED', model: 'Post', id },
+      done: false,
+    })));
+    await events.return?.();
+  });
+
+  it('keeps a guarded upsert branch and its event inside the caller-owned transaction', async () => {
+    const events = eventBus.iterate(eventTopic('User'));
+    const nextEvent = events.next();
+
+    const created = await prisma.forContext(ctxFor('roy@example.com')).$transaction(async (tx) => {
+      const result = await tx.user.upsert({
+        where: { email: 'ambient-upsert@example.com' },
+        create: { email: 'ambient-upsert@example.com', name: 'created' },
+        update: { name: 'updated' },
+        select: { id: true },
+      });
+      await expect(Promise.race([nextEvent.then(() => 'published'), wait(25)]))
+        .resolves.toBe('waiting');
+      return result;
+    });
+
+    await expect(nextEvent).resolves.toMatchObject({
+      value: { type: 'CREATED', model: 'User', id: created.id },
+      done: false,
+    });
+    await events.return?.();
+  });
+
   it('exposes $transaction but not raw query escapes on the context-bound surface', async () => {
     const scoped = prisma.forContext(ctxFor('roy@example.com'));
     expect(typeof scoped.$transaction).toBe('function');

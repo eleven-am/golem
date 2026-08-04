@@ -4,9 +4,10 @@ export function emitClientModule(modelNames: readonly string[], clientImport: st
   const modelMap = modelNames.map((name) => `  ${lcFirst(name)}: '${name}',`).join('\n');
   const delegateUnion = modelNames.map((name) => `'${lcFirst(name)}'`).join(' | ');
 
-  return `import { Prisma, PrismaClient } from '${clientImport}';
+  return `import { AsyncLocalStorage } from 'node:async_hooks';
+import { Prisma, PrismaClient } from '${clientImport}';
 import { withBufferedEvents } from '@eleven-am/golem-core';
-import type { GolemEngineRef, GolemQueryInterceptor, ScopedQuery } from '@eleven-am/golem-core';
+import type { GolemBatchDelegate, GolemEngineRef, GolemQueryInterceptor, RelationGroupByRequest, RelationGroupByRow, ScopedQuery } from '@eleven-am/golem-core';
 
 export type GolemClientOptions = ConstructorParameters<typeof PrismaClient>[0];
 
@@ -27,22 +28,53 @@ const POLICY_OPS = {
   count: 'count',
   aggregate: 'aggregate',
   groupBy: 'groupBy',
+  relationGroupBy: 'relationGroupBy',
 } as const;
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
   const raw = new PrismaClient(options);
+  type TransactionState = { client: Record<string, unknown>; suppressBatchEvents: boolean };
+  const transactionContext = new AsyncLocalStorage<TransactionState>();
+  const delegateFor = (client: Record<string, unknown>, model: string) =>
+    client[model.charAt(0).toLowerCase() + model.slice(1)] as {
+      findUnique(args: unknown): Promise<unknown>;
+      findMany(args: unknown): Promise<Record<string, unknown>[]>;
+      updateManyAndReturn?(args: unknown): Promise<Record<string, unknown>[]>;
+      deleteMany(args: unknown): Promise<{ count: number }>;
+    };
   const instrumented = raw.$extends({
     query: {
       $allModels: {
         $allOperations({ model, operation, args, query }) {
-          const delegate = model ? raw[model.charAt(0).toLowerCase() + model.slice(1) as keyof typeof raw] : undefined;
+          const state = transactionContext.getStore();
+          const activeClient = (state?.client ?? raw) as unknown as Record<string, unknown>;
+          const delegate = model ? delegateFor(activeClient, model) : undefined;
           return interceptor({
             model,
             operation,
             args,
             query: query as (value: unknown) => Promise<unknown>,
             findExisting: model
-              ? (where, select) => (delegate as unknown as { findUnique(args: unknown): Promise<unknown> }).findUnique({ where, select })
+              ? (where, select) => delegate!.findUnique({ where, select })
+              : undefined,
+            batch: model
+              ? {
+                  suppressed: state?.suppressBatchEvents ?? false,
+                  run: async <T>(work: (delegate: GolemBatchDelegate) => Promise<T>) => {
+                    const current = transactionContext.getStore();
+                    const execute = (client: Record<string, unknown>) =>
+                      transactionContext.run(
+                        { client, suppressBatchEvents: true },
+                        () => work(delegateFor(client, model)),
+                      );
+                    if (current) return execute(current.client);
+                    return withBufferedEvents(() =>
+                      raw.$transaction((tx) =>
+                        execute(tx as unknown as Record<string, unknown>),
+                      ),
+                    );
+                  },
+                }
               : undefined,
           });
         },
@@ -50,10 +82,18 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
     },
   });
   const transaction = instrumented.$transaction.bind(instrumented);
-  const commitAwareTransaction = ((...args: unknown[]) =>
-    withBufferedEvents(() =>
-      (transaction as unknown as (...transactionArgs: unknown[]) => Promise<unknown>)(...args),
-    )) as typeof instrumented.$transaction;
+  const commitAwareTransaction = ((first: unknown, ...rest: unknown[]) =>
+    withBufferedEvents(() => {
+      const invoke = transaction as unknown as (...transactionArgs: unknown[]) => Promise<unknown>;
+      if (typeof first !== 'function') return invoke(first, ...rest);
+      return invoke(
+        (tx: Record<string, unknown>) => transactionContext.run(
+          { client: tx, suppressBatchEvents: false },
+          () => (first as (client: Record<string, unknown>) => Promise<unknown>)(tx),
+        ),
+        ...rest,
+      );
+    })) as typeof instrumented.$transaction;
   return instrumented.$extends({
     client: {
       $transaction: commitAwareTransaction,
@@ -63,9 +103,11 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
 
 export type GolemBaseClient = ReturnType<typeof createBaseClient>;
 
+type PrismaPolicyOperation = Exclude<keyof typeof POLICY_OPS, 'relationGroupBy'>;
+
 type SupportedArgs<
   TDelegate,
-  TOperation extends keyof typeof POLICY_OPS,
+  TOperation extends PrismaPolicyOperation,
   TKeys extends PropertyKey,
 > = Pick<
   Prisma.Args<TDelegate, TOperation>,
@@ -109,6 +151,9 @@ type ContextBoundDelegate<TDelegate> = {
   groupBy<TArgs extends SupportedArgs<TDelegate, 'groupBy', 'where' | 'orderBy' | 'by' | 'having' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>(
     args: Prisma.SelectSubset<TArgs, SupportedArgs<TDelegate, 'groupBy', 'where' | 'orderBy' | 'by' | 'having' | 'take' | 'skip' | '_count' | '_avg' | '_sum' | '_min' | '_max'>>,
   ): Promise<Prisma.Result<TDelegate, TArgs, 'groupBy'>>;
+  relationGroupBy<TDimension extends string = string, TMeasure extends string = string>(
+    args: Omit<RelationGroupByRequest<TDimension, TMeasure>, 'model' | 'context'>,
+  ): Promise<RelationGroupByRow<TDimension, TMeasure>[]>;
 };
 
 export type GolemModelName = (typeof GOLEM_MODELS)[keyof typeof GOLEM_MODELS];

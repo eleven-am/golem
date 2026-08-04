@@ -6,6 +6,7 @@ import { AuthorizationModule } from '@eleven-am/authorizer';
 import { GolemAuthorizationAdapter } from '@eleven-am/golem-authorizer';
 import { GOLEM_GRAPHQL, GolemModule } from '@eleven-am/golem';
 import type { GolemGraphQLArtifacts } from '@eleven-am/golem';
+import type { GolemBatchEventOptions } from '@eleven-am/golem';
 import { DemoAuthenticator, DemoRules } from './auth';
 import { getDatamodel } from './generated/golem';
 import { GolemPrismaService } from './generated/golem/client';
@@ -16,11 +17,17 @@ import { SearchPostsAccessModule } from './search-posts.guard';
 
 const DEFAULT_DATABASE_URL = 'file:./prisma/dev.db';
 
+export interface DemoGolemOptions {
+  batchEvents?: GolemBatchEventOptions;
+  postTagSubscriptions?: boolean;
+}
+
 @Module({})
 export class AppModule {
   static forDatabase(
     databaseUrl: string = DEFAULT_DATABASE_URL,
     graphql: Partial<ApolloDriverConfig> = {},
+    golem: DemoGolemOptions = {},
   ): DynamicModule {
     return {
       module: AppModule,
@@ -44,15 +51,21 @@ export class AppModule {
               subscriptions: true,
               aggregations: {
                 dimensions: ['authorId', 'published', 'type'],
+                relationDimensions: {
+                  authorEmail: { path: ['author'], field: 'email' },
+                },
+                measures: ['viewCount', 'rating', 'title', 'createdAt'],
+                maxIntermediateGroups: 100,
                 maxGroups: 50,
               },
             },
             Profile: { operations: ['findOne', 'findMany', 'create'] },
-            PostTag: false,
+            PostTag: golem.postTagSubscriptions ? { subscriptions: true } : false,
             Play: false,
           },
           extensions: [UserExtension, UserCountsExtension],
           authorization: GolemAuthorizationAdapter,
+          batchEvents: golem.batchEvents,
         }),
         GraphQLModule.forRootAsync<ApolloDriverConfig>({
           driver: ApolloDriver,

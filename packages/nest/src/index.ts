@@ -14,9 +14,11 @@ import { DiscoveryModule, DiscoveryService } from '@nestjs/core';
 import {
   AuthorizationProvider,
   GolemDefaults,
+  GolemBatchEventOptions,
   GolemEngine,
   GolemEngineRef,
   GolemQueryInterceptor,
+  GolemSubscriptionOptions,
   DatamodelDocument,
   HookRegistry,
   ModelsConfig,
@@ -24,6 +26,7 @@ import {
   createGolemEngine,
   createEventPublisher,
   subscribableModels,
+  validateUpsertGuardInfrastructure,
 } from '@eleven-am/golem-core';
 import { PubSub, PubSubEngine } from 'graphql-subscriptions';
 import type { GraphQLSchema } from 'graphql';
@@ -67,6 +70,8 @@ export interface GolemModuleOptions<TModels> {
   extensions?: Type<object>[];
   importedExtensions?: Array<Type<object> | string | symbol>;
   authorization?: Type<AuthorizationProvider> | string | symbol;
+  subscription?: GolemSubscriptionOptions;
+  batchEvents?: GolemBatchEventOptions;
 }
 
 export interface GolemModuleAsyncOptions<TModels>
@@ -81,10 +86,18 @@ interface ConnectableClient {
 }
 
 class GolemClientLifecycle implements OnModuleInit, OnModuleDestroy {
-  constructor(private readonly client: ConnectableClient) {}
+  constructor(
+    private readonly client: ConnectableClient,
+    private readonly validateUpsertGuard: boolean,
+  ) {}
 
-  onModuleInit(): Promise<void> {
-    return this.client.$connect();
+  async onModuleInit(): Promise<void> {
+    await this.client.$connect();
+    if (this.validateUpsertGuard) {
+      await validateUpsertGuardInfrastructure(
+        this.client as unknown as Record<string, unknown>,
+      );
+    }
   }
 
   onModuleDestroy(): Promise<void> {
@@ -174,6 +187,7 @@ export class GolemModule implements NestModule {
               datamodel: options.datamodel,
               eventBus,
               models: subscribableModels(options),
+              batch: options.batchEvents,
             });
             return new (options.client as unknown as GeneratedGolemClient)(
               clientOptions,
@@ -185,7 +199,8 @@ export class GolemModule implements NestModule {
         },
         {
           provide: GOLEM_CLIENT_LIFECYCLE,
-          useFactory: (client: ConnectableClient) => new GolemClientLifecycle(client),
+          useFactory: (client: ConnectableClient) =>
+            new GolemClientLifecycle(client, options.authorization !== undefined),
           inject: [options.client],
         },
         {
@@ -257,6 +272,7 @@ export class GolemModule implements NestModule {
               computedFields: specs.computedFields,
               customOperations: specs.customOperations,
               authorization,
+              subscription: options.subscription,
             });
           },
           inject: [

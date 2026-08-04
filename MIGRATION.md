@@ -6,6 +6,87 @@ things do not: they fail on traffic that works today. Check those first.
 `@eleven-am/golem-queue` and `@eleven-am/golem-render` carry no golem
 dependency and did not change. Leave them where they are.
 
+## Hardening upgrade: required schema and client changes
+
+This upgrade closes the context-aware upsert race, bounds subscription and batch-event memory, exposes compound identities through GraphQL, makes masked output nullability truthful, and adds configured relation dimensions. Apply these steps before deploying the regenerated client.
+
+### 1. Add the internal upsert guard migration
+
+Every database used by an authorization-enabled Golem application must contain this reserved model:
+
+```prisma
+model GolemUpsertGuard {
+  stripe Int    @id
+  seq    BigInt @default(0)
+
+  @@map("_golem_upsert_guard")
+}
+```
+
+Copy the model from `packages/core/prisma/golem-core.prisma` or apply the provider SQL in `packages/core/prisma/migrations/sqlite/001_golem_upsert_guard.sql` or `packages/core/prisma/migrations/postgresql/001_golem_upsert_guard.sql`, then run your normal Prisma migration and generation workflow. Golem reserves `GolemUpsertGuard`, removes it from generated GraphQL and `forContext` model surfaces, and validates the delegate/table during Nest startup. Missing infrastructure now fails deployment rather than waiting for the first upsert.
+
+The table stays bounded by `defaults.upsertGuardStripes` (4,096 by default). It stores only a stripe and monotonic sequence; model names and unique selector values are hashed and never persisted. All participating context-aware upserts for the same canonical model/selector serialize before the policy branch probe. Plain Prisma/external writers and differently addressed selectors do not participate. A caller-owned SQLite transaction that established an incompatible snapshot before the guard write now returns stable `CONFLICT`; retry only by repeating the complete transaction when that is safe.
+
+### 2. Regenerate GraphQL and TypeScript clients
+
+With authorization and `checkReadFields` enabled, every visible scalar/enum model output is now nullable, including required database columns. Inputs retain their existing Prisma requiredness, lists keep their list/item structure, and event identities stay non-null. Re-run GraphQL codegen and fix consumers that assumed a selected scalar could never be `null`.
+
+Compound `@@id` and `@@unique` selectors now appear as Prisma-shaped nested input objects across find-one, update, delete, upsert, connect, connect-or-create, and nested update/delete. A composite subscription event changes `id` from an unsupported scalar to a model-specific object in declared key order:
+
+```graphql
+subscription {
+  postTagEvents {
+    type
+    id { postId tagId }
+  }
+}
+```
+
+Single-column event schemas are unchanged. Regenerate typed operations for any newly exposed composite model or subscription.
+
+### 3. Set operational event bounds deliberately
+
+One reference-counted iterator now serves each model/schema's local subscribers. Every subscriber has a bounded queue (`subscription.queueCapacity`, default 64). A full queue disconnects that subscriber with `GOLEM_SUBSCRIPTION_OVERFLOW`; events are not dropped. Wire `subscription.observer` if queue depth, suppressions, evaluation latency, delivery counts, or overflow must feed your metrics system.
+
+Top-level `updateMany` and `deleteMany` now publish deterministic per-row events for subscribable models. The generated client performs the auxiliary work on the active transaction, buffers until commit, and discards on rollback. Defaults are 1,000 rows and 1 MiB encoded payload:
+
+```ts
+GolemModule.forRoot({
+  // ...
+  batchEvents: {
+    maxRows: 1_000,
+    maxPayloadBytes: 1_048_576,
+  },
+  subscription: {
+    queueCapacity: 64,
+    observer,
+  },
+});
+```
+
+Over-limit batches reject before mutation and never truncate. Eventful `updateMany` rejects writes to primary-key components. `deleteMany` snapshots and deletes the exact selected identities and rolls back on a concurrency mismatch. Nested batches and out-of-process writes are still not captured. Publication is commit-aware but neither durable nor exactly-once: a process crash after commit and before publication can lose events.
+
+### 4. Configure relation dimensions explicitly
+
+Prisma-shaped `groupBy` is unchanged. A model with `relationDimensions` gains a separate `<models>RelationGrouped` GraphQL field and the separately typed `forContext(ctx).model.relationGroupBy()` method (including its transaction view and the engine):
+
+```ts
+aggregations: {
+  dimensions: ['albumId'],
+  relationDimensions: {
+    artistCountry: {
+      path: ['track', 'primaryArtist'],
+      field: 'country',
+    },
+  },
+  measures: ['msPlayed'],
+  maxIntermediateGroups: 10_000,
+  maxGroups: 100,
+}
+```
+
+Only one explicit forward to-one path is accepted. Reverse-only, to-many/many-to-many, multiple paths, related-model measures, hidden/write-only keys, and unreadable terminal fields fail closed. Root facts whose terminal target is absent or policy-invisible use inner-join semantics and do not contribute. Final `having`, ordering, `skip`, and `take` run after merging; averages are reconstructed from sum/non-null count; the complete first-phase set is capped before pagination. Keep `$scoped()` for shapes outside these constraints.
+
 ## Check these four before you deploy
 
 **1. Your GraphQL `context` must be a function.**
@@ -355,9 +436,9 @@ Generated sum, average, minimum, and maximum fields now use separate output obje
 
 The new `Decimal` scalar also enables ordinary Decimal model fields. It serializes Prisma Decimal values exactly as strings.
 
-## Review context-aware upsert retries
+## Review context-aware upsert participation
 
-`forContext().model.upsert()` performs a policy-scoped branch probe and then runs either the create or update pipeline so exactly that branch's hooks and verification execute. It is not Prisma's atomic native upsert. Concurrent missing-row writers can race; a unique race is reported as Golem `CONFLICT`. Retry only when repeating the entire operation is safe.
+`forContext().model.upsert()` now acquires the bounded internal guard before its policy-scoped branch probe, then runs exactly one create or update pipeline so that branch's hooks and verification execute once. Apply the required guard migration described above. Retry a stable SQLite ambient-snapshot `CONFLICT` only when repeating the complete transaction is safe. Plain Prisma/external writers and differently addressed unique selectors do not participate in this serialization guarantee.
 
 ## Queue validation changes
 

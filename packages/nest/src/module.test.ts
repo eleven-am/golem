@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Injectable } from '@nestjs/common';
 import type { MiddlewareConsumer } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
-import type { DatamodelDocument } from '@eleven-am/golem-core';
+import type { AuthorizationProvider, DatamodelDocument } from '@eleven-am/golem-core';
 import { BeforeCreate, ComputedField, GolemHooks } from './decorators';
 import { GolemModule } from './index';
 import { golemRequestBoundary } from './request-boundary';
@@ -51,7 +51,30 @@ class FakeClient {
   async $disconnect(): Promise<void> {}
 }
 
+@Injectable()
+class FakeAuthorization implements AuthorizationProvider {
+  async authorize(): Promise<void> {}
+  async constrain(): Promise<unknown> { return {}; }
+  async check(): Promise<boolean> { return true; }
+  async checkField(): Promise<boolean> { return true; }
+  async classifyFields(): Promise<Record<string, { access: 'always' }>> { return {}; }
+}
+
 describe('GolemModule extension validation', () => {
+  it('fails startup when authorization needs serialized upsert but the guard model is absent', async () => {
+    const moduleRef = await Test.createTestingModule({
+      imports: [GolemModule.forRoot({
+        client: FakeClient,
+        datamodel,
+        authorization: FakeAuthorization,
+      })],
+    }).compile();
+
+    await expect(moduleRef.init()).rejects.toThrow(
+      'Serialized context-aware upsert requires the GolemUpsertGuard model and migration',
+    );
+  });
+
   it('fails during module compilation when one extension targets multiple models', async () => {
     @Injectable()
     class InvalidExtension {

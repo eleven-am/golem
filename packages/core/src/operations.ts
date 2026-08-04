@@ -38,6 +38,12 @@ import { decodeAggregateRow } from './compiled-aggregate-decode';
 import { runCompiledRead } from './compiled-read-run';
 import { GolemHookOperation, HookRegistry } from './hooks';
 import { lcFirst } from './naming';
+import { batchEventRows } from './publisher';
+import {
+  DEFAULT_UPSERT_GUARD_STRIPES,
+  acquireUpsertGuard,
+  validateUpsertGuardStripes,
+} from './upsert-guard';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { NestedWriteKind, NestedWriteOperation, planNestedWrites } from './nested-writes';
 import {
@@ -55,6 +61,19 @@ import {
   resolveScopedFieldPolicy,
 } from './scoped';
 import { PrismaSelect } from './select';
+import {
+  addAggregationValues,
+  compareAggregationValues,
+  divideAggregationValue,
+  matchesAggregationFilter,
+  relationTuple,
+  relationTupleToken,
+  relationTupleWhere,
+  selectedTrueFields,
+  type RelationAggregationPlan,
+  type RelationGroupByRequest,
+  type RelationOrderBy,
+} from './relation-aggregation';
 import {
   VerifyContext,
   planVerification,
@@ -197,6 +216,17 @@ export interface GroupByRequest {
   compiled?: boolean;
 }
 
+interface RelationAggregateAccumulator {
+  key: Record<string, unknown>;
+  count: number;
+  countBy: Record<string, number>;
+  sums: Record<string, unknown>;
+  averageSums: Record<string, unknown>;
+  averageCounts: Record<string, number>;
+  mins: Record<string, unknown>;
+  maxes: Record<string, unknown>;
+}
+
 export interface GolemOpScope {
   client: Record<string, any>;
   ambient: boolean;
@@ -220,6 +250,7 @@ export interface GolemEngineTransaction {
   count(request: CountRequest): Promise<number>;
   aggregate(request: AggregateRequest): Promise<unknown>;
   groupBy(request: GroupByRequest): Promise<unknown[]>;
+  relationGroupBy(request: RelationGroupByRequest): Promise<unknown[]>;
   scoped(request: Omit<ScopedRequest, 'context'>): ScopedQuery;
 }
 
@@ -233,6 +264,8 @@ export interface GolemEngineOptions {
   checkReadFields?: boolean;
   provider?: string;
   hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;
+  upsertGuardStripes?: number;
+  relationAggregations?: ReadonlyMap<string, RelationAggregationPlan>;
 }
 
 export interface GolemEngineRef {
@@ -372,6 +405,8 @@ export class GolemEngine {
   private readonly models: readonly DatamodelModel[];
   private readonly authorizationSessions = new WeakMap<object, AuthorizationProvider>();
   private readonly compiledReadListeners = new Set<(event: CompiledReadEvent) => void>();
+  private readonly upsertGuardStripes: number;
+  private readonly relationAggregations: ReadonlyMap<string, RelationAggregationPlan>;
 
   constructor(
     private readonly client: Record<string, any>,
@@ -387,6 +422,10 @@ export class GolemEngine {
     this.takeLimits = options.takeLimits ?? new Map();
     this.groupLimits = options.groupLimits ?? new Map();
     this.authorization = options.authorization;
+    this.relationAggregations = options.relationAggregations ?? new Map();
+    this.upsertGuardStripes = validateUpsertGuardStripes(
+      options.upsertGuardStripes ?? DEFAULT_UPSERT_GUARD_STRIPES,
+    );
     this.maxDepth = options.maxDepth ?? 5;
     this.checkWriteResults = options.checkWriteResults ?? (this.authorization !== undefined);
     this.checkReadFields = options.checkReadFields ?? (this.authorization !== undefined);
@@ -956,7 +995,7 @@ export class GolemEngine {
                   ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
                 })
               : delegate.findFirst({
-                  where: mergeConstraint(req.where, constraint),
+                  where: mergeConstraint(this.filterableWhere(req.model, req.where), constraint),
                   select: prepared.select,
                   include: prepared.include,
                   ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
@@ -1197,11 +1236,20 @@ export class GolemEngine {
           select: scalars,
         })) as Record<string, unknown>[];
         const identityWhere = this.pkBatchWhere(req.model, beforeRows);
-        await txDelegate.updateMany({ where: identityWhere, data: req.data });
-        const afterRows = (await txDelegate.findMany({
-          where: identityWhere,
-          select: scalars,
-        })) as Record<string, unknown>[];
+        const mutationResult = await txDelegate.updateMany({ where: identityWhere, data: req.data });
+        const returnedRows = batchEventRows(mutationResult);
+        const canReuseReturnedRows =
+          returnedRows !== undefined &&
+          Object.values(scalars).every((selection) => selection === true) &&
+          returnedRows.every((row) =>
+            Object.keys(scalars).every((field) => Object.prototype.hasOwnProperty.call(row, field)),
+          );
+        const afterRows = canReuseReturnedRows
+          ? [...returnedRows]
+          : (await txDelegate.findMany({
+              where: identityWhere,
+              select: scalars,
+            })) as Record<string, unknown>[];
         const afterById = new Map(
           afterRows.map((row) => [this.pkIdentity(req.model, row), row] as const),
         );
@@ -1247,6 +1295,45 @@ export class GolemEngine {
   }
 
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
+    if (!this.enforced(request.context)) {
+      return this.upsertBranch(request, scope);
+    }
+    if (scope?.ambient) {
+      await acquireUpsertGuard(
+        scope.client,
+        request.model,
+        request.where,
+        this.upsertGuardStripes,
+        this.provider,
+      );
+      return this.upsertBranch(request, scope);
+    }
+    const transaction = (this.client as {
+      $transaction?: (run: (tx: Record<string, any>) => Promise<unknown>) => Promise<unknown>;
+    }).$transaction;
+    if (typeof transaction !== 'function') {
+      throw new GolemValidationError(
+        'Serialized context-aware upsert requires a Prisma client exposing $transaction',
+      );
+    }
+    return withBufferedEvents(() =>
+      this.run(request.model, () =>
+        transaction.call(this.client, async (tx) => {
+          // This must remain the first statement on the engine-owned transaction.
+          await acquireUpsertGuard(
+            tx,
+            request.model,
+            request.where,
+            this.upsertGuardStripes,
+            this.provider,
+          );
+          return this.upsertBranch(request, { client: tx, ambient: true });
+        }),
+      ),
+    );
+  }
+
+  private async upsertBranch(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     await this.classifyFilterFields(request.model, request.context, {
       where: this.filterableWhere(request.model, request.where),
@@ -1412,6 +1499,482 @@ export class GolemEngine {
     return (await this.run(request.model, () => delegate.groupBy(args))) as unknown[];
   }
 
+  async relationGroupBy(
+    request: RelationGroupByRequest,
+    scope?: GolemOpScope,
+  ): Promise<unknown[]> {
+    const plan = this.relationAggregations.get(request.model);
+    if (!plan) {
+      throw new GolemValidationError(
+        `Relation aggregation is not configured for ${request.model}`,
+      );
+    }
+    const by = [...request.by];
+    if (by.length === 0) {
+      throw new GolemValidationError(
+        `relationGroupBy on ${request.model} requires at least one grouping key`,
+      );
+    }
+    if (new Set(by).size !== by.length) {
+      throw new GolemValidationError(
+        `relationGroupBy on ${request.model} cannot repeat grouping keys`,
+      );
+    }
+    const localDimensions = new Map(plan.dimensions.map((field) => [field.name, field]));
+    const allowedDimensions = new Set([
+      ...localDimensions.keys(),
+      ...plan.relationDimensions.keys(),
+    ]);
+    for (const name of by) {
+      if (!allowedDimensions.has(name)) {
+        throw new GolemValidationError(
+          `Cannot group relation aggregation on ${request.model} by unconfigured dimension ${name}`,
+        );
+      }
+    }
+    const relationBy = by.filter((name) => plan.relationDimensions.has(name));
+    if (relationBy.length === 0) {
+      throw new GolemValidationError(
+        `relationGroupBy on ${request.model} requires at least one configured relation dimension`,
+      );
+    }
+    assertPageArgument(request.model, 'take', request.take);
+    assertPageArgument(request.model, 'skip', request.skip);
+    if (request.take !== undefined && request.take > plan.maxGroups) {
+      throw new GolemValidationError(
+        `relationGroupBy on ${request.model} allows take of at most ${plan.maxGroups}`,
+      );
+    }
+
+    const configuredMeasures = new Set(plan.measures.map((field) => field.name));
+    const requested = {
+      sum: selectedTrueFields(request._sum),
+      avg: selectedTrueFields(request._avg),
+      min: selectedTrueFields(request._min),
+      max: selectedTrueFields(request._max),
+    };
+    const internal = {
+      sum: new Set(requested.sum),
+      avg: new Set(requested.avg),
+      min: new Set(requested.min),
+      max: new Set(requested.max),
+    };
+    const havingSpec = request.having as Record<string, unknown> | undefined;
+    for (const [field, value] of Object.entries(havingSpec ?? {})) {
+      if (['count', 'sum', 'avg', 'min', 'max'].includes(field)) continue;
+      if (!configuredMeasures.has(field)) {
+        throw new GolemValidationError(
+          `Cannot apply having to unconfigured measure ${request.model}.${field}`,
+        );
+      }
+      if (!value || typeof value !== 'object' || Array.isArray(value)) {
+        throw new GolemValidationError(
+          `Relation aggregation having for ${request.model}.${field} must select an aggregate`,
+        );
+      }
+      for (const operator of Object.keys(value as Record<string, unknown>)) {
+        if (!['_sum', '_avg', '_min', '_max'].includes(operator)) {
+          throw new GolemValidationError(
+            `Unsupported relation aggregation having operator ${operator}`,
+          );
+        }
+      }
+    }
+    for (const kind of ['sum', 'avg', 'min', 'max'] as const) {
+      const fields = havingSpec?.[kind] as Record<string, unknown> | undefined;
+      for (const field of Object.keys(fields ?? {})) internal[kind].add(field);
+    }
+    for (const [field, operations] of Object.entries(havingSpec ?? {})) {
+      if (!operations || typeof operations !== 'object') continue;
+      for (const operator of Object.keys(operations as Record<string, unknown>)) {
+        const kind = operator.slice(1) as keyof typeof internal;
+        if (operator.startsWith('_') && kind in internal) internal[kind].add(field);
+      }
+    }
+    const requestedOrder = request.orderBy
+      ? Array.isArray(request.orderBy) ? request.orderBy : [request.orderBy]
+      : [];
+    for (const entry of requestedOrder as readonly RelationOrderBy[]) {
+      for (const [field, direction] of Object.entries(entry.key ?? {})) {
+        if (!by.includes(field)) {
+          throw new GolemValidationError(
+            `Cannot order relation aggregation on ${request.model} by key ${field} because it is not in by`,
+          );
+        }
+        if (direction !== 'asc' && direction !== 'desc') {
+          throw new GolemValidationError(
+            `Invalid relation aggregation order direction for ${field}`,
+          );
+        }
+      }
+      for (const kind of ['sum', 'avg', 'min', 'max'] as const) {
+        for (const [field, direction] of Object.entries(entry[kind] ?? {})) {
+          if (direction !== 'asc' && direction !== 'desc') {
+            throw new GolemValidationError(
+              `Invalid relation aggregation order direction for ${kind}.${field}`,
+            );
+          }
+          internal[kind].add(field);
+        }
+      }
+    }
+    const countFields =
+      request._count && typeof request._count === 'object'
+        ? selectedTrueFields(request._count).filter((field) => field !== '_all')
+        : [];
+    for (const field of [
+      ...internal.sum,
+      ...internal.avg,
+      ...internal.min,
+      ...internal.max,
+      ...countFields,
+    ]) {
+      if (!configuredMeasures.has(field)) {
+        throw new GolemValidationError(
+          `Cannot aggregate unconfigured measure ${request.model}.${field}`,
+        );
+      }
+    }
+    const measureFields = new Map(plan.measures.map((field) => [field.name, field]));
+    for (const kind of ['sum', 'avg'] as const) {
+      for (const field of internal[kind]) {
+        if (!['Int', 'Float', 'BigInt', 'Decimal'].includes(measureFields.get(field)!.type)) {
+          throw new GolemValidationError(
+            `Cannot ${kind} non-numeric relation aggregation measure ${request.model}.${field}`,
+          );
+        }
+      }
+    }
+    for (const kind of ['min', 'max'] as const) {
+      for (const field of internal[kind]) {
+        if (!['Int', 'Float', 'BigInt', 'Decimal', 'DateTime', 'String'].includes(
+          measureFields.get(field)!.type,
+        )) {
+          throw new GolemValidationError(
+            `Cannot ${kind} unordered relation aggregation measure ${request.model}.${field}`,
+          );
+        }
+      }
+    }
+
+    const rootBy = [
+      ...by.filter((name) => localDimensions.has(name)),
+      ...plan.path[0]!.fromFields,
+    ].filter((name, index, fields) => fields.indexOf(name) === index);
+    const rootSumFields = [...new Set([...internal.sum, ...internal.avg])];
+    const rootCountFields = [...new Set([...countFields, ...internal.avg])];
+    const rootCount = Object.fromEntries([
+      ['_all', true],
+      ...rootCountFields.map((field) => [field, true] as const),
+    ]);
+    const relationReferences: FieldReferences = new Map();
+    for (const step of plan.path) {
+      for (const name of step.fromFields) {
+        referenceField(relationReferences, step.sourceModel, name);
+      }
+      for (const name of step.toFields) {
+        referenceField(relationReferences, step.targetModel, name);
+      }
+    }
+    const terminalModel = plan.path[plan.path.length - 1]!.targetModel;
+    for (const name of relationBy) {
+      referenceField(
+        relationReferences,
+        terminalModel,
+        plan.relationDimensions.get(name)!.field.name,
+      );
+    }
+    await this.classifyReferencedFields(
+      request.context,
+      relationReferences,
+      'group',
+    );
+    const rootRows = (await this.groupBy(
+      {
+        model: request.model,
+        by: rootBy,
+        where: request.where,
+        orderBy: rootBy.map((field) => ({ [field]: 'asc' })),
+        take: plan.maxIntermediateGroups + 1,
+        _sum:
+          rootSumFields.length > 0
+            ? Object.fromEntries(rootSumFields.map((field) => [field, true]))
+            : undefined,
+        _min: internal.min.size > 0
+          ? Object.fromEntries([...internal.min].map((field) => [field, true]))
+          : undefined,
+        _max: internal.max.size > 0
+          ? Object.fromEntries([...internal.max].map((field) => [field, true]))
+          : undefined,
+        _count: rootCount,
+        context: request.context,
+      },
+      scope,
+    )) as Record<string, unknown>[];
+    if (rootRows.length > plan.maxIntermediateGroups) {
+      throw new GolemValidationError(
+        `relationGroupBy on ${request.model} matched more than ${plan.maxIntermediateGroups} intermediate groups`,
+      );
+    }
+
+    type ReachedFact = {
+      root: Record<string, unknown>;
+      key: readonly unknown[];
+      terminal?: Record<string, unknown>;
+    };
+    let reached: ReachedFact[] = rootRows
+      .map((root) => ({ root, key: relationTuple(root, plan.path[0]!.fromFields) }))
+      .filter((fact) => fact.key.every((value) => value !== null && value !== undefined));
+
+    for (let index = 0; index < plan.path.length; index += 1) {
+      const step = plan.path[index]!;
+      const next = plan.path[index + 1];
+      const selectNames = new Set(step.toFields);
+      if (next) {
+        for (const name of next.fromFields) selectNames.add(name);
+      } else {
+        for (const name of relationBy) {
+          selectNames.add(plan.relationDimensions.get(name)!.field.name);
+        }
+      }
+      const uniqueKeys = new Map<string, readonly unknown[]>();
+      for (const fact of reached) uniqueKeys.set(relationTupleToken(fact.key), fact.key);
+      const targets: Record<string, unknown>[] = [];
+      const keys = [...uniqueKeys.values()];
+      const constraint = await this.constraintFor('read', step.targetModel, request.context);
+      const delegate = this.delegate(step.targetModel, scope?.client);
+      for (let offset = 0; offset < keys.length; offset += 250) {
+        const slice = keys.slice(offset, offset + 250);
+        const where = {
+          OR: slice.map((key) => relationTupleWhere(step.toFields, key)),
+        };
+        const rows = (await this.run(step.targetModel, () =>
+          delegate.findMany({
+            where: mergeConstraint(where, constraint),
+            select: Object.fromEntries([...selectNames].map((name) => [name, true])),
+            orderBy: step.toFields.map((field) => ({ [field]: 'asc' })),
+          }),
+        )) as Record<string, unknown>[];
+        targets.push(...rows);
+      }
+      const targetsByKey = new Map(
+        targets.map((row) => [
+          relationTupleToken(relationTuple(row, step.toFields)),
+          row,
+        ]),
+      );
+      reached = reached.flatMap((fact): ReachedFact[] => {
+        const target = targetsByKey.get(relationTupleToken(fact.key));
+        if (!target) return [];
+        if (!next) return [{ ...fact, terminal: target }];
+        const key = relationTuple(target, next.fromFields);
+        return key.every((value) => value !== null && value !== undefined)
+          ? [{ ...fact, key }]
+          : [];
+      });
+    }
+
+    const groups = new Map<string, RelationAggregateAccumulator>();
+    for (const fact of reached) {
+      const key: Record<string, unknown> = {};
+      for (const name of by) {
+        key[name] = localDimensions.has(name)
+          ? fact.root[name]
+          : fact.terminal![plan.relationDimensions.get(name)!.field.name];
+      }
+      const token = relationTupleToken(by.map((name) => key[name]));
+      let aggregate = groups.get(token);
+      if (!aggregate) {
+        aggregate = {
+          key,
+          count: 0,
+          countBy: {},
+          sums: {},
+          averageSums: {},
+          averageCounts: {},
+          mins: {},
+          maxes: {},
+        };
+        groups.set(token, aggregate);
+      }
+      const rowCount = fact.root._count as Record<string, number>;
+      aggregate.count += rowCount._all ?? 0;
+      for (const field of countFields) {
+        aggregate.countBy[field] = (aggregate.countBy[field] ?? 0) + (rowCount[field] ?? 0);
+      }
+      const sums = (fact.root._sum ?? {}) as Record<string, unknown>;
+      for (const field of internal.sum) {
+        aggregate.sums[field] = addAggregationValues(aggregate.sums[field], sums[field]);
+      }
+      for (const field of internal.avg) {
+        aggregate.averageSums[field] = addAggregationValues(
+          aggregate.averageSums[field],
+          sums[field],
+        );
+        aggregate.averageCounts[field] =
+          (aggregate.averageCounts[field] ?? 0) + (rowCount[field] ?? 0);
+      }
+      const mins = (fact.root._min ?? {}) as Record<string, unknown>;
+      const maxes = (fact.root._max ?? {}) as Record<string, unknown>;
+      for (const field of internal.min) {
+        const value = mins[field];
+        if (value !== null && value !== undefined && (
+          !(field in aggregate.mins) ||
+          aggregate.mins[field] === null ||
+          aggregate.mins[field] === undefined ||
+          compareAggregationValues(value, aggregate.mins[field]) < 0
+        )) aggregate.mins[field] = value;
+      }
+      for (const field of internal.max) {
+        const value = maxes[field];
+        if (value !== null && value !== undefined && (
+          !(field in aggregate.maxes) ||
+          aggregate.maxes[field] === null ||
+          aggregate.maxes[field] === undefined ||
+          compareAggregationValues(value, aggregate.maxes[field]) > 0
+        )) aggregate.maxes[field] = value;
+      }
+    }
+
+    const wantsCountObject =
+      request._count !== null && typeof request._count === 'object';
+    const wantsCountAll =
+      request._count === true ||
+      (wantsCountObject &&
+        (request._count as Readonly<Record<string, boolean>>)._all === true);
+    let rows = [...groups.values()].map((aggregate) => {
+      const row: Record<string, unknown> = { ...aggregate.key };
+      const averageValues = Object.fromEntries(
+        [...internal.avg].map((field) => [
+          field,
+          divideAggregationValue(
+            aggregate.averageSums[field],
+            aggregate.averageCounts[field] ?? 0,
+            { provider: this.provider, field: measureFields.get(field) },
+          ),
+        ]),
+      );
+      if (request._count === true) row._count = aggregate.count;
+      else if (wantsCountObject) {
+        row._count = {
+          ...(wantsCountAll ? { _all: aggregate.count } : {}),
+          ...aggregate.countBy,
+        };
+      }
+      if (requested.sum.length > 0) {
+        row._sum = Object.fromEntries(
+          requested.sum.map((field) => [field, aggregate.sums[field] ?? null]),
+        );
+      }
+      if (requested.avg.length > 0) {
+        row._avg = Object.fromEntries(
+          requested.avg.map((field) => [field, averageValues[field]]),
+        );
+      }
+      if (requested.min.length > 0) {
+        row._min = Object.fromEntries(
+          requested.min.map((field) => [field, aggregate.mins[field] ?? null]),
+        );
+      }
+      if (requested.max.length > 0) {
+        row._max = Object.fromEntries(
+          requested.max.map((field) => [field, aggregate.maxes[field] ?? null]),
+        );
+      }
+      Object.defineProperty(row, '__relationCount', {
+        value: aggregate.count,
+        enumerable: false,
+      });
+      Object.defineProperty(row, '__relationAggregates', {
+        value: {
+          sum: aggregate.sums,
+          avg: averageValues,
+          min: aggregate.mins,
+          max: aggregate.maxes,
+        },
+        enumerable: false,
+      });
+      return row;
+    });
+
+    const aggregateValue = (
+      row: Record<string, unknown>,
+      kind: string,
+      field?: string,
+    ): unknown => {
+      if (kind === 'count') return row.__relationCount;
+      return field === undefined
+        ? undefined
+        : ((row.__relationAggregates as Record<string, Record<string, unknown>>)[kind])?.[field];
+    };
+    const having = havingSpec;
+    if (having) {
+      rows = rows.filter((row) => {
+        if (having.count && !matchesAggregationFilter(row.__relationCount, having.count)) {
+          return false;
+        }
+        for (const kind of ['sum', 'avg', 'min', 'max']) {
+          const fields = having[kind] as Record<string, unknown> | undefined;
+          if (fields) {
+            for (const [field, filter] of Object.entries(fields)) {
+              if (!matchesAggregationFilter(aggregateValue(row, kind, field), filter)) return false;
+            }
+          }
+        }
+        for (const [field, operations] of Object.entries(having)) {
+          if (['count', 'sum', 'avg', 'min', 'max'].includes(field)) continue;
+          if (!operations || typeof operations !== 'object') continue;
+          for (const [operator, filter] of Object.entries(operations as Record<string, unknown>)) {
+            if (operator.startsWith('_') && !matchesAggregationFilter(
+              aggregateValue(row, operator.slice(1), field),
+              filter,
+            )) return false;
+          }
+        }
+        return true;
+      });
+    }
+
+    const orderEntries = requestedOrder;
+    const comparisons: Array<{
+      value: (row: Record<string, unknown>) => unknown;
+      direction: 'asc' | 'desc';
+    }> = [];
+    for (const entry of orderEntries as readonly RelationOrderBy[]) {
+      for (const [field, direction] of Object.entries(entry.key ?? {})) {
+        if (direction) comparisons.push({ value: (row) => row[field], direction });
+      }
+      if (entry.count) {
+        comparisons.push({ value: (row) => row.__relationCount, direction: entry.count });
+      }
+      for (const kind of ['sum', 'avg', 'min', 'max'] as const) {
+        for (const [field, direction] of Object.entries(entry[kind] ?? {})) {
+          if (!direction) continue;
+          comparisons.push({
+            value: (row) => aggregateValue(row, kind, field),
+            direction,
+          });
+        }
+      }
+    }
+    for (const name of by) {
+      comparisons.push({ value: (row) => row[name], direction: 'asc' });
+    }
+    rows.sort((left, right) => {
+      for (const comparison of comparisons) {
+        const result = compareAggregationValues(
+          comparison.value(left),
+          comparison.value(right),
+        );
+        if (result !== 0) return comparison.direction === 'asc' ? result : -result;
+      }
+      return 0;
+    });
+    const skip = request.skip ?? 0;
+    const take = request.take ?? plan.maxGroups;
+    return rows.slice(skip, skip + take);
+  }
+
   private async classifyReferencedFields(
     context: unknown,
     references: FieldReferences,
@@ -1523,6 +2086,7 @@ export class GolemEngine {
         count: (request) => this.count({ context, ...request }, scope),
         aggregate: (request) => this.aggregate({ context, ...request }, scope),
         groupBy: (request) => this.groupBy({ context, ...request }, scope),
+        relationGroupBy: (request) => this.relationGroupBy({ context, ...request }, scope),
         scoped: (request) => this.scoped({ context, ...request }, scope),
       };
       return fn(view);

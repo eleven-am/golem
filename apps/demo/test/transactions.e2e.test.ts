@@ -92,4 +92,71 @@ describe('application-owned transaction events (e2e)', () => {
       .resolves.toMatchObject({ title: 'First post' });
     await events.return?.();
   });
+
+  it('emits ordered per-row events for a plain generated-client updateMany', async () => {
+    const selected = await prisma.post.findMany({
+      where: { title: { in: ['First post', 'Draft post'] } },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const received = selected.map(() => events.next());
+
+    await expect(prisma.post.updateMany({
+      where: { id: { in: selected.map(({ id }) => id) } },
+      data: { published: true },
+    })).resolves.toEqual({ count: selected.length });
+
+    await expect(Promise.all(received)).resolves.toEqual(selected.map(({ id }) => ({
+      value: { type: 'UPDATED', model: 'Post', id },
+      done: false,
+    })));
+    await events.return?.();
+  });
+
+  it('keeps interactive batch events buffered until commit', async () => {
+    const selected = await prisma.post.findMany({
+      where: { title: { in: ['First post', 'Draft post'] } },
+      select: { id: true },
+      orderBy: { id: 'asc' },
+    });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const received = selected.map(() => events.next());
+
+    await prisma.$transaction(async (tx) => {
+      await tx.post.updateMany({
+        where: { id: { in: selected.map(({ id }) => id) } },
+        data: { published: true },
+      });
+      await expect(Promise.race([received[0].then(() => 'published'), wait(25)]))
+        .resolves.toBe('waiting');
+    });
+
+    await expect(Promise.all(received)).resolves.toEqual(selected.map(({ id }) => ({
+      value: { type: 'UPDATED', model: 'Post', id },
+      done: false,
+    })));
+    await events.return?.();
+  });
+
+  it('rolls back deleteMany rows and events together in an interactive transaction', async () => {
+    const selected = await prisma.post.findMany({
+      where: { title: { in: ['First post', 'Draft post'] } },
+      select: { id: true },
+    });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const nextEvent = events.next();
+
+    await expect(prisma.$transaction(async (tx) => {
+      await tx.post.deleteMany({ where: { id: { in: selected.map(({ id }) => id) } } });
+      throw new Error('rollback batch delete');
+    })).rejects.toThrow('rollback batch delete');
+
+    await expect(Promise.race([nextEvent.then(() => 'published'), wait(25)]))
+      .resolves.toBe('waiting');
+    await expect(prisma.post.count({
+      where: { id: { in: selected.map(({ id }) => id) } },
+    })).resolves.toBe(selected.length);
+    await events.return?.();
+  });
 });

@@ -397,6 +397,8 @@ type FieldRefInputType<Model, FieldType> = Model extends never ? never : FieldRe
 
 
 export const ModelName = {
+  GolemUpsertGuard: 'GolemUpsertGuard',
+  UpsertTarget: 'UpsertTarget',
   Post: 'Post',
   User: 'User',
   Secret: 'Secret',
@@ -417,10 +419,158 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "post" | "user" | "secret" | "metric" | "profile"
+    modelProps: "golemUpsertGuard" | "upsertTarget" | "post" | "user" | "secret" | "metric" | "profile"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
+    GolemUpsertGuard: {
+      payload: Prisma.$GolemUpsertGuardPayload<ExtArgs>
+      fields: Prisma.GolemUpsertGuardFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.GolemUpsertGuardFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.GolemUpsertGuardFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        findFirst: {
+          args: Prisma.GolemUpsertGuardFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.GolemUpsertGuardFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        findMany: {
+          args: Prisma.GolemUpsertGuardFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>[]
+        }
+        create: {
+          args: Prisma.GolemUpsertGuardCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        createMany: {
+          args: Prisma.GolemUpsertGuardCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.GolemUpsertGuardCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>[]
+        }
+        delete: {
+          args: Prisma.GolemUpsertGuardDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        update: {
+          args: Prisma.GolemUpsertGuardUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        deleteMany: {
+          args: Prisma.GolemUpsertGuardDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.GolemUpsertGuardUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.GolemUpsertGuardUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>[]
+        }
+        upsert: {
+          args: Prisma.GolemUpsertGuardUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$GolemUpsertGuardPayload>
+        }
+        aggregate: {
+          args: Prisma.GolemUpsertGuardAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateGolemUpsertGuard>
+        }
+        groupBy: {
+          args: Prisma.GolemUpsertGuardGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.GolemUpsertGuardGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.GolemUpsertGuardCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.GolemUpsertGuardCountAggregateOutputType> | number
+        }
+      }
+    }
+    UpsertTarget: {
+      payload: Prisma.$UpsertTargetPayload<ExtArgs>
+      fields: Prisma.UpsertTargetFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.UpsertTargetFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.UpsertTargetFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        findFirst: {
+          args: Prisma.UpsertTargetFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.UpsertTargetFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        findMany: {
+          args: Prisma.UpsertTargetFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>[]
+        }
+        create: {
+          args: Prisma.UpsertTargetCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        createMany: {
+          args: Prisma.UpsertTargetCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.UpsertTargetCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>[]
+        }
+        delete: {
+          args: Prisma.UpsertTargetDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        update: {
+          args: Prisma.UpsertTargetUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        deleteMany: {
+          args: Prisma.UpsertTargetDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.UpsertTargetUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.UpsertTargetUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>[]
+        }
+        upsert: {
+          args: Prisma.UpsertTargetUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$UpsertTargetPayload>
+        }
+        aggregate: {
+          args: Prisma.UpsertTargetAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregateUpsertTarget>
+        }
+        groupBy: {
+          args: Prisma.UpsertTargetGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.UpsertTargetGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.UpsertTargetCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.UpsertTargetCountAggregateOutputType> | number
+        }
+      }
+    }
     Post: {
       payload: Prisma.$PostPayload<ExtArgs>
       fields: Prisma.PostFieldRefs
@@ -827,6 +977,23 @@ export const TransactionIsolationLevel = runtime.makeStrictEnum({
 export type TransactionIsolationLevel = (typeof TransactionIsolationLevel)[keyof typeof TransactionIsolationLevel]
 
 
+export const GolemUpsertGuardScalarFieldEnum = {
+  stripe: 'stripe',
+  seq: 'seq'
+} as const
+
+export type GolemUpsertGuardScalarFieldEnum = (typeof GolemUpsertGuardScalarFieldEnum)[keyof typeof GolemUpsertGuardScalarFieldEnum]
+
+
+export const UpsertTargetScalarFieldEnum = {
+  id: 'id',
+  key: 'key',
+  value: 'value'
+} as const
+
+export type UpsertTargetScalarFieldEnum = (typeof UpsertTargetScalarFieldEnum)[keyof typeof UpsertTargetScalarFieldEnum]
+
+
 export const PostScalarFieldEnum = {
   id: 'id',
   title: 'title',
@@ -911,6 +1078,13 @@ export type IntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'In
 
 
 /**
+ * Reference to a field of type 'BigInt'
+ */
+export type BigIntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'BigInt'>
+    
+
+
+/**
  * Reference to a field of type 'String'
  */
 export type StringFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'String'>
@@ -928,13 +1102,6 @@ export type BooleanFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel,
  * Reference to a field of type 'Decimal'
  */
 export type DecimalFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'Decimal'>
-    
-
-
-/**
- * Reference to a field of type 'BigInt'
- */
-export type BigIntFieldRefInput<$PrismaModel> = FieldRefInputType<$PrismaModel, 'BigInt'>
     
 
 
@@ -1102,6 +1269,8 @@ export interface PrismaClientOptionsWithAdapter extends PrismaClientBaseOptions 
  */
 export type PrismaClientOptions = PrismaClientOptionsWithAccelerateUrl | PrismaClientOptionsWithAdapter
 export type GlobalOmitConfig = {
+  golemUpsertGuard?: Prisma.GolemUpsertGuardOmit
+  upsertTarget?: Prisma.UpsertTargetOmit
   post?: Prisma.PostOmit
   user?: Prisma.UserOmit
   secret?: Prisma.SecretOmit

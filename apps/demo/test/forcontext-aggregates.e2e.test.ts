@@ -97,11 +97,46 @@ describe('forContext count and aggregate (e2e)', () => {
     expect(rows._count).toBeGreaterThan(0);
   });
 
-  it('exposes count, aggregate and groupBy on the context-bound surface', async () => {
+  it('exposes count, aggregate, groupBy, and relationGroupBy on the context-bound surface', async () => {
     const scoped = prisma.forContext(ctxFor('roy@example.com'));
     expect(typeof scoped.post.count).toBe('function');
     expect(typeof scoped.post.aggregate).toBe('function');
     expect(typeof scoped.post.groupBy).toBe('function');
+    expect(typeof scoped.post.relationGroupBy).toBe('function');
+  });
+
+  it('runs configured relation aggregation through the typed context-bound API', async () => {
+    const rows = await prisma.forContext(ctxFor('roy@example.com')).post.relationGroupBy({
+      by: ['authorEmail'],
+      orderBy: { key: { authorEmail: 'asc' } },
+      _count: true,
+      _sum: { viewCount: true },
+    });
+
+    expect(rows).toEqual([
+      {
+        authorEmail: 'ada@example.com',
+        _count: 1,
+        _sum: { viewCount: 100n },
+      },
+      {
+        authorEmail: 'roy@example.com',
+        _count: 2,
+        _sum: { viewCount: 9007199254740998n },
+      },
+    ]);
+  });
+
+  it('binds relation aggregation to the context transaction view', async () => {
+    const rows = await prisma.forContext(ctxFor('roy@example.com')).$transaction((tx) =>
+      tx.post.relationGroupBy({
+        by: ['authorEmail'],
+        _count: true,
+        take: 1,
+      }),
+    );
+
+    expect(rows).toEqual([{ authorEmail: 'ada@example.com', _count: 1 }]);
   });
 
   it('merges the caller constraint into a grouped query', async () => {

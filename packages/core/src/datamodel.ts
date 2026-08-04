@@ -14,6 +14,8 @@ export interface DatamodelField {
   hasDefaultValue: boolean;
   isReadOnly: boolean;
   isUpdatedAt: boolean;
+  /** Prisma native database type and arguments, when the schema declares one. */
+  nativeType?: readonly [string, readonly string[]];
   relationName?: string;
   relationFromFields?: readonly string[];
   relationToFields?: readonly string[];
@@ -75,9 +77,16 @@ export interface DatamodelDocument<TModels = Record<string, string>> {
   __models?: TModels;
 }
 
+export interface RelationDimensionConfig {
+  path: readonly string[];
+  field: string;
+}
+
 export interface AggregationsConfig<TField extends string = string> {
   dimensions?: readonly TField[];
+  relationDimensions?: Readonly<Record<string, RelationDimensionConfig>>;
   measures?: readonly TField[];
+  maxIntermediateGroups?: number;
   maxGroups?: number;
 }
 
@@ -102,7 +111,9 @@ export interface GolemDefaults {
   operations?: readonly GolemOperation[];
   maxTake?: number;
   maxGroups?: number;
+  maxIntermediateGroups?: number;
   maxDepth?: number;
   checkWriteResults?: boolean;
   checkReadFields?: boolean;
+  upsertGuardStripes?: number;
 }

@@ -162,6 +162,19 @@ export class InputTypeRegistry {
     const back = this.backRelationField(model, field);
     const whereUnique = this.ctx.whereUniqueInputs.get(target.name)!;
     const createWithout = this.createWithoutInput(target, back);
+    const connectOrCreate = createWithout
+      ? this.memo(
+          `${target.name}CreateOrConnectWithout${ucFirst(back.name)}Input`,
+          () =>
+            new GraphQLInputObjectType({
+              name: `${target.name}CreateOrConnectWithout${ucFirst(back.name)}Input`,
+              fields: {
+                where: { type: new GraphQLNonNull(whereUnique) },
+                create: { type: new GraphQLNonNull(createWithout) },
+              },
+            }),
+        )
+      : undefined;
     if (field.isList) {
       const envelope = this.memo(`${target.name}CreateNestedManyWithout${ucFirst(back.name)}Input`, () =>
         new GraphQLInputObjectType({
@@ -175,6 +188,11 @@ export class InputTypeRegistry {
                 type: new GraphQLList(new GraphQLNonNull(createWithout)),
               };
             }
+            if (connectOrCreate) {
+              fields.connectOrCreate = {
+                type: new GraphQLList(new GraphQLNonNull(connectOrCreate)),
+              };
+            }
             return fields;
           },
         }),
@@ -186,6 +204,7 @@ export class InputTypeRegistry {
         name: `${target.name}CreateNestedOneWithout${ucFirst(back.name)}Input`,
         fields: () => ({
           ...(createWithout ? { create: { type: createWithout } } : {}),
+          ...(connectOrCreate ? { connectOrCreate: { type: connectOrCreate } } : {}),
           connect: { type: whereUnique },
         }),
       }),
@@ -250,7 +269,21 @@ export class InputTypeRegistry {
     const target = this.ctx.modelsByName.get(field.type)!;
     const back = this.backRelationField(model, field);
     const whereUnique = this.ctx.whereUniqueInputs.get(target.name)!;
+    const createWithout = this.createWithoutInput(target, back);
     const updateWithout = this.updateWithoutInput(target, back);
+    const connectOrCreate = createWithout
+      ? this.memo(
+          `${target.name}CreateOrConnectWithout${ucFirst(back.name)}Input`,
+          () =>
+            new GraphQLInputObjectType({
+              name: `${target.name}CreateOrConnectWithout${ucFirst(back.name)}Input`,
+              fields: {
+                where: { type: new GraphQLNonNull(whereUnique) },
+                create: { type: new GraphQLNonNull(createWithout) },
+              },
+            }),
+        )
+      : undefined;
     if (field.isList) {
       const relationName = `${target.name}UpdateManyWithout${ucFirst(back.name)}Input`;
       const updateWithWhere = updateWithout
@@ -266,6 +299,20 @@ export class InputTypeRegistry {
               }),
           )
         : undefined;
+      const upsertWithWhere = updateWithout && createWithout
+        ? this.memo(
+            `${target.name}UpsertWithWhereUniqueWithout${ucFirst(back.name)}Input`,
+            () =>
+              new GraphQLInputObjectType({
+                name: `${target.name}UpsertWithWhereUniqueWithout${ucFirst(back.name)}Input`,
+                fields: {
+                  where: { type: new GraphQLNonNull(whereUnique) },
+                  update: { type: new GraphQLNonNull(updateWithout) },
+                  create: { type: new GraphQLNonNull(createWithout) },
+                },
+              }),
+          )
+        : undefined;
       return this.memo(relationName, () =>
         new GraphQLInputObjectType({
           name: relationName,
@@ -273,32 +320,70 @@ export class InputTypeRegistry {
             ...(updateWithWhere
               ? { update: { type: new GraphQLList(new GraphQLNonNull(updateWithWhere)) } }
               : {}),
+            ...(upsertWithWhere
+              ? { upsert: { type: new GraphQLList(new GraphQLNonNull(upsertWithWhere)) } }
+              : {}),
+            ...(connectOrCreate
+              ? { connectOrCreate: { type: new GraphQLList(new GraphQLNonNull(connectOrCreate)) } }
+              : {}),
             connect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
             disconnect: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
+            delete: { type: new GraphQLList(new GraphQLNonNull(whereUnique)) },
           }),
         }),
       );
     }
     if (field.isRequired) {
       const relationName = `${target.name}UpdateOneRequiredWithout${ucFirst(back.name)}Input`;
+      const upsert = updateWithout && createWithout
+        ? this.memo(
+            `${target.name}UpsertWithout${ucFirst(back.name)}Input`,
+            () =>
+              new GraphQLInputObjectType({
+                name: `${target.name}UpsertWithout${ucFirst(back.name)}Input`,
+                fields: {
+                  update: { type: new GraphQLNonNull(updateWithout) },
+                  create: { type: new GraphQLNonNull(createWithout) },
+                },
+              }),
+          )
+        : undefined;
       return this.memo(relationName, () =>
         new GraphQLInputObjectType({
           name: relationName,
           fields: () => ({
             ...(updateWithout ? { update: { type: updateWithout } } : {}),
+            ...(upsert ? { upsert: { type: upsert } } : {}),
+            ...(connectOrCreate ? { connectOrCreate: { type: connectOrCreate } } : {}),
             connect: { type: whereUnique },
           }),
         }),
       );
     }
     const relationName = `${target.name}UpdateOneWithout${ucFirst(back.name)}Input`;
+    const upsert = updateWithout && createWithout
+      ? this.memo(
+          `${target.name}UpsertWithout${ucFirst(back.name)}Input`,
+          () =>
+            new GraphQLInputObjectType({
+              name: `${target.name}UpsertWithout${ucFirst(back.name)}Input`,
+              fields: {
+                update: { type: new GraphQLNonNull(updateWithout) },
+                create: { type: new GraphQLNonNull(createWithout) },
+              },
+            }),
+        )
+      : undefined;
     return this.memo(relationName, () =>
       new GraphQLInputObjectType({
         name: relationName,
         fields: () => ({
           ...(updateWithout ? { update: { type: updateWithout } } : {}),
+          ...(upsert ? { upsert: { type: upsert } } : {}),
+          ...(connectOrCreate ? { connectOrCreate: { type: connectOrCreate } } : {}),
           connect: { type: whereUnique },
           disconnect: { type: GraphQLBoolean },
+          delete: { type: GraphQLBoolean },
         }),
       }),
     );

@@ -10,7 +10,7 @@ import {
   WillAuthorize,
 } from '@eleven-am/authorizer';
 import { GolemAuthorizationAdapter } from '@eleven-am/golem-authorizer';
-import { GolemModule } from '@eleven-am/golem';
+import { GOLEM_EVENT_BUS, GolemModule, PubSubEventBus, eventTopic } from '@eleven-am/golem';
 import { DemoAuthenticator } from '../src/auth';
 import { getDatamodel } from '../src/generated/golem';
 import { GolemPrismaService } from '../src/generated/golem/client';
@@ -37,6 +37,15 @@ async function bootRules(suite: string, rules: unknown): Promise<{
   prisma: GolemPrismaService;
 }> {
   const databaseFile = provisionDatabase(suite);
+  const booted = await bootRulesAt(databaseFile, rules);
+  await seed(booted.prisma);
+  return booted;
+}
+
+async function bootRulesAt(databaseFile: string, rules: unknown): Promise<{
+  app: INestApplication;
+  prisma: GolemPrismaService;
+}> {
   const moduleRef = await Test.createTestingModule({
     providers: [rules as never],
     imports: [
@@ -48,7 +57,7 @@ async function bootRules(suite: string, rules: unknown): Promise<{
         client: GolemPrismaService,
         prismaOptions: { adapter: new PrismaBetterSqlite3({ url: `file:${databaseFile}` }) },
         datamodel: getDatamodel(),
-        models: { PostTag: false, Play: false },
+        models: { User: { subscriptions: true }, PostTag: false, Play: false },
         authorization: GolemAuthorizationAdapter,
       }),
     ],
@@ -56,7 +65,6 @@ async function bootRules(suite: string, rules: unknown): Promise<{
   const app = moduleRef.createNestApplication();
   await app.init();
   const prisma = app.get(GolemPrismaService);
-  await seed(prisma);
   return { app, prisma };
 }
 
@@ -263,5 +271,72 @@ describe('an upsert by a caller who may create and update (e2e)', () => {
     });
 
     expect(updated).toEqual({ email: 'roy@example.com', name: 'Edited' });
+  });
+
+  it('serializes concurrent creators of one unique selector without a race loser', async () => {
+    const eventBus = app.get<PubSubEventBus>(GOLEM_EVENT_BUS);
+    const events = eventBus.iterate(eventTopic('User'));
+    const received = Array.from({ length: 16 }, () => events.next());
+    const attempts = Array.from({ length: 16 }, (_, index) =>
+      asCaller().user.upsert({
+        where: { email: 'concurrent@example.com' },
+        create: { email: 'concurrent@example.com', name: `create-${index}` },
+        update: { name: `update-${index}` },
+        select: { id: true, name: true },
+      }),
+    );
+
+    const results = await Promise.all(attempts);
+    expect(new Set(results.map(({ id }) => id)).size).toBe(1);
+    expect(await prisma.user.count({ where: { email: 'concurrent@example.com' } })).toBe(1);
+    expect(await prisma.golemUpsertGuard.count()).toBeLessThanOrEqual(4096);
+    const payloads = (await Promise.all(received)).map((result) => result.value);
+    expect(payloads.filter(({ type }) => type === 'CREATED')).toHaveLength(1);
+    expect(payloads.filter(({ type }) => type === 'UPDATED')).toHaveLength(15);
+    expect(new Set(payloads.map(({ id }) => id)).size).toBe(1);
+    await events.return?.();
+  });
+});
+
+describe('serialized upsert across independent clients (e2e)', () => {
+  const suite = `${__filename}.multi-client`;
+  let first: { app: INestApplication; prisma: GolemPrismaService };
+  let second: { app: INestApplication; prisma: GolemPrismaService };
+
+  beforeAll(async () => {
+    const databaseFile = provisionDatabase(suite);
+    first = await bootRulesAt(databaseFile, CreateAndUpdateRules);
+    await seed(first.prisma);
+    second = await bootRulesAt(databaseFile, CreateAndUpdateRules);
+  });
+
+  afterAll(async () => {
+    await second.app.close();
+    await first.app.close();
+    removeDatabaseFiles(databaseFileFor(suite));
+  });
+
+  it('returns a stable conflict for the SQLite cross-connection lock limitation', async () => {
+    const clients = [first.prisma, second.prisma];
+    const attempts = Array.from({ length: 2 }, (_, index) =>
+      clients[index % clients.length]
+        .forContext(ctxFor('ada@example.com'))
+        .user.upsert({
+          where: { email: 'multi-client@example.com' },
+          create: { email: 'multi-client@example.com', name: `create-${index}` },
+          update: { name: `update-${index}` },
+          select: { id: true },
+        }),
+    );
+
+    const results = await Promise.allSettled(attempts);
+    expect(results.filter(({ status }) => status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(({ status }) => status === 'rejected') as PromiseRejectedResult;
+    expect(rejected.reason).toMatchObject({
+      code: 'CONFLICT',
+      message: 'Serialized context-aware upsert could not acquire its SQLite guard in the current transaction',
+    });
+    expect(await first.prisma.user.count({ where: { email: 'multi-client@example.com' } }))
+      .toBe(1);
   });
 });

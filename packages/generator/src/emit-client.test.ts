@@ -24,12 +24,26 @@ describe('generated Golem client', () => {
     expect(output).toContain("import { withBufferedEvents } from '@eleven-am/golem-core'");
     expect(output).toContain('const transaction = instrumented.$transaction.bind(instrumented)');
     expect(output).toContain('withBufferedEvents(() =>');
+    expect(output).toContain('withBufferedEvents(() =>\n                      raw.$transaction');
     expect(output).toContain('$transaction: commitAwareTransaction');
+    expect(output).toContain('transactionContext.run(');
+    expect(output).toContain('{ client: tx, suppressBatchEvents: false }');
   });
 
-  it('exposes count and aggregate through the context-bound surface', () => {
+  it('runs batch-event helpers on the ambient interactive transaction', () => {
+    expect(output).toContain("import { AsyncLocalStorage } from 'node:async_hooks'");
+    expect(output).toContain('const current = transactionContext.getStore()');
+    expect(output).toContain('if (current) return execute(current.client)');
+    expect(output).toContain('raw.$transaction((tx) =>');
+    expect(output).toContain('{ client, suppressBatchEvents: true }');
+    expect(output).toContain('batch: model');
+  });
+
+  it('exposes count, aggregate, and separately typed relation aggregation through the context-bound surface', () => {
     expect(output).toContain('count:');
     expect(output).toContain('aggregate:');
+    expect(output).toContain("relationGroupBy: 'relationGroupBy'");
+    expect(output).toContain("Omit<RelationGroupByRequest<TDimension, TMeasure>, 'model' | 'context'>");
   });
 
   it('generates an explicit policy-aware argument whitelist instead of copying Prisma delegates', () => {
@@ -52,7 +66,7 @@ describe('generated Golem client', () => {
   });
 
   it('exposes the scoped query root on the context-bound surface', () => {
-    expect(output).toContain("import type { GolemEngineRef, GolemQueryInterceptor, ScopedQuery } from '@eleven-am/golem-core'");
+    expect(output).toContain('GolemEngineRef, GolemQueryInterceptor, RelationGroupByRequest, RelationGroupByRow, ScopedQuery');
     expect(output).toContain('$scoped(model: GolemModelName, alias?: string): ScopedQuery;');
     expect(output).toContain("if (delegateName === '$scoped')");
     expect(output).toContain('.scoped({ model, alias, context })');

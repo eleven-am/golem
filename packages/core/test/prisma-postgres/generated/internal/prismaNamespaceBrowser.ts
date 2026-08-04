@@ -51,6 +51,8 @@ export const AnyNull = runtime.AnyNull
 
 
 export const ModelName = {
+  GolemUpsertGuard: 'GolemUpsertGuard',
+  UpsertTarget: 'UpsertTarget',
   Post: 'Post',
   User: 'User',
   Secret: 'Secret',
@@ -72,6 +74,23 @@ export const TransactionIsolationLevel = runtime.makeStrictEnum({
 } as const)
 
 export type TransactionIsolationLevel = (typeof TransactionIsolationLevel)[keyof typeof TransactionIsolationLevel]
+
+
+export const GolemUpsertGuardScalarFieldEnum = {
+  stripe: 'stripe',
+  seq: 'seq'
+} as const
+
+export type GolemUpsertGuardScalarFieldEnum = (typeof GolemUpsertGuardScalarFieldEnum)[keyof typeof GolemUpsertGuardScalarFieldEnum]
+
+
+export const UpsertTargetScalarFieldEnum = {
+  id: 'id',
+  key: 'key',
+  value: 'value'
+} as const
+
+export type UpsertTargetScalarFieldEnum = (typeof UpsertTargetScalarFieldEnum)[keyof typeof UpsertTargetScalarFieldEnum]
 
 
 export const PostScalarFieldEnum = {

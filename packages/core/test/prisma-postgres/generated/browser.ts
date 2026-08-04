@@ -18,6 +18,16 @@ export { Prisma }
 export * as $Enums from './enums'
 export * from './enums';
 /**
+ * Model GolemUpsertGuard
+ * 
+ */
+export type GolemUpsertGuard = Prisma.GolemUpsertGuardModel
+/**
+ * Model UpsertTarget
+ * 
+ */
+export type UpsertTarget = Prisma.UpsertTargetModel
+/**
  * Model Post
  * 
  */

@@ -8,6 +8,8 @@
  *
  * 🟢 You can import this file directly.
  */
+export type * from './models/GolemUpsertGuard'
+export type * from './models/UpsertTarget'
 export type * from './models/Post'
 export type * from './models/User'
 export type * from './models/Secret'

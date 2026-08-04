@@ -241,9 +241,13 @@ describe('engine hooks', () => {
     const user = fakeUserDelegate();
     user.findFirst.mockResolvedValue(null);
     user.findUnique.mockResolvedValue({ id: 'u1', email: 'new@example.com' });
+    const golemUpsertGuard = { upsert: jest.fn().mockResolvedValue({ stripe: 1 }) };
     const client = {
       user,
-      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) => run({ user })),
+      golemUpsertGuard,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+        run({ user, golemUpsertGuard }),
+      ),
     };
     const engine = new GolemEngine(client, models, {
       hooks: registry,

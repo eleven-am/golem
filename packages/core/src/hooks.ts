@@ -3,17 +3,19 @@ export type GolemOperation =
   | 'findMany'
   | 'create'
   | 'update'
+  | 'upsert'
   | 'delete'
   | 'updateMany'
   | 'deleteMany';
 
-export type GolemHookOperation = GolemOperation | 'findFirst';
+export type GolemHookOperation = Exclude<GolemOperation, 'upsert'> | 'findFirst';
 
 export const ALL_OPERATIONS: readonly GolemOperation[] = [
   'findOne',
   'findMany',
   'create',
   'update',
+  'upsert',
   'delete',
   'updateMany',
   'deleteMany',

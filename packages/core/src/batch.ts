@@ -1,4 +1,5 @@
 import DataLoader from 'dataloader';
+import { CanonicalValueError, canonicalToken } from './canonical';
 import { COMPILED_READ_BATCH_CHUNK } from './compiled-read-run';
 
 export type BatchLoadResult<TKey, TValue> =
@@ -78,12 +79,6 @@ export function clearBatchCaches(ctx: unknown, scope?: BatchScope): void {
   }
 }
 
-function instanceName(value: object): string {
-  const constructor = (value as { constructor?: { name?: unknown } }).constructor;
-  const name = constructor === undefined ? undefined : constructor.name;
-  return typeof name === 'string' && name.length > 0 ? name : 'object';
-}
-
 function refuseArgument(name: string, path: string, reason: string): never {
   throw new Error(
     `Batch loader ${name} cannot tell one batch from another by ${path === '' ? 'its arguments' : `argument ${path}`}: ${reason}`,
@@ -91,64 +86,17 @@ function refuseArgument(name: string, path: string, reason: string): never {
 }
 
 const SERIALIZABLE =
-  'batch arguments must be built from null, undefined, booleans, numbers, bigints, strings, Dates, arrays and plain objects';
+  'batch arguments must be built from canonical scalar values, Dates, bytes, Decimals, arrays and plain objects';
 
-function stableToken(value: unknown, name: string, path: string, open: readonly object[]): string {
-  if (value === null) {
-    return 'null';
+function stableToken(value: unknown, name: string): string {
+  try {
+    return canonicalToken(value);
+  } catch (error) {
+    if (error instanceof CanonicalValueError) {
+      return refuseArgument(name, error.path, `${error.reason}, ${SERIALIZABLE}`);
+    }
+    throw error;
   }
-  switch (typeof value) {
-    case 'undefined':
-      return 'undefined';
-    case 'string':
-      return `str:${JSON.stringify(value)}`;
-    case 'number':
-    case 'boolean':
-      return `${typeof value}:${String(value)}`;
-    case 'bigint':
-      return `bigint:${value.toString()}`;
-    case 'function':
-      return refuseArgument(name, path, `a function cannot be serialized exactly, ${SERIALIZABLE}`);
-    case 'symbol':
-      return refuseArgument(name, path, `a symbol cannot be serialized exactly, ${SERIALIZABLE}`);
-  }
-  const object = value as object;
-  if (open.includes(object)) {
-    return refuseArgument(name, path, 'it holds a reference back to itself');
-  }
-  const nested = [...open, object];
-  if (Array.isArray(object)) {
-    return `[${object
-      .map((item, index) => stableToken(item, name, `${path}[${index}]`, nested))
-      .join(',')}]`;
-  }
-  if (object instanceof Date) {
-    const time = object.getTime();
-    return Number.isNaN(time) ? 'date:invalid' : `date:${object.toISOString()}`;
-  }
-  const prototype = Object.getPrototypeOf(object);
-  if (prototype !== Object.prototype && prototype !== null) {
-    return refuseArgument(
-      name,
-      path,
-      `a ${instanceName(object)} instance cannot be serialized exactly, ${SERIALIZABLE}`,
-    );
-  }
-  if (Object.getOwnPropertySymbols(object).length > 0) {
-    return refuseArgument(
-      name,
-      path,
-      'it carries symbol keys, which cannot be serialized exactly',
-    );
-  }
-  const record = object as Record<string, unknown>;
-  return `{${Object.getOwnPropertyNames(record)
-    .sort()
-    .map(
-      (key) =>
-        `${JSON.stringify(key)}:${stableToken(record[key], name, path === '' ? key : `${path}.${key}`, nested)}`,
-    )
-    .join(',')}}`;
 }
 
 function isBatchMap<TKey, TValue>(
@@ -213,7 +161,7 @@ export function createBatchLoader<TKey, TValue, TArgs = undefined>(
       variants = new Map();
       request.set(identity, variants);
     }
-    const variant = stableToken(args, spec.name, '', []);
+    const variant = stableToken(args, spec.name);
     const existing = variants.get(variant) as DataLoader<TKey, TValue | null, unknown> | undefined;
     if (existing) {
       return existing;

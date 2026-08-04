@@ -56,6 +56,7 @@ export interface AggregationFieldSets {
 export interface AggregationTypeDeps {
   model: DatamodelModel;
   fields: AggregationFieldSets;
+  includeKeyOrder?: boolean;
   sortOrder: GraphQLEnumType;
   dimensionType: (
     model: DatamodelModel,
@@ -347,6 +348,10 @@ export function buildAggregationTypes(
       const config: GraphQLInputFieldConfigMap = {
         count: { type: sortOrder },
       };
+      if (deps.includeKeyOrder) {
+        const keyOrder = orderInputOf(`${model.name}GroupKeyOrderInput`, fields.dimensions);
+        if (keyOrder) config.key = { type: keyOrder };
+      }
       for (const kind of MEASURE_KINDS) {
         const order = NUMERIC_KINDS.includes(kind) ? measureOrder : orderableOrder;
         if (order) {

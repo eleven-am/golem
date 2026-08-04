@@ -7,6 +7,7 @@ import {
   GolemValidationError,
 } from './errors';
 import { GolemEngine } from './operations';
+import { GOLEM_BATCH_RESULT_ROWS } from './publisher';
 import { field } from './testing';
 
 const models = [
@@ -167,7 +168,12 @@ describe('composite updateMany identity', () => {
       { postId: 'p1', tagId: 't2', addedAt: 1 },
     ];
     const findMany = jest.fn().mockResolvedValue(rows);
-    const updateMany = jest.fn().mockResolvedValue({ count: 2 });
+    const updateResult = { count: 2 } as { count: number; [GOLEM_BATCH_RESULT_ROWS]?: unknown };
+    Object.defineProperty(updateResult, GOLEM_BATCH_RESULT_ROWS, {
+      value: rows.map((row) => ({ ...row, addedAt: 2 })),
+      enumerable: false,
+    });
+    const updateMany = jest.fn().mockResolvedValue(updateResult);
     const delegates = { postTag: { findMany, updateMany } };
     const client = {
       ...delegates,
@@ -196,6 +202,7 @@ describe('composite updateMany identity', () => {
       where: { OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] },
       data: { addedAt: 2 },
     });
+    expect(findMany).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -352,7 +359,15 @@ describe('the upsert branch probe', () => {
   }
 
   function engineWithProvider(delegate: Record<string, jest.Mock>, constrain: jest.Mock) {
-    return new GolemEngine({ user: delegate }, probeModels, {
+    const golemUpsertGuard = { upsert: jest.fn().mockResolvedValue({ stripe: 1 }) };
+    const client = {
+      user: delegate,
+      golemUpsertGuard,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+        run({ user: delegate, golemUpsertGuard }),
+      ),
+    };
+    return new GolemEngine(client, probeModels, {
       authorization: provider(constrain),
       checkWriteResults: false,
       checkReadFields: false,
@@ -380,6 +395,41 @@ describe('the upsert branch probe', () => {
       select: { id: true },
     });
     expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('acquires the stripe before the branch probe in an engine-owned transaction', async () => {
+    const calls: string[] = [];
+    const delegate = {
+      findFirst: jest.fn(async () => { calls.push('probe'); return null; }),
+      create: jest.fn(async () => { calls.push('create'); return { id: 'u1' }; }),
+      update: jest.fn(),
+    };
+    const guard = {
+      upsert: jest.fn(async () => { calls.push('guard'); return { stripe: 1 }; }),
+    };
+    const client = {
+      user: delegate,
+      golemUpsertGuard: guard,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+        run({ user: delegate, golemUpsertGuard: guard }),
+      ),
+    };
+    const engine = new GolemEngine(client, probeModels, {
+      authorization: provider(jest.fn(async () => ({}))),
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
+
+    await engine.upsert({
+      model: 'User',
+      where: { email: 'new@example.com' },
+      create: { email: 'new@example.com' },
+      update: { name: 'new' },
+      context: { req: {} },
+    });
+
+    expect(calls).toEqual(['guard', 'probe', 'create']);
+    expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
 
   it('takes the update branch for a row the update constraint admits', async () => {

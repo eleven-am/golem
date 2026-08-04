@@ -1,6 +1,7 @@
 import type { DMMF } from '@prisma/generator-helper';
 
 const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
+const INTERNAL_MODELS = new Set(['GolemUpsertGuard']);
 
 export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string): string {
   const indexesByModel = new Map<string, Array<{ kind: string; name?: string; dbName?: string; fields: string[] }>>();
@@ -19,7 +20,9 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
     }
   }
 
-  const models = datamodel.models.map((model) => ({
+  const models = datamodel.models
+    .filter((model) => !INTERNAL_MODELS.has(model.name))
+    .map((model) => ({
     name: model.name,
     dbName: model.dbName ?? model.name,
     fields: model.fields
@@ -36,6 +39,9 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
         hasDefaultValue: field.hasDefaultValue,
         isReadOnly: field.isReadOnly,
         isUpdatedAt: field.isUpdatedAt ?? false,
+        ...(field.nativeType
+          ? { nativeType: [field.nativeType[0], [...field.nativeType[1]]] }
+          : {}),
         ...(field.relationName ? { relationName: field.relationName } : {}),
         ...(field.relationFromFields?.length ? { relationFromFields: [...field.relationFromFields] } : {}),
         ...(field.relationToFields?.length ? { relationToFields: [...(field.relationToFields as string[])] } : {}),
@@ -61,7 +67,7 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
       const indexes = indexesByModel.get(model.name) ?? [];
       return indexes.length > 0 ? { indexes } : {};
     })(),
-  }));
+    }));
   const enums = datamodel.enums.map((e) => ({
     name: e.name,
     values: e.values.map((v) => v.name),

@@ -23,8 +23,10 @@ import {
 } from 'graphql';
 import { AuthorizationProvider } from './authorization';
 import { BatchScope, clearBatchCaches } from './batch';
+import { canonicalToken } from './canonical';
 import {
   GolemDefaults,
+  AggregationsConfig,
   DatamodelDocument,
   DatamodelField,
   DatamodelModel,
@@ -51,8 +53,11 @@ import {
   findManyFieldName,
   findOneFieldName,
   groupByFieldName,
+  relationGroupByFieldName,
   relationCountTypeName,
+  ucFirst,
   updateFieldName,
+  upsertFieldName,
   updateManyFieldName,
 } from './naming';
 import {
@@ -71,11 +76,16 @@ import {
 } from './aggregations';
 import { GolemEngine } from './operations';
 import {
+  buildRelationAggregationPlan,
+  type RelationAggregationPlan,
+} from './relation-aggregation';
+import {
   RELATION_COUNT_FIELD,
   buildEventEntitySelect,
   buildSelect,
   primaryKeySelect,
 } from './select';
+import { GolemSubscriptionOptions, ModelSubscriptionHub } from './subscription-hub';
 
 export const DateTimeScalar = new GraphQLScalarType({
   name: 'DateTime',
@@ -83,8 +93,6 @@ export const DateTimeScalar = new GraphQLScalarType({
   parseValue: (value) => new Date(value as string),
   parseLiteral: (ast) => (ast.kind === Kind.STRING ? new Date(ast.value) : null),
 });
-
-const SUBSCRIPTION_ABANDONED = Symbol('golem.subscription.abandoned');
 
 const BIGINT_STRING = /^-?\d+$/;
 
@@ -181,6 +189,7 @@ export interface BuildGolemSchemaOptions<TModels = Record<string, string>> {
   computedFields?: readonly ComputedFieldSpec[];
   customOperations?: readonly CustomOperationSpec[];
   authorization?: AuthorizationProvider;
+  subscription?: GolemSubscriptionOptions;
 }
 
 interface ResolvedModelSettings {
@@ -195,6 +204,7 @@ interface ResolvedModelSettings {
   dimensions?: ReadonlySet<string>;
   measures?: ReadonlySet<string>;
   maxGroups?: number;
+  aggregationConfig?: AggregationsConfig;
 }
 
 function resolveModelSettings(
@@ -207,16 +217,19 @@ function resolveModelSettings(
   const immutable = new Set(config?.immutable ?? []);
   const readOnly = new Set(config?.readOnly ?? []);
   const writeOnly = new Set(config?.writeOnly ?? []);
+  const primaryKeyFields = new Set(
+    model.primaryKey?.fields ?? model.fields.filter((field) => field.isId).map((field) => field.name),
+  );
   for (const name of [...hidden, ...immutable, ...readOnly, ...writeOnly]) {
     if (!fieldNames.has(name)) {
       throw new Error(`Unknown field ${name} in configuration for model ${model.name}`);
     }
   }
   for (const field of model.fields) {
-    if (field.isId && hidden.has(field.name)) {
+    if (primaryKeyFields.has(field.name) && hidden.has(field.name)) {
       throw new Error(`Cannot hide primary key ${model.name}.${field.name}`);
     }
-    if (writeOnly.has(field.name) && field.isId) {
+    if (writeOnly.has(field.name) && primaryKeyFields.has(field.name)) {
       throw new Error(`Cannot make primary key ${model.name}.${field.name} write-only`);
     }
     if (writeOnly.has(field.name) && field.kind === 'object') {
@@ -270,7 +283,7 @@ function resolveAggregations(
   defaults: GolemDefaults,
 ): Pick<
   ResolvedModelSettings,
-  'aggregations' | 'dimensions' | 'measures' | 'maxGroups'
+  'aggregations' | 'dimensions' | 'measures' | 'maxGroups' | 'aggregationConfig'
 > {
   if (config === undefined) {
     return {
@@ -286,6 +299,7 @@ function resolveAggregations(
     dimensions: config.dimensions ? new Set(config.dimensions) : undefined,
     measures: config.measures ? new Set(config.measures) : undefined,
     maxGroups: config.maxGroups ?? defaults.maxGroups,
+    aggregationConfig: config,
   };
 }
 
@@ -319,6 +333,7 @@ interface ResolvedGolem {
   subscribable: Set<string>;
   takeLimits: Map<string, number>;
   groupLimits: Map<string, number>;
+  relationAggregations: Map<string, RelationAggregationPlan>;
 }
 
 function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): ResolvedGolem {
@@ -347,12 +362,59 @@ function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): Resol
 
   const takeLimits = new Map<string, number>();
   const groupLimits = new Map<string, number>();
+  const relationAggregations = new Map<string, RelationAggregationPlan>();
   for (const [name, resolved] of settings) {
     if (resolved.maxTake !== undefined) {
       takeLimits.set(name, resolved.maxTake);
     }
     if (resolved.maxGroups !== undefined) {
       groupLimits.set(name, resolved.maxGroups);
+    }
+  }
+  for (const model of models) {
+    const resolved = settings.get(model.name)!;
+    if (!resolved.aggregationConfig) continue;
+    const plan = buildRelationAggregationPlan(
+      model,
+      resolved.aggregationConfig,
+      modelsByName,
+      {
+        maxGroups: options.defaults?.maxGroups,
+        maxIntermediateGroups: options.defaults?.maxIntermediateGroups,
+      },
+    );
+    if (plan) {
+      const required = new Map<string, Set<string>>();
+      const add = (modelName: string, field: string) => {
+        const fields = required.get(modelName) ?? new Set<string>();
+        fields.add(field);
+        required.set(modelName, fields);
+      };
+      for (const field of [...plan.dimensions, ...plan.measures]) add(model.name, field.name);
+      for (const step of plan.path) {
+        for (const field of step.fromFields) add(step.sourceModel, field);
+        for (const field of step.toFields) add(step.targetModel, field);
+      }
+      const terminal = plan.path[plan.path.length - 1]!.targetModel;
+      for (const dimension of plan.relationDimensions.values()) {
+        add(terminal, dimension.field.name);
+      }
+      for (const [modelName, fields] of required) {
+        const targetSettings = settings.get(modelName);
+        if (!targetSettings) {
+          throw new Error(
+            `Relation aggregation on ${model.name} reaches unavailable model ${modelName}`,
+          );
+        }
+        for (const field of fields) {
+          if (targetSettings.hidden.has(field) || targetSettings.writeOnly.has(field)) {
+            throw new Error(
+              `Relation aggregation on ${model.name} requires unreadable field ${modelName}.${field}`,
+            );
+          }
+        }
+      }
+      relationAggregations.set(model.name, plan);
     }
   }
 
@@ -364,11 +426,12 @@ function resolveGolem<TModels>(options: BuildGolemSchemaOptions<TModels>): Resol
     subscribable,
     takeLimits,
     groupLimits,
+    relationAggregations,
   };
 }
 
 export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TModels>): GolemEngine {
-  const { engineModels, settings, takeLimits, groupLimits } = resolveGolem(options);
+  const { engineModels, settings, takeLimits, groupLimits, relationAggregations } = resolveGolem(options);
   const hiddenFields = new Map<string, ReadonlySet<string>>();
   for (const [name, resolved] of settings) {
     if (resolved.hidden.size > 0) {
@@ -379,12 +442,14 @@ export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TMod
     hooks: options.hooks,
     takeLimits,
     groupLimits,
+    relationAggregations,
     authorization: options.authorization,
     maxDepth: options.defaults?.maxDepth,
     checkWriteResults: options.defaults?.checkWriteResults,
     checkReadFields: options.defaults?.checkReadFields,
     provider: options.datamodel.provider,
     hiddenFields,
+    upsertGuardStripes: options.defaults?.upsertGuardStripes,
   });
 }
 
@@ -395,38 +460,26 @@ export function subscribableModels<TModels>(
 }
 
 export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TModels>): GraphQLSchema {
-  const { models, engineModels, modelsByName, settings, subscribable, takeLimits, groupLimits } =
+  const { models, engineModels, modelsByName, settings, subscribable, takeLimits, groupLimits, relationAggregations } =
     resolveGolem(options);
   if (subscribable.size > 0 && !options.eventBus) {
     throw new Error(
       `Subscriptions are enabled for ${[...subscribable].join(', ')} but no event bus was provided`,
     );
   }
-  for (const model of models) {
-    if (!model.primaryKey || model.primaryKey.fields.length <= 1) {
-      continue;
-    }
-    if (subscribable.has(model.name)) {
-      throw new Error(
-        `Model ${model.name} has a composite primary key and cannot enable subscriptions; Golem event identifiers require a single-column primary key`,
-      );
-    }
-    throw new Error(
-      `Model ${model.name} has a composite primary key and cannot be exposed on the generated GraphQL surface; set models.${model.name} to false and use forContext for composite-key access`,
-    );
-  }
-
   const engine =
     options.engine ??
     new GolemEngine(options.client, engineModels, {
       hooks: options.hooks,
       takeLimits,
       groupLimits,
+      relationAggregations,
       authorization: options.authorization,
       maxDepth: options.defaults?.maxDepth,
       checkWriteResults: options.defaults?.checkWriteResults,
       checkReadFields: options.defaults?.checkReadFields,
       provider: options.datamodel.provider,
+      upsertGuardStripes: options.defaults?.upsertGuardStripes,
     });
 
   const hiddenFor = (name: string): ReadonlySet<string> => settings.get(name)?.hidden ?? new Set();
@@ -440,6 +493,8 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
         !hiddenFor(model.name).has(f.name) &&
         !settings.get(model.name)?.writeOnly.has(f.name),
     );
+  const authorizationCanMaskOutputs =
+    options.authorization !== undefined && (options.defaults?.checkReadFields ?? true);
 
   const computedSpecs = options.computedFields ?? [];
   for (const spec of computedSpecs) {
@@ -583,6 +638,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
 
   const whereInputs = new Map<string, GraphQLInputObjectType>();
   const whereUniqueInputs = new Map<string, GraphQLInputObjectType>();
+  const compoundUniqueInputs = new Map<string, GraphQLInputObjectType>();
   const orderByInputs = new Map<string, GraphQLInputObjectType>();
 
   for (const model of models) {
@@ -606,7 +662,10 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
               const base: GraphQLOutputType =
                 field.kind === 'enum' ? enumTypes.get(field.type)! : scalarType(model, field);
               fields[field.name] = {
-                type: field.isRequired ? new GraphQLNonNull(base) : base,
+                type:
+                  field.isRequired && !authorizationCanMaskOutputs
+                    ? new GraphQLNonNull(base)
+                    : base,
               };
             }
           }
@@ -666,6 +725,55 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
             if (field.kind === 'scalar' && (field.isId || field.isUnique)) {
               fields[field.name] = { type: scalarType(model, field) };
             }
+          }
+          const visible = new Set(visibleFields(model).map((field) => field.name));
+          const selectors: Array<{ name: string; fields: readonly string[] }> = [];
+          if (model.primaryKey && model.primaryKey.fields.length > 1) {
+            selectors.push({
+              name: model.primaryKey.name ?? model.primaryKey.fields.join('_'),
+              fields: model.primaryKey.fields,
+            });
+          }
+          for (const index of model.uniqueIndexes ?? []) {
+            if (index.fields.length > 1 && index.fields.every((name) => visible.has(name))) {
+              selectors.push({ name: index.name ?? index.fields.join('_'), fields: index.fields });
+            }
+          }
+          const seen = new Set<string>();
+          for (const selector of selectors) {
+            if (seen.has(selector.name)) {
+              throw new Error(
+                `Model ${model.name} declares compound selector ${selector.name} more than once`,
+              );
+            }
+            seen.add(selector.name);
+            const cacheKey = `${model.name}.${selector.name}`;
+            let input = compoundUniqueInputs.get(cacheKey);
+            if (!input) {
+              const componentFields = selector.fields.map((name) => {
+                const component = model.fields.find((field) => field.name === name);
+                if (!component || component.kind === 'object' || component.isList) {
+                  throw new Error(
+                    `Compound selector ${model.name}.${selector.name} references invalid field ${name}`,
+                  );
+                }
+                return component;
+              });
+              input = new GraphQLInputObjectType({
+                name: `${model.name}${ucFirst(selector.name)}CompoundUniqueInput`,
+                fields: Object.fromEntries(
+                  componentFields.map((component) => {
+                    const base =
+                      component.kind === 'enum'
+                        ? enumTypes.get(component.type)!
+                        : scalarType(model, component);
+                    return [component.name, { type: new GraphQLNonNull(base) }];
+                  }),
+                ),
+              });
+              compoundUniqueInputs.set(cacheKey, input);
+            }
+            fields[selector.name] = { type: input };
           }
           return fields;
         },
@@ -928,6 +1036,74 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
           }),
         };
       }
+
+      const relationPlan = relationAggregations.get(model.name);
+      if (relationPlan) {
+        const relationDimensionFields = [...relationPlan.relationDimensions.values()].map(
+          (dimension) => ({ ...dimension.field, name: dimension.name }),
+        );
+        const relationModel = {
+          ...model,
+          name: `${model.name}RelationAggregation`,
+        };
+        const relationTypes = buildAggregationTypes({
+          model: relationModel,
+          fields: {
+            dimensions: [...relationPlan.dimensions, ...relationDimensionFields],
+            measures: relationPlan.measures.filter(isMeasurable),
+            orderables: relationPlan.measures.filter(isOrderable),
+            countables: relationPlan.measures,
+          },
+          includeKeyOrder: true,
+          sortOrder,
+          dimensionType,
+          filterTypeFor,
+        });
+        if (!relationTypes.dimensionEnum || !relationTypes.groupOutput) {
+          throw new Error(`Relation aggregation on ${model.name} has no dimensions`);
+        }
+        queryFields[relationGroupByFieldName(model.name)] = {
+          type: new GraphQLNonNull(
+            new GraphQLList(new GraphQLNonNull(relationTypes.groupOutput)),
+          ),
+          args: {
+            where: { type: whereInput },
+            by: {
+              type: new GraphQLNonNull(
+                new GraphQLList(new GraphQLNonNull(relationTypes.dimensionEnum)),
+              ),
+            },
+            measures: { type: relationTypes.measuresInput },
+            ...(relationTypes.havingInput
+              ? { having: { type: relationTypes.havingInput } }
+              : {}),
+            ...(relationTypes.orderByInput
+              ? { orderBy: { type: relationTypes.orderByInput } }
+              : {}),
+            take: { type: GraphQLInt },
+            skip: { type: GraphQLInt },
+          },
+          resolve: wrapResolve(async (_root, args, ctx) => {
+            const by = (args.by ?? []) as string[];
+            const measures = toPrismaMeasures(args.measures as MeasuresArg);
+            const rows = (await engine.relationGroupBy({
+              model: model.name,
+              by,
+              where: args.where ?? undefined,
+              having: args.having as Record<string, unknown> | undefined,
+              orderBy: args.orderBy as Record<string, unknown> | undefined,
+              take: args.take ?? undefined,
+              skip: args.skip ?? undefined,
+              ...(measures as Pick<
+                import('./relation-aggregation').RelationGroupByRequest,
+                '_sum' | '_avg' | '_min' | '_max' | '_count'
+              >),
+              context: ctx,
+            })) as Record<string, unknown>[];
+            return toGroupResults(rows, by);
+          }),
+        };
+      }
     }
 
     if (operations.has('create')) {
@@ -966,6 +1142,31 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
               model: model.name,
               where: args.where,
               data: args.data,
+              select: buildSelect(info, model, modelsByName, computedRequires),
+              context: ctx,
+            }),
+          ),
+        ),
+      };
+    }
+
+    if (operations.has('upsert')) {
+      mutationFields[upsertFieldName(model.name)] = {
+        type: new GraphQLNonNull(objectType),
+        args: {
+          where: { type: new GraphQLNonNull(whereUniqueInput) },
+          create: { type: new GraphQLNonNull(inputs.createInput(model)) },
+          update: { type: new GraphQLNonNull(inputs.updateInput(model)) },
+        },
+        resolve: wrapResolve((_root, args, ctx, info) =>
+          written(
+            ctx,
+            info,
+            engine.upsert({
+              model: model.name,
+              where: args.where,
+              create: args.create,
+              update: args.update,
               select: buildSelect(info, model, modelsByName, computedRequires),
               context: ctx,
             }),
@@ -1039,108 +1240,148 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
 
     if (subscribable.has(model.name)) {
       const eventBus = options.eventBus!;
-      const pkField = model.fields.find((f) => f.isId);
-      if (!pkField) {
+      const pkNames = model.primaryKey?.fields ?? model.fields
+        .filter((field) => field.isId)
+        .map((field) => field.name);
+      const pkFields = pkNames.map((name) => model.fields.find((field) => field.name === name));
+      if (pkFields.length === 0 || pkFields.some((field) => !field)) {
         throw new Error(`Model ${model.name} has no primary key field and cannot be subscribable`);
       }
+      const keys = pkFields as DatamodelField[];
       const eventTypeName = `${model.name}Event`;
+      const eventIdentityType = keys.length === 1
+        ? scalarType(model, keys[0])
+        : new GraphQLObjectType({
+            name: `${model.name}EventIdentity`,
+            fields: Object.fromEntries(
+              keys.map((field) => {
+                const type = field.kind === 'enum'
+                  ? enumTypes.get(field.type)!
+                  : scalarType(model, field);
+                return [field.name, { type: new GraphQLNonNull(type) }];
+              }),
+            ),
+          });
       const eventType = new GraphQLObjectType({
         name: eventTypeName,
         fields: {
           type: { type: new GraphQLNonNull(golemEventType) },
-          id: { type: new GraphQLNonNull(scalarType(model, pkField)) },
+          id: { type: new GraphQLNonNull(eventIdentityType) },
           entity: { type: objectType },
         },
       });
+      const hub = new ModelSubscriptionHub(
+        model.name,
+        () => eventBus.iterate(eventTopic(model.name)),
+        options.subscription,
+      );
 
       subscriptionFields[eventsFieldName(model.name)] = {
         type: new GraphQLNonNull(eventType),
         args: {
           where: { type: whereInput },
         },
-        subscribe: (_root, args, ctx, info) => {
+        subscribe: async (_root, args, ctx, info) => {
           const authz = options.authorization;
           const eventContext = () => (authz ? authz.freshContext?.(ctx) ?? ctx : undefined);
-          let abandon!: () => void;
-          const abandoned = new Promise<typeof SUBSCRIPTION_ABANDONED>((resolve) => {
-            abandon = () => resolve(SUBSCRIPTION_ABANDONED);
+          if (authz) {
+            await authz.authorize('read', model.name, eventContext());
+          }
+          const entitySelect = buildEventEntitySelect(
+            info,
+            eventTypeName,
+            model,
+            modelsByName,
+            computedRequires,
+          );
+          const evaluationKey = canonicalToken({
+            where: args.where ?? null,
+            entitySelect: entitySelect ?? null,
           });
-          const events = (async function* () {
-            if (authz) {
-              await authz.authorize('read', model.name, eventContext());
-            }
-            const entitySelect = buildEventEntitySelect(info, eventTypeName, model, modelsByName, computedRequires);
-            const source = eventBus.iterate(eventTopic(model.name));
-            try {
-              while (true) {
-                const step = await Promise.race([source.next(), abandoned]);
-                if (step === SUBSCRIPTION_ABANDONED || step.done) break;
-                const payload = step.value;
-                if (payload.type === 'DELETED') {
-                  // A deleted row can no longer be queried safely. Filtered deletion events are
-                  // therefore suppressed, and authorized subscriptions require a pre-delete
-                  // snapshot that passes a fresh instance check.
-                  if (args.where) continue;
-                  if (authz) {
-                    if (!payload.entity || !authz.check) continue;
-                    try {
-                      const allowed = await authz.check('read', model.name, payload.entity, eventContext());
-                      if (!allowed) continue;
-                    } catch (error) {
-                      if (
-                        error instanceof GolemError &&
-                        (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
-                      ) continue;
-                      throw error;
+          return hub.subscribe({
+            contextIdentity: ctx,
+            evaluationKey,
+            evaluate: async (payload) => {
+              if (payload.type === 'DELETED') {
+                // A deleted row can no longer be queried safely. Filtered deletion events are
+                // therefore suppressed, and authorized subscriptions require a pre-delete
+                // snapshot that passes a fresh instance check.
+                if (args.where) return { deliver: false, reason: 'deletion-filter' };
+                if (authz) {
+                  if (!payload.entity || !authz.check) {
+                    return { deliver: false, reason: 'deletion-unverifiable' };
+                  }
+                  try {
+                    const allowed = await authz.check(
+                      'read',
+                      model.name,
+                      payload.entity,
+                      eventContext(),
+                    );
+                    if (!allowed) return { deliver: false, reason: 'authorization' };
+                  } catch (error) {
+                    if (
+                      error instanceof GolemError &&
+                      (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
+                    ) {
+                      return { deliver: false, reason: 'authorization' };
                     }
+                    throw error;
                   }
-                  yield { type: payload.type, id: payload.id, entity: null };
-                  continue;
                 }
-                if (!args.where && !entitySelect && !authz) {
-                  yield { type: payload.type, id: payload.id, entity: null };
-                  continue;
-                }
-                const where = args.where
-                  ? { AND: [{ [pkField.name]: payload.id }, args.where] }
-                  : { [pkField.name]: payload.id };
-                let entity: unknown;
-                try {
-                  entity = await engine.findFirst({
-                    model: model.name,
-                    where,
-                    select: entitySelect ?? primaryKeySelect(model),
-                    context: eventContext(),
-                  });
-                } catch (error) {
-                  if (
-                    error instanceof GolemError &&
-                    (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
-                  ) {
-                    continue;
-                  }
-                  throw error;
-                }
-                if (!entity && (args.where || authz)) {
-                  continue;
-                }
-                yield { type: payload.type, id: payload.id, entity: entitySelect ? entity : null };
+                return {
+                  deliver: true,
+                  value: { type: payload.type, id: payload.id, entity: null },
+                };
               }
-            } finally {
-              void Promise.resolve(source.return?.()).catch(() => undefined);
-            }
-          })();
-          return {
-            next: () => events.next(),
-            return: (value?: unknown) => {
-              abandon();
-              return events.return(value as never);
+              if (!args.where && !entitySelect && !authz) {
+                return {
+                  deliver: true,
+                  value: { type: payload.type, id: payload.id, entity: null },
+                };
+              }
+              const identityWhere = keys.length === 1
+                ? { [keys[0].name]: payload.id }
+                : payload.id;
+              if (
+                !identityWhere ||
+                typeof identityWhere !== 'object' ||
+                Array.isArray(identityWhere)
+              ) {
+                return { deliver: false, reason: 'invalid-identity' };
+              }
+              const where = args.where
+                ? { AND: [identityWhere, args.where] }
+                : identityWhere;
+              let entity: unknown;
+              try {
+                entity = await engine.findFirst({
+                  model: model.name,
+                  where,
+                  select: entitySelect ?? primaryKeySelect(model),
+                  context: eventContext(),
+                });
+              } catch (error) {
+                if (
+                  error instanceof GolemError &&
+                  (error.code === 'FORBIDDEN' || error.code === 'UNAUTHENTICATED')
+                ) {
+                  return { deliver: false, reason: 'authorization' };
+                }
+                throw error;
+              }
+              if (!entity && args.where) return { deliver: false, reason: 'filter' };
+              if (!entity && authz) return { deliver: false, reason: 'authorization' };
+              return {
+                deliver: true,
+                value: {
+                  type: payload.type,
+                  id: payload.id,
+                  entity: entitySelect ? entity : null,
+                },
+              };
             },
-            throw: (error?: unknown) => events.throw(error),
-            [Symbol.asyncIterator]() {
-              return this;
-            },
-          };
+          });
         },
         resolve: (payload: unknown) => payload,
       };

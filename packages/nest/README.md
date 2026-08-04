@@ -12,3 +12,15 @@ See the [full guide](https://github.com/eleven-am/golem#readme) for the quicksta
 If you set `GraphQLModule`'s `context`, it must be a function — `context: ({ req }) => ({ req })` — never a static object. `@nestjs/apollo` reuses a static object across requests with the first caller's `req` still attached, so every later caller is served as the first one. Golem stamps each request through a middleware it registers itself and fails any operation whose context belongs to another request; a context deliberately shared across requests must carry `[golemSharedContext]: true` (the symbol is exported from `@eleven-am/golem`).
 
 Since 0.4, computed fields are real Nest field resolvers. Import the typed `ComputedField` helper from the generated Golem module, use `@Parent()`/`@Context()`/`@Args()`, and pass `golem.fieldResolverEnhancers` to `GraphQLModule`. This enables ordinary Nest pipes, guards, interceptors, filters, and request-scoped providers. A computed field that queries for other rows can be declared with `BatchedComputedField` instead, which loads every parent key resolved in the same tick in one query, per request and through the caller's context. See the root migration guide for the positional-parent breaking change.
+
+Production event bounds are configured at the module boundary:
+
+```ts
+GolemModule.forRoot({
+  // client, datamodel, authorization, models ...
+  subscription: { queueCapacity: 64, observer },
+  batchEvents: { maxRows: 1_000, maxPayloadBytes: 1_048_576 },
+});
+```
+
+One local hub owns each model's event-bus iterator and disconnects a full consumer with `GOLEM_SUBSCRIPTION_OVERFLOW`. Top-level batch events remain buffered until commit. Delivery is not durable or exactly-once. Authorization-enabled startup also validates the reserved `_golem_upsert_guard` table/delegate; apply the provider artifact from `@eleven-am/golem-core` before deploying.

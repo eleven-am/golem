@@ -239,7 +239,7 @@ Before-hooks run sequentially in provider discovery order. Each hook receives th
 | `updateMany` | `@BeforeUpdateMany()` | `@AfterUpdateMany()` |
 | `deleteMany` | `@BeforeDeleteMany()` | `@AfterDeleteMany()` |
 
-`upsert` first probes with a policy-scoped `findFirst`, then selects Golem's create or update pipeline. Exactly that branch's hooks and verification run once. This preserves truthful branch behavior, but it is not Prisma's native atomic upsert: concurrent missing-row callers can race, and the loser receives Golem's stable `CONFLICT` error for the unique violation. Put the operation inside `forContext(ctx).$transaction(...)` when the probe and branch must share your ambient transaction; use application-level retry only when retrying the whole operation is safe. Hooks do not run for plain Prisma delegate calls.
+Context-aware `upsert` serializes branch selection through Golem's bounded internal guard table. A typed canonical form of the model and unique selector is hashed into one of 4,096 stripes by default; the selector itself is never persisted. In an engine-owned transaction the guard acquisition is the first statement, followed by the policy-scoped probe and exactly one create or update pipeline, so exactly that branch's hooks and truthful `CREATED`/`UPDATED` event run once after commit. Caller-owned transactions participate in the same guard, but SQLite may reject a snapshot that has already read before acquiring it; Golem reports that case as stable `CONFLICT` rather than leaking a provider error. The guarantee covers participating Golem context-aware upserts using the same model and canonical selector. Plain Prisma, external writers, and writes addressing the row through a different selector remain outside it. Hooks do not run for plain Prisma delegate calls.
 
 ### Credentials and write-only fields
 
@@ -283,22 +283,46 @@ Models that opt into `aggregations` receive policy-scoped `aggregate` and `group
 - `forContext()` returns Prisma-native `bigint`, `Decimal`, and `number` values unchanged.
 - Empty and nullable measure results stay `null`; they are never changed to zero.
 
-Group keys are local scalar or enum columns. When analytics need to group a fact row by an attribute reached through a relation, prefer an explicit fact-row dimension stamped at write time:
+Ordinary `groupBy` retains Prisma's local-column shape. Relation dimensions use a separately named, deliberately bounded operation and must be configured explicitly:
 
-```prisma
-model Play {
-  id              String  @id @default(cuid())
-  userId          String
-  trackId         String
-  primaryArtistId String?
-  albumId         String?
-  msPlayed        BigInt
+```ts
+models: {
+  Play: {
+    aggregations: {
+      dimensions: ['albumId'],
+      relationDimensions: {
+        artistCountry: {
+          path: ['track', 'primaryArtist'],
+          field: 'country',
+        },
+      },
+      measures: ['msPlayed'],
+      maxIntermediateGroups: 10_000,
+      maxGroups: 100,
+    },
+  },
 }
 ```
 
-Then `groupBy({ by: ['primaryArtistId'], _sum: { msPlayed: true } })` stays one Prisma query under the existing policy kernel. This also forces attribution semantics to be honest: a play can count once for its primary artist instead of silently fanning out across every featured artist and inflating total listening time.
+GraphQL exposes this as `playsRelationGrouped`, separately from `playsGrouped`:
 
-Relation-traversing aggregation is not implemented. If it is designed later, it must remain Prisma-native and policy-scoped in both phases, reconstruct averages from sum/count, inspect the full first-phase set before measure ordering plus `take`, enforce an explicit intermediate-cardinality cap, define fan-out semantics, and fail closed unless the hop model and keys are readable. This is design guidance, not a committed roadmap item.
+```graphql
+query {
+  playsRelationGrouped(
+    by: [albumId, artistCountry]
+    measures: { count: true, sum: [msPlayed], avg: [msPlayed] }
+    orderBy: { sum: { msPlayed: desc } }
+    take: 20
+  ) {
+    key { albumId artistCountry }
+    count
+    sum { msPlayed }
+    avg { msPlayed }
+  }
+}
+```
+
+The programmatic counterpart is `forContext(ctx).play.relationGroupBy()` (also present on its transaction view and `GolemEngine`), typed separately from Prisma-shaped `groupBy`. Golem first groups authorized root facts by local dimensions and relation keys, then policy-fetches every configured to-one hop and merges by the terminal value. A root fact whose target is missing or not visible uses inner-join semantics and contributes nothing. Averages are rebuilt from total sum and total non-null count, never from averages. The complete intermediate set is inspected against `maxIntermediateGroups` before final `having`, ordering, `skip`, or `take`; final ordering receives deterministic key tie-breakers and output is capped by `maxGroups`. Paths must be one or more explicit forward to-one relations. To-many, many-to-many, reverse-only, distinct relation paths, related-model measures, unreadable keys, and unreadable terminal fields fail at configuration or evaluation. Use `$scoped()` for analytical shapes outside this contract.
 
 ## Extensions
 
@@ -358,6 +382,8 @@ GolemModule.forRoot({
   datamodel: getDatamodel(),           // from the generated artifacts
   pubSub: REDIS_PUBSUB,                // any graphql-subscriptions PubSubEngine; optional
   authorization: GolemAuthorizationAdapter,  // optional
+  subscription: { queueCapacity: 64, observer }, // bounded local fan-out
+  batchEvents: { maxRows: 1_000, maxPayloadBytes: 1_048_576 },
   extensions: [ArticleExtension],      // optional
   defaults: { /* global posture */ },
   models: { /* per-model overrides */ },
@@ -368,18 +394,21 @@ GolemModule.forRoot({
 
 | Option | Default | Meaning |
 |---|---|---|
-| `operations` | all seven | Which operations exist, globally |
+| `operations` | all eight | Which CRUD/read operations exist, globally |
 | `subscriptions` | `false` | Event streams per model |
 | `maxTake` | unlimited | `take` above this is rejected with `BAD_USER_INPUT`, never silently clamped |
+| `maxGroups` | relation aggregation: `100` | Final relation-aware group output cap; also the optional GraphQL-local `groupBy` cap |
+| `maxIntermediateGroups` | `10,000` | Complete first-phase cap for relation-aware aggregation |
 | `maxDepth` | `5` | Maximum relation nesting per query, rejected beyond |
 | `checkWriteResults` | `true` with authorization | Transactional write verification and field-level write permissions |
 | `checkReadFields` | `true` with authorization | Read-side field rejection and per-row masking |
+| `upsertGuardStripes` | `4,096` | Bounded serialization stripes for context-aware upsert |
 
 **`models`** (per model, overrides `defaults`)
 
 | Option | Meaning |
 |---|---|
-| `false` | Model is removed from the generated GraphQL surface, but stays reachable under policy through `forContext(ctx)` and to plain delegate access (the intended home for internal or composite-key models). Relation fields on other models that point at it are pruned with it — see below |
+| `false` | Model is removed from the generated GraphQL surface, but stays reachable under policy through `forContext(ctx)` and plain delegate access. Relation fields on other models that point at it are pruned with it — see below |
 | `operations: [...]` | Allowlist; disabled operations do not exist in the schema |
 | `hidden: [...]` | Field removed from every schema surface: types, filters, inputs |
 | `immutable: [...]` | Field accepted on create, absent from update inputs |
@@ -387,7 +416,7 @@ GolemModule.forRoot({
 | `writeOnly: [...]` | Field is accepted by create and update inputs but absent from outputs, filters, ordering, and unique selectors |
 | `subscriptions` | Event stream for this model |
 | `maxTake` | Per-model take limit |
-| `aggregations` | `true` or an allowlist of dimensions/measures plus optional `maxGroups`; generates scoped aggregate/groupBy operations |
+| `aggregations` | `true`, or local `dimensions`/`measures` plus optional named `relationDimensions`, `maxIntermediateGroups`, and `maxGroups`; relation dimensions add a separately named operation |
 
 Field behavior is explicit across every generated GraphQL surface, including nested inputs:
 
@@ -401,6 +430,8 @@ Field behavior is explicit across every generated GraphQL surface, including nes
 | `hidden` | no | no | no | no |
 
 Configuration is validated while the schema is built. Unknown fields, write-only primary keys or relations, and conflicting access modes fail startup with the model and field named. `writeOnly` plus `immutable` is the supported combined mode; other overlapping access modes are rejected rather than resolved implicitly.
+
+When authorization is present and `checkReadFields` is enabled, every visible scalar and enum output field is nullable even when its database column is required. A field check may truthfully mask that value to `null`; the containing object, relation list, and event remain intact. Input requiredness still follows Prisma, relation list structure is unchanged, and event identities remain non-null after event authorization. Disable field checks explicitly if you need the old Prisma-required output nullability, then regenerate GraphQL client types.
 
 ## Errors
 
@@ -416,25 +447,31 @@ All failures surface as GraphQL errors with stable extension codes and no Prisma
 
 ## Subscriptions in detail
 
-Each opted-in model gets `articleEvents(where?)` emitting `{ type: CREATED | UPDATED | DELETED, id, entity }`. Delivery re-fetches the row with the subscriber's own selection and ability, so every subscriber sees exactly what they are allowed to see. Filters evaluate in the database. For production, provide a shared `PubSubEngine` (for example `graphql-redis-subscriptions`); the in-memory default only works on a single instance and logs a warning saying so.
+Each opted-in model gets `articleEvents(where?)` emitting `{ type: CREATED | UPDATED | DELETED, id, entity }`. A single reference-counted local hub owns the event-bus iterator for each model/schema instance, opening it for the first subscriber and closing it after the last. Delivery still re-fetches with the subscriber's current context, selection, filter, and ability. Evaluation is shared only within one event when the exact context object and canonical filter/selection match; it is never shared across callers.
+
+Each consumer queue holds 64 events by default. Set `subscription.queueCapacity` to change it. A slow consumer that fills the queue is disconnected with `GOLEM_SUBSCRIPTION_OVERFLOW`; no event is silently dropped. `GolemSubscriptionObserver` reports active subscriptions, received events, evaluations and latency, deliveries, suppression reasons, queue depth, and overflow disconnects. The event transport is versioned and safely round-trips BigInt, Decimal, Date, bytes, deletion snapshots, composite identities, and batch envelopes through JSON-like buses.
+
+Single-column models keep a scalar event `id`. Composite-`@@id` models expose a model-specific non-null identity object containing the ordered key components. Named and unnamed compound `@@id` and `@@unique` selectors are available in generated find-one, update, delete, upsert, connect, connect-or-create, and nested update/delete inputs.
+
+Top-level `updateMany` and `deleteMany` emit deterministic per-row events for subscribable models across GraphQL, `forContext`, plain generated delegates, and generated interactive transactions. The default limits are 1,000 rows and 1 MiB encoded payload; exceeding either rejects before mutation and never truncates. Eventful `updateMany` refuses primary-key updates. `deleteMany` snapshots and deletes exactly the selected identities and rolls back on a count mismatch. Events remain buffered until commit and are discarded on rollback. Delivery is commit-aware and in-process, not durable or exactly-once: a process crash after the database commit but before publication can still lose events, and out-of-process writes remain invisible.
 
 ## Known limitations
 
 Stated here because you will hit them eventually, and finding them in a README beats finding them in production:
 
-- **Subscription fan-out.** Delivery costs about two indexed queries plus one ability build per event per subscriber. Fine for typical fan-outs, a scaling consideration for very hot models with thousands of subscribers.
+- **Subscription evaluation remains policy-local.** One event-bus iterator fans out locally, but each distinct context/filter/selection group still performs its own policy-scoped evaluation. Golem deliberately does not share unrestricted rows or results across users.
 - **Transactions.** Writes through the generated client are buffered until `prisma.$transaction` commits and discarded on rollback. `forContext(ctx).$transaction(fn)` extends this to policy-enforced callers with the callback form only — there is no sequential-array (`$transaction([...])`) form on the bound client. Out-of-process transactions remain outside Golem's event boundary.
 - **Aggregates are read-only and hook-free.** `count`, `aggregate`, and `groupBy` merge the caller's read constraint but run no `before`/`after` hooks. They fail closed on any field that is not readable on every row the merged constraint matches — a `never` field, a field-level condition, or an inverted rule — rejected by name, since one aggregate value cannot carry per-row masking. A model-level scoped grant discharges its own conditions, so every field on such a model aggregates normally.
-- **Context-aware upsert is branch-aware, not a native atomic upsert.** Golem performs a scoped branch probe and then runs either the create or update pipeline so the correct hooks and authorization execute once. A concurrent unique insert can win between those steps; the losing caller receives `CONFLICT`.
+- **Serialized upsert is cooperative.** The striped guard serializes participating Golem context-aware calls using the same canonical model/selector. Plain Prisma, external writers, and differently addressed selectors do not participate. SQLite caller-owned transactions that already established an incompatible snapshot receive stable `CONFLICT`.
 - **`maxGroups` bounds the generated GraphQL surface only.** With it set, a `groupBy` that supplies no `take` is fetched with a `take` of `maxGroups + 1` and refused if the extra group appears — bounded, and never silently truncated. An explicit `take` above the cap is refused outright. The programmatic `forContext` client is deliberately uncapped: a developer asking for every distinct group is not an anonymous caller asking for one. Note that Prisma requires any `orderBy` on a `groupBy` to use only fields present in `by`; when a `take` is in play and you supplied no ordering, Golem orders by the grouping keys so the page is deterministic.
-- **Conditional read-masked fields should be nullable** in your schema. A masked `null` on a non-nullable GraphQL field produces a standard null-propagation error. This bites only on rows the caller genuinely cannot read the field on: a relation-scoped condition (for example `{ post: { is: { authorId } } }`) is hydrated before the per-row check runs, so an owner's own rows return the real value instead of being masked, even when the model carries no owner scalar of its own. Only genuinely unauthorized rows mask.
+- **Authorized schemas make scalar outputs nullable.** With field checks enabled, required database scalar/enum columns are nullable in GraphQL so a genuine per-row mask does not null-propagate through the containing object. Inputs remain Prisma-required where applicable.
 - **`BigInt` columns serialize as strings** over GraphQL, since values can exceed `2^53` and JSON cannot carry a raw bigint. Inputs accept an integer string or an integer literal; fractional numbers, unsafe integer numbers, and non-numeric strings are rejected.
 - **`Decimal` columns and Decimal aggregates serialize as strings** over GraphQL. Golem preserves the exact Prisma Decimal value; database/provider precision remains the database's responsibility (for example, SQLite numeric aggregation can already be approximate before Prisma returns it).
-- **BigInt policy conditions are exact by default.** The default ability — used when your `Authenticator` leaves `abilityFactory` off — compares mixed `BigInt`/number operands exactly (fail-closed on non-numeric and `NaN` operands), so the in-memory checks — read field masking, transactional write verification, and the subscription delete re-check — are exact at any magnitude, with no `2^53` ceiling. If you override `abilityFactory`, build it with `createAbility` from `@eleven-am/authorizer/prisma`; the adapter verifies this BigInt exactness at startup and refuses to boot with a factory that is not exact. The row-level query filter compiles to SQL and was always exact. List-membership operators (`has`, `hasSome`, `hasEvery`) are BigInt-exact for mixed `BigInt`/number element pairs; non-numeric elements keep JavaScript `Array.includes` (`SameValueZero`) semantics.
+- **BigInt policy conditions are exact by default.** The default ability — used when your `Authenticator` leaves `abilityFactory` off — compares mixed `BigInt`/number operands exactly (fail-closed on non-numeric and `NaN` operands), so the in-memory checks — read field masking, transactional write verification, and the subscription delete re-check — are exact at any magnitude, with no `2^53` ceiling. If you override `abilityFactory`, build it with `createGolemAbility` from `@eleven-am/golem-authorizer`; the adapter verifies that its condition matcher agrees with Golem's operator table and refuses to boot when it does not. The row-level query filter compiles to SQL and was always exact. List-membership operators (`has`, `hasSome`, `hasEvery`) are BigInt-exact for mixed `BigInt`/number element pairs; non-numeric elements keep JavaScript `Array.includes` (`SameValueZero`) semantics.
 - **Out-of-process writes** (another service, a SQL console) are invisible to the event stream.
 - **`retrieveUser` runs per request** and per delivered subscription event. Verify a JWT or cache the lookup; only hit the database on purpose.
-- **Batch mutations publish no events.** `updateMany` and `deleteMany` return counts, and there are deliberately no per-row events for them.
-- **Composite primary keys are `forContext`-only.** Models with a Prisma composite `@@id` are supported for policy-enforced reads and verified writes through `forContext(ctx)` (and plain delegate access). Identity is the compound unique key — `{ postId_tagId: { postId, tagId } }` for `@@id([postId, tagId])`, or the two columns as scalar fields in a filter `where`; every key column is selected across the verified read/write/re-read cycle, so relation-scoped rules like `{ post: { is: { authorId } } }` verify correctly. Such models are not supported on the generated GraphQL surface (their `where`-unique input cannot be expressed) and cannot enable subscriptions (event ids are single-column); both are rejected at schema build naming the model. Set the model to `false` in the `models` config to keep it off the GraphQL surface while it stays reachable through `forContext`.
+- **Nested/out-of-process batches are not captured.** Per-row batch events cover top-level generated GraphQL, `forContext`, plain generated delegates, and generated interactive transactions. Nested batch writes and writes made outside the generated client remain outside the event boundary.
+- **Relation-aware aggregation is bounded to one forward to-one path.** It supports local measures and local plus terminal dimensions. To-many/many-to-many traversal, multiple relation paths, and related-model measures remain `$scoped()` territory. Ordinary programmatic local `groupBy` remains deliberately uncapped by GraphQL's `maxGroups`.
 - **Excluding a model prunes the relations pointing at it.** A relation field cannot reference a GraphQL type that does not exist, so `Artist.genres` disappears from the surface when the join model `ArtistGenre` is `false`. This is silent, and you notice it as an absence rather than an error. Expose what you actually want through a `@ComputedField` — `Artist.genreNames: [String!]!` — which is the better API in any case, since a join table is a storage decision and not something an API should promise. Computed fields resolve per row, so a computed field backed by its own query costs one query per row of the parent list unless it is declared with `@BatchedComputedField`.
 
 ## License

@@ -1,4 +1,4 @@
-# Release notes — next major
+# Release notes — 0.6.1
 
 Golem generates the SQL for the queries it generates, and enforces
 permissions with its own semantics rather than Prisma's.
@@ -6,6 +6,40 @@ permissions with its own semantics rather than Prisma's.
 Prisma keeps the schema, the migrations, the generated types, the
 connection, and the client you write yourself. It is no longer in the path
 of a query golem generates.
+
+## Completed hardening work
+
+### Context-aware upsert is serialized
+
+Policy-aware upserts now acquire a bounded striped guard before probing the update-visible branch. The guard key is a SHA-256 hash of the model plus a typed canonical selector, mapped into 4,096 stripes by default; no selector value is stored. Engine-owned transactions acquire it as their first statement, then run exactly one create/update pipeline with exactly that branch's hooks and commit-buffered event. Concurrent participating PostgreSQL clients converge on one row and one truthful create event. SQLite snapshot conflicts are translated to stable `CONFLICT`.
+
+This requires the reserved `_golem_upsert_guard` table. Provider Prisma/SQL examples ship under `packages/core/prisma`; authorization-enabled Nest applications validate it at startup. The guarantee is cooperative: external/plain Prisma writers and differently addressed selectors remain outside it.
+
+### Subscription fan-out is bounded and observable
+
+One reference-counted local hub per model/schema replaces one event-bus iterator per subscriber. Subscriber queues default to 64; overflow disconnects with `GOLEM_SUBSCRIPTION_OVERFLOW` and never silently drops. Evaluation is deduplicated only inside one event for the identical context object plus canonical filter/selection, never across users. Fresh authorization still runs per event. `GolemSubscriptionObserver` exposes connection counts, receive/evaluate/deliver/suppress counters, latency, queue depth, and overflow.
+
+The event wire format is versioned and JSON-safe for BigInt, Decimal, Date, bytes, composite identities, deletion snapshots, and batch envelopes.
+
+### Composite GraphQL CRUD and event identities
+
+Named and unnamed compound `@@id`/`@@unique` selectors now retain Prisma's nested accessor shape throughout find-one, update, delete, upsert, connect, connect-or-create, and nested update/delete. Fallback selections fetch every primary-key component. Hidden or write-only key components fail schema construction.
+
+Composite models may subscribe. Their event `id` is a model-specific non-null object in declared primary-key order; single-key models retain the existing scalar schema. Filtered delivery and deletion snapshots use scalar conjunctions internally and remain policy scoped.
+
+### Masked scalar outputs are truthfully nullable
+
+When authorization and `checkReadFields` are enabled, visible scalar/enum output fields are nullable regardless of database requiredness. A denied required column can become `null` without nulling its parent object, list, relation, alias, or subscription payload. Input requiredness and relation-list structure are unchanged; identities remain non-null.
+
+### Top-level batch writes emit bounded per-row events
+
+`updateMany` and `deleteMany` now emit deterministic per-row events through GraphQL, `forContext`, plain generated delegates, and generated interactive transactions for subscribable models. Defaults are 1,000 rows and 1 MiB encoded payload, configurable with `batchEvents`. Over-limit work rejects before mutation, never truncates, and primary-key updates are refused. Delete batches snapshot and delete exact identities, verify the count, and roll back on a mismatch. Events publish after commit and disappear on rollback.
+
+This is in-process commit-aware delivery, not an outbox: nested batches, out-of-process writes, and a crash between database commit and publication remain outside the contract.
+
+### Configured relation dimensions
+
+`relationGroupBy()` and the separate `<models>RelationGrouped` GraphQL field provide bounded two-phase aggregation over one explicit forward to-one path. Root and every reached model receive independent row policy. Every participating key/dimension/measure must be readable. Policy-invisible targets use inner-join semantics. Averages merge sum/non-null-count components, Decimal sums avoid Decimal.js operation rounding, and Decimal averages reproduce live SQLite/PostgreSQL provider results (including PostgreSQL native scale). Final having/order/pagination runs only after the complete intermediate set is checked against `maxIntermediateGroups`. Ordinary Prisma-shaped `groupBy` and its uncapped programmatic posture are unchanged. `$scoped()` remains the escape hatch.
 
 ---
 

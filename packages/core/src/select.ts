@@ -17,8 +17,9 @@ export type PrismaSelect = { [field: string]: boolean | PrismaSelectRelation };
 
 export function primaryKeySelect(model: DatamodelModel): PrismaSelect {
   const select: PrismaSelect = {};
+  const compound = new Set(model.primaryKey?.fields ?? []);
   for (const field of model.fields) {
-    if (field.isId) {
+    if (field.isId || compound.has(field.name)) {
       select[field.name] = true;
     }
   }

@@ -180,7 +180,7 @@ describe('buildGolemSchema queries', () => {
     expect(sdl).toContain('type User');
   });
 
-  it('rejects exposing a composite primary key model on the GraphQL surface', () => {
+  it('exposes a composite primary key model on the GraphQL surface', () => {
     const composite: DatamodelDocument = {
       models: [
         {
@@ -194,12 +194,15 @@ describe('buildGolemSchema queries', () => {
       ],
       enums: [],
     };
-    expect(() => buildGolemSchema({ datamodel: composite, client: {} })).toThrow(
-      'Model PostTag has a composite primary key and cannot be exposed on the generated GraphQL surface',
-    );
+    const sdl = printSchema(buildGolemSchema({ datamodel: composite, client: {} }));
+    expect(sdl).toContain('postTag(where: PostTagWhereUniqueInput!): PostTag');
+    expect(sdl).toContain('postId_tagId: PostTagPostId_tagIdCompoundUniqueInput');
+    expect(sdl).toContain('input PostTagPostId_tagIdCompoundUniqueInput');
+    expect(sdl).toContain('postId: String!');
+    expect(sdl).toContain('tagId: String!');
   });
 
-  it('rejects enabling subscriptions on a composite primary key model', () => {
+  it('exposes a non-null ordered identity object for composite subscriptions', () => {
     const composite: DatamodelDocument = {
       models: [
         {
@@ -213,14 +216,16 @@ describe('buildGolemSchema queries', () => {
       ],
       enums: [],
     };
-    expect(() =>
+    const sdl = printSchema(
       buildGolemSchema({
         datamodel: composite,
         client: {},
         models: { PostTag: { subscriptions: true } },
         eventBus: {} as never,
       }),
-    ).toThrow('Model PostTag has a composite primary key and cannot enable subscriptions');
+    );
+    expect(sdl).toContain('id: PostTagEventIdentity!');
+    expect(sdl).toContain('type PostTagEventIdentity {\n  postId: String!\n  tagId: String!\n}');
   });
 
   it('keeps a hidden composite primary key model available to the engine', () => {
@@ -272,11 +277,12 @@ describe('buildGolemSchema queries', () => {
 });
 
 describe('buildGolemSchema mutations', () => {
-  it('exposes the five mutations per model', () => {
+  it('exposes the six mutations per model', () => {
     const schema = buildGolemSchema({ datamodel, client: fakeClient() });
     const sdl = printSchema(schema);
     expect(sdl).toContain('createUser(data: UserCreateInput!): User!');
     expect(sdl).toContain('updateUser(where: UserWhereUniqueInput!, data: UserUpdateInput!): User!');
+    expect(sdl).toContain('upsertUser(where: UserWhereUniqueInput!, create: UserCreateInput!, update: UserUpdateInput!): User!');
     expect(sdl).toContain('deleteUser(where: UserWhereUniqueInput!): User!');
     expect(sdl).toContain('updateManyUsers(where: UserWhereInput, data: UserUpdateManyInput!): BatchPayload!');
     expect(sdl).toContain('deleteManyUsers(where: UserWhereInput): BatchPayload!');

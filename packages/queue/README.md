@@ -110,7 +110,7 @@ Concurrency still applies across scopes: eight accounts send in parallel, one jo
 
 This is enforced in the store, not in the process, so it holds across N workers. A candidate is skipped when another job in its scope holds a **live** lease — `status = 'RUNNING' AND leaseExpiresAt > now`. A crashed worker's stranded row is not a blocker, or it would freeze its whole scope until lease recovery ran, which is precisely what recovery exists to fix.
 
-`PrismaJobStore` needs `$transaction` and a `jobGuard` delegate on the client for this: the predicate and the claim have to be a single statement, and a same-table `NOT EXISTS` cannot be expressed through the delegate's where-shape. Check-then-claim across two statements races, on every engine — SQLite's single writer serializes statements, not a transaction with a read in the middle. If your `Job` model is `@@map`ped, pass the physical name: `new PrismaJobStore(prisma, { table: 'queue_jobs' })`.
+`PrismaJobStore` needs `$transaction` and a `jobGuard` delegate on the client for this: the predicate and the claim have to be one transaction, and the guard row provides the serialization point that makes the predicate and claim atomic. Check-then-claim without that serialization races on every engine — SQLite's single writer serializes statements, not transactions with reads interleaved. If your `Job` model is `@@map`ped, no additional option is needed: `PrismaJobStore` uses Prisma delegates, so Prisma resolves the physical table name.
 
 `InMemoryJobStore` enforces the same rule, so tests exercise production semantics.
 

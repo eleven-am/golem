@@ -65,6 +65,34 @@ describe('generated aggregation surface (e2e)', () => {
     expect(groups.every((group) => typeof group.key.type === 'string')).toBe(true);
   });
 
+  it('groups through the separately named configured relation dimension', async () => {
+    const response = await query(`{
+      postsRelationGrouped(
+        by: [authorEmail]
+        measures: { count: true, sum: [viewCount] }
+        orderBy: { key: { authorEmail: asc } }
+      ) {
+        key { authorEmail }
+        count
+        sum { viewCount }
+      }
+    }`);
+
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.postsRelationGrouped).toEqual([
+      {
+        key: { authorEmail: 'ada@example.com' },
+        count: 1,
+        sum: { viewCount: '100' },
+      },
+      {
+        key: { authorEmail: 'roy@example.com' },
+        count: 2,
+        sum: { viewCount: '9007199254740998' },
+      },
+    ]);
+  });
+
   it('exposes the enum dimension with its own type in the schema', async () => {
     const response = await query(`{
       __type(name: "PostGroupKey") { fields { name type { name } } }

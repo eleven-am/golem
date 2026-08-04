@@ -2,6 +2,21 @@ datasource db {
   provider = "sqlite"
 }
 
+model GolemUpsertGuard {
+  stripe Int    @id
+  seq    BigInt @default(0)
+
+  @@map("_golem_upsert_guard")
+}
+
+model UpsertTarget {
+  id    Int    @id @default(autoincrement())
+  key   String @unique
+  value String
+
+  @@map("upsert_targets")
+}
+
 generator client {
   provider            = "prisma-client"
   output              = "./generated"

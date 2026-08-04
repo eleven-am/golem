@@ -57,7 +57,17 @@ function delegate() {
 }
 
 function fakeClient() {
-  return { user: delegate(), post: delegate(), comment: delegate() };
+  const client = {
+    user: delegate(),
+    post: delegate(),
+    comment: delegate(),
+    golemUpsertGuard: { upsert: jest.fn().mockResolvedValue({ stripe: 1 }) },
+    $transaction: jest.fn() as jest.Mock,
+  };
+  client.$transaction.mockImplementation(async (run: (tx: unknown) => Promise<unknown>) =>
+    run(client),
+  );
+  return client;
 }
 
 const readable: FieldClassification = { access: 'always' };

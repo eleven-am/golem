@@ -29,6 +29,24 @@ function scalar(name: string): DMMF.Field {
   } as DMMF.Field;
 }
 
+describe('native scalar metadata', () => {
+  it('preserves native type arguments needed for exact provider semantics', () => {
+    const score = {
+      ...scalar('score'),
+      type: 'Decimal',
+      nativeType: ['Decimal', ['48', '12']],
+    } as DMMF.Field;
+    const parsed = parseEmitted(
+      emitDatamodelModule(datamodel([model('Metric', [score], null)]), 'postgresql'),
+    );
+
+    expect(parsed.models[0].fields[0]).toMatchObject({
+      name: 'score',
+      nativeType: ['Decimal', ['48', '12']],
+    });
+  });
+});
+
 function datamodel(models: DMMF.Model[], indexes: DMMF.Index[] = []): DMMF.Datamodel {
   return { models, enums: [], types: [], indexes } as unknown as DMMF.Datamodel;
 }
@@ -106,6 +124,19 @@ describe('emitDatamodelModule composite primary keys', () => {
     const output = emitDatamodelModule(datamodel([model('User', [idField, scalar('email')], null)]));
     const parsed = parseEmitted(output);
     expect(parsed.models[0].primaryKey).toBeUndefined();
+  });
+});
+
+describe('reserved internal models', () => {
+  it('omits GolemUpsertGuard from the public datamodel and registered model types', () => {
+    const idField = { ...scalar('id'), isId: true } as DMMF.Field;
+    const output = emitDatamodelModule(datamodel([
+      model('User', [idField], null),
+      model('GolemUpsertGuard', [scalar('stripe'), scalar('seq')], null),
+    ]));
+
+    expect(parseEmitted(output).models.map(({ name }) => name)).toEqual(['User']);
+    expect(output).not.toContain('GolemUpsertGuard:');
   });
 });
 

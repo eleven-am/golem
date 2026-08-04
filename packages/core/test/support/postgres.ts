@@ -16,7 +16,16 @@ export const POSTGRES_URL_HINT =
   `Set ${POSTGRES_OPTIONAL_ENV}=1 to skip the Postgres suite while iterating locally.`;
 
 const DDL = [
-  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets", "plays"`,
+  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets", "plays", "upsert_targets", "_golem_upsert_guard"`,
+  `CREATE TABLE "_golem_upsert_guard" (
+     "stripe" INTEGER PRIMARY KEY,
+     "seq" BIGINT NOT NULL DEFAULT 0
+   )`,
+  `CREATE TABLE "upsert_targets" (
+     "id" SERIAL PRIMARY KEY,
+     "key" TEXT NOT NULL UNIQUE,
+     "value" TEXT NOT NULL
+   )`,
   `CREATE TABLE "users" (
      "user_id" INTEGER PRIMARY KEY,
      "name" TEXT NOT NULL,

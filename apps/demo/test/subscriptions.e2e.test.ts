@@ -15,7 +15,9 @@ describe('golem subscriptions (e2e)', () => {
   let client: Client;
 
   beforeAll(async () => {
-    const context = await bootDemoApp(__filename);
+    const context = await bootDemoApp(__filename, {
+      golem: { postTagSubscriptions: true },
+    });
     app = context.app;
     prisma = context.prisma;
     await app.listen(0);
@@ -139,13 +141,67 @@ describe('golem subscriptions (e2e)', () => {
     expect(events[0].data.postEvents).toEqual({ type: 'DELETED', id: visible.id });
   });
 
-  it('emits nothing for batch mutations', async () => {
-    await gql(`mutation {
+  it('executes composite-primary-key CRUD through the generated GraphQL schema', async () => {
+    const post = await prisma.post.findFirstOrThrow({ where: { title: 'First post' } });
+    const tag = await prisma.tag.findFirstOrThrow({ orderBy: { id: 'asc' } });
+    await prisma.postTag.deleteMany({ where: { postId: post.id, tagId: tag.id } });
+    const where = `postId_tagId: { postId: "${post.id}", tagId: "${tag.id}" }`;
+
+    const created = await gql(`mutation {
+      createPostTag(data: {
+        post: { connect: { id: "${post.id}" } }
+        tag: { connect: { id: "${tag.id}" } }
+      }) { postId tagId }
+    }`);
+    expect(created.body.errors).toBeUndefined();
+    expect(created.body.data.createPostTag).toEqual({ postId: post.id, tagId: tag.id });
+
+    const found = await gql(`query {
+      postTag(where: { ${where} }) { postId tagId }
+    }`);
+    expect(found.body.errors).toBeUndefined();
+    expect(found.body.data.postTag).toEqual({ postId: post.id, tagId: tag.id });
+
+    const updated = await gql(`mutation {
+      updatePostTag(
+        where: { ${where} }
+        data: { addedAt: "2026-02-01T00:00:00.000Z" }
+      ) { addedAt }
+    }`);
+    expect(updated.body.errors).toBeUndefined();
+    expect(updated.body.data.updatePostTag.addedAt).toBe('2026-02-01T00:00:00.000Z');
+
+    const upserted = await gql(`mutation {
+      upsertPostTag(
+        where: { ${where} }
+        create: {
+          post: { connect: { id: "${post.id}" } }
+          tag: { connect: { id: "${tag.id}" } }
+        }
+        update: { addedAt: "2026-03-01T00:00:00.000Z" }
+      ) { addedAt }
+    }`);
+    expect(upserted.body.errors).toBeUndefined();
+    expect(upserted.body.data.upsertPostTag.addedAt).toBe('2026-03-01T00:00:00.000Z');
+
+    const deleted = await gql(`mutation {
+      deletePostTag(where: { ${where} }) { postId tagId }
+    }`);
+    expect(deleted.body.errors).toBeUndefined();
+    expect(deleted.body.data.deletePostTag).toEqual({ postId: post.id, tagId: tag.id });
+    await expect(prisma.postTag.findUnique({
+      where: { postId_tagId: { postId: post.id, tagId: tag.id } },
+    })).resolves.toBeNull();
+  });
+
+  it('emits bounded deterministic per-row events for batch mutations', async () => {
+    const first = await gql(`mutation {
       createPost(data: { title: "batch-a", author: { connect: { email: "sub@example.com" } } }) { id }
     }`);
-    await gql(`mutation {
+    const second = await gql(`mutation {
       createPost(data: { title: "batch-b", author: { connect: { email: "sub@example.com" } } }) { id }
     }`);
+    const ids = [first.body.data.createPost.id, second.body.data.createPost.id].sort();
 
     const sub = collect('subscription { postEvents { type id } }');
     await sleep(400);
@@ -162,6 +218,47 @@ describe('golem subscriptions (e2e)', () => {
     expect(updated.body.data.updateManyPosts.count).toBe(2);
     expect(deleted.body.data.deleteManyPosts.count).toBe(2);
     expect(sub.errors).toEqual([]);
-    expect(sub.events).toEqual([]);
+    expect(sub.events.map((entry) => entry.data.postEvents)).toEqual([
+      { type: 'UPDATED', id: ids[0] },
+      { type: 'UPDATED', id: ids[1] },
+      { type: 'DELETED', id: ids[0] },
+      { type: 'DELETED', id: ids[1] },
+    ]);
+  });
+
+  it('emits ordered composite identities for composite batch mutations', async () => {
+    const post = await prisma.post.findFirstOrThrow({ where: { title: 'First post' } });
+    const tags = await prisma.tag.findMany({ orderBy: { id: 'asc' }, take: 2 });
+    await prisma.postTag.createMany({
+      data: tags.map((tag) => ({ postId: post.id, tagId: tag.id })),
+    });
+    const identities = tags
+      .map((tag) => ({ postId: post.id, tagId: tag.id }))
+      .sort((left, right) => left.tagId.localeCompare(right.tagId));
+    const sub = collect(
+      'subscription { postTagEvents { type id { postId tagId } } }',
+    );
+    await sleep(400);
+
+    const updated = await gql(`mutation {
+      updateManyPostTags(
+        where: { postId: { equals: "${post.id}" } }
+        data: { addedAt: "2026-01-01T00:00:00.000Z" }
+      ) { count }
+    }`);
+    const deleted = await gql(`mutation {
+      deleteManyPostTags(where: { postId: { equals: "${post.id}" } }) { count }
+    }`);
+    await sleep(400);
+    sub.unsubscribe();
+
+    expect(updated.body.errors).toBeUndefined();
+    expect(deleted.body.errors).toBeUndefined();
+    expect(updated.body.data.updateManyPostTags.count).toBe(2);
+    expect(deleted.body.data.deleteManyPostTags.count).toBe(2);
+    expect(sub.events.map((entry) => entry.data.postTagEvents)).toEqual([
+      ...identities.map((id) => ({ type: 'UPDATED', id })),
+      ...identities.map((id) => ({ type: 'DELETED', id })),
+    ]);
   });
 });

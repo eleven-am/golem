@@ -1,0 +1,8 @@
+/// Internal bounded serialization infrastructure for context-aware upsert.
+/// This model is reserved by Golem and is omitted from generated GraphQL and forContext surfaces.
+model GolemUpsertGuard {
+  stripe Int    @id
+  seq    BigInt @default(0)
+
+  @@map("_golem_upsert_guard")
+}

@@ -29,6 +29,10 @@ export function updateFieldName(model: string): string {
   return `update${model}`;
 }
 
+export function upsertFieldName(model: string): string {
+  return `upsert${model}`;
+}
+
 export function deleteFieldName(model: string): string {
   return `delete${model}`;
 }
@@ -55,4 +59,8 @@ export function aggregateFieldName(model: string): string {
 
 export function groupByFieldName(model: string): string {
   return `${pluralOrList(lcFirst(model))}Grouped`;
+}
+
+export function relationGroupByFieldName(model: string): string {
+  return `${pluralOrList(lcFirst(model))}RelationGrouped`;
 }
