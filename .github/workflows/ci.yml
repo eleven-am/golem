@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    working-directory: typescript
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -47,6 +51,7 @@ jobs:
         with:
           node-version: 20
           cache: npm
+          cache-dependency-path: typescript/package-lock.json
       - run: npm ci
       # golem-core imports @eleven-am/golem-policy, whose dist is gitignored, so
       # policy builds first or core cannot resolve it.

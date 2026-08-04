@@ -50,6 +50,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/eleven-am/golem.git",
-    "directory": "packages/policy"
+    "directory": "typescript/packages/policy"
   }
 }

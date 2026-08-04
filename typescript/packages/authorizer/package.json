@@ -1,5 +1,5 @@
 {
-  "name": "@eleven-am/golem",
+  "name": "@eleven-am/golem-authorizer",
   "version": "0.6.1",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -8,28 +8,23 @@
     "test": "jest"
   },
   "dependencies": {
+    "@casl/prisma": "^2.0.0",
     "@eleven-am/golem-core": "^0.6.1",
-    "graphql-subscriptions": "^3.0.0"
+    "@eleven-am/golem-policy": "^0.6.0"
   },
   "peerDependencies": {
-    "@nestjs/common": "^10.0.0 || ^11.0.0",
-    "@nestjs/graphql": "^12.0.0 || ^13.0.0",
-    "graphql": "^16.0.0",
-    "@nestjs/core": "^10.0.0 || ^11.0.0"
+    "@eleven-am/authorizer": "^2.2.1",
+    "@nestjs/common": "^11.0.0"
   },
   "devDependencies": {
+    "@eleven-am/authorizer": "^2.2.1",
     "@nestjs/common": "^11.0.0",
-    "@nestjs/graphql": "^13.0.0",
-    "@nestjs/testing": "^11.0.0",
     "@types/jest": "^29.5.14",
     "@types/node": "^22.10.0",
     "graphql": "^16.11.0",
-    "reflect-metadata": "^0.2.2",
-    "rxjs": "^7.8.1",
     "jest": "^29.7.0",
     "ts-jest": "^29.2.5",
-    "typescript": "^5.7.0",
-    "@nestjs/core": "^11.0.0"
+    "typescript": "^5.7.0"
   },
   "license": "GPL-3.0",
   "author": "Roy OSSAI",
@@ -43,18 +38,16 @@
     "dist",
     "README.md"
   ],
-  "description": "Golem: feed it a Prisma schema, get a full authorized GraphQL API in one NestJS module",
+  "description": "Golem authorization adapter for @eleven-am/authorizer (CASL): constraints, verified writes, field permissions, read masking",
   "keywords": [
-    "nestjs",
-    "graphql",
-    "prisma",
-    "crud",
-    "subscriptions",
-    "authorization"
+    "golem",
+    "casl",
+    "authorization",
+    "prisma"
   ],
   "repository": {
     "type": "git",
     "url": "git+https://github.com/eleven-am/golem.git",
-    "directory": "packages/nest"
+    "directory": "typescript/packages/authorizer"
   }
 }

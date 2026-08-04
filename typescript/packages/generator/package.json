@@ -41,6 +41,6 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/eleven-am/golem.git",
-    "directory": "packages/generator"
+    "directory": "typescript/packages/generator"
   }
 }

@@ -13,7 +13,7 @@ of a query golem generates.
 
 Policy-aware upserts now acquire a bounded striped guard before probing the update-visible branch. The guard key is a SHA-256 hash of the model plus a typed canonical selector, mapped into 4,096 stripes by default; no selector value is stored. Engine-owned transactions acquire it as their first statement, then run exactly one create/update pipeline with exactly that branch's hooks and commit-buffered event. Concurrent participating PostgreSQL clients converge on one row and one truthful create event. SQLite snapshot conflicts are translated to stable `CONFLICT`.
 
-This requires the reserved `_golem_upsert_guard` table. Provider Prisma/SQL examples ship under `packages/core/prisma`; authorization-enabled Nest applications validate it at startup. The guarantee is cooperative: external/plain Prisma writers and differently addressed selectors remain outside it.
+This requires the reserved `_golem_upsert_guard` table. Provider Prisma/SQL examples ship under `typescript/packages/core/prisma`; authorization-enabled Nest applications validate it at startup. The guarantee is cooperative: external/plain Prisma writers and differently addressed selectors remain outside it.
 
 ### Subscription fan-out is bounded and observable
 
