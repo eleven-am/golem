@@ -280,11 +280,14 @@ func orderedFields(fields []ir.FieldIR) []ir.FieldIR {
 func fieldHandle(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
 	ownerModel := models[owner]
 	if field.Scalar != nil {
-		valueType, err := logicalGoType(field.Scalar.Type, enums, imports)
+		handle, valueType, err := scalarHandle(field.Scalar, enums, imports)
 		if err != nil {
 			return "", err
 		}
-		return fmt.Sprintf("golem.ScalarField[%s, %s]", ownerModel.Go.Name, valueType), nil
+		if handle == "BytesField" || handle == "NullableBytesField" {
+			return fmt.Sprintf("golem.%s[%s]", handle, ownerModel.Go.Name), nil
+		}
+		return fmt.Sprintf("golem.%s[%s, %s]", handle, ownerModel.Go.Name, valueType), nil
 	}
 	if field.Relation == nil {
 		return "", fmt.Errorf("model codegen: field %s has no scalar or relation payload", field.ID)
@@ -313,7 +316,9 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 		if err != nil {
 			return "", err
 		}
-		return "golem.GeneratedScalarField" + args + "(" + literal + ")", nil
+		constructor := handle[:open]
+		constructor = strings.TrimPrefix(constructor, "golem.")
+		return "golem.Generated" + constructor + args + "(" + literal + ")", nil
 	}
 	literal, err := idLiteral("RelationID", string(field.Relation.RelationID))
 	if err != nil {
@@ -324,6 +329,48 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 		constructor = "golem.GeneratedToMany"
 	}
 	return constructor + args + "(" + literal + ")", nil
+}
+
+// scalarHandle is the single bootstrap/final mapping from normalized logical
+// field facts to the narrow public policy handle method set. It deliberately
+// derives the class from ModelIR instead of serializing a second capability copy.
+func scalarHandle(field *ir.ScalarFieldIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet) (name, valueType string, err error) {
+	if field == nil {
+		return "", "", fmt.Errorf("model codegen: scalar handle has no scalar metadata")
+	}
+	logical := field.Type
+	if logical.Kind == ir.TypeScalarList {
+		if logical.Element == nil {
+			return "", "", fmt.Errorf("model codegen: scalar-list logical type has no element")
+		}
+		valueType, err = logicalGoType(*logical.Element, enums, imports)
+	} else {
+		valueType, err = logicalGoType(logical, enums, imports)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	switch logical.Kind {
+	case ir.TypeBool, ir.TypeUUID, ir.TypeEnum:
+		name = "EqualField"
+	case ir.TypeInt16, ir.TypeInt32, ir.TypeInt64, ir.TypeFloat32, ir.TypeFloat64,
+		ir.TypeDecimal, ir.TypeDate, ir.TypeTime, ir.TypeDateTime:
+		name = "OrderedField"
+	case ir.TypeString:
+		name = "TextField"
+	case ir.TypeBytes:
+		name = "BytesField"
+	case ir.TypeScalarList:
+		name = "ListField"
+	case ir.TypeJSON:
+		name = "OpaqueField"
+	default:
+		return "", "", fmt.Errorf("model codegen: unsupported logical type %q", logical.Kind)
+	}
+	if field.Nullable {
+		name = "Nullable" + name
+	}
+	return name, valueType, nil
 }
 
 func relationTarget(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.ModelDeclIR, relations map[ir.RelationID]ir.RelationIR) (ir.ModelDeclIR, error) {

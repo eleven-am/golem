@@ -467,9 +467,10 @@ global values do not contain cyclic Go pointers.
 P1 freezes only the type-level shells required to compile and discover attached
 methods.
 
-- P2 owns final predicate/operator behavior and may refine handle decomposition
-  before descriptor Gate 3, but may not remove typed model ownership or introduce
-  string field identities.
+- P2's frozen public predicate/operator ABI is
+  [`../p2/OPERATOR-ABI.md`](../p2/OPERATOR-ABI.md). It may refine handle
+  decomposition before descriptor Gate 3, but may not remove typed model
+  ownership or introduce string field identities.
 - P3/P4 own the fields and semantics of operation request/result shells. P1 owns
   their valid package-level names and recognized hook signature table.
 - P5 owns GraphQL SDL/resolvers. P1 emits transport-neutral metadata only.

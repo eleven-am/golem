@@ -113,7 +113,6 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		}
 	}
 	for typeName, names := range map[string][]string{
-		"ScalarField":        {"Expr"},
 		"SchemaExpr":         {"Eq", "Ne", "LT", "LTE", "GT", "GTE", "IsNull", "IsNotNull", "Add", "Sub", "Mul", "Div", "Mod"},
 		"SchemaPredicate":    {"Or", "And", "Not"},
 		"IndexKey":           {"Desc"},

@@ -3,6 +3,8 @@
 // the compiler; executing these functions does not construct a runtime schema.
 package golem
 
+import "time"
+
 type Schema struct{ _ schemaMarker }
 type schemaMarker struct{}
 
@@ -111,6 +113,15 @@ const (
 // Predicate is a type-level shell. P2 owns its representation and semantics.
 type Predicate[M any] struct{ _ func() M }
 
+func All[M any]() Predicate[M]                          { return Predicate[M]{} }
+func None[M any]() Predicate[M]                         { return Predicate[M]{} }
+func And[M any](_ ...Predicate[M]) Predicate[M]         { return Predicate[M]{} }
+func Or[M any](_ ...Predicate[M]) Predicate[M]          { return Predicate[M]{} }
+func Not[M any](_ Predicate[M]) Predicate[M]            { return Predicate[M]{} }
+func (Predicate[M]) And(_ ...Predicate[M]) Predicate[M] { return Predicate[M]{} }
+func (Predicate[M]) Or(_ ...Predicate[M]) Predicate[M]  { return Predicate[M]{} }
+func (Predicate[M]) Not() Predicate[M]                  { return Predicate[M]{} }
+
 // SchemaExpr and SchemaPredicate are compile-time-only advanced schema nodes.
 // They are deliberately distinct from Predicate, which belongs to P2 policy.
 type SchemaExpr[M any, V any] struct{ _ func(M) V }
@@ -163,25 +174,158 @@ func Cast[M any, From any, To any](_ SchemaValue[M, From], _ SchemaCast[From, To
 
 type Column[M any] interface{ columnModel(M) }
 
-type ScalarField[M any, V any] struct {
+// ScalarColumn is sealed to generated scalar, list, bytes, and opaque field
+// handles. The value type is retained for schema expressions and later typed
+// operation payloads without reflection.
+type ScalarColumn[M any, V any] interface {
+	Column[M]
+	schemaValue(M, V)
+	Expr() SchemaExpr[M, V]
+}
+
+type fieldCore[M any, V any] struct {
 	id FieldID
 	_  func(M) V
 }
 
-func (ScalarField[M, V]) columnModel(M)          {}
-func (ScalarField[M, V]) schemaValue(M, V)       {}
-func (ScalarField[M, V]) Expr() SchemaExpr[M, V] { return SchemaExpr[M, V]{} }
+func (fieldCore[M, V]) columnModel(M)          {}
+func (fieldCore[M, V]) schemaValue(M, V)       {}
+func (fieldCore[M, V]) Expr() SchemaExpr[M, V] { return SchemaExpr[M, V]{} }
 
-func GeneratedScalarField[M any, V any](id FieldID) ScalarField[M, V] {
-	return ScalarField[M, V]{id: id}
+// EqualValue is the closed portable V1 operand set for equality and membership.
+// Bytes and scalar lists have distinct handles because slices are not scalar
+// values and require different operator semantics.
+type EqualValue interface {
+	~bool | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string |
+		UUID | Decimal | Date | Time | time.Time
 }
 
-func (ScalarField[M, V]) Eq(_ V) Predicate[M]        { return Predicate[M]{} }
-func (ScalarField[M, V]) Ne(_ V) Predicate[M]        { return Predicate[M]{} }
-func (ScalarField[M, V]) GTE(_ V) Predicate[M]       { return Predicate[M]{} }
-func (ScalarField[M, V]) IsNull() Predicate[M]       { return Predicate[M]{} }
-func (Predicate[M]) Or(_ Predicate[M]) Predicate[M]  { return Predicate[M]{} }
-func (Predicate[M]) And(_ Predicate[M]) Predicate[M] { return Predicate[M]{} }
+// OrderedValue is the portable V1 operand set with a total provider-neutral
+// ordering. Boolean and UUID fields are deliberately excluded.
+type OrderedValue interface {
+	~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string |
+		Decimal | Date | Time | time.Time
+}
+
+type ListElement interface {
+	~bool | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string |
+		UUID | Decimal | Date | Time | time.Time
+}
+
+type EqualField[M any, V EqualValue] struct{ fieldCore[M, V] }
+
+func GeneratedEqualField[M any, V EqualValue](id FieldID) EqualField[M, V] {
+	return EqualField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
+}
+
+func (EqualField[M, V]) Eq(_ V) Predicate[M]       { return Predicate[M]{} }
+func (EqualField[M, V]) Ne(_ V) Predicate[M]       { return Predicate[M]{} }
+func (EqualField[M, V]) In(_ ...V) Predicate[M]    { return Predicate[M]{} }
+func (EqualField[M, V]) NotIn(_ ...V) Predicate[M] { return Predicate[M]{} }
+
+type OrderedField[M any, V OrderedValue] struct{ EqualField[M, V] }
+
+func GeneratedOrderedField[M any, V OrderedValue](id FieldID) OrderedField[M, V] {
+	return OrderedField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
+}
+
+func (OrderedField[M, V]) LT(_ V) Predicate[M]  { return Predicate[M]{} }
+func (OrderedField[M, V]) LTE(_ V) Predicate[M] { return Predicate[M]{} }
+func (OrderedField[M, V]) GT(_ V) Predicate[M]  { return Predicate[M]{} }
+func (OrderedField[M, V]) GTE(_ V) Predicate[M] { return Predicate[M]{} }
+
+type TextField[M any, V ~string] struct{ OrderedField[M, V] }
+
+func GeneratedTextField[M any, V ~string](id FieldID) TextField[M, V] {
+	return TextField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
+}
+
+func (TextField[M, V]) Contains(_ V) Predicate[M]   { return Predicate[M]{} }
+func (TextField[M, V]) StartsWith(_ V) Predicate[M] { return Predicate[M]{} }
+func (TextField[M, V]) EndsWith(_ V) Predicate[M]   { return Predicate[M]{} }
+
+type ListField[M any, E ListElement] struct{ fieldCore[M, List[E]] }
+
+func GeneratedListField[M any, E ListElement](id FieldID) ListField[M, E] {
+	return ListField[M, E]{fieldCore: fieldCore[M, List[E]]{id: id}}
+}
+
+func (ListField[M, E]) Has(_ E) Predicate[M]         { return Predicate[M]{} }
+func (ListField[M, E]) HasEvery(_ ...E) Predicate[M] { return Predicate[M]{} }
+func (ListField[M, E]) HasSome(_ ...E) Predicate[M]  { return Predicate[M]{} }
+func (ListField[M, E]) IsEmpty(_ bool) Predicate[M]  { return Predicate[M]{} }
+func (ListField[M, E]) Eq(_ List[E]) Predicate[M]    { return Predicate[M]{} }
+
+type BytesField[M any] struct{ fieldCore[M, []byte] }
+
+func GeneratedBytesField[M any](id FieldID) BytesField[M] {
+	return BytesField[M]{fieldCore: fieldCore[M, []byte]{id: id}}
+}
+
+func (BytesField[M]) Eq(_ []byte) Predicate[M]       { return Predicate[M]{} }
+func (BytesField[M]) Ne(_ []byte) Predicate[M]       { return Predicate[M]{} }
+func (BytesField[M]) In(_ ...[]byte) Predicate[M]    { return Predicate[M]{} }
+func (BytesField[M]) NotIn(_ ...[]byte) Predicate[M] { return Predicate[M]{} }
+
+type OpaqueField[M any, V any] struct{ fieldCore[M, V] }
+
+func GeneratedOpaqueField[M any, V any](id FieldID) OpaqueField[M, V] {
+	return OpaqueField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
+}
+
+type NullableEqualField[M any, V EqualValue] struct{ EqualField[M, V] }
+
+func GeneratedNullableEqualField[M any, V EqualValue](id FieldID) NullableEqualField[M, V] {
+	return NullableEqualField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
+}
+
+func (NullableEqualField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableEqualField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+
+type NullableOrderedField[M any, V OrderedValue] struct{ OrderedField[M, V] }
+
+func GeneratedNullableOrderedField[M any, V OrderedValue](id FieldID) NullableOrderedField[M, V] {
+	return NullableOrderedField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
+}
+
+func (NullableOrderedField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableOrderedField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+
+type NullableTextField[M any, V ~string] struct{ TextField[M, V] }
+
+func GeneratedNullableTextField[M any, V ~string](id FieldID) NullableTextField[M, V] {
+	return NullableTextField[M, V]{TextField: GeneratedTextField[M, V](id)}
+}
+
+func (NullableTextField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableTextField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+
+type NullableListField[M any, E ListElement] struct{ ListField[M, E] }
+
+func GeneratedNullableListField[M any, E ListElement](id FieldID) NullableListField[M, E] {
+	return NullableListField[M, E]{ListField: GeneratedListField[M, E](id)}
+}
+
+func (NullableListField[M, E]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableListField[M, E]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+
+type NullableBytesField[M any] struct{ BytesField[M] }
+
+func GeneratedNullableBytesField[M any](id FieldID) NullableBytesField[M] {
+	return NullableBytesField[M]{BytesField: GeneratedBytesField[M](id)}
+}
+
+func (NullableBytesField[M]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableBytesField[M]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+
+type NullableOpaqueField[M any, V any] struct{ OpaqueField[M, V] }
+
+func GeneratedNullableOpaqueField[M any, V any](id FieldID) NullableOpaqueField[M, V] {
+	return NullableOpaqueField[M, V]{OpaqueField: GeneratedOpaqueField[M, V](id)}
+}
+
+func (NullableOpaqueField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
+func (NullableOpaqueField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
 
 type ToOne[M any, R any] struct {
 	id RelationID
@@ -201,12 +345,17 @@ func GeneratedToMany[M any, R any](id RelationID) ToMany[M, R] {
 	return ToMany[M, R]{id: id}
 }
 
-func (ToOne[M, R]) Is(_ Predicate[R]) Predicate[M]    { return Predicate[M]{} }
-func (ToMany[M, R]) Some(_ Predicate[R]) Predicate[M] { return Predicate[M]{} }
+func (ToOne[M, R]) Is(_ Predicate[R]) Predicate[M]     { return Predicate[M]{} }
+func (ToMany[M, R]) Some(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
+func (ToOne[M, R]) IsNot(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
+func (ToOne[M, R]) IsNull() Predicate[M]               { return Predicate[M]{} }
+func (ToOne[M, R]) IsNotNull() Predicate[M]            { return Predicate[M]{} }
+func (ToMany[M, R]) Every(_ Predicate[R]) Predicate[M] { return Predicate[M]{} }
+func (ToMany[M, R]) None(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
 
 type IndexKey[M any] struct{ _ func() M }
 
-func IndexColumn[M any, V any](_ ScalarField[M, V]) IndexKey[M] {
+func IndexColumn[M any, V any](_ ScalarColumn[M, V]) IndexKey[M] {
 	return IndexKey[M]{}
 }
 
@@ -248,7 +397,7 @@ func (RelationOptionSpec[M]) modelOption(M) {}
 
 type GeneratedSpec[M any] struct{ _ func() M }
 
-func Generated[M any, V any](_ ScalarField[M, V], _ SchemaExpr[M, V], _ GeneratedStorage) ModelOption[M] {
+func Generated[M any, V any](_ ScalarColumn[M, V], _ SchemaExpr[M, V], _ GeneratedStorage) ModelOption[M] {
 	return modelOption[M]{}
 }
 

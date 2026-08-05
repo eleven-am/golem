@@ -22,14 +22,22 @@ func (in *interpreter) evalExpression(expression ast.Expr) (ir.SchemaExprIR, boo
 		}
 		return in.literal(expression, logical)
 	}
+	// Expr is the one schema-expression bridge shared by every generated scalar
+	// handle family. Recognize it from the manifest-backed receiver instead of
+	// coupling interpretation to one concrete public handle type: P2 narrows the
+	// policy method set per logical field capability, while every scalar remains a
+	// valid schema value.
+	if handle, valid := in.resolveHandle(in.receiver(call)); valid && handle.Kind == "field" {
+		if function := in.callObject(call); function != nil && function.Name() == "Expr" {
+			if len(call.Args) != 0 {
+				in.errorAt("P1_METHOD_EXPR_ARITY", "Expr takes no arguments", call)
+				return ir.SchemaExprIR{}, false
+			}
+			return in.evalExpression(in.receiver(call))
+		}
+	}
 	operation := in.callOperation(call)
 	switch operation {
-	case "ScalarField.Expr":
-		if len(call.Args) != 0 {
-			in.errorAt("P1_METHOD_EXPR_ARITY", "Expr takes no arguments", call)
-			return ir.SchemaExprIR{}, false
-		}
-		return in.evalExpression(in.receiver(call))
 	case "SchemaValueOf":
 		if len(call.Args) != 1 {
 			in.errorAt("P1_METHOD_EXPR_ARITY", "SchemaValueOf requires one constant", call)

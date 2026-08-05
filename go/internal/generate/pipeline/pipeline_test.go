@@ -17,6 +17,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	postgresqlprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
 type fakeLowerer struct {
@@ -174,6 +176,53 @@ func TestBuildSupportsSamePackageApplicationRegistry(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("same-package registry did not call its local package binding accessor")
+	}
+}
+
+func TestBuildCompilesEveryPolicyHandleFamily(t *testing.T) {
+	directory := testdata(t, "capabilities")
+	request := Request{
+		Compile:    compile.Config{Dir: moduleRoot(t), Pattern: "./internal/generate/pipeline/testdata/capabilities", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/internal/generate/pipeline/testdata/capabilities", PackageName: "capabilities", Directory: directory},
+		Lowerers:   []physical.Lowerer{sqliteprovider.New(), postgresqlprovider.New()},
+	}
+	result, err := Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	coveredProviders := map[ir.Provider]bool{}
+	for _, provider := range result.Providers {
+		coveredProviders[provider.Provider.Provider] = true
+	}
+	if len(result.Providers) != 2 || !coveredProviders[ir.SQLite] || !coveredProviders[ir.PostgreSQL] {
+		t.Fatalf("all-family provider coverage = %v", coveredProviders)
+	}
+	var modelSource string
+	for _, artifact := range result.Prospective.Artifacts {
+		if artifact.Kind == manifest.ArtifactModelGo {
+			modelSource += string(artifact.Content)
+		}
+	}
+	for _, handle := range []string{
+		"golem.EqualField[Post, bool]",
+		"golem.EqualField[Post, Status]",
+		"golem.OrderedField[Post, int64]",
+		"golem.TextField[Post, string]",
+		"golem.BytesField[Post]",
+		"golem.ListField[Post, string]",
+		"golem.OpaqueField[Post, golem.JSON[any]]",
+		"golem.NullableEqualField[Post, bool]",
+		"golem.NullableOrderedField[Post, int64]",
+		"golem.NullableTextField[Post, string]",
+		"golem.NullableBytesField[Post]",
+		"golem.NullableListField[Post, string]",
+		"golem.NullableOpaqueField[Post, golem.JSON[any]]",
+		"golem.ToOne[Post, User]",
+		"golem.ToMany[User, Post]",
+	} {
+		if !strings.Contains(modelSource, handle) {
+			t.Errorf("full-pipeline model source missing %q", handle)
+		}
 	}
 }
 

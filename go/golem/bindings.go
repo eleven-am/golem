@@ -40,7 +40,7 @@ type DeleteManyHookResult[M any] struct{ _ func() M }
 
 // SetCreate preserves model and value type identity at compile time. P4 owns
 // request mutation, validation, and errors.
-func SetCreate[M, V any](_ *CreateHookRequest[M], _ ScalarField[M, V], _ V) error { return nil }
+func SetCreate[M, V any](_ *CreateHookRequest[M], _ ScalarColumn[M, V], _ V) error { return nil }
 
 type HookOperation string
 type HookPhase string

@@ -55,6 +55,14 @@ func TestGeneratedApplicationBindingsRejectMixedAndUnstampedPackages(t *testing.
 
 func TestTypedBindingShellSignatures(t *testing.T) {
 	var _ func(context.Context) bindingActor = ActorFrom[bindingActor]
-	var _ func(*CreateHookRequest[bindingModel], ScalarField[bindingModel, int64], int64) error = SetCreate[bindingModel, int64]
+	var _ func(*CreateHookRequest[bindingModel], ScalarColumn[bindingModel, int64], int64) error = SetCreate[bindingModel, int64]
 	var _ PolicyFactory[bindingActor] = func(bindingActor) (FrozenPolicy, error) { return FrozenPolicy{}, nil }
+
+	request := &CreateHookRequest[bindingModel]{}
+	if err := SetCreate(request, GeneratedOrderedField[bindingModel, int64](FieldID{}), int64(1)); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetCreate(request, GeneratedBytesField[bindingModel](FieldID{}), []byte("value")); err != nil {
+		t.Fatal(err)
+	}
 }

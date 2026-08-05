@@ -49,7 +49,7 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "4204c27d2ec59a4f8bf32d8879d6d2cb2b9bfd16573901f2c4876e77c77e4f4f"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "03cb7657c005ff34b1dc1ea80fbd9d9910c550e349170c8ee2b360e8f90d5242"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput

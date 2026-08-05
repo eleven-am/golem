@@ -3,6 +3,7 @@ package bindings
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -21,6 +22,7 @@ const validPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/te
 const invalidPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/invalid"
 const actorPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/actor"
 const systemPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/systemmodel"
+const capabilityInvalidPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/capabilityinvalid"
 
 func TestDiscoverAndEmitTypedBindingsCompile(t *testing.T) {
 	compilation := bindingCompilation(validPackage, true)
@@ -67,6 +69,36 @@ func TestDiscoverRejectsMalformedRecognizedMethods(t *testing.T) {
 	for code, found := range want {
 		if !found {
 			t.Errorf("missing %s in %#v", code, result.Diagnostics)
+		}
+	}
+}
+
+func TestBootstrapTypecheckRejectsIllegalPolicyCapabilities(t *testing.T) {
+	compilation := capabilityInvalidCompilation()
+	spec := modelcodegen.PackageSpec{ImportPath: capabilityInvalidPackage, PackageName: "capabilityinvalid", Directory: fixtureDir(t, "capabilityinvalid")}
+	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := DiscoverAndEmit(context.Background(), DiscoveryRequest{Dir: moduleDir(t), Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}, ModelBootstrap: bootstrap})
+	var messages []string
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code != "P1_BINDING_TYPECHECK" {
+			t.Errorf("diagnostic code=%q; want P1_BINDING_TYPECHECK: %#v", diagnostic.Code, diagnostic)
+		}
+		messages = append(messages, diagnostic.Message)
+	}
+	joined := strings.Join(messages, "\n")
+	for _, stable := range []string{
+		"Metadata.GTE",
+		"Published.GT",
+		"Status.Contains",
+		"ID.IsNull",
+		"Owner.Some",
+		"Others.ID.Eq(actor.ID)",
+	} {
+		if !strings.Contains(joined, stable) {
+			t.Errorf("missing stable typecheck substring %q in:\n%s", stable, joined)
 		}
 	}
 }
@@ -123,6 +155,42 @@ func bindingCompilation(packagePath string, exposed bool) ir.CompilationIR {
 		contracts = append(contracts, ir.ModelContractIR{ModelID: postID, Exposed: exposed})
 	}
 	return ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Schema: ir.SchemaIdentityIR{StableName: "binding", Actor: actor}, Models: models}, Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts}}
+}
+
+func capabilityInvalidCompilation() ir.CompilationIR {
+	modelNames := []string{"JSONFailure", "BoolFailure", "EnumFailure", "NonNullFailure", "RelationFailure", "CrossFailure", "Other"}
+	models := make([]ir.ModelDeclIR, 0, len(modelNames))
+	contracts := make([]ir.ModelContractIR, 0, len(modelNames))
+	modelIDs := map[string]ir.ModelID{}
+	for index, name := range modelNames {
+		modelID := ir.ModelID(fmt.Sprintf("%032x", 1000+index))
+		modelIDs[name] = modelID
+		models = append(models, ir.ModelDeclIR{ID: modelID, Go: ir.GoNamedTypeIR{PackagePath: capabilityInvalidPackage, Name: name}, LogicalName: name})
+		contracts = append(contracts, ir.ModelContractIR{ModelID: modelID, Exposed: true})
+	}
+	field := func(index int, name string, logical ir.LogicalTypeIR) ir.FieldIR {
+		return ir.FieldIR{ID: ir.FieldID(fmt.Sprintf("%032x", 2000+index)), GoName: name, LogicalName: name, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: ir.SQLIdentifier(strings.ToLower(name)), Type: logical}}
+	}
+	models[0].Fields = []ir.FieldIR{field(0, "Metadata", ir.LogicalTypeIR{Kind: ir.TypeJSON})}
+	models[1].Fields = []ir.FieldIR{field(1, "Published", ir.LogicalTypeIR{Kind: ir.TypeBool})}
+	enumID := ir.EnumID(fmt.Sprintf("%032x", 3000))
+	models[2].Fields = []ir.FieldIR{field(2, "Status", ir.LogicalTypeIR{Kind: ir.TypeEnum, EnumID: &enumID})}
+	models[3].Fields = []ir.FieldIR{field(3, "ID", ir.LogicalTypeIR{Kind: ir.TypeInt64})}
+	relationID := ir.RelationID(fmt.Sprintf("%032x", 4000))
+	relationFieldID := ir.FieldID(fmt.Sprintf("%032x", 2004))
+	models[4].Fields = []ir.FieldIR{{ID: relationFieldID, GoName: "Owner", LogicalName: "Owner", Kind: ir.FieldRelation, Relation: &ir.RelationFieldIR{RelationID: relationID, Role: ir.RelationSource, Kind: ir.RelationBelongsTo}}}
+	models[5].Fields = []ir.FieldIR{field(5, "ID", ir.LogicalTypeIR{Kind: ir.TypeInt64})}
+	models[6].Fields = []ir.FieldIR{field(6, "ID", ir.LogicalTypeIR{Kind: ir.TypeInt64})}
+	return ir.CompilationIR{
+		Model: ir.ModelIR{
+			FormatVersion: ir.ModelFormatVersion,
+			Schema:        ir.SchemaIdentityIR{StableName: "capability-invalid", Actor: ir.GoNamedTypeIR{PackagePath: capabilityInvalidPackage, Name: "Actor"}},
+			Models:        models,
+			Enums:         []ir.EnumIR{{ID: enumID, Go: ir.GoNamedTypeIR{PackagePath: capabilityInvalidPackage, Name: "Status"}}},
+			Relations:     []ir.RelationIR{{ID: relationID, SourceModel: modelIDs["RelationFailure"], TargetModel: modelIDs["Other"], SourceField: relationFieldID}},
+		},
+		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts},
+	}
 }
 
 func moduleDir(t *testing.T) string {
