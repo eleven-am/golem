@@ -18,6 +18,8 @@ jobs:
     env:
       GOLEM_POLICY_PG_URL: postgresql://postgres:golem@127.0.0.1:55432/golem
       GOLEM_POLICY_PG_C_URL: postgresql://postgres:golem@127.0.0.1:55433/golem
+      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
+      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
     services:
       postgres:
         image: postgres:17
@@ -52,6 +54,10 @@ jobs:
           node-version: 20
           cache: npm
           cache-dependency-path: typescript/package-lock.json
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - run: npm ci
       # golem-core imports @eleven-am/golem-policy, whose dist is gitignored, so
       # policy builds first or core cannot resolve it.
@@ -68,3 +74,22 @@ jobs:
       # over everything blocks releases on issues no change here can fix.
       # Tighten this back once those are patched upstream.
       - run: npm audit --omit=dev --audit-level=critical
+      - name: Verify Go policy kernel
+        working-directory: go
+        run: go test -p=1 -count=1 ./...
+      - name: Repeat and shuffle Go policy kernel
+        working-directory: go
+        run: |
+          go test -p=1 -count=2 ./...
+          go test -shuffle=on -count=10 ./internal/policy/...
+      - name: Race-check Go policy kernel
+        working-directory: go
+        run: go test -p=1 -race -count=1 ./...
+      - name: Vet Go policy kernel
+        working-directory: go
+        run: go vet ./...
+      - name: Check Go formatting
+        working-directory: go
+        run: |
+          test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
+          git diff --check

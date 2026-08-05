@@ -1,9 +1,8 @@
 # P2 internal policy IR and freeze/bind contract
 
-Status: **controlling design; closed IR, schema registry, binder, canonical
-encoding, normalization, ordered resolution, dependency planning, evaluation,
-implication, and classification are implemented; later P2 consumers remain
-incomplete**
+Status: **controlling design; the closed IR and all P2 consumers through SQL
+compilation and execution-scoped policy construction are implemented, certified,
+and runtime-agreement promoted as recorded in [`STATUS.md`](./STATUS.md)**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 2, 4,
 7–8, and 20–21. [`P2-PLAN.md`](./P2-PLAN.md) owns delivery order and
@@ -11,10 +10,10 @@ Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 2, 4,
 detailed operator, policy-resolution, and classification chapters own their
 expanded algorithms after the Bible's conflict resolutions.
 
-This document freezes the representation boundary required before P2-C. SQL
-renderers remain later work; the rule kernel, dependency collector,
-provider-neutral evaluator, conservative implication prover, and typed
-classifier now consume this boundary.
+This document freezes the representation boundary required before P2-C. The rule
+kernel, dependency collector, provider-neutral evaluator, conservative
+implication prover, typed classifier, SQL compiler, provider renderers, and
+execution-scoped policy set now consume this boundary.
 
 ## 1. Scope and fixed decisions
 
@@ -898,7 +897,7 @@ operator family; capability is checked before constant folding.
 
 P2 must close these concrete gaps; none is permission to infer data at runtime.
 
-### 10.1 Public descriptor metadata is insufficient for bind
+### 10.1 Public descriptor metadata remains intentionally insufficient for bind
 
 Current `ApplicationDescriptors`/`ModelMetadata` provide model ID, scan/write
 field order, identities, and shallow relation metadata. They do not provide:
@@ -914,25 +913,14 @@ duplicated author-controlled metadata. The complete facts already exist in the
 embedded canonical ModelIR and provider PhysicalSchema documents. The required
 fix is the one-time validated runtime schema decoder/index in section 6.2.
 
-### 10.2 PhysicalSchema has no runtime decoder
+### 10.2 PhysicalSchema runtime decoding is implemented
 
-ModelIR and ContractIR canonical payloads are JSON and can be decoded then
-revalidated/fingerprinted. `physical.CanonicalEncode` currently emits a custom
-reflection-driven binary form, but the repository has no matching decoder. Thus
-the generated `SchemaBundle` is not yet consumable as the P2 physical registry.
-
-Before provider SQL work, P1/P2 integration must either:
-
-1. implement a versioned, bounds-checked `physical.CanonicalDecode` that rejects
-   unknown types/fields, trailing bytes, invalid schema, and fingerprint
-   mismatch; or
-2. generate a separate immutable typed runtime physical registry whose canonical
-   bytes and fingerprint are proven equal to the PhysicalSchema document.
-
-Option 1 is the minimal coherent fix. Re-encoding after decode must reproduce
-the embedded bytes exactly. Using reflection for the new policy canonical
-encoder is still forbidden; this exception only describes compatibility with
-the already-frozen P1 physical document format.
+The generated `SchemaBundle` is consumed through the versioned, bounds-checked
+`physical.CanonicalDecode`. The runtime registry rejects unknown types and
+fields, trailing data, invalid schema facts, fingerprint disagreement, and
+logical/physical ownership forgery. Re-encoding is required to reproduce the
+embedded bytes exactly. Policy canonical encoding remains explicit and does not
+reuse reflection.
 
 ### 10.3 Relation handles lack endpoint FieldID
 

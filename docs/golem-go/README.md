@@ -13,7 +13,9 @@ baseline and must not be read as a completed policy-kernel claim. The P2-B publi
 ABI, internal representation, and provider proof contracts are
 [`p2/PUBLIC-ABI.md`](./p2/PUBLIC-ABI.md),
 [`p2/INTERNAL-IR.md`](./p2/INTERNAL-IR.md), and
-[`p2/PROVIDER-AGREEMENT.md`](./p2/PROVIDER-AGREEMENT.md).
+[`p2/PROVIDER-AGREEMENT.md`](./p2/PROVIDER-AGREEMENT.md). Current implementation
+evidence, completion status, provider limits, and P3+ exclusions are tracked in
+[`p2/STATUS.md`](./p2/STATUS.md).
 
 The numbered documents are detailed supporting specifications and research:
 

@@ -1,6 +1,7 @@
 # P2 portable operator ABI
 
-Status: **accepted P2-A typed baseline; not the complete P2 contract**
+Status: **historical accepted P2-A typed baseline; the current complete authoring
+surface is `PUBLIC-ABI.md`, and implementation status is `STATUS.md`**
 
 Scope: typed policy predicates, row grants, in-memory evaluation, and SQL lowering
 Authority: subordinate only to [`../BIBLE.md`](../BIBLE.md); this file owns the

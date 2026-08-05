@@ -1,14 +1,14 @@
 # P2-B public authoring ABI
 
-Status: **controlling P2-B contract; immutable predicates, ordered rules, frozen
-views, and generated field/relation identities are implemented; agreement-gated
-advanced handles remain intentionally closed**
+Status: **controlling P2-B contract; the complete portable authoring surface and
+generated handle families are implemented and runtime agreement is active for
+the proved SQLite/PostgreSQL inventory recorded in [`STATUS.md`](./STATUS.md)**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 6–8,
 20, and 21. The detailed operator and policy-resolution chapters apply after
 the resolutions recorded here. [`OPERATOR-ABI.md`](./OPERATOR-ABI.md) remains
-the accepted P2-A baseline; this document also records the advanced authoring
-cells that remain closed until provider agreement is proved.
+the accepted P2-A baseline; this document records the complete authoring cells
+implemented after that baseline.
 
 ## 1. Scope and fixed outcomes
 
@@ -335,11 +335,10 @@ Users.Name.Compare(golem.ASCIIInsensitive()).StartsWith(actor.Prefix)
 folding mode. `ASCIIInsensitive` means exactly the agreement-corpus ASCII fold;
 it does not promise Unicode case folding or locale behavior.
 
-A schema does not receive `ModeTextField` until both SQLite and PostgreSQL have
-agreement-proved support. The initial P2-B implementation emits only `TextField`.
-There is no PostgreSQL-only public text operator cell in the initial vocabulary.
-This makes an unavailable comparison mode a compile failure, not a first-request
-renderer error.
+The current generator emits `ModeTextField` because the SQLite and PostgreSQL
+implementations and agreement corpus now exist. There is no PostgreSQL-only
+public text operator cell. Runtime startup still validates the provider proof and
+closed agreement inventory before accepting a policy.
 
 ## 6. Typed JSON authoring
 
@@ -513,13 +512,12 @@ The mode view intentionally exposes only the three JSON string operators.
 Insensitive JSON equality, ordering, and array operations do not compile because
 the detailed contract applies JSON `mode` only to string matching.
 
-The initial P2-B generator emits the existing opaque JSON handle. `JSONField` is
-closed until the complete sensitive matrix passes both-provider live proof;
-`ModeJSONField` remains closed until the insensitive string cells additionally
-pass. No PostgreSQL-only JSON handle is part of the initial public vocabulary.
-The required SQLite implementation may use deterministic registered modernc
-SQLite functions, but those functions must pass the same evaluator/SQLite/
-PostgreSQL oracle before these handles are emitted.
+The current generator emits `ModeJSONField`, which includes the sensitive JSON
+matrix and the mode-bearing string operations. No PostgreSQL-only JSON handle is
+part of the public vocabulary. SQLite supplies deterministic registered modernc
+functions for semantics JSON1 cannot prove exactly; PostgreSQL uses guarded
+`jsonb` operations. Both remain subject to startup capability proof and the live
+agreement gate.
 
 ### 6.4 JSON conjunction
 
@@ -558,11 +556,11 @@ is supported:
 | sensitive JSON plus insensitive strings proved on both | `ModeJSONField` / nullable form |
 | opaque JSON without accepted filter capability | existing `OpaqueField` / nullable form |
 
-The initial P2-B vocabulary is portable or closed. It contains no PostgreSQL-only
-public operator handle. The generator must not emit a broader handle and rely on
-a renderer to reject ordinary use later. JSON and scalar-list fields remain
-opaque/non-authorable until their complete required method families pass the
-three-engine agreement gate.
+The P2 vocabulary is portable or closed and contains no PostgreSQL-only public
+operator handle. The current generator emits list and mode-aware JSON/text
+handles because their provider implementations and oracle inventory are present.
+Unsupported storage and provider facts still refuse during compilation, binding,
+capability proof, or runtime startup.
 
 ### 7.2 Validation timing
 
@@ -689,10 +687,8 @@ the corresponding proved capability:
 - four existing `Can*` calls.
 
 Generated code must be regenerated because relation initializers and eligible
-field handle types change. `ListField` keeps its reserved method names, but the
-initial P2-B generator must stop emitting it until the dual-provider agreement
-gate passes; policy source that relied on the P2-A shell will intentionally stop
-compiling during that closed interval.
+field handle types changed. `ListField`, `ModeTextField`, and `ModeJSONField` are
+now emitted by the current template ABI.
 
 ## 11. Contradictions and required resolutions
 
@@ -717,27 +713,24 @@ where authority is sufficient; genuinely unresolved items remain explicit.
   plan requires missing dependency data to be distinct and fail closed. The P2
   plan/Bible security invariant wins.
 
-### 11.2 Unresolved before implementation
+### 11.2 Resolved during implementation
 
-1. **Portable JSON proof.** The eventual API above assumes exact JSON equality,
-   ordering, path navigation, null sentinels, string operations, and array
-   operations can pass the SQLite/PostgreSQL/Go agreement corpus, potentially
-   through deterministic registered SQLite functions. Until they do, the
-   generator retains `OpaqueField`; the API is closed rather than approximated.
-2. **Portable scalar-list proof.** The eventual `ListField` vocabulary assumes a
-   declared SQLite representation and deterministic functions that agree with Go
-   and PostgreSQL. Until the complete list family passes live proof, list policy
-   authoring remains closed.
-3. **Frozen inspection accessors.** The public freeze/view entry points and
-   immutability requirements are fixed in section 8. The exact sealed node/rule
-   getter set must be owned once by the internal-IR/binder contract to avoid a
-   package cycle or duplicate public representations.
-4. **Decimal constructor surface.** `JSONNumber(Decimal)` is exact, but the public
-   constructors/parsers for `Decimal` itself must be frozen by the P2 exact-value
-   contract. JSON must not add a second decimal implementation.
+1. **Portable JSON implementation.** Exact JSON equality, ordering, typed paths,
+   null sentinels, string operations, and array operations now have one Go
+   evaluator, deterministic SQLite functions, PostgreSQL `jsonb` lowering, and a
+   shared corpus. PostgreSQL rejects exact JSON numbers outside `jsonb`'s physical
+   `numeric` range before execution.
+2. **Portable scalar-list implementation.** `ListField` targets P1's canonical
+   JSON-array storage on both providers; it never assumes PostgreSQL native
+   arrays.
+3. **Frozen inspection accessors.** The sealed copy-isolated views live once in
+   `go/golem`, and `internal/policy/bind` is their sole production consumer.
+4. **Decimal and JSON numbers.** Public `Decimal` remains the portable
+   precision-18 scalar. Exact JSON numbers use their separate canonical
+   coefficient/exponent representation and never route through `float64`.
 
-None of these permits renderer-time approximation. An unresolved capability
-remains absent or opaque until its agreement gate passes.
+None of these permits renderer-time approximation. Provider physical limits are
+fail-closed boundaries, not coercion rules.
 
 ## 12. P2-B ABI definition of done
 
@@ -755,5 +748,5 @@ The public ABI portion of P2-B is complete only when:
 7. freeze and binder validation timings are tested independently;
 8. all input bytes, lists, JSON maps, paths, and rule fields are copy-isolated;
 9. template ABI and deterministic generated goldens are updated; and
-10. documentation still states that no operator is production-ready until the
-    evaluator and both live provider agreement gates pass.
+10. documentation records the exact inventory whose evaluator and both live
+    provider agreement gates passed, while keeping future unproved cells closed.

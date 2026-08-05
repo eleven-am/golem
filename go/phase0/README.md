@@ -1,17 +1,22 @@
 # Golem Go — Phase 0 semantic design
 
-> **Historical status:** this directory records the Phase 0 spike and its source
-> decisions. The controlling merged architecture is now
-> [`docs/golem-go/BIBLE.md`](../../docs/golem-go/BIBLE.md). Phase 0 fixtures remain
-> useful oracle and traceability evidence; they are not the complete runtime
-> specification.
+> **Historical oracle only — do not use as the production API.** This directory
+> records the Phase 0 spike and its source decisions. The controlling merged
+> architecture is [`docs/golem-go/BIBLE.md`](../../docs/golem-go/BIBLE.md), and
+> current policy status is
+> [`docs/golem-go/p2/STATUS.md`](../../docs/golem-go/p2/STATUS.md). Phase 0's string
+> identities, `any` records, and in-memory evaluator are retained only as
+> independent oracle/traceability evidence. Production packages must not import
+> or copy them.
 
 Phase 0 defines the Go product boundary before production implementation begins.
 Its executable spike answers the first high-risk question: can Go express
 Golem's ordered row and field authorization semantics in a typed,
 provider-neutral form before a database or transport exists?
 
-The spike proves an authoring shape based on model-specific policy objects:
+The following is a historical spike example, not current application syntax. It
+proved the model-specific policy-object direction before the generated P2 ABI
+existed:
 
 ```go
 type PostPolicy struct{}

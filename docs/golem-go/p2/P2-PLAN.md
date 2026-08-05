@@ -1,7 +1,13 @@
 # P2 policy kernel execution plan
 
-Status: **controlling implementation plan; P2-B through P2-F are implemented;
-P2 as a whole is not complete**
+Status: **controlling implementation record; P2-A through P2-J are complete and
+verified**
+
+The line-by-line evidence ledger is recorded in [`STATUS.md`](./STATUS.md). The
+closure run passed 630 probes across the evaluator, migrated SQLite, and both
+mandatory PostgreSQL collation profiles. Runtime agreement is promoted for the
+closed 41-entry portable inventory, and CI owns the complete deterministic
+command set.
 
 Authority: [`../BIBLE.md`](../BIBLE.md) is authoritative. The detailed operator,
 policy-resolution, and classification chapters remain normative after applying
@@ -67,8 +73,9 @@ reflection, table introspection, Go field names, or caller-provided strings.
 
 ### 2.2 Implemented P2 foundation
 
-Commit `7ec8b5e` provides the narrow typed baseline, and the current P2-B/P2-C
-worktree extends it with:
+Commit `7ec8b5e` provided the narrow typed baseline. The current tree extends it
+through provider rendering, the agreement harness, and execution-scoped policy
+construction with:
 
 - equality, ordered, text, bytes, list, opaque, and nullable scalar handles;
 - to-one and to-many relation handles;
@@ -82,19 +89,26 @@ worktree extends it with:
 - a closed internal policy IR, canonical encoders, and fingerprints;
 - a validated immutable runtime schema registry and public-to-internal binder;
 - deterministic conservative condition normalization; and
-- separate newest-first row and field rule resolution.
+- separate newest-first row and field rule resolution;
+- the complete portable scalar, list, relation, comparison-mode, and JSON
+  authoring handles;
+- provider-neutral SQL traversal with deterministic aliases and bound values;
+- SQLite and PostgreSQL leaf renderers and codecs;
+- the checked-in social agreement corpus and live provider adapters; and
+- fresh actor-scoped generated policy-set construction.
 
-Advanced list, insensitive-text, and JSON policy handles remain deliberately
-closed in generated application code until their evaluator/SQLite/PostgreSQL
-agreement cells pass.
+The generated advanced handles are open for the closed 41-entry portable
+inventory. Runtime construction requires the matching provider agreement proof
+and continues to fail closed for any future unknown or unproved operator; see
+[`STATUS.md`](./STATUS.md).
 
-### 2.3 What is still absent
+### 2.3 Closure state
 
-The repository does not yet contain:
-
-- SQLite or PostgreSQL policy SQL rendering;
-- provider agreement fixtures; or
-- execution-scoped policy-set construction.
+No P2 implementation or verification item remains open. The accepted registry,
+runtime activation, 630-probe two-provider agreement run, migrated-schema proof,
+named mutation owners, and deterministic CI gates are all complete. Work listed
+as a P3+ exclusion in [`STATUS.md`](./STATUS.md) remains deliberately outside
+this phase.
 
 The Phase 0 package is an oracle and design fixture. P2 must not rename it into
 production or retain its string model/field identities, `any` operands,
@@ -317,7 +331,7 @@ methods fail bootstrap type checking on both-provider fixtures.
 
 ### P2-B — public contract and representation foundation
 
-Status: **implemented locally; acceptance gate passes**.
+Status: **implemented; acceptance gate passes**.
 
 Work:
 
@@ -346,7 +360,7 @@ Gate:
 
 ### P2-C — validation, normalization, and canonical identity
 
-Status: **implemented locally; acceptance gate passes**.
+Status: **implemented; acceptance gate passes**.
 
 Work:
 
@@ -371,7 +385,7 @@ fixtures all fail closed with stable error codes.
 
 ### P2-D — ordered rule kernel
 
-Status: **implemented locally; acceptance gate passes**.
+Status: **implemented; acceptance gate passes**.
 
 Work:
 
@@ -388,7 +402,7 @@ lenses. Every named mutation in `02-policy-resolution.md` makes a named test fai
 
 ### P2-E — evaluator and dependency collection
 
-Status: **implemented locally; acceptance gate passes**.
+Status: **implemented; acceptance gate passes**.
 
 Work:
 
@@ -404,7 +418,7 @@ exact values, JSON absent versus JSON null, and missing-dependency refusal.
 
 ### P2-F — implication and classification
 
-Status: **implemented locally; acceptance gate passes**.
+Status: **implemented; acceptance gate passes**.
 
 Work:
 
@@ -424,8 +438,7 @@ exports no string-keyed field API.
 
 ### P2-G — SQLite and PostgreSQL rendering
 
-Status: **shared compiler contract implemented; provider leaf renderers remain in
-progress**.
+Status: **implemented; unit, golden, capability, and SQLite-live tests exist**.
 
 Work:
 
@@ -448,6 +461,9 @@ must itself satisfy the measurable two-valued contract.
 
 ### P2-H — live agreement oracle
 
+Status: **implemented and verified on SQLite plus C-default and linguistic-
+default PostgreSQL profiles**.
+
 Work:
 
 1. Build one canonical social-policy dataset containing nulls, empty/non-empty
@@ -464,10 +480,15 @@ Gate: all three engines select identical identities for the portable matrix; eve
 authorization predicate has zero SQL-unknown rows; every named operator mutation
 from `01-operators.md` makes at least one named test fail.
 
-The normal local suite may skip PostgreSQL when its DSN is absent. The P2 completion
-and release gate may not: CI must provision PostgreSQL 15+ and run the live profile.
+The mandatory agreement test fails rather than skips when either PostgreSQL DSN
+is absent. A developer may run narrower non-completion suites without those
+profiles; the full P2 and release commands require CI to provision both.
 
 ### P2-I — generated-binding and startup integration
+
+Status: **complete and verified; execution-scoped construction, preflight, and
+the promoted 41-entry portable agreement inventory are active, while unknown or
+unproved additions remain fail-closed**.
 
 Work:
 
@@ -485,6 +506,8 @@ mixed fingerprints and unsupported operators fail before provider execution; rac
 tests pass.
 
 ### P2-J — final audit
+
+Status: **complete and verified**.
 
 Work:
 

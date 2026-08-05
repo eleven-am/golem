@@ -1,7 +1,8 @@
 # P2 provider agreement and acceptance matrix
 
-Status: **P2-B/P2-H controlling acceptance contract; implementation is not yet
-claimed**
+Status: **P2-B/P2-H controlling acceptance contract; evaluator, SQLite,
+PostgreSQL, both live PostgreSQL profiles, runtime agreement promotion, and the
+complete CI gate are verified**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 2, 4, 7, 20, and
 21. [`../01-operators.md`](../01-operators.md) is the detailed semantic and
@@ -12,6 +13,23 @@ an independent policy-resolution oracle, not production operator code.
 This document answers one question: which predicates may enter a frozen policy,
 and what evidence proves that the Go evaluator, SQLite, and PostgreSQL give them
 the same two-valued meaning?
+
+### Current provider implementation boundaries
+
+- SQLite installs three deterministic modernc scalar functions for ASCII folding,
+  scalar-list operations, and exact JSON operations. Startup probes those
+  functions through the active connection pool and binds the resulting proof to
+  the physical schema fingerprint. These functions execute inside the SQL
+  predicate; they are not a Go post-filter.
+- PostgreSQL uses guarded, schema-qualified `jsonb` and scalar expressions.
+  Exact public JSON numbers are encoded without `float64`, but PostgreSQL
+  `jsonb` stores numbers through PostgreSQL `numeric`. A coefficient/exponent
+  outside that documented physical range is refused by the codec before SQL
+  execution.
+- The Go value/evaluator layer retains exact canonical JSON numbers as sign,
+  coefficient, and base-10 exponent. It has no JavaScript `2^53-1` ceiling and
+  does not silently narrow a number merely because one provider has a smaller
+  physical range.
 
 ## 1. Non-negotiable gate
 
@@ -513,6 +531,33 @@ No mutation is satisfied by checking generated SQL text alone. Each applicable
 mutation must change identities, produce unknowns, bypass refusal, or violate a
 declared exact-value outcome.
 
+The checked-in owner mapping is:
+
+- M1, M17–M20, M29, and M30:
+  `policy/sql.TestCompileNamedRelationAndCombinatorMutations` and
+  `TestCompileNamedCapabilityMutationsRefuseBeforeDialectRendering`;
+- M2–M10 and M13:
+  `sqlite.TestPolicySQLiteNamedScalarMutationMatrix`, which executes production
+  fragments and separately asserts zero SQL unknowns;
+- M11: `oracle.TestPostgreSQLProviderAgreementLiveProfiles` and its forced versus
+  unforced collation control in `verifyPostgreSQLCollationProfile`;
+- M12 and M19–M26:
+  `evaluate.TestNamedEvaluatorMutationInvariants`, with provider-side witnesses
+  in the SQLite/PostgreSQL agreement suites;
+- M14–M16: `sqlite.TestPolicySQLiteNamedMutationSemanticsAndUnknownCount` plus
+  the portable live oracle;
+- M18: the SQL quantifier matrix above plus
+  `evaluate.TestRelationLoadedEmptyVacuityComplementsAndNestedRows`;
+- M21: the evaluator invariant, exact JSON/list SQLite cases, and PostgreSQL
+  `adjacent_integer_above_2pow53` live subtest;
+- M23 and M28: `operator.TestNamedValidationMutations`; and
+- M26 and M27: the JSON unknown-count provider cases plus
+  `oracle.TestSocialCorpusHasCanonicalShapeAndOperatorBijection`.
+
+M22's original read-projection mutation remains P3-owned. Its P2 owner proves
+only exact oracle/value decoding and must not be cited as a completed P3 read
+test.
+
 ## 9. Contradictions and fail-closed resolutions
 
 These are source conflicts, not implementation discretion:
@@ -535,9 +580,10 @@ These are source conflicts, not implementation discretion:
    the oracle; otherwise the methods are unavailable for a dual-provider schema.
 5. **JSON paths and support.** The chapter exposes different public path shapes
    and refuses several SQLite JSON operations. Resolution: public paths are typed
-   provider-neutral segments. Provider-owned exact SQLite functions close JSON1's
-   semantic gaps. Until those functions and live probes exist, the full JSON
-   method family remains closed rather than becoming PostgreSQL-only by accident.
+   provider-neutral segments. Provider-owned exact SQLite functions now close
+   JSON1's semantic gaps. The full portable handle is generated, and the
+   promoted runtime gate accepts the proved portable inventory while refusing
+   unproved additions.
 6. **JSON numeric precision.** The chapter inherits the JavaScript `2^53-1`
    ceiling and float64 structural equality. Bible/P1 require exact canonical JSON
    numbers. Resolution: exact values with no JavaScript ceiling; any provider path
@@ -582,15 +628,20 @@ with equal or stronger three-engine evidence is accepted.
 
 ## 10. Completion commands and CI contract
 
-The ordinary local suite may skip live PostgreSQL only when it does not claim P2
-completion. SQLite is never skipped.
+The ordinary local package suite may skip the live PostgreSQL profile test when
+either DSN is absent. That convenience does not constitute completion evidence:
+the P2 completion/release profile supplies both variables, so setup, agreement,
+and collation failures are hard failures and no PostgreSQL profile is skipped.
 
 ```sh
 cd go
-go test -count=1 ./...
-go vet ./...
-go test -race -count=1 ./golem ./internal/policy/...
+go test -p=1 -count=1 ./...
+go test -p=1 -count=2 ./...
 go test -shuffle=on -count=10 ./internal/policy/...
+go test -p=1 -race -count=1 ./...
+go vet ./...
+test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
+git diff --check
 ```
 
 The P2 completion/release job must provide explicit PostgreSQL 15+ DSNs:
@@ -606,15 +657,6 @@ the `C`-default test cluster for this profile. The second variable is mandatory
 for P2 completion because M11 must be measured. CI creates disposable databases
 or grants creation/drop of per-test schemas; tests do not drop `public`, shared
 schemas, or databases.
-
-The final job also requires:
-
-```sh
-cd go
-test -z "$(gofmt -l .)"
-git diff --check
-go test -count=2 ./...
-```
 
 P2-H is complete only when the checked-in registry/probe inventory, identity
 record, unknown-count record, mutation-to-test map, provider capability report,
