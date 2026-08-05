@@ -57,8 +57,10 @@ type Registry struct {
 	fields              map[golem.ModelID]map[golem.FieldID]Field
 	relations           map[relationKey]RelationEndpoint
 	enumValues          map[compilerir.EnumID]map[string]compilerir.EnumValueID
+	enumLabels          map[compilerir.EnumID]map[compilerir.EnumValueID]string
 	physicalModels      map[golem.Provider]map[golem.ModelID]PhysicalModel
 	physicalFields      map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField
+	physicalNamespaces  map[golem.Provider]physical.PhysicalName
 	capabilities        map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
 }
 
@@ -138,12 +140,32 @@ func (registry *Registry) EnumValue(enum compilerir.EnumID, authoredLabel string
 	return value, ok
 }
 
+func (registry *Registry) EnumLabel(enum compilerir.EnumID, value compilerir.EnumValueID) (string, bool) {
+	if registry == nil {
+		return "", false
+	}
+	values, ok := registry.enumLabels[enum]
+	if !ok {
+		return "", false
+	}
+	label, ok := values[value]
+	return label, ok
+}
+
 func (registry *Registry) PhysicalModel(provider golem.Provider, model golem.ModelID) (PhysicalModel, bool) {
 	models, ok := registry.physicalModels[provider]
 	if !ok {
 		return PhysicalModel{}, false
 	}
 	value, ok := models[model]
+	return value, ok
+}
+
+func (registry *Registry) PhysicalNamespace(provider golem.Provider) (physical.PhysicalName, bool) {
+	if registry == nil {
+		return "", false
+	}
+	value, ok := registry.physicalNamespaces[provider]
 	return value, ok
 }
 

@@ -41,8 +41,9 @@ func New(bundle golem.SchemaBundle) (*Registry, error) {
 		registry: Registry{
 			generationDigest: bundle.GenerationDigest(), modelFingerprint: modelDocument.Fingerprint(), contractFingerprint: contractDocument.Fingerprint(),
 			models: make(map[golem.ModelID]Model), fields: make(map[golem.ModelID]map[golem.FieldID]Field), relations: make(map[relationKey]RelationEndpoint),
-			enumValues: make(map[compilerir.EnumID]map[string]compilerir.EnumValueID), physicalModels: make(map[golem.Provider]map[golem.ModelID]PhysicalModel),
+			enumValues: make(map[compilerir.EnumID]map[string]compilerir.EnumValueID), enumLabels: make(map[compilerir.EnumID]map[compilerir.EnumValueID]string), physicalModels: make(map[golem.Provider]map[golem.ModelID]PhysicalModel),
 			physicalFields: make(map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField), capabilities: make(map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact),
+			physicalNamespaces: make(map[golem.Provider]physical.PhysicalName),
 		},
 		logicalModels: make(map[compilerir.ModelID]compilerir.ModelDeclIR), logicalFields: make(map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR),
 	}
@@ -157,6 +158,7 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		}
 		seenEnumIDs[enum.ID] = true
 		values := make(map[string]compilerir.EnumValueID, len(enum.Values))
+		labels := make(map[compilerir.EnumValueID]string, len(enum.Values))
 		for valueIndex, value := range enum.Values {
 			valuePath := fmt.Sprintf("%s.values[%d]", path, valueIndex)
 			if _, err := fixedID(string(value.ID)); err != nil {
@@ -170,8 +172,10 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 			}
 			seenEnumValueIDs[value.ID] = true
 			values[value.WireValue] = value.ID
+			labels[value.ID] = value.WireValue
 		}
 		builder.registry.enumValues[enum.ID] = values
+		builder.registry.enumLabels[enum.ID] = labels
 	}
 
 	globalFields := make(map[compilerir.FieldID]compilerir.ModelID)
@@ -477,5 +481,6 @@ func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema ph
 		capabilities[capability.ID] = capability
 	}
 	builder.registry.physicalModels[provider], builder.registry.physicalFields[provider], builder.registry.capabilities[provider] = models, fields, capabilities
+	builder.registry.physicalNamespaces[provider] = schema.Namespace.Name
 	return nil
 }

@@ -424,6 +424,9 @@ exports no string-keyed field API.
 
 ### P2-G — SQLite and PostgreSQL rendering
 
+Status: **shared compiler contract implemented; provider leaf renderers remain in
+progress**.
+
 Work:
 
 1. Implement the safe provider-neutral SQL walk and deterministic alias allocator.
@@ -436,6 +439,12 @@ Work:
 Gate: renderer goldens prove descriptor-only identifiers, parameter-only values,
 stable aliases/binds, correlated `EXISTS`, and two-valued fragments for every
 registry entry.
+
+The shared compiler additionally requires the exact bound model fingerprint and
+an immutable runtime-probed capability proof for the active provider. The
+reserved `golem_p` alias namespace prevents correlated-subquery capture. Raw
+provider leaves are not hidden behind a compiler-added `COALESCE`; each renderer
+must itself satisfy the measurable two-valued contract.
 
 ### P2-H — live agreement oracle
 

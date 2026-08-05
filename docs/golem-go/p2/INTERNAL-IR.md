@@ -114,6 +114,10 @@ More precisely:
 - `internal/policy/sql` defines a dialect interface and calls it. Concrete
   provider packages implement that interface; `policy/sql` never imports a
   provider package.
+  Its shared walk owns deterministic aliases, bind order, logical composition,
+  composite correlation, and relation quantifiers. Compilation requires the
+  bound schema fingerprint plus a matching runtime capability proof and rejects
+  stale field/relation shapes before a dialect is called.
 - Provider packages MUST NOT own a second evaluator, rule resolver,
   classifier, or operator meaning table.
 - Test-only `internal/policy/oracle` may import all three engines. No production
