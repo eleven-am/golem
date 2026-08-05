@@ -320,7 +320,11 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 		constructor = strings.TrimPrefix(constructor, "golem.")
 		return "golem.Generated" + constructor + args + "(" + literal + ")", nil
 	}
-	literal, err := idLiteral("RelationID", string(field.Relation.RelationID))
+	fieldLiteral, err := idLiteral("FieldID", string(field.ID))
+	if err != nil {
+		return "", err
+	}
+	relationLiteral, err := idLiteral("RelationID", string(field.Relation.RelationID))
 	if err != nil {
 		return "", err
 	}
@@ -328,7 +332,7 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 	if field.Relation.Kind == ir.RelationHasMany {
 		constructor = "golem.GeneratedToMany"
 	}
-	return constructor + args + "(" + literal + ")", nil
+	return constructor + args + "(" + fieldLiteral + ", " + relationLiteral + ")", nil
 }
 
 // scalarHandle is the single bootstrap/final mapping from normalized logical
@@ -339,14 +343,7 @@ func scalarHandle(field *ir.ScalarFieldIR, enums map[ir.EnumID]ir.EnumIR, import
 		return "", "", fmt.Errorf("model codegen: scalar handle has no scalar metadata")
 	}
 	logical := field.Type
-	if logical.Kind == ir.TypeScalarList {
-		if logical.Element == nil {
-			return "", "", fmt.Errorf("model codegen: scalar-list logical type has no element")
-		}
-		valueType, err = logicalGoType(*logical.Element, enums, imports)
-	} else {
-		valueType, err = logicalGoType(logical, enums, imports)
-	}
+	valueType, err = logicalGoType(logical, enums, imports)
 	if err != nil {
 		return "", "", err
 	}
@@ -361,13 +358,17 @@ func scalarHandle(field *ir.ScalarFieldIR, enums map[ir.EnumID]ir.EnumIR, import
 	case ir.TypeBytes:
 		name = "BytesField"
 	case ir.TypeScalarList:
-		name = "ListField"
+		// Scalar-list storage is supported by P1, but its authorization
+		// operator family remains closed until the evaluator/SQLite/PostgreSQL
+		// agreement gate passes. Emit a schema-capable handle with no policy
+		// methods for both nullable and required lists.
+		name = "OpaqueField"
 	case ir.TypeJSON:
 		name = "OpaqueField"
 	default:
 		return "", "", fmt.Errorf("model codegen: unsupported logical type %q", logical.Kind)
 	}
-	if field.Nullable {
+	if field.Nullable && logical.Kind != ir.TypeScalarList {
 		name = "Nullable" + name
 	}
 	return name, valueType, nil

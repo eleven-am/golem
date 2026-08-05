@@ -23,6 +23,11 @@ const invalidPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/
 const actorPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/actor"
 const systemPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/systemmodel"
 const capabilityInvalidPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/capabilityinvalid"
+const ruleZeroPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/rulezero"
+const ruleCrossModelPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/rulecrossmodel"
+const ruleForgedFieldPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/ruleforgedfield"
+const ruleDeleteFieldPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/ruledeletefield"
+const listPolicyInvalidPackage = "github.com/eleven-am/golem/go/internal/codegen/bindings/testdata/listpolicyinvalid"
 
 func TestDiscoverAndEmitTypedBindingsCompile(t *testing.T) {
 	compilation := bindingCompilation(validPackage, true)
@@ -103,6 +108,62 @@ func TestBootstrapTypecheckRejectsIllegalPolicyCapabilities(t *testing.T) {
 	}
 }
 
+func TestFieldRuleRequiresAtLeastOneField(t *testing.T) {
+	assertRuleTypecheckFailure(t, ruleZeroPackage, false, "not enough arguments in call to rules.CanReadFields")
+}
+
+func TestFieldRuleRejectsCrossModelField(t *testing.T) {
+	assertRuleTypecheckFailure(t, ruleCrossModelPackage, true, "Posts.ID")
+}
+
+func TestFieldIdentityCannotBeImplementedByApplicationPackage(t *testing.T) {
+	assertRuleTypecheckFailure(t, ruleForgedFieldPackage, false, "does not implement golem.Field")
+}
+
+func TestDeleteHasNoFieldScopedRuleMethod(t *testing.T) {
+	assertRuleTypecheckFailure(t, ruleDeleteFieldPackage, false, "rules.CanDeleteFields undefined")
+}
+
+func TestScalarListPolicyMethodsStayClosedBeforeProviderAgreement(t *testing.T) {
+	compilation := listPolicyInvalidCompilation()
+	spec := modelcodegen.PackageSpec{ImportPath: listPolicyInvalidPackage, PackageName: "listpolicyinvalid", Directory: fixtureDir(t, "listpolicyinvalid")}
+	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := DiscoverAndEmit(context.Background(), DiscoveryRequest{Dir: moduleDir(t), Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}, ModelBootstrap: bootstrap})
+	var messages []string
+	for _, diagnostic := range result.Diagnostics {
+		messages = append(messages, diagnostic.Message)
+	}
+	if joined := strings.Join(messages, "\n"); !strings.Contains(joined, "Posts.Tags.Has undefined") {
+		t.Fatalf("missing closed scalar-list method diagnostic in:\n%s", joined)
+	}
+}
+
+func assertRuleTypecheckFailure(t *testing.T, packagePath string, includePost bool, stable string) {
+	t.Helper()
+	compilation := ruleFixtureCompilation(packagePath, includePost)
+	packageName := filepath.Base(packagePath)
+	spec := modelcodegen.PackageSpec{ImportPath: packagePath, PackageName: packageName, Directory: fixtureDir(t, packageName)}
+	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := DiscoverAndEmit(context.Background(), DiscoveryRequest{Dir: moduleDir(t), Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}, ModelBootstrap: bootstrap})
+	var messages []string
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Code != "P1_BINDING_TYPECHECK" {
+			t.Errorf("diagnostic code=%q; want P1_BINDING_TYPECHECK: %#v", diagnostic.Code, diagnostic)
+		}
+		messages = append(messages, diagnostic.Message)
+	}
+	joined := strings.Join(messages, "\n")
+	if !strings.Contains(joined, stable) {
+		t.Fatalf("missing stable typecheck substring %q in:\n%s", stable, joined)
+	}
+}
+
 func TestSeparateActorPackageLoadsForSystemOnlyModel(t *testing.T) {
 	modelID := ir.ModelID("70000000000000000000000000000000")
 	compilation := ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Schema: ir.SchemaIdentityIR{StableName: "system", Actor: ir.GoNamedTypeIR{PackagePath: actorPackage, Name: "Actor"}}, Models: []ir.ModelDeclIR{{ID: modelID, Go: ir.GoNamedTypeIR{PackagePath: systemPackage, Name: "Audit"}, LogicalName: "Audit", Fields: []ir.FieldIR{{ID: "71000000000000000000000000000000", GoName: "ID", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}}}}}}}, Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{ModelID: modelID, Exposed: false}}}}
@@ -151,8 +212,16 @@ func bindingCompilation(packagePath string, exposed bool) ir.CompilationIR {
 	models := []ir.ModelDeclIR{{ID: userID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "User"}, LogicalName: "User", Fields: []ir.FieldIR{field("11000000000000000000000000000000", "ID")}}}
 	contracts := []ir.ModelContractIR{{ModelID: userID, Exposed: exposed}}
 	if packagePath == validPackage {
-		models = append(models, ir.ModelDeclIR{ID: postID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "Post"}, LogicalName: "Post", Fields: []ir.FieldIR{field("21000000000000000000000000000000", "ID"), field("22000000000000000000000000000000", "AuthorID")}})
+		relationID := ir.RelationID("30000000000000000000000000000000")
+		relationFieldID := ir.FieldID("23000000000000000000000000000000")
+		models = append(models, ir.ModelDeclIR{ID: postID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "Post"}, LogicalName: "Post", Fields: []ir.FieldIR{
+			field("21000000000000000000000000000000", "ID"),
+			field("22000000000000000000000000000000", "AuthorID"),
+			{ID: relationFieldID, GoName: "Author", LogicalName: "Author", Kind: ir.FieldRelation, Relation: &ir.RelationFieldIR{RelationID: relationID, Role: ir.RelationSource, Kind: ir.RelationBelongsTo}},
+		}})
+		modelsIR := ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Schema: ir.SchemaIdentityIR{StableName: "binding", Actor: actor}, Models: models, Relations: []ir.RelationIR{{ID: relationID, SourceModel: postID, TargetModel: userID, SourceField: relationFieldID}}}
 		contracts = append(contracts, ir.ModelContractIR{ModelID: postID, Exposed: exposed})
+		return ir.CompilationIR{Model: modelsIR, Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts}}
 	}
 	return ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Schema: ir.SchemaIdentityIR{StableName: "binding", Actor: actor}, Models: models}, Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts}}
 }
@@ -190,6 +259,42 @@ func capabilityInvalidCompilation() ir.CompilationIR {
 			Relations:     []ir.RelationIR{{ID: relationID, SourceModel: modelIDs["RelationFailure"], TargetModel: modelIDs["Other"], SourceField: relationFieldID}},
 		},
 		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts},
+	}
+}
+
+func ruleFixtureCompilation(packagePath string, includePost bool) ir.CompilationIR {
+	actor := ir.GoNamedTypeIR{PackagePath: packagePath, Name: "Actor"}
+	field := func(id string) ir.FieldIR {
+		return ir.FieldIR{ID: ir.FieldID(id), GoName: "ID", LogicalName: "ID", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "id", Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}}}
+	}
+	userID := ir.ModelID("51000000000000000000000000000000")
+	models := []ir.ModelDeclIR{{ID: userID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "User"}, LogicalName: "User", Fields: []ir.FieldIR{field("51100000000000000000000000000000")}}}
+	contracts := []ir.ModelContractIR{{ModelID: userID, Exposed: true}}
+	if includePost {
+		postID := ir.ModelID("52000000000000000000000000000000")
+		models = append(models, ir.ModelDeclIR{ID: postID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "Post"}, LogicalName: "Post", Fields: []ir.FieldIR{field("52100000000000000000000000000000")}})
+		contracts = append(contracts, ir.ModelContractIR{ModelID: postID, Exposed: true})
+	}
+	return ir.CompilationIR{
+		Model:    ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Schema: ir.SchemaIdentityIR{StableName: "field-rule-fixture", Actor: actor}, Models: models},
+		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: contracts},
+	}
+}
+
+func listPolicyInvalidCompilation() ir.CompilationIR {
+	modelID := ir.ModelID("61000000000000000000000000000000")
+	element := ir.LogicalTypeIR{Kind: ir.TypeString}
+	field := ir.FieldIR{
+		ID: ir.FieldID("61100000000000000000000000000000"), GoName: "Tags", LogicalName: "Tags", Kind: ir.FieldScalarList,
+		Scalar: &ir.ScalarFieldIR{Column: "tags", Type: ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &element}},
+	}
+	return ir.CompilationIR{
+		Model: ir.ModelIR{
+			FormatVersion: ir.ModelFormatVersion,
+			Schema:        ir.SchemaIdentityIR{StableName: "list-policy-invalid", Actor: ir.GoNamedTypeIR{PackagePath: listPolicyInvalidPackage, Name: "Actor"}},
+			Models:        []ir.ModelDeclIR{{ID: modelID, Go: ir.GoNamedTypeIR{PackagePath: listPolicyInvalidPackage, Name: "Post"}, LogicalName: "Post", Fields: []ir.FieldIR{field}}},
+		},
+		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{ModelID: modelID, Exposed: true}}},
 	}
 }
 

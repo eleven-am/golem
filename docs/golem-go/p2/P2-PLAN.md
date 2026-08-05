@@ -1,11 +1,14 @@
 # P2 policy kernel execution plan
 
-Status: **controlling implementation plan; P2 is not implemented**
+Status: **controlling implementation plan; P2-B is implemented and P2-C/P2-D
+are in integration; P2 as a whole is not complete**
 
 Authority: [`../BIBLE.md`](../BIBLE.md) is authoritative. The detailed operator,
 policy-resolution, and classification chapters remain normative after applying
 the Bible's resolutions. [`OPERATOR-ABI.md`](./OPERATOR-ABI.md) is the accepted
-P2-A typed baseline, not the complete P2 surface.
+P2-A typed baseline, not the complete P2 surface. The frozen P2-B contracts are
+[`PUBLIC-ABI.md`](./PUBLIC-ABI.md), [`INTERNAL-IR.md`](./INTERNAL-IR.md), and
+[`PROVIDER-AGREEMENT.md`](./PROVIDER-AGREEMENT.md).
 
 ## 1. Outcome
 
@@ -62,30 +65,33 @@ P2 may rely on these P1 outputs:
 P2 must consume those artifacts. It must not reconstruct schema facts with
 reflection, table introspection, Go field names, or caller-provided strings.
 
-### 2.2 Completed P2-A baseline
+### 2.2 Implemented P2 foundation
 
-Commit `7ec8b5e` provides the narrow typed baseline:
+Commit `7ec8b5e` provides the narrow typed baseline, and the current P2-B/P2-C
+worktree extends it with:
 
 - equality, ordered, text, bytes, list, opaque, and nullable scalar handles;
 - to-one and to-many relation handles;
 - typed logical combinators;
 - deterministic logical-type-to-handle generation;
 - bootstrap type-check failures for invalid handle methods; and
-- a dual-provider generated social-style capability fixture.
+- a dual-provider generated social-style capability fixture;
+- real immutable public predicates and ordered frozen policies;
+- model-wide grants/denials and field-scoped grants/denials;
+- exact public values and sealed, copy-isolated frozen views;
+- a closed internal policy IR, canonical encoders, and fingerprints;
+- a validated immutable runtime schema registry and public-to-internal binder;
+- deterministic conservative condition normalization; and
+- separate newest-first row and field rule resolution.
 
-These methods currently construct empty shells. They prove authoring shape and
-compile-time capability narrowing only.
+Advanced list, insensitive-text, and JSON policy handles remain deliberately
+closed in generated application code until their evaluator/SQLite/PostgreSQL
+agreement cells pass.
 
 ### 2.3 What is still absent
 
 The repository does not yet contain:
 
-- a runtime predicate representation;
-- canonical policy values and codecs;
-- the complete Bible-required operator surface;
-- deny or field-scoped rule methods;
-- immutable ordered rules;
-- row or field resolution;
 - dependency planning;
 - implication or discharge;
 - a production evaluator;
@@ -149,15 +155,14 @@ It includes:
   operations from `01-operators.md`; and
 - logical constants and combinators.
 
-The public Go spelling for comparison modes and JSON paths must be frozen in an
-ABI table with positive and negative compile fixtures before implementation.
-This is a contract task, not an implementation choice left to a renderer author.
+The public Go spelling for comparison modes and JSON paths is frozen in
+`PUBLIC-ABI.md`; its positive and negative fixtures are mandatory.
 
-Provider-specific operators are legal only for a schema whose declared provider
-set satisfies their capability. A dual-provider schema receives only the
-agreement-proved intersection. A PostgreSQL-only extension must not appear to be
-portable and must fail before an operation executes when used with an incompatible
-schema.
+The initial P2 vocabulary is portable or closed. Advanced text, list, and JSON
+handles are not emitted until their complete method family passes the evaluator,
+SQLite, and PostgreSQL agreement gate. A future provider-specific extension needs
+a distinct capability-bearing handle and operator identity; it cannot silently
+broaden a portable method.
 
 ### 3.3 Relation existence
 
@@ -310,19 +315,26 @@ Status: **complete in `7ec8b5e`**.
 Gate: generated handles compile with the narrow method sets and invalid basic
 methods fail bootstrap type checking on both-provider fixtures.
 
-### P2-B — complete public contract and value layer
+### P2-B — public contract and representation foundation
+
+Status: **implemented locally; acceptance gate passes**.
 
 Work:
 
-1. Amend `OPERATOR-ABI.md` to the full Bible-required rule and operator surface.
-2. Freeze comparison-mode and JSON-path Go syntax.
+1. Implement the frozen `PUBLIC-ABI.md` rule, field, comparison-mode, and JSON
+   syntax without widening any closed capability cell.
+2. Add the sealed copy-isolated public frozen predicate/policy views required by
+   `INTERNAL-IR.md`.
 3. Add field-rule methods and generated sealed `Field[M]` identity access.
-4. Replace predicate shells with immutable internal nodes.
+4. Change relation handles and generated constructors to carry both endpoint
+   `FieldID` and `RelationID`.
 5. Implement exact public value constructors, parsers, canonical encoders, and
    copy isolation.
 6. Extend positive/negative code-generation fixtures for every method family and
    provider capability.
-7. Bump the generated template ABI.
+7. Stop emitting list, insensitive, and JSON policy handles until the corresponding
+   agreement gate opens them; keep schema-expression capability intact.
+8. Bump the generated template ABI.
 
 Gate:
 
@@ -334,24 +346,32 @@ Gate:
 
 ### P2-C — validation, normalization, and canonical identity
 
+Status: **implemented locally; acceptance gate passes**.
+
 Work:
 
-1. Implement the closed internal policy IR and binder.
-2. Validate shape, model ownership, relation transitions, values, operators, and
+1. Implement a bounds-checked `physical.CanonicalDecode`, with exact re-encoding,
+   validation, trailing-data rejection, and fingerprint checks.
+2. Decode each `SchemaBundle` once into an immutable ID-keyed runtime registry.
+3. Implement the closed internal policy IR and binder.
+4. Validate shape, model ownership, relation transitions, values, operators, and
    provider capabilities.
-3. Normalize constants, empty combinators, associative nesting, identities, and
+5. Normalize constants, empty combinators, associative nesting, identities, and
    duplicate branches.
-4. Preserve rule order while canonicalizing conditions.
-5. Implement stable canonical encoding and fingerprinting.
+6. Preserve rule order while canonicalizing conditions.
+7. Implement stable canonical encoding and fingerprinting.
 
 Forbidden rewrites include unproved De Morgan transformations, nullable comparison
 rewrites, or relation-quantifier rewrites.
 
-Gate: canonical bytes are identical under repeated construction and permitted
-commutative shuffles; malformed internal fixtures all fail closed with stable error
-codes.
+Gate: the embedded physical document decodes, validates, fingerprints, and
+re-encodes byte-identically; canonical policy bytes are identical under repeated
+construction and permitted commutative shuffles; malformed schema/ID/value
+fixtures all fail closed with stable error codes.
 
 ### P2-D — ordered rule kernel
+
+Status: **implemented locally; acceptance gate passes**.
 
 Work:
 
@@ -439,9 +459,11 @@ Work:
 1. Make generated policy factories build and freeze real policy values.
 2. Build one fresh actor-specific policy set per explicit execution input.
 3. Validate generation/schema fingerprints and provider capabilities before use.
-4. Add deterministic inspect output for operator requirements and attached policy
+4. Enable each previously closed generated handle only after its complete P2-H
+   agreement inventory passes, with a template ABI bump when generated types change.
+5. Add deterministic inspect output for operator requirements and attached policy
    inventory without executing application policy code during generation.
-5. Prove no actor-specific policy result is stored in global or engine state.
+6. Prove no actor-specific policy result is stored in global or engine state.
 
 Gate: two concurrent actors repeatedly build different policies without leakage;
 mixed fingerprints and unsupported operators fail before provider execution; race

@@ -106,13 +106,23 @@ func TestGeneratedDescriptorConstructorsRequireTypedIDs(t *testing.T) {
 		{"GeneratedNullableListField", GeneratedNullableListField[declarationUser, string], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableBytesField", GeneratedNullableBytesField[declarationUser], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableOpaqueField", GeneratedNullableOpaqueField[declarationUser, JSON[any]], reflect.TypeOf(FieldID{})},
-		{"GeneratedToOne", GeneratedToOne[declarationUser, declarationUser], reflect.TypeOf(RelationID{})},
-		{"GeneratedToMany", GeneratedToMany[declarationUser, declarationUser], reflect.TypeOf(RelationID{})},
 	}
 	for _, constructor := range constructors {
 		functionType := reflect.TypeOf(constructor.fn)
 		if functionType.NumIn() != 1 || functionType.In(0) != constructor.want {
 			t.Fatalf("%s accepts %v; want exactly %v", constructor.name, functionType, constructor.want)
+		}
+	}
+	for _, constructor := range []struct {
+		name string
+		fn   any
+	}{
+		{"GeneratedToOne", GeneratedToOne[declarationUser, declarationUser]},
+		{"GeneratedToMany", GeneratedToMany[declarationUser, declarationUser]},
+	} {
+		functionType := reflect.TypeOf(constructor.fn)
+		if functionType.NumIn() != 2 || functionType.In(0) != reflect.TypeOf(FieldID{}) || functionType.In(1) != reflect.TypeOf(RelationID{}) {
+			t.Fatalf("%s accepts %v; want exactly FieldID, RelationID", constructor.name, functionType)
 		}
 	}
 	modelConstructor := reflect.TypeOf(GeneratedModelDescriptor[declarationUser])
@@ -147,8 +157,8 @@ func TestPolicyHandleCapabilitiesAndModelOwnership(t *testing.T) {
 	var _ func() Predicate[declarationUser] = declarationCapabilities.OptionalPayload.IsNotNull
 	var _ func() Predicate[declarationUser] = declarationCapabilities.OptionalMetadata.IsNull
 
-	toOne := GeneratedToOne[declarationUser, declarationUser](RelationID{0x01})
-	toMany := GeneratedToMany[declarationUser, declarationUser](RelationID{0x02})
+	toOne := GeneratedToOne[declarationUser, declarationUser](FieldID{0x0d}, RelationID{0x01})
+	toMany := GeneratedToMany[declarationUser, declarationUser](FieldID{0x0e}, RelationID{0x02})
 	var _ func(Predicate[declarationUser]) Predicate[declarationUser] = toOne.Is
 	var _ func(Predicate[declarationUser]) Predicate[declarationUser] = toOne.IsNot
 	var _ func() Predicate[declarationUser] = toOne.IsNull
@@ -163,6 +173,43 @@ func TestPolicyHandleCapabilitiesAndModelOwnership(t *testing.T) {
 	var _ Predicate[declarationUser] = Or[declarationUser]()
 	var _ Predicate[declarationUser] = Not(declarationUsers.ID.Eq(UUID{}))
 	var _ Predicate[declarationUser] = declarationUsers.ID.Eq(UUID{}).And(declarationUsers.Score.GTE(0)).Or().Not()
+}
+
+func TestEveryGeneratedHandleIsASealedFieldIdentity(t *testing.T) {
+	var _ Field[declarationUser] = declarationUsers.ID
+	var _ Field[declarationUser] = declarationUsers.Score
+	var _ Field[declarationUser] = declarationUsers.Title
+	var _ Field[declarationUser] = declarationUsers.DeletedAt
+	var _ Field[declarationUser] = declarationCapabilities.Aliases
+	var _ Field[declarationUser] = declarationCapabilities.OptionalAliases
+	var _ Field[declarationUser] = declarationCapabilities.Payload
+	var _ Field[declarationUser] = declarationCapabilities.OptionalPayload
+	var _ Field[declarationUser] = declarationCapabilities.Metadata
+	var _ Field[declarationUser] = declarationCapabilities.OptionalMetadata
+	var _ Field[declarationUser] = GeneratedToOne[declarationUser, declarationUser](FieldID{0x0d}, RelationID{0x01})
+	var _ Field[declarationUser] = GeneratedToMany[declarationUser, declarationUser](FieldID{0x0e}, RelationID{0x02})
+}
+
+func TestCompleteRuleAuthoringSurfaceHasTypedSignatures(t *testing.T) {
+	rules := NewRules[declarationUser]()
+	predicate := declarationUsers.ID.Eq(UUID{})
+	toOne := GeneratedToOne[declarationUser, declarationUser](FieldID{0x0d}, RelationID{0x01})
+	toMany := GeneratedToMany[declarationUser, declarationUser](FieldID{0x0e}, RelationID{0x02})
+
+	rules.CanRead(predicate)
+	rules.CannotRead(predicate)
+	rules.CanCreate(predicate)
+	rules.CannotCreate(predicate)
+	rules.CanUpdate(predicate)
+	rules.CannotUpdate(predicate)
+	rules.CanDelete(predicate)
+	rules.CannotDelete(predicate)
+	rules.CanReadFields(predicate, declarationUsers.ID)
+	rules.CannotReadFields(predicate, declarationUsers.ID, declarationUsers.Title, toOne)
+	rules.CanCreateFields(predicate, declarationUsers.ID)
+	rules.CannotCreateFields(predicate, declarationUsers.Title, toMany)
+	rules.CanUpdateFields(predicate, declarationUsers.Score)
+	rules.CannotUpdateFields(predicate, declarationUsers.DeletedAt, toOne, toMany)
 }
 
 func TestEveryFieldHandlePreservesSchemaDSL(t *testing.T) {

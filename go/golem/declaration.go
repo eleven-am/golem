@@ -110,17 +110,30 @@ const (
 	Virtual GeneratedStorage = "virtual"
 )
 
-// Predicate is a type-level shell. P2 owns its representation and semantics.
-type Predicate[M any] struct{ _ func() M }
+// Predicate is an immutable, model-typed policy expression. Its representation
+// remains private; only generated handles and the closed combinators below can
+// construct nodes.
+type Predicate[M any] struct {
+	node *predicateNode
+	_    func() M
+}
 
-func All[M any]() Predicate[M]                          { return Predicate[M]{} }
-func None[M any]() Predicate[M]                         { return Predicate[M]{} }
-func And[M any](_ ...Predicate[M]) Predicate[M]         { return Predicate[M]{} }
-func Or[M any](_ ...Predicate[M]) Predicate[M]          { return Predicate[M]{} }
-func Not[M any](_ Predicate[M]) Predicate[M]            { return Predicate[M]{} }
-func (Predicate[M]) And(_ ...Predicate[M]) Predicate[M] { return Predicate[M]{} }
-func (Predicate[M]) Or(_ ...Predicate[M]) Predicate[M]  { return Predicate[M]{} }
-func (Predicate[M]) Not() Predicate[M]                  { return Predicate[M]{} }
+func All[M any]() Predicate[M]  { return predicateConstant[M](true) }
+func None[M any]() Predicate[M] { return predicateConstant[M](false) }
+func And[M any](values ...Predicate[M]) Predicate[M] {
+	return predicateLogical(frozenOperatorAnd, values)
+}
+func Or[M any](values ...Predicate[M]) Predicate[M] {
+	return predicateLogical(frozenOperatorOr, values)
+}
+func Not[M any](value Predicate[M]) Predicate[M] { return predicateNot(value) }
+func (value Predicate[M]) And(more ...Predicate[M]) Predicate[M] {
+	return And(append([]Predicate[M]{value}, more...)...)
+}
+func (value Predicate[M]) Or(more ...Predicate[M]) Predicate[M] {
+	return Or(append([]Predicate[M]{value}, more...)...)
+}
+func (value Predicate[M]) Not() Predicate[M] { return Not(value) }
 
 // SchemaExpr and SchemaPredicate are compile-time-only advanced schema nodes.
 // They are deliberately distinct from Predicate, which belongs to P2 policy.
@@ -172,7 +185,18 @@ func Cast[M any, From any, To any](_ SchemaValue[M, From], _ SchemaCast[From, To
 	return SchemaExpr[M, To]{}
 }
 
-type Column[M any] interface{ columnModel(M) }
+// Field is the sealed identity shared by every generated scalar and relation
+// handle. Application packages may accept Field[M] values, but cannot invent
+// them because both methods are unexported.
+type Field[M any] interface {
+	fieldModel(M)
+	fieldIdentity() FieldID
+}
+
+type Column[M any] interface {
+	Field[M]
+	columnModel(M)
+}
 
 // ScalarColumn is sealed to generated scalar, list, bytes, and opaque field
 // handles. The value type is retained for schema expressions and later typed
@@ -188,9 +212,11 @@ type fieldCore[M any, V any] struct {
 	_  func(M) V
 }
 
-func (fieldCore[M, V]) columnModel(M)          {}
-func (fieldCore[M, V]) schemaValue(M, V)       {}
-func (fieldCore[M, V]) Expr() SchemaExpr[M, V] { return SchemaExpr[M, V]{} }
+func (fieldCore[M, V]) columnModel(M)                {}
+func (fieldCore[M, V]) fieldModel(M)                 {}
+func (field fieldCore[M, V]) fieldIdentity() FieldID { return field.id }
+func (fieldCore[M, V]) schemaValue(M, V)             {}
+func (fieldCore[M, V]) Expr() SchemaExpr[M, V]       { return SchemaExpr[M, V]{} }
 
 // EqualValue is the closed portable V1 operand set for equality and membership.
 // Bytes and scalar lists have distinct handles because slices are not scalar
@@ -218,10 +244,18 @@ func GeneratedEqualField[M any, V EqualValue](id FieldID) EqualField[M, V] {
 	return EqualField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
 }
 
-func (EqualField[M, V]) Eq(_ V) Predicate[M]       { return Predicate[M]{} }
-func (EqualField[M, V]) Ne(_ V) Predicate[M]       { return Predicate[M]{} }
-func (EqualField[M, V]) In(_ ...V) Predicate[M]    { return Predicate[M]{} }
-func (EqualField[M, V]) NotIn(_ ...V) Predicate[M] { return Predicate[M]{} }
+func (field EqualField[M, V]) Eq(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEq, scalarOperand(value))
+}
+func (field EqualField[M, V]) Ne(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorNe, scalarOperand(value))
+}
+func (field EqualField[M, V]) In(values ...V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorIn, scalarOperands(values))
+}
+func (field EqualField[M, V]) NotIn(values ...V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorNotIn, scalarOperands(values))
+}
 
 type OrderedField[M any, V OrderedValue] struct{ EqualField[M, V] }
 
@@ -229,10 +263,18 @@ func GeneratedOrderedField[M any, V OrderedValue](id FieldID) OrderedField[M, V]
 	return OrderedField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
 }
 
-func (OrderedField[M, V]) LT(_ V) Predicate[M]  { return Predicate[M]{} }
-func (OrderedField[M, V]) LTE(_ V) Predicate[M] { return Predicate[M]{} }
-func (OrderedField[M, V]) GT(_ V) Predicate[M]  { return Predicate[M]{} }
-func (OrderedField[M, V]) GTE(_ V) Predicate[M] { return Predicate[M]{} }
+func (field OrderedField[M, V]) LT(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorLT, scalarOperand(value))
+}
+func (field OrderedField[M, V]) LTE(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorLTE, scalarOperand(value))
+}
+func (field OrderedField[M, V]) GT(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorGT, scalarOperand(value))
+}
+func (field OrderedField[M, V]) GTE(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorGTE, scalarOperand(value))
+}
 
 type TextField[M any, V ~string] struct{ OrderedField[M, V] }
 
@@ -240,9 +282,15 @@ func GeneratedTextField[M any, V ~string](id FieldID) TextField[M, V] {
 	return TextField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
 }
 
-func (TextField[M, V]) Contains(_ V) Predicate[M]   { return Predicate[M]{} }
-func (TextField[M, V]) StartsWith(_ V) Predicate[M] { return Predicate[M]{} }
-func (TextField[M, V]) EndsWith(_ V) Predicate[M]   { return Predicate[M]{} }
+func (field TextField[M, V]) Contains(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorContains, stringOperand(string(value)))
+}
+func (field TextField[M, V]) StartsWith(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorStartsWith, stringOperand(string(value)))
+}
+func (field TextField[M, V]) EndsWith(value V) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEndsWith, stringOperand(string(value)))
+}
 
 type ListField[M any, E ListElement] struct{ fieldCore[M, List[E]] }
 
@@ -250,11 +298,21 @@ func GeneratedListField[M any, E ListElement](id FieldID) ListField[M, E] {
 	return ListField[M, E]{fieldCore: fieldCore[M, List[E]]{id: id}}
 }
 
-func (ListField[M, E]) Has(_ E) Predicate[M]         { return Predicate[M]{} }
-func (ListField[M, E]) HasEvery(_ ...E) Predicate[M] { return Predicate[M]{} }
-func (ListField[M, E]) HasSome(_ ...E) Predicate[M]  { return Predicate[M]{} }
-func (ListField[M, E]) IsEmpty(_ bool) Predicate[M]  { return Predicate[M]{} }
-func (ListField[M, E]) Eq(_ List[E]) Predicate[M]    { return Predicate[M]{} }
+func (field ListField[M, E]) Has(value E) Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorListHas, scalarOperand(value))
+}
+func (field ListField[M, E]) HasEvery(values ...E) Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorListHasEvery, scalarOperands(values))
+}
+func (field ListField[M, E]) HasSome(values ...E) Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorListHasSome, scalarOperands(values))
+}
+func (field ListField[M, E]) IsEmpty(value bool) Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorListIsEmpty, flagOperand(value))
+}
+func (field ListField[M, E]) Eq(values List[E]) Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorListEq, scalarOperands([]E(values)))
+}
 
 type BytesField[M any] struct{ fieldCore[M, []byte] }
 
@@ -262,10 +320,18 @@ func GeneratedBytesField[M any](id FieldID) BytesField[M] {
 	return BytesField[M]{fieldCore: fieldCore[M, []byte]{id: id}}
 }
 
-func (BytesField[M]) Eq(_ []byte) Predicate[M]       { return Predicate[M]{} }
-func (BytesField[M]) Ne(_ []byte) Predicate[M]       { return Predicate[M]{} }
-func (BytesField[M]) In(_ ...[]byte) Predicate[M]    { return Predicate[M]{} }
-func (BytesField[M]) NotIn(_ ...[]byte) Predicate[M] { return Predicate[M]{} }
+func (field BytesField[M]) Eq(value []byte) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEq, bytesOperand(value))
+}
+func (field BytesField[M]) Ne(value []byte) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorNe, bytesOperand(value))
+}
+func (field BytesField[M]) In(values ...[]byte) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorIn, bytesOperands(values))
+}
+func (field BytesField[M]) NotIn(values ...[]byte) Predicate[M] {
+	return predicateScalar[M](field.fieldIdentity(), frozenOperatorNotIn, bytesOperands(values))
+}
 
 type OpaqueField[M any, V any] struct{ fieldCore[M, V] }
 
@@ -279,8 +345,12 @@ func GeneratedNullableEqualField[M any, V EqualValue](id FieldID) NullableEqualF
 	return NullableEqualField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
 }
 
-func (NullableEqualField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableEqualField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableEqualField[M, V]) IsNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableEqualField[M, V]) IsNotNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
 
 type NullableOrderedField[M any, V OrderedValue] struct{ OrderedField[M, V] }
 
@@ -288,8 +358,12 @@ func GeneratedNullableOrderedField[M any, V OrderedValue](id FieldID) NullableOr
 	return NullableOrderedField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
 }
 
-func (NullableOrderedField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableOrderedField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableOrderedField[M, V]) IsNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableOrderedField[M, V]) IsNotNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
 
 type NullableTextField[M any, V ~string] struct{ TextField[M, V] }
 
@@ -297,8 +371,12 @@ func GeneratedNullableTextField[M any, V ~string](id FieldID) NullableTextField[
 	return NullableTextField[M, V]{TextField: GeneratedTextField[M, V](id)}
 }
 
-func (NullableTextField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableTextField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableTextField[M, V]) IsNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableTextField[M, V]) IsNotNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
 
 type NullableListField[M any, E ListElement] struct{ ListField[M, E] }
 
@@ -306,8 +384,12 @@ func GeneratedNullableListField[M any, E ListElement](id FieldID) NullableListFi
 	return NullableListField[M, E]{ListField: GeneratedListField[M, E](id)}
 }
 
-func (NullableListField[M, E]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableListField[M, E]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableListField[M, E]) IsNull() Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorIsNull, noOperand())
+}
+func (field NullableListField[M, E]) IsNotNull() Predicate[M] {
+	return predicateList[M](field.fieldIdentity(), frozenOperatorIsNotNull, noOperand())
+}
 
 type NullableBytesField[M any] struct{ BytesField[M] }
 
@@ -315,8 +397,12 @@ func GeneratedNullableBytesField[M any](id FieldID) NullableBytesField[M] {
 	return NullableBytesField[M]{BytesField: GeneratedBytesField[M](id)}
 }
 
-func (NullableBytesField[M]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableBytesField[M]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableBytesField[M]) IsNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableBytesField[M]) IsNotNull() Predicate[M] {
+	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
 
 type NullableOpaqueField[M any, V any] struct{ OpaqueField[M, V] }
 
@@ -324,34 +410,59 @@ func GeneratedNullableOpaqueField[M any, V any](id FieldID) NullableOpaqueField[
 	return NullableOpaqueField[M, V]{OpaqueField: GeneratedOpaqueField[M, V](id)}
 }
 
-func (NullableOpaqueField[M, V]) IsNull() Predicate[M]    { return Predicate[M]{} }
-func (NullableOpaqueField[M, V]) IsNotNull() Predicate[M] { return Predicate[M]{} }
+func (field NullableOpaqueField[M, V]) IsNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableOpaqueField[M, V]) IsNotNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
 
 type ToOne[M any, R any] struct {
-	id RelationID
-	_  func(M) R
+	fieldID    FieldID
+	relationID RelationID
+	_          func(M) R
 }
 
 type ToMany[M any, R any] struct {
-	id RelationID
-	_  func(M) R
+	fieldID    FieldID
+	relationID RelationID
+	_          func(M) R
 }
 
-func GeneratedToOne[M any, R any](id RelationID) ToOne[M, R] {
-	return ToOne[M, R]{id: id}
+func GeneratedToOne[M any, R any](fieldID FieldID, relationID RelationID) ToOne[M, R] {
+	return ToOne[M, R]{fieldID: fieldID, relationID: relationID}
 }
 
-func GeneratedToMany[M any, R any](id RelationID) ToMany[M, R] {
-	return ToMany[M, R]{id: id}
+func GeneratedToMany[M any, R any](fieldID FieldID, relationID RelationID) ToMany[M, R] {
+	return ToMany[M, R]{fieldID: fieldID, relationID: relationID}
 }
 
-func (ToOne[M, R]) Is(_ Predicate[R]) Predicate[M]     { return Predicate[M]{} }
-func (ToMany[M, R]) Some(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
-func (ToOne[M, R]) IsNot(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
-func (ToOne[M, R]) IsNull() Predicate[M]               { return Predicate[M]{} }
-func (ToOne[M, R]) IsNotNull() Predicate[M]            { return Predicate[M]{} }
-func (ToMany[M, R]) Every(_ Predicate[R]) Predicate[M] { return Predicate[M]{} }
-func (ToMany[M, R]) None(_ Predicate[R]) Predicate[M]  { return Predicate[M]{} }
+func (ToOne[M, R]) fieldModel(M)                  {}
+func (field ToOne[M, R]) fieldIdentity() FieldID  { return field.fieldID }
+func (ToMany[M, R]) fieldModel(M)                 {}
+func (field ToMany[M, R]) fieldIdentity() FieldID { return field.fieldID }
+
+func (field ToOne[M, R]) Is(value Predicate[R]) Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationIs, value.node)
+}
+func (field ToMany[M, R]) Some(value Predicate[R]) Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationSome, value.node)
+}
+func (field ToOne[M, R]) IsNot(value Predicate[R]) Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationIsNot, value.node)
+}
+func (field ToOne[M, R]) IsNull() Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationIsNull, nil)
+}
+func (field ToOne[M, R]) IsNotNull() Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationIsNotNull, nil)
+}
+func (field ToMany[M, R]) Every(value Predicate[R]) Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationEvery, value.node)
+}
+func (field ToMany[M, R]) None(value Predicate[R]) Predicate[M] {
+	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationNone, value.node)
+}
 
 type IndexKey[M any] struct{ _ func() M }
 
@@ -401,11 +512,54 @@ func Generated[M any, V any](_ ScalarColumn[M, V], _ SchemaExpr[M, V], _ Generat
 	return modelOption[M]{}
 }
 
-// Rules is an opaque type-checking shell. P2 owns ordered rule behavior.
-type Rules[M any] struct{ _ func() M }
+// Rules records policy declarations in exact source execution order. It is
+// safe to snapshot through Freeze without exposing its mutable builder state.
+type Rules[M any] struct {
+	state rulesState
+	_     func() M
+}
 
-func NewRules[M any]() *Rules[M]           { return &Rules[M]{} }
-func (*Rules[M]) CanRead(_ Predicate[M])   {}
-func (*Rules[M]) CanCreate(_ Predicate[M]) {}
-func (*Rules[M]) CanUpdate(_ Predicate[M]) {}
-func (*Rules[M]) CanDelete(_ Predicate[M]) {}
+func NewRules[M any]() *Rules[M] { return &Rules[M]{} }
+func (rules *Rules[M]) CanRead(value Predicate[M]) {
+	rules.appendModelRule(frozenActionRead, frozenEffectGrant, value)
+}
+func (rules *Rules[M]) CannotRead(value Predicate[M]) {
+	rules.appendModelRule(frozenActionRead, frozenEffectDeny, value)
+}
+func (rules *Rules[M]) CanCreate(value Predicate[M]) {
+	rules.appendModelRule(frozenActionCreate, frozenEffectGrant, value)
+}
+func (rules *Rules[M]) CannotCreate(value Predicate[M]) {
+	rules.appendModelRule(frozenActionCreate, frozenEffectDeny, value)
+}
+func (rules *Rules[M]) CanUpdate(value Predicate[M]) {
+	rules.appendModelRule(frozenActionUpdate, frozenEffectGrant, value)
+}
+func (rules *Rules[M]) CannotUpdate(value Predicate[M]) {
+	rules.appendModelRule(frozenActionUpdate, frozenEffectDeny, value)
+}
+func (rules *Rules[M]) CanDelete(value Predicate[M]) {
+	rules.appendModelRule(frozenActionDelete, frozenEffectGrant, value)
+}
+func (rules *Rules[M]) CannotDelete(value Predicate[M]) {
+	rules.appendModelRule(frozenActionDelete, frozenEffectDeny, value)
+}
+
+func (rules *Rules[M]) CanReadFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionRead, frozenEffectGrant, value, first, rest)
+}
+func (rules *Rules[M]) CannotReadFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionRead, frozenEffectDeny, value, first, rest)
+}
+func (rules *Rules[M]) CanCreateFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionCreate, frozenEffectGrant, value, first, rest)
+}
+func (rules *Rules[M]) CannotCreateFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionCreate, frozenEffectDeny, value, first, rest)
+}
+func (rules *Rules[M]) CanUpdateFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionUpdate, frozenEffectGrant, value, first, rest)
+}
+func (rules *Rules[M]) CannotUpdateFields(value Predicate[M], first Field[M], rest ...Field[M]) {
+	rules.appendFieldRule(frozenActionUpdate, frozenEffectDeny, value, first, rest)
+}

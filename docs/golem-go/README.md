@@ -9,7 +9,11 @@ the detailed schema/IR, provider/migration, and compiler/codegen specifications.
 
 P2 work is governed by [`p2/P2-PLAN.md`](./p2/P2-PLAN.md). The accompanying
 [`p2/OPERATOR-ABI.md`](./p2/OPERATOR-ABI.md) records the completed P2-A typed
-baseline and must not be read as a completed policy-kernel claim.
+baseline and must not be read as a completed policy-kernel claim. The P2-B public
+ABI, internal representation, and provider proof contracts are
+[`p2/PUBLIC-ABI.md`](./p2/PUBLIC-ABI.md),
+[`p2/INTERNAL-IR.md`](./p2/INTERNAL-IR.md), and
+[`p2/PROVIDER-AGREEMENT.md`](./p2/PROVIDER-AGREEMENT.md).
 
 The numbered documents are detailed supporting specifications and research:
 

@@ -194,26 +194,15 @@ func (state *lowerState) storage(logical ir.LogicalTypeIR) (physical.StorageType
 			return physical.StorageType{}, fmt.Errorf("unsupported logical capability %q on %s", *logical.Capability, logical.Kind)
 		}
 	}
-	switch logical.Kind {
-	case ir.TypeBool, ir.TypeInt16, ir.TypeInt32, ir.TypeInt64, ir.TypeDecimal, ir.TypeDateTime:
-		return physical.StorageType{Kind: physical.StorageSQLiteInteger}, nil
-	case ir.TypeFloat32, ir.TypeFloat64:
-		return physical.StorageType{Kind: physical.StorageSQLiteReal}, nil
-	case ir.TypeString, ir.TypeUUID, ir.TypeDate, ir.TypeTime, ir.TypeJSON, ir.TypeEnum, ir.TypeScalarList:
-		if logical.Kind == ir.TypeScalarList {
-			if logical.Element == nil {
-				return physical.StorageType{}, fmt.Errorf("scalar list has no element type")
-			}
-			if _, err := scalarListDescriptor(*logical.Element, state.enums); err != nil {
-				return physical.StorageType{}, err
-			}
+	if logical.Kind == ir.TypeScalarList {
+		if logical.Element == nil {
+			return physical.StorageType{}, fmt.Errorf("scalar list has no element type")
 		}
-		return physical.StorageType{Kind: physical.StorageSQLiteText, Length: valueOrZero(logical.MaxLength)}, nil
-	case ir.TypeBytes:
-		return physical.StorageType{Kind: physical.StorageSQLiteBlob, Length: valueOrZero(logical.MaxLength)}, nil
-	default:
-		return physical.StorageType{}, fmt.Errorf("logical type %q has no portable SQLite storage", logical.Kind)
+		if _, err := scalarListDescriptor(*logical.Element, state.enums); err != nil {
+			return physical.StorageType{}, err
+		}
 	}
+	return physical.ExpectedStorage(ir.SQLite, logical)
 }
 
 func (state *lowerState) lowerDefault(logical ir.LogicalTypeIR, storage physical.StorageType, value ir.DefaultIR) (physical.PhysicalDefault, error) {
@@ -581,13 +570,6 @@ func containsProvider(providers []ir.Provider, wanted ir.Provider) bool {
 		}
 	}
 	return false
-}
-
-func valueOrZero(value *uint32) uint32 {
-	if value == nil {
-		return 0
-	}
-	return *value
 }
 
 func scalarListDescriptor(element ir.LogicalTypeIR, enums map[ir.EnumID]ir.EnumIR) (string, error) {

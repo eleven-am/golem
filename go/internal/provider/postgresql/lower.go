@@ -170,58 +170,7 @@ func lowerColumn(modelID ir.ModelID, field ir.FieldIR, enums map[ir.EnumID]ir.En
 }
 
 func postgresStorage(logical ir.LogicalTypeIR) (physical.StorageType, error) {
-	switch logical.Kind {
-	case ir.TypeBool:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLBoolean}, nil
-	case ir.TypeInt16:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLSmallInt}, nil
-	case ir.TypeInt32:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLInteger}, nil
-	case ir.TypeInt64:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}, nil
-	case ir.TypeFloat32:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLReal}, nil
-	case ir.TypeFloat64:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLDouble}, nil
-	case ir.TypeDecimal:
-		if logical.Precision == nil || logical.Scale == nil {
-			return physical.StorageType{}, fmt.Errorf("decimal requires precision and scale")
-		}
-		if *logical.Precision > 18 {
-			return physical.StorageType{}, fmt.Errorf("portable decimal precision %d exceeds 18", *logical.Precision)
-		}
-		return physical.StorageType{Kind: physical.StoragePostgreSQLNumeric, Precision: *logical.Precision, Scale: *logical.Scale}, nil
-	case ir.TypeString, ir.TypeEnum:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLText}, nil
-	case ir.TypeBytes:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLBytea}, nil
-	case ir.TypeUUID:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLUUID}, nil
-	case ir.TypeDate:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLDate}, nil
-	case ir.TypeTime:
-		precision := uint16(6)
-		if logical.Precision != nil {
-			precision = *logical.Precision
-		}
-		if precision > 6 {
-			return physical.StorageType{}, fmt.Errorf("time precision %d exceeds microseconds", precision)
-		}
-		return physical.StorageType{Kind: physical.StoragePostgreSQLTime, Length: uint32(precision)}, nil
-	case ir.TypeDateTime:
-		precision := uint16(6)
-		if logical.Precision != nil {
-			precision = *logical.Precision
-		}
-		if precision > 6 {
-			return physical.StorageType{}, fmt.Errorf("datetime precision %d exceeds microseconds", precision)
-		}
-		return physical.StorageType{Kind: physical.StoragePostgreSQLTimestampTZ, Length: uint32(precision)}, nil
-	case ir.TypeJSON, ir.TypeScalarList:
-		return physical.StorageType{Kind: physical.StoragePostgreSQLJSONB}, nil
-	default:
-		return physical.StorageType{}, fmt.Errorf("unsupported logical type %q", logical.Kind)
-	}
+	return physical.ExpectedStorage(ir.PostgreSQL, logical)
 }
 
 func lowerDefault(value ir.DefaultIR, storage physical.StorageType) (physical.PhysicalDefault, error) {

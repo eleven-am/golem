@@ -7,7 +7,7 @@ Authority: subordinate only to [`../BIBLE.md`](../BIBLE.md); this file owns the
 P2-A public operator ABI. Supporting operator research is non-controlling where it
 conflicts with this file. The complete P2 scope, including the Bible-required rule
 surface and advanced accepted operators, is controlled by
-[`P2-PLAN.md`](./P2-PLAN.md).
+[`P2-PLAN.md`](./P2-PLAN.md) and its linked P2-B contracts.
 
 This file freezes the already implemented baseline so later work does not mutate
 its method meanings. Its explicit deferrals are deferrals from P2-A, not permission

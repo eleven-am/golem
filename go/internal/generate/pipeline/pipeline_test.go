@@ -179,7 +179,7 @@ func TestBuildSupportsSamePackageApplicationRegistry(t *testing.T) {
 	}
 }
 
-func TestBuildCompilesEveryPolicyHandleFamily(t *testing.T) {
+func TestBuildCompilesEveryCurrentlyEnabledPolicyHandleFamily(t *testing.T) {
 	directory := testdata(t, "capabilities")
 	request := Request{
 		Compile:    compile.Config{Dir: moduleRoot(t), Pattern: "./internal/generate/pipeline/testdata/capabilities", Root: "DefineSchema"},
@@ -209,13 +209,12 @@ func TestBuildCompilesEveryPolicyHandleFamily(t *testing.T) {
 		"golem.OrderedField[Post, int64]",
 		"golem.TextField[Post, string]",
 		"golem.BytesField[Post]",
-		"golem.ListField[Post, string]",
+		"golem.OpaqueField[Post, golem.List[string]]",
 		"golem.OpaqueField[Post, golem.JSON[any]]",
 		"golem.NullableEqualField[Post, bool]",
 		"golem.NullableOrderedField[Post, int64]",
 		"golem.NullableTextField[Post, string]",
 		"golem.NullableBytesField[Post]",
-		"golem.NullableListField[Post, string]",
 		"golem.NullableOpaqueField[Post, golem.JSON[any]]",
 		"golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
@@ -223,6 +222,9 @@ func TestBuildCompilesEveryPolicyHandleFamily(t *testing.T) {
 		if !strings.Contains(modelSource, handle) {
 			t.Errorf("full-pipeline model source missing %q", handle)
 		}
+	}
+	if strings.Contains(modelSource, "golem.ListField[") || strings.Contains(modelSource, "golem.NullableListField[") {
+		t.Fatal("scalar-list policy handles were emitted before provider agreement")
 	}
 }
 

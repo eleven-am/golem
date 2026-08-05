@@ -2,15 +2,6 @@ package golem
 
 import "context"
 
-// FrozenPolicy is the opaque P1 result of a freshly built model policy. P2
-// owns its representation and semantics.
-type FrozenPolicy struct{ _ policyMarker }
-type policyMarker struct{}
-
-// Freeze is a type-level ABI shell. P2 replaces the empty representation with
-// ordered policy validation and immutable policy construction.
-func (*Rules[M]) Freeze(_ ModelID) (FrozenPolicy, error) { return FrozenPolicy{}, nil }
-
 // ActorFrom is the typed context access point used by hook source. P4 owns
 // actor storage and execution semantics.
 func ActorFrom[A any](_ context.Context) A {
