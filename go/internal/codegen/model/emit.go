@@ -119,8 +119,14 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			return File{}, nil, fmt.Errorf("model codegen: namespace %q collides for models %s and %s", namespace, prior, model.ID)
 		}
 		namespaces[namespace] = model.ID
-		members := map[string]string{}
+		members := map[string]string{
+			"Where": "read method", "OrderBy": "read method", "Take": "read method",
+			"Skip": "read method", "Distinct": "read method", "Select": "read method",
+		}
 		for _, field := range model.Fields {
+			if prior := members[field.GoName]; prior != "" {
+				return File{}, nil, fmt.Errorf("model codegen: namespace %s member %q collides between %s and field", namespace, field.GoName, prior)
+			}
 			members[field.GoName] = "field"
 		}
 		for _, selector := range orderedCompoundSelectors(contracts[model.ID], model) {
@@ -185,6 +191,16 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			fmt.Fprintf(&body, "\t%s golem.IdentitySelector[%s]\n", generatedSelectorName(selector, model), model.Go.Name)
 		}
 		body.WriteString("}\n\n")
+		fmt.Fprintf(&body, "func (%s) Where(predicate golem.Predicate[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Where(predicate)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) OrderBy(terms ...golem.OrderTerm[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.OrderBy(terms...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) Take(value int) golem.ReadOption[%s] { return golem.Take[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) Skip(value int) golem.ReadOption[%s] { return golem.Skip[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) Distinct(fields ...golem.Column[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Distinct(fields...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) Select(fields ...golem.Selection[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Select(fields...)\n}\n\n")
 		fmt.Fprintf(&body, "var %s = %s{\n", namespace, typeName)
 		for _, field := range orderedFields(model.Fields) {
 			initializer, err := fieldInitializer(field, model.ID, modelByID, enumByID, relations, imports)

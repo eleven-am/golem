@@ -35,6 +35,12 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 	for _, fragment := range []string{
 		"var GolemGeneratedPostDescriptor = golem.GeneratedModelDescriptor[Post](golem.ModelID{0x00",
 		"type golemGeneratedPostFields struct",
+		"func (golemGeneratedPostFields) Where(predicate golem.Predicate[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) OrderBy(terms ...golem.OrderTerm[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Take(value int) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Skip(value int) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Distinct(fields ...golem.Column[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Select(fields ...golem.Selection[Post]) golem.ReadOption[Post]",
 		"var Posts = golemGeneratedPostFields{",
 		"Author    golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
@@ -283,8 +289,15 @@ func TestEmitRejectsNonCanonicalStringIDs(t *testing.T) {
 
 func TestEmitRejectsSelectorNamespaceAndModelIDCollisions(t *testing.T) {
 	compilation := socialCompilation()
-	compilation.Contract.Models[0].Selectors[1].Name = "ID"
+	compilation.Model.Models[0].Fields[0].GoName = "Where"
 	_, err := Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
+	if err == nil || !strings.Contains(err.Error(), "read method") {
+		t.Fatalf("read method collision error=%v", err)
+	}
+
+	compilation = socialCompilation()
+	compilation.Contract.Models[0].Selectors[1].Name = "ID"
+	_, err = Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
 	if err == nil || !strings.Contains(err.Error(), "collides") {
 		t.Fatalf("selector collision error=%v", err)
 	}
