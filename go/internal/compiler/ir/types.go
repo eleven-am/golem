@@ -7,6 +7,9 @@ const (
 	RawDeclFormatVersion  uint16 = 1
 	ModelFormatVersion    uint16 = 1
 	ContractFormatVersion uint16 = 1
+	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
+	// encodings used for fingerprints and generated runtime schema bundles.
+	CanonicalFormatVersion uint16 = 1
 )
 
 type (
@@ -212,16 +215,17 @@ type EnumValueIR struct {
 }
 
 type ModelDeclIR struct {
-	ID              ModelID           `json:"id"`
-	Go              GoNamedTypeIR     `json:"go"`
-	LogicalName     string            `json:"logicalName"`
-	Table           TableBindingIR    `json:"table"`
-	Fields          []FieldIR         `json:"fields"`
-	PrimaryKey      *KeyIR            `json:"primaryKey,omitempty"`
-	Uniques         []KeyIR           `json:"uniques"`
-	Indexes         []IndexIR         `json:"indexes"`
-	Checks          []CheckIR         `json:"checks"`
-	EqualityIndexes []EqualityIndexIR `json:"equalityIndexes"`
+	ID                ModelID           `json:"id"`
+	CanonicalIdentity string            `json:"canonicalIdentity"`
+	Go                GoNamedTypeIR     `json:"go"`
+	LogicalName       string            `json:"logicalName"`
+	Table             TableBindingIR    `json:"table"`
+	Fields            []FieldIR         `json:"fields"`
+	PrimaryKey        *KeyIR            `json:"primaryKey,omitempty"`
+	Uniques           []KeyIR           `json:"uniques"`
+	Indexes           []IndexIR         `json:"indexes"`
+	Checks            []CheckIR         `json:"checks"`
+	EqualityIndexes   []EqualityIndexIR `json:"equalityIndexes"`
 }
 
 type TableBindingIR struct {
@@ -238,13 +242,14 @@ const (
 )
 
 type FieldIR struct {
-	ID               FieldID          `json:"id"`
-	GoName           string           `json:"goName"`
-	LogicalName      string           `json:"logicalName"`
-	DeclarationOrder uint32           `json:"declarationOrder"`
-	Kind             FieldKind        `json:"kind"`
-	Scalar           *ScalarFieldIR   `json:"scalar,omitempty"`
-	Relation         *RelationFieldIR `json:"relation,omitempty"`
+	ID                FieldID          `json:"id"`
+	CanonicalIdentity string           `json:"canonicalIdentity"`
+	GoName            string           `json:"goName"`
+	LogicalName       string           `json:"logicalName"`
+	DeclarationOrder  uint32           `json:"declarationOrder"`
+	Kind              FieldKind        `json:"kind"`
+	Scalar            *ScalarFieldIR   `json:"scalar,omitempty"`
+	Relation          *RelationFieldIR `json:"relation,omitempty"`
 }
 
 type ScalarFieldIR struct {

@@ -222,12 +222,20 @@ Rules:
 - physical table/column/index/constraint renames do not change logical identity;
 - a Go/logical rename changes default identity unless an explicit durable ID or
   reviewed `renameFrom` transfers the previous snapshot identity;
-- `renameFrom` must resolve exactly one object of the same kind in the prior
-  reviewed snapshot;
+- `renameFrom` accepts either the prior canonical identity when that value fits
+  the source tag grammar, or the prior object's 32-hex stable ID; it must resolve
+  exactly one object of the same kind in the prior reviewed snapshot;
 - the migration planner never infers a rename from spelling similarity;
 - snapshots preserve transferred IDs after the one-time rename declaration is
   removed; and
 - events and descriptors serialize stable IDs, never positional ordinals.
+
+Compiler entrypoints resolve `renameFrom` only with the configured immutable
+migration head. `migration new`, `inspect`, `generate`, and `check` load that
+same reviewed `HeadModel` before compiling. If no reviewed head is available,
+an authored
+`renameFrom` is a compile error; ordinary compilation never substitutes a
+drop/create pair or infers identity from similar spelling.
 
 ---
 
@@ -347,6 +355,9 @@ requires both-provider CI and this contract's capability matrix to remain true.
 ## 10. Migration workflow
 
 P1 includes initial and incremental migration planning.
+The exact public flags, reviewed-history layout, SQL binding, and apply-loop
+semantics are fixed by
+[`MIGRATION-COMMAND-CONTRACT.md`](MIGRATION-COMMAND-CONTRACT.md).
 
 Commands are separated deliberately:
 
@@ -390,12 +401,15 @@ fingerprint prematurely.
 P1 uses distinct domain-separated digests:
 
 1. `ModelFingerprint`: canonical versioned persisted logical `ModelIR`;
-2. `PhysicalFingerprint[provider]`: canonical normalized provider physical
+2. `PhysicalFingerprint[provider]`: canonical normalized application physical
    schema;
-3. `ContractFingerprint`: exposure, names, limits, and typed binding inventory;
-4. `GenerationDigest`: model + contract fingerprints, generator/template/ABI
-   versions, and generated artifact inventory; and
-5. `MigrationChainHash[provider]`: ordered immutable migration IDs, file
+3. `SystemFingerprint[provider]`: provider manifest plus versioned Golem system
+   schema;
+4. `ContractFingerprint`: exposure, names, limits, and typed binding inventory;
+5. `GenerationDigest`: model + contract + every provider physical/system
+   fingerprint, generator/template/ABI versions, and generated artifact
+   inventory; and
+6. `MigrationChainHash[provider]`: ordered immutable migration IDs, file
    checksums, and before/after physical fingerprints.
 
 Changing GraphQL exposure regenerates contract artifacts without pretending the

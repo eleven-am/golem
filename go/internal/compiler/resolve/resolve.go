@@ -156,7 +156,7 @@ func (r *baseResolver) resolveModel(rawModel ir.RawModelDecl) {
 	modelID := ir.ModelIDFrom(identity)
 	table, _ := attributeValue(rawModel.Marker, "table")
 	model := ir.ModelDeclIR{
-		ID: modelID, Go: ir.GoNamedTypeIR{PackagePath: rawModel.PackagePath, Name: rawModel.GoName},
+		ID: modelID, CanonicalIdentity: identity.Canonical, Go: ir.GoNamedTypeIR{PackagePath: rawModel.PackagePath, Name: rawModel.GoName},
 		LogicalName: rawModel.GoName, Table: ir.TableBindingIR{PhysicalName: ir.SQLIdentifier(table)},
 	}
 	graphqlName, _ := attributeValue(rawModel.Marker, "graphql")
@@ -220,7 +220,7 @@ func (r *baseResolver) resolveField(modelID ir.ModelID, rawField ir.RawFieldDecl
 	modes, modeDiagnostics := resolveModes(rawField)
 	diagnostics = append(diagnostics, modeDiagnostics...)
 	field := &ir.FieldIR{
-		ID: fieldID, GoName: rawField.GoName, LogicalName: rawField.GoName,
+		ID: fieldID, CanonicalIdentity: identity.Canonical, GoName: rawField.GoName, LogicalName: rawField.GoName,
 		DeclarationOrder: ordinal, Kind: kind,
 		Scalar: &ir.ScalarFieldIR{Column: ir.SQLIdentifier(*rawField.DBTag), Type: logicalType, Nullable: nullable, Default: defaultValue, Updated: updated},
 	}

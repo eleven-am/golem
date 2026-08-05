@@ -71,6 +71,21 @@ func ModelFingerprint(input ModelIR) (Fingerprint, error) {
 	return fingerprint("golem:model-fingerprint:v1", encoded), nil
 }
 
+// CanonicalEmptyModel is the reviewed logical starting point for an initial
+// migration. Its fingerprint uses the ordinary ModelFingerprint domain; it is
+// not an arbitrary sentinel digest.
+func CanonicalEmptyModel() ModelIR {
+	return ModelIR{FormatVersion: ModelFormatVersion, Providers: []Provider{}, Enums: []EnumIR{}, Models: []ModelDeclIR{}, Relations: []RelationIR{}, Extensions: []ProviderExtensionIR{}}
+}
+
+func EmptyModelFingerprint() Fingerprint {
+	value, err := ModelFingerprint(CanonicalEmptyModel())
+	if err != nil {
+		panic(err)
+	}
+	return value
+}
+
 func ContractFingerprint(input ContractIR) (Fingerprint, error) {
 	encoded, err := CanonicalContract(input)
 	if err != nil {

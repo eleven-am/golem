@@ -30,6 +30,9 @@ func Emit(request Request) (Result, error) {
 	})
 	modelByID := make(map[ir.ModelID]ir.ModelDeclIR, len(models))
 	for _, model := range models {
+		if _, duplicate := modelByID[model.ID]; duplicate {
+			return Result{}, fmt.Errorf("model codegen: duplicate model ID %s", model.ID)
+		}
 		modelByID[model.ID] = model
 		if _, ok := packages[model.Go.PackagePath]; !ok {
 			return Result{}, fmt.Errorf("model codegen: missing package specification for %q", model.Go.PackagePath)
@@ -60,7 +63,7 @@ func Emit(request Request) (Result, error) {
 	}
 	result := Result{}
 	for _, path := range paths {
-		file, symbols, emitErr := emitPackage(packages[path], byPackage[path], modelByID, enumByID, relations, contractMap(request.Compilation.Contract), golemPath)
+		file, symbols, emitErr := emitPackage(packages[path], byPackage[path], modelByID, enumByID, relations, contractMap(request.Compilation.Contract), golemPath, request.FinalStamp)
 		if emitErr != nil {
 			return Result{}, emitErr
 		}
@@ -105,7 +108,7 @@ func contractMap(contract ir.ContractIR) map[ir.ModelID]ir.ModelContractIR {
 	return result
 }
 
-func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.ModelID]ir.ModelDeclIR, enumByID map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, contracts map[ir.ModelID]ir.ModelContractIR, golemPath string) (File, []Symbol, error) {
+func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.ModelID]ir.ModelDeclIR, enumByID map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, contracts map[ir.ModelID]ir.ModelContractIR, golemPath string, stamp *FinalStamp) (File, []Symbol, error) {
 	namespaces := make(map[string]ir.ModelID, len(models))
 	for _, model := range models {
 		namespace := plural(model.LogicalName)
@@ -116,6 +119,20 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			return File{}, nil, fmt.Errorf("model codegen: namespace %q collides for models %s and %s", namespace, prior, model.ID)
 		}
 		namespaces[namespace] = model.ID
+		members := map[string]string{}
+		for _, field := range model.Fields {
+			members[field.GoName] = "field"
+		}
+		for _, selector := range orderedCompoundSelectors(contracts[model.ID], model) {
+			name := generatedSelectorName(selector, model)
+			if !token.IsIdentifier(name) {
+				return File{}, nil, fmt.Errorf("model codegen: namespace %s selector %s has invalid generated Go identifier %q", namespace, selector.KeyID, name)
+			}
+			if prior := members[name]; prior != "" {
+				return File{}, nil, fmt.Errorf("model codegen: namespace %s member %q collides between %s and selector %s", namespace, name, prior, selector.KeyID)
+			}
+			members[name] = "selector"
+		}
 	}
 
 	imports := newImports(spec.ImportPath, golemPath)
@@ -142,11 +159,16 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		namespace := plural(model.LogicalName)
 		typeName := "golemGenerated" + model.Go.Name + "Fields"
 		descriptorName := "GolemGenerated" + model.Go.Name + "Descriptor"
+		contract := contracts[model.ID]
 		modelLiteral, err := idLiteral("ModelID", string(model.ID))
 		if err != nil {
 			return File{}, nil, fmt.Errorf("model codegen: model %s: %w", model.ID, err)
 		}
-		fmt.Fprintf(&body, "var %s = golem.GeneratedModelDescriptor[%s](%s)\n\n", descriptorName, model.Go.Name, modelLiteral)
+		shape, err := descriptorShapeLiteral(model, contract, modelByID, relations)
+		if err != nil {
+			return File{}, nil, err
+		}
+		fmt.Fprintf(&body, "var %s = golem.GeneratedModelDescriptor[%s](%s, %s)\n\n", descriptorName, model.Go.Name, modelLiteral, shape)
 		symbols = append(symbols,
 			Symbol{PackagePath: spec.ImportPath, Name: descriptorName, Kind: SymbolModelDescriptor, ModelID: model.ID},
 			Symbol{PackagePath: spec.ImportPath, Name: namespace, Kind: SymbolNamespace, ModelID: model.ID},
@@ -158,6 +180,9 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 				return File{}, nil, err
 			}
 			fmt.Fprintf(&body, "\t%s %s\n", field.GoName, handle)
+		}
+		for _, selector := range orderedCompoundSelectors(contract, model) {
+			fmt.Fprintf(&body, "\t%s golem.IdentitySelector[%s]\n", generatedSelectorName(selector, model), model.Go.Name)
 		}
 		body.WriteString("}\n\n")
 		fmt.Fprintf(&body, "var %s = %s{\n", namespace, typeName)
@@ -174,19 +199,43 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 			symbols = append(symbols, symbol)
 		}
-		body.WriteString("}\n\n")
-		contract := contracts[model.ID]
-		for _, selector := range contract.Selectors {
-			name := selector.Name
-			if name == "" {
-				name = selectorName(selector, model)
+		for _, selector := range orderedCompoundSelectors(contract, model) {
+			initializer, initErr := selectorInitializer(selector, model)
+			if initErr != nil {
+				return File{}, nil, initErr
 			}
-			symbols = append(symbols, Symbol{PackagePath: spec.ImportPath, Namespace: namespace, Name: name, Kind: SymbolSelector, ModelID: model.ID, KeyID: selector.KeyID})
+			name := generatedSelectorName(selector, model)
+			fmt.Fprintf(&body, "\t%s: %s,\n", name, initializer)
+			symbols = append(symbols, Symbol{PackagePath: spec.ImportPath, Namespace: namespace, Name: name, Kind: SymbolSelector, ModelID: model.ID, KeyID: selector.KeyID, Fields: append([]ir.FieldID(nil), selector.Fields...)})
 		}
+		body.WriteString("}\n\n")
 	}
+	body.WriteString("func GolemGeneratedDescriptors() golem.PackageDescriptors {\n")
+	if stamp == nil {
+		body.WriteString("\treturn golem.GeneratedPackageDescriptors(\n")
+	} else {
+		digest, digestErr := schemaDigestLiteral(stamp.GenerationDigest)
+		if digestErr != nil {
+			return File{}, nil, digestErr
+		}
+		fmt.Fprintf(&body, "\treturn golem.GeneratedStampedPackageDescriptors(%s,\n", digest)
+	}
+	for _, model := range models {
+		fmt.Fprintf(&body, "\t\tGolemGenerated%sDescriptor.Metadata(),\n", model.Go.Name)
+	}
+	body.WriteString("\t)\n}\n")
 
 	var source bytes.Buffer
-	source.WriteString("// Code generated by golem. DO NOT EDIT.\n\n")
+	source.WriteString("// Code generated by golem. DO NOT EDIT.\n")
+	if stamp != nil {
+		if stamp.GenerationDigest == "" || stamp.GeneratorVersion == "" || stamp.TemplateABIVersion == "" {
+			return File{}, nil, fmt.Errorf("model codegen: incomplete final generation stamp")
+		}
+		fmt.Fprintf(&source, "// Golem generation digest: %s\n", stamp.GenerationDigest)
+		fmt.Fprintf(&source, "// Golem generator version: %s\n", stamp.GeneratorVersion)
+		fmt.Fprintf(&source, "// Golem template ABI version: %s\n", stamp.TemplateABIVersion)
+	}
+	source.WriteByte('\n')
 	fmt.Fprintf(&source, "package %s\n\n", spec.PackageName)
 	imports.write(&source)
 	source.Write(body.Bytes())
@@ -194,11 +243,27 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 	if err != nil {
 		return File{}, nil, fmt.Errorf("model codegen: format package %q: %w\n%s", spec.ImportPath, err, source.String())
 	}
-	path := BootstrapFilename
+	filename := BootstrapFilename
+	if stamp != nil {
+		filename = FinalFilename
+	}
+	path := filename
 	if spec.Directory != "" {
-		path = filepath.Join(spec.Directory, BootstrapFilename)
+		path = filepath.Join(spec.Directory, filename)
 	}
 	return File{ImportPath: spec.ImportPath, PackageName: spec.PackageName, Path: path, Source: formatted}, symbols, nil
+}
+
+func schemaDigestLiteral(value string) (string, error) {
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != value {
+		return "", fmt.Errorf("model codegen: generation digest %q is not canonical SHA-256", value)
+	}
+	parts := make([]string, len(decoded))
+	for index, b := range decoded {
+		parts[index] = fmt.Sprintf("0x%02x", b)
+	}
+	return "golem.SchemaDigest{" + strings.Join(parts, ", ") + "}", nil
 }
 
 func orderedFields(fields []ir.FieldIR) []ir.FieldIR {
@@ -346,17 +411,185 @@ func idLiteral(kind, value string) (string, error) {
 	return "golem." + kind + "{" + strings.Join(parts, ", ") + "}", nil
 }
 
+func descriptorShapeLiteral(model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, relations map[ir.RelationID]ir.RelationIR) (string, error) {
+	ordered := orderedFields(model.Fields)
+	fieldByID := make(map[ir.FieldID]ir.FieldIR, len(ordered))
+	readOnly := map[ir.FieldID]bool{}
+	for _, field := range contract.Fields {
+		for _, mode := range field.Modes {
+			if mode == ir.ModeReadOnly {
+				readOnly[field.FieldID] = true
+			}
+		}
+	}
+	var scan, write []ir.FieldID
+	var relationLiterals []string
+	for _, field := range ordered {
+		fieldByID[field.ID] = field
+		if field.Scalar != nil {
+			scan = append(scan, field.ID)
+			if field.Scalar.Generation == nil && !field.Scalar.DatabaseReadOnly && !readOnly[field.ID] {
+				write = append(write, field.ID)
+			}
+			continue
+		}
+		if field.Relation == nil {
+			return "", fmt.Errorf("model codegen: field %s has no descriptor payload", field.ID)
+		}
+		target, err := relationTarget(field, model.ID, models, relations)
+		if err != nil {
+			return "", err
+		}
+		modelID, _ := idLiteral("ModelID", string(model.ID))
+		targetID, err := idLiteral("ModelID", string(target.ID))
+		if err != nil {
+			return "", err
+		}
+		fieldID, err := idLiteral("FieldID", string(field.ID))
+		if err != nil {
+			return "", err
+		}
+		relationID, err := idLiteral("RelationID", string(field.Relation.RelationID))
+		if err != nil {
+			return "", err
+		}
+		role := "golem.RelationSource"
+		if field.Relation.Role == ir.RelationInverse {
+			role = "golem.RelationInverse"
+		} else if field.Relation.Role != ir.RelationSource {
+			return "", fmt.Errorf("model codegen: relation field %s has invalid role %q", field.ID, field.Relation.Role)
+		}
+		cardinality := "golem.RelationToOne"
+		switch field.Relation.Kind {
+		case ir.RelationBelongsTo, ir.RelationHasOne:
+		case ir.RelationHasMany:
+			cardinality = "golem.RelationToMany"
+		default:
+			return "", fmt.Errorf("model codegen: relation field %s has invalid cardinality %q", field.ID, field.Relation.Kind)
+		}
+		relationLiterals = append(relationLiterals, fmt.Sprintf("golem.GeneratedRelationMetadata(%s, %s, %s, %s, %s, %s)", modelID, targetID, fieldID, relationID, role, cardinality))
+	}
+	scanLiteral, err := fieldIDSliceLiteral(scan)
+	if err != nil {
+		return "", err
+	}
+	writeLiteral, err := fieldIDSliceLiteral(write)
+	if err != nil {
+		return "", err
+	}
+	var identityLiterals []string
+	for _, selector := range orderedSelectors(contract, model) {
+		if len(selector.Fields) == 0 {
+			return "", fmt.Errorf("model codegen: selector %s has no identity fields", selector.KeyID)
+		}
+		for _, fieldID := range selector.Fields {
+			field, exists := fieldByID[fieldID]
+			if !exists || field.Scalar == nil {
+				return "", fmt.Errorf("model codegen: selector %s references non-scalar or missing field %s", selector.KeyID, fieldID)
+			}
+		}
+		literal, literalErr := identityMetadataLiteral(selector, model)
+		if literalErr != nil {
+			return "", literalErr
+		}
+		identityLiterals = append(identityLiterals, literal)
+	}
+	return "golem.GeneratedDescriptorShape(" + scanLiteral + ", " + writeLiteral + ", []golem.IdentityMetadata{" + strings.Join(identityLiterals, ", ") + "}, []golem.RelationMetadata{" + strings.Join(relationLiterals, ", ") + "})", nil
+}
+
+func fieldIDSliceLiteral(fields []ir.FieldID) (string, error) {
+	values := make([]string, len(fields))
+	for index, field := range fields {
+		literal, err := idLiteral("FieldID", string(field))
+		if err != nil {
+			return "", err
+		}
+		values[index] = literal
+	}
+	return "[]golem.FieldID{" + strings.Join(values, ", ") + "}", nil
+}
+
+func identityMetadataLiteral(selector ir.SelectorContractIR, model ir.ModelDeclIR) (string, error) {
+	modelID, err := idLiteral("ModelID", string(model.ID))
+	if err != nil {
+		return "", err
+	}
+	keyID, err := idLiteral("KeyID", string(selector.KeyID))
+	if err != nil {
+		return "", err
+	}
+	fields, err := fieldIDSliceLiteral(selector.Fields)
+	if err != nil {
+		return "", err
+	}
+	kind := "golem.PrimaryIdentity"
+	if selector.Kind == ir.KeyUnique {
+		kind = "golem.UniqueIdentity"
+	} else if selector.Kind != ir.KeyPrimary {
+		return "", fmt.Errorf("model codegen: selector %s has invalid identity kind %q", selector.KeyID, selector.Kind)
+	}
+	fields = strings.TrimPrefix(strings.TrimSuffix(fields, "}"), "[]golem.FieldID{")
+	if fields != "" {
+		fields = ", " + fields
+	}
+	return fmt.Sprintf("golem.GeneratedIdentityMetadata(%s, %s, %s%s)", modelID, keyID, kind, fields), nil
+}
+
+func selectorInitializer(selector ir.SelectorContractIR, model ir.ModelDeclIR) (string, error) {
+	metadata, err := identityMetadataLiteral(selector, model)
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(metadata, "golem.GeneratedIdentityMetadata", "golem.GeneratedIdentitySelector["+model.Go.Name+"]", 1), nil
+}
+
+func orderedSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR) []ir.SelectorContractIR {
+	selectors := append([]ir.SelectorContractIR(nil), contract.Selectors...)
+	sort.Slice(selectors, func(i, j int) bool {
+		left, right := generatedSelectorName(selectors[i], model), generatedSelectorName(selectors[j], model)
+		if left != right {
+			return left < right
+		}
+		return selectors[i].KeyID < selectors[j].KeyID
+	})
+	return selectors
+}
+
+// orderedCompoundSelectors returns only selectors that require a distinct
+// namespace member. A single-field identity is selected through its existing
+// typed ScalarField handle; its identity remains present in ModelMetadata.
+func orderedCompoundSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR) []ir.SelectorContractIR {
+	selectors := orderedSelectors(contract, model)
+	result := make([]ir.SelectorContractIR, 0, len(selectors))
+	for _, selector := range selectors {
+		if len(selector.Fields) > 1 {
+			result = append(result, selector)
+		}
+	}
+	return result
+}
+
+func generatedSelectorName(selector ir.SelectorContractIR, model ir.ModelDeclIR) string {
+	if selector.Name != "" {
+		return selector.Name
+	}
+	return selectorName(selector, model)
+}
+
 func selectorName(selector ir.SelectorContractIR, model ir.ModelDeclIR) string {
 	byID := make(map[ir.FieldID]string, len(model.Fields))
 	for _, field := range model.Fields {
-		byID[field.ID] = field.GoName
+		name := field.LogicalName
+		if name == "" {
+			name = field.GoName
+		}
+		byID[field.ID] = name
 	}
-	var b strings.Builder
-	b.WriteString("By")
+	parts := make([]string, 0, len(selector.Fields))
 	for _, id := range selector.Fields {
-		b.WriteString(byID[id])
+		parts = append(parts, byID[id])
 	}
-	return b.String()
+	return strings.Join(parts, "_")
 }
 
 func plural(name string) string {

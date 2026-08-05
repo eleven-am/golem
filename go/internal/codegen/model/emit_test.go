@@ -36,11 +36,16 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 		"var GolemGeneratedPostDescriptor = golem.GeneratedModelDescriptor[Post](golem.ModelID{0x00",
 		"type golemGeneratedPostFields struct",
 		"var Posts = golemGeneratedPostFields{",
-		"Author golem.ToOne[Post, User]",
+		"Author    golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
-		"Manager golem.ToOne[User, User]",
+		"Manager       golem.ToOne[User, User]",
 		"golem.GeneratedScalarField[Post, string](golem.FieldID{",
 		"golem.GeneratedToOne[Post, User](golem.RelationID{",
+		"ByIDTitle golem.IdentitySelector[Post]",
+		"golem.GeneratedIdentitySelector[Post](golem.ModelID{",
+		"func GolemGeneratedDescriptors() golem.PackageDescriptors",
+		"golem.GeneratedDescriptorShape(",
+		"golem.GeneratedRelationMetadata(",
 	} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("generated source does not contain %q:\n%s", fragment, source)
@@ -58,7 +63,19 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 	}
 	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ID", SymbolField, id(2), id(21), "", "")
 	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "Author", SymbolRelation, id(2), id(23), id(40), "")
-	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ByID", SymbolSelector, id(2), "", "", id(61))
+	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ByIDTitle", SymbolSelector, id(2), "", "", id(63))
+	for _, symbol := range result.Manifest.Symbols {
+		if symbol.Kind == SymbolSelector && symbol.KeyID == ir.KeyID(id(61)) {
+			t.Fatal("single-field identity must reuse its scalar field handle")
+		}
+	}
+	for _, symbol := range result.Manifest.Symbols {
+		if symbol.Kind == SymbolSelector && symbol.KeyID == ir.KeyID(id(63)) {
+			if len(symbol.Fields) != 2 || symbol.Fields[0] != ir.FieldID(id(21)) || symbol.Fields[1] != ir.FieldID(id(22)) {
+				t.Fatalf("composite selector manifest fields=%v", symbol.Fields)
+			}
+		}
+	}
 
 	compileGenerated(t, directory, map[string]string{
 		"models.go": "package social\n\ntype User struct{}\ntype Post struct{}\n",
@@ -103,6 +120,21 @@ func TestEmitCrossPackageRelationCompilesWithoutDescriptorPointers(t *testing.T)
 	}, result.Files)
 }
 
+func TestFinalDescriptorAccessorCarriesGenerationDigest(t *testing.T) {
+	result, err := Emit(Request{
+		Compilation: socialCompilation(),
+		Packages:    []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}},
+		FinalStamp:  &FinalStamp{GenerationDigest: strings.Repeat("a", 64), GeneratorVersion: "generator", TemplateABIVersion: "template"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(result.Files[0].Source)
+	if !strings.Contains(source, "golem.GeneratedStampedPackageDescriptors(golem.SchemaDigest{0xaa") {
+		t.Fatalf("final descriptor accessor lacks fixed-width generation stamp:\n%s", source)
+	}
+}
+
 func TestEmitIsDeterministicUnderInputShuffle(t *testing.T) {
 	firstCompilation := socialCompilation()
 	secondCompilation := socialCompilation()
@@ -112,6 +144,9 @@ func TestEmitIsDeterministicUnderInputShuffle(t *testing.T) {
 	}
 	reverseRelations(secondCompilation.Model.Relations)
 	reverseContracts(secondCompilation.Contract.Models)
+	for index := range secondCompilation.Contract.Models {
+		reverseSelectors(secondCompilation.Contract.Models[index].Selectors)
+	}
 
 	first, err := Emit(Request{Compilation: firstCompilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
 	if err != nil {
@@ -129,6 +164,53 @@ func TestEmitIsDeterministicUnderInputShuffle(t *testing.T) {
 	}
 }
 
+func TestDescriptorShapePinsScanAndWriteFieldOrder(t *testing.T) {
+	compilation := socialCompilation()
+	models := map[ir.ModelID]ir.ModelDeclIR{}
+	for _, model := range compilation.Model.Models {
+		models[model.ID] = model
+	}
+	relations := map[ir.RelationID]ir.RelationIR{}
+	for _, relation := range compilation.Model.Relations {
+		relations[relation.ID] = relation
+	}
+	post := models[ir.ModelID(id(2))]
+	var contract ir.ModelContractIR
+	for _, candidate := range compilation.Contract.Models {
+		if candidate.ModelID == post.ID {
+			contract = candidate
+		}
+	}
+	shape, err := descriptorShapeLiteral(post, contract, models, relations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, _ := fieldIDSliceLiteral([]ir.FieldID{ir.FieldID(id(21)), ir.FieldID(id(22))})
+	write, _ := fieldIDSliceLiteral([]ir.FieldID{ir.FieldID(id(21))})
+	if !strings.HasPrefix(shape, "golem.GeneratedDescriptorShape("+scan+", "+write+",") {
+		t.Fatalf("scan/write order not pinned:\n%s", shape)
+	}
+	if !strings.Contains(shape, "golem.RelationSource, golem.RelationToOne") {
+		t.Fatalf("source relation endpoint metadata missing:\n%s", shape)
+	}
+	user := models[ir.ModelID(id(1))]
+	var userContract ir.ModelContractIR
+	for _, candidate := range compilation.Contract.Models {
+		if candidate.ModelID == user.ID {
+			userContract = candidate
+		}
+	}
+	userShape, err := descriptorShapeLiteral(user, userContract, models, relations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{"golem.RelationSource, golem.RelationToOne", "golem.RelationInverse, golem.RelationToMany"} {
+		if !strings.Contains(userShape, fragment) {
+			t.Fatalf("recursive relation endpoint metadata missing %q:\n%s", fragment, userShape)
+		}
+	}
+}
+
 func TestEmitRejectsNonCanonicalStringIDs(t *testing.T) {
 	compilation := socialCompilation()
 	compilation.Model.Models[0].Fields[0].ID = "user-provided-id"
@@ -138,20 +220,47 @@ func TestEmitRejectsNonCanonicalStringIDs(t *testing.T) {
 	}
 }
 
+func TestEmitRejectsSelectorNamespaceAndModelIDCollisions(t *testing.T) {
+	compilation := socialCompilation()
+	compilation.Contract.Models[0].Selectors[1].Name = "ID"
+	_, err := Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
+	if err == nil || !strings.Contains(err.Error(), "collides") {
+		t.Fatalf("selector collision error=%v", err)
+	}
+
+	compilation = socialCompilation()
+	compilation.Model.Models[1].ID = compilation.Model.Models[0].ID
+	_, err = Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
+	if err == nil || !strings.Contains(err.Error(), "duplicate model ID") {
+		t.Fatalf("model ID collision error=%v", err)
+	}
+
+	compilation = socialCompilation()
+	compilation.Contract.Models[0].Selectors[1].Fields = nil
+	_, err = Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
+	if err == nil || !strings.Contains(err.Error(), "no identity fields") {
+		t.Fatalf("empty selector error=%v", err)
+	}
+}
+
 func socialCompilation() ir.CompilationIR {
 	userID, postID := ir.ModelID(id(1)), ir.ModelID(id(2))
-	authorRelation, managerRelation := ir.RelationID(id(40)), ir.RelationID(id(41))
+	authorRelation, managerRelation, reviewerRelation := ir.RelationID(id(40)), ir.RelationID(id(41)), ir.RelationID(id(42))
 	postFields := []ir.FieldIR{
 		scalarField(id(21), "ID", 0, ir.TypeString),
 		scalarField(id(22), "Title", 1, ir.TypeString),
 		relationField(id(23), "Author", 2, authorRelation, ir.RelationSource, ir.RelationBelongsTo),
+		relationField(id(24), "Reviewer", 3, reviewerRelation, ir.RelationSource, ir.RelationBelongsTo),
 	}
+	postFields[1].Scalar.DatabaseReadOnly = true
 	userFields := []ir.FieldIR{
 		scalarField(id(11), "ID", 0, ir.TypeUUID),
 		relationField(id(12), "Posts", 1, authorRelation, ir.RelationInverse, ir.RelationHasMany),
 		relationField(id(13), "Manager", 2, managerRelation, ir.RelationSource, ir.RelationBelongsTo),
+		relationField(id(14), "Reports", 3, managerRelation, ir.RelationInverse, ir.RelationHasMany),
+		relationField(id(15), "ReviewedPosts", 4, reviewerRelation, ir.RelationInverse, ir.RelationHasMany),
 	}
-	authorInverse := ir.FieldID(id(12))
+	authorInverse, managerInverse, reviewerInverse := ir.FieldID(id(12)), ir.FieldID(id(14)), ir.FieldID(id(15))
 	return ir.CompilationIR{
 		Model: ir.ModelIR{
 			Models: []ir.ModelDeclIR{
@@ -160,11 +269,12 @@ func socialCompilation() ir.CompilationIR {
 			},
 			Relations: []ir.RelationIR{
 				{ID: authorRelation, SourceModel: postID, TargetModel: userID, SourceField: ir.FieldID(id(23)), InverseField: &authorInverse},
-				{ID: managerRelation, SourceModel: userID, TargetModel: userID, SourceField: ir.FieldID(id(13))},
+				{ID: managerRelation, SourceModel: userID, TargetModel: userID, SourceField: ir.FieldID(id(13)), InverseField: &managerInverse},
+				{ID: reviewerRelation, SourceModel: postID, TargetModel: userID, SourceField: ir.FieldID(id(24)), InverseField: &reviewerInverse},
 			},
 		},
 		Contract: ir.ContractIR{Models: []ir.ModelContractIR{
-			{ModelID: postID, Selectors: []ir.SelectorContractIR{{KeyID: ir.KeyID(id(61)), Kind: ir.KeyPrimary, Name: "ByID", Fields: []ir.FieldID{ir.FieldID(id(21))}}}},
+			{ModelID: postID, Fields: []ir.FieldContractIR{{FieldID: ir.FieldID(id(22)), Modes: []ir.FieldMode{ir.ModeReadOnly}}}, Selectors: []ir.SelectorContractIR{{KeyID: ir.KeyID(id(61)), Kind: ir.KeyPrimary, Name: "ByID", Fields: []ir.FieldID{ir.FieldID(id(21))}}, {KeyID: ir.KeyID(id(63)), Kind: ir.KeyUnique, Name: "ByIDTitle", Fields: []ir.FieldID{ir.FieldID(id(21)), ir.FieldID(id(22))}}}},
 			{ModelID: userID, Selectors: []ir.SelectorContractIR{{KeyID: ir.KeyID(id(62)), Kind: ir.KeyPrimary, Name: "ByID", Fields: []ir.FieldID{ir.FieldID(id(11))}}}},
 		}},
 	}
@@ -250,4 +360,10 @@ func reverseRelations(values []ir.RelationIR) {
 }
 func reverseContracts(values []ir.ModelContractIR) {
 	sort.SliceStable(values, func(i, j int) bool { return i > j })
+}
+
+func reverseSelectors(values []ir.SelectorContractIR) {
+	for left, right := 0, len(values)-1; left < right; left, right = left+1, right-1 {
+		values[left], values[right] = values[right], values[left]
+	}
 }

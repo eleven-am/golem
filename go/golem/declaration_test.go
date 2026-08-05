@@ -56,7 +56,7 @@ func (declarationUser) GolemModel() ModelSpec[declarationUser] {
 
 func TestDescriptorIDsAreFixedWidthAndNotStringConvertible(t *testing.T) {
 	stringType := reflect.TypeOf("")
-	for _, value := range []any{ModelID{}, FieldID{}, RelationID{}} {
+	for _, value := range []any{ModelID{}, FieldID{}, RelationID{}, KeyID{}} {
 		idType := reflect.TypeOf(value)
 		if idType.Kind() != reflect.Array || idType.Len() != 16 || idType.Elem().Kind() != reflect.Uint8 {
 			t.Fatalf("%s is not a fixed 128-bit value: %s", idType.Name(), idType)
@@ -77,7 +77,6 @@ func TestGeneratedDescriptorConstructorsRequireTypedIDs(t *testing.T) {
 		want reflect.Type
 	}{
 		{"GeneratedScalarField", GeneratedScalarField[declarationUser, UUID], reflect.TypeOf(FieldID{})},
-		{"GeneratedModelDescriptor", GeneratedModelDescriptor[declarationUser], reflect.TypeOf(ModelID{})},
 		{"GeneratedToOne", GeneratedToOne[declarationUser, declarationUser], reflect.TypeOf(RelationID{})},
 		{"GeneratedToMany", GeneratedToMany[declarationUser, declarationUser], reflect.TypeOf(RelationID{})},
 	}
@@ -86,6 +85,10 @@ func TestGeneratedDescriptorConstructorsRequireTypedIDs(t *testing.T) {
 		if functionType.NumIn() != 1 || functionType.In(0) != constructor.want {
 			t.Fatalf("%s accepts %v; want exactly %v", constructor.name, functionType, constructor.want)
 		}
+	}
+	modelConstructor := reflect.TypeOf(GeneratedModelDescriptor[declarationUser])
+	if modelConstructor.NumIn() != 2 || modelConstructor.In(0) != reflect.TypeOf(ModelID{}) || modelConstructor.In(1) != reflect.TypeOf(GeneratedModelShape{}) {
+		t.Fatalf("GeneratedModelDescriptor accepts %v; want typed model ID and generated shape", modelConstructor)
 	}
 }
 

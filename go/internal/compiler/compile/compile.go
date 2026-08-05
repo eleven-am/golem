@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
@@ -18,16 +19,20 @@ import (
 )
 
 type Config struct {
-	Dir     string
-	Pattern string
-	Root    string
+	Dir           string
+	Pattern       string
+	Root          string
+	PreviousModel *ir.ModelIR
 }
 
 type Result struct {
-	Compilation         *ir.CompilationIR `json:"compilation,omitempty"`
-	ModelFingerprint    ir.Fingerprint    `json:"modelFingerprint,omitempty"`
-	ContractFingerprint ir.Fingerprint    `json:"contractFingerprint,omitempty"`
-	Diagnostics         []ir.Diagnostic   `json:"diagnostics"`
+	Compilation         *ir.CompilationIR          `json:"compilation,omitempty"`
+	ModelFingerprint    ir.Fingerprint             `json:"modelFingerprint,omitempty"`
+	ContractFingerprint ir.Fingerprint             `json:"contractFingerprint,omitempty"`
+	Packages            []modelcodegen.PackageSpec `json:"-"`
+	ModulePath          string                     `json:"-"`
+	ModuleDir           string                     `json:"-"`
+	Diagnostics         []ir.Diagnostic            `json:"diagnostics"`
 }
 
 // Compile runs the accepted P1 passes using one generation-unit ID registry.
@@ -42,7 +47,16 @@ func Compile(ctx context.Context, config Config) Result {
 		ir.SortDiagnostics(diagnostics)
 		return Result{Diagnostics: diagnostics}
 	}
-	return compileWithMethods(ctx, extracted.Raw, extracted.Packages, config.Dir)
+	if config.PreviousModel != nil {
+		if _, err := ir.CanonicalModel(*config.PreviousModel); err != nil {
+			return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_PREVIOUS_MODEL_INVALID", "previous reviewed ModelIR is invalid: "+err.Error(), extracted.Raw.Root.Span)}}
+		}
+	}
+	prepared, renameDiagnostics := resolve.ApplyReviewedIdentities(extracted.Raw, config.PreviousModel)
+	if len(renameDiagnostics) != 0 {
+		return Result{Diagnostics: renameDiagnostics}
+	}
+	return compileWithMethods(ctx, prepared, extracted.Packages, config.Dir)
 }
 
 func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema.PackageMetadata, dir string) Result {
@@ -59,10 +73,12 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 	populateContractFields(raw, &resolved.Compilation)
 	specs := make([]modelcodegen.PackageSpec, 0, len(metadata))
 	modulePath := ""
+	moduleDir := ""
 	for _, item := range metadata {
 		specs = append(specs, modelcodegen.PackageSpec{ImportPath: item.ImportPath, PackageName: item.Name, Directory: item.Directory})
 		if modulePath == "" {
 			modulePath = item.ModulePath
+			moduleDir = item.ModuleDir
 		} else if item.ModulePath != modulePath {
 			diagnostics = append(diagnostics, ir.NewError("P1_METHOD_MODULE_MISMATCH", fmt.Sprintf("registered package %s belongs to module %s, expected %s", item.ImportPath, item.ModulePath, modulePath), raw.Root.Span))
 		}
@@ -73,6 +89,17 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		if err != nil {
 			diagnostics = append(diagnostics, ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span))
 		} else {
+			shells, shellErr := bindings.EmitShells(bindings.Request{Compilation: resolved.Compilation, Packages: specs})
+			if shellErr != nil {
+				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_BINDING_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
+			} else {
+				for _, shell := range shells {
+					bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+				}
+			}
+			if hasErrors(diagnostics) {
+				return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
+			}
 			interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry()})
 			diagnostics = append(diagnostics, interpreted.Diagnostics...)
 		}
@@ -89,12 +116,38 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		diagnostics = append(diagnostics, applyRelationOptions(&resolved.Compilation.Model, interpreted.RelationOptions)...)
 	}
 	populateContractFields(raw, &resolved.Compilation)
-	return finish(raw, resolved.Compilation, diagnostics)
+	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
+}
+
+func finishWithMetadata(raw ir.RawDeclIR, compilation ir.CompilationIR, diagnostics []ir.Diagnostic, specs []modelcodegen.PackageSpec, modulePath, moduleDir string) Result {
+	result := finish(raw, compilation, diagnostics)
+	if result.Compilation != nil {
+		result.Packages = append([]modelcodegen.PackageSpec(nil), specs...)
+		result.ModulePath = modulePath
+		result.ModuleDir = moduleDir
+	}
+	return result
 }
 
 // CompileRaw composes the semantic passes for an already extracted source IR.
 // It is useful for deterministic tests and callers with a cached syntax pass.
 func CompileRaw(raw ir.RawDeclIR) Result {
+	return CompileRawWithPrevious(raw, nil)
+}
+
+// CompileRawWithPrevious is the source-independent history-aware compiler
+// entrypoint used by deterministic rename tests and cached extraction callers.
+func CompileRawWithPrevious(raw ir.RawDeclIR, previous *ir.ModelIR) Result {
+	if previous != nil {
+		if _, err := ir.CanonicalModel(*previous); err != nil {
+			return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_PREVIOUS_MODEL_INVALID", "previous reviewed ModelIR is invalid: "+err.Error(), raw.Root.Span)}}
+		}
+	}
+	prepared, identityDiagnostics := resolve.ApplyReviewedIdentities(raw, previous)
+	if hasErrors(identityDiagnostics) {
+		return Result{Diagnostics: identityDiagnostics}
+	}
+	raw = prepared
 	resolved := resolve.Base(raw)
 	diagnostics := append([]ir.Diagnostic(nil), resolved.Diagnostics...)
 	if !hasErrors(diagnostics) {

@@ -510,7 +510,9 @@ the generator never invents a cast, fill value, enum mapping, or row transform.
 Renames are never inferred from spelling similarity.
 
 - A model or field may declare exactly one `renameFrom` referring to an object in
-  the immediately previous reviewed snapshot.
+  the immediately previous reviewed snapshot. The reference is either its
+  source-authorable canonical identity or its 32-hex stable object ID; the
+  stable-ID form is always available, including for default-derived identities.
 - The reference is resolved in logical-object scope and transfers the stable ID.
 - It must be unambiguous, must match object kind, and may not target an object
   also claimed by another declaration.
@@ -720,6 +722,9 @@ The database ledger stores migration ID, parent chain hash, file checksum,
 before/after physical fingerprints, phase status, and application time. Golem
 system tables are versioned physical objects but are fingerprinted separately
 from application tables so runtime upgrades cannot disguise application drift.
+Generated and migration publication manifests bind both fingerprints for every
+provider; changing only a system object changes `GenerationDigest`, and a stale
+system fingerprint is rejected against the immutable physical snapshot head.
 
 ### 13.3 Runtime verification
 

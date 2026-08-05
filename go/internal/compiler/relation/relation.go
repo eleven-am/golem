@@ -54,19 +54,20 @@ type modelKey struct {
 }
 
 type declaration struct {
-	ownerRaw     *ir.RawModelDecl
-	owner        *ir.ModelDeclIR
-	target       *ir.ModelDeclIR
-	raw          *ir.RawFieldDecl
-	order        uint32
-	kind         ir.RelationKind
-	explicitName string
-	local        []ir.FieldIR
-	remote       []ir.FieldIR
-	fieldID      ir.FieldID
-	valid        bool
-	used         bool
-	duplicate    bool
+	ownerRaw       *ir.RawModelDecl
+	owner          *ir.ModelDeclIR
+	target         *ir.ModelDeclIR
+	raw            *ir.RawFieldDecl
+	order          uint32
+	kind           ir.RelationKind
+	explicitName   string
+	local          []ir.FieldIR
+	remote         []ir.FieldIR
+	fieldID        ir.FieldID
+	fieldCanonical string
+	valid          bool
+	used           bool
+	duplicate      bool
 }
 
 // Prelink resolves relation identities, shapes, mappings, and inverse pairing.
@@ -121,12 +122,13 @@ func Prelink(raw ir.RawDeclIR, base ir.ModelIR, registry *ir.IDRegistry) Result 
 		if !declaration.valid || declaration.duplicate {
 			continue
 		}
-		fieldID, ok := relationFieldID(declaration, registry, &result.Diagnostics)
+		fieldID, canonical, ok := relationFieldID(declaration, registry, &result.Diagnostics)
 		if !ok {
 			declaration.valid = false
 			continue
 		}
 		declaration.fieldID = fieldID
+		declaration.fieldCanonical = canonical
 		fieldIDs[declaration] = fieldID
 	}
 
@@ -483,16 +485,16 @@ func compatibleInverses(source *declaration, declarations []*declaration) []*dec
 	return result
 }
 
-func relationFieldID(declaration *declaration, registry *ir.IDRegistry, diagnostics *[]ir.Diagnostic) (ir.FieldID, bool) {
+func relationFieldID(declaration *declaration, registry *ir.IDRegistry, diagnostics *[]ir.Diagnostic) (ir.FieldID, string, bool) {
 	for _, field := range declaration.owner.Fields {
 		if field.GoName != declaration.raw.GoName {
 			continue
 		}
 		if field.Kind != ir.FieldRelation {
 			*diagnostics = append(*diagnostics, ir.NewError(codeFieldConflict, fmt.Sprintf("model %s already resolves %s as a non-relation field", declaration.owner.Go.Name, declaration.raw.GoName), declaration.raw.Span))
-			return "", false
+			return "", "", false
 		}
-		return field.ID, true
+		return field.ID, field.CanonicalIdentity, true
 	}
 	canonical := ir.OwnedIdentity(string(declaration.owner.ID), declaration.raw.GoName)
 	if explicit, ok := attribute(declaration.raw, "id"); ok && explicit != nil {
@@ -501,14 +503,14 @@ func relationFieldID(declaration *declaration, registry *ir.IDRegistry, diagnost
 	identity, diagnostic := registry.Register(ir.ObjectField, canonical, declaration.raw.Span)
 	if diagnostic != nil {
 		*diagnostics = append(*diagnostics, *diagnostic)
-		return "", false
+		return "", "", false
 	}
-	return ir.FieldIDFrom(identity), true
+	return ir.FieldIDFrom(identity), identity.Canonical, true
 }
 
 func relationFieldFragment(declaration *declaration, relationID ir.RelationID, role ir.RelationEndpointRole) ir.FieldIR {
 	return ir.FieldIR{
-		ID: declaration.fieldID, GoName: declaration.raw.GoName, LogicalName: declaration.raw.GoName,
+		ID: declaration.fieldID, CanonicalIdentity: declaration.fieldCanonical, GoName: declaration.raw.GoName, LogicalName: declaration.raw.GoName,
 		DeclarationOrder: declaration.order, Kind: ir.FieldRelation,
 		Relation: &ir.RelationFieldIR{RelationID: relationID, Role: role, Kind: declaration.kind},
 	}

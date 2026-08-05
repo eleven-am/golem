@@ -28,16 +28,20 @@ type (
 )
 
 // ModelDescriptor is the immutable typed anchor emitted once for each model.
-// It stores only a stable ID; relation resolution belongs to the registry built
-// after every package bootstrap has been decoded.
+// It stores stable logical scan/write order, identity, and relation metadata;
+// relation targets remain IDs and are resolved only after package registries
+// are composed, so generated package initialization cannot form pointer cycles.
 type ModelDescriptor[M any] struct {
-	id ModelID
-	_  func() M
+	metadata ModelMetadata
+	_        func() M
 }
 
-func GeneratedModelDescriptor[M any](id ModelID) ModelDescriptor[M] {
-	return ModelDescriptor[M]{id: id}
+func GeneratedModelDescriptor[M any](id ModelID, shape GeneratedModelShape) ModelDescriptor[M] {
+	metadata := ModelMetadata{id: id, scanFields: append([]FieldID(nil), shape.scanFields...), writeFields: append([]FieldID(nil), shape.writeFields...), identities: cloneIdentities(shape.identities), relations: append([]RelationMetadata(nil), shape.relations...)}
+	return ModelDescriptor[M]{metadata: metadata}
 }
+
+func (descriptor ModelDescriptor[M]) Metadata() ModelMetadata { return descriptor.metadata.clone() }
 
 // Stable scalar declaration types are intentionally representation-opaque in
 // P1. Later runtime phases own value parsing and database codecs.

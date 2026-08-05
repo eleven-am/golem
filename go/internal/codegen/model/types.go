@@ -14,6 +14,8 @@ const (
 	DefaultGolemImportPath = "github.com/eleven-am/golem/go/golem"
 	// BootstrapFilename is the stable filename used for every emitted package.
 	BootstrapFilename = "zz_golem_bootstrap.go"
+	// FinalFilename is the manifest-owned descriptor file emitted after typed discovery.
+	FinalFilename = "zz_golem_models.gen.go"
 )
 
 // PackageSpec supplies the Go package information that is intentionally absent
@@ -30,6 +32,13 @@ type Request struct {
 	Compilation     ir.CompilationIR
 	Packages        []PackageSpec
 	GolemImportPath string
+	FinalStamp      *FinalStamp
+}
+
+type FinalStamp struct {
+	GenerationDigest   string
+	GeneratorVersion   string
+	TemplateABIVersion string
 }
 
 // File is one generated, formatted Go source file.
@@ -64,6 +73,7 @@ type Symbol struct {
 	FieldID    ir.FieldID
 	RelationID ir.RelationID
 	KeyID      ir.KeyID
+	Fields     []ir.FieldID
 }
 
 // Manifest is sorted by package, namespace, name, and kind.

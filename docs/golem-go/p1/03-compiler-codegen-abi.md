@@ -374,22 +374,28 @@ identity.
 
 ### 5.3 Fingerprints
 
-P1 produces two digests with different jobs:
+P1 produces separate domain-bound digests with different jobs:
 
-- `SchemaFingerprint`: SHA-256 of the canonical physical schema projection. It
+- `PhysicalFingerprint[provider]`: SHA-256 of the canonical application
+  physical schema projection. It
   covers provider-neutral tables, columns, scalar storage, nullability, defaults,
   primary/unique/index order, and foreign keys. Generated application code and
   migration metadata embed it; startup database verification compares it.
+- `SystemFingerprint[provider]`: SHA-256 of the provider manifest and versioned
+  Golem system schema. It is carried beside every provider snapshot and cannot
+  be hidden by an unchanged application physical fingerprint.
 - `GenerationDigest`: SHA-256 of the complete canonical resolved IR plus actor
-  identity, binding inventory, exposure metadata, generator version, and template
-  ABI version. The manifest and every generated Go file embed it to detect stale
-  mixed output.
+  identity, binding inventory, exposure metadata, every provider physical and
+  system fingerprint, generator version, and template ABI version. The manifest
+  and every generated Go file embed it to detect stale mixed output.
 
 A GraphQL exposure change therefore regenerates code without falsely requiring a
-database migration. A storage change changes both digests.
+database migration. An application storage change changes its physical and
+generation digests; a system-schema change changes its system and generation
+digests.
 
 Absolute paths, source positions, timestamps, local Go versions, environment
-variables, and output directories are excluded from both digests.
+variables, and output directories are excluded from these digests.
 
 ---
 
@@ -609,6 +615,12 @@ func GolemGeneratedBindings() golem.PackageBindings[Actor]
 values. It does not construct a policy. The application registry calls the
 policy function for each execution after actor resolution. There is no actor or
 policy cache in generated package state.
+
+Final package binding and descriptor accessors carry the fixed-width
+`GenerationDigest`. Bootstrap constructors are explicitly unstamped. Generated
+application composition is fallible and validates every package against the
+same expected digest used by `GolemGeneratedSchemaBundle`; an unstamped or mixed
+package returns `*golem.GenerationDigestError` before a registry is exposed.
 
 The bridge itself remains unexported where possible; only the single package
 binding accessor crosses into the generated application package. There is no
@@ -899,11 +911,11 @@ the journal before doing other work. Every generated Go file embeds the same
 `GenerationDigest`; mixed files fail `check` and generated application registry
 validation.
 
-The manifest records module-relative path, kind, content SHA-256,
-`SchemaFingerprint`, `GenerationDigest`, generator version, and generated-header
-marker. Only a path in the previous manifest with a matching generated header
-may be removed as stale. Globs, prefix deletion, and directory-wide deletion are
-forbidden.
+The manifest records module-relative path, kind, content SHA-256, each
+provider's `PhysicalFingerprint` and `SystemFingerprint`, `GenerationDigest`,
+generator version, and generated-header marker. Only a path in the previous
+manifest with a matching generated header may be removed as stale. Globs,
+prefix deletion, and directory-wide deletion are forbidden.
 
 Existing immutable migration files are never overwritten or deleted by ordinary
 generation. If an initial migration path already exists with different content,
@@ -1099,12 +1111,15 @@ declaration that narrows conservative GraphQL nullability. Until then, all
 visible scalar/enum fields on a policy-bearing model are treated as potentially
 maskable.
 
-### 14.4 Migration-history command set — migration owner
+### 14.4 Migration-history command set — resolved
 
-P1 fixes deterministic initial artifacts, schema verification, and immutable
-file refusal. The commands for reviewed diffs, renames, destructive-change
-approval, and production migration application require a separate migration
-contract. Ordinary `generate` must not invent them.
+The migration owner has fixed reviewed diffs, exact destructive approval,
+immutable history layout, and production application in
+[`MIGRATION-COMMAND-CONTRACT.md`](MIGRATION-COMMAND-CONTRACT.md). Ordinary
+`generate` remains unable to invent or mutate migration history. Authored
+`renameFrom` is resolved against the prior reviewed ModelIR by source-authorable
+canonical identity or 32-hex stable object ID and transfers that identity instead
+of degrading to drop/create. Missing or invalid history is an explicit failure.
 
 ---
 
