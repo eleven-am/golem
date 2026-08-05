@@ -98,6 +98,23 @@ func TestPolicyDialectReviewedGoldens(t *testing.T) {
 	}
 }
 
+func TestPolicyPostgreSQLM12InsensitiveOrderingPinsInnerBinaryCollation(t *testing.T) {
+	resolver := newPolicyTestResolver("policy_m12")
+	fragment := compilePolicyTest(t, resolver, policyScalar(t, resolver, policyir.OperatorGreaterThan, policyir.ComparisonASCIIInsensitive, oneString(t, "école")))
+	if !strings.Contains(fragment.SQL(), `pg_catalog.translate(("root"."text" COLLATE "C"),`) {
+		t.Fatalf("column is folded before its inner binary collation: %s", fragment.SQL())
+	}
+	if !strings.Contains(fragment.SQL(), `pg_catalog.translate(($1::text COLLATE "C"),`) {
+		t.Fatalf("operand is folded before its inner binary collation: %s", fragment.SQL())
+	}
+	if strings.Count(fragment.SQL(), `COLLATE "C"`) != 4 || !strings.Contains(fragment.SQL(), " > ") {
+		t.Fatalf("insensitive ordering lost its inner/outer binary-collation fence: %s", fragment.SQL())
+	}
+	if !reflect.DeepEqual(fragment.Args(), []any{"école"}) {
+		t.Fatalf("args=%#v", fragment.Args())
+	}
+}
+
 func TestPolicyCodecCoversEveryPhysicalValueFamily(t *testing.T) {
 	dialect := NewPolicyDialect()
 	typeCase := func(kind policyir.ValueKind, precision, scale uint16, element *policyir.TypeRef) policyir.TypeRef {

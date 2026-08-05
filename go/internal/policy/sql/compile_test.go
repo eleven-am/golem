@@ -3,6 +3,7 @@ package sql
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -89,6 +90,198 @@ func TestCompileRejectsAliasCaptureAndMismatchedRuntimeProof(t *testing.T) {
 	request.Capabilities, _ = NewCapabilityProof(ir.ProviderPostgreSQL, resolver.SchemaFingerprint())
 	_, err = Compile(request)
 	assertCode(t, err, CodeCapability)
+}
+
+func TestCompileNamedRelationAndCombinatorMutations(t *testing.T) {
+	ids := testIDs{}
+	providers := ir.PortableProviders()
+	stringType, _ := ir.NewTypeRef(ir.ValueString, true, 0, 0, ir.EnumID{}, nil, 0)
+	value, _ := ir.StringValue("Ada")
+	operand, _ := ir.OneOperand(value)
+	leafRequirements, err := operator.ValidateShape(ir.OperatorEqual, operator.Shape{Node: ir.ConditionScalar, FieldType: stringType, Operand: operand, Mode: ir.ComparisonSensitive, Providers: providers})
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := ir.NewScalar(ids.childModel(), ids.childName(), stringType, ir.OperatorEqual, ir.ComparisonSensitive, operand, leafRequirements)
+	relationCondition := func(operatorID ir.OperatorID, cardinality ir.RelationCardinality, child *ir.Condition) ir.Condition {
+		requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionRelation, Operand: ir.NoOperand(), Mode: ir.ComparisonSensitive, Cardinality: cardinality, HasChild: child != nil, Providers: providers})
+		if err != nil {
+			t.Fatal(err)
+		}
+		condition, err := ir.NewRelation(ids.rootModel(), ids.children(), ids.relation(), ids.childModel(), cardinality, operatorID, child, requirements)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return condition
+	}
+
+	t.Run("M1_every_nullable_child_uses_is_not_true", func(t *testing.T) {
+		fragment, err := Compile(testRequest(t, relationCondition(ir.OperatorRelationEvery, ir.RelationToMany, &leaf), ir.ProviderPostgreSQL, fixtureResolver(ids, stringType), "root"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(fragment.SQL(), `AND ((("golem_p1"."name" = $1)) IS NOT TRUE)`) || !strings.HasPrefix(fragment.SQL(), "NOT (EXISTS ") {
+			t.Fatalf("every lost its two-valued counterexample form: %s", fragment.SQL())
+		}
+	})
+
+	t.Run("M17_to_one_presence_uses_related_existence", func(t *testing.T) {
+		resolver := fixtureResolver(ids, stringType)
+		descriptor := resolver.relations[ids.relation()]
+		descriptor.Cardinality = ir.RelationToOne
+		resolver.relations[ids.relation()] = descriptor
+		fragment, err := Compile(testRequest(t, relationCondition(ir.OperatorRelationIsNull, ir.RelationToOne, nil), ir.ProviderPostgreSQL, resolver, "root"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(fragment.SQL(), "NOT (EXISTS ") || strings.Contains(fragment.SQL(), " IS NULL") || !strings.Contains(fragment.SQL(), `"root"."tenant" = "golem_p1"."tenant"`) || !strings.Contains(fragment.SQL(), `"root"."id" = "golem_p1"."parent_id"`) {
+			t.Fatalf("relation presence is not descriptor-correlated existence: %s", fragment.SQL())
+		}
+	})
+
+	t.Run("M18_to_many_quantifier_matrix", func(t *testing.T) {
+		want := map[ir.OperatorID]struct {
+			prefix    string
+			isNotTrue bool
+		}{
+			ir.OperatorRelationSome:  {prefix: "EXISTS ", isNotTrue: false},
+			ir.OperatorRelationEvery: {prefix: "NOT (EXISTS ", isNotTrue: true},
+			ir.OperatorRelationNone:  {prefix: "NOT (EXISTS ", isNotTrue: false},
+		}
+		for operatorID, expected := range want {
+			fragment, err := Compile(testRequest(t, relationCondition(operatorID, ir.RelationToMany, &leaf), ir.ProviderPostgreSQL, fixtureResolver(ids, stringType), "root"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(fragment.SQL(), expected.prefix) || strings.Contains(fragment.SQL(), "IS NOT TRUE") != expected.isNotTrue {
+				t.Fatalf("operator %d rendered %q", operatorID, fragment.SQL())
+			}
+		}
+	})
+
+	t.Run("M19_not_array_is_nor", func(t *testing.T) {
+		truth, _ := ir.NewConstant(ids.rootModel(), true)
+		falsehood, _ := ir.NewConstant(ids.rootModel(), false)
+		or, _ := ir.NewLogical(ids.rootModel(), ir.LogicalOr, []ir.Condition{truth, falsehood})
+		nor, _ := ir.NewLogical(ids.rootModel(), ir.LogicalNot, []ir.Condition{or})
+		fragment, err := Compile(testRequest(t, nor, ir.ProviderPostgreSQL, fixtureResolver(ids, stringType), "root"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fragment.SQL() != "NOT (((TRUE) OR (FALSE)))" {
+			t.Fatalf("NOT(array) did not retain NOT(OR(...)) ownership: %s", fragment.SQL())
+		}
+	})
+
+	t.Run("M20_empty_combinator_constants", func(t *testing.T) {
+		for truth, want := range map[bool]string{true: "TRUE", false: "FALSE"} {
+			condition, _ := ir.NewConstant(ids.rootModel(), truth)
+			fragment, err := Compile(testRequest(t, condition, ir.ProviderPostgreSQL, fixtureResolver(ids, stringType), "root"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fragment.SQL() != want {
+				t.Fatalf("constant %v rendered %q", truth, fragment.SQL())
+			}
+		}
+	})
+}
+
+func TestCompileNamedCapabilityMutationsRefuseBeforeDialectRendering(t *testing.T) {
+	ids := testIDs{}
+	providers := ir.PortableProviders()
+	assertRefusal := func(t *testing.T, condition ir.Condition, typ ir.TypeRef, proved ...ir.Capability) {
+		t.Helper()
+		resolver := fixtureResolver(ids, typ)
+		proof, err := NewCapabilityProof(ir.ProviderPostgreSQL, resolver.SchemaFingerprint(), proved...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request := Request{Condition: condition, Provider: ir.ProviderPostgreSQL, Resolver: resolver, Dialect: noRenderDialect{}, Capabilities: proof, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: "root"}
+		_, err = Compile(request)
+		assertCode(t, err, CodeCapability)
+	}
+
+	t.Run("M29_ascii_insensitive_missing_capability_refuses_before_sql", func(t *testing.T) {
+		textType, _ := ir.NewTypeRef(ir.ValueString, true, 0, 0, ir.EnumID{}, nil, 0)
+		textValue, _ := ir.StringValue("")
+		one, _ := ir.OneOperand(textValue)
+		emptyMany, _ := ir.ManyOperand(nil)
+		for _, operatorID := range []ir.OperatorID{
+			ir.OperatorEqual, ir.OperatorNotEqual, ir.OperatorIn, ir.OperatorNotIn,
+			ir.OperatorLessThan, ir.OperatorLessThanOrEqual, ir.OperatorGreaterThan, ir.OperatorGreaterThanOrEqual,
+			ir.OperatorContains, ir.OperatorStartsWith, ir.OperatorEndsWith,
+		} {
+			operatorID := operatorID
+			t.Run(fmt.Sprintf("scalar_%d", operatorID), func(t *testing.T) {
+				operand := one
+				if operatorID == ir.OperatorIn || operatorID == ir.OperatorNotIn {
+					operand = emptyMany // Degenerate forms must not bypass the gate.
+				}
+				requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionScalar, FieldType: textType, Operand: operand, Mode: ir.ComparisonASCIIInsensitive, Providers: providers})
+				if err != nil {
+					t.Fatal(err)
+				}
+				condition, err := ir.NewScalar(ids.rootModel(), ids.rootName(), textType, operatorID, ir.ComparisonASCIIInsensitive, operand, requirements)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertRefusal(t, condition, textType, ir.CapabilityBinaryText)
+			})
+		}
+
+		jsonType, _ := ir.NewTypeRef(ir.ValueJSON, true, 0, 0, ir.EnumID{}, nil, 0)
+		jsonString, _ := ir.JSONStringValue("")
+		jsonValue, _ := ir.NewJSONValue(jsonString)
+		jsonOperand, _ := ir.OneOperand(jsonValue)
+		path, _ := ir.NewJSONPath()
+		for _, operatorID := range []ir.OperatorID{ir.OperatorJSONStringContains, ir.OperatorJSONStringStartsWith, ir.OperatorJSONStringEndsWith} {
+			operatorID := operatorID
+			t.Run(fmt.Sprintf("json_%d", operatorID), func(t *testing.T) {
+				requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionJSON, FieldType: jsonType, Operand: jsonOperand, Mode: ir.ComparisonASCIIInsensitive, Path: path, Providers: providers})
+				if err != nil {
+					t.Fatal(err)
+				}
+				condition, err := ir.NewJSON(ids.rootModel(), ids.rootName(), jsonType, operatorID, ir.ComparisonASCIIInsensitive, path, jsonOperand, requirements)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertRefusal(t, condition, jsonType, ir.CapabilityBinaryText, ir.CapabilityExactJSON)
+			})
+		}
+	})
+
+	t.Run("M30_scalar_list_json_capability_missing_refuses_before_sql", func(t *testing.T) {
+		elementType, _ := ir.NewTypeRef(ir.ValueString, false, 0, 0, ir.EnumID{}, nil, 0)
+		listType, _ := ir.NewTypeRef(ir.ValueScalarList, true, 0, 0, ir.EnumID{}, &elementType, ir.CapabilityScalarListJSON)
+		listElement, _ := ir.StringValue("x")
+		oneElement, _ := ir.OneOperand(listElement)
+		listValue, _ := ir.NewListValue([]ir.Value{listElement})
+		oneList, _ := ir.OneOperand(listValue)
+		manyElements, _ := ir.ManyOperand([]ir.Value{listElement})
+		for _, test := range []struct {
+			operator ir.OperatorID
+			operand  ir.Operand
+		}{
+			{ir.OperatorListEqual, oneList}, {ir.OperatorListHas, oneElement},
+			{ir.OperatorListHasEvery, manyElements}, {ir.OperatorListHasSome, manyElements},
+			{ir.OperatorListIsEmpty, ir.FlagOperand(true)},
+			{ir.OperatorListIsNull, ir.NoOperand()}, {ir.OperatorListIsNotNull, ir.NoOperand()},
+		} {
+			test := test
+			t.Run(fmt.Sprintf("list_%d", test.operator), func(t *testing.T) {
+				requirements, err := operator.ValidateShape(test.operator, operator.Shape{Node: ir.ConditionList, FieldType: listType, Operand: test.operand, Mode: ir.ComparisonSensitive, Providers: providers})
+				if err != nil {
+					t.Fatal(err)
+				}
+				condition, err := ir.NewList(ids.rootModel(), ids.rootName(), listType, test.operator, test.operand, requirements)
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertRefusal(t, condition, listType, ir.CapabilityBinaryText, ir.CapabilityASCIIInsensitiveText, ir.CapabilityExactJSON)
+			})
+		}
+	})
 }
 
 func mustType(t *testing.T, kind ir.ValueKind) ir.TypeRef {
@@ -228,4 +421,31 @@ func (testDialect) RenderList(ListLeaf, *Binder) (string, error) {
 }
 func (testDialect) RenderJSON(JSONLeaf, *Binder) (string, error) {
 	return "", fmt.Errorf("unsupported")
+}
+
+// noRenderDialect panics on every rendering operation. Tests using it prove
+// capability refusal happens before identifier quoting, operator support,
+// binding, or renderer dispatch.
+type noRenderDialect struct{}
+
+func (noRenderDialect) Provider() ir.Provider { return ir.ProviderPostgreSQL }
+func (noRenderDialect) Quote(physical.PhysicalName) string {
+	panic("dialect rendering reached")
+}
+func (noRenderDialect) Table(Model) string { panic("dialect rendering reached") }
+func (noRenderDialect) Placeholder(int) string {
+	panic("dialect rendering reached")
+}
+func (noRenderDialect) Supports(ir.OperatorID) bool { panic("dialect rendering reached") }
+func (noRenderDialect) Encode(BoundValue) (any, error) {
+	panic("dialect rendering reached")
+}
+func (noRenderDialect) RenderScalar(ScalarLeaf, *Binder) (string, error) {
+	panic("dialect rendering reached")
+}
+func (noRenderDialect) RenderList(ListLeaf, *Binder) (string, error) {
+	panic("dialect rendering reached")
+}
+func (noRenderDialect) RenderJSON(JSONLeaf, *Binder) (string, error) {
+	panic("dialect rendering reached")
 }

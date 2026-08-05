@@ -113,7 +113,10 @@ func sqlitePolicyList(_ *modernsqlite.FunctionContext, arguments []driver.Value)
 		}
 	case ir.OperatorListIsEmpty:
 		wantEmpty, err := strconv.ParseBool(wanted)
-		matched = err == nil && (len(values) == 0) == wantEmpty && validTypedList(values, typ)
+		// Presence and array shape are the complete contract for IsEmpty. Stored
+		// malformed elements still occupy array slots; their value type matters
+		// only to element-comparison operators.
+		matched = err == nil && (len(values) == 0) == wantEmpty
 	default:
 		return int64(0), nil
 	}

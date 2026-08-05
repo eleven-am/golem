@@ -85,11 +85,13 @@ func TestPolicySQLiteNamedMutationSemanticsAndUnknownCount(t *testing.T) {
 	}{
 		"adjacent_integer_above_2pow53":                    {`SELECT golem_policy_list('[9007199254740993]', '[9007199254740992]', '4:0:0', 101)`, 0},
 		"list_equals_noncanonical_text":                    {`SELECT golem_policy_list('[1.0, 2e0]', '[1,2]', '7:18:2', 101)`, 1},
+		"list_has_null_column_unknown_count":               {`SELECT golem_policy_list(NULL, '1', '4:0:0', 102)`, 0},
 		"list_equals_malformed_null_element_is_two_valued": {`SELECT golem_policy_list('[null]', '[null]', '4:0:0', 101)`, 0},
 		"list_has_wrong_type_is_two_valued":                {`SELECT golem_policy_list('["1"]', '1', '4:0:0', 102)`, 0},
 		"list_has_every_empty_present":                     {`SELECT golem_policy_list('[]', '[]', '4:0:0', 103)`, 1},
 		"list_has_some_empty":                              {`SELECT golem_policy_list('[1]', '[]', '4:0:0', 104)`, 0},
 		"list_is_empty_null_column_unknown_count":          {`SELECT golem_policy_list(NULL, 'true', '4:0:0', 105)`, 0},
+		"list_is_not_empty_counts_malformed_elements":      {`SELECT golem_policy_list('[null,"wrong"]', 'false', '4:0:0', 105)`, 1},
 		"json_adjacent_integer_above_2pow53":               {`SELECT golem_policy_json('{"n":9007199254740993}', '[["k","n"]]', '9007199254740992', 203, 1, 2)`, 0},
 		"json_missing_path_db_null":                        {`SELECT golem_policy_json('{"x":1}', '[["k","missing"]]', '1', 203, 1, 5)`, 1},
 		"json_present_json_null":                           {`SELECT golem_policy_json('{"x":null}', '[["k","x"]]', '2', 203, 1, 5)`, 1},
@@ -114,6 +116,118 @@ func TestPolicySQLiteNamedMutationSemanticsAndUnknownCount(t *testing.T) {
 		})
 	}
 }
+
+// TestPolicySQLiteNamedScalarMutationMatrix owns the scalar SQL-side witnesses
+// for M2-M10 and M13.  These are execution assertions, not renderer-string
+// snapshots: every fragment is compiled through the production compiler, run
+// against nullable rows, and independently checked for SQL UNKNOWN.
+func TestPolicySQLiteNamedScalarMutationMatrix(t *testing.T) {
+	ctx := context.Background()
+	database, _, err := New().Open(ctx, filepath.Join(t.TempDir(), "scalar-mutations.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY, name TEXT) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	rows := []struct {
+		id   int
+		name *string
+	}{
+		{1, pointer("100%_\\A")},
+		{2, nil},
+		{3, pointer("other")},
+		{4, pointer("ÉCOLE")},
+	}
+	for _, row := range rows {
+		if _, err := database.Exec(`INSERT INTO probe(id,name) VALUES (?,?)`, row.id, row.name); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	resolver := newSQLitePolicyTestResolver(t)
+	proof, err := New().PolicyCapabilityProof(ctx, database, resolver.fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := func(value string) ir.Operand {
+		text, err := ir.StringValue(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		operand, err := ir.OneOperand(text)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operand
+	}
+	many := func(values ...string) ir.Operand {
+		items := make([]ir.Value, len(values))
+		for index, value := range values {
+			items[index], err = ir.StringValue(value)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		operand, err := ir.ManyOperand(items)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return operand
+	}
+	condition := func(operatorID ir.OperatorID, mode ir.ComparisonMode, operand ir.Operand) ir.Condition {
+		requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionScalar, FieldType: resolver.textType, Operand: operand, Mode: mode, Providers: ir.PortableProviders()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		result, err := ir.NewScalar(resolver.modelID, resolver.nameID, resolver.textType, operatorID, mode, operand, requirements)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return result
+	}
+	tests := []struct {
+		name      string
+		condition ir.Condition
+		want      []int
+	}{
+		{"M2_ordered_nullable_unknown_count", condition(ir.OperatorLessThan, ir.ComparisonSensitive, one("z")), []int{1, 3}},
+		{"M3_equals_null_safe_unknown_count", condition(ir.OperatorEqual, ir.ComparisonSensitive, one("other")), []int{3}},
+		{"M4_not_exact_complement_nullable", condition(ir.OperatorNotEqual, ir.ComparisonSensitive, one("other")), []int{1, 2, 4}},
+		{"M5_in_nullable_unknown_count", condition(ir.OperatorIn, ir.ComparisonSensitive, many("other")), []int{3}},
+		{"M6_not_in_includes_null_subject", condition(ir.OperatorNotIn, ir.ComparisonSensitive, many("other")), []int{1, 2, 4}},
+		{"M7_in_empty_is_none", condition(ir.OperatorIn, ir.ComparisonSensitive, many()), nil},
+		{"M8_not_in_empty_is_all", condition(ir.OperatorNotIn, ir.ComparisonSensitive, many()), []int{1, 2, 3, 4}},
+		{"M9_literal_like_metacharacters_sensitive", condition(ir.OperatorContains, ir.ComparisonSensitive, one("%_\\")), []int{1}},
+		{"M10_literal_like_metacharacters_insensitive", condition(ir.OperatorEqual, ir.ComparisonASCIIInsensitive, one("100%_\\a")), []int{1}},
+		{"M13_empty_needle_excludes_null_subject", condition(ir.OperatorContains, ir.ComparisonSensitive, one("")), []int{1, 3, 4}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fragment, err := policysql.Compile(policysql.Request{Condition: test.condition, Provider: ir.ProviderSQLite, Resolver: resolver, Dialect: NewPolicyDialect(), Capabilities: proof, BoundFingerprint: resolver.fingerprint, RootAlias: "root"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var selected []int
+			if err := database.Select(&selected, `SELECT id FROM probe AS "root" WHERE `+fragment.SQL()+` ORDER BY id`, fragment.Args()...); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(selected, test.want) {
+				t.Fatalf("selected=%v want=%v SQL=%s args=%#v", selected, test.want, fragment.SQL(), fragment.Args())
+			}
+			var unknown int
+			if err := database.Get(&unknown, `SELECT count(*) FROM probe AS "root" WHERE (`+fragment.SQL()+`) IS NULL`, fragment.Args()...); err != nil {
+				t.Fatal(err)
+			}
+			if unknown != 0 {
+				t.Fatalf("unknown count=%d", unknown)
+			}
+		})
+	}
+}
+
+func pointer(value string) *string { return &value }
 
 func TestPolicySQLiteJSONAndListFunctionsNeverReturnUnknown(t *testing.T) {
 	database, _, err := New().Open(context.Background(), filepath.Join(t.TempDir(), "unknown.db"))
