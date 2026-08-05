@@ -7,6 +7,10 @@ For active Go implementation, [`p1/P1-CONTRACT.md`](./p1/P1-CONTRACT.md) is the
 accepted P1 integration contract. Its three supporting Wave 0 documents preserve
 the detailed schema/IR, provider/migration, and compiler/codegen specifications.
 
+P2 work is governed by [`p2/P2-PLAN.md`](./p2/P2-PLAN.md). The accompanying
+[`p2/OPERATOR-ABI.md`](./p2/OPERATOR-ABI.md) records the completed P2-A typed
+baseline and must not be read as a completed policy-kernel claim.
+
 The numbered documents are detailed supporting specifications and research:
 
 1. [`01-operators.md`](./01-operators.md) — operator semantics and agreement;

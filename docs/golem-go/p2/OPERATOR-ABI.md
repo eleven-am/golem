@@ -1,11 +1,17 @@
 # P2 portable operator ABI
 
-Status: **frozen public V1 contract**
+Status: **accepted P2-A typed baseline; not the complete P2 contract**
 
 Scope: typed policy predicates, row grants, in-memory evaluation, and SQL lowering
 Authority: subordinate only to [`../BIBLE.md`](../BIBLE.md); this file owns the
-P2 public operator ABI. Supporting operator research is non-controlling where it
-conflicts with this file.
+P2-A public operator ABI. Supporting operator research is non-controlling where it
+conflicts with this file. The complete P2 scope, including the Bible-required rule
+surface and advanced accepted operators, is controlled by
+[`P2-PLAN.md`](./P2-PLAN.md).
+
+This file freezes the already implemented baseline so later work does not mutate
+its method meanings. Its explicit deferrals are deferrals from P2-A, not permission
+to declare the complete P2 policy kernel finished without them.
 
 ## 1. Contract boundary
 
@@ -117,8 +123,7 @@ None(Predicate[R]) Predicate[M]
 
 There is no separate nullable to-one handle in V1. Generated required and
 nullable to-one relations both use `ToOne[M, R]` and expose all four methods.
-For a required to-one relation, the later predicate normalizer MUST reduce
-`IsNull()` to false and `IsNotNull()` to true from schema facts; code generation
+Presence is determined from related-row existence for both forms; code generation
 MUST NOT invent a second relation handle type merely to hide those methods.
 
 Predicates expose both constructors and fluent sugar:
@@ -182,8 +187,9 @@ and `IsEmpty(false)` are false on null.
 
 For a nullable to-one relation, `Is(p)` is false on null and `IsNot(p)` is true;
 the latter is exact logical negation. Presence methods test relation existence.
-For a required to-one relation, presence is constant truth as specified in
-section 2 and is normalized from the schema rather than evaluated as a join.
+For every to-one relation, presence means existence of the related row and is
+evaluated/rendered through the relation identity. Required field nullability alone
+does not prove presence; a relation may be dangling under database drift.
 
 ### 3.3 Empty operands and quantifiers
 
@@ -229,7 +235,8 @@ policy evaluation after pagination.
 
 ## 5. Explicit V1 deferrals
 
-The following are outside this ABI and require a later versioned design:
+The following are outside this P2-A ABI and require a later P2 ABI revision before
+the complete P2 gate:
 
 - case-insensitive text and locale/collation modes;
 - typed JSON equality, ordering, containment, paths, or array/string operators;
