@@ -537,6 +537,10 @@ type FrozenPredicate struct {
 
 func (predicate Predicate[M]) Freeze(root ModelDescriptor[M]) (FrozenPredicate, error) {
 	model := root.Metadata().ModelID()
+	return predicate.freezeForModel(model)
+}
+
+func (predicate Predicate[M]) freezeForModel(model ModelID) (FrozenPredicate, error) {
 	if model == (ModelID{}) {
 		return FrozenPredicate{}, freezeFailure(FreezeInvalidModel, "model descriptor has a zero identity")
 	}

@@ -217,6 +217,9 @@ func (fieldCore[M, V]) fieldModel(M)                 {}
 func (field fieldCore[M, V]) fieldIdentity() FieldID { return field.id }
 func (fieldCore[M, V]) schemaValue(M, V)             {}
 func (fieldCore[M, V]) Expr() SchemaExpr[M, V]       { return SchemaExpr[M, V]{} }
+func (field fieldCore[M, V]) readSelection(M) readSelectionNode {
+	return readSelectionNode{kind: readSelectionScalar, field: field.id}
+}
 
 // EqualValue is the closed portable V1 operand set for equality and membership.
 // Bytes and scalar lists have distinct handles because slices are not scalar
@@ -255,6 +258,12 @@ func (field EqualField[M, V]) In(values ...V) Predicate[M] {
 }
 func (field EqualField[M, V]) NotIn(values ...V) Predicate[M] {
 	return predicateScalar[M](field.fieldIdentity(), frozenOperatorNotIn, scalarOperands(values))
+}
+func (field EqualField[M, V]) Asc() OrderTerm[M] {
+	return orderTerm[M](field.fieldIdentity(), SortAscending)
+}
+func (field EqualField[M, V]) Desc() OrderTerm[M] {
+	return orderTerm[M](field.fieldIdentity(), SortDescending)
 }
 
 type OrderedField[M any, V OrderedValue] struct{ EqualField[M, V] }
@@ -588,23 +597,33 @@ func (field NullableOpaqueField[M, V]) IsNotNull() Predicate[M] {
 }
 
 type ToOne[M any, R any] struct {
-	fieldID    FieldID
-	relationID RelationID
-	_          func(M) R
+	fieldID     FieldID
+	relationID  RelationID
+	targetModel ModelID
+	_           func(M) R
 }
 
 type ToMany[M any, R any] struct {
-	fieldID    FieldID
-	relationID RelationID
-	_          func(M) R
+	fieldID     FieldID
+	relationID  RelationID
+	targetModel ModelID
+	_           func(M) R
 }
 
-func GeneratedToOne[M any, R any](fieldID FieldID, relationID RelationID) ToOne[M, R] {
-	return ToOne[M, R]{fieldID: fieldID, relationID: relationID}
+func GeneratedToOne[M any, R any](fieldID FieldID, relationID RelationID, target ...ModelID) ToOne[M, R] {
+	var targetModel ModelID
+	if len(target) == 1 {
+		targetModel = target[0]
+	}
+	return ToOne[M, R]{fieldID: fieldID, relationID: relationID, targetModel: targetModel}
 }
 
-func GeneratedToMany[M any, R any](fieldID FieldID, relationID RelationID) ToMany[M, R] {
-	return ToMany[M, R]{fieldID: fieldID, relationID: relationID}
+func GeneratedToMany[M any, R any](fieldID FieldID, relationID RelationID, target ...ModelID) ToMany[M, R] {
+	var targetModel ModelID
+	if len(target) == 1 {
+		targetModel = target[0]
+	}
+	return ToMany[M, R]{fieldID: fieldID, relationID: relationID, targetModel: targetModel}
 }
 
 func (ToOne[M, R]) fieldModel(M)                  {}

@@ -332,7 +332,15 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 	if field.Relation.Kind == ir.RelationHasMany {
 		constructor = "golem.GeneratedToMany"
 	}
-	return constructor + args + "(" + fieldLiteral + ", " + relationLiteral + ")", nil
+	target, err := relationTarget(field, owner, models, relations)
+	if err != nil {
+		return "", err
+	}
+	targetLiteral, err := idLiteral("ModelID", string(target.ID))
+	if err != nil {
+		return "", err
+	}
+	return constructor + args + "(" + fieldLiteral + ", " + relationLiteral + ", " + targetLiteral + ")", nil
 }
 
 // scalarHandle is the single bootstrap/final mapping from normalized logical

@@ -139,8 +139,8 @@ func TestGeneratedDescriptorConstructorsRequireTypedIDs(t *testing.T) {
 		{"GeneratedToMany", GeneratedToMany[declarationUser, declarationUser]},
 	} {
 		functionType := reflect.TypeOf(constructor.fn)
-		if functionType.NumIn() != 2 || functionType.In(0) != reflect.TypeOf(FieldID{}) || functionType.In(1) != reflect.TypeOf(RelationID{}) {
-			t.Fatalf("%s accepts %v; want exactly FieldID, RelationID", constructor.name, functionType)
+		if functionType.NumIn() != 3 || functionType.In(0) != reflect.TypeOf(FieldID{}) || functionType.In(1) != reflect.TypeOf(RelationID{}) || functionType.In(2) != reflect.TypeOf([]ModelID{}) || !functionType.IsVariadic() {
+			t.Fatalf("%s accepts %v; want FieldID, RelationID, optional generated target ModelID", constructor.name, functionType)
 		}
 	}
 	modelConstructor := reflect.TypeOf(GeneratedModelDescriptor[declarationUser])
