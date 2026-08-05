@@ -32,9 +32,15 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	if !ok || post.ID() != ids.post {
 		t.Fatal("post model was not indexed")
 	}
+	if !registry.HasModel(ids.post) || registry.HasModel(golem.ModelID{0xff}) {
+		t.Fatal("model identity membership disagrees with the registry index")
+	}
 	author, ok := registry.Field(ids.post, ids.author)
 	if !ok || author.Kind() != compilerir.FieldScalar || author.ModelID() != ids.post {
 		t.Fatalf("author field = %#v, %v", author, ok)
+	}
+	if !registry.HasField(ids.post, ids.author) || registry.HasField(ids.user, ids.author) {
+		t.Fatal("field identity membership accepted an unknown or wrong-owner field")
 	}
 	if _, ok := registry.Field(ids.user, ids.author); ok {
 		t.Fatal("cross-model field identity was accepted")
@@ -72,6 +78,13 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	}
 	if physicalModel, ok := registry.PhysicalModel(golem.PostgreSQL, ids.user); !ok || physicalModel.Name() != "users" {
 		t.Fatalf("PostgreSQL physical model = %#v, %v", physicalModel, ok)
+	}
+}
+
+func TestNilRegistryIdentityMembershipFailsClosed(t *testing.T) {
+	var registry *Registry
+	if registry.HasModel(golem.ModelID{1}) || registry.HasField(golem.ModelID{1}, golem.FieldID{1}) {
+		t.Fatal("nil registry reported a known identity")
 	}
 }
 

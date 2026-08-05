@@ -78,6 +78,29 @@ func (registry *Registry) Providers() []golem.Provider {
 	return append([]golem.Provider(nil), registry.providers...)
 }
 
+// HasModel and HasField expose only identity membership for consumers that do
+// not need schema facts. Both are nil-safe so an absent bootstrap registry
+// fails closed at subsystem boundaries.
+func (registry *Registry) HasModel(id golem.ModelID) bool {
+	if registry == nil {
+		return false
+	}
+	_, ok := registry.models[id]
+	return ok
+}
+
+func (registry *Registry) HasField(model golem.ModelID, field golem.FieldID) bool {
+	if registry == nil {
+		return false
+	}
+	fields, ok := registry.fields[model]
+	if !ok {
+		return false
+	}
+	_, ok = fields[field]
+	return ok
+}
+
 // Model returns a model only when the fixed-width ID is present in this exact
 // fingerprinted registry.
 func (registry *Registry) Model(id golem.ModelID) (Model, bool) {

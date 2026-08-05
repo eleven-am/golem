@@ -1,7 +1,7 @@
 # P2 policy kernel execution plan
 
-Status: **controlling implementation plan; P2-B is implemented and P2-C/P2-D
-are in integration; P2 as a whole is not complete**
+Status: **controlling implementation plan; P2-B through P2-F are implemented;
+P2 as a whole is not complete**
 
 Authority: [`../BIBLE.md`](../BIBLE.md) is authoritative. The detailed operator,
 policy-resolution, and classification chapters remain normative after applying
@@ -92,9 +92,6 @@ agreement cells pass.
 
 The repository does not yet contain:
 
-- dependency planning;
-- implication or discharge;
-- a production evaluator;
 - SQLite or PostgreSQL policy SQL rendering;
 - provider agreement fixtures; or
 - execution-scoped policy-set construction.
@@ -232,8 +229,11 @@ go/internal/policy/ir           closed non-generic condition/rule/value IR
 go/internal/policy/bind         frozen-public-value -> validated internal IR
 go/internal/policy/operator     registry, validation, evaluation contracts
 go/internal/policy/normalize    canonical two-valued-safe normalization
-go/internal/policy/rules        ordered row and field lenses
-go/internal/policy/classify     requirements, dependencies, implication
+go/internal/policy/resolve      ordered row and field lenses
+go/internal/policy/dependency   ordered local requirements + merged hydration tree
+go/internal/policy/evaluate     immutable loaded records + one exact evaluator
+go/internal/policy/imply        canonical conservative structural implication
+go/internal/policy/classify     typed requests, access, dependencies, discharge
 go/internal/policy/sql          safe traversal and provider renderer contract
 go/internal/provider/sqlite     SQLite operator fragments and binding codecs
 go/internal/provider/postgresql PostgreSQL operator fragments and binding codecs
@@ -388,6 +388,8 @@ lenses. Every named mutation in `02-policy-resolution.md` makes a named test fai
 
 ### P2-E — evaluator and dependency collection
 
+Status: **implemented locally; acceptance gate passes**.
+
 Work:
 
 1. Implement all registry operators in the Go evaluator.
@@ -402,10 +404,14 @@ exact values, JSON absent versus JSON null, and missing-dependency refusal.
 
 ### P2-F — implication and classification
 
+Status: **implemented locally; acceptance gate passes**.
+
 Work:
 
 1. Implement canonical structural equality without `reflect.DeepEqual`.
-2. Implement conservative conjunct/disjunction implication rules.
+2. Implement conservative conjunct/disjunction implication rules plus a bounded
+   exact propositional fallback over canonical opaque leaves. Oversized proofs
+   and unsatisfiable-selector vacuity fail closed.
 3. Implement `always`, `conditional`, and `never` classification.
 4. Compute semantic discharge as
    `Implies(selectingConstraint, fieldCondition)`.

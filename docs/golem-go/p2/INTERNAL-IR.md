@@ -1,8 +1,9 @@
 # P2 internal policy IR and freeze/bind contract
 
 Status: **controlling design; closed IR, schema registry, binder, canonical
-encoding, and conservative normalization are implemented; later P2 consumers
-remain incomplete**
+encoding, normalization, ordered resolution, dependency planning, evaluation,
+implication, and classification are implemented; later P2 consumers remain
+incomplete**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 2, 4,
 7–8, and 20–21. [`P2-PLAN.md`](./P2-PLAN.md) owns delivery order and
@@ -10,9 +11,10 @@ Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 2, 4,
 detailed operator, policy-resolution, and classification chapters own their
 expanded algorithms after the Bible's conflict resolutions.
 
-This document freezes the representation boundary required before P2-C can
-start. It does not claim that the evaluator, rule kernel, classifier, or SQL
-renderers exist.
+This document freezes the representation boundary required before P2-C. SQL
+renderers remain later work; the rule kernel, dependency collector,
+provider-neutral evaluator, conservative implication prover, and typed
+classifier now consume this boundary.
 
 ## 1. Scope and fixed decisions
 
@@ -71,10 +73,12 @@ internal/policy/bind <--------- go/golem frozen views
    +--> internal/policy/operator
    +--> internal/policy/ir
 
-internal/policy/normalize ---> internal/policy/ir
-internal/policy/rules --------> internal/policy/ir + normalize
-internal/policy/classify -----> internal/policy/ir + rules
-internal/policy/evaluate -----> internal/policy/ir + operator
+internal/policy/normalize ----> internal/policy/ir
+internal/policy/resolve ------> internal/policy/ir + normalize
+internal/policy/dependency ---> internal/policy/ir
+internal/policy/evaluate -----> internal/policy/ir + operator + dependency
+internal/policy/imply --------> internal/policy/ir + normalize
+internal/policy/classify -----> internal/policy/ir + resolve + dependency + imply
 internal/policy/sql ----------> internal/policy/ir + operator + schema
                                       ^
                                       | dialect implementation
@@ -94,6 +98,19 @@ More precisely:
   read-only operator registry.
 - `internal/policy/operator` declares semantics and renderer capabilities. It
   imports `ir`, but not concrete providers.
+- `internal/policy/dependency` derives ordered typed hydration plans without a
+  provider or record representation.
+- `internal/policy/evaluate` owns immutable loaded/null/missing record states and
+  the single exact in-memory evaluator. It imports `dependency`, `operator`, and
+  `ir`, but no provider.
+- `internal/policy/imply` first applies the canonical structural
+  conjunction/disjunction rules, then may use an exact truth-table proof over at
+  most twelve canonical opaque leaves. It never assigns meaning to a leaf;
+  oversized proofs and vacuous proofs from an unsatisfiable selector fail
+  closed. Failure to prove is not a claim of logical impossibility.
+- `internal/policy/classify` validates typed model and field uses against the
+  runtime schema registry, derives selecting/read constraints from one policy,
+  and computes access, hydration, and semantic discharge without field names.
 - `internal/policy/sql` defines a dialect interface and calls it. Concrete
   provider packages implement that interface; `policy/sql` never imports a
   provider package.
@@ -938,8 +955,9 @@ prevent ordinary mistakes; bind-time validation is the security boundary.
 
 No ModelIR migration is required for P2 conditions: existing ModelIR already
 contains stable field/relation/enum identities, exact logical types, endpoint
-mappings, and provider declarations. The missing work is runtime decoding/indexing
-and the public relation endpoint handle.
+mappings, and provider declarations. Runtime decoding/indexing and the public
+relation endpoint handle are implemented by the schema registry, binder, and
+generated ABI.
 
 ## 11. Explicit rejection of Phase 0 production shapes
 
