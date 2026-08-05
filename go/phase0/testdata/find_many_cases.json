@@ -1,0 +1,8 @@
+[
+  {"name":"public-or-owner","actorId":"u1","expectedIds":["p1","p2","p4"]},
+  {"name":"request-filter-narrows-policy","actorId":"u1","where":{"published":false},"expectedIds":["p1"]},
+  {"name":"request-filter-cannot-widen-policy","actorId":"u1","where":{"authorId":"u2"},"expectedIds":["p2"]},
+  {"name":"empty-authorization-result","actorId":"u3","where":{"published":false},"expectedIds":[]},
+  {"name":"authorization-precedes-pagination","actorId":"u1","skip":2,"take":1,"expectedIds":["p4"]},
+  {"name":"system-bypasses-caller-policy","system":true,"expectedIds":["p1","p2","p3","p4"]}
+]
