@@ -39,7 +39,7 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 		"Author    golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
 		"Manager       golem.ToOne[User, User]",
-		"golem.GeneratedTextField[Post, string](golem.FieldID{",
+		"golem.GeneratedModeTextField[Post, string](golem.FieldID{",
 		"golem.GeneratedToOne[Post, User](golem.FieldID{",
 		"golem.GeneratedToMany[User, Post](golem.FieldID{",
 		"}, golem.RelationID{",
@@ -90,6 +90,7 @@ func TestScalarHandleMappingIsExactForEveryLogicalFamily(t *testing.T) {
 		enumID: {ID: enumID, Go: ir.GoNamedTypeIR{PackagePath: "example.test/app/social", Name: "Visibility"}},
 	}
 	element := ir.LogicalTypeIR{Kind: ir.TypeString}
+	enumElement := ir.LogicalTypeIR{Kind: ir.TypeEnum, EnumID: pointer(enumID)}
 	tests := []struct {
 		name     string
 		logical  ir.LogicalTypeIR
@@ -110,14 +111,15 @@ func TestScalarHandleMappingIsExactForEveryLogicalFamily(t *testing.T) {
 		{"date", ir.LogicalTypeIR{Kind: ir.TypeDate}, false, "golem.OrderedField[Post, golem.Date]", "golem.GeneratedOrderedField[Post, golem.Date]"},
 		{"time", ir.LogicalTypeIR{Kind: ir.TypeTime}, false, "golem.OrderedField[Post, golem.Time]", "golem.GeneratedOrderedField[Post, golem.Time]"},
 		{"datetime", ir.LogicalTypeIR{Kind: ir.TypeDateTime}, true, "golem.NullableOrderedField[Post, time.Time]", "golem.GeneratedNullableOrderedField[Post, time.Time]"},
-		{"string", ir.LogicalTypeIR{Kind: ir.TypeString}, false, "golem.TextField[Post, string]", "golem.GeneratedTextField[Post, string]"},
-		{"nullable string", ir.LogicalTypeIR{Kind: ir.TypeString}, true, "golem.NullableTextField[Post, string]", "golem.GeneratedNullableTextField[Post, string]"},
+		{"string", ir.LogicalTypeIR{Kind: ir.TypeString}, false, "golem.ModeTextField[Post, string]", "golem.GeneratedModeTextField[Post, string]"},
+		{"nullable string", ir.LogicalTypeIR{Kind: ir.TypeString}, true, "golem.NullableModeTextField[Post, string]", "golem.GeneratedNullableModeTextField[Post, string]"},
 		{"bytes", ir.LogicalTypeIR{Kind: ir.TypeBytes}, false, "golem.BytesField[Post]", "golem.GeneratedBytesField[Post]"},
 		{"nullable bytes", ir.LogicalTypeIR{Kind: ir.TypeBytes}, true, "golem.NullableBytesField[Post]", "golem.GeneratedNullableBytesField[Post]"},
-		{"list", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &element}, false, "golem.OpaqueField[Post, golem.List[string]]", "golem.GeneratedOpaqueField[Post, golem.List[string]]"},
-		{"nullable list", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &element}, true, "golem.OpaqueField[Post, golem.List[string]]", "golem.GeneratedOpaqueField[Post, golem.List[string]]"},
-		{"json", ir.LogicalTypeIR{Kind: ir.TypeJSON}, false, "golem.OpaqueField[Post, golem.JSON[any]]", "golem.GeneratedOpaqueField[Post, golem.JSON[any]]"},
-		{"nullable json", ir.LogicalTypeIR{Kind: ir.TypeJSON}, true, "golem.NullableOpaqueField[Post, golem.JSON[any]]", "golem.GeneratedNullableOpaqueField[Post, golem.JSON[any]]"},
+		{"list", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &element}, false, "golem.ListField[Post, string]", "golem.GeneratedListField[Post, string]"},
+		{"nullable list", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &element}, true, "golem.NullableListField[Post, string]", "golem.GeneratedNullableListField[Post, string]"},
+		{"enum list", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &enumElement}, false, "golem.ListField[Post, Visibility]", "golem.GeneratedListField[Post, Visibility]"},
+		{"json", ir.LogicalTypeIR{Kind: ir.TypeJSON}, false, "golem.ModeJSONField[Post]", "golem.GeneratedModeJSONField[Post]"},
+		{"nullable json", ir.LogicalTypeIR{Kind: ir.TypeJSON}, true, "golem.NullableModeJSONField[Post]", "golem.GeneratedNullableModeJSONField[Post]"},
 	}
 	models := map[ir.ModelID]ir.ModelDeclIR{ir.ModelID(id(2)): {ID: ir.ModelID(id(2)), Go: ir.GoNamedTypeIR{PackagePath: "example.test/app/social", Name: "Post"}}}
 	for index, test := range tests {

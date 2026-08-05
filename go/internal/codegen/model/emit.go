@@ -284,7 +284,7 @@ func fieldHandle(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.Mo
 		if err != nil {
 			return "", err
 		}
-		if handle == "BytesField" || handle == "NullableBytesField" {
+		if handle == "BytesField" || handle == "NullableBytesField" || handle == "ModeJSONField" || handle == "NullableModeJSONField" {
 			return fmt.Sprintf("golem.%s[%s]", handle, ownerModel.Go.Name), nil
 		}
 		return fmt.Sprintf("golem.%s[%s, %s]", handle, ownerModel.Go.Name, valueType), nil
@@ -347,6 +347,15 @@ func scalarHandle(field *ir.ScalarFieldIR, enums map[ir.EnumID]ir.EnumIR, import
 	if err != nil {
 		return "", "", err
 	}
+	if logical.Kind == ir.TypeScalarList {
+		if logical.Element == nil {
+			return "", "", fmt.Errorf("model codegen: scalar list has no element type")
+		}
+		valueType, err = logicalGoType(*logical.Element, enums, imports)
+		if err != nil {
+			return "", "", err
+		}
+	}
 	switch logical.Kind {
 	case ir.TypeBool, ir.TypeUUID, ir.TypeEnum:
 		name = "EqualField"
@@ -354,21 +363,17 @@ func scalarHandle(field *ir.ScalarFieldIR, enums map[ir.EnumID]ir.EnumIR, import
 		ir.TypeDecimal, ir.TypeDate, ir.TypeTime, ir.TypeDateTime:
 		name = "OrderedField"
 	case ir.TypeString:
-		name = "TextField"
+		name = "ModeTextField"
 	case ir.TypeBytes:
 		name = "BytesField"
 	case ir.TypeScalarList:
-		// Scalar-list storage is supported by P1, but its authorization
-		// operator family remains closed until the evaluator/SQLite/PostgreSQL
-		// agreement gate passes. Emit a schema-capable handle with no policy
-		// methods for both nullable and required lists.
-		name = "OpaqueField"
+		name = "ListField"
 	case ir.TypeJSON:
-		name = "OpaqueField"
+		name = "ModeJSONField"
 	default:
 		return "", "", fmt.Errorf("model codegen: unsupported logical type %q", logical.Kind)
 	}
-	if field.Nullable && logical.Kind != ir.TypeScalarList {
+	if field.Nullable {
 		name = "Nullable" + name
 	}
 	return name, valueType, nil

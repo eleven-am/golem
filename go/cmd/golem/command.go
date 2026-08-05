@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
@@ -24,6 +25,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/physical"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/operator"
 	"github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"golang.org/x/mod/modfile"
@@ -57,6 +60,24 @@ type inspectOutput struct {
 	ModelFingerprint    ir.Fingerprint    `json:"modelFingerprint"`
 	ContractFingerprint ir.Fingerprint    `json:"contractFingerprint"`
 	GenerationDigest    string            `json:"generationDigest"`
+	Policies            []inspectPolicy   `json:"policies"`
+	PolicyOperators     []inspectOperator `json:"policyOperators"`
+}
+
+type inspectPolicy struct {
+	ModelID     ir.ModelID `json:"modelId"`
+	PackagePath string     `json:"packagePath"`
+	Receiver    string     `json:"receiver"`
+	Method      string     `json:"method"`
+}
+
+type inspectOperator struct {
+	ID                 uint16   `json:"id"`
+	Name               string   `json:"name"`
+	DeclaredProviders  []string `json:"declaredProviders"`
+	AgreementProviders []string `json:"agreementProviders"`
+	Capability         uint16   `json:"capability,omitempty"`
+	TwoValued          bool     `json:"twoValued"`
 }
 
 type generateOutput struct {
@@ -120,17 +141,43 @@ func runInspect(ctx context.Context, directory string, args []string, stdout, st
 	for index, provider := range result.Providers {
 		providers[index] = inspectProvider{Provider: provider.Provider, Fingerprint: provider.Fingerprint, SystemFingerprint: provider.SystemFingerprint, Schema: provider.Schema}
 	}
+	policies := make([]inspectPolicy, 0)
+	for _, entry := range result.Bindings {
+		if entry.Kind == bindings.BindingPolicy {
+			policies = append(policies, inspectPolicy{ModelID: entry.ModelID, PackagePath: entry.PackagePath, Receiver: entry.Receiver, Method: entry.Method})
+		}
+	}
+	operators := make([]inspectOperator, 0, len(operator.Entries()))
+	for _, entry := range operator.Entries() {
+		operators = append(operators, inspectOperator{ID: uint16(entry.ID()), Name: entry.Name(), DeclaredProviders: inspectPolicyProviders(entry.DeclaredProviders()), AgreementProviders: inspectPolicyProviders(entry.AgreementProviders()), Capability: uint16(entry.Capability()), TwoValued: entry.SQLIsTwoValued()})
+	}
 	output := inspectOutput{
-		FormatVersion: 1, Model: result.Compilation.Model, Contract: result.Compilation.Contract,
+		FormatVersion: 2, Model: result.Compilation.Model, Contract: result.Compilation.Contract,
 		Providers:        providers,
 		ModelFingerprint: result.ModelFingerprint, ContractFingerprint: result.ContractFingerprint,
 		GenerationDigest: result.Prospective.GenerationDigest,
+		Policies:         policies, PolicyOperators: operators,
 	}
 	if err := encodeJSON(stdout, output); err != nil {
 		writeError(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func inspectPolicyProviders(providers policyir.ProviderSet) []string {
+	result := make([]string, 0, 2)
+	if providers.Valid() {
+		for _, provider := range providers.Providers() {
+			switch provider {
+			case policyir.ProviderSQLite:
+				result = append(result, "sqlite")
+			case policyir.ProviderPostgreSQL:
+				result = append(result, "postgresql")
+			}
+		}
+	}
+	return result
 }
 
 func runGeneration(ctx context.Context, directory string, args []string, stdout, stderr io.Writer, command string, mode publication.Mode) int {

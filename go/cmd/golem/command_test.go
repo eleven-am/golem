@@ -49,15 +49,20 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "8ce913ea014319c807eb92297dd5bf7e75df8971a95ad03260d697bcc220d487"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "db7337575172e5d8828eda712410e1d184cbaa4d55cae8c347076b347965bc22"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 1 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 {
+	if output.FormatVersion != 2 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
+	}
+	for _, entry := range output.PolicyOperators {
+		if entry.ID == 0 || entry.Name == "" || len(entry.DeclaredProviders) != 2 || len(entry.AgreementProviders) != 2 || !entry.TwoValued {
+			t.Fatalf("inspect operator inventory is incomplete: %#v", entry)
+		}
 	}
 	if output.ModelFingerprint == "" || output.ContractFingerprint == "" || output.GenerationDigest == "" {
 		t.Fatal("inspect omitted fingerprints")

@@ -292,6 +292,74 @@ func (field TextField[M, V]) EndsWith(value V) Predicate[M] {
 	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEndsWith, stringOperand(string(value)))
 }
 
+type ComparisonMode interface{ comparisonMode() FrozenComparisonMode }
+type comparisonModeValue FrozenComparisonMode
+
+func (mode comparisonModeValue) comparisonMode() FrozenComparisonMode {
+	return FrozenComparisonMode(mode)
+}
+func DefaultComparison() ComparisonMode { return comparisonModeValue(FrozenComparisonSensitive) }
+func ASCIIInsensitive() ComparisonMode  { return comparisonModeValue(FrozenComparisonASCIIInsensitive) }
+
+type ModeTextField[M any, V ~string] struct{ TextField[M, V] }
+type NullableModeTextField[M any, V ~string] struct{ NullableTextField[M, V] }
+type TextComparison[M any, V ~string] struct {
+	field FieldID
+	mode  FrozenComparisonMode
+}
+
+func GeneratedModeTextField[M any, V ~string](id FieldID) ModeTextField[M, V] {
+	return ModeTextField[M, V]{TextField: GeneratedTextField[M, V](id)}
+}
+func GeneratedNullableModeTextField[M any, V ~string](id FieldID) NullableModeTextField[M, V] {
+	return NullableModeTextField[M, V]{NullableTextField: GeneratedNullableTextField[M, V](id)}
+}
+func (field ModeTextField[M, V]) Compare(mode ComparisonMode) TextComparison[M, V] {
+	return textComparison[M, V](field.fieldIdentity(), mode)
+}
+func (field NullableModeTextField[M, V]) Compare(mode ComparisonMode) TextComparison[M, V] {
+	return textComparison[M, V](field.fieldIdentity(), mode)
+}
+func textComparison[M any, V ~string](field FieldID, mode ComparisonMode) TextComparison[M, V] {
+	if mode == nil {
+		return TextComparison[M, V]{field: field}
+	}
+	return TextComparison[M, V]{field: field, mode: mode.comparisonMode()}
+}
+func (field TextComparison[M, V]) Eq(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorEq, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) Ne(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorNe, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) In(values ...V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorIn, field.mode, scalarOperands(values))
+}
+func (field TextComparison[M, V]) NotIn(values ...V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorNotIn, field.mode, scalarOperands(values))
+}
+func (field TextComparison[M, V]) LT(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorLT, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) LTE(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorLTE, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) GT(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorGT, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) GTE(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorGTE, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) Contains(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorContains, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) StartsWith(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorStartsWith, field.mode, stringOperand(string(value)))
+}
+func (field TextComparison[M, V]) EndsWith(value V) Predicate[M] {
+	return predicateScalarMode[M](field.field, frozenOperatorEndsWith, field.mode, stringOperand(string(value)))
+}
+
 type ListField[M any, E ListElement] struct{ fieldCore[M, List[E]] }
 
 func GeneratedListField[M any, E ListElement](id FieldID) ListField[M, E] {
@@ -337,6 +405,108 @@ type OpaqueField[M any, V any] struct{ fieldCore[M, V] }
 
 func GeneratedOpaqueField[M any, V any](id FieldID) OpaqueField[M, V] {
 	return OpaqueField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
+}
+
+type JSONField[M any] struct{ fieldCore[M, JSON[any]] }
+type NullableJSONField[M any] struct{ JSONField[M] }
+type ModeJSONField[M any] struct{ JSONField[M] }
+type NullableModeJSONField[M any] struct{ ModeJSONField[M] }
+type JSONTarget[M any] struct {
+	field FieldID
+	path  JSONPath
+}
+type ModeJSONTarget[M any] struct{ JSONTarget[M] }
+type JSONStringComparison[M any] struct {
+	target JSONTarget[M]
+	mode   FrozenComparisonMode
+}
+
+func GeneratedJSONField[M any](id FieldID) JSONField[M] {
+	return JSONField[M]{fieldCore: fieldCore[M, JSON[any]]{id: id}}
+}
+func GeneratedNullableJSONField[M any](id FieldID) NullableJSONField[M] {
+	return NullableJSONField[M]{JSONField: GeneratedJSONField[M](id)}
+}
+func GeneratedModeJSONField[M any](id FieldID) ModeJSONField[M] {
+	return ModeJSONField[M]{JSONField: GeneratedJSONField[M](id)}
+}
+func GeneratedNullableModeJSONField[M any](id FieldID) NullableModeJSONField[M] {
+	return NullableModeJSONField[M]{ModeJSONField: GeneratedModeJSONField[M](id)}
+}
+func (field JSONField[M]) Root() JSONTarget[M] {
+	return JSONTarget[M]{field: field.fieldIdentity(), path: jsonRootPath()}
+}
+func (field JSONField[M]) At(path JSONPath) JSONTarget[M] {
+	return JSONTarget[M]{field: field.fieldIdentity(), path: path}
+}
+func (field ModeJSONField[M]) Root() ModeJSONTarget[M] {
+	return ModeJSONTarget[M]{JSONTarget: field.JSONField.Root()}
+}
+func (field ModeJSONField[M]) At(path JSONPath) ModeJSONTarget[M] {
+	return ModeJSONTarget[M]{JSONTarget: field.JSONField.At(path)}
+}
+func (field NullableJSONField[M]) IsNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableJSONField[M]) IsNotNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
+func (field NullableModeJSONField[M]) IsNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNull)
+}
+func (field NullableModeJSONField[M]) IsNotNull() Predicate[M] {
+	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNotNull)
+}
+func (target JSONTarget[M]) Eq(value JSONEqualityOperand) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONEq, FrozenComparisonSensitive, jsonEqualityOperand(value))
+}
+func (target JSONTarget[M]) Ne(value JSONEqualityOperand) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONNe, FrozenComparisonSensitive, jsonEqualityOperand(value))
+}
+func (target JSONTarget[M]) LT(value JSONOrderedValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONLT, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) LTE(value JSONOrderedValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONLTE, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) GT(value JSONOrderedValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONGT, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) GTE(value JSONOrderedValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONGTE, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) StringContains(value string) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONStringContains, FrozenComparisonSensitive, jsonValueOperand(JSONString(value)))
+}
+func (target JSONTarget[M]) StringStartsWith(value string) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONStringStartsWith, FrozenComparisonSensitive, jsonValueOperand(JSONString(value)))
+}
+func (target JSONTarget[M]) StringEndsWith(value string) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONStringEndsWith, FrozenComparisonSensitive, jsonValueOperand(JSONString(value)))
+}
+func (target JSONTarget[M]) ArrayContains(value JSONValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONArrayContains, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) ArrayStartsWith(value JSONValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONArrayStartsWith, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target JSONTarget[M]) ArrayEndsWith(value JSONValue) Predicate[M] {
+	return predicateJSON[M](target.field, target.path, frozenOperatorJSONArrayEndsWith, FrozenComparisonSensitive, jsonValueOperand(value))
+}
+func (target ModeJSONTarget[M]) Compare(mode ComparisonMode) JSONStringComparison[M] {
+	if mode == nil {
+		return JSONStringComparison[M]{target: target.JSONTarget}
+	}
+	return JSONStringComparison[M]{target: target.JSONTarget, mode: mode.comparisonMode()}
+}
+func (target JSONStringComparison[M]) Contains(value string) Predicate[M] {
+	return predicateJSON[M](target.target.field, target.target.path, frozenOperatorJSONStringContains, target.mode, jsonValueOperand(JSONString(value)))
+}
+func (target JSONStringComparison[M]) StartsWith(value string) Predicate[M] {
+	return predicateJSON[M](target.target.field, target.target.path, frozenOperatorJSONStringStartsWith, target.mode, jsonValueOperand(JSONString(value)))
+}
+func (target JSONStringComparison[M]) EndsWith(value string) Predicate[M] {
+	return predicateJSON[M](target.target.field, target.target.path, frozenOperatorJSONStringEndsWith, target.mode, jsonValueOperand(JSONString(value)))
 }
 
 type NullableEqualField[M any, V EqualValue] struct{ EqualField[M, V] }

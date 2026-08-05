@@ -207,24 +207,21 @@ func TestBuildCompilesEveryCurrentlyEnabledPolicyHandleFamily(t *testing.T) {
 		"golem.EqualField[Post, bool]",
 		"golem.EqualField[Post, Status]",
 		"golem.OrderedField[Post, int64]",
-		"golem.TextField[Post, string]",
+		"golem.ModeTextField[Post, string]",
 		"golem.BytesField[Post]",
-		"golem.OpaqueField[Post, golem.List[string]]",
-		"golem.OpaqueField[Post, golem.JSON[any]]",
+		"golem.ListField[Post, string]",
+		"golem.ModeJSONField[Post]",
 		"golem.NullableEqualField[Post, bool]",
 		"golem.NullableOrderedField[Post, int64]",
-		"golem.NullableTextField[Post, string]",
+		"golem.NullableModeTextField[Post, string]",
 		"golem.NullableBytesField[Post]",
-		"golem.NullableOpaqueField[Post, golem.JSON[any]]",
+		"golem.NullableModeJSONField[Post]",
 		"golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
 	} {
 		if !strings.Contains(modelSource, handle) {
 			t.Errorf("full-pipeline model source missing %q", handle)
 		}
-	}
-	if strings.Contains(modelSource, "golem.ListField[") || strings.Contains(modelSource, "golem.NullableListField[") {
-		t.Fatal("scalar-list policy handles were emitted before provider agreement")
 	}
 }
 

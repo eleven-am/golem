@@ -48,6 +48,18 @@ var declarationCapabilities = struct {
 	OptionalMetadata: GeneratedNullableOpaqueField[declarationUser, JSON[any]](FieldID{0x0c}),
 }
 
+var declarationActivated = struct {
+	Title            ModeTextField[declarationUser, string]
+	OptionalTitle    NullableModeTextField[declarationUser, string]
+	Metadata         ModeJSONField[declarationUser]
+	OptionalMetadata NullableModeJSONField[declarationUser]
+}{
+	Title:            GeneratedModeTextField[declarationUser, string](FieldID{0x10}),
+	OptionalTitle:    GeneratedNullableModeTextField[declarationUser, string](FieldID{0x11}),
+	Metadata:         GeneratedModeJSONField[declarationUser](FieldID{0x12}),
+	OptionalMetadata: GeneratedNullableModeJSONField[declarationUser](FieldID{0x13}),
+}
+
 func DefineSchemaFixture(schema *Schema) {
 	SchemaName(schema, "test")
 	Actor[declarationActor](schema)
@@ -97,15 +109,21 @@ func TestGeneratedDescriptorConstructorsRequireTypedIDs(t *testing.T) {
 		{"GeneratedEqualField", GeneratedEqualField[declarationUser, UUID], reflect.TypeOf(FieldID{})},
 		{"GeneratedOrderedField", GeneratedOrderedField[declarationUser, int64], reflect.TypeOf(FieldID{})},
 		{"GeneratedTextField", GeneratedTextField[declarationUser, string], reflect.TypeOf(FieldID{})},
+		{"GeneratedModeTextField", GeneratedModeTextField[declarationUser, string], reflect.TypeOf(FieldID{})},
 		{"GeneratedListField", GeneratedListField[declarationUser, string], reflect.TypeOf(FieldID{})},
 		{"GeneratedBytesField", GeneratedBytesField[declarationUser], reflect.TypeOf(FieldID{})},
 		{"GeneratedOpaqueField", GeneratedOpaqueField[declarationUser, JSON[any]], reflect.TypeOf(FieldID{})},
+		{"GeneratedJSONField", GeneratedJSONField[declarationUser], reflect.TypeOf(FieldID{})},
+		{"GeneratedModeJSONField", GeneratedModeJSONField[declarationUser], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableEqualField", GeneratedNullableEqualField[declarationUser, UUID], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableOrderedField", GeneratedNullableOrderedField[declarationUser, Date], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableTextField", GeneratedNullableTextField[declarationUser, string], reflect.TypeOf(FieldID{})},
+		{"GeneratedNullableModeTextField", GeneratedNullableModeTextField[declarationUser, string], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableListField", GeneratedNullableListField[declarationUser, string], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableBytesField", GeneratedNullableBytesField[declarationUser], reflect.TypeOf(FieldID{})},
 		{"GeneratedNullableOpaqueField", GeneratedNullableOpaqueField[declarationUser, JSON[any]], reflect.TypeOf(FieldID{})},
+		{"GeneratedNullableJSONField", GeneratedNullableJSONField[declarationUser], reflect.TypeOf(FieldID{})},
+		{"GeneratedNullableModeJSONField", GeneratedNullableModeJSONField[declarationUser], reflect.TypeOf(FieldID{})},
 	}
 	for _, constructor := range constructors {
 		functionType := reflect.TypeOf(constructor.fn)
@@ -157,6 +175,42 @@ func TestPolicyHandleCapabilitiesAndModelOwnership(t *testing.T) {
 	var _ func() Predicate[declarationUser] = declarationCapabilities.OptionalPayload.IsNotNull
 	var _ func() Predicate[declarationUser] = declarationCapabilities.OptionalMetadata.IsNull
 
+	modeText := declarationActivated.Title.Compare(ASCIIInsensitive())
+	var _ func(string) Predicate[declarationUser] = modeText.Eq
+	var _ func(string) Predicate[declarationUser] = modeText.Ne
+	var _ func(...string) Predicate[declarationUser] = modeText.In
+	var _ func(...string) Predicate[declarationUser] = modeText.NotIn
+	var _ func(string) Predicate[declarationUser] = modeText.LT
+	var _ func(string) Predicate[declarationUser] = modeText.LTE
+	var _ func(string) Predicate[declarationUser] = modeText.GT
+	var _ func(string) Predicate[declarationUser] = modeText.GTE
+	var _ func(string) Predicate[declarationUser] = modeText.Contains
+	var _ func(string) Predicate[declarationUser] = modeText.StartsWith
+	var _ func(string) Predicate[declarationUser] = modeText.EndsWith
+	var _ func() Predicate[declarationUser] = declarationActivated.OptionalTitle.IsNull
+	var _ func() Predicate[declarationUser] = declarationActivated.OptionalTitle.IsNotNull
+
+	jsonRoot := declarationActivated.Metadata.Root()
+	jsonPath := declarationActivated.Metadata.At(NewJSONPath(JSONKey("profile"), JSONIndex(0)))
+	var _ func(JSONEqualityOperand) Predicate[declarationUser] = jsonRoot.Eq
+	var _ func(JSONEqualityOperand) Predicate[declarationUser] = jsonRoot.Ne
+	var _ func(JSONOrderedValue) Predicate[declarationUser] = jsonPath.LT
+	var _ func(JSONOrderedValue) Predicate[declarationUser] = jsonPath.LTE
+	var _ func(JSONOrderedValue) Predicate[declarationUser] = jsonPath.GT
+	var _ func(JSONOrderedValue) Predicate[declarationUser] = jsonPath.GTE
+	var _ func(string) Predicate[declarationUser] = jsonPath.StringContains
+	var _ func(string) Predicate[declarationUser] = jsonPath.StringStartsWith
+	var _ func(string) Predicate[declarationUser] = jsonPath.StringEndsWith
+	var _ func(JSONValue) Predicate[declarationUser] = jsonPath.ArrayContains
+	var _ func(JSONValue) Predicate[declarationUser] = jsonPath.ArrayStartsWith
+	var _ func(JSONValue) Predicate[declarationUser] = jsonPath.ArrayEndsWith
+	jsonMode := jsonPath.Compare(ASCIIInsensitive())
+	var _ func(string) Predicate[declarationUser] = jsonMode.Contains
+	var _ func(string) Predicate[declarationUser] = jsonMode.StartsWith
+	var _ func(string) Predicate[declarationUser] = jsonMode.EndsWith
+	var _ func() Predicate[declarationUser] = declarationActivated.OptionalMetadata.IsNull
+	var _ func() Predicate[declarationUser] = declarationActivated.OptionalMetadata.IsNotNull
+
 	toOne := GeneratedToOne[declarationUser, declarationUser](FieldID{0x0d}, RelationID{0x01})
 	toMany := GeneratedToMany[declarationUser, declarationUser](FieldID{0x0e}, RelationID{0x02})
 	var _ func(Predicate[declarationUser]) Predicate[declarationUser] = toOne.Is
@@ -186,6 +240,10 @@ func TestEveryGeneratedHandleIsASealedFieldIdentity(t *testing.T) {
 	var _ Field[declarationUser] = declarationCapabilities.OptionalPayload
 	var _ Field[declarationUser] = declarationCapabilities.Metadata
 	var _ Field[declarationUser] = declarationCapabilities.OptionalMetadata
+	var _ Field[declarationUser] = declarationActivated.Title
+	var _ Field[declarationUser] = declarationActivated.OptionalTitle
+	var _ Field[declarationUser] = declarationActivated.Metadata
+	var _ Field[declarationUser] = declarationActivated.OptionalMetadata
 	var _ Field[declarationUser] = GeneratedToOne[declarationUser, declarationUser](FieldID{0x0d}, RelationID{0x01})
 	var _ Field[declarationUser] = GeneratedToMany[declarationUser, declarationUser](FieldID{0x0e}, RelationID{0x02})
 }
@@ -221,6 +279,10 @@ func TestEveryFieldHandlePreservesSchemaDSL(t *testing.T) {
 	var _ ScalarColumn[declarationUser, []byte] = declarationCapabilities.Payload
 	var _ ScalarColumn[declarationUser, JSON[any]] = declarationCapabilities.Metadata
 	var _ ScalarColumn[declarationUser, JSON[any]] = declarationCapabilities.OptionalMetadata
+	var _ ScalarColumn[declarationUser, string] = declarationActivated.Title
+	var _ ScalarColumn[declarationUser, string] = declarationActivated.OptionalTitle
+	var _ ScalarColumn[declarationUser, JSON[any]] = declarationActivated.Metadata
+	var _ ScalarColumn[declarationUser, JSON[any]] = declarationActivated.OptionalMetadata
 
 	_ = Lower(declarationUsers.Title)
 	_ = declarationUsers.Score.Expr().GTE(0)

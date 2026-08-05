@@ -124,7 +124,7 @@ func TestDeleteHasNoFieldScopedRuleMethod(t *testing.T) {
 	assertRuleTypecheckFailure(t, ruleDeleteFieldPackage, false, "rules.CanDeleteFields undefined")
 }
 
-func TestScalarListPolicyMethodsStayClosedBeforeProviderAgreement(t *testing.T) {
+func TestScalarListPolicyMethodsCompileAfterProviderAgreement(t *testing.T) {
 	compilation := listPolicyInvalidCompilation()
 	spec := modelcodegen.PackageSpec{ImportPath: listPolicyInvalidPackage, PackageName: "listpolicyinvalid", Directory: fixtureDir(t, "listpolicyinvalid")}
 	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}})
@@ -132,12 +132,11 @@ func TestScalarListPolicyMethodsStayClosedBeforeProviderAgreement(t *testing.T) 
 		t.Fatal(err)
 	}
 	result := DiscoverAndEmit(context.Background(), DiscoveryRequest{Dir: moduleDir(t), Compilation: compilation, Packages: []modelcodegen.PackageSpec{spec}, ModelBootstrap: bootstrap})
-	var messages []string
-	for _, diagnostic := range result.Diagnostics {
-		messages = append(messages, diagnostic.Message)
+	if len(result.Diagnostics) != 0 {
+		t.Fatalf("scalar-list policy binding diagnostics = %#v", result.Diagnostics)
 	}
-	if joined := strings.Join(messages, "\n"); !strings.Contains(joined, "Posts.Tags.Has undefined") {
-		t.Fatalf("missing closed scalar-list method diagnostic in:\n%s", joined)
+	if len(result.Entries) != 1 || len(result.Files) == 0 {
+		t.Fatalf("scalar-list policy binding result = %#v", result)
 	}
 }
 

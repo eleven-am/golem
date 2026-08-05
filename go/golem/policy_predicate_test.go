@@ -6,6 +6,7 @@ import (
 	"math"
 	"sync"
 	"testing"
+	"time"
 )
 
 type freezeModel struct{}
@@ -30,7 +31,7 @@ func TestPredicateFreezeBuildsTypedImmutableView(t *testing.T) {
 		t.Fatal(err)
 	}
 	view := frozen.View()
-	if view.Version() != 1 || view.RootModelID() != freezeModelID || len(view.CanonicalBytes()) == 0 {
+	if view.Version() != 2 || view.RootModelID() != freezeModelID || len(view.CanonicalBytes()) == 0 {
 		t.Fatalf("unexpected frozen predicate header: version=%d model=%x bytes=%d", view.Version(), view.RootModelID(), len(view.CanonicalBytes()))
 	}
 	root := view.Root()
@@ -189,6 +190,22 @@ func TestPredicateFreezeRejectsMalformedAndNonFiniteValues(t *testing.T) {
 			_, err := GeneratedOrderedField[freezeModel, float64](freezeFieldID).LT(math.Inf(1)).Freeze(freezeDescriptor)
 			return err
 		}, FreezeInvalidValue},
+		{"sub-microsecond datetime", func() error {
+			_, err := GeneratedOrderedField[freezeModel, time.Time](freezeFieldID).Eq(time.Unix(1, 1)).Freeze(freezeDescriptor)
+			return err
+		}, FreezeInvalidValue},
+		{"nil text comparison mode", func() error {
+			_, err := GeneratedModeTextField[freezeModel, string](freezeFieldID).Compare(nil).Eq("value").Freeze(freezeDescriptor)
+			return err
+		}, FreezeInvalidPredicate},
+		{"nil JSON comparison mode", func() error {
+			_, err := GeneratedModeJSONField[freezeModel](freezeFieldID).Root().Compare(nil).Contains("value").Freeze(freezeDescriptor)
+			return err
+		}, FreezeInvalidPredicate},
+		{"absent JSON path", func() error {
+			_, err := GeneratedJSONField[freezeModel](freezeFieldID).At(JSONPath{}).Eq(JSONString("value")).Freeze(freezeDescriptor)
+			return err
+		}, FreezeInvalidPredicate},
 		{"zero relation", func() error {
 			_, err := GeneratedToOne[freezeModel, freezeRelated](freezeRelationField, RelationID{}).Is(All[freezeRelated]()).Freeze(freezeDescriptor)
 			return err

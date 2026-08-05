@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-const frozenPolicyVersion uint16 = 1
+const frozenPolicyVersion uint16 = 2
 
 // FrozenConditionKind is the closed public-view node family. Its numeric values
 // are persisted by the versioned public freeze encoding.
@@ -65,50 +65,79 @@ const (
 	FrozenOperatorRelationSome      FrozenOperator = 44
 	FrozenOperatorRelationEvery     FrozenOperator = 45
 	FrozenOperatorRelationNone      FrozenOperator = 46
+
+	FrozenOperatorJSONEq               FrozenOperator = 50
+	FrozenOperatorJSONNe               FrozenOperator = 51
+	FrozenOperatorJSONLT               FrozenOperator = 52
+	FrozenOperatorJSONLTE              FrozenOperator = 53
+	FrozenOperatorJSONGT               FrozenOperator = 54
+	FrozenOperatorJSONGTE              FrozenOperator = 55
+	FrozenOperatorJSONStringContains   FrozenOperator = 56
+	FrozenOperatorJSONStringStartsWith FrozenOperator = 57
+	FrozenOperatorJSONStringEndsWith   FrozenOperator = 58
+	FrozenOperatorJSONArrayContains    FrozenOperator = 59
+	FrozenOperatorJSONArrayStartsWith  FrozenOperator = 60
+	FrozenOperatorJSONArrayEndsWith    FrozenOperator = 61
 )
 
 const (
-	frozenOperatorAnd               = FrozenOperatorAnd
-	frozenOperatorOr                = FrozenOperatorOr
-	frozenOperatorNot               = FrozenOperatorNot
-	frozenOperatorEq                = FrozenOperatorEq
-	frozenOperatorNe                = FrozenOperatorNe
-	frozenOperatorIn                = FrozenOperatorIn
-	frozenOperatorNotIn             = FrozenOperatorNotIn
-	frozenOperatorLT                = FrozenOperatorLT
-	frozenOperatorLTE               = FrozenOperatorLTE
-	frozenOperatorGT                = FrozenOperatorGT
-	frozenOperatorGTE               = FrozenOperatorGTE
-	frozenOperatorContains          = FrozenOperatorContains
-	frozenOperatorStartsWith        = FrozenOperatorStartsWith
-	frozenOperatorEndsWith          = FrozenOperatorEndsWith
-	frozenOperatorIsNull            = FrozenOperatorIsNull
-	frozenOperatorIsNotNull         = FrozenOperatorIsNotNull
-	frozenOperatorListHas           = FrozenOperatorListHas
-	frozenOperatorListHasEvery      = FrozenOperatorListHasEvery
-	frozenOperatorListHasSome       = FrozenOperatorListHasSome
-	frozenOperatorListIsEmpty       = FrozenOperatorListIsEmpty
-	frozenOperatorListEq            = FrozenOperatorListEq
-	frozenOperatorRelationIs        = FrozenOperatorRelationIs
-	frozenOperatorRelationIsNot     = FrozenOperatorRelationIsNot
-	frozenOperatorRelationIsNull    = FrozenOperatorRelationIsNull
-	frozenOperatorRelationIsNotNull = FrozenOperatorRelationIsNotNull
-	frozenOperatorRelationSome      = FrozenOperatorRelationSome
-	frozenOperatorRelationEvery     = FrozenOperatorRelationEvery
-	frozenOperatorRelationNone      = FrozenOperatorRelationNone
+	frozenOperatorAnd                  = FrozenOperatorAnd
+	frozenOperatorOr                   = FrozenOperatorOr
+	frozenOperatorNot                  = FrozenOperatorNot
+	frozenOperatorEq                   = FrozenOperatorEq
+	frozenOperatorNe                   = FrozenOperatorNe
+	frozenOperatorIn                   = FrozenOperatorIn
+	frozenOperatorNotIn                = FrozenOperatorNotIn
+	frozenOperatorLT                   = FrozenOperatorLT
+	frozenOperatorLTE                  = FrozenOperatorLTE
+	frozenOperatorGT                   = FrozenOperatorGT
+	frozenOperatorGTE                  = FrozenOperatorGTE
+	frozenOperatorContains             = FrozenOperatorContains
+	frozenOperatorStartsWith           = FrozenOperatorStartsWith
+	frozenOperatorEndsWith             = FrozenOperatorEndsWith
+	frozenOperatorIsNull               = FrozenOperatorIsNull
+	frozenOperatorIsNotNull            = FrozenOperatorIsNotNull
+	frozenOperatorListHas              = FrozenOperatorListHas
+	frozenOperatorListHasEvery         = FrozenOperatorListHasEvery
+	frozenOperatorListHasSome          = FrozenOperatorListHasSome
+	frozenOperatorListIsEmpty          = FrozenOperatorListIsEmpty
+	frozenOperatorListEq               = FrozenOperatorListEq
+	frozenOperatorRelationIs           = FrozenOperatorRelationIs
+	frozenOperatorRelationIsNot        = FrozenOperatorRelationIsNot
+	frozenOperatorRelationIsNull       = FrozenOperatorRelationIsNull
+	frozenOperatorRelationIsNotNull    = FrozenOperatorRelationIsNotNull
+	frozenOperatorRelationSome         = FrozenOperatorRelationSome
+	frozenOperatorRelationEvery        = FrozenOperatorRelationEvery
+	frozenOperatorRelationNone         = FrozenOperatorRelationNone
+	frozenOperatorJSONEq               = FrozenOperatorJSONEq
+	frozenOperatorJSONNe               = FrozenOperatorJSONNe
+	frozenOperatorJSONLT               = FrozenOperatorJSONLT
+	frozenOperatorJSONLTE              = FrozenOperatorJSONLTE
+	frozenOperatorJSONGT               = FrozenOperatorJSONGT
+	frozenOperatorJSONGTE              = FrozenOperatorJSONGTE
+	frozenOperatorJSONStringContains   = FrozenOperatorJSONStringContains
+	frozenOperatorJSONStringStartsWith = FrozenOperatorJSONStringStartsWith
+	frozenOperatorJSONStringEndsWith   = FrozenOperatorJSONStringEndsWith
+	frozenOperatorJSONArrayContains    = FrozenOperatorJSONArrayContains
+	frozenOperatorJSONArrayStartsWith  = FrozenOperatorJSONArrayStartsWith
+	frozenOperatorJSONArrayEndsWith    = FrozenOperatorJSONArrayEndsWith
 )
 
 type FrozenComparisonMode uint8
 
-const FrozenComparisonSensitive FrozenComparisonMode = 1
+const (
+	FrozenComparisonSensitive        FrozenComparisonMode = 1
+	FrozenComparisonASCIIInsensitive FrozenComparisonMode = 2
+)
 
 type FrozenOperandKind uint8
 
 const (
-	FrozenOperandNone FrozenOperandKind = 1
-	FrozenOperandOne  FrozenOperandKind = 2
-	FrozenOperandMany FrozenOperandKind = 3
-	FrozenOperandFlag FrozenOperandKind = 4
+	FrozenOperandNone     FrozenOperandKind = 1
+	FrozenOperandOne      FrozenOperandKind = 2
+	FrozenOperandMany     FrozenOperandKind = 3
+	FrozenOperandFlag     FrozenOperandKind = 4
+	FrozenOperandJSONNull FrozenOperandKind = 5
 )
 
 type FrozenValueKind uint8
@@ -127,6 +156,15 @@ const (
 	FrozenValueDate     FrozenValueKind = 11
 	FrozenValueTime     FrozenValueKind = 12
 	FrozenValueDateTime FrozenValueKind = 13
+	FrozenValueJSON     FrozenValueKind = 14
+)
+
+type FrozenJSONNullKind uint8
+
+const (
+	FrozenJSONDbNull       FrozenJSONNullKind = 1
+	FrozenJSONDocumentNull FrozenJSONNullKind = 2
+	FrozenJSONAnyNull      FrozenJSONNullKind = 3
 )
 
 type FrozenAction uint8
@@ -172,11 +210,11 @@ type FrozenJSONPathView interface {
 	Segments() []JSONPathSegment
 }
 
-type frozenJSONPathView struct{}
+type frozenJSONPathView struct{ path JSONPath }
 
-func (frozenJSONPathView) sealedFrozenJSONPathView()   {}
-func (frozenJSONPathView) Present() bool               { return false }
-func (frozenJSONPathView) Segments() []JSONPathSegment { return nil }
+func (frozenJSONPathView) sealedFrozenJSONPathView()        {}
+func (view frozenJSONPathView) Present() bool               { return view.path.present }
+func (view frozenJSONPathView) Segments() []JSONPathSegment { return view.path.Segments() }
 
 // FrozenValueView exposes one exact, immutable operand value through typed
 // accessors. Exactly one accessor succeeds according to Kind.
@@ -193,6 +231,7 @@ type FrozenValueView interface {
 	Date() (Date, bool)
 	Time() (Time, bool)
 	DateTime() (unixSeconds int64, nanosecond uint32, ok bool)
+	JSON() (JSONValue, bool)
 }
 
 // FrozenOperandView is a closed arity-tagged operand. Many returns a fresh
@@ -203,6 +242,7 @@ type FrozenOperandView interface {
 	One() (FrozenValueView, bool)
 	Many() []FrozenValueView
 	Flag() (bool, bool)
+	JSONNull() (FrozenJSONNullKind, bool)
 }
 
 type FrozenPredicateView interface {
@@ -252,6 +292,7 @@ type predicateNode struct {
 	field    FieldID
 	relation RelationID
 	operand  frozenOperand
+	path     JSONPath
 	children []*predicateNode
 }
 
@@ -263,15 +304,17 @@ type frozenCondition struct {
 	field    FieldID
 	relation RelationID
 	operand  frozenOperand
+	path     JSONPath
 	children []*frozenCondition
 }
 
 type frozenOperand struct {
-	kind    FrozenOperandKind
-	one     frozenValue
-	many    []frozenValue
-	flag    bool
-	invalid string
+	kind     FrozenOperandKind
+	one      frozenValue
+	many     []frozenValue
+	flag     bool
+	jsonNull FrozenJSONNullKind
+	invalid  string
 }
 
 type frozenValue struct {
@@ -287,6 +330,7 @@ type frozenValue struct {
 	clock      Time
 	seconds    int64
 	nanosecond uint32
+	json       jsonValueData
 	invalid    string
 }
 
@@ -307,7 +351,11 @@ func predicateNot[M any](value Predicate[M]) Predicate[M] {
 }
 
 func predicateScalar[M any](field FieldID, operator FrozenOperator, operand frozenOperand) Predicate[M] {
-	return Predicate[M]{node: &predicateNode{kind: FrozenConditionScalar, field: field, operator: operator, mode: FrozenComparisonSensitive, operand: operand}}
+	return predicateScalarMode[M](field, operator, FrozenComparisonSensitive, operand)
+}
+
+func predicateScalarMode[M any](field FieldID, operator FrozenOperator, mode FrozenComparisonMode, operand frozenOperand) Predicate[M] {
+	return Predicate[M]{node: &predicateNode{kind: FrozenConditionScalar, field: field, operator: operator, mode: mode, operand: operand}}
 }
 
 func predicatePresence[M any](field FieldID, operator FrozenOperator) Predicate[M] {
@@ -320,6 +368,47 @@ func predicateList[M any](field FieldID, operator FrozenOperator, operand frozen
 
 func predicateJSONPresence[M any](field FieldID, operator FrozenOperator) Predicate[M] {
 	return Predicate[M]{node: &predicateNode{kind: FrozenConditionJSON, field: field, operator: operator, mode: FrozenComparisonSensitive, operand: noOperand()}}
+}
+
+func predicateJSON[M any](field FieldID, path JSONPath, operator FrozenOperator, mode FrozenComparisonMode, operand frozenOperand) Predicate[M] {
+	return Predicate[M]{node: &predicateNode{kind: FrozenConditionJSON, field: field, operator: operator, mode: mode, path: cloneJSONPath(path), operand: operand}}
+}
+
+func cloneJSONPath(path JSONPath) JSONPath {
+	return JSONPath{segments: append([]jsonPathSegmentValue(nil), path.segments...), present: path.present}
+}
+
+func jsonValueOperand(value JSONValue) frozenOperand {
+	data, ok := copyJSONValue(value)
+	frozen := frozenValue{kind: FrozenValueJSON, json: data}
+	if !ok {
+		frozen.invalid = "invalid JSON operand"
+	}
+	return frozenOperand{kind: FrozenOperandOne, one: frozen}
+}
+
+func jsonEqualityOperand(value JSONEqualityOperand) frozenOperand {
+	switch sentinel := value.(type) {
+	case dbNullSentinel:
+		if sentinel == DBNull {
+			return frozenOperand{kind: FrozenOperandJSONNull, jsonNull: FrozenJSONDbNull}
+		}
+	case jsonNullSentinel:
+		if sentinel == JSONNull {
+			return frozenOperand{kind: FrozenOperandJSONNull, jsonNull: FrozenJSONDocumentNull}
+		}
+	case anyNullSentinel:
+		if sentinel == AnyNull {
+			return frozenOperand{kind: FrozenOperandJSONNull, jsonNull: FrozenJSONAnyNull}
+		}
+	default:
+		jsonValue, ok := value.(JSONValue)
+		if !ok {
+			return frozenOperand{kind: FrozenOperandOne, one: frozenValue{invalid: "invalid JSON equality operand"}}
+		}
+		return jsonValueOperand(jsonValue)
+	}
+	return frozenOperand{kind: FrozenOperandOne, one: frozenValue{invalid: "invalid JSON null sentinel"}}
 }
 
 func predicateRelation[M any](field FieldID, relation RelationID, operator FrozenOperator, child *predicateNode) Predicate[M] {
@@ -486,12 +575,12 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 
 	switch node.kind {
 	case FrozenConditionConstant:
-		if node.operator != FrozenOperatorNone || node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || len(node.children) != 0 {
+		if node.operator != FrozenOperatorNone || node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || node.path.present || len(node.children) != 0 {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed constant node")
 		}
 		return &frozenCondition{kind: FrozenConditionConstant, truth: node.truth, operand: flagOperand(node.truth)}, nil
 	case FrozenConditionLogical:
-		if node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || node.operand.kind != FrozenOperandNone {
+		if node.mode != 0 || node.field != (FieldID{}) || node.relation != (RelationID{}) || node.path.present || node.operand.kind != FrozenOperandNone {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed logical node")
 		}
 		children := make([]*frozenCondition, len(node.children))
@@ -517,7 +606,7 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		if node.field == (FieldID{}) {
 			return nil, freezeFailure(FreezeInvalidField, "scalar handle has a zero field identity")
 		}
-		if node.mode != FrozenComparisonSensitive || node.relation != (RelationID{}) || len(node.children) != 0 || !validScalarShape(node.operator, node.operand.kind) {
+		if (node.mode != FrozenComparisonSensitive && node.mode != FrozenComparisonASCIIInsensitive) || node.relation != (RelationID{}) || node.path.present || len(node.children) != 0 || !validScalarShape(node.operator, node.operand.kind) {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed scalar node")
 		}
 		if err := validateFrozenOperand(node.operand); err != nil {
@@ -528,7 +617,7 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		if node.field == (FieldID{}) {
 			return nil, freezeFailure(FreezeInvalidField, "list handle has a zero field identity")
 		}
-		if node.mode != 0 || node.relation != (RelationID{}) || len(node.children) != 0 || !validListShape(node.operator, node.operand.kind) {
+		if node.mode != 0 || node.relation != (RelationID{}) || node.path.present || len(node.children) != 0 || !validListShape(node.operator, node.operand.kind) {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed list node")
 		}
 		if err := validateFrozenOperand(node.operand); err != nil {
@@ -539,10 +628,13 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		if node.field == (FieldID{}) {
 			return nil, freezeFailure(FreezeInvalidField, "JSON handle has a zero field identity")
 		}
-		if node.mode != FrozenComparisonSensitive || node.relation != (RelationID{}) || len(node.children) != 0 || (node.operator != FrozenOperatorIsNull && node.operator != FrozenOperatorIsNotNull) || node.operand.kind != FrozenOperandNone {
+		if node.relation != (RelationID{}) || len(node.children) != 0 || !validJSONShape(node) {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed JSON node")
 		}
-		return &frozenCondition{kind: node.kind, operator: node.operator, mode: node.mode, field: node.field, operand: noOperand()}, nil
+		if err := validateFrozenOperand(node.operand); err != nil {
+			return nil, err
+		}
+		return &frozenCondition{kind: node.kind, operator: node.operator, mode: node.mode, field: node.field, path: cloneJSONPath(node.path), operand: cloneFrozenOperand(node.operand)}, nil
 	case FrozenConditionRelation:
 		if node.field == (FieldID{}) {
 			return nil, freezeFailure(FreezeInvalidField, "relation handle has a zero field identity")
@@ -550,7 +642,7 @@ func freezePredicateNode(node *predicateNode, active map[*predicateNode]bool, de
 		if node.relation == (RelationID{}) {
 			return nil, freezeFailure(FreezeInvalidRelation, "relation handle has a zero relation identity")
 		}
-		if node.mode != 0 || node.operand.kind != FrozenOperandNone || !validRelationShape(node.operator, len(node.children)) {
+		if node.mode != 0 || node.path.present || node.operand.kind != FrozenOperandNone || !validRelationShape(node.operator, len(node.children)) {
 			return nil, freezeFailure(FreezeInvalidPredicate, "malformed relation node")
 		}
 		children := make([]*frozenCondition, len(node.children))
@@ -596,6 +688,37 @@ func validListShape(operator FrozenOperator, operand FrozenOperandKind) bool {
 	}
 }
 
+func validJSONShape(node *predicateNode) bool {
+	presence := node.operator == FrozenOperatorIsNull || node.operator == FrozenOperatorIsNotNull
+	if presence {
+		return node.mode == FrozenComparisonSensitive && !node.path.present && node.operand.kind == FrozenOperandNone
+	}
+	if !node.path.present {
+		return false
+	}
+	for _, segment := range node.path.segments {
+		if !segment.valid {
+			return false
+		}
+	}
+	if node.mode != FrozenComparisonSensitive && node.mode != FrozenComparisonASCIIInsensitive {
+		return false
+	}
+	if node.mode == FrozenComparisonASCIIInsensitive && node.operator != FrozenOperatorJSONStringContains && node.operator != FrozenOperatorJSONStringStartsWith && node.operator != FrozenOperatorJSONStringEndsWith {
+		return false
+	}
+	switch node.operator {
+	case FrozenOperatorJSONEq, FrozenOperatorJSONNe:
+		return node.operand.kind == FrozenOperandOne || node.operand.kind == FrozenOperandJSONNull
+	case FrozenOperatorJSONLT, FrozenOperatorJSONLTE, FrozenOperatorJSONGT, FrozenOperatorJSONGTE,
+		FrozenOperatorJSONStringContains, FrozenOperatorJSONStringStartsWith, FrozenOperatorJSONStringEndsWith,
+		FrozenOperatorJSONArrayContains, FrozenOperatorJSONArrayStartsWith, FrozenOperatorJSONArrayEndsWith:
+		return node.operand.kind == FrozenOperandOne
+	default:
+		return false
+	}
+}
+
 func validRelationShape(operator FrozenOperator, childCount int) bool {
 	switch operator {
 	case FrozenOperatorRelationIs, FrozenOperatorRelationIsNot, FrozenOperatorRelationSome, FrozenOperatorRelationEvery, FrozenOperatorRelationNone:
@@ -610,6 +733,12 @@ func validRelationShape(operator FrozenOperator, childCount int) bool {
 func validateFrozenOperand(operand frozenOperand) error {
 	if operand.invalid != "" {
 		return freezeFailure(FreezeInvalidValue, operand.invalid)
+	}
+	if operand.kind == FrozenOperandJSONNull {
+		if operand.jsonNull < FrozenJSONDbNull || operand.jsonNull > FrozenJSONAnyNull {
+			return freezeFailure(FreezeInvalidValue, "invalid JSON null sentinel")
+		}
+		return nil
 	}
 	values := operand.many
 	if operand.kind == FrozenOperandOne {
@@ -640,8 +769,12 @@ func validateFrozenOperand(operand frozenOperand) error {
 				return freezeFailure(FreezeInvalidValue, "time operand is outside [00:00:00, 24:00:00)")
 			}
 		case FrozenValueDateTime:
-			if value.nanosecond >= 1_000_000_000 {
-				return freezeFailure(FreezeInvalidValue, "datetime nanosecond is invalid")
+			if value.nanosecond >= 1_000_000_000 || value.nanosecond%1_000 != 0 {
+				return freezeFailure(FreezeInvalidValue, "datetime must have exact microsecond precision")
+			}
+		case FrozenValueJSON:
+			if _, ok := copyJSONValue(publicJSONValue(value.json)); !ok {
+				return freezeFailure(FreezeInvalidValue, "invalid JSON operand")
 			}
 		default:
 			return freezeFailure(FreezeInvalidValue, "operand has an unknown value kind")
@@ -702,6 +835,7 @@ func cloneFrozenOperand(operand frozenOperand) frozenOperand {
 
 func cloneFrozenValue(value frozenValue) frozenValue {
 	value.bytes = append([]byte(nil), value.bytes...)
+	value.json = value.json.clone()
 	return value
 }
 
@@ -750,7 +884,12 @@ func (view frozenConditionView) Mode() FrozenComparisonMode {
 	}
 	return 0
 }
-func (frozenConditionView) Path() FrozenJSONPathView { return frozenJSONPathView{} }
+func (view frozenConditionView) Path() FrozenJSONPathView {
+	if view.condition == nil {
+		return frozenJSONPathView{}
+	}
+	return frozenJSONPathView{path: cloneJSONPath(view.condition.path)}
+}
 func (view frozenConditionView) Operand() FrozenOperandView {
 	if view.condition == nil {
 		return frozenOperandView{operand: noOperand()}
@@ -790,6 +929,9 @@ func (view frozenOperandView) Many() []FrozenValueView {
 }
 func (view frozenOperandView) Flag() (bool, bool) {
 	return view.operand.flag, view.operand.kind == FrozenOperandFlag
+}
+func (view frozenOperandView) JSONNull() (FrozenJSONNullKind, bool) {
+	return view.operand.jsonNull, view.operand.kind == FrozenOperandJSONNull
 }
 
 type frozenValueView struct{ value frozenValue }
@@ -844,6 +986,12 @@ func (view frozenValueView) Time() (Time, bool) {
 }
 func (view frozenValueView) DateTime() (int64, uint32, bool) {
 	return view.value.seconds, view.value.nanosecond, view.value.kind == FrozenValueDateTime
+}
+func (view frozenValueView) JSON() (JSONValue, bool) {
+	if view.value.kind != FrozenValueJSON {
+		return nil, false
+	}
+	return publicJSONValue(view.value.json.clone()), true
 }
 
 type ruleBuilder struct {
@@ -1033,6 +1181,7 @@ func cloneFrozenCondition(condition *frozenCondition) *frozenCondition {
 		return nil
 	}
 	result := *condition
+	result.path = cloneJSONPath(condition.path)
 	result.operand = cloneFrozenOperand(condition.operand)
 	result.children = make([]*frozenCondition, len(condition.children))
 	for index, child := range condition.children {
@@ -1043,7 +1192,7 @@ func cloneFrozenCondition(condition *frozenCondition) *frozenCondition {
 
 func encodeFrozenPredicate(model ModelID, condition *frozenCondition) ([]byte, error) {
 	var output bytes.Buffer
-	output.WriteString("golem:public-policy-condition:v1\x00")
+	output.WriteString("golem:public-policy-condition:v2\x00")
 	writeUint16(&output, frozenPolicyVersion)
 	output.Write(model[:])
 	if err := encodeFrozenCondition(&output, condition); err != nil {
@@ -1054,7 +1203,7 @@ func encodeFrozenPredicate(model ModelID, condition *frozenCondition) ([]byte, e
 
 func encodeFrozenPolicy(model ModelID, rules []frozenRule) ([]byte, error) {
 	var output bytes.Buffer
-	output.WriteString("golem:public-policy:v1\x00")
+	output.WriteString("golem:public-policy:v2\x00")
 	writeUint16(&output, frozenPolicyVersion)
 	output.Write(model[:])
 	writeUint32(&output, uint32(len(rules)))
@@ -1105,6 +1254,18 @@ func encodeFrozenCondition(output *bytes.Buffer, condition *frozenCondition) err
 	case FrozenConditionScalar, FrozenConditionList, FrozenConditionJSON:
 		output.Write(condition.field[:])
 		output.WriteByte(byte(condition.mode))
+		if condition.kind == FrozenConditionJSON {
+			writeBool(output, condition.path.present)
+			writeUint32(output, uint32(len(condition.path.segments)))
+			for _, segment := range condition.path.segments {
+				writeBool(output, segment.isIndex)
+				if segment.isIndex {
+					writeUint32(output, segment.index)
+				} else {
+					writeBytes(output, []byte(segment.key))
+				}
+			}
+		}
 		if err := encodeFrozenOperand(output, condition.operand); err != nil {
 			return err
 		}
@@ -1140,6 +1301,9 @@ func encodeFrozenOperand(output *bytes.Buffer, operand frozenOperand) error {
 		return nil
 	case FrozenOperandFlag:
 		writeBool(output, operand.flag)
+		return nil
+	case FrozenOperandJSONNull:
+		output.WriteByte(byte(operand.jsonNull))
 		return nil
 	default:
 		return fmt.Errorf("unknown operand kind %d", operand.kind)
@@ -1179,6 +1343,12 @@ func encodeFrozenValue(output *bytes.Buffer, value frozenValue) error {
 	case FrozenValueDateTime:
 		writeUint64(output, uint64(value.seconds))
 		writeUint32(output, value.nanosecond)
+	case FrozenValueJSON:
+		encoded, err := CanonicalJSON(publicJSONValue(value.json))
+		if err != nil {
+			return err
+		}
+		writeBytes(output, encoded)
 	default:
 		return fmt.Errorf("unknown value kind %d", value.kind)
 	}

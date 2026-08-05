@@ -144,9 +144,9 @@ var (
 	portable      = ir.PortableProviders()
 )
 
-// Every entry deliberately starts agreement-pending. The provider agreement
-// contract forbids treating a metadata declaration as proof that evaluator,
-// SQLite, and PostgreSQL implementations agree.
+// Every public entry is activated only for the provider set exercised by the
+// checked-in live agreement oracle. Adding a provider or operator still starts
+// closed until that exact cell is promoted here after the oracle passes.
 var entries = []Entry{
 	scalar(ir.OperatorEqual, "scalar.equal", allScalar, operandMask(ir.OperandOne), textModes, NullSubjectNeverMatches, EmptyNotApplicable),
 	scalar(ir.OperatorNotEqual, "scalar.not_equal", allScalar, operandMask(ir.OperandOne), textModes, NullSubjectAlwaysMatches, EmptyNotApplicable),
@@ -195,22 +195,22 @@ var entries = []Entry{
 }
 
 func scalar(id ir.OperatorID, name string, kinds KindMask, operands OperandMask, modes ModeMask, nullSubject NullSubjectBehavior, empty EmptyMeaning) Entry {
-	return Entry{id: id, name: name, node: ir.ConditionScalar, fieldKinds: kinds, operands: operands, modes: modes, nullability: NullabilityAny, path: PathForbidden, child: ChildForbidden, empty: empty, nullSubject: nullSubject, twoValued: true, declaredProviders: portable}
+	return Entry{id: id, name: name, node: ir.ConditionScalar, fieldKinds: kinds, operands: operands, modes: modes, nullability: NullabilityAny, path: PathForbidden, child: ChildForbidden, empty: empty, nullSubject: nullSubject, twoValued: true, declaredProviders: portable, agreementProviders: portable}
 }
 func presence(id ir.OperatorID, name string, node ir.ConditionKind, kinds KindMask, nullSubject NullSubjectBehavior) Entry {
 	return presenceWithCapability(id, name, node, kinds, nullSubject, 0)
 }
 func presenceWithCapability(id ir.OperatorID, name string, node ir.ConditionKind, kinds KindMask, nullSubject NullSubjectBehavior, capability ir.Capability) Entry {
-	return Entry{id: id, name: name, node: node, fieldKinds: kinds, operands: operandMask(ir.OperandNone), modes: sensitive, nullability: NullabilityNullable, path: PathForbidden, child: ChildForbidden, empty: EmptyNotApplicable, nullSubject: nullSubject, twoValued: true, declaredProviders: portable, capability: capability}
+	return Entry{id: id, name: name, node: node, fieldKinds: kinds, operands: operandMask(ir.OperandNone), modes: sensitive, nullability: NullabilityNullable, path: PathForbidden, child: ChildForbidden, empty: EmptyNotApplicable, nullSubject: nullSubject, twoValued: true, declaredProviders: portable, agreementProviders: portable, capability: capability}
 }
 func list(id ir.OperatorID, name string, operands OperandMask, empty EmptyMeaning) Entry {
-	return Entry{id: id, name: name, node: ir.ConditionList, fieldKinds: kindMask(ir.ValueScalarList), elementKinds: listElements, operands: operands, modes: sensitive, nullability: NullabilityAny, path: PathForbidden, child: ChildForbidden, empty: empty, nullSubject: NullSubjectNeverMatches, twoValued: true, declaredProviders: portable, capability: ir.CapabilityScalarListJSON}
+	return Entry{id: id, name: name, node: ir.ConditionList, fieldKinds: kindMask(ir.ValueScalarList), elementKinds: listElements, operands: operands, modes: sensitive, nullability: NullabilityAny, path: PathForbidden, child: ChildForbidden, empty: empty, nullSubject: NullSubjectNeverMatches, twoValued: true, declaredProviders: portable, agreementProviders: portable, capability: ir.CapabilityScalarListJSON}
 }
 func jsonPresence(id ir.OperatorID, name string, nullSubject NullSubjectBehavior) Entry {
 	return presenceWithCapability(id, name, ir.ConditionJSON, kindMask(ir.ValueJSON), nullSubject, 0)
 }
 func json(id ir.OperatorID, name string, operands OperandMask, modes ModeMask) Entry {
-	return Entry{id: id, name: name, node: ir.ConditionJSON, fieldKinds: kindMask(ir.ValueJSON), operands: operands, modes: modes, nullability: NullabilityAny, path: PathAllowed, child: ChildForbidden, empty: EmptyNotApplicable, nullSubject: NullSubjectOperandDependent, twoValued: true, declaredProviders: portable, capability: ir.CapabilityExactJSON}
+	return Entry{id: id, name: name, node: ir.ConditionJSON, fieldKinds: kindMask(ir.ValueJSON), operands: operands, modes: modes, nullability: NullabilityAny, path: PathAllowed, child: ChildForbidden, empty: EmptyNotApplicable, nullSubject: NullSubjectOperandDependent, twoValued: true, declaredProviders: portable, agreementProviders: portable, capability: ir.CapabilityExactJSON}
 }
 func relation(id ir.OperatorID, name string, cardinality ir.RelationCardinality, child ChildPolicy, nullSubject NullSubjectBehavior) Entry {
 	empty := EmptyNotApplicable
@@ -219,7 +219,7 @@ func relation(id ir.OperatorID, name string, cardinality ir.RelationCardinality,
 	} else if id == ir.OperatorRelationEvery || id == ir.OperatorRelationNone {
 		empty = EmptyTrue
 	}
-	return Entry{id: id, name: name, node: ir.ConditionRelation, operands: operandMask(ir.OperandNone), modes: sensitive, nullability: NullabilityAny, path: PathForbidden, cardinality: cardinality, child: child, empty: empty, nullSubject: nullSubject, twoValued: true, declaredProviders: portable, capability: ir.CapabilityRelationCorrelation}
+	return Entry{id: id, name: name, node: ir.ConditionRelation, operands: operandMask(ir.OperandNone), modes: sensitive, nullability: NullabilityAny, path: PathForbidden, cardinality: cardinality, child: child, empty: empty, nullSubject: nullSubject, twoValued: true, declaredProviders: portable, agreementProviders: portable, capability: ir.CapabilityRelationCorrelation}
 }
 
 var byID = func() map[ir.OperatorID]Entry {
@@ -545,9 +545,8 @@ func exactlyQuantized(value int64, precision, base uint16) bool {
 	return value%factor == 0
 }
 
-// RequireAgreement is the runtime activation gate. It currently refuses every
-// entry until the live Go/SQLite/PostgreSQL agreement matrix promotes that
-// entry's proved provider set.
+// RequireAgreement is the runtime activation gate. It accepts only provider
+// subsets explicitly promoted by the live Go/SQLite/PostgreSQL matrix.
 func RequireAgreement(id ir.OperatorID, providers ir.ProviderSet) error {
 	entry, ok := Lookup(id)
 	if !ok {

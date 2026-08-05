@@ -2,6 +2,8 @@ package golem
 
 import (
 	"context"
+	"sync"
+	"sync/atomic"
 	"testing"
 )
 
@@ -65,4 +67,137 @@ func TestTypedBindingShellSignatures(t *testing.T) {
 	if err := SetCreate(request, GeneratedBytesField[bindingModel](FieldID{}), []byte("value")); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestBuildGeneratedPolicySetIsFreshAndConcurrentActorScoped(t *testing.T) {
+	model := ModelID{1}
+	digest := SchemaDigest{2}
+	var calls atomic.Int64
+	binding := GeneratedPolicyBinding[bindingActor, bindingModel](model, func(actor bindingActor) (FrozenPolicy, error) {
+		calls.Add(1)
+		rules := NewRules[bindingModel]()
+		if actor.ID%2 == 0 {
+			rules.CanRead(All[bindingModel]())
+		} else {
+			rules.CanRead(None[bindingModel]())
+		}
+		return rules.Freeze(model)
+	})
+	application, err := GeneratedApplicationBindings(digest, GeneratedStampedPackageBindings(digest, []PolicyBinding[bindingActor]{binding}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	inventory := application.PolicyInventory()
+	if len(inventory) != 1 || inventory[0] != model || calls.Load() != 0 {
+		t.Fatalf("static inventory executed or drifted: %v calls=%d", inventory, calls.Load())
+	}
+	inventory[0] = ModelID{9}
+	if application.PolicyInventory()[0] != model {
+		t.Fatal("policy inventory leaked backing storage")
+	}
+
+	const executions = 64
+	canonical := make([]string, executions)
+	var wait sync.WaitGroup
+	wait.Add(executions)
+	for index := range executions {
+		go func(index int) {
+			defer wait.Done()
+			set, buildErr := BuildGeneratedPolicySet(application, bindingActor{ID: int64(index)})
+			if buildErr != nil {
+				t.Errorf("build %d: %v", index, buildErr)
+				return
+			}
+			policies := set.Policies()
+			if len(policies) != 1 {
+				t.Errorf("build %d policy count=%d", index, len(policies))
+				return
+			}
+			canonical[index] = string(policies[0].CanonicalBytes())
+		}(index)
+	}
+	wait.Wait()
+	if calls.Load() != executions {
+		t.Fatalf("factory calls=%d want=%d", calls.Load(), executions)
+	}
+	if canonical[0] == canonical[1] {
+		t.Fatal("different actors produced aliased/equal policy snapshots")
+	}
+	for index := range executions {
+		if canonical[index] != canonical[index%2] {
+			t.Fatalf("actor class %d leaked at execution %d", index%2, index)
+		}
+	}
+}
+
+func TestBuildGeneratedPolicySetRejectsFactoryModelMismatchAndDuplicates(t *testing.T) {
+	digest := SchemaDigest{3}
+	model := ModelID{1}
+	other := ModelID{2}
+	factory := func(ModelID) PolicyFactory[bindingActor] {
+		return func(bindingActor) (FrozenPolicy, error) { return NewRules[bindingModel]().Freeze(other) }
+	}
+	application, err := GeneratedApplicationBindings(digest, GeneratedStampedPackageBindings(digest, []PolicyBinding[bindingActor]{GeneratedPolicyBinding[bindingActor, bindingModel](model, factory(model))}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildGeneratedPolicySet(application, bindingActor{}); err == nil {
+		t.Fatal("factory model mismatch was accepted")
+	}
+	valid := func(bindingActor) (FrozenPolicy, error) { return NewRules[bindingModel]().Freeze(model) }
+	application, err = GeneratedApplicationBindings(digest, GeneratedStampedPackageBindings(digest, []PolicyBinding[bindingActor]{GeneratedPolicyBinding[bindingActor, bindingModel](model, valid), GeneratedPolicyBinding[bindingActor, bindingModel](model, valid)}, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := BuildGeneratedPolicySet(application, bindingActor{}); err == nil {
+		t.Fatal("duplicate model bindings were accepted")
+	}
+}
+
+func TestBuildGeneratedPolicySetPreflightsCompleteGraphBeforeFactories(t *testing.T) {
+	digest := SchemaDigest{4}
+	first, second := ModelID{1}, ModelID{2}
+	var calls atomic.Int64
+	valid := func(model ModelID) PolicyFactory[bindingActor] {
+		return func(bindingActor) (FrozenPolicy, error) {
+			calls.Add(1)
+			return NewRules[bindingModel]().Freeze(model)
+		}
+	}
+
+	t.Run("duplicate", func(t *testing.T) {
+		calls.Store(0)
+		pkg := GeneratedStampedPackageBindings(digest, []PolicyBinding[bindingActor]{
+			GeneratedPolicyBinding[bindingActor, bindingModel](first, valid(first)),
+			GeneratedPolicyBinding[bindingActor, bindingModel](first, valid(first)),
+		}, nil)
+		application, err := GeneratedApplicationBindings(digest, pkg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildGeneratedPolicySet(application, bindingActor{}); err == nil {
+			t.Fatal("duplicate binding was accepted")
+		}
+		if calls.Load() != 0 {
+			t.Fatalf("factory ran before duplicate preflight: calls=%d", calls.Load())
+		}
+	})
+
+	t.Run("incomplete later binding", func(t *testing.T) {
+		calls.Store(0)
+		pkg := GeneratedStampedPackageBindings(digest, []PolicyBinding[bindingActor]{
+			GeneratedPolicyBinding[bindingActor, bindingModel](first, valid(first)),
+			GeneratedPolicyBinding[bindingActor, bindingModel](second, nil),
+		}, nil)
+		application, err := GeneratedApplicationBindings(digest, pkg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := BuildGeneratedPolicySet(application, bindingActor{}); err == nil {
+			t.Fatal("incomplete binding was accepted")
+		}
+		if calls.Load() != 0 {
+			t.Fatalf("factory ran before completeness preflight: calls=%d", calls.Load())
+		}
+	})
 }

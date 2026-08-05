@@ -29,7 +29,7 @@ const (
 type fixtureIDs struct {
 	user, post                      golem.ModelID
 	userID, userName, userRole      golem.FieldID
-	userTags                        golem.FieldID
+	userTags, userProfile           golem.FieldID
 	userPosts, postID, postAuthorID golem.FieldID
 	postAuthor                      golem.FieldID
 	relation                        golem.RelationID
@@ -63,8 +63,8 @@ func TestPredicateBindsSchemaDirectedEnumAndRelationTree(t *testing.T) {
 	if operatorID != ir.OperatorEqual {
 		t.Fatalf("child operator = %d", operatorID)
 	}
-	if err := operator.RequireAgreement(operatorID, ir.PortableProviders()); err == nil {
-		t.Fatal("binding construction unexpectedly promoted an agreement-pending operator")
+	if err := operator.RequireAgreement(operatorID, ir.PortableProviders()); err != nil {
+		t.Fatalf("binding construction did not retain the agreement-proved operator: %v", err)
 	}
 
 	role := golem.GeneratedEqualField[testUser, testRole](ids.userRole)
@@ -155,6 +155,146 @@ func TestListEqualityBindsAsOneTypedOrderedListValue(t *testing.T) {
 	}
 }
 
+func TestActivatedTextAndListOperatorsBindToExactIRCells(t *testing.T) {
+	registry, ids := bindFixture(t)
+	descriptor := modelDescriptor[testUser](ids.user)
+	name := golem.GeneratedNullableModeTextField[testUser, string](ids.userName)
+	frozen, err := name.Compare(golem.ASCIIInsensitive()).StartsWith("Ad").Freeze(descriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	condition, err := Predicate(frozen, registry, ir.PortableProviders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operatorID, _ := condition.Operator()
+	mode, _ := condition.Mode()
+	if operatorID != ir.OperatorStartsWith || mode != ir.ComparisonASCIIInsensitive {
+		t.Fatalf("text operator/mode = %d/%d", operatorID, mode)
+	}
+	wantCapabilities := map[ir.Capability]bool{
+		ir.CapabilityBinaryText:           false,
+		ir.CapabilityASCIIInsensitiveText: false,
+	}
+	for _, requirement := range condition.Requirements() {
+		if _, ok := wantCapabilities[requirement.Capability()]; ok {
+			wantCapabilities[requirement.Capability()] = true
+		}
+	}
+	for capability, found := range wantCapabilities {
+		if !found {
+			t.Fatalf("text condition lacks capability %d", capability)
+		}
+	}
+
+	tags := golem.GeneratedNullableListField[testUser, string](ids.userTags)
+	tests := []struct {
+		name     string
+		value    golem.Predicate[testUser]
+		operator ir.OperatorID
+		operand  ir.OperandKind
+	}{
+		{"has", tags.Has("go"), ir.OperatorListHas, ir.OperandOne},
+		{"has every empty", tags.HasEvery(), ir.OperatorListHasEvery, ir.OperandMany},
+		{"has some", tags.HasSome("go", "sql"), ir.OperatorListHasSome, ir.OperandMany},
+		{"is empty", tags.IsEmpty(true), ir.OperatorListIsEmpty, ir.OperandFlag},
+		{"is null", tags.IsNull(), ir.OperatorListIsNull, ir.OperandNone},
+		{"is not null", tags.IsNotNull(), ir.OperatorListIsNotNull, ir.OperandNone},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			frozen, freezeErr := test.value.Freeze(descriptor)
+			if freezeErr != nil {
+				t.Fatal(freezeErr)
+			}
+			bound, bindErr := Predicate(frozen, registry, ir.PortableProviders())
+			if bindErr != nil {
+				t.Fatal(bindErr)
+			}
+			operatorID, _ := bound.Operator()
+			operand, _ := bound.Operand()
+			if operatorID != test.operator || operand.Kind() != test.operand {
+				t.Fatalf("operator/operand = %d/%d; want %d/%d", operatorID, operand.Kind(), test.operator, test.operand)
+			}
+			if test.operand == ir.OperandMany {
+				values, ok := operand.Many()
+				if !ok || test.name == "has every empty" && len(values) != 0 {
+					t.Fatalf("many operand = %#v/%v", values, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestActivatedJSONOperatorsBindExactPathsValuesModesAndSentinels(t *testing.T) {
+	registry, ids := bindFixture(t)
+	descriptor := modelDescriptor[testUser](ids.user)
+	profile := golem.GeneratedNullableModeJSONField[testUser](ids.userProfile)
+	path := golem.NewJSONPath(golem.JSONKey("profile"), golem.JSONIndex(3))
+	number, err := golem.ParseJSONNumber("9007199254740993.25")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		value     golem.Predicate[testUser]
+		operator  ir.OperatorID
+		mode      ir.ComparisonMode
+		pathCount int
+		operand   ir.OperandKind
+		jsonKind  ir.JSONKind
+		nullKind  ir.JSONNullKind
+	}{
+		{"root exact number", profile.Root().Eq(number), ir.OperatorJSONEqual, ir.ComparisonSensitive, 0, ir.OperandOne, ir.JSONNumber, 0},
+		{"path db null", profile.At(path).Ne(golem.DBNull), ir.OperatorJSONNotEqual, ir.ComparisonSensitive, 2, ir.OperandJSONNull, 0, ir.JSONDbNull},
+		{"path document null", profile.At(path).Eq(golem.JSONNull), ir.OperatorJSONEqual, ir.ComparisonSensitive, 2, ir.OperandJSONNull, 0, ir.JSONDocumentNull},
+		{"path any null", profile.At(path).Eq(golem.AnyNull), ir.OperatorJSONEqual, ir.ComparisonSensitive, 2, ir.OperandJSONNull, 0, ir.JSONAnyNull},
+		{"path order", profile.At(path).GTE(number), ir.OperatorJSONGreaterThanOrEqual, ir.ComparisonSensitive, 2, ir.OperandOne, ir.JSONNumber, 0},
+		{"path insensitive string", profile.At(path).Compare(golem.ASCIIInsensitive()).Contains("Admin"), ir.OperatorJSONStringContains, ir.ComparisonASCIIInsensitive, 2, ir.OperandOne, ir.JSONString, 0},
+		{"path array candidate", profile.At(path).ArrayStartsWith(golem.JSONObject(map[string]golem.JSONValue{"id": number})), ir.OperatorJSONArrayStartsWith, ir.ComparisonSensitive, 2, ir.OperandOne, ir.JSONObject, 0},
+		{"column is null", profile.IsNull(), ir.OperatorJSONIsNull, ir.ComparisonSensitive, 0, ir.OperandNone, 0, 0},
+		{"column is not null", profile.IsNotNull(), ir.OperatorJSONIsNotNull, ir.ComparisonSensitive, 0, ir.OperandNone, 0, 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			frozen, freezeErr := test.value.Freeze(descriptor)
+			if freezeErr != nil {
+				t.Fatal(freezeErr)
+			}
+			condition, bindErr := Predicate(frozen, registry, ir.PortableProviders())
+			if bindErr != nil {
+				t.Fatal(bindErr)
+			}
+			operatorID, _ := condition.Operator()
+			mode, _ := condition.Mode()
+			boundPath, _ := condition.Path()
+			operand, _ := condition.Operand()
+			if operatorID != test.operator || mode != test.mode || len(boundPath.Segments()) != test.pathCount || operand.Kind() != test.operand {
+				t.Fatalf("operator/mode/path/operand = %d/%d/%d/%d", operatorID, mode, len(boundPath.Segments()), operand.Kind())
+			}
+			if test.jsonKind != 0 {
+				value, ok := operand.One()
+				jsonValue, jsonOK := value.JSON()
+				if !ok || !jsonOK || jsonValue.Kind() != test.jsonKind {
+					t.Fatalf("JSON operand = %#v/%v/%v", jsonValue, ok, jsonOK)
+				}
+				if test.jsonKind == ir.JSONNumber {
+					exact, _ := jsonValue.Number()
+					if string(exact.Coefficient()) != "900719925474099325" || exact.Exponent() != -2 {
+						t.Fatalf("exact number = %s e%d", exact.Coefficient(), exact.Exponent())
+					}
+				}
+			}
+			if test.nullKind != 0 {
+				kind, ok := operand.JSONNull()
+				if !ok || kind != test.nullKind {
+					t.Fatalf("null operand = %d/%v", kind, ok)
+				}
+			}
+		})
+	}
+}
+
 func TestBinderFailsClosedOnStaleIdentitiesProvidersAndEnumLabels(t *testing.T) {
 	registry, ids := bindFixture(t)
 	descriptor := modelDescriptor[testPost](ids.post)
@@ -204,7 +344,7 @@ func TestBinderFailsClosedOnStaleIdentitiesProvidersAndEnumLabels(t *testing.T) 
 	}
 	_, err = Predicate(frozenRole, registry, ir.PortableProviders())
 	var bindErr *Error
-	if !errors.As(err, &bindErr) || bindErr.Code != CodeValue {
+	if !errors.As(err, &bindErr) || bindErr.Code != CodeValue || bindErr.ModelID != ir.ModelID(ids.user) || bindErr.FieldID != ir.FieldID(ids.userRole) || bindErr.OperatorID != ir.OperatorEqual {
 		t.Fatalf("unknown enum error = %v", err)
 	}
 
@@ -275,7 +415,7 @@ func TestPredicateBindingIsDeterministicAndConcurrent(t *testing.T) {
 func bindFixture(t *testing.T) (*schema.Registry, fixtureIDs) {
 	t.Helper()
 	userID, postID := compilerir.ModelID(bindID(1)), compilerir.ModelID(bindID(2))
-	userKey, userName, userRole, userTags, userPosts := compilerir.FieldID(bindID(11)), compilerir.FieldID(bindID(12)), compilerir.FieldID(bindID(13)), compilerir.FieldID(bindID(14)), compilerir.FieldID(bindID(15))
+	userKey, userName, userRole, userTags, userProfile, userPosts := compilerir.FieldID(bindID(11)), compilerir.FieldID(bindID(12)), compilerir.FieldID(bindID(13)), compilerir.FieldID(bindID(14)), compilerir.FieldID(bindID(15)), compilerir.FieldID(bindID(16))
 	postKey, postAuthorID, postAuthor := compilerir.FieldID(bindID(21)), compilerir.FieldID(bindID(22)), compilerir.FieldID(bindID(23))
 	relationID := compilerir.RelationID(bindID(31))
 	enumID, adminID, ordinaryID := compilerir.EnumID(bindID(51)), compilerir.EnumValueID(bindID(52)), compilerir.EnumValueID(bindID(53))
@@ -294,8 +434,9 @@ func bindFixture(t *testing.T) (*schema.Registry, fixtureIDs) {
 				bindScalar(userKey, "ID", "id", compilerir.FieldScalar, compilerir.LogicalTypeIR{Kind: compilerir.TypeUUID}, false, 0),
 				bindScalar(userName, "Name", "name", compilerir.FieldScalar, compilerir.LogicalTypeIR{Kind: compilerir.TypeString, MaxLength: &maxLength}, true, 1),
 				bindScalar(userRole, "Role", "role", compilerir.FieldEnum, compilerir.LogicalTypeIR{Kind: compilerir.TypeEnum, EnumID: &enumID}, false, 2),
-				bindScalar(userTags, "Tags", "tags", compilerir.FieldScalarList, compilerir.LogicalTypeIR{Kind: compilerir.TypeScalarList, Element: &listElement, Capability: &listCapability}, false, 3),
-				bindRelation(userPosts, "Posts", relationID, compilerir.RelationInverse, compilerir.RelationHasMany, 4),
+				bindScalar(userTags, "Tags", "tags", compilerir.FieldScalarList, compilerir.LogicalTypeIR{Kind: compilerir.TypeScalarList, Element: &listElement, Capability: &listCapability}, true, 3),
+				bindScalar(userProfile, "Profile", "profile", compilerir.FieldScalar, compilerir.LogicalTypeIR{Kind: compilerir.TypeJSON}, true, 4),
+				bindRelation(userPosts, "Posts", relationID, compilerir.RelationInverse, compilerir.RelationHasMany, 5),
 			}, PrimaryKey: &compilerir.KeyIR{ID: compilerir.KeyID(bindID(41)), Kind: compilerir.KeyPrimary, PhysicalName: "pk_users", Fields: []compilerir.FieldID{userKey}}},
 			{ID: postID, LogicalName: "Post", Table: compilerir.TableBindingIR{PhysicalName: "posts"}, Fields: []compilerir.FieldIR{
 				bindScalar(postKey, "ID", "id", compilerir.FieldScalar, compilerir.LogicalTypeIR{Kind: compilerir.TypeString, MaxLength: &maxLength}, false, 0),
@@ -306,7 +447,7 @@ func bindFixture(t *testing.T) (*schema.Registry, fixtureIDs) {
 		Relations: []compilerir.RelationIR{{ID: relationID, SourceModel: postID, TargetModel: userID, SourceField: postAuthor, InverseField: &userPosts, Cardinality: compilerir.RelationMany, LocalFields: []compilerir.FieldID{postAuthorID}, RemoteFields: []compilerir.FieldID{userKey}}},
 	}
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{
-		{ModelID: userID, Fields: bindContractFields(userKey, userName, userRole, userTags, userPosts)},
+		{ModelID: userID, Fields: bindContractFields(userKey, userName, userRole, userTags, userProfile, userPosts)},
 		{ModelID: postID, Fields: bindContractFields(postKey, postAuthorID, postAuthor)},
 	}, Enums: []compilerir.EnumContractIR{{EnumID: enumID, GraphQLName: "Role"}}}
 
@@ -344,7 +485,7 @@ func bindFixture(t *testing.T) (*schema.Registry, fixtureIDs) {
 		t.Fatal(err)
 	}
 	return registry, fixtureIDs{
-		user: bindModelID(t, userID), post: bindModelID(t, postID), userID: bindFieldID(t, userKey), userName: bindFieldID(t, userName), userRole: bindFieldID(t, userRole), userTags: bindFieldID(t, userTags),
+		user: bindModelID(t, userID), post: bindModelID(t, postID), userID: bindFieldID(t, userKey), userName: bindFieldID(t, userName), userRole: bindFieldID(t, userRole), userTags: bindFieldID(t, userTags), userProfile: bindFieldID(t, userProfile),
 		userPosts: bindFieldID(t, userPosts), postID: bindFieldID(t, postKey), postAuthorID: bindFieldID(t, postAuthorID), postAuthor: bindFieldID(t, postAuthor),
 		relation: bindRelationID(t, relationID), enum: ir.EnumID(bindFixedID(t, string(enumID))), admin: ir.EnumValueID(bindFixedID(t, string(adminID))),
 	}

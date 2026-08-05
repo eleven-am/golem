@@ -215,6 +215,7 @@ func (value Time) String() string {
 // authored path and is not a spelling for the document root.
 type JSONPath struct {
 	segments []jsonPathSegmentValue
+	present  bool
 }
 
 type JSONPathSegment interface {
@@ -252,7 +253,7 @@ func NewJSONPath(first JSONPathSegment, rest ...JSONPathSegment) JSONPath {
 	for index, segment := range input {
 		segments[index] = copyPathSegment(segment)
 	}
-	return JSONPath{segments: segments}
+	return JSONPath{segments: segments, present: true}
 }
 
 func (path JSONPath) Segments() []JSONPathSegment {
@@ -264,7 +265,7 @@ func (path JSONPath) Segments() []JSONPathSegment {
 }
 
 func (path JSONPath) Valid() bool {
-	if len(path.segments) == 0 {
+	if !path.present || len(path.segments) == 0 {
 		return false
 	}
 	for _, segment := range path.segments {
@@ -274,6 +275,8 @@ func (path JSONPath) Valid() bool {
 	}
 	return true
 }
+
+func jsonRootPath() JSONPath { return JSONPath{present: true} }
 
 type JSONValue interface{ jsonValue() }
 
@@ -401,6 +404,10 @@ func (value JSONNumberValue) Canonical() string {
 		return prefix + value.coefficient
 	}
 	return prefix + value.coefficient + "e" + strconv.FormatInt(int64(value.exponent), 10)
+}
+
+func (value JSONNumberValue) Parts() (negative bool, coefficient string, exponent int32, ok bool) {
+	return value.negative, value.coefficient, value.exponent, value.valid
 }
 
 func (value JSONNumberValue) Valid() bool { return value.valid }

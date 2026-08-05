@@ -1,6 +1,11 @@
 package golem
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"slices"
+)
 
 // ActorFrom is the typed context access point used by hook source. P4 owns
 // actor storage and execution semantics.
@@ -134,6 +139,82 @@ func GeneratedApplicationBindings[A any](expected SchemaDigest, packages ...Pack
 }
 
 func (bindings ApplicationBindings[A]) GenerationDigest() SchemaDigest { return bindings.generation }
+
+// PolicyInventory returns the statically attached model identities without
+// executing application policy code. The returned slice is detached from the
+// generated binding graph.
+func (bindings ApplicationBindings[A]) PolicyInventory() []ModelID {
+	result := make([]ModelID, 0)
+	for _, pkg := range bindings.packages {
+		for _, binding := range pkg.policies {
+			result = append(result, binding.model)
+		}
+	}
+	slices.SortFunc(result, func(left, right ModelID) int { return bytes.Compare(left[:], right[:]) })
+	return result
+}
+
+// GeneratedPolicySet is one actor-specific, execution-scoped factory result.
+// It is immutable and intentionally carries no actor value.
+type GeneratedPolicySet struct {
+	generation SchemaDigest
+	policies   []FrozenPolicy
+}
+
+func (set GeneratedPolicySet) GenerationDigest() SchemaDigest { return set.generation }
+
+func (set GeneratedPolicySet) Policies() []FrozenPolicy {
+	result := make([]FrozenPolicy, len(set.policies))
+	for index, policy := range set.policies {
+		result[index] = FrozenPolicy{model: policy.model, rules: make([]frozenRule, len(policy.rules)), canonical: append([]byte(nil), policy.canonical...)}
+		for ruleIndex, rule := range policy.rules {
+			result[index].rules[ruleIndex] = cloneFrozenRule(rule)
+		}
+	}
+	return result
+}
+
+// BuildGeneratedPolicySet invokes every generated policy factory exactly once
+// for this call. No result is cached in package, application, or engine state.
+func BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (GeneratedPolicySet, error) {
+	if bindings.generation == (SchemaDigest{}) {
+		return GeneratedPolicySet{}, fmt.Errorf("generated policy set: application bindings are unstamped")
+	}
+	// Validate the complete static graph before executing any application code.
+	// This keeps malformed generated artifacts from producing a partially
+	// observed execution where an earlier factory ran before a later duplicate,
+	// missing factory, or generation mismatch was discovered.
+	seen := make(map[ModelID]struct{})
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return GeneratedPolicySet{}, fmt.Errorf("generated policy set: package %d generation mismatch", packageIndex)
+		}
+		for bindingIndex, binding := range pkg.policies {
+			if binding.model == (ModelID{}) || binding.build == nil {
+				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: package %d binding %d is incomplete", packageIndex, bindingIndex)
+			}
+			if _, duplicate := seen[binding.model]; duplicate {
+				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: duplicate policy binding for model %x", binding.model)
+			}
+			seen[binding.model] = struct{}{}
+		}
+	}
+
+	policies := make([]FrozenPolicy, 0, len(seen))
+	for _, pkg := range bindings.packages {
+		for _, binding := range pkg.policies {
+			policy, err := binding.build(actor)
+			if err != nil {
+				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: model %x factory: %w", binding.model, err)
+			}
+			if policy.View().ModelID() != binding.model {
+				return GeneratedPolicySet{}, fmt.Errorf("generated policy set: model %x factory returned policy for %x", binding.model, policy.View().ModelID())
+			}
+			policies = append(policies, policy)
+		}
+	}
+	return GeneratedPolicySet{generation: bindings.generation, policies: policies}, nil
+}
 
 type generatedBindingError string
 

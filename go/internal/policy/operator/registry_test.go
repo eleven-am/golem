@@ -32,7 +32,7 @@ func mustOne(t *testing.T, value ir.Value) ir.Operand {
 	return operand
 }
 
-func TestRegistryIsClosedUniqueAndAgreementPending(t *testing.T) {
+func TestRegistryIsClosedUniqueAndPortableAgreementProved(t *testing.T) {
 	entries := Entries()
 	if len(entries) != 41 {
 		t.Fatalf("entry count = %d", len(entries))
@@ -51,11 +51,11 @@ func TestRegistryIsClosedUniqueAndAgreementPending(t *testing.T) {
 			t.Fatal("entries are not ID ordered")
 		}
 		previous = entry.ID()
-		if entry.AgreementStatus() != AgreementPending {
-			t.Fatalf("%s prematurely agreement-proved", entry.Name())
+		if entry.AgreementStatus() != AgreementProved || entry.AgreementProviders() != mustProviders(t) {
+			t.Fatalf("%s is not agreement-proved for the portable providers", entry.Name())
 		}
-		if err := RequireAgreement(entry.ID(), mustProviders(t)); err == nil {
-			t.Fatalf("%s bypassed agreement gate", entry.Name())
+		if err := RequireAgreement(entry.ID(), mustProviders(t)); err != nil {
+			t.Fatalf("%s failed the proved agreement gate: %v", entry.Name(), err)
 		}
 	}
 	if _, ok := Lookup(99); ok {
@@ -220,4 +220,31 @@ func TestValidateConditionRejectsWrongOperatorCellAndRequirements(t *testing.T) 
 	if err := ValidateCondition(missing, providers); err == nil {
 		t.Fatal("missing derived requirement accepted")
 	}
+}
+
+func TestNamedValidationMutations(t *testing.T) {
+	providers := mustProviders(t)
+
+	t.Run("M23_bool_never_numeric", func(t *testing.T) {
+		boolean := mustType(t, ir.ValueBool, false, nil, 0)
+		numeric, _ := ir.SignedValue(ir.ValueInt64, 1)
+		if _, err := ValidateShape(ir.OperatorEqual, Shape{Node: ir.ConditionScalar, FieldType: boolean, Operand: mustOne(t, numeric), Mode: ir.ComparisonSensitive, Providers: providers}); err == nil {
+			t.Fatal("boolean equality accepted a numeric operand")
+		}
+	})
+
+	t.Run("M28_comparison_mode_rejected_on_non_text_operation", func(t *testing.T) {
+		integer := mustType(t, ir.ValueInt64, false, nil, 0)
+		numeric, _ := ir.SignedValue(ir.ValueInt64, 1)
+		if _, err := ValidateShape(ir.OperatorEqual, Shape{Node: ir.ConditionScalar, FieldType: integer, Operand: mustOne(t, numeric), Mode: ir.ComparisonASCIIInsensitive, Providers: providers}); err == nil {
+			t.Fatal("ASCII-insensitive mode accepted on numeric equality")
+		}
+
+		jsonType := mustType(t, ir.ValueJSON, false, nil, 0)
+		jsonString, _ := ir.JSONStringValue("x")
+		jsonValue, _ := ir.NewJSONValue(jsonString)
+		if _, err := ValidateShape(ir.OperatorJSONEqual, Shape{Node: ir.ConditionJSON, FieldType: jsonType, Operand: mustOne(t, jsonValue), Mode: ir.ComparisonASCIIInsensitive, Providers: providers}); err == nil {
+			t.Fatal("ASCII-insensitive mode accepted on JSON structural equality")
+		}
+	})
 }

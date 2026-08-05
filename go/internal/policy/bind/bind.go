@@ -1,7 +1,10 @@
 package bind
 
 import (
+	"bytes"
 	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -14,7 +17,7 @@ import (
 )
 
 const (
-	publicFrozenVersion = uint16(1)
+	publicFrozenVersion = uint16(2)
 	maximumBindDepth    = 256
 	listCapability      = compilerir.CapabilityID("scalar-list:json-array:v1")
 )
@@ -300,7 +303,7 @@ func (b *binder) scalar(view golem.FrozenConditionView, model ir.ModelID, path s
 	}
 	operand, err := b.operand(view.Operand(), typ, operatorID, path+".operand")
 	if err != nil {
-		return ir.Condition{}, err
+		return ir.Condition{}, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
 	}
 	requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionScalar, FieldType: typ, Operand: operand, Mode: mode, Providers: b.providers})
 	if err != nil {
@@ -333,7 +336,7 @@ func (b *binder) list(view golem.FrozenConditionView, model ir.ModelID, path str
 	}
 	operand, err := b.listOperand(view.Operand(), typ, operatorID, path+".operand")
 	if err != nil {
-		return ir.Condition{}, err
+		return ir.Condition{}, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
 	}
 	requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionList, FieldType: typ, Operand: operand, Mode: ir.ComparisonSensitive, Providers: b.providers})
 	if err != nil {
@@ -371,7 +374,7 @@ func (b *binder) json(view golem.FrozenConditionView, model ir.ModelID, path str
 	}
 	operand, err := b.operand(view.Operand(), typ, operatorID, path+".operand")
 	if err != nil {
-		return ir.Condition{}, err
+		return ir.Condition{}, b.contextualize(err, model, field, ir.RelationID{}, operatorID)
 	}
 	requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionJSON, FieldType: typ, Operand: operand, Mode: mode, Path: jsonPath, Providers: b.providers})
 	if err != nil {
@@ -616,6 +619,27 @@ func (b *binder) operand(view golem.FrozenOperandView, typ ir.TypeRef, operatorI
 			return ir.Operand{}, b.failureFor(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, operatorID, "flag accessor disagrees with its tag")
 		}
 		return ir.FlagOperand(flag), nil
+	case golem.FrozenOperandJSONNull:
+		value, ok := view.JSONNull()
+		if !ok {
+			return ir.Operand{}, b.failureFor(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, operatorID, "JSON null accessor disagrees with its tag")
+		}
+		var kind ir.JSONNullKind
+		switch value {
+		case golem.FrozenJSONDbNull:
+			kind = ir.JSONDbNull
+		case golem.FrozenJSONDocumentNull:
+			kind = ir.JSONDocumentNull
+		case golem.FrozenJSONAnyNull:
+			kind = ir.JSONAnyNull
+		default:
+			return ir.Operand{}, b.failureFor(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, operatorID, "unknown JSON null kind %d", value)
+		}
+		bound, err := ir.JSONNullOperand(kind)
+		if err != nil {
+			return ir.Operand{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, operatorID, err)
+		}
+		return bound, nil
 	default:
 		return ir.Operand{}, b.failureFor(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, operatorID, "unknown operand kind tag %d", view.Kind())
 	}
@@ -789,8 +813,83 @@ func (b *binder) value(view golem.FrozenValueView, typ ir.TypeRef, path string) 
 			return ir.Value{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, 0, err)
 		}
 		return bound, nil
+	case ir.ValueJSON:
+		value, ok := view.JSON()
+		if !ok {
+			return ir.Value{}, b.failure(CodeValue, path, "JSON accessor disagrees with its tag")
+		}
+		converted, err := bindJSONValue(value)
+		if err != nil {
+			return ir.Value{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, 0, err)
+		}
+		return ir.NewJSONValue(converted)
 	default:
 		return ir.Value{}, b.failure(CodeValue, path, "logical kind %d has no current frozen public value codec", typ.Kind())
+	}
+}
+
+func bindJSONValue(value golem.JSONValue) (ir.JSONValue, error) {
+	canonical, err := golem.CanonicalJSON(value)
+	if err != nil {
+		return ir.JSONValue{}, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(canonical))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return ir.JSONValue{}, err
+	}
+	return bindDecodedJSON(decoded)
+}
+
+func bindDecodedJSON(value any) (ir.JSONValue, error) {
+	switch value := value.(type) {
+	case nil:
+		return ir.JSONNullValue(), nil
+	case bool:
+		return ir.JSONBoolValue(value), nil
+	case string:
+		return ir.JSONStringValue(value)
+	case json.Number:
+		number, err := golem.ParseJSONNumber(string(value))
+		if err != nil {
+			return ir.JSONValue{}, err
+		}
+		negative, coefficient, exponent, ok := number.Parts()
+		if !ok {
+			return ir.JSONValue{}, fmt.Errorf("invalid canonical JSON number")
+		}
+		exact, err := ir.NewJSONNumber(negative, []byte(coefficient), exponent)
+		if err != nil {
+			return ir.JSONValue{}, err
+		}
+		return ir.JSONNumberValueOf(exact)
+	case []any:
+		items := make([]ir.JSONValue, len(value))
+		for index, item := range value {
+			converted, err := bindDecodedJSON(item)
+			if err != nil {
+				return ir.JSONValue{}, fmt.Errorf("JSON array %d: %w", index, err)
+			}
+			items[index] = converted
+		}
+		return ir.JSONArrayValue(items)
+	case map[string]any:
+		members := make([]ir.JSONMember, 0, len(value))
+		for key, item := range value {
+			converted, err := bindDecodedJSON(item)
+			if err != nil {
+				return ir.JSONValue{}, fmt.Errorf("JSON object key %q: %w", key, err)
+			}
+			member, err := ir.NewJSONMember(key, converted)
+			if err != nil {
+				return ir.JSONValue{}, err
+			}
+			members = append(members, member)
+		}
+		return ir.JSONObjectValue(members)
+	default:
+		return ir.JSONValue{}, fmt.Errorf("unsupported decoded JSON type %T", value)
 	}
 }
 
@@ -910,14 +1009,17 @@ func bindListOperator(value golem.FrozenOperator) (ir.OperatorID, bool) {
 }
 
 func bindJSONOperator(value golem.FrozenOperator) (ir.OperatorID, bool) {
-	switch value {
-	case golem.FrozenOperatorIsNull:
-		return ir.OperatorJSONIsNull, true
-	case golem.FrozenOperatorIsNotNull:
-		return ir.OperatorJSONIsNotNull, true
-	default:
-		return 0, false
+	values := map[golem.FrozenOperator]ir.OperatorID{
+		golem.FrozenOperatorIsNull: ir.OperatorJSONIsNull, golem.FrozenOperatorIsNotNull: ir.OperatorJSONIsNotNull,
+		golem.FrozenOperatorJSONEq: ir.OperatorJSONEqual, golem.FrozenOperatorJSONNe: ir.OperatorJSONNotEqual,
+		golem.FrozenOperatorJSONLT: ir.OperatorJSONLessThan, golem.FrozenOperatorJSONLTE: ir.OperatorJSONLessThanOrEqual,
+		golem.FrozenOperatorJSONGT: ir.OperatorJSONGreaterThan, golem.FrozenOperatorJSONGTE: ir.OperatorJSONGreaterThanOrEqual,
+		golem.FrozenOperatorJSONStringContains: ir.OperatorJSONStringContains, golem.FrozenOperatorJSONStringStartsWith: ir.OperatorJSONStringStartsWith,
+		golem.FrozenOperatorJSONStringEndsWith: ir.OperatorJSONStringEndsWith, golem.FrozenOperatorJSONArrayContains: ir.OperatorJSONArrayContains,
+		golem.FrozenOperatorJSONArrayStartsWith: ir.OperatorJSONArrayStartsWith, golem.FrozenOperatorJSONArrayEndsWith: ir.OperatorJSONArrayEndsWith,
 	}
+	result, ok := values[value]
+	return result, ok
 }
 
 func bindRelationOperator(value golem.FrozenOperator) (ir.OperatorID, bool) {
@@ -934,6 +1036,9 @@ func bindRelationOperator(value golem.FrozenOperator) (ir.OperatorID, bool) {
 func bindMode(value golem.FrozenComparisonMode) (ir.ComparisonMode, bool) {
 	if value == golem.FrozenComparisonSensitive {
 		return ir.ComparisonSensitive, true
+	}
+	if value == golem.FrozenComparisonASCIIInsensitive {
+		return ir.ComparisonASCIIInsensitive, true
 	}
 	return 0, false
 }
@@ -969,6 +1074,7 @@ func publicKind(value ir.ValueKind) (golem.FrozenValueKind, bool) {
 		ir.ValueDecimal: golem.FrozenValueDecimal, ir.ValueString: golem.FrozenValueString, ir.ValueBytes: golem.FrozenValueBytes,
 		ir.ValueUUID: golem.FrozenValueUUID, ir.ValueDate: golem.FrozenValueDate, ir.ValueTime: golem.FrozenValueTime,
 		ir.ValueDateTime: golem.FrozenValueDateTime,
+		ir.ValueJSON:     golem.FrozenValueJSON,
 	}
 	result, ok := values[value]
 	return result, ok
@@ -1011,4 +1117,25 @@ func (b *binder) failureFor(code ErrorCode, path string, model ir.ModelID, field
 
 func (b *binder) wrap(code ErrorCode, path string, model ir.ModelID, field ir.FieldID, relation ir.RelationID, operatorID ir.OperatorID, cause error) error {
 	return &Error{Code: code, Path: path, Detail: cause.Error(), RulePosition: b.rule, HasRule: b.hasRule, ModelID: model, FieldID: field, RelationID: relation, OperatorID: operatorID, Cause: cause}
+}
+
+func (b *binder) contextualize(err error, model ir.ModelID, field ir.FieldID, relation ir.RelationID, operatorID ir.OperatorID) error {
+	var failure *Error
+	if !errors.As(err, &failure) {
+		return b.wrap(CodeInternal, "", model, field, relation, operatorID, err)
+	}
+	copy := *failure
+	if copy.ModelID == (ir.ModelID{}) {
+		copy.ModelID = model
+	}
+	if copy.FieldID == (ir.FieldID{}) {
+		copy.FieldID = field
+	}
+	if copy.RelationID == (ir.RelationID{}) {
+		copy.RelationID = relation
+	}
+	if copy.OperatorID == 0 {
+		copy.OperatorID = operatorID
+	}
+	return &copy
 }
