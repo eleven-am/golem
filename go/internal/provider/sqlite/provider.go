@@ -16,6 +16,11 @@ const (
 	CapabilityGeneratedColumns  ir.CapabilityID = "sqlite.generated_columns"
 	CapabilityExpressionIndexes ir.CapabilityID = "sqlite.expression_indexes"
 	CapabilityPartialIndexes    ir.CapabilityID = "sqlite.partial_indexes"
+	CapabilityPolicyBinaryText  ir.CapabilityID = "policy.binary-text.v1"
+	CapabilityPolicyASCIIText   ir.CapabilityID = "policy.ascii-insensitive-text.v1"
+	CapabilityPolicyExactJSON   ir.CapabilityID = "policy.exact-json.v1"
+	CapabilityPolicyScalarList  ir.CapabilityID = "scalar-list.json-array.v1"
+	CapabilityPolicyRelation    ir.CapabilityID = "policy.relation-correlation.v1"
 )
 
 type Provider struct{}
@@ -28,6 +33,11 @@ func (*Provider) Manifest() physical.ProviderManifest {
 		physical.CapabilityFact{ID: CapabilityGeneratedColumns, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityExpressionIndexes, Version: 1, Verification: physical.VerificationVersionFloor},
 		physical.CapabilityFact{ID: CapabilityPartialIndexes, Version: 1, Verification: physical.VerificationVersionFloor},
+		physical.CapabilityFact{ID: CapabilityPolicyBinaryText, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyASCIIText, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyExactJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyScalarList, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyRelation, Version: 1, Verification: physical.VerificationRuntimeProbe},
 	)
 }
 
@@ -36,6 +46,11 @@ type CapabilityReport struct {
 	ForeignKeys      bool
 	JSON1            bool
 	GeneratedColumns bool
+	PolicyBinaryText bool
+	PolicyASCIIText  bool
+	PolicyExactJSON  bool
+	PolicyScalarList bool
+	PolicyRelation   bool
 }
 
 // Open opens a modernc.org/sqlite database through sqlx and proves the provider

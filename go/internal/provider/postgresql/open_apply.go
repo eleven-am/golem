@@ -37,6 +37,10 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 		database.Close()
 		return nil, CapabilityReport{}, fmt.Errorf("postgresql required capabilities missing: jsonb=%t generatedColumns=%t advisoryLocks=%t", report.JSONB, report.GeneratedColumns, report.AdvisoryLocks)
 	}
+	if !report.BinaryText || !report.ASCIIInsensitive || !report.ExactJSON || !report.ScalarListJSON || !report.RelationCorrelation {
+		database.Close()
+		return nil, CapabilityReport{}, fmt.Errorf("postgresql policy capabilities missing: binary=%t ascii=%t exactJSON=%t scalarListJSON=%t relation=%t", report.BinaryText, report.ASCIIInsensitive, report.ExactJSON, report.ScalarListJSON, report.RelationCorrelation)
+	}
 	return database, report, nil
 }
 
@@ -80,10 +84,17 @@ EXISTS (
   SELECT 1 FROM pg_catalog.pg_proc p
   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = 'pg_catalog' AND p.proname = 'pg_advisory_xact_lock'
-)`
+),
+('A' COLLATE "C") < ('a' COLLATE "C"),
+pg_catalog.translate('ÅAZ', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = 'Åaz',
+('9007199254740993'::jsonb <> '9007199254740992'::jsonb)
+  AND pg_catalog.jsonb_typeof('9007199254740993'::jsonb) = 'number',
+pg_catalog.jsonb_array_length('[1,2,1]'::jsonb) = 3
+  AND ('[1,2]'::jsonb <> '[2,1]'::jsonb),
+EXISTS (SELECT 1 FROM (VALUES (1)) AS parent(id) WHERE EXISTS (SELECT 1 FROM (VALUES (1)) AS child(parent_id) WHERE child.parent_id = parent.id))`
 	var version int
 	var report CapabilityReport
-	if err := query.QueryRowxContext(ctx, statement).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks); err != nil {
+	if err := query.QueryRowxContext(ctx, statement).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks, &report.BinaryText, &report.ASCIIInsensitive, &report.ExactJSON, &report.ScalarListJSON, &report.RelationCorrelation); err != nil {
 		return CapabilityReport{}, fmt.Errorf("postgresql capability probe: %w", err)
 	}
 	report.Version = physical.Version{Major: uint32(version / 10000), Minor: uint32((version / 100) % 100), Patch: uint32(version % 100)}

@@ -28,14 +28,24 @@ func (*Provider) Manifest() physical.ProviderManifest {
 		physical.CapabilityFact{ID: CapabilityGeneratedColumns, Version: 1, Verification: physical.VerificationVersionFloor},
 		physical.CapabilityFact{ID: CapabilityAdvisoryLocks, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: capabilityAdvancedIndexes, Version: 1, Verification: physical.VerificationVersionFloor},
+		physical.CapabilityFact{ID: CapabilityPolicyBinaryText, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyASCIIInsensitive, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyExactJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyScalarListJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityPolicyRelationCorrelation, Version: 1, Verification: physical.VerificationRuntimeProbe},
 	)
 }
 
 type CapabilityReport struct {
-	Version          physical.Version
-	JSONB            bool
-	GeneratedColumns bool
-	AdvisoryLocks    bool
+	Version             physical.Version
+	JSONB               bool
+	GeneratedColumns    bool
+	AdvisoryLocks       bool
+	BinaryText          bool
+	ASCIIInsensitive    bool
+	ExactJSON           bool
+	ScalarListJSON      bool
+	RelationCorrelation bool
 }
 
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {

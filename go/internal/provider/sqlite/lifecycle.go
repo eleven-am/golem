@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/physical"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	"github.com/jmoiron/sqlx"
 	_ "modernc.org/sqlite"
 )
@@ -78,6 +80,11 @@ func (*Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport
 		ForeignKeys:      firstReport.ForeignKeys && secondReport.ForeignKeys,
 		JSON1:            firstReport.JSON1 && secondReport.JSON1,
 		GeneratedColumns: firstReport.GeneratedColumns && secondReport.GeneratedColumns,
+		PolicyBinaryText: firstReport.PolicyBinaryText && secondReport.PolicyBinaryText,
+		PolicyASCIIText:  firstReport.PolicyASCIIText && secondReport.PolicyASCIIText,
+		PolicyExactJSON:  firstReport.PolicyExactJSON && secondReport.PolicyExactJSON,
+		PolicyScalarList: firstReport.PolicyScalarList && secondReport.PolicyScalarList,
+		PolicyRelation:   firstReport.PolicyRelation && secondReport.PolicyRelation,
 	}, nil
 }
 
@@ -114,7 +121,41 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 	if _, err := connection.ExecContext(ctx, "DROP TABLE temp."+table); err != nil {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe generated cleanup: %w", err)
 	}
-	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true}, nil
+	var ascii string
+	if err := connection.GetContext(ctx, &ascii, "SELECT golem_policy_ascii_fold('AbÅ')"); err != nil || ascii != "abÅ" {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection policy ASCII fold unavailable: value=%q error=%v", label, ascii, err)
+	}
+	var listExact, jsonExact int
+	if err := connection.GetContext(ctx, &listExact, "SELECT golem_policy_list('[9007199254740993]', '[9007199254740993]', '4:0:0', 101)"); err != nil || listExact != 1 {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection policy scalar-list exactness unavailable: value=%d error=%v", label, listExact, err)
+	}
+	if err := connection.GetContext(ctx, &jsonExact, "SELECT golem_policy_json('{\"n\":9007199254740993}', '[[\"k\",\"n\"]]', '9007199254740993', 203, 1, 2)"); err != nil || jsonExact != 1 {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection policy JSON exactness unavailable: value=%d error=%v", label, jsonExact, err)
+	}
+	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true}, nil
+}
+
+// PolicyCapabilityProof measures the complete SQLite P2 policy function set on
+// two distinct pooled connections, then binds that result to the caller's
+// already-validated logical schema fingerprint.
+func (provider *Provider) PolicyCapabilityProof(ctx context.Context, database *sqlx.DB, schemaFingerprint [32]byte) (policysql.CapabilityProof, error) {
+	if schemaFingerprint == ([32]byte{}) {
+		return policysql.CapabilityProof{}, fmt.Errorf("sqlite policy capability proof: schema fingerprint is required")
+	}
+	report, err := provider.probe(ctx, database)
+	if err != nil {
+		return policysql.CapabilityProof{}, err
+	}
+	if !report.PolicyBinaryText || !report.PolicyASCIIText || !report.PolicyExactJSON || !report.PolicyScalarList || !report.PolicyRelation {
+		return policysql.CapabilityProof{}, fmt.Errorf("sqlite policy capability proof: incomplete runtime probe")
+	}
+	return policysql.NewCapabilityProof(policyir.ProviderSQLite, schemaFingerprint,
+		policyir.CapabilityBinaryText,
+		policyir.CapabilityASCIIInsensitiveText,
+		policyir.CapabilityExactJSON,
+		policyir.CapabilityScalarListJSON,
+		policyir.CapabilityRelationCorrelation,
+	)
 }
 
 func parseVersion(value string) (physical.Version, error) {

@@ -136,15 +136,15 @@ func internalProvider(provider golem.Provider) (ir.Provider, bool) {
 func capabilityName(capability ir.Capability) string {
 	switch capability {
 	case ir.CapabilityBinaryText:
-		return "policy.binary-text:v1"
+		return "policy.binary-text.v1"
 	case ir.CapabilityASCIIInsensitiveText:
-		return "policy.ascii-insensitive-text:v1"
+		return "policy.ascii-insensitive-text.v1"
 	case ir.CapabilityExactJSON:
-		return "policy.exact-json:v1"
+		return "policy.exact-json.v1"
 	case ir.CapabilityScalarListJSON:
-		return "scalar-list:json-array:v1"
+		return "scalar-list.json-array.v1"
 	case ir.CapabilityRelationCorrelation:
-		return "policy.relation-correlation:v1"
+		return "policy.relation-correlation.v1"
 	default:
 		return ""
 	}

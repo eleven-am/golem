@@ -37,8 +37,8 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	if report.Version.Major < 15 || !report.JSONB || !report.GeneratedColumns || !report.AdvisoryLocks {
-		return physical.PhysicalSchema{}, fmt.Errorf("postgresql capability verification failed: version=%d.%d jsonb=%t generated=%t advisory=%t", report.Version.Major, report.Version.Minor, report.JSONB, report.GeneratedColumns, report.AdvisoryLocks)
+	if report.Version.Major < 15 || !report.JSONB || !report.GeneratedColumns || !report.AdvisoryLocks || !report.BinaryText || !report.ASCIIInsensitive || !report.ExactJSON || !report.ScalarListJSON || !report.RelationCorrelation {
+		return physical.PhysicalSchema{}, fmt.Errorf("postgresql capability verification failed: version=%d.%d jsonb=%t generated=%t advisory=%t binary=%t ascii=%t exactJSON=%t scalarListJSON=%t relation=%t", report.Version.Major, report.Version.Minor, report.JSONB, report.GeneratedColumns, report.AdvisoryLocks, report.BinaryText, report.ASCIIInsensitive, report.ExactJSON, report.ScalarListJSON, report.RelationCorrelation)
 	}
 	actual := physical.PhysicalSchema{Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion, Provider: provider.Manifest(), Namespace: expectedNormalized.Namespace, Unmanaged: append([]physical.UnmanagedObject(nil), expectedNormalized.Unmanaged...)}
 	allowed := map[string]bool{}
