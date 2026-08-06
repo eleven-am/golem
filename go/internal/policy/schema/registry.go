@@ -107,6 +107,12 @@ func (registry *Registry) HasField(model golem.ModelID, field golem.FieldID) boo
 // fingerprinted registry.
 func (registry *Registry) Model(id golem.ModelID) (Model, bool) {
 	value, ok := registry.models[id]
+	value.fields = append([]golem.FieldID(nil), value.fields...)
+	value.primaryKey = append([]golem.FieldID(nil), value.primaryKey...)
+	value.identities = make([]Identity, len(registry.models[id].identities))
+	for index, identity := range registry.models[id].identities {
+		value.identities[index] = identity.clone()
+	}
 	return value, ok
 }
 
@@ -118,6 +124,7 @@ func (registry *Registry) Field(model golem.ModelID, field golem.FieldID) (Field
 		return Field{}, false
 	}
 	value, ok := values[field]
+	value.modes = append([]compilerir.FieldMode(nil), value.modes...)
 	return value, ok
 }
 
@@ -196,10 +203,66 @@ func (registry *Registry) Capability(provider golem.Provider, id compilerir.Capa
 
 // Model is the minimum provider-neutral model fact used by the binder.
 type Model struct {
-	id golem.ModelID
+	id         golem.ModelID
+	fields     []golem.FieldID
+	primaryKey []golem.FieldID
+	identities []Identity
+	equality   map[golem.FieldID]struct{}
+	maxTake    uint32
 }
 
-func (model Model) ID() golem.ModelID { return model.id }
+func (model Model) ID() golem.ModelID       { return model.id }
+func (model Model) Fields() []golem.FieldID { return append([]golem.FieldID(nil), model.fields...) }
+func (model Model) PrimaryKey() []golem.FieldID {
+	return append([]golem.FieldID(nil), model.primaryKey...)
+}
+func (model Model) Identities() []Identity {
+	result := make([]Identity, len(model.identities))
+	for index, identity := range model.identities {
+		result[index] = identity.clone()
+	}
+	return result
+}
+func (model Model) Identity(key golem.KeyID) (Identity, bool) {
+	for _, identity := range model.identities {
+		if identity.key == key {
+			return identity.clone(), true
+		}
+	}
+	return Identity{}, false
+}
+
+func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTake != 0 }
+
+// EqualityIndexed reports the compiler-proven provider-neutral fact that an
+// equality lookup on this field is served by a leading key/index column.
+func (model Model) EqualityIndexed(field golem.FieldID) bool {
+	if _, ok := model.equality[field]; ok {
+		return true
+	}
+	if len(model.primaryKey) != 0 && model.primaryKey[0] == field {
+		return true
+	}
+	for _, identity := range model.identities {
+		if len(identity.fields) != 0 && identity.fields[0] == field {
+			return true
+		}
+	}
+	return false
+}
+
+type Identity struct {
+	key    golem.KeyID
+	kind   compilerir.KeyKind
+	fields []golem.FieldID
+}
+
+func (identity Identity) KeyID() golem.KeyID       { return identity.key }
+func (identity Identity) Kind() compilerir.KeyKind { return identity.kind }
+func (identity Identity) Fields() []golem.FieldID {
+	return append([]golem.FieldID(nil), identity.fields...)
+}
+func (identity Identity) clone() Identity { identity.fields = identity.Fields(); return identity }
 
 // Field is a provider-neutral logical field fact.
 type Field struct {
@@ -208,6 +271,8 @@ type Field struct {
 	kind         compilerir.FieldKind
 	logicalType  compilerir.LogicalTypeIR
 	nullable     bool
+	graphqlName  string
+	modes        []compilerir.FieldMode
 	relation     golem.RelationID
 	relationRole compilerir.RelationEndpointRole
 }
@@ -217,6 +282,22 @@ func (field Field) ID() golem.FieldID                     { return field.id }
 func (field Field) Kind() compilerir.FieldKind            { return field.kind }
 func (field Field) LogicalType() compilerir.LogicalTypeIR { return cloneLogicalType(field.logicalType) }
 func (field Field) Nullable() bool                        { return field.nullable }
+func (field Field) GraphQLName() string                   { return field.graphqlName }
+func (field Field) Modes() []compilerir.FieldMode {
+	return append([]compilerir.FieldMode(nil), field.modes...)
+}
+
+// Visible reports whether the field belongs to the default public projection.
+// Empty modes are visible for source compatibility; hidden and write-only
+// explicitly remove a field from read output.
+func (field Field) Visible() bool {
+	for _, mode := range field.modes {
+		if mode == compilerir.ModeHidden || mode == compilerir.ModeWriteOnly {
+			return false
+		}
+	}
+	return true
+}
 func (field Field) RelationID() (golem.RelationID, bool) {
 	return field.relation, field.kind == compilerir.FieldRelation
 }
@@ -362,4 +443,9 @@ func fieldID(value compilerir.FieldID) (golem.FieldID, error) {
 func relationID(value compilerir.RelationID) (golem.RelationID, error) {
 	parsed, err := fixedID(string(value))
 	return golem.RelationID(parsed), err
+}
+
+func keyID(value compilerir.KeyID) (golem.KeyID, error) {
+	parsed, err := fixedID(string(value))
+	return golem.KeyID(parsed), err
 }

@@ -65,3 +65,36 @@ func TestRequestRejectsCrossModelWhereAndRelation(t *testing.T) {
 		t.Fatal("relation with mismatched child was accepted")
 	}
 }
+
+func TestRelationCountRequiresMatchingCountChildAndCoexistsWithRelation(t *testing.T) {
+	model := policyir.ModelID{0x11}
+	target := policyir.ModelID{0x12}
+	field := policyir.FieldID{0x13}
+	relation := policyir.RelationID{0x14}
+	rows, err := NewRequest(RequestInput{Operation: FindMany, Model: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewRelationCountSelection(field, relation, target, rows); err == nil {
+		t.Fatal("relation count accepted a findMany child")
+	}
+	count, err := NewRequest(RequestInput{Operation: Count, Model: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	countSelection, err := NewRelationCountSelection(field, relation, target, count)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rowSelection, err := NewRelationSelection(field, relation, target, rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewRequest(RequestInput{Operation: FindMany, Model: model, Projection: ProjectionSelect, Selection: []Selection{rowSelection, countSelection}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selections := request.Selection(); len(selections) != 2 || selections[1].Kind() != SelectRelationCount {
+		t.Fatalf("selections=%#v", selections)
+	}
+}

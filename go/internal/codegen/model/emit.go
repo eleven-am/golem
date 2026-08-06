@@ -121,7 +121,7 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		namespaces[namespace] = model.ID
 		members := map[string]string{
 			"Where": "read method", "OrderBy": "read method", "Take": "read method",
-			"Skip": "read method", "Distinct": "read method", "Select": "read method",
+			"Skip": "read method", "Distinct": "read method", "Cursor": "read method", "Select": "read method", "Include": "read method", "Omit": "read method",
 		}
 		for _, field := range model.Fields {
 			if prior := members[field.GoName]; prior != "" {
@@ -129,7 +129,7 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 			members[field.GoName] = "field"
 		}
-		for _, selector := range orderedCompoundSelectors(contracts[model.ID], model) {
+		for _, selector := range orderedSelectors(contracts[model.ID], model) {
 			name := generatedSelectorName(selector, model)
 			if !token.IsIdentifier(name) {
 				return File{}, nil, fmt.Errorf("model codegen: namespace %s selector %s has invalid generated Go identifier %q", namespace, selector.KeyID, name)
@@ -175,6 +175,15 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			return File{}, nil, err
 		}
 		fmt.Fprintf(&body, "var %s = golem.GeneratedModelDescriptor[%s](%s, %s)\n\n", descriptorName, model.Go.Name, modelLiteral, shape)
+		for _, selector := range orderedSelectors(contract, model) {
+			selectorType := generatedSelectorType(model, selector)
+			fmt.Fprintf(&body, "type %s struct{}\n\n", selectorType)
+			method, methodErr := selectorValueMethod(selectorType, selector, model, enumByID, imports)
+			if methodErr != nil {
+				return File{}, nil, methodErr
+			}
+			body.WriteString(method)
+		}
 		symbols = append(symbols,
 			Symbol{PackagePath: spec.ImportPath, Name: descriptorName, Kind: SymbolModelDescriptor, ModelID: model.ID},
 			Symbol{PackagePath: spec.ImportPath, Name: namespace, Kind: SymbolNamespace, ModelID: model.ID},
@@ -187,8 +196,8 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 			fmt.Fprintf(&body, "\t%s %s\n", field.GoName, handle)
 		}
-		for _, selector := range orderedCompoundSelectors(contract, model) {
-			fmt.Fprintf(&body, "\t%s golem.IdentitySelector[%s]\n", generatedSelectorName(selector, model), model.Go.Name)
+		for _, selector := range orderedSelectors(contract, model) {
+			fmt.Fprintf(&body, "\t%s %s\n", generatedSelectorName(selector, model), generatedSelectorType(model, selector))
 		}
 		body.WriteString("}\n\n")
 		fmt.Fprintf(&body, "func (%s) Where(predicate golem.Predicate[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
@@ -199,8 +208,14 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		fmt.Fprintf(&body, "func (%s) Skip(value int) golem.ReadOption[%s] { return golem.Skip[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "func (%s) Distinct(fields ...golem.Column[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.Distinct(fields...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) Cursor(selector golem.UniqueSelectorValue[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Cursor(selector)\n}\n\n")
 		fmt.Fprintf(&body, "func (%s) Select(fields ...golem.Selection[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.Select(fields...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) Include(relations ...golem.RelationInclusion[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Include(relations...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) Omit(fields ...golem.Column[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "\treturn golem.Omit(fields...)\n}\n\n")
 		fmt.Fprintf(&body, "var %s = %s{\n", namespace, typeName)
 		for _, field := range orderedFields(model.Fields) {
 			initializer, err := fieldInitializer(field, model.ID, modelByID, enumByID, relations, imports)
@@ -215,13 +230,9 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 			symbols = append(symbols, symbol)
 		}
-		for _, selector := range orderedCompoundSelectors(contract, model) {
-			initializer, initErr := selectorInitializer(selector, model)
-			if initErr != nil {
-				return File{}, nil, initErr
-			}
+		for _, selector := range orderedSelectors(contract, model) {
 			name := generatedSelectorName(selector, model)
-			fmt.Fprintf(&body, "\t%s: %s,\n", name, initializer)
+			fmt.Fprintf(&body, "\t%s: %s{},\n", name, generatedSelectorType(model, selector))
 			symbols = append(symbols, Symbol{PackagePath: spec.ImportPath, Namespace: namespace, Name: name, Kind: SymbolSelector, ModelID: model.ID, KeyID: selector.KeyID, Fields: append([]ir.FieldID(nil), selector.Fields...)})
 		}
 		body.WriteString("}\n\n")
@@ -647,10 +658,65 @@ func orderedCompoundSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR)
 }
 
 func generatedSelectorName(selector ir.SelectorContractIR, model ir.ModelDeclIR) string {
-	if selector.Name != "" {
-		return selector.Name
+	name := selector.Name
+	if name == "" {
+		name = selectorName(selector, model)
 	}
-	return selectorName(selector, model)
+	if len(selector.Fields) == 1 {
+		for _, field := range model.Fields {
+			if field.ID == selector.Fields[0] && (name == field.GoName || name == field.LogicalName) {
+				return "By" + field.GoName
+			}
+		}
+	}
+	if selector.Name != "" {
+		return name
+	}
+	return name
+}
+
+func generatedSelectorType(model ir.ModelDeclIR, selector ir.SelectorContractIR) string {
+	return "golemGenerated" + model.Go.Name + generatedSelectorName(selector, model) + "Selector"
+}
+
+func selectorValueMethod(typeName string, selector ir.SelectorContractIR, model ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet) (string, error) {
+	fields := make(map[ir.FieldID]ir.FieldIR, len(model.Fields))
+	for _, field := range model.Fields {
+		fields[field.ID] = field
+	}
+	parameters := make([]string, len(selector.Fields))
+	components := make([]string, len(selector.Fields))
+	for index, fieldID := range selector.Fields {
+		field, ok := fields[fieldID]
+		if !ok || field.Scalar == nil {
+			return "", fmt.Errorf("model codegen: selector %s field %s is absent or non-scalar", selector.KeyID, fieldID)
+		}
+		valueType, err := logicalGoType(field.Scalar.Type, enums, imports)
+		if err != nil {
+			return "", err
+		}
+		parameter := fmt.Sprintf("value%d", index)
+		constructor := "golem.GeneratedSelectorComponent"
+		if field.Scalar.Nullable {
+			valueType = "golem.Null[" + valueType + "]"
+			constructor = "golem.GeneratedNullableSelectorComponent"
+		}
+		parameters[index] = parameter + " " + valueType
+		fieldLiteral, err := idLiteral("FieldID", string(fieldID))
+		if err != nil {
+			return "", err
+		}
+		components[index] = constructor + "(" + fieldLiteral + ", " + parameter + ")"
+	}
+	modelLiteral, err := idLiteral("ModelID", string(model.ID))
+	if err != nil {
+		return "", err
+	}
+	keyLiteral, err := idLiteral("KeyID", string(selector.KeyID))
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("func (%s) Value(%s) golem.UniqueSelectorValue[%s] {\n\treturn golem.GeneratedUniqueSelectorValue[%s](%s, %s, %s)\n}\n\n", typeName, strings.Join(parameters, ", "), model.Go.Name, model.Go.Name, modelLiteral, keyLiteral, strings.Join(components, ", ")), nil
 }
 
 func selectorName(selector ir.SelectorContractIR, model ir.ModelDeclIR) string {

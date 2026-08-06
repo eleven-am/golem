@@ -501,6 +501,23 @@ func CanonicalJSON(value JSONValue) ([]byte, error) {
 	return output.Bytes(), nil
 }
 
+// NewJSONDocument validates and canonicalizes one persisted JSON document for
+// a generated JSON field. T is a compile-time application witness; decoding
+// remains exact and does not pass through float64.
+func NewJSONDocument[T any](input []byte) (JSON[T], error) {
+	value, err := ParseJSON(input)
+	if err != nil {
+		return JSON[T]{}, err
+	}
+	canonical, err := CanonicalJSON(value)
+	if err != nil {
+		return JSON[T]{}, err
+	}
+	return JSON[T]{raw: canonical}, nil
+}
+
+func (value JSON[T]) Bytes() []byte { return append([]byte(nil), value.raw...) }
+
 type jsonKind uint8
 
 const (

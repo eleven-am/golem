@@ -483,7 +483,12 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 		environment = append(os.Environ(), environment...)
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule
-	loaded, err := packages.Load(&packages.Config{Context: ctx, Dir: compiled.ModuleDir, Env: environment, Mode: mode, Overlay: overlay}, orderedPatterns...)
+	modfile, cleanupModfile, err := prospectiveModfile(compiled.ModuleDir)
+	if err != nil {
+		return err
+	}
+	defer cleanupModfile()
+	loaded, err := packages.Load(&packages.Config{Context: ctx, Dir: compiled.ModuleDir, Env: environment, Mode: mode, Overlay: overlay, BuildFlags: []string{"-mod=mod", "-modfile=" + modfile}}, orderedPatterns...)
 	if err != nil {
 		return fmt.Errorf("prospective package load: %w", err)
 	}
@@ -529,6 +534,46 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 		return fmt.Errorf("prospective generated graph does not compile: %s", strings.Join(messages, "; "))
 	}
 	return nil
+}
+
+// prospectiveModfile gives go/packages an isolated dependency workspace. A
+// freshly authored consumer module often has no go.sum entries for Golem's
+// transitive runtime drivers yet; prospective compilation may resolve those
+// dependencies, but must not mutate the user's go.mod/go.sum during inspect,
+// check, or a failed publication.
+func prospectiveModfile(moduleDir string) (string, func(), error) {
+	content, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
+	if err != nil {
+		return "", func() {}, fmt.Errorf("read module file for prospective compilation: %w", err)
+	}
+	file, err := os.CreateTemp(moduleDir, ".golem-prospective-*.mod")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("create prospective module file: %w", err)
+	}
+	name := file.Name()
+	cleanup := func() {
+		_ = os.Remove(name)
+		_ = os.Remove(strings.TrimSuffix(name, ".mod") + ".sum")
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
+		cleanup()
+		return "", func() {}, fmt.Errorf("write prospective module file: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("close prospective module file: %w", err)
+	}
+	if sum, readErr := os.ReadFile(filepath.Join(moduleDir, "go.sum")); readErr == nil {
+		if writeErr := os.WriteFile(strings.TrimSuffix(name, ".mod")+".sum", sum, 0o600); writeErr != nil {
+			cleanup()
+			return "", func() {}, fmt.Errorf("write prospective sum file: %w", writeErr)
+		}
+	} else if !os.IsNotExist(readErr) {
+		cleanup()
+		return "", func() {}, fmt.Errorf("read module sums for prospective compilation: %w", readErr)
+	}
+	return name, cleanup, nil
 }
 
 func isGoArtifact(kind manifest.ArtifactKind) bool {

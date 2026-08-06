@@ -4,8 +4,102 @@ package ir
 import (
 	"fmt"
 
+	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
+
+type Selector struct {
+	key    golem.KeyID
+	fields []policyir.FieldID
+}
+
+func NewSelector(key golem.KeyID, fields []policyir.FieldID) (Selector, error) {
+	if key == (golem.KeyID{}) || len(fields) == 0 {
+		return Selector{}, fmt.Errorf("P3_READ_IR_SELECTOR: key and fields are required")
+	}
+	seen := map[policyir.FieldID]bool{}
+	result := Selector{key: key, fields: append([]policyir.FieldID(nil), fields...)}
+	for _, field := range result.fields {
+		if field == (policyir.FieldID{}) || seen[field] {
+			return Selector{}, fmt.Errorf("P3_READ_IR_SELECTOR: fields are zero or duplicate")
+		}
+		seen[field] = true
+	}
+	return result, nil
+}
+func (selector Selector) KeyID() golem.KeyID { return selector.key }
+func (selector Selector) Fields() []policyir.FieldID {
+	return append([]policyir.FieldID(nil), selector.fields...)
+}
+
+type Cursor struct {
+	selector  Selector
+	predicate policyir.Condition
+}
+
+func NewCursor(selector Selector, predicate policyir.Condition) (Cursor, error) {
+	if selector.key == (golem.KeyID{}) || len(selector.fields) == 0 || predicate.ModelID() == (policyir.ModelID{}) {
+		return Cursor{}, fmt.Errorf("P3_READ_IR_CURSOR: selector and predicate are required")
+	}
+	fields, err := cursorPredicateFields(predicate)
+	if err != nil || !sameFieldSet(fields, selector.fields) {
+		return Cursor{}, fmt.Errorf("P3_READ_IR_CURSOR: predicate must be equality on exactly the selector fields")
+	}
+	return Cursor{selector: Selector{key: selector.key, fields: selector.Fields()}, predicate: predicate}, nil
+}
+
+func cursorPredicateFields(condition policyir.Condition) ([]policyir.FieldID, error) {
+	switch condition.Kind() {
+	case policyir.ConditionScalar:
+		operator, _ := condition.Operator()
+		operand, _ := condition.Operand()
+		field, _ := condition.Field()
+		if operator != policyir.OperatorEqual || operand.Kind() != policyir.OperandOne || field == (policyir.FieldID{}) {
+			return nil, fmt.Errorf("cursor leaf is not scalar equality")
+		}
+		return []policyir.FieldID{field}, nil
+	case policyir.ConditionLogical:
+		operator, children, _ := condition.Logical()
+		if operator != policyir.LogicalAnd || len(children) == 0 {
+			return nil, fmt.Errorf("cursor logical predicate is not conjunction")
+		}
+		var fields []policyir.FieldID
+		for _, child := range children {
+			values, err := cursorPredicateFields(child)
+			if err != nil {
+				return nil, err
+			}
+			fields = append(fields, values...)
+		}
+		return fields, nil
+	default:
+		return nil, fmt.Errorf("cursor predicate has unsupported condition kind")
+	}
+}
+
+func sameFieldSet(left, right []policyir.FieldID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	seen := make(map[policyir.FieldID]bool, len(left))
+	for _, field := range left {
+		if field == (policyir.FieldID{}) || seen[field] {
+			return false
+		}
+		seen[field] = true
+	}
+	for _, field := range right {
+		if !seen[field] {
+			return false
+		}
+	}
+	return true
+}
+
+func (cursor Cursor) Selector() Selector {
+	return Selector{key: cursor.selector.key, fields: cursor.selector.Fields()}
+}
+func (cursor Cursor) Predicate() policyir.Condition { return cursor.predicate }
 
 type Operation uint8
 
@@ -43,6 +137,15 @@ type SelectionKind uint8
 const (
 	SelectScalar SelectionKind = iota + 1
 	SelectRelation
+	SelectRelationCount
+)
+
+type ProjectionMode uint8
+
+const (
+	ProjectionDefault ProjectionMode = iota + 1
+	ProjectionSelect
+	ProjectionInclude
 )
 
 type Selection struct {
@@ -68,6 +171,14 @@ func NewRelationSelection(field policyir.FieldID, relation policyir.RelationID, 
 	return Selection{kind: SelectRelation, field: field, relation: relation, target: target, request: &child}, nil
 }
 
+func NewRelationCountSelection(field policyir.FieldID, relation policyir.RelationID, target policyir.ModelID, request Request) (Selection, error) {
+	if field == (policyir.FieldID{}) || relation == (policyir.RelationID{}) || target == (policyir.ModelID{}) || request.model != target || request.operation != Count {
+		return Selection{}, fmt.Errorf("P3_READ_IR_SELECTION: relation-count identities and matching count request are required")
+	}
+	child := request.clone()
+	return Selection{kind: SelectRelationCount, field: field, relation: relation, target: target, request: &child}, nil
+}
+
 func (selection Selection) Kind() SelectionKind             { return selection.kind }
 func (selection Selection) FieldID() policyir.FieldID       { return selection.field }
 func (selection Selection) RelationID() policyir.RelationID { return selection.relation }
@@ -87,25 +198,33 @@ func (selection Selection) clone() Selection {
 }
 
 type RequestInput struct {
-	Operation Operation
-	Model     policyir.ModelID
-	Where     *policyir.Condition
-	OrderBy   []Order
-	Take      *int
-	Skip      *int
-	Distinct  []policyir.FieldID
-	Selection []Selection
+	Operation  Operation
+	Model      policyir.ModelID
+	Where      *policyir.Condition
+	OrderBy    []Order
+	Take       *int
+	Skip       *int
+	Distinct   []policyir.FieldID
+	Selection  []Selection
+	Projection ProjectionMode
+	Omit       []policyir.FieldID
+	Selector   *Selector
+	Cursor     *Cursor
 }
 
 type Request struct {
-	operation Operation
-	model     policyir.ModelID
-	where     *policyir.Condition
-	orders    []Order
-	take      *int
-	skip      *int
-	distinct  []policyir.FieldID
-	selection []Selection
+	operation  Operation
+	model      policyir.ModelID
+	where      *policyir.Condition
+	orders     []Order
+	take       *int
+	skip       *int
+	distinct   []policyir.FieldID
+	selection  []Selection
+	projection ProjectionMode
+	omit       []policyir.FieldID
+	selector   *Selector
+	cursor     *Cursor
 }
 
 func NewRequest(input RequestInput) (Request, error) {
@@ -115,19 +234,87 @@ func NewRequest(input RequestInput) (Request, error) {
 	if input.Where != nil && input.Where.ModelID() != input.Model {
 		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: where model does not match request model")
 	}
-	result := Request{operation: input.Operation, model: input.Model}
+	projection := input.Projection
+	if projection == 0 {
+		projection = ProjectionDefault
+		// Preserve the pre-mode constructor contract for trusted internal
+		// callers while all bound public requests carry an explicit mode.
+		if len(input.Selection) != 0 {
+			projection = ProjectionSelect
+		}
+	}
+	if projection < ProjectionDefault || projection > ProjectionInclude {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: projection mode is invalid")
+	}
+	result := Request{operation: input.Operation, model: input.Model, projection: projection}
 	if input.Where != nil {
 		where := *input.Where
 		result.where = &where
 	}
+	if input.Operation == FindUnique && input.Selector == nil {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: findUnique requires a selector")
+	}
+	if input.Operation != FindUnique && input.Selector != nil {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: selector is only valid for findUnique")
+	}
+	if input.Selector != nil {
+		value := Selector{key: input.Selector.key, fields: input.Selector.Fields()}
+		result.selector = &value
+	}
+	if input.Cursor != nil {
+		if input.Operation != FindFirst && input.Operation != FindMany {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: cursor is only valid for findFirst/findMany")
+		}
+		if input.Cursor.predicate.ModelID() != input.Model {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: cursor model does not match request model")
+		}
+		value := Cursor{selector: input.Cursor.Selector(), predicate: input.Cursor.Predicate()}
+		result.cursor = &value
+	}
 	result.orders = append([]Order(nil), input.OrderBy...)
 	result.distinct = append([]policyir.FieldID(nil), input.Distinct...)
+	result.omit = append([]policyir.FieldID(nil), input.Omit...)
 	result.selection = make([]Selection, len(input.Selection))
 	for index, selection := range input.Selection {
-		if selection.field == (policyir.FieldID{}) || (selection.kind != SelectScalar && selection.kind != SelectRelation) {
+		if selection.field == (policyir.FieldID{}) || (selection.kind != SelectScalar && selection.kind != SelectRelation && selection.kind != SelectRelationCount) {
 			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: selection %d is invalid", index)
 		}
 		result.selection[index] = selection.clone()
+	}
+	if result.projection == ProjectionDefault && len(result.selection) != 0 {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: default projection cannot carry selections")
+	}
+	if result.projection == ProjectionSelect && (len(result.selection) == 0 || len(result.omit) != 0) {
+		return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: select requires selections and cannot combine with omit")
+	}
+	if result.projection == ProjectionInclude {
+		if len(result.selection) == 0 {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: include requires relation selections")
+		}
+		for _, selection := range result.selection {
+			if selection.kind != SelectRelation && selection.kind != SelectRelationCount {
+				return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: include accepts relation and relation-count selections only")
+			}
+		}
+	}
+	type selectionIdentity struct {
+		field policyir.FieldID
+		kind  SelectionKind
+	}
+	seenSelection := make(map[selectionIdentity]bool, len(result.selection))
+	for _, selection := range result.selection {
+		identity := selectionIdentity{field: selection.field, kind: selection.kind}
+		if seenSelection[identity] {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: selections are duplicate")
+		}
+		seenSelection[identity] = true
+	}
+	seenOmit := make(map[policyir.FieldID]bool, len(result.omit))
+	for _, field := range result.omit {
+		if field == (policyir.FieldID{}) || seenOmit[field] {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: omit fields are zero or duplicate")
+		}
+		seenOmit[field] = true
 	}
 	if input.Take != nil {
 		value := *input.Take
@@ -171,8 +358,24 @@ func (request Request) Selection() []Selection {
 	}
 	return result
 }
+func (request Request) ProjectionMode() ProjectionMode { return request.projection }
+func (request Request) Omitted() []policyir.FieldID {
+	return append([]policyir.FieldID(nil), request.omit...)
+}
+func (request Request) Selector() (Selector, bool) {
+	if request.selector == nil {
+		return Selector{}, false
+	}
+	return Selector{key: request.selector.key, fields: request.selector.Fields()}, true
+}
+func (request Request) Cursor() (Cursor, bool) {
+	if request.cursor == nil {
+		return Cursor{}, false
+	}
+	return Cursor{selector: request.cursor.Selector(), predicate: request.cursor.Predicate()}, true
+}
 func (request Request) clone() Request {
-	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection}
+	input := RequestInput{Operation: request.operation, Model: request.model, Where: request.where, OrderBy: request.orders, Take: request.take, Skip: request.skip, Distinct: request.distinct, Selection: request.selection, Projection: request.projection, Omit: request.omit, Selector: request.selector, Cursor: request.cursor}
 	result, _ := NewRequest(input)
 	return result
 }

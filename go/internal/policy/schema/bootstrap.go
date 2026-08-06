@@ -190,7 +190,7 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		}
 		builder.logicalModels[logicalModel.ID] = logicalModel
 		builder.logicalFields[logicalModel.ID] = make(map[compilerir.FieldID]compilerir.FieldIR, len(logicalModel.Fields))
-		builder.registry.models[mid] = Model{id: mid}
+		modelFact := Model{id: mid, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes))}
 		builder.registry.fields[mid] = make(map[golem.FieldID]Field, len(logicalModel.Fields))
 		for fieldIndex, logicalField := range logicalModel.Fields {
 			fieldPath := fmt.Sprintf("%s.fields[%d]", path, fieldIndex)
@@ -219,7 +219,48 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 				fact.relation, fact.relationRole = rid, logicalField.Relation.Role
 			}
 			builder.registry.fields[mid][fid] = fact
+			modelFact.fields = append(modelFact.fields, fid)
 		}
+		if logicalModel.PrimaryKey != nil {
+			for _, keyField := range logicalModel.PrimaryKey.Fields {
+				fid, fieldErr := fieldID(keyField)
+				if fieldErr != nil {
+					return fail(CodeIdentity, path+".primaryKey", "%v", fieldErr)
+				}
+				modelFact.primaryKey = append(modelFact.primaryKey, fid)
+			}
+			key, keyErr := keyID(logicalModel.PrimaryKey.ID)
+			if keyErr != nil {
+				return fail(CodeIdentity, path+".primaryKey.id", "%v", keyErr)
+			}
+			modelFact.identities = append(modelFact.identities, Identity{key: key, kind: logicalModel.PrimaryKey.Kind, fields: append([]golem.FieldID(nil), modelFact.primaryKey...)})
+		}
+		for uniqueIndex, unique := range logicalModel.Uniques {
+			key, keyErr := keyID(unique.ID)
+			if keyErr != nil {
+				return fail(CodeIdentity, fmt.Sprintf("%s.uniques[%d].id", path, uniqueIndex), "%v", keyErr)
+			}
+			identity := Identity{key: key, kind: unique.Kind, fields: make([]golem.FieldID, len(unique.Fields))}
+			for fieldIndex, uniqueField := range unique.Fields {
+				fid, fieldErr := fieldID(uniqueField)
+				if fieldErr != nil {
+					return fail(CodeIdentity, fmt.Sprintf("%s.uniques[%d].fields[%d]", path, uniqueIndex, fieldIndex), "%v", fieldErr)
+				}
+				identity.fields[fieldIndex] = fid
+			}
+			modelFact.identities = append(modelFact.identities, identity)
+		}
+		for equalityIndex, equality := range logicalModel.EqualityIndexes {
+			fid, fieldErr := fieldID(equality.FieldID)
+			if fieldErr != nil {
+				return fail(CodeIdentity, fmt.Sprintf("%s.equalityIndexes[%d].fieldId", path, equalityIndex), "%v", fieldErr)
+			}
+			if _, ok := builder.registry.fields[mid][fid]; !ok {
+				return fail(CodeField, fmt.Sprintf("%s.equalityIndexes[%d].fieldId", path, equalityIndex), "field is absent from model")
+			}
+			modelFact.equality[fid] = struct{}{}
+		}
+		builder.registry.models[mid] = modelFact
 	}
 	return builder.indexRelations(model.Relations)
 }
@@ -362,6 +403,10 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 			return fail(CodeContract, path+".modelId", "duplicate model ID %s", model.ModelID)
 		}
 		seenModels[model.ModelID] = true
+		mid, _ := modelID(model.ModelID)
+		fact := builder.registry.models[mid]
+		fact.maxTake = model.Limits.MaxTake
+		builder.registry.models[mid] = fact
 		if len(model.Fields) != len(builder.logicalFields[model.ModelID]) {
 			return fail(CodeContract, path+".fields", "contract field inventory has %d entries, want %d", len(model.Fields), len(builder.logicalFields[model.ModelID]))
 		}
@@ -375,6 +420,11 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 				return fail(CodeContract, fieldPath+".fieldId", "duplicate field ID %s", field.FieldID)
 			}
 			seenFields[field.FieldID] = true
+			fid, _ := fieldID(field.FieldID)
+			fieldFact := builder.registry.fields[mid][fid]
+			fieldFact.graphqlName = field.GraphQLName
+			fieldFact.modes = append([]compilerir.FieldMode(nil), field.Modes...)
+			builder.registry.fields[mid][fid] = fieldFact
 		}
 	}
 	if len(contract.Enums) != len(builder.registry.enumValues) {

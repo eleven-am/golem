@@ -448,6 +448,10 @@ func scalarOperands[V EqualValue](values []V) frozenOperand {
 }
 
 func scalarValue[V EqualValue](value V) frozenValue {
+	return scalarValueAny(value)
+}
+
+func scalarValueAny(value any) frozenValue {
 	switch exact := any(value).(type) {
 	case UUID:
 		return frozenValue{kind: FrozenValueUUID, uuid: exact}

@@ -7,22 +7,45 @@ import (
 	"slices"
 )
 
-// ActorFrom is the typed context access point used by hook source. P4 owns
-// actor storage and execution semantics.
-func ActorFrom[A any](_ context.Context) A {
+type actorContextKey struct{}
+
+// ActorFrom is the typed context access point used by hook source. A value is
+// present only while a caller-bound hook is executing; system reads bypass
+// hooks and never install an actor.
+func ActorFrom[A any](ctx context.Context) A {
+	if ctx != nil {
+		if actor, ok := ctx.Value(actorContextKey{}).(A); ok {
+			return actor
+		}
+	}
 	var actor A
 	return actor
+}
+
+// RuntimeContextWithActor is the narrow runtime bridge used immediately around
+// generated hook invocation.
+func RuntimeContextWithActor[A any](ctx context.Context, actor A) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, actorContextKey{}, actor)
 }
 
 // Hook request and result shells intentionally contain no operation data in
 // P1. Their package-level generated aliases and generic model ownership are the
 // ABI; P3/P4 may add payload without renaming them.
-type FindOneHookRequest[M any] struct{ _ func() M }
-type FindOneHookResult[M any] struct{ _ func() M }
-type FindFirstHookRequest[M any] struct{ _ func() M }
-type FindFirstHookResult[M any] struct{ _ func() M }
-type FindManyHookRequest[M any] struct{ _ func() M }
-type FindManyHookResult[M any] struct{ _ func() M }
+type FindOneHookRequest[M any] struct {
+	selector UniqueSelectorValue[M]
+	options  []ReadOption[M]
+}
+type FindOneHookResult[M any] struct{ row Row[M] }
+type FindFirstHookRequest[M any] struct{ options []ReadOption[M] }
+type FindFirstHookResult[M any] struct {
+	row   Row[M]
+	found bool
+}
+type FindManyHookRequest[M any] struct{ options []ReadOption[M] }
+type FindManyHookResult[M any] struct{ rows []Row[M] }
 type CreateHookRequest[M any] struct{ _ func() M }
 type CreateHookResult[M any] struct{ _ func() M }
 type UpdateHookRequest[M any] struct{ _ func() M }
@@ -33,6 +56,118 @@ type UpdateManyHookRequest[M any] struct{ _ func() M }
 type UpdateManyHookResult[M any] struct{ _ func() M }
 type DeleteManyHookRequest[M any] struct{ _ func() M }
 type DeleteManyHookResult[M any] struct{ _ func() M }
+
+func RuntimeFindOneHookRequest[M any](selector UniqueSelectorValue[M], options []ReadOption[M]) *FindOneHookRequest[M] {
+	return &FindOneHookRequest[M]{selector: cloneUniqueSelectorValue(selector), options: cloneReadOptions(options)}
+}
+func RuntimeFindFirstHookRequest[M any](options []ReadOption[M]) *FindFirstHookRequest[M] {
+	return &FindFirstHookRequest[M]{options: cloneReadOptions(options)}
+}
+func RuntimeFindManyHookRequest[M any](options []ReadOption[M]) *FindManyHookRequest[M] {
+	return &FindManyHookRequest[M]{options: cloneReadOptions(options)}
+}
+func (request *FindOneHookRequest[M]) Selector() UniqueSelectorValue[M] {
+	if request == nil {
+		return UniqueSelectorValue[M]{}
+	}
+	return cloneUniqueSelectorValue(request.selector)
+}
+func (request *FindOneHookRequest[M]) Options() []ReadOption[M] {
+	if request == nil {
+		return nil
+	}
+	return cloneReadOptions(request.options)
+}
+func (request *FindFirstHookRequest[M]) Options() []ReadOption[M] {
+	if request == nil {
+		return nil
+	}
+	return cloneReadOptions(request.options)
+}
+func (request *FindManyHookRequest[M]) Options() []ReadOption[M] {
+	if request == nil {
+		return nil
+	}
+	return cloneReadOptions(request.options)
+}
+func (request *FindOneHookRequest[M]) ReplaceOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = cloneReadOptions(options)
+	}
+}
+func (request *FindOneHookRequest[M]) ReplaceSelector(selector UniqueSelectorValue[M]) {
+	if request != nil {
+		request.selector = cloneUniqueSelectorValue(selector)
+	}
+}
+func (request *FindFirstHookRequest[M]) ReplaceOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = cloneReadOptions(options)
+	}
+}
+func (request *FindManyHookRequest[M]) ReplaceOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = cloneReadOptions(options)
+	}
+}
+func (request *FindOneHookRequest[M]) AppendOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = append(request.options, cloneReadOptions(options)...)
+	}
+}
+func (request *FindFirstHookRequest[M]) AppendOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = append(request.options, cloneReadOptions(options)...)
+	}
+}
+func (request *FindManyHookRequest[M]) AppendOptions(options ...ReadOption[M]) {
+	if request != nil {
+		request.options = append(request.options, cloneReadOptions(options)...)
+	}
+}
+
+func RuntimeFindOneHookResult[M any](row Row[M]) FindOneHookResult[M] {
+	return FindOneHookResult[M]{row: cloneRow(row)}
+}
+func RuntimeFindFirstHookResult[M any](row Row[M], found bool) FindFirstHookResult[M] {
+	result := FindFirstHookResult[M]{found: found}
+	if found {
+		result.row = cloneRow(row)
+	}
+	return result
+}
+func RuntimeFindManyHookResult[M any](rows []Row[M]) FindManyHookResult[M] {
+	return FindManyHookResult[M]{rows: cloneRows(rows)}
+}
+func (result FindOneHookResult[M]) Row() Row[M] { return cloneRow(result.row) }
+func (result FindFirstHookResult[M]) Row() (Row[M], bool) {
+	if !result.found {
+		return Row[M]{}, false
+	}
+	return cloneRow(result.row), true
+}
+func (result FindManyHookResult[M]) Rows() []Row[M] { return cloneRows(result.rows) }
+
+func cloneReadOptions[M any](options []ReadOption[M]) []ReadOption[M] {
+	result := make([]ReadOption[M], len(options))
+	var witness M
+	for index, option := range options {
+		if option != nil {
+			result[index] = readOptionValue[M]{node: cloneReadOption(option.readOption(witness))}
+		}
+	}
+	return result
+}
+func cloneUniqueSelectorValue[M any](selector UniqueSelectorValue[M]) UniqueSelectorValue[M] {
+	return GeneratedUniqueSelectorValue[M](selector.model, selector.key, selector.components...)
+}
+func cloneRows[M any](rows []Row[M]) []Row[M] {
+	result := make([]Row[M], len(rows))
+	for index, row := range rows {
+		result[index] = cloneRow(row)
+	}
+	return result
+}
 
 // SetCreate preserves model and value type identity at compile time. P4 owns
 // request mutation, validation, and errors.
@@ -152,6 +287,48 @@ func (bindings ApplicationBindings[A]) PolicyInventory() []ModelID {
 	}
 	slices.SortFunc(result, func(left, right ModelID) int { return bytes.Compare(left[:], right[:]) })
 	return result
+}
+
+type RuntimeHookMetadata struct {
+	Model     ModelID
+	Operation HookOperation
+	Phase     HookPhase
+}
+
+func (bindings ApplicationBindings[A]) RuntimeHookInventory() []RuntimeHookMetadata {
+	result := make([]RuntimeHookMetadata, 0)
+	for _, pkg := range bindings.packages {
+		for _, binding := range pkg.hooks {
+			result = append(result, RuntimeHookMetadata{Model: binding.model, Operation: binding.operation, Phase: binding.phase})
+		}
+	}
+	return result
+}
+
+// RuntimeInvokeHooks executes matching generated hooks in deterministic package
+// and declaration order. The opaque payload type is checked by each generated
+// bridge before application code runs.
+func RuntimeInvokeHooks[A any](ctx context.Context, bindings ApplicationBindings[A], model ModelID, operation HookOperation, phase HookPhase, payload any) error {
+	if ctx == nil || model == (ModelID{}) || payload == nil {
+		return fmt.Errorf("generated hooks: context, model, and payload are required")
+	}
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return fmt.Errorf("generated hooks: package %d generation mismatch", packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model != model || binding.operation != operation || binding.phase != phase {
+				continue
+			}
+			if binding.invoke == nil {
+				return fmt.Errorf("generated hooks: matching hook is incomplete")
+			}
+			if err := binding.invoke(ctx, payload); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // GeneratedPolicySet is one actor-specific, execution-scoped factory result.

@@ -1,6 +1,7 @@
 # P3 authorized reads and generated client plan
 
-Status: **controlling implementation plan; contract gate in progress**
+Status: **complete — the executable evidence gate in
+[`P3-EVIDENCE.md`](./P3-EVIDENCE.md) passes**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 8–11, 17–20,
 and 21. [`../04-statement-shape.md`](../04-statement-shape.md) remains detailed
@@ -126,9 +127,21 @@ Stable categories are `BAD_USER_INPUT`, `NOT_FOUND`, `UNAUTHENTICATED`, and
 not expose SQL, driver text, policy internals, physical identifiers, or whether a
 policy-invisible target exists.
 
-The runtime enforces explicit bounds for root take, relation take/fan-out,
-relation depth, selected fields, parameters, statement/alias complexity, and
-loader keys. It refuses rather than silently truncating.
+The public `runtime.ReadLimits` value is copied and normalized when an
+application opens. `MaxTake` and `MaxRelationFanout` deliberately use zero to
+mean unconfigured/unlimited; Golem does not invent a default row cap. The
+zero-value safety defaults are relation depth 5, 256 selected/private fields,
+999 statement parameters, 1 MiB of statement text, 2,048 aliases, and 90,000
+loader keys. Applications may lower, but not raise, the provider-neutral hard
+ceilings. Negative values and unsafe raised ceilings fail during `Open`.
+
+A configured root or to-many fan-out cap is not a truncation instruction. When
+the caller did not provide an explicit `take`, the planner fetches `cap + 1` and
+execution returns `BAD_USER_INPUT` if the sentinel row exists. Batched relations
+check this per parent bucket; correlated relations check each decoded parent
+payload. An explicit `take` at or below the cap remains an intentional page.
+Schema `MaxTake` is combined with the runtime value and the stricter non-zero
+cap wins.
 
 Caller executions own their actor policy set, decision memoization, loaders,
 connection identity, and decoded data. Application-wide state contains immutable
@@ -180,9 +193,15 @@ hop, exact output types/states, loading-strategy agreement, mask/withhold behavi
 limits, stable errors, concurrent principal isolation, deterministic SQL/binds,
 and every P3-owned named mutation from documents 03–05.
 
+Implementation waves P3-A through P3-F are integrated. P3-G is a factual gate,
+not a prose status: only rows marked `PASS` in `P3-EVIDENCE.md` count, and P3 may
+not be declared complete while any required row is `PENDING` or `FAIL`.
+
 ## 9. Definition of done
 
-P3 is complete only when all of the following are evidenced:
+P3 is complete only when all of the following are evidenced. The authoritative
+test/provider mapping and current state for each item is
+[`P3-EVIDENCE.md`](./P3-EVIDENCE.md):
 
 1. all four generated read operations execute on caller and system clients;
 2. every caller row restriction is in SQL before ordering and pagination;

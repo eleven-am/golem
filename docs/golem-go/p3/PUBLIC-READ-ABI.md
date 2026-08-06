@@ -123,7 +123,47 @@ not receive raw mutable SQL. After hooks observe the public decoded result and
 may veto return. Read hooks execute inside the caller execution and never on the
 system client. Mutation hook payloads remain P4 shells.
 
-## 6. Stable errors
+## 6. Runtime read limits
+
+Generated application configuration exposes the public runtime limit contract
+without copying its definition:
+
+```go
+type Config[P any] struct {
+    DB               *sqlx.DB
+    Provider         golem.Provider
+    ReadLimits       runtime.ReadLimits
+    ResolvePrincipal func(context.Context, P) (Actor, error)
+    SnapshotActor    func(Actor) (Actor, error)
+}
+
+type ReadLimits struct {
+    MaxTake                int
+    MaxRelationFanout      int
+    MaxRelationDepth       int
+    MaxSelectedFields      int
+    MaxStatementParameters int
+    MaxStatementBytes      int
+    MaxStatementAliases    int
+    MaxLoaderKeys          int
+}
+```
+
+`MaxTake == 0` and `MaxRelationFanout == 0` mean deliberately
+unconfigured/unlimited. They do not acquire a hidden default. Zero selects the
+safe runtime default for every other field: depth 5, 256 selected/private fields,
+999 parameters, 1 MiB statement text, 2,048 aliases, and 90,000 loader keys.
+Configured complexity values may lower but cannot raise those portable hard
+ceilings.
+
+Root and to-many caps refuse overflow; they do not silently truncate. With no
+explicit `Take`, execution fetches one sentinel row beyond the effective cap and
+returns `BAD_USER_INPUT` on overflow. Relation overflow is checked per parent for
+both loading strategies. An explicit page at or below the cap is returned
+normally. A model contract's non-zero `MaxTake` participates in the same check,
+and the stricter non-zero runtime/schema value wins.
+
+## 7. Stable errors
 
 ```go
 type ErrorCode string

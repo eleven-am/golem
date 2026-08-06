@@ -35,6 +35,9 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	if !registry.HasModel(ids.post) || registry.HasModel(golem.ModelID{0xff}) {
 		t.Fatal("model identity membership disagrees with the registry index")
 	}
+	if !post.EqualityIndexed(ids.postID) || post.EqualityIndexed(ids.author) {
+		t.Fatal("model equality-index facts do not include the leading primary key exactly")
+	}
 	author, ok := registry.Field(ids.post, ids.author)
 	if !ok || author.Kind() != compilerir.FieldScalar || author.ModelID() != ids.post {
 		t.Fatalf("author field = %#v, %v", author, ok)

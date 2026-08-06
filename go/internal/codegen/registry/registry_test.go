@@ -37,7 +37,7 @@ func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	if strings.Index(source, `"example.test/models/a"`) > strings.Index(source, `"example.test/models/z"`) {
 		t.Fatal("model accessors are not ordered by import path")
 	}
-	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "Golem generation digest:"} {
+	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "ReadLimits       golemruntime.ReadLimits", "ReadLimits: config.ReadLimits", "SnapshotActor", "SnapshotActor: config.SnapshotActor", "Golem generation digest:"} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("source missing %q:\n%s", fragment, source)
 		}

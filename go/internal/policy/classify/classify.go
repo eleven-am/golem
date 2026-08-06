@@ -63,6 +63,19 @@ type Request struct {
 // NewRequest validates all identities against the exact runtime schema and
 // derives both constraints from one immutable policy.
 func NewRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action) (Request, error) {
+	return newRequest(registry, policy, model, fields, use, selectingAction, nil)
+}
+
+// NewRequestWithConstraint is the P3 boundary for classifying fields against
+// the actual statement reach (caller predicate AND row policy). The supplied
+// constraint must itself imply the policy row constraint, preventing a caller
+// from widening policy reach while still allowing its narrower filter to
+// discharge a conditional field lens.
+func NewRequestWithConstraint(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, selecting ir.Condition) (Request, error) {
+	return newRequest(registry, policy, model, fields, use, selectingAction, &selecting)
+}
+
+func newRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, fields []ir.FieldID, use UseKind, selectingAction ir.Action, actual *ir.Condition) (Request, error) {
 	if registry == nil {
 		return Request{}, fmt.Errorf("policy classify: nil schema registry")
 	}
@@ -109,6 +122,19 @@ func NewRequest(registry IdentityRegistry, policy ir.Policy, model ir.ModelID, f
 	selectingConstraint, err := resolve.RowConstraint(policyCopy, selectingAction, model)
 	if err != nil {
 		return Request{}, fmt.Errorf("policy classify: resolve selecting constraint: %w", err)
+	}
+	if actual != nil {
+		if actual.ModelID() != model {
+			return Request{}, fmt.Errorf("policy classify: actual selecting constraint model mismatch")
+		}
+		proved, implyErr := imply.Condition(*actual, selectingConstraint)
+		if implyErr != nil {
+			return Request{}, fmt.Errorf("policy classify: validate actual selecting constraint: %w", implyErr)
+		}
+		if !proved {
+			return Request{}, fmt.Errorf("policy classify: actual selecting constraint does not preserve policy reach")
+		}
+		selectingConstraint = *actual
 	}
 	return Request{
 		policy:              policyCopy,

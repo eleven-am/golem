@@ -20,6 +20,7 @@ var (
 	readCommentBody  = FieldID{0x42}
 	readCommentLive  = FieldID{0x43}
 	readRelation     = RelationID{0x51}
+	readPostKey      = KeyID{0x61}
 
 	readPostDescriptor = GeneratedModelDescriptor[readPost](readPostModel, GeneratedDescriptorShape(
 		[]FieldID{readPostID, readPostTitle, readPostBody, readPostPayload}, nil, nil, nil,
@@ -126,6 +127,36 @@ func TestReadRowNestedRelationsAreDetached(t *testing.T) {
 	}
 }
 
+func TestRelationCountPreservesSelectedZeroAndCoexistsWithRows(t *testing.T) {
+	comment, err := RuntimeModelReadRow(readCommentModel,
+		RuntimePresentReadCell(readCommentBody, "visible", func(value string) string { return value }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeRow, err := RuntimeModelReadRowWithCounts(readPostModel,
+		[]RuntimeReadCell{RuntimeToManyReadCell(readPostComments, []RuntimeModelRow{comment})},
+		[]RuntimeRelationCountCell{RuntimePresentRelationCountCell(readPostComments, readRelation, 0)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := RuntimeTypedReadRow(readPostDescriptor, runtimeRow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if related, ok := Many(row, readPosts.Comments).Get(); !ok || len(related) != 1 {
+		t.Fatalf("related=%v present=%t", related, ok)
+	}
+	count := RelationCount(row, readPosts.Comments)
+	if value, ok := count.Get(); !ok || value != 0 || count.State() != ReadPresent {
+		t.Fatalf("count=%d present=%t state=%d", value, ok, count.State())
+	}
+	if count := RelationCount(Row[readPost]{}, readPosts.Comments); count.State() != ReadUnselected {
+		t.Fatalf("unselected count state=%d", count.State())
+	}
+}
+
 func TestFreezeFindManyOwnsNestedTypedReadShape(t *testing.T) {
 	if readPosts.ID.fieldIdentity() == (FieldID{}) {
 		t.Fatalf("readPosts.ID was initialized with zero identity; source id=%x", readPostID)
@@ -186,6 +217,68 @@ func TestFreezeFindManyOwnsNestedTypedReadShape(t *testing.T) {
 	}
 }
 
+func TestFreezeRelationCountOwnsWhereOnlyChildAndCanCoexistWithRows(t *testing.T) {
+	request, err := FreezeFindMany(readPostDescriptor, Select[readPost](
+		readPosts.Comments.Select(readComments.ID),
+		readPosts.Comments.Count(Where(readComments.Live.Eq(true))),
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := request.Selection()
+	if len(selection) != 2 || !selection[0].IsRelation() || !selection[1].IsRelationCount() {
+		t.Fatalf("selection=%#v", selection)
+	}
+	child, ok := selection[1].Request()
+	if !ok || child.Operation() != ReadCount || child.ModelID() != readCommentModel {
+		t.Fatalf("count child=%#v present=%t", child, ok)
+	}
+	if _, ok := child.Where(); !ok {
+		t.Fatal("count where was not frozen")
+	}
+	if _, err := FreezeFindMany(readPostDescriptor, Select[readPost](
+		readPosts.Comments.Count(Take[readComment](1)),
+	)); err == nil {
+		t.Fatal("relation count accepted paging")
+	}
+}
+
+func TestFreezeCursorIncludeAndOmitOwnTheirModes(t *testing.T) {
+	cursorValue := GeneratedUniqueSelectorValue[readPost](readPostModel, readPostKey,
+		GeneratedSelectorComponent(readPostID, UUID{1}),
+	)
+	request, err := FreezeFindMany(readPostDescriptor,
+		Cursor(cursorValue),
+		Include[readPost](readPosts.Comments),
+		Omit[readPost](readPosts.Body, readPosts.Payload),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if request.ProjectionMode() != ProjectionInclude {
+		t.Fatalf("projection mode=%d", request.ProjectionMode())
+	}
+	if omitted := request.Omitted(); len(omitted) != 2 || omitted[0] != readPostBody || omitted[1] != readPostPayload {
+		t.Fatalf("omitted=%x", omitted)
+	}
+	cursor, ok := request.Cursor()
+	if !ok || cursor.Selector().KeyID() != readPostKey || len(cursor.Selector().Fields()) != 1 {
+		t.Fatalf("cursor=%#v present=%t", cursor, ok)
+	}
+	if predicate := cursor.Predicate(); predicate.View().RootModelID() != readPostModel {
+		t.Fatalf("cursor predicate model=%x", predicate.View().RootModelID())
+	}
+	selection := request.Selection()
+	if len(selection) != 1 || !selection[0].IsRelation() {
+		t.Fatalf("include selection=%#v", selection)
+	}
+
+	selected, err := FreezeFindMany(readPostDescriptor, Select[readPost](readPosts.ID))
+	if err != nil || selected.ProjectionMode() != ProjectionSelect || len(selected.Omitted()) != 0 {
+		t.Fatalf("selected=%#v err=%v", selected, err)
+	}
+}
+
 func TestFreezeReadRequestRejectsStructuralAmbiguity(t *testing.T) {
 	tests := []struct {
 		name string
@@ -210,6 +303,23 @@ func TestFreezeReadRequestRejectsStructuralAmbiguity(t *testing.T) {
 		}},
 		{"count projection", func() error {
 			_, err := FreezeCount(readPostDescriptor, Select[readPost](readPosts.ID))
+			return err
+		}},
+		{"select and include", func() error {
+			_, err := FreezeFindMany(readPostDescriptor, Select[readPost](readPosts.ID), Include[readPost](readPosts.Comments.Select(readComments.ID)))
+			return err
+		}},
+		{"select and omit", func() error {
+			_, err := FreezeFindMany(readPostDescriptor, Select[readPost](readPosts.ID), Omit[readPost](readPosts.Body))
+			return err
+		}},
+		{"empty include", func() error {
+			_, err := FreezeFindMany(readPostDescriptor, Include[readPost]())
+			return err
+		}},
+		{"cursor on count", func() error {
+			selector := GeneratedUniqueSelectorValue[readPost](readPostModel, readPostKey, GeneratedSelectorComponent(readPostID, UUID{1}))
+			_, err := FreezeCount(readPostDescriptor, Cursor(selector))
 			return err
 		}},
 		{"empty where", func() error {

@@ -40,7 +40,10 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 		"func (golemGeneratedPostFields) Take(value int) golem.ReadOption[Post]",
 		"func (golemGeneratedPostFields) Skip(value int) golem.ReadOption[Post]",
 		"func (golemGeneratedPostFields) Distinct(fields ...golem.Column[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Cursor(selector golem.UniqueSelectorValue[Post]) golem.ReadOption[Post]",
 		"func (golemGeneratedPostFields) Select(fields ...golem.Selection[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Include(relations ...golem.RelationInclusion[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Omit(fields ...golem.Column[Post]) golem.ReadOption[Post]",
 		"var Posts = golemGeneratedPostFields{",
 		"Author    golem.ToOne[Post, User]",
 		"golem.ToMany[User, Post]",
@@ -49,8 +52,9 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 		"golem.GeneratedToOne[Post, User](golem.FieldID{",
 		"golem.GeneratedToMany[User, Post](golem.FieldID{",
 		"}, golem.RelationID{",
-		"ByIDTitle golem.IdentitySelector[Post]",
-		"golem.GeneratedIdentitySelector[Post](golem.ModelID{",
+		"ByIDTitle golemGeneratedPostByIDTitleSelector",
+		"func (golemGeneratedPostByIDSelector) Value(value0 string) golem.UniqueSelectorValue[Post]",
+		"golem.GeneratedUniqueSelectorValue[Post](golem.ModelID{",
 		"func GolemGeneratedDescriptors() golem.PackageDescriptors",
 		"golem.GeneratedDescriptorShape(",
 		"golem.GeneratedRelationMetadata(",
@@ -72,11 +76,7 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ID", SymbolField, id(2), id(21), "", "")
 	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "Author", SymbolRelation, id(2), id(23), id(40), "")
 	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ByIDTitle", SymbolSelector, id(2), "", "", id(63))
-	for _, symbol := range result.Manifest.Symbols {
-		if symbol.Kind == SymbolSelector && symbol.KeyID == ir.KeyID(id(61)) {
-			t.Fatal("single-field identity must reuse its scalar field handle")
-		}
-	}
+	assertManifestSymbol(t, result.Manifest, "example.test/app/social", "Posts", "ByID", SymbolSelector, id(2), "", "", id(61))
 	for _, symbol := range result.Manifest.Symbols {
 		if symbol.Kind == SymbolSelector && symbol.KeyID == ir.KeyID(id(63)) {
 			if len(symbol.Fields) != 2 || symbol.Fields[0] != ir.FieldID(id(21)) || symbol.Fields[1] != ir.FieldID(id(22)) {

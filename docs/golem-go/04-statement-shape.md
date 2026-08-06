@@ -9,6 +9,16 @@ Status: specification, Go target, Postgres-first.
 Ground truth: the TypeScript implementation at `typescript/packages/core/src` and
 `typescript/packages/policy/src`, released as 0.6.1.
 
+> **Controlling P3 resolutions.** Where the older research below differs, the
+> implemented P3 contracts control: selected to-many relation counts may appear
+> at any supported relation depth; `distinct` is executed by deterministic SQL
+> window ranking; a conditionally readable distinct key is refused unless the
+> selecting predicate discharges its field condition; portable Decimal has at
+> most 18 coefficient digits; and conditional output masks are evaluated during
+> one shared runtime finalization step after private dependency hydration. P3
+> does not require every mask to be a SQL `CASE` and does not expose the older
+> `Masked`/`DeferredMask` planning report as public ABI.
+
 This document specifies the compiled read path: the thing that turns a request for
 rows into SQL, folds the caller's filter and the authorization policy into the same
 statement, aggregates relations, masks columns the caller may read only sometimes,
@@ -32,9 +42,9 @@ non-obvious, this document says what breaks if you do the obvious thing instead.
 | **row predicate** | The boolean condition deciding whether a row is visible. It is the conjunction of the caller's `where` and the model's read **policy constraint**. |
 | **policy constraint** | A condition tree the authorization provider returns for `(action=read, model, caller)`. Data, not a closure. See doc 02. |
 | **field policy** | A per-column decision: always readable, never readable, or readable **on some rows** (conditional). A conditional field carries its own condition tree. |
-| **mask** | The SQL that renders a conditional field: the true value where the condition holds, `NULL` elsewhere. |
+| **mask** | The output decision for a conditional field: selected-present where its condition holds, selected-null elsewhere. P3 applies it during shared runtime finalization. |
 | **withhold** | Not projecting a column at all, and refusing any statement that references it. |
-| **defer** | Golem could not render a mask in SQL, so it fetches the true value and nulls it in memory, and *reports* that it did. |
+| **defer** | Retain the field and its private dependencies until runtime finalization, then publish the value or selected-null and strip private data. This is P3's normal mask path, not an exceptional fallback. |
 | **plan** | The immutable description of the statement(s) to run, plus how to decode the rows. Built once, executed once. |
 | **fallback** | The planner refusing to compile this request at all, with a reason and a human-readable detail. The caller runs it some other way. |
 
@@ -112,7 +122,7 @@ findMany User
                take: 5, skip: 10 }
     metrics: { select: { id, label } }                    // to-many, UNindexed FK
   field policy:
-    Post.secretNote → conditional on { published: true }
+    Post.secretNote → conditional on { views: { gt: 100 } }
 ```
 
 ### 1.3 The statement golem generates (Postgres)
@@ -130,21 +140,24 @@ select
   cast((select coalesce(json_agg(agg), '[]') from (
       select "t2"."post_id" as "id",
              "t2"."title"   as "title",
-             case when ("t2"."published" IS NOT DISTINCT FROM $1)
-                  then "t2"."secret_note" else null end as "secretNote"
+             "t2"."secret_note" as "secretNote",
+             "t2"."views"       as "__golem_private_views"
       from "posts" as "t2"
-      where ("t2"."published" IS NOT DISTINCT FROM $2)
+      where ("t2"."published" IS NOT DISTINCT FROM $1)
         and "t2"."author_id" = "t0"."user_id"
       order by "t2"."views" desc
-      limit $3 offset $4
+      limit $2 offset $3
   ) as agg) as text) as "posts"
 from "users" as "t0"
-where ("t0"."tenant_id" IS NOT DISTINCT FROM $5)
+where ("t0"."tenant_id" IS NOT DISTINCT FROM $4)
 order by "t0"."name" asc
-limit $6
+limit $5
 ```
 
-Parameters, in bind order: `[true, true, 5, 10, 1, 20]`.
+Parameters, in bind order: `[true, 5, 10, 1, 20]`. The decoder retains the
+private `views` slot long enough for `finishPlanRows` to evaluate the
+`secretNote` condition, publishes the value or selected-null, and then strips
+the private slot.
 
 Then, once, keyed by the parent ids the first statement returned:
 
@@ -173,17 +186,17 @@ says how the second statement works.
 | Fragment | What it is | Why it is shaped that way |
 | --- | --- | --- |
 | `"users" as "t0"` | The root table under the reserved root alias. | The root alias is fixed so a policy predicate can be rendered against it without knowing the projection. |
-| `"t0"."user_id" as "id"` | A scalar column, physical name → logical name. | Every projected column is aliased to its **model field name**, so decoding never consults the schema mapping again. A model that carries no physical name is a fallback, never a guess. |
+| `"t0"."user_id" as "id"` | A public scalar column, physical name → logical name. | Public projection aliases are model field names; generated internal aliases occupy a reserved namespace and remain mapped to typed field identities in the plan. Decoding never guesses from a physical name. |
 | `"t3"."owner_id" as "ownerId"` (second statement) | A *correlation key* the caller did not ask for. | Added because `metrics` is batched and must be re-attached to its parent by key. Injected keys are recorded in the plan's `Drop` list and deleted from the decoded row before the caller sees it. See §5.4. |
-| `case when (…) then "t2"."secret_note" else null end` | The mask. | The value never leaves the database on a row where the caller may not read it. One construction site renders this for every depth and both loading strategies (§6). |
+| `"t2"."views" as "__golem_private_views"` | A private mask dependency. | It is available only to typed decode/finalization, is never copied into the public row, and is stripped after the field condition is evaluated (§6). |
 | `(select to_json(obj) from (…) as obj)` | A to-one relation. | A correlated scalar subquery. Zero matching rows ⇒ the subquery yields no row ⇒ SQL `NULL` ⇒ decodes to a nil relation, which is the right answer for a to-one. |
 | `(select coalesce(json_agg(agg), '[]') from (…) as agg)` | A to-many relation. | Aggregate with no `GROUP BY` ⇒ always exactly one row ⇒ never a missing row, but `json_agg` over zero rows is `NULL`, so the `coalesce` is mandatory (§2.2). |
 | `cast(… as text)` around the whole aggregate | Hand the driver a string, not JSON. | golem parses the JSON itself. Left as `json`, `pgx` decodes numbers with its own rules and the numeric-type guarantees of §7 are lost before golem sees them. |
 | `"t2"."author_id" = "t0"."user_id"` | The correlation. | Added *after* the relation's own `where`, so bind order is: relation projection, relation filter, correlation, paging. |
-| `("t2"."published" IS NOT DISTINCT FROM $2)` inside the subquery | The **related model's** policy, folded in. | A relation is a read of the related model. Its policy belongs inside its subquery, not in the outer `WHERE`, where it would filter parents. |
-| `limit $3 offset $4` inside the subquery | Per-parent paging. | A correlated subquery is evaluated once per parent row, so `LIMIT` there is naturally per parent. §5.3 is about preserving that when the relation is batched instead. |
-| `("t0"."tenant_id" IS NOT DISTINCT FROM $5)` | Caller `where` ∧ root policy, one predicate. | Merged as `{AND: [where, constraint]}` before rendering, so a policy can never be short-circuited by the shape of a caller filter. |
-| `limit $6` | Root paging. | Pushed into SQL **unless** the read is `distinct` (§1.6). |
+| `("t2"."published" IS NOT DISTINCT FROM $1)` inside the subquery | The **related model's** policy, folded in. | A relation is a read of the related model. Its policy belongs inside its subquery, not in the outer `WHERE`, where it would filter parents. |
+| `limit $2 offset $3` inside the subquery | Per-parent paging. | A correlated subquery is evaluated once per parent row, so `LIMIT` there is naturally per parent. §5.3 is about preserving that when the relation is batched instead. |
+| `("t0"."tenant_id" IS NOT DISTINCT FROM $4)` | Caller `where` ∧ root policy, one predicate. | Merged as `{AND: [where, constraint]}` before rendering, so a policy can never be short-circuited by the shape of a caller filter. |
+| `limit $5` | Root paging. | Applied after SQL window ranking when the read uses `distinct` (§1.6). |
 
 ### 1.4 Alias allocation
 
@@ -222,30 +235,28 @@ type Plan struct {
     Relations  []NestedProjection // JSON-aggregated relations and how to decode them
     Batches    []Batch            // relations loaded by a second statement (§5)
     Drop       []string           // injected columns to delete after decoding
-    Distinct   *DistinctPlan      // in-memory de-duplication (§1.6)
-    Masked     []string           // dotted paths masked in SQL — for observability
-    Deferred   []DeferredMask     // masks that could not be rendered (§6.4)
+    Distinct   *DistinctPlan      // deterministic SQL window ranking (§1.6)
+    // Conditional field/relation/count masks and their private dependencies
+    // are carried by the typed plan and finalized through one runtime path.
 }
 ```
 
-`Masked` and `Deferred` are not decoration. They are the read's own account of where
-authorization was enforced, and the acceptance tests in §9 assert on them.
-
-### 1.6 `distinct` is not `SELECT DISTINCT`
+### 1.6 `distinct` uses deterministic SQL ranking
 
 When the request carries `distinct: [fields…]`, golem does **not** emit
-`SELECT DISTINCT` or `DISTINCT ON`. It:
+`SELECT DISTINCT` or provider-specific `DISTINCT ON`. It:
 
 1. emits the statement with the distinct keys added to the projection (injected and
    added to `Drop` if the caller did not ask for them),
-2. does **not** push `LIMIT`/`OFFSET` into SQL,
-3. de-duplicates in memory, keeping the **first** row of each key tuple in the order
-   the statement returned,
-4. then applies `OFFSET` and `LIMIT` to the de-duplicated list.
+2. assigns `ROW_NUMBER()` partitioned by the portable distinct-key tuple and
+   ordered by the request's deterministic order (including its primary-key
+   tie-breaker),
+3. retains rank 1, then applies root or per-parent paging to that ranked result.
 
-Pushing `LIMIT` into SQL here is wrong: the engine would apply it before
-de-duplication and the caller would get fewer than `take` rows. This ordering is
-also why a masked column can never be a distinct key (§6.4).
+Pushing paging below the ranking step is wrong: the caller would get fewer than
+`take` rows. A conditional distinct key is refused unless the selecting predicate
+proves its field condition. Once discharged, every reachable row may read the
+true key; no mask is applied to the partition expression.
 
 ### 1.7 Reversal
 
@@ -273,7 +284,7 @@ select list** of its parent. Never a join in the parent's `FROM`.
 ```sql
 (select coalesce(json_agg(agg), '[]')
    from (
-     select <projected columns of the child, masked>,
+     select <projected public columns and private mask dependencies>,
             <nested relation aggregates>
      from <child table> as <child alias>
      where (<child model's row predicate>)
@@ -322,7 +333,7 @@ error.
 ```sql
 (select to_json(obj)
    from (
-     select <projected columns of the child, masked>,
+     select <projected public columns and private mask dependencies>,
             <nested relation aggregates>
      from <child table> as <child alias>
      where <child alias>.<pk> = <parent alias>.<fk>
@@ -336,11 +347,10 @@ scalar subquery is `NULL`. That is correct: a to-one with no partner *is* null. 
 A to-one relation may **not** carry a `where` in the projection. That is a fallback,
 because the upstream API rejects it rather than treating it as a filter, and
 compiling it would make golem answer a question the reference implementation refuses
-to answer. A to-one whose related model carries a *conditional row policy* is handled
-elsewhere: the policy cannot go in a `where` here, so the read tree records a
-post-hoc check and the relation is nulled in memory for rows the policy denies. If
-the authorization provider cannot answer per-instance questions at all, the whole
-traversal is refused.
+to answer. The related model's row policy is nevertheless conjoined inside this
+subquery just like a to-many policy. Zero authorized rows therefore produces SQL
+`NULL`; row authorization is never implemented by fetching an unauthorized child
+and nulling it in Go.
 
 ### 2.4 Nesting
 
@@ -370,8 +380,12 @@ parent's JSON.
 ```
 
 Constraints:
-- Only at the **top level** of a read. A count of a relation of a relation is a fallback.
+- At any selected relation depth accepted by `MaxRelationDepth`. The immediate
+  child may itself own selected counts, in both bounded-batch and correlated
+  shapes.
 - Only on to-many relations.
+- The counted target's read policy and the count entry's optional `where` are
+  conjoined before `count(*)`.
 - The result column is `_count$<relationName>`. If that exceeds **63 bytes**,
   fall back: Postgres silently truncates longer identifiers and two counts would
   collide into one column. The same 63-byte check applies to aggregate measure
@@ -538,13 +552,12 @@ batched path**, because `EqualityIndexed` then returns false for everything. Mak
 For each relation, in the order the projection names it:
 
 ```
-shape(relation, parentShape) =
-    "json"  if parentShape == "json"
-    "json"  if !relation.IsList
-    "json"  if len(relation.Correlation) != 1
-    "json"  if kindOf(childKeyColumn) != Plain      // see §7.1
-    "json"  if EqualityIndexed(childModel, childKeyField)
-    "row"   otherwise
+shape(relation) =
+    "correlated" if !relation.IsList
+    "batch"      if len(relation.Correlation) != 1
+    "batch"      if kindOf(childKeyColumn) is unsupported
+    "correlated" if EqualityIndexed(childModel, childKeyField)
+    "batch"      otherwise
 ```
 
 The root node's shape is `"row"`.
@@ -557,17 +570,16 @@ In words: a relation is batched (`"row"`) only when **all** of the following hol
 2. **It correlates on exactly one column.** A multi-column key would need a
    row-constructor `IN`, whose index behaviour is engine-specific and which SQLite
    does not support in the same form.
-3. **The key column is a "plain" scalar** — `String`, `Int`, `Float`, or an enum.
-   Not `BigInt`, `Decimal`, `DateTime`, or `Boolean`. Those either lose precision or
-   change representation on the way to being a bind parameter and back, and the
-   batched path re-attaches children to parents by comparing key *values* in memory
-   (§5.4). A key that does not round-trip exactly cannot be compared exactly.
+3. **The key column is one supported non-list scalar.** P3's typed correlation
+   codec covers bool, integer, finite float, portable Decimal, string, bytes, UUID,
+   date/time/datetime, and enum keys exactly. JSON/list and composite correlation
+   shapes remain outside the production correlated strategy.
 4. **The foreign key is not equality-indexed.** This is the actual trigger. An
    indexed key stays in the single statement.
-5. **Its parent is itself row-shaped.** Once a relation is inside a JSON aggregate,
-   its children are inside that JSON too. You cannot key a separate statement off
-   rows that only exist inside a `json_agg`. So batching is available only along an
-   unbroken chain of row-shaped nodes from the root.
+5. **Its parent rows are materialized before deeper loading.** Immediate indexed
+   children arrive through correlated JSON, are decoded and flattened once, and
+   their own nested relations may then use correlated or bounded-batch execution.
+   Production never regresses to one child statement per parent.
 
 Nothing else — not `take`, not `where`, not depth — influences the choice.
 
@@ -582,12 +594,13 @@ State this to operators plainly, as the release notes do: **if you want the
 single-statement shape, index the foreign key.** golem will use it, immediately,
 with no configuration.
 
-### 4.4 The cost you are accepting
+### 4.4 The bounded cost you are accepting
 
-The batched statement fetches **every** child of every parent in the chunk and slices
-per parent in memory (§5.3). For a relation with `take: 5` over 900 parents each
-having 10 000 children, that is nine million rows fetched to return four and a half
-thousand. This is the same thing the reference implementation does, and it is the
+The batched statement uses `ROW_NUMBER()` partitioned by the exact correlation
+tuple, then applies `skip`/`take` inside each parent partition. It therefore fetches
+only the requested per-parent page (or a configured fan-out cap plus one sentinel),
+not every child in the chunk. Parameter chunks remain bounded independently. This
+is intentionally stricter than the historical reference implementation and is the
 price of not scanning the child table once per parent. It is another reason to say
 "index the foreign key" loudly.
 
@@ -746,36 +759,45 @@ columns, then reverse if `Reversed`.
 
 ## 6. Masking
 
-A field the caller may read only on some rows is masked **in the statement**, at
-every depth and on both loading strategies.
+A field the caller may read only on some rows is masked during one shared runtime
+finalization step at every depth and for both loading strategies. The statement
+projects the conditional value and the exact private scalar/relation dependencies
+needed to evaluate its mask. Finalization evaluates the condition, publishes the
+value or selected-null, and strips every private dependency. This construction
+site is strategy-independent, so an index change cannot change disclosure.
 
-### 6.1 The form
+### 6.1 The controlling P3 form
 
-```sql
-case when (<the field's condition, rendered against this node's alias>)
-     then <the column reference, with any type cast from §7 applied>
-     else null end as "<field name>"
-```
+P3 does not require a SQL `CASE` mask. The physical projection contains a typed
+decode slot for the conditional field plus private decode/hydration slots for its
+condition. Those slots are never copied directly into the public row.
 
-The condition is rendered with **`absent` = deny-all**: if the condition tree is
-empty or missing, the mask renders as `false` and the column is null everywhere.
+The condition is evaluated with **`absent` = deny-all**: if the condition tree is
+empty or missing, the public field is selected-null everywhere.
 This is the opposite of the row predicate, where an absent constraint means
 grant-all. An absent *row* constraint means "the provider has nothing to say about
 which rows"; an absent *field* condition on a field the provider has already
 declared conditional means "the provider said it depends and then did not say on
-what", and that must never be read as a grant. In practice golem does not even
-render it — see `unconstrained` in §6.4.
+what", and that must never be read as a grant. The runtime therefore closes the
+field without attempting to infer a missing condition.
 
-Each masked column gets **its own** condition. Two masked columns on the same model
-never share a `CASE`.
+Each masked field gets **its own** condition. Fields may share private hydration
+dependencies, but never share the final disclosure decision.
 
-The condition may itself hop relations, in which case it renders as the correlated
-`EXISTS` of §3 against the node's alias — inside the projection, inside whatever
-subquery this node is.
+The condition may itself hop relations. The planner privately hydrates the
+authorized relation facts needed by the condition, and the shared finalization
+step evaluates the same typed predicate used for scalar dependencies. Those facts
+are never copied into the public projection.
 
-### 6.2 One construction site
+### 6.2 One construction and finalization site
 
-There is exactly one function that renders a projected column:
+The older SQL-`CASE` sketch used one column renderer and one child builder. The
+controlling requirement is the same architectural invariant at a different
+layer: all row-shaped and correlated decoders produce the same typed planned
+cells, and `finishPlanRows` is the only site that evaluates field, relation, and
+relation-count masks and builds public rows.
+
+Supporting sketch (not the required runtime API):
 
 ```go
 func (b *builder) column(alias string, col PlannedColumn, mask *Expr) Expr
@@ -787,9 +809,8 @@ and exactly one function that builds a child `SELECT`:
 func (b *builder) child(rel PlannedRelation) SelectBuilder  // projection + masks + relation where
 ```
 
-`child` is called by **both** the correlated-aggregate path (which wraps it in
-`json_agg` and the correlation predicates) and the batched path (which wraps it in
-`IN (…)`). Neither path may project a column any other way.
+Both loading paths must preserve the same planned mask and dependencies. Neither
+path may build public cells directly.
 
 This is not tidiness. The two strategies are chosen by an *index* — a property of
 the physical schema that changes when someone runs a migration. If masking lived in
@@ -800,7 +821,8 @@ disappear, exposing a column to a caller who may not read it, with no code chang
 and no test failure. A DBA's routine index change would be a privilege escalation.
 One construction site makes that state unreachable rather than merely untested.
 
-§9's `MASK_ONE_STRATEGY` mutation is the test that this holds.
+§9's `MASK_ONE_STRATEGY` mutation is the test that this holds; it asserts public
+states and strategy agreement rather than requiring `CASE` text.
 
 ### 6.3 What a mask does and does not do
 
@@ -818,78 +840,56 @@ predicate** — implied by it, so every row the read can return satisfies the ma
 at which point the value is readable on every returned row and filtering leaks
 nothing.
 
-### 6.4 The deferral rules, exhaustively
+### 6.4 Deferred shared finalization
 
-When golem cannot render a mask in the statement, it **defers**: it projects the
-true value, nulls it in memory after decoding, and records a `DeferredMask` on the
-plan. Deferral is a correctness-preserving retreat, never a silent one.
+P3 defers conditional output masks by design: it projects the true typed value
+privately, hydrates the exact condition dependencies, and publishes selected-null
+or selected-present only after relation attachment. Deferral is not a fallback
+and `DeferredMask` is not public ABI.
 
-```go
-type DeferredMask struct {
-    Path   string  // "the read" for the root, else the dotted relation path
-    Field  string
-    Reason DeferralReason
-    Detail string  // human-readable, names the model, field and why
-}
-```
+The planner must preserve three special positions without changing this rule:
 
-The complete set of reasons, in the order the planner checks them:
+- a private correlation key remains whole until attachment, then receives its
+  public field mask;
+- a conditional distinct key is rejected unless its condition is discharged;
+  a discharged key is uniformly readable and needs no output mask for the rows
+  the statement can return;
+- a relation used only by a mask is hydrated under the target model's policy and
+  never appears as a selected public relation.
 
-| Reason | Condition | Why it cannot be rendered there |
-| --- | --- | --- |
-| `relation` | The mask's path names a node the compiled read does not reach. | There is no statement, no alias and no rows for that path. Nothing to render against. |
-| `unconstrained` | The provider classified the field as conditional but handed over no condition (nil, or an empty tree). | An absent condition must never be read as a grant. Golem will not render `false` and call it a mask either, because the field may still be readable per-row via the provider's instance check — so the value is fetched and the provider is asked row by row. |
-| `unprojected` | The field is masked but the compiled projection has no column for it. | Nothing to wrap. (Reachable when the caller's `select` does not name it but a mask check does.) |
-| `correlated` | The field carries a key a batch correlates on: either the parent key of a batched child of this node, or the child key of the batch this node *is*. | §5.4 attaches children to parents by comparing key values. A masked key is `NULL` for some rows, all such rows collapse into one bucket, and children attach to the wrong parents — or to none. The key must be whole while the batch runs. Golem masks it **after** the batch has been attached, in memory. |
-| `distinct` | A **root-level** field the read is distinct on. | §1.6 de-duplicates on the value. The engine — and the reference implementation — de-duplicate on the *true* value before the mask would null it. Masking first would collapse every unreadable row into a single `NULL` group and drop rows the caller is entitled to. Only reachable at all when the mask is discharged (§6.3); otherwise the request was already refused. |
-| `decoder` | Engine-specific. On SQLite: the masked column is not `String`, `Float` or `BigInt`. | SQLite carries a *declared type* alongside a value, and wrapping a column in a `CASE` expression erases it. A client that decodes by declared type then reads an `Int` as something else. Measured: `String`, `Float` and `BigInt` survive the wrapper; `Int`, `Boolean`, `DateTime`, `Decimal` and enums do not. **Postgres has no equivalent limitation** — a `CASE` over a typed column keeps the column's type — so this reason never fires on the Postgres path. Keep the check behind the dialect seam; do not delete it because Postgres does not need it. |
-| `unrenderable` | Rendering the condition raised an unsupported-condition error. | The condition uses an operator the SQL renderer does not implement. Note this is *not* a fallback of the whole read: only this one mask retreats. |
-
-Deferral is per field. A read may mask three columns in SQL and defer a fourth, and
-the plan reports both lists.
-
-### 6.5 Hydration, and the replanning step
+### 6.5 Private hydration and stripping
 
 To null a deferred mask in memory, golem must have fetched whatever the condition
 reads. The read tree therefore **injects** extra columns into the projection —
 "hydration" — for example projecting `posts.published` so that a deferred mask on
 `posts.secretNote` can be evaluated per row.
 
-When the mask turns out to be renderable in SQL, that hydration is dead weight and
-leaks a column the caller did not ask for into the result. So the planner:
-
-1. plans the node tree,
-2. plans the masks,
-3. computes which injected columns are now unnecessary — an injected column may be
-   dropped only if **every** mask that needed it was rendered in SQL,
-4. if anything can be dropped, prunes the projection, **resets the alias counter**,
-   replans the node tree from scratch, and replans the masks.
-
-The "every mask that needed it" condition is the subtle one. Two masks on the same
-model can share a hydration column; if one renders and the other defers, the column
-stays. Getting this wrong produces a mask that evaluates against a column that is
-not there, which in Go is a zero value — that is, a mask that quietly denies (or
-quietly grants) instead of failing.
-
-The replan is a full replan. Do not attempt to patch aliases.
+Hydration is a private plan view, separate from any caller-selected relation page.
+It applies the target row policy, ignores caller-owned relation `where`/paging,
+and survives until its owning record's masks have been evaluated. Missing cells,
+counts, or hydrated relations are internal invariants and fail closed; they are
+not interpreted as zero values. Public row construction copies only planned
+public cells and therefore strips hydration and injected order/distinct/
+correlation keys in the same finalization pass.
 
 ### 6.6 Withholding is stronger than masking
 
 Masking and withholding are not two flavours of the same thing.
 
-- **Mask**: the column is in the statement. Its value is nulled in the projection.
-  It remains filterable, orderable and comparable in every other clause. A caller
-  who can reach those clauses can still learn the value.
+- **Mask**: the column is privately decoded, then published as its value or
+  selected-null during finalization. It remains filterable, orderable and
+  comparable only when the selecting row predicate discharges its condition. A
+  caller may not use an undisclosed conditional field as an information channel.
 - **Withhold**: the column is **not in the statement at all**, and any statement
   that references it is **refused** with a forbidden error, in every clause,
   including inside a CTE body, inside a subquery in `FROM`, inside a correlated
   subquery, and inside a join condition.
 
-Withholding is what §8's scoped builder does for a field the caller may never read,
-and for a field whose mask cannot be rendered and is not discharged by the row
-predicate. It is strictly stronger, and it is the right default whenever the caller
-gets to write the query, because a mask's guarantee depends on the caller not being
-able to write a `WHERE` — and in the escape hatch, the caller can.
+Withholding is what §8's scoped builder does for a field the caller may never read.
+Conditional fields in caller-controlled value-influencing positions are likewise
+refused unless the selecting predicate discharges their condition. This is
+strictly stronger than output masking and is the right default whenever the caller
+gets to write the query.
 
 ---
 
@@ -900,8 +900,9 @@ able to write a `WHERE` — and in the escape hatch, the caller can.
 A relation's columns travel through a JSON document. JSON numbers are IEEE-754
 doubles in every parser that does not go out of its way. A 64-bit integer
 round-tripped through JSON loses precision above 2^53 — `9007199254740993` becomes
-`9007199254740992` — and a fixed-point decimal becomes a binary float, so
-`0.000000000000000001` becomes `1e-18` and `1234567890.1234567890123` loses its tail.
+`9007199254740992` — and a fixed-point decimal becomes a binary float. The legal
+portable values `0.0000000000001` and `12345.6789012345678` therefore travel as
+text rather than an inexact JSON number.
 Neither raises an error. The value is simply wrong, and it is wrong in the direction
 that looks fine in a test with small numbers.
 
@@ -912,7 +913,7 @@ classified, and the classification decides both the SQL and the decode:
 | --- | --- | --- | --- |
 | `String`, `Int`, `Float`, enum | `Plain` | the column reference | as-is from the JSON value |
 | `BigInt` | `BigInt` | **`cast(<col> as text)`** | `strconv.ParseInt(s, 10, 64)` — or a big.Int if the schema exceeds int64 |
-| `Decimal` | `Decimal` | **`cast(<col> as text)`** | the project's exact-decimal type, constructed **from the string**, never via float64 |
+| `Decimal(p,s)`, `p <= 18` | `Decimal` | **`cast(<col> as text)`** | `golem.Decimal`, constructed **from the string**, never via float64 |
 | `DateTime` | `DateTime` | the column reference | §7.3 |
 | `Boolean` | `Boolean` | the column reference | true JSON bool, or `1`/`0` from SQLite |
 | anything else (`Json`, `Bytes`, list columns, unknown) | — | **fallback** | — |
@@ -929,15 +930,10 @@ driver already did the work. So the classification is a property of the *node's
 shape*, computed once when the node is planned, and stored on the plan — never
 recomputed at decode time.
 
-The mask (§6) applies the cast **inside** the `CASE`, around the column reference:
-`case when (<condition>) then cast(<col> as text) else null end`. That order is
-fixed by the specification, not chosen per call site — the cast belongs to the
-*column* (decided when the column is planned, from its type and its node's shape),
-the mask belongs to the *field policy* (applied afterwards), and there is one
-function that composes them in that order. Both orders would evaluate the same on
-Postgres, which is exactly why the order must be written down: otherwise two
-implementations produce different statement text for the same request and §9.3's
-determinism check has nothing to compare.
+The exact text cast belongs to correlated JSON serialization, independently of
+field masking. The decoder reconstructs the typed value first; §6's shared runtime
+finalization subsequently publishes it or selected-null. Conditional and
+unconditional fields therefore share the exact same decode path.
 
 **If you use `jsonb`**, this rule is doubly load-bearing: `jsonb` normalizes numeric
 literals as it stores them, so a `numeric` that reaches `jsonb_agg` uncast has
@@ -1059,6 +1055,12 @@ Some queries golem will not generate: analytical rollups, window functions,
 multi-pass CTEs. The escape hatch lets a developer write one — **rooted at a derived
 table golem constructed**, with the row predicate and the field policy already
 applied.
+
+This section is a P6 proposal, not the P3 read ABI. Its boundary may lower a
+conditional field to SQL `CASE` because an arbitrary developer-authored result no
+longer has P3's typed row graph available for shared finalization. That scoped
+lowering does not create a second P3 mask strategy and cannot be used by generated
+reads.
 
 ### 8.1 The root
 
@@ -1212,14 +1214,15 @@ something written alongside. That is what makes the oracle meaningful. Two
 implementations that share a planner drift together and the test passes while both
 are wrong. The TypeScript oracle runs golem's compiled path against Prisma, on a
 live Postgres and a live SQLite, over a seeded fixture containing precisely the
-values that break naive implementations: a `BigInt` above and below 2^53, a
-23-significant-digit decimal, a decimal of 1e-18, timestamps with milliseconds,
+values that break naive implementations: a `BigInt` above and below 2^53, the
+portable maximum-shape `Decimal(18,13)` values `±12345.6789012345678`, the tiny
+legal value `0.0000000000001`, timestamps with milliseconds,
 nulls in every nullable column, an empty relation, and a relation with no matching
 parent.
 
 The oracle also asserts on the **plan**, not only the answer: which relations were
-batched, how many statements ran, which paths were masked, which were deferred and
-with what reason. A read that returns the right answer by the wrong strategy is a
+batched, how many statements ran, and which paths carried conditional masks and
+private hydration. A read that returns the right answer by the wrong strategy is a
 regression.
 
 ### 9.2 The mutations
@@ -1229,14 +1232,14 @@ test must fail. If it passes, the test does not exist yet.
 
 | Mutation | The change | What must fail |
 | --- | --- | --- |
-| **`MASK_ONE_STRATEGY`** | Render the mask in the correlated-aggregate path only, leaving the batched child `SELECT` unmasked (or vice versa). | A read of a to-many whose foreign key is **unindexed**, projecting a masked column, must return the masked value nulled on the rows where the condition is false. With the mutation the batched statement returns true values and the oracle diverges. Add the mirror test on an **indexed** foreign key so that whichever half is mutated, one fails. Also assert the second statement's text contains the `case when`. |
+| **`MASK_ONE_STRATEGY`** | Apply shared mask finalization to the correlated path only, or the batch path only. | Indexed-correlated and forced/unindexed-batched reads must return identical selected-present/selected-null states. The assertion is on public states and graph agreement, not `CASE` text. |
 | **`NO_CHUNK`** | Put every parent key into one `IN` list. | A batched relation over **70 000** parents on Postgres and **33 000** on SQLite must succeed and return the correct children for the first, a mid-chunk, a chunk-boundary and the last parent. With the mutation the driver refuses the statement. A test with 100 parents will not catch this — that is the actual historical failure. Assert the statement count equals `1 + ceil(parents / 900)`. |
 | **`BATCH_WIDE_LIMIT`** | Apply the relation's `take`/`skip` across the whole batch, or push a `LIMIT` into the batched statement. | A batched relation with `take: 2` over 950 parents, each with 3 children, must return exactly 2 children **per parent** — total 1900 — and the parent at index 900 (first of the second chunk) must get the same *relative* children as the parent at index 0. With the mutation the total is 2, or the second chunk's parents come back empty. Add the `skip: 1, take: -2` variant to pin offset/limit/reverse ordering. |
 | **`JOIN_FOR_RELATION_FILTER`** | Compile a relation filter as a join instead of a correlated `EXISTS`. | §3.1: a nullable foreign key, a policy of the form `OR: [ {relation hop}, {local column} ]`, and a row whose foreign key is null but whose local column satisfies the other branch. That row must be returned. With the mutation it is not. Add a to-many variant asserting `LIMIT n` returns n **parents**, which the join formulation breaks by multiplying rows. |
-| **`NO_TEXT_CAST_BIGINT`** | Project a `BigInt` (or `Decimal`) inside a JSON aggregate without `cast(… as text)`. | A relation carrying `hits = 9007199254740993` and `-9007199254740993`, and a decimal of `1234567890.1234567890123`, must decode exactly and with the same type as the reference implementation. With the mutation the values come back off by one and the decimal loses its tail — **and the test only catches it if the fixture holds values above 2^53**, which is why the fixture does. |
+| **`NO_TEXT_CAST_BIGINT`** | Project a `BigInt` or portable `Decimal(18,s)` inside correlated JSON without a text boundary. | A relation carrying `±9007199254740993`, `Decimal(18,13)` values `±12345.6789012345678`, and `0.0000000000001` must decode exactly and with the same public types. |
 | **`DROP_COALESCE`** | Remove the `coalesce(…, '[]')` from the to-many aggregate. | A parent with no children must decode to an empty non-nil list. With the mutation it decodes to nil (and, if the decoder "repairs" it, the test must instead assert that the raw JSON column is `'[]'`). |
-| **`MASK_THE_DISTINCT_KEY`** | Render the mask on a column the read is `distinct` on, instead of deferring. | A read `distinct` on a discharged-mask column must return the same rows as the reference. With the mutation every row failing the condition collapses into one `NULL` group and rows disappear. The plan must report the field as deferred with reason `distinct`. |
-| **`MASK_THE_BATCH_KEY`** | Render the mask on a column that carries a batch's correlation key, instead of deferring. | A read whose parent key (or child key) is itself a masked field must attach children to the correct parents, and must null the key afterwards. With the mutation every parent whose key masks to null claims the same bucket. Plan must report reason `correlated`. |
+| **`MASK_THE_DISTINCT_KEY`** | Allow a conditionally readable distinct key without proving its condition, or mask it before ranking. | An undischargeable conditional distinct key must be refused with `FORBIDDEN` even when it is not selected. A discharged key may rank on its true value because every reachable row can read it. |
+| **`MASK_THE_BATCH_KEY`** | Apply the public field mask to a relation correlation key before attachment. | Indexed-correlated and forced-batched reads must attach every child with the private true key, then expose that key as present or selected-null according to its field mask. |
 | **`IGNORE_INDEX_METADATA`** | Have the generator omit indexes, or have `EqualityIndexed` return a constant. | The plan for an **indexed** foreign key must be a single statement with no batches; the plan for an **unindexed** one must be two statements. Both answers must remain identical to the reference either way — that is the point of "loading strategy never changes an answer" — so this test asserts on the **plan**, not the rows. |
 | **`FORGE_SCOPED_ROOT`** | Skip the seal check; or hand the builder a zero-valued `ScopedRoot`, a root borrowed from another scoped query, or reach the base table through a raw fragment / union / CTE / correlated subquery / schema qualification. | Must not compile (the unexported seal) or must be refused (the seal check, then the audit). Port the red-team suite wholesale: one test per refusal in §8.3, plus the zero-value and borrowed-root cases, each asserting the *error class* — validation versus forbidden — not just that something failed. |
 | **`TYPE_IS_THE_BOUNDARY`** | Enforce the escape-hatch restrictions only in the narrowed builder type. | Every removed method, called through a widening type assertion, must still be refused at audit time. |
