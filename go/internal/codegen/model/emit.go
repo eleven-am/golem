@@ -448,6 +448,10 @@ func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelD
 	if capabilities.create {
 		fmt.Fprintf(body, "func (field %s) Create(value %s) golem.CreateValue[%s] {\n", typeName, valueType, model.Go.Name)
 		fmt.Fprintf(body, "\treturn golem.GeneratedCreateFieldValue(%s, %s, value)\n}\n\n", modelLiteral, column)
+		if field.Scalar.Nullable {
+			fmt.Fprintf(body, "func (field %s) CreateNull() golem.CreateValue[%s] {\n", typeName, model.Go.Name)
+			fmt.Fprintf(body, "\treturn golem.GeneratedCreateNullFieldValue(%s, %s)\n}\n\n", modelLiteral, column)
+		}
 	}
 	if capabilities.set {
 		fmt.Fprintf(body, "func (field %s) Set(value %s) golem.UpdateManyValue[%s] {\n", typeName, valueType, model.Go.Name)

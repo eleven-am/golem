@@ -86,9 +86,46 @@ func (modelOption[M]) modelOption(M) {}
 
 func DefineModel[M any](_ ...ModelOption[M]) ModelSpec[M] { return ModelSpec[M]{} }
 
+type GraphQLOperation string
+
+const (
+	GraphQLFindOne    GraphQLOperation = "findOne"
+	GraphQLFindMany   GraphQLOperation = "findMany"
+	GraphQLCreate     GraphQLOperation = "create"
+	GraphQLUpdate     GraphQLOperation = "update"
+	GraphQLUpsert     GraphQLOperation = "upsert"
+	GraphQLDelete     GraphQLOperation = "delete"
+	GraphQLUpdateMany GraphQLOperation = "updateMany"
+	GraphQLDeleteMany GraphQLOperation = "deleteMany"
+)
+
+type GraphQLRootNames struct {
+	FindOne    string
+	FindMany   string
+	Create     string
+	Update     string
+	Upsert     string
+	Delete     string
+	UpdateMany string
+	DeleteMany string
+}
+
+type GraphQLOption struct{ _ graphqlOptionMarker }
+type graphqlOptionMarker struct{}
+
+func GraphQL[M any](_ ...GraphQLOption) ModelOption[M]      { return modelOption[M]{} }
+func GraphQLOperations(_ ...GraphQLOperation) GraphQLOption { return GraphQLOption{} }
+func GraphQLPlural(_ string) GraphQLOption                  { return GraphQLOption{} }
+func GraphQLRoots(_ GraphQLRootNames) GraphQLOption         { return GraphQLOption{} }
+func GraphQLPageSizes(_, _ int) GraphQLOption               { return GraphQLOption{} }
+func GraphQLHidden() GraphQLOption                          { return GraphQLOption{} }
+
+type EnumValueOption struct{ _ enumValueOptionMarker }
+type enumValueOptionMarker struct{}
 type EnumValueSpec[E ~string] struct{ _ func() E }
 
-func EnumValue[E ~string](_ E) EnumValueSpec[E] { return EnumValueSpec[E]{} }
+func GraphQLValue(_ string) EnumValueOption                           { return EnumValueOption{} }
+func EnumValue[E ~string](_ E, _ ...EnumValueOption) EnumValueSpec[E] { return EnumValueSpec[E]{} }
 func DefineEnum[E ~string](_ ...EnumValueSpec[E]) EnumSpec[E] {
 	return EnumSpec[E]{}
 }

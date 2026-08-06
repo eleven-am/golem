@@ -15,6 +15,11 @@ type enumConstant struct {
 	span   ir.SourceSpan
 }
 
+type enumMethodValue struct {
+	goName      string
+	graphqlName *string
+}
+
 func (c *compiler) extractEnums(pkg *load.Package) {
 	constants := enumConstants(pkg)
 	for _, file := range pkg.Files {
@@ -56,7 +61,8 @@ func (c *compiler) extractEnums(pkg *load.Package) {
 				Span:   sourceSpan(pkg, typeSpec.Pos(), typeSpec.End()),
 			}
 			seen := map[string]bool{}
-			for _, valueName := range valueNames {
+			for _, declared := range valueNames {
+				valueName := declared.goName
 				constant, exists := constants[enumName+"\x00"+valueName]
 				if !exists {
 					c.error(pkg, "P1_ENUM_VALUE_CONSTANT", fmt.Sprintf("%s is not a typed string constant of %s", valueName, enumName), method)
@@ -67,7 +73,7 @@ func (c *compiler) extractEnums(pkg *load.Package) {
 					continue
 				}
 				seen[valueName] = true
-				raw.Values = append(raw.Values, ir.RawEnumValue{GoName: valueName, WireValue: constant.wire, Ordinal: uint32(len(raw.Values)), Span: constant.span})
+				raw.Values = append(raw.Values, ir.RawEnumValue{GoName: valueName, WireValue: constant.wire, GraphQLName: declared.graphqlName, Ordinal: uint32(len(raw.Values)), Span: constant.span})
 			}
 			c.enums = append(c.enums, raw)
 		}
@@ -103,7 +109,7 @@ func enumConstants(pkg *load.Package) map[string]enumConstant {
 	return result
 }
 
-func enumMethodValues(method *ast.FuncDecl, golemAlias string) ([]string, bool) {
+func enumMethodValues(method *ast.FuncDecl, golemAlias string) ([]enumMethodValue, bool) {
 	if method.Body == nil || len(method.Body.List) != 1 {
 		return nil, false
 	}
@@ -115,17 +121,29 @@ func enumMethodValues(method *ast.FuncDecl, golemAlias string) ([]string, bool) 
 	if !ok || !isPackageSelector(defineCall.Fun, golemAlias, "DefineEnum") {
 		return nil, false
 	}
-	values := make([]string, 0, len(defineCall.Args))
+	values := make([]enumMethodValue, 0, len(defineCall.Args))
 	for _, argument := range defineCall.Args {
 		valueCall, ok := argument.(*ast.CallExpr)
-		if !ok || !isPackageSelector(valueCall.Fun, golemAlias, "EnumValue") || len(valueCall.Args) != 1 {
+		if !ok || !isPackageSelector(valueCall.Fun, golemAlias, "EnumValue") || len(valueCall.Args) < 1 || len(valueCall.Args) > 2 {
 			return nil, false
 		}
 		identifier, ok := valueCall.Args[0].(*ast.Ident)
 		if !ok {
 			return nil, false
 		}
-		values = append(values, identifier.Name)
+		value := enumMethodValue{goName: identifier.Name}
+		if len(valueCall.Args) == 2 {
+			option, ok := valueCall.Args[1].(*ast.CallExpr)
+			if !ok || !isPackageSelector(option.Fun, golemAlias, "GraphQLValue") || len(option.Args) != 1 {
+				return nil, false
+			}
+			name, ok := stringLiteral(option.Args[0])
+			if !ok {
+				return nil, false
+			}
+			value.graphqlName = &name
+		}
+		values = append(values, value)
 	}
 	return values, true
 }

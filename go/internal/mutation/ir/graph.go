@@ -478,8 +478,8 @@ func validateScalarShape(operation Operation, values []ScalarOperation) error {
 	switch operation {
 	case Create:
 		for _, value := range values {
-			if value.kind != ScalarSet {
-				return fmt.Errorf("P4_MUTATION_IR_NODE: create accepts set operations only")
+			if value.kind != ScalarSet && value.kind != ScalarNull {
+				return fmt.Errorf("P4_MUTATION_IR_NODE: create accepts set and explicit-null operations only")
 			}
 		}
 	case Update, UpdateMany:

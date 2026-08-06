@@ -16,7 +16,7 @@ import (
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-func TestFreshExternalModuleBuildsPipelineArtifactsAndExecutesGeneratedReadClients(t *testing.T) {
+func TestFreshSocialModuleGeneratesCompilesAndConstructsGraphQLServer(t *testing.T) {
 	root := t.TempDir()
 	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.test/social
 
@@ -41,6 +41,9 @@ type User struct {
 	ID golem.UUID §db:"id" golem:"id=acceptance.User.ID;pk"§
 	Name string §db:"name" golem:"id=acceptance.User.Name"§
 	Posts []Post §db:"-" golem:"relation=has_many;fields=id;references=author_id"§
+	Comments []Comment §db:"-" golem:"relation=has_many;fields=id;references=author_id"§
+	FriendshipsFrom []Friendship §db:"-" golem:"relation=has_many;name=Origin;fields=id;references=user_id"§
+	FriendshipsTo []Friendship §db:"-" golem:"relation=has_many;name=Destination;fields=id;references=friend_id"§
 }
 
 type Post struct {
@@ -50,6 +53,49 @@ type Post struct {
 	AuthorID golem.UUID §db:"author_id" golem:"id=acceptance.Post.AuthorID"§
 	Title string §db:"title" golem:"id=acceptance.Post.Title"§
 	Author *User §db:"-" golem:"relation=belongs_to;fields=author_id;references=id"§
+	Comments []Comment §db:"-" golem:"relation=has_many;fields=id;references=post_id"§
+	PostTags []PostTag §db:"-" golem:"relation=has_many;fields=id;references=post_id"§
+}
+
+type Comment struct {
+	_ struct{} §golem:"model;id=acceptance.Comment;table=comments"§
+	_ struct{} §golem:"index=idx_comments_post_parent(post_id,parent_id)"§
+	ID golem.UUID §db:"id" golem:"pk"§
+	PostID golem.UUID §db:"post_id"§
+	AuthorID golem.UUID §db:"author_id"§
+	ParentID golem.Null[golem.UUID] §db:"parent_id"§
+	Body string §db:"body"§
+	Post *Post §db:"-" golem:"relation=belongs_to;fields=post_id;references=id"§
+	Author *User §db:"-" golem:"relation=belongs_to;fields=author_id;references=id"§
+	ReplyTo *Comment §db:"-" golem:"relation=belongs_to;name=ReplyTree;fields=parent_id;references=id"§
+	Replies []Comment §db:"-" golem:"relation=has_many;name=ReplyTree;fields=id;references=parent_id"§
+}
+
+type Friendship struct {
+	_ struct{} §golem:"model;id=acceptance.Friendship;table=friendships"§
+	_ struct{} §golem:"primary=pk_friendships(user_id,friend_id)"§
+	_ struct{} §golem:"index=idx_friendships_friend_user(friend_id,user_id)"§
+	UserID golem.UUID §db:"user_id"§
+	FriendID golem.UUID §db:"friend_id"§
+	User *User §db:"-" golem:"relation=belongs_to;name=Origin;fields=user_id;references=id"§
+	Friend *User §db:"-" golem:"relation=belongs_to;name=Destination;fields=friend_id;references=id"§
+}
+
+type Tag struct {
+	_ struct{} §golem:"model;id=acceptance.Tag;table=tags"§
+	_ struct{} §golem:"unique=uq_tags_name(name)"§
+	ID golem.UUID §db:"id" golem:"pk"§
+	Name string §db:"name" golem:"type=varchar(64)"§
+	PostTags []PostTag §db:"-" golem:"relation=has_many;fields=name;references=tag_name"§
+}
+
+type PostTag struct {
+	_ struct{} §golem:"model;id=acceptance.PostTag;table=post_tags"§
+	_ struct{} §golem:"primary=pk_post_tags(post_id,tag_name)"§
+	PostID golem.UUID §db:"post_id"§
+	TagName string §db:"tag_name" golem:"type=varchar(64)"§
+	Post *Post §db:"-" golem:"relation=belongs_to;fields=post_id;references=id"§
+	Tag *Tag §db:"-" golem:"relation=belongs_to;fields=tag_name;references=name"§
 }
 
 func (User) DefinePolicy(rules *golem.Rules[User], value actor.Actor) {
@@ -59,6 +105,11 @@ func (User) DefinePolicy(rules *golem.Rules[User], value actor.Actor) {
 func (Post) DefinePolicy(rules *golem.Rules[Post], _ actor.Actor) {
 	rules.CanRead(golem.All[Post]())
 }
+
+func (Comment) DefinePolicy(rules *golem.Rules[Comment], _ actor.Actor) { rules.CanRead(golem.All[Comment]()) }
+func (Friendship) DefinePolicy(rules *golem.Rules[Friendship], _ actor.Actor) { rules.CanRead(golem.All[Friendship]()) }
+func (Tag) DefinePolicy(rules *golem.Rules[Tag], _ actor.Actor) { rules.CanRead(golem.All[Tag]()) }
+func (PostTag) DefinePolicy(rules *golem.Rules[PostTag], _ actor.Actor) { rules.CanRead(golem.All[PostTag]()) }
 `, "§", "`")
 	writePipelineAcceptanceFile(t, root, "models/models.go", modelsSource)
 	writePipelineAcceptanceFile(t, root, "schema/schema.go", `package schema
@@ -74,6 +125,10 @@ func DefineSchema(schema *golem.Schema) {
 	golem.Actor[actor.Actor](schema)
 	golem.Model[models.User](schema)
 	golem.Model[models.Post](schema)
+	golem.Model[models.Comment](schema)
+	golem.Model[models.Friendship](schema)
+	golem.Model[models.Tag](schema)
+	golem.Model[models.PostTag](schema)
 	golem.Providers(schema, golem.SQLite)
 }
 `)
@@ -95,7 +150,7 @@ func DefineSchema(schema *golem.Schema) {
 		t.Fatal(err)
 	}
 	for _, artifact := range result.Prospective.Artifacts {
-		if artifact.Kind != manifest.ArtifactModelGo && artifact.Kind != manifest.ArtifactBindingsGo && artifact.Kind != manifest.ArtifactRegistryGo {
+		if artifact.Kind != manifest.ArtifactModelGo && artifact.Kind != manifest.ArtifactBindingsGo && artifact.Kind != manifest.ArtifactRegistryGo && artifact.Kind != manifest.ArtifactGraphQLGo && artifact.Kind != manifest.ArtifactGraphQLSDL {
 			continue
 		}
 		writePipelineAcceptanceFile(t, root, artifact.Path, string(artifact.Content))
@@ -128,6 +183,9 @@ func DefineSchema(schema *golem.Schema) {
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"example.test/social/actor"
@@ -178,6 +236,22 @@ func TestGeneratedCallerAndSystemReads(t *testing.T) {
 	if name, ok := golem.Value(unique, models.Users.Name).Get(); !ok || name != "bob" { t.Fatalf("system unique=%%q present=%%t", name, ok) }
 	count, err = system.Users.Count(ctx)
 	if err != nil || count != 2 { t.Fatalf("system count=%%d err=%%v", count, err) }
+
+	server, err := application.GraphQL(app.GraphQLConfig[string]{
+		PrincipalFromContext: func(context.Context) (string, bool) { return "principal", true },
+		ReportInternalError: func(_ context.Context, err error) { t.Errorf("trusted GraphQL error: %%v", err) },
+	})
+	if err != nil { t.Fatal(err) }
+	if server.SDL() == "" || server.Handler() == nil { t.Fatal("generated GraphQL server is incomplete") }
+	if server.ContractFingerprint() != app.GolemGeneratedSchemaBundle().Contract().Fingerprint() { t.Fatal("GraphQL contract fingerprint mismatch") }
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`+"`"+`{"query":"query { users(take: 2) { id name } }"}`+"`"+`))
+	request.Header.Set("Content-Type", "application/json")
+	server.Handler().ServeHTTP(recorder, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, `+"`"+`"name":"alice"`+"`"+`) || strings.Contains(body, `+"`"+`"name":"bob"`+"`"+`) || strings.Contains(body, `+"`"+`"errors"`+"`"+`) {
+		t.Fatalf("GraphQL response code=%%d body=%%s", recorder.Code, body)
+	}
 }
 `, "file:"+databasePath+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"))
 

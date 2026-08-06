@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	"github.com/eleven-am/golem/go/internal/codegen/registry"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/methods"
@@ -16,6 +17,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/resolve"
 	"github.com/eleven-am/golem/go/internal/compiler/schema"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
 type Config struct {
@@ -97,10 +100,21 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 					bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
 				}
 			}
+			appPackage, appFound := packageSpec(specs, resolved.Compilation.Model.Schema.PackagePath)
+			if !appFound {
+				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", resolved.Compilation.Model.Schema.PackagePath), raw.Root.Span))
+			} else {
+				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model})
+				if shellErr != nil {
+					diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
+				} else {
+					bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+				}
+			}
 			if hasErrors(diagnostics) {
 				return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
 			}
-			interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry()})
+			interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs})
 			diagnostics = append(diagnostics, interpreted.Diagnostics...)
 		}
 	}
@@ -116,7 +130,22 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		diagnostics = append(diagnostics, applyRelationOptions(&resolved.Compilation.Model, interpreted.RelationOptions)...)
 	}
 	populateContractFields(raw, &resolved.Compilation)
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, interpreted.GraphQLModels)...)
+	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, graphqlextension.Normalize(&resolved.Compilation, interpreted.GraphQLComputed, interpreted.GraphQLCustom)...)
+	}
 	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
+}
+
+func packageSpec(specs []modelcodegen.PackageSpec, importPath string) (modelcodegen.PackageSpec, bool) {
+	for _, spec := range specs {
+		if spec.ImportPath == importPath {
+			return spec, true
+		}
+	}
+	return modelcodegen.PackageSpec{}, false
 }
 
 func finishWithMetadata(raw ir.RawDeclIR, compilation ir.CompilationIR, diagnostics []ir.Diagnostic, specs []modelcodegen.PackageSpec, modulePath, moduleDir string) Result {
@@ -166,6 +195,9 @@ func CompileRawWithPrevious(raw ir.RawDeclIR, previous *ir.ModelIR) Result {
 	}
 	if !hasErrors(diagnostics) {
 		populateContractFields(raw, &resolved.Compilation)
+	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, nil)...)
 	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, validateComplete(resolved.Compilation)...)
@@ -315,7 +347,7 @@ func populateContractFields(raw ir.RawDeclIR, compilation *ir.CompilationIR) {
 			if !exists {
 				entry = ir.FieldContractIR{FieldID: field.ID, Modes: []ir.FieldMode{ir.ModeVisible}}
 			}
-			entry.GraphQLName = field.GoName
+			entry.GraphQLName = graphqlcontract.LowerCamel(field.GoName)
 			if rawField, ok := rawByName[field.GoName]; ok {
 				if graphql, ok := rawAttribute(rawField.GolemAttrs, "graphql"); ok {
 					entry.GraphQLName = graphql

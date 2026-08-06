@@ -178,14 +178,14 @@ func request(frozen golem.FrozenReadRequest, registry *schema.Registry, provider
 			if endpoint.Cardinality() != compilerir.RelationMany {
 				return readir.Request{}, fail(CodeRelation, model, publicSelection.FieldID(), "relation count requires a to-many relation", nil)
 			}
-			selection, selectionErr := readir.NewRelationCountSelection(policyir.FieldID(field.ID()), policyir.RelationID(endpoint.RelationID()), policyir.ModelID(endpoint.TargetModelID()), child)
+			selection, selectionErr := readir.NewRelationCountSelectionOccurrence(readir.OccurrenceID(publicSelection.OccurrenceID()), policyir.FieldID(field.ID()), policyir.RelationID(endpoint.RelationID()), policyir.ModelID(endpoint.TargetModelID()), child)
 			if selectionErr != nil {
 				return readir.Request{}, fail(CodeRelation, model, publicSelection.FieldID(), "relation-count selection is invalid", selectionErr)
 			}
 			input.Selection = append(input.Selection, selection)
 			continue
 		}
-		selection, err := readir.NewRelationSelection(policyir.FieldID(field.ID()), policyir.RelationID(endpoint.RelationID()), policyir.ModelID(endpoint.TargetModelID()), child)
+		selection, err := readir.NewRelationSelectionOccurrence(readir.OccurrenceID(publicSelection.OccurrenceID()), policyir.FieldID(field.ID()), policyir.RelationID(endpoint.RelationID()), policyir.ModelID(endpoint.TargetModelID()), child)
 		if err != nil {
 			return readir.Request{}, fail(CodeRelation, model, publicSelection.FieldID(), "relation selection is invalid", err)
 		}

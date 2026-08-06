@@ -112,17 +112,24 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 		if !sameType(operation.Type(), field.Type) {
 			return nil, fail(CodeSchema, context.node.ModelID(), operation.FieldID(), "create operation type does not match the active field descriptor", nil)
 		}
-		value, present := operation.Value()
-		if operation.Kind() != mutationir.ScalarSet || !present {
-			return nil, fail(CodeInput, context.node.ModelID(), operation.FieldID(), "create carries a non-set operation", nil)
-		}
-		encoded, err := context.encode(value, operation.Type())
-		if err != nil {
-			return nil, fail(CodeRender, context.node.ModelID(), operation.FieldID(), "create value did not encode exactly", err)
-		}
-		bindings = append(bindings, Binding{kind: StaticBinding, value: encoded})
 		columns[index] = context.dialect.Quote(field.Column)
-		values[index] = context.dialect.Placeholder(len(bindings))
+		switch operation.Kind() {
+		case mutationir.ScalarNull:
+			values[index] = "NULL"
+		case mutationir.ScalarSet:
+			value, present := operation.Value()
+			if !present {
+				return nil, fail(CodeInput, context.node.ModelID(), operation.FieldID(), "create set operand is absent", nil)
+			}
+			encoded, err := context.encode(value, operation.Type())
+			if err != nil {
+				return nil, fail(CodeRender, context.node.ModelID(), operation.FieldID(), "create value did not encode exactly", err)
+			}
+			bindings = append(bindings, Binding{kind: StaticBinding, value: encoded})
+			values[index] = context.dialect.Placeholder(len(bindings))
+		default:
+			return nil, fail(CodeInput, context.node.ModelID(), operation.FieldID(), "create carries an unsupported scalar operation", nil)
+		}
 	}
 	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), scalarOperationFields(operations))
 	if err != nil {

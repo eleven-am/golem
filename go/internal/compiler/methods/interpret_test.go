@@ -3,17 +3,21 @@ package methods
 import (
 	"context"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
 const fixturePackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/basic"
 const rejectPackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/reject"
 const signaturePackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/signatures"
+const extensionPackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/extensions"
+const invalidExtensionPackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/extensionsinvalid"
 
 func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	directory := fixtureDirectory(t, "basic")
@@ -28,6 +32,25 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	}
 	if len(result.Advanced) != 2 {
 		t.Fatalf("advanced models = %d, want 2", len(result.Advanced))
+	}
+	if len(result.GraphQLModels) != 1 {
+		t.Fatalf("GraphQL model patches = %#v", result.GraphQLModels)
+	}
+	if len(result.GraphQLComputed) != 3 {
+		t.Fatalf("computed GraphQL declarations = %#v", result.GraphQLComputed)
+	}
+	if result.GraphQLComputed[0].Field.Name != "batchGreeting" || result.GraphQLComputed[0].Field.Batch == nil || result.GraphQLComputed[0].Field.Batch.MaxBatchSize != 32 {
+		t.Fatalf("batch computed declaration = %#v", result.GraphQLComputed[0])
+	}
+	if result.GraphQLComputed[1].Field.Batch == nil || result.GraphQLComputed[1].Field.Batch.CacheKey == nil || result.GraphQLComputed[2].Field.Name != "greeting" || !reflect.DeepEqual(result.GraphQLComputed[2].Field.Requires, []ir.FieldID{"13000000000000000000000000000000"}) {
+		t.Fatalf("computed declarations = %#v", result.GraphQLComputed)
+	}
+	graphql := result.GraphQLModels[0]
+	if graphql.ModelID != userID || graphql.Plural == nil || *graphql.Plural != "accounts" || graphql.Roots == nil || graphql.Roots.FindOne != "account" || graphql.DefaultPage == nil || *graphql.DefaultPage != 25 || graphql.MaximumPage == nil || *graphql.MaximumPage != 250 {
+		t.Fatalf("GraphQL model patch = %#v", graphql)
+	}
+	if graphql.Operations == nil || len(*graphql.Operations) != 3 || (*graphql.Operations)[2] != ir.OperationCreate {
+		t.Fatalf("GraphQL operations = %#v", graphql.Operations)
 	}
 	user := result.Advanced[0]
 	if user.ModelID != userID {
@@ -66,6 +89,49 @@ func TestInterpretDeterministic(t *testing.T) {
 	}
 	if len(first.Advanced) != len(second.Advanced) || first.Advanced[0].Indexes[0].Predicate.CanonicalIdentity != second.Advanced[0].Indexes[0].Predicate.CanonicalIdentity {
 		t.Fatalf("non-deterministic results: first=%#v second=%#v", first.Advanced, second.Advanced)
+	}
+}
+
+func TestInterpretGraphQLModelAndSchemaExtensionsDeterministically(t *testing.T) {
+	config := Config{Dir: moduleDirectory(t), Compilation: extensionCompilation(extensionPackage), Packages: []modelcodegen.PackageSpec{{ImportPath: extensionPackage, PackageName: "extensions", Directory: fixtureDirectory(t, "extensions")}}}
+	first := Interpret(context.Background(), config)
+	second := Interpret(context.Background(), config)
+	if len(first.Diagnostics) != 0 || len(second.Diagnostics) != 0 {
+		t.Fatalf("diagnostics: first=%#v second=%#v", first.Diagnostics, second.Diagnostics)
+	}
+	if len(first.GraphQLComputed) != 1 || first.GraphQLComputed[0].Field.Name != "greeting" {
+		t.Fatalf("computed = %#v", first.GraphQLComputed)
+	}
+	if len(first.GraphQLCustom) != 2 || first.GraphQLCustom[0].Operation.Operation != ir.CustomOperationMutation || first.GraphQLCustom[1].Operation.Name != "searchUsers" {
+		t.Fatalf("custom = %#v", first.GraphQLCustom)
+	}
+	if first.GraphQLComputed[0].Field.ExtensionID != second.GraphQLComputed[0].Field.ExtensionID || first.GraphQLCustom[0].Operation.ExtensionID != second.GraphQLCustom[0].Operation.ExtensionID {
+		t.Fatalf("extension identities are not deterministic: first=%#v second=%#v", first, second)
+	}
+	compilation := config.Compilation
+	if diagnostics := graphqlextension.Normalize(&compilation, first.GraphQLComputed, first.GraphQLCustom); len(diagnostics) != 0 {
+		t.Fatalf("normalization diagnostics = %#v", diagnostics)
+	}
+	if len(compilation.Contract.Models[0].Computed) != 1 || len(compilation.Contract.CustomOperations) != 2 {
+		t.Fatalf("normalized contract = %#v", compilation.Contract)
+	}
+}
+
+func TestInterpretGraphQLExtensionsRejectsInvalidSignaturesCapabilitiesTypesAndSourceCollision(t *testing.T) {
+	config := Config{Dir: moduleDirectory(t), Compilation: extensionCompilation(invalidExtensionPackage), Packages: []modelcodegen.PackageSpec{{ImportPath: invalidExtensionPackage, PackageName: "extensionsinvalid", Directory: fixtureDirectory(t, "extensionsinvalid")}}}
+	result := Interpret(context.Background(), config)
+	for _, code := range []string{"P5_COMPUTED_SIGNATURE", "P5_COMPUTED_BATCH_SIGNATURE", "P5_CUSTOM_SIGNATURE", "P5_EXTENSION_ARGUMENT_TYPE"} {
+		if !containsDiagnostic(result.Diagnostics, code) {
+			t.Errorf("missing %s in %#v", code, result.Diagnostics)
+		}
+	}
+	if len(result.GraphQLCustom) != 1 || result.GraphQLCustom[0].Operation.Name != "users" {
+		t.Fatalf("valid collision declaration was not retained: %#v", result.GraphQLCustom)
+	}
+	compilation := config.Compilation
+	diagnostics := graphqlextension.Normalize(&compilation, result.GraphQLComputed, result.GraphQLCustom)
+	if !containsDiagnostic(diagnostics, "P5_CUSTOM_ROOT_COLLISION") {
+		t.Fatalf("missing root collision diagnostic in %#v", diagnostics)
 	}
 }
 
@@ -126,6 +192,41 @@ func fixtureCompilation() ir.CompilationIR {
 			field("21000000000000000000000000000000", "ID", ir.TypeInt64),
 		}},
 	}}}
+}
+
+func extensionCompilation(packagePath string) ir.CompilationIR {
+	const (
+		modelID   ir.ModelID = "40000000000000000000000000000000"
+		idField   ir.FieldID = "41000000000000000000000000000000"
+		nameField ir.FieldID = "42000000000000000000000000000000"
+	)
+	return ir.CompilationIR{
+		Model: ir.ModelIR{
+			FormatVersion: ir.ModelFormatVersion,
+			Schema:        ir.SchemaIdentityIR{ID: "43000000000000000000000000000000", StableName: "extensions", PackagePath: packagePath},
+			Models: []ir.ModelDeclIR{{
+				ID: modelID, Go: ir.GoNamedTypeIR{PackagePath: packagePath, Name: "User"}, LogicalName: "User", Table: ir.TableBindingIR{PhysicalName: "users"},
+				Fields: []ir.FieldIR{
+					{ID: idField, GoName: "ID", LogicalName: "ID", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "id", Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}}},
+					{ID: nameField, GoName: "Name", LogicalName: "Name", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "name", Type: ir.LogicalTypeIR{Kind: ir.TypeString}}},
+				},
+			}},
+		},
+		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{
+			ModelID: modelID, GraphQLName: "User", GraphQLPlural: "Users", Exposed: true,
+			Roots: ir.GraphQLRootNamesIR{FindMany: "users"}, Operations: []ir.Operation{ir.OperationFindMany},
+			Fields: []ir.FieldContractIR{{FieldID: idField, GraphQLName: "id"}, {FieldID: nameField, GraphQLName: "name"}},
+		}}},
+	}
+}
+
+func containsDiagnostic(diagnostics []ir.Diagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func rejectCompilation() ir.CompilationIR {

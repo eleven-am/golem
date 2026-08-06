@@ -29,6 +29,12 @@ application surface in
 provider, concurrency, race, repeat, and deterministic evidence ledger is
 [`p4/P4-EVIDENCE.md`](./p4/P4-EVIDENCE.md).
 
+P5 generated GraphQL is complete. Its controlling architecture and work waves are
+[`p5/P5-PLAN.md`](./p5/P5-PLAN.md), the frozen schema and Go integration are
+[`p5/PUBLIC-GRAPHQL-ABI.md`](./p5/PUBLIC-GRAPHQL-ABI.md), and the mandatory
+completed local evidence gates are recorded in
+[`p5/P5-EVIDENCE.md`](./p5/P5-EVIDENCE.md).
+
 The numbered documents are detailed supporting specifications and research:
 
 1. [`01-operators.md`](./01-operators.md) — operator semantics and agreement;

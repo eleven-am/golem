@@ -79,7 +79,7 @@ func TestBaseResolvesSocialScalarsEnumsDefaultsAndContract(t *testing.T) {
 	if !reflect.DeepEqual(modeByID[fields["UpdatedAt"].ID], []ir.FieldMode{ir.ModeReadOnly}) {
 		t.Fatalf("updated modes = %#v", modeByID[fields["UpdatedAt"].ID])
 	}
-	if graphqlByID[fields["Secret"].ID] != "secretValue" || graphqlByID[fields["ID"].ID] != "ID" {
+	if graphqlByID[fields["Secret"].ID] != "secretValue" || graphqlByID[fields["ID"].ID] != "id" {
 		t.Fatalf("field GraphQL names = %#v", graphqlByID)
 	}
 }

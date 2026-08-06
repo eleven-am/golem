@@ -75,6 +75,7 @@ func TestBuildCleanCheckoutAcrossActorModelAndApplicationPackages(t *testing.T) 
 		}
 	}
 	var registrySource string
+	var graphqlGo, graphqlSDL bool
 	for _, artifact := range result.Prospective.Artifacts {
 		if isGoArtifact(artifact.Kind) {
 			for _, marker := range []string{result.Prospective.GenerationDigest, manifest.GeneratorVersion, manifest.TemplateABIVersion} {
@@ -112,6 +113,15 @@ func TestBuildCleanCheckoutAcrossActorModelAndApplicationPackages(t *testing.T) 
 		if artifact.Kind == manifest.ArtifactRegistryGo {
 			registrySource = string(artifact.Content)
 		}
+		if artifact.Kind == manifest.ArtifactGraphQLGo {
+			graphqlGo = strings.HasSuffix(artifact.Path, "/zz_golem_graphql.gen.go") && bytes.Contains(artifact.Content, []byte("func (app *App[P]) GraphQL")) && bytes.Contains(artifact.Content, []byte("NewGeneratedExecutor")) && bytes.Contains(artifact.Content, []byte("NewExecutableSchema")) && bytes.Contains(artifact.Content, []byte("ExecutableSchema: golemGeneratedExecutable")) && bytes.Contains(artifact.Content, []byte("app.ForPrincipal")) && bytes.Contains(artifact.Content, []byte("NewCallerMutationExecution")) && bytes.Contains(artifact.Content, []byte("CallerMutationModel")) && bytes.Contains(artifact.Content, []byte(string(result.ContractFingerprint)))
+		}
+		if artifact.Kind == manifest.ArtifactGraphQLSDL {
+			graphqlSDL = strings.HasSuffix(artifact.Path, "/zz_golem_graphql.schema.graphqls") && firstLine(artifact.Content) == graphqlGeneratedHeader && bytes.Contains(artifact.Content, []byte("type Query"))
+		}
+	}
+	if !graphqlGo || !graphqlSDL {
+		t.Fatalf("canonical GraphQL artifacts missing or incomplete: go=%v sdl=%v", graphqlGo, graphqlSDL)
 	}
 	modelBytes, _ := ir.CanonicalModel(result.Compilation.Model)
 	contractBytes, _ := ir.CanonicalContract(result.Compilation.Contract)
@@ -251,7 +261,7 @@ func TestBuildInvalidBindingAndLoweringFailureReturnNoPartialResult(t *testing.T
 	})
 }
 
-func TestBuildIsByteIdenticalUnderShuffledLowererOptionPackageAndArtifactOrder(t *testing.T) {
+func TestGeneratedGraphQLArtifactsAreByteIdenticalAcrossShuffledInputAndRepeatedGeneration(t *testing.T) {
 	firstRequest := multipackageRequest(t)
 	firstRequest.LowerOptions = []ProviderOptions{{Provider: ir.SQLite}, {Provider: ir.PostgreSQL}}
 	first, err := Build(context.Background(), firstRequest)

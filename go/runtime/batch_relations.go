@@ -224,9 +224,9 @@ func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], execut
 			rows.Close()
 			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation-count decode failed", err)
 		}
-		counts := make(map[policyir.FieldID]int64, len(decodedCounts))
+		counts := make(map[readOccurrenceKey]int64, len(decodedCounts))
 		for _, count := range decodedCounts {
-			counts[count.FieldID()] = count.Value()
+			counts[readOccurrenceKey{field: count.FieldID(), occurrence: count.OccurrenceID()}] = count.Value()
 		}
 		result = append(result, executedRow{values: values, counts: counts, batchKeys: extraKeys})
 	}

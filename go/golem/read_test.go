@@ -157,6 +157,113 @@ func TestRelationCountPreservesSelectedZeroAndCoexistsWithRows(t *testing.T) {
 	}
 }
 
+func TestRuntimeOccurrenceRelationsAndCountsRemainIndependent(t *testing.T) {
+	firstChild, err := RuntimeModelReadRow(readCommentModel, RuntimePresentReadCell(readCommentBody, "newest", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondChild, err := RuntimeModelReadRow(readCommentModel, RuntimePresentReadCell(readCommentBody, "oldest", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, err := RuntimeModelReadRowWithOccurrences(readPostModel, nil,
+		[]RuntimeRelationCountCell{
+			RuntimePresentRelationCountOccurrenceCell(readPostComments, readRelation, 3, 1),
+			RuntimePresentRelationCountOccurrenceCell(readPostComments, readRelation, 4, 2),
+		},
+		[]RuntimeOccurrenceCell{
+			RuntimeToManyOccurrenceCell(readPostComments, 1, []RuntimeModelRow{firstChild}),
+			RuntimeToManyOccurrenceCell(readPostComments, 2, []RuntimeModelRow{secondChild}),
+		})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row, err := RuntimeTypedReadRow(readPostDescriptor, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest, ok := RuntimeOccurrenceToMany(row, readPosts.Comments, 1).Get()
+	if !ok || len(newest) != 1 {
+		t.Fatalf("newest = %#v/%v", newest, ok)
+	}
+	oldest, ok := RuntimeOccurrenceToMany(row, readPosts.Comments, 2).Get()
+	if !ok || len(oldest) != 1 {
+		t.Fatalf("oldest = %#v/%v", oldest, ok)
+	}
+	if value, _ := Value(newest[0], readComments.Body).Get(); value != "newest" {
+		t.Fatalf("newest body = %q", value)
+	}
+	if value, _ := Value(oldest[0], readComments.Body).Get(); value != "oldest" {
+		t.Fatalf("oldest body = %q", value)
+	}
+	if value, ok := RuntimeOccurrenceRelationCount(row, readPosts.Comments, 3).Get(); !ok || value != 1 {
+		t.Fatalf("first count = %d/%v", value, ok)
+	}
+	if value, ok := RuntimeOccurrenceRelationCount(row, readPosts.Comments, 4).Get(); !ok || value != 2 {
+		t.Fatalf("second count = %d/%v", value, ok)
+	}
+	if Many(row, readPosts.Comments).IsSelected() || RelationCount(row, readPosts.Comments).IsSelected() {
+		t.Fatal("GraphQL occurrences leaked into the ordinary typed field slot")
+	}
+	if runtime.ModelID() != readPostModel {
+		t.Fatalf("runtime model=%x", runtime.ModelID())
+	}
+	transportRows, present := RuntimeTransportOccurrence(runtime, readPostComments, 1).Get()
+	children, typed := transportRows.([]RuntimeModelRow)
+	if !present || !typed || len(children) != 1 || children[0].ModelID() != readCommentModel {
+		t.Fatalf("transport occurrence=%#v present=%v typed=%v", transportRows, present, typed)
+	}
+	transportCount, present := RuntimeTransportRelationCount(runtime, readPostComments, readRelation, 4).Get()
+	if !present || transportCount != int64(2) {
+		t.Fatalf("transport count=%#v present=%v", transportCount, present)
+	}
+}
+
+func TestRuntimeFreezeReadRequestRetainsIndependentRelationOccurrences(t *testing.T) {
+	one, two := 1, 2
+	childOne, err := RuntimeFreezeReadRequest(RuntimeReadRequestInput{
+		Operation: ReadFindMany, Model: readCommentModel, Take: &one, Projection: ProjectionSelect,
+		Selection: []RuntimeReadSelectionInput{{Kind: RuntimeReadScalar, Field: readCommentBody}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	childTwo, err := RuntimeFreezeReadRequest(RuntimeReadRequestInput{
+		Operation: ReadFindMany, Model: readCommentModel, Take: &two, Projection: ProjectionSelect,
+		Selection: []RuntimeReadSelectionInput{{Kind: RuntimeReadScalar, Field: readCommentBody}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := RuntimeFreezeReadRequest(RuntimeReadRequestInput{
+		Operation: ReadFindMany, Model: readPostModel, Projection: ProjectionSelect,
+		Selection: []RuntimeReadSelectionInput{
+			{Kind: RuntimeReadRelation, Field: readPostComments, Relation: readRelation, Target: readCommentModel, Occurrence: 1, Request: &childOne},
+			{Kind: RuntimeReadRelation, Field: readPostComments, Relation: readRelation, Target: readCommentModel, Occurrence: 2, Request: &childTwo},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	selection := request.Selection()
+	if len(selection) != 2 || selection[0].OccurrenceID() != 1 || selection[1].OccurrenceID() != 2 {
+		t.Fatalf("selection=%#v", selection)
+	}
+	first, _ := selection[0].Request()
+	second, _ := selection[1].Request()
+	firstTake, _ := first.Take()
+	secondTake, _ := second.Take()
+	if firstTake != 1 || secondTake != 2 {
+		t.Fatalf("child takes=%d/%d", firstTake, secondTake)
+	}
+	if _, err := RuntimeFreezeReadRequest(RuntimeReadRequestInput{
+		Operation: ReadFindMany, Model: readPostModel, Projection: ProjectionSelect,
+		Selection: []RuntimeReadSelectionInput{{Kind: RuntimeReadScalar, Field: readPostTitle, Occurrence: 1}},
+	}); err == nil {
+		t.Fatal("scalar occurrence identity was accepted")
+	}
+}
+
 func TestFreezeFindManyOwnsNestedTypedReadShape(t *testing.T) {
 	if readPosts.ID.fieldIdentity() == (FieldID{}) {
 		t.Fatalf("readPosts.ID was initialized with zero identity; source id=%x", readPostID)

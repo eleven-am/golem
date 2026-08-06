@@ -239,6 +239,16 @@ func bindScalarOperation(kind InputKind, public golem.FrozenMutationField, field
 	operation := public.Operation()
 	raw, hasValue := public.Value()
 	if kind == InputCreate {
+		if operation == golem.MutationFieldNull {
+			if hasValue || !field.Nullable() {
+				return mutationir.ScalarOperation{}, fail(CodeOperation, modelID, fieldID, "create null requires a nullable field and no operand", nil)
+			}
+			bound, err := mutationir.NewNull(policyir.FieldID(fieldID), typ)
+			if err != nil {
+				return mutationir.ScalarOperation{}, fail(CodeInternal, modelID, fieldID, "create scalar IR rejected validated null", err)
+			}
+			return bound, nil
+		}
 		if operation != golem.MutationFieldCreate || !hasValue {
 			return mutationir.ScalarOperation{}, fail(CodeOperation, modelID, fieldID, "create field has an invalid operation or operand shape", nil)
 		}

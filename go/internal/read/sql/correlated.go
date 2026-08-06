@@ -65,14 +65,16 @@ func correlatedKeyKindAllowed(kind compilerir.LogicalTypeKind) bool {
 }
 
 type CorrelatedColumn struct {
-	field    policyir.FieldID
-	relation policyir.RelationID
-	alias    string
+	field      policyir.FieldID
+	relation   policyir.RelationID
+	alias      string
+	occurrence readir.OccurrenceID
 }
 
-func (column CorrelatedColumn) FieldID() policyir.FieldID       { return column.field }
-func (column CorrelatedColumn) RelationID() policyir.RelationID { return column.relation }
-func (column CorrelatedColumn) Alias() string                   { return column.alias }
+func (column CorrelatedColumn) FieldID() policyir.FieldID         { return column.field }
+func (column CorrelatedColumn) RelationID() policyir.RelationID   { return column.relation }
+func (column CorrelatedColumn) Alias() string                     { return column.alias }
+func (column CorrelatedColumn) OccurrenceID() readir.OccurrenceID { return column.occurrence }
 
 type renderedCorrelated struct {
 	expression string
@@ -242,7 +244,7 @@ func renderCorrelatedRelation(parent readplan.Plan, relation readplan.Relation, 
 		aggregate = "(SELECT COALESCE(json_group_array(json(" + dialect.Quote(aggregateAlias) + "." + dialect.Quote("golem_payload") + ")), '[]') FROM (" + page + ") AS " + dialect.Quote(aggregateAlias) + ")"
 	}
 	alias := fmt.Sprintf("golem_rel%d", relationIndex)
-	return renderedCorrelated{expression: aggregate + " AS " + dialect.Quote(physical.PhysicalName(alias)), column: CorrelatedColumn{field: relation.FieldID(), relation: relation.RelationID(), alias: alias}, args: args}, nil
+	return renderedCorrelated{expression: aggregate + " AS " + dialect.Quote(physical.PhysicalName(alias)), column: CorrelatedColumn{field: relation.FieldID(), relation: relation.RelationID(), alias: alias, occurrence: relation.OccurrenceID()}, args: args}, nil
 }
 
 func renderCorrelatedCursor(plan readplan.Plan, cursor readir.Cursor, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, dialect policysql.Dialect, model policysql.Model, childAlias, parentAlias physical.PhysicalName, parentField, childField policysql.Field, physicalColumns map[policyir.FieldID]string, reverse bool, offset int) (string, []any, string, error) {

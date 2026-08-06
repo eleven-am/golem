@@ -59,14 +59,77 @@ func (cell RuntimeReadCell) FieldID() FieldID { return cell.field }
 // before a generated model type is known. It remains model-ID checked when a
 // generated accessor turns it into Row[M].
 type RuntimeModelRow struct {
-	model  ModelID
-	cells  map[FieldID]readCell
-	counts map[relationCountKey]readCell
+	model       ModelID
+	cells       map[FieldID]readCell
+	counts      map[relationCountKey]readCell
+	occurrences map[runtimeOccurrenceKey]readCell
+}
+
+func (row RuntimeModelRow) ModelID() ModelID { return row.model }
+
+// RuntimeTransportValue is the representation-opaque GraphQL/code-generation
+// view of one already authorized public cell. It preserves unselected versus
+// masked/null versus present and clones mutable values on every read.
+type RuntimeTransportValue struct{ cell readCell }
+
+func (value RuntimeTransportValue) State() ReadState { return value.cell.state }
+func (value RuntimeTransportValue) Get() (any, bool) {
+	if value.cell.state != ReadPresent {
+		return nil, false
+	}
+	raw := cloneReadCell(value.cell).value
+	if list, ok := raw.(runtimeScalarList); ok {
+		return RuntimeScalarListValue{canonical: append([]byte(nil), list.raw...)}, true
+	}
+	return raw, true
+}
+
+type RuntimeScalarListValue struct{ canonical []byte }
+
+func (value RuntimeScalarListValue) CanonicalJSON() []byte {
+	return append([]byte(nil), value.canonical...)
+}
+
+func RuntimeTransportField(row RuntimeModelRow, field FieldID) RuntimeTransportValue {
+	if field == (FieldID{}) {
+		return RuntimeTransportValue{}
+	}
+	return RuntimeTransportValue{cell: cloneReadCell(row.cells[field])}
+}
+
+func RuntimeTransportOccurrence(row RuntimeModelRow, field FieldID, occurrence RuntimeOccurrenceID) RuntimeTransportValue {
+	if field == (FieldID{}) || occurrence == 0 {
+		return RuntimeTransportValue{}
+	}
+	return RuntimeTransportValue{cell: cloneReadCell(row.occurrences[runtimeOccurrenceKey{field: field, occurrence: uint32(occurrence)}])}
+}
+
+func RuntimeTransportRelationCount(row RuntimeModelRow, field FieldID, relation RelationID, occurrence RuntimeOccurrenceID) RuntimeTransportValue {
+	if field == (FieldID{}) || relation == (RelationID{}) {
+		return RuntimeTransportValue{}
+	}
+	return RuntimeTransportValue{cell: cloneReadCell(row.counts[relationCountKey{field: field, relation: relation, occurrence: uint32(occurrence)}])}
 }
 
 type relationCountKey struct {
-	field    FieldID
-	relation RelationID
+	field      FieldID
+	relation   RelationID
+	occurrence uint32
+}
+
+type runtimeOccurrenceKey struct {
+	field      FieldID
+	occurrence uint32
+}
+
+// RuntimeOccurrenceID addresses one GraphQL response-path occurrence. Zero is
+// reserved for the ordinary generated Go projection API.
+type RuntimeOccurrenceID uint32
+
+type RuntimeOccurrenceCell struct {
+	field      FieldID
+	occurrence RuntimeOccurrenceID
+	cell       readCell
 }
 
 // RuntimeRelationCountCell is the representation-opaque handoff for one
@@ -74,9 +137,10 @@ type relationCountKey struct {
 // than field identities so selecting both the relation rows and its count does
 // not make the two result cells collide.
 type RuntimeRelationCountCell struct {
-	field    FieldID
-	relation RelationID
-	cell     readCell
+	field      FieldID
+	relation   RelationID
+	occurrence RuntimeOccurrenceID
+	cell       readCell
 }
 
 func RuntimePresentRelationCountCell(field FieldID, relation RelationID, value int64) RuntimeRelationCountCell {
@@ -85,6 +149,14 @@ func RuntimePresentRelationCountCell(field FieldID, relation RelationID, value i
 
 func RuntimeNullRelationCountCell(field FieldID, relation RelationID) RuntimeRelationCountCell {
 	return RuntimeRelationCountCell{field: field, relation: relation, cell: readCell{state: ReadNull}}
+}
+
+func RuntimePresentRelationCountOccurrenceCell(field FieldID, relation RelationID, occurrence RuntimeOccurrenceID, value int64) RuntimeRelationCountCell {
+	return RuntimeRelationCountCell{field: field, relation: relation, occurrence: occurrence, cell: readCell{state: ReadPresent, value: value}}
+}
+
+func RuntimeNullRelationCountOccurrenceCell(field FieldID, relation RelationID, occurrence RuntimeOccurrenceID) RuntimeRelationCountCell {
+	return RuntimeRelationCountCell{field: field, relation: relation, occurrence: occurrence, cell: readCell{state: ReadNull}}
 }
 
 func RuntimeNullReadCell(field FieldID) RuntimeReadCell {
@@ -114,10 +186,11 @@ func RuntimeScalarListReadCell(field FieldID, canonical []byte) RuntimeReadCell 
 
 // Row is one immutable, model-typed projected result.
 type Row[M any] struct {
-	model  ModelID
-	cells  map[FieldID]readCell
-	counts map[relationCountKey]readCell
-	_      func() M
+	model       ModelID
+	cells       map[FieldID]readCell
+	counts      map[relationCountKey]readCell
+	occurrences map[runtimeOccurrenceKey]readCell
+	_           func() M
 }
 
 // RuntimeReadRow validates and owns decoded cells at the public runtime
@@ -141,10 +214,16 @@ func RuntimeModelReadRow(model ModelID, cells ...RuntimeReadCell) (RuntimeModelR
 // cells and authorized relation counts without requiring the generated model's
 // Go type.
 func RuntimeModelReadRowWithCounts(model ModelID, cells []RuntimeReadCell, counts []RuntimeRelationCountCell) (RuntimeModelRow, error) {
+	return RuntimeModelReadRowWithOccurrences(model, cells, counts, nil)
+}
+
+// RuntimeModelReadRowWithOccurrences retains independently addressed aliased
+// relation/count results while ordinary typed projections keep occurrence zero.
+func RuntimeModelReadRowWithOccurrences(model ModelID, cells []RuntimeReadCell, counts []RuntimeRelationCountCell, occurrences []RuntimeOccurrenceCell) (RuntimeModelRow, error) {
 	if model == (ModelID{}) {
 		return RuntimeModelRow{}, fmt.Errorf("read row: model has a zero identity")
 	}
-	result := RuntimeModelRow{model: model, cells: make(map[FieldID]readCell, len(cells)), counts: make(map[relationCountKey]readCell, len(counts))}
+	result := RuntimeModelRow{model: model, cells: make(map[FieldID]readCell, len(cells)), counts: make(map[relationCountKey]readCell, len(counts)), occurrences: make(map[runtimeOccurrenceKey]readCell, len(occurrences))}
 	for index, value := range cells {
 		if value.field == (FieldID{}) {
 			return RuntimeModelRow{}, fmt.Errorf("read row: cell %d has a zero field identity", index)
@@ -171,11 +250,24 @@ func RuntimeModelReadRowWithCounts(model ModelID, cells []RuntimeReadCell, count
 		} else if value.cell.value != nil {
 			return RuntimeModelRow{}, fmt.Errorf("read row: count %d is not int64", index)
 		}
-		key := relationCountKey{field: value.field, relation: value.relation}
+		key := relationCountKey{field: value.field, relation: value.relation, occurrence: uint32(value.occurrence)}
 		if _, duplicate := result.counts[key]; duplicate {
 			return RuntimeModelRow{}, fmt.Errorf("read row: duplicate relation count identity %x/%x", value.field, value.relation)
 		}
 		result.counts[key] = cloneReadCell(value.cell)
+	}
+	for index, value := range occurrences {
+		if value.field == (FieldID{}) || value.occurrence == 0 {
+			return RuntimeModelRow{}, fmt.Errorf("read row: occurrence %d has a zero field or occurrence identity", index)
+		}
+		if value.cell.state != ReadPresent && value.cell.state != ReadNull {
+			return RuntimeModelRow{}, fmt.Errorf("read row: occurrence %d has invalid state %d", index, value.cell.state)
+		}
+		key := runtimeOccurrenceKey{field: value.field, occurrence: uint32(value.occurrence)}
+		if _, duplicate := result.occurrences[key]; duplicate {
+			return RuntimeModelRow{}, fmt.Errorf("read row: duplicate occurrence identity %x/%d", value.field, value.occurrence)
+		}
+		result.occurrences[key] = cloneReadCell(value.cell)
 	}
 	return result, nil
 }
@@ -186,7 +278,7 @@ func RuntimeTypedReadRow[M any](descriptor ModelDescriptor[M], runtime RuntimeMo
 	if model == (ModelID{}) || runtime.model != model {
 		return Row[M]{}, fmt.Errorf("read row: runtime model does not match descriptor")
 	}
-	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts)}, nil
+	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences)}, nil
 }
 
 // RuntimeToOneReadCell and RuntimeToManyReadCell attach already hydrated
@@ -197,6 +289,18 @@ func RuntimeToOneReadCell(field FieldID, value RuntimeModelRow) RuntimeReadCell 
 
 func RuntimeToManyReadCell(field FieldID, values []RuntimeModelRow) RuntimeReadCell {
 	return RuntimePresentReadCell(field, cloneRuntimeModelRows(values), cloneRuntimeModelRows)
+}
+
+func RuntimeNullOccurrenceCell(field FieldID, occurrence RuntimeOccurrenceID) RuntimeOccurrenceCell {
+	return RuntimeOccurrenceCell{field: field, occurrence: occurrence, cell: readCell{state: ReadNull}}
+}
+
+func RuntimeToOneOccurrenceCell(field FieldID, occurrence RuntimeOccurrenceID, value RuntimeModelRow) RuntimeOccurrenceCell {
+	return RuntimeOccurrenceCell{field: field, occurrence: occurrence, cell: readCell{state: ReadPresent, value: cloneRuntimeModelRow(value), clone: func(raw any) any { return cloneRuntimeModelRow(raw.(RuntimeModelRow)) }}}
+}
+
+func RuntimeToManyOccurrenceCell(field FieldID, occurrence RuntimeOccurrenceID, values []RuntimeModelRow) RuntimeOccurrenceCell {
+	return RuntimeOccurrenceCell{field: field, occurrence: occurrence, cell: readCell{state: ReadPresent, value: cloneRuntimeModelRows(values), clone: func(raw any) any { return cloneRuntimeModelRows(raw.([]RuntimeModelRow)) }}}
 }
 
 func cloneReadCell(cell readCell) readCell {
@@ -222,8 +326,16 @@ func cloneReadCounts(counts map[relationCountKey]readCell) map[relationCountKey]
 	return result
 }
 
+func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccurrenceKey]readCell {
+	result := make(map[runtimeOccurrenceKey]readCell, len(values))
+	for key, cell := range values {
+		result[key] = cloneReadCell(cell)
+	}
+	return result
+}
+
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts)}
+	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences)}
 }
 
 func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
@@ -235,7 +347,7 @@ func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
 }
 
 func cloneRow[M any](row Row[M]) Row[M] {
-	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts)}
+	result := Row[M]{model: row.model, cells: make(map[FieldID]readCell, len(row.cells)), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences)}
 	for field, cell := range row.cells {
 		result.cells[field] = cloneReadCell(cell)
 	}
@@ -434,7 +546,7 @@ func One[M, R any](row Row[M], field ToOne[M, R]) ReadValue[Row[R]] {
 		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
 			return ReadValue[Row[R]]{}
 		}
-		typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts)}
+		typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
 		return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
 	}
 	// Retain compatibility with runtime cells constructed before relation rows
@@ -462,7 +574,7 @@ func Many[M, R any](row Row[M], field ToMany[M, R]) ReadValue[[]Row[R]] {
 			if item.model != field.targetModel || field.targetModel == (ModelID{}) {
 				return ReadValue[[]Row[R]]{}
 			}
-			typed[index] = Row[R]{model: item.model, cells: cloneReadCells(item.cells), counts: cloneReadCounts(item.counts)}
+			typed[index] = Row[R]{model: item.model, cells: cloneReadCells(item.cells), counts: cloneReadCounts(item.counts), occurrences: cloneOccurrences(item.occurrences)}
 		}
 	} else {
 		legacy, legacyOK := cell.value.([]Row[R])
@@ -509,6 +621,65 @@ func RelationCount[M, R any](row Row[M], field ToMany[M, R]) ReadValue[int64] {
 	return ReadValue[int64]{state: ReadPresent, value: value}
 }
 
+// RuntimeOccurrenceToOne and RuntimeOccurrenceToMany are used by generated
+// GraphQL encoders to read aliased relation slots without exposing an untyped
+// string-keyed row representation.
+func RuntimeOccurrenceToOne[M, R any](row Row[M], field ToOne[M, R], occurrence RuntimeOccurrenceID) ReadValue[Row[R]] {
+	cell, ok := row.occurrences[runtimeOccurrenceKey{field: field.fieldID, occurrence: uint32(occurrence)}]
+	if !ok {
+		return ReadValue[Row[R]]{}
+	}
+	if cell.state == ReadNull {
+		return ReadValue[Row[R]]{state: ReadNull}
+	}
+	value, ok := cell.value.(RuntimeModelRow)
+	if !ok || value.model != field.targetModel || field.targetModel == (ModelID{}) {
+		return ReadValue[Row[R]]{}
+	}
+	typed := Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+	return ReadValue[Row[R]]{state: ReadPresent, value: typed, clone: cloneRow[R]}
+}
+
+func RuntimeOccurrenceToMany[M, R any](row Row[M], field ToMany[M, R], occurrence RuntimeOccurrenceID) ReadValue[[]Row[R]] {
+	cell, ok := row.occurrences[runtimeOccurrenceKey{field: field.fieldID, occurrence: uint32(occurrence)}]
+	if !ok {
+		return ReadValue[[]Row[R]]{}
+	}
+	if cell.state == ReadNull {
+		return ReadValue[[]Row[R]]{state: ReadNull}
+	}
+	values, ok := cell.value.([]RuntimeModelRow)
+	if !ok {
+		return ReadValue[[]Row[R]]{}
+	}
+	typed := make([]Row[R], len(values))
+	for index, value := range values {
+		if value.model != field.targetModel || field.targetModel == (ModelID{}) {
+			return ReadValue[[]Row[R]]{}
+		}
+		typed[index] = Row[R]{model: value.model, cells: cloneReadCells(value.cells), counts: cloneReadCounts(value.counts), occurrences: cloneOccurrences(value.occurrences)}
+	}
+	return ReadValue[[]Row[R]]{state: ReadPresent, value: cloneRows(typed), clone: cloneRows[R]}
+}
+
+func RuntimeOccurrenceRelationCount[M, R any](row Row[M], field ToMany[M, R], occurrence RuntimeOccurrenceID) ReadValue[int64] {
+	if field.relationID == (RelationID{}) || field.targetModel == (ModelID{}) {
+		return ReadValue[int64]{}
+	}
+	cell, ok := row.counts[relationCountKey{field: field.fieldID, relation: field.relationID, occurrence: uint32(occurrence)}]
+	if !ok {
+		return ReadValue[int64]{}
+	}
+	if cell.state == ReadNull {
+		return ReadValue[int64]{state: ReadNull}
+	}
+	value, ok := cell.value.(int64)
+	if !ok {
+		return ReadValue[int64]{}
+	}
+	return ReadValue[int64]{state: ReadPresent, value: value}
+}
+
 type readSelectionKind uint8
 
 const (
@@ -518,11 +689,12 @@ const (
 )
 
 type readSelectionNode struct {
-	kind     readSelectionKind
-	field    FieldID
-	relation RelationID
-	target   ModelID
-	options  []readOptionNode
+	kind       readSelectionKind
+	field      FieldID
+	relation   RelationID
+	target     ModelID
+	occurrence RuntimeOccurrenceID
+	options    []readOptionNode
 }
 
 // Selection is sealed to generated scalar handles and validated generated
@@ -940,11 +1112,12 @@ func (order FrozenReadOrder) FieldID() FieldID         { return order.field }
 func (order FrozenReadOrder) Direction() SortDirection { return order.direction }
 
 type FrozenReadSelection struct {
-	kind     readSelectionKind
-	field    FieldID
-	relation RelationID
-	target   ModelID
-	request  *FrozenReadRequest
+	kind       readSelectionKind
+	field      FieldID
+	relation   RelationID
+	target     ModelID
+	occurrence RuntimeOccurrenceID
+	request    *FrozenReadRequest
 }
 
 type ReadProjectionMode uint8
@@ -958,6 +1131,9 @@ const (
 func (selection FrozenReadSelection) FieldID() FieldID       { return selection.field }
 func (selection FrozenReadSelection) RelationID() RelationID { return selection.relation }
 func (selection FrozenReadSelection) TargetModelID() ModelID { return selection.target }
+func (selection FrozenReadSelection) OccurrenceID() RuntimeOccurrenceID {
+	return selection.occurrence
+}
 func (selection FrozenReadSelection) IsRelation() bool {
 	return selection.kind == readSelectionRelation
 }
@@ -1299,18 +1475,19 @@ func freezeReadSelection(operation ReadOperation, model ModelID, nodes []readSel
 		return nil, invalidRead(operation, model, FieldID{}, "select is empty")
 	}
 	type selectionIdentity struct {
-		field FieldID
-		kind  readSelectionKind
+		field      FieldID
+		kind       readSelectionKind
+		occurrence RuntimeOccurrenceID
 	}
 	seen := make(map[selectionIdentity]bool, len(nodes))
 	result := make([]FrozenReadSelection, 0, len(nodes))
 	for _, node := range nodes {
-		identity := selectionIdentity{field: node.field, kind: node.kind}
+		identity := selectionIdentity{field: node.field, kind: node.kind, occurrence: node.occurrence}
 		if node.field == (FieldID{}) || seen[identity] {
 			return nil, invalidRead(operation, model, node.field, "select contains a zero or duplicate field")
 		}
 		seen[identity] = true
-		selection := FrozenReadSelection{kind: node.kind, field: node.field}
+		selection := FrozenReadSelection{kind: node.kind, field: node.field, occurrence: node.occurrence}
 		switch node.kind {
 		case readSelectionScalar:
 			if node.relation != (RelationID{}) || node.target != (ModelID{}) || len(node.options) != 0 {

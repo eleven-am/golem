@@ -98,3 +98,31 @@ func TestRelationCountRequiresMatchingCountChildAndCoexistsWithRelation(t *testi
 		t.Fatalf("selections=%#v", selections)
 	}
 }
+
+func TestOccurrenceAwareRelationsPermitAliasesWithoutWeakeningTypedDuplicates(t *testing.T) {
+	model, target := policyir.ModelID{0x21}, policyir.ModelID{0x22}
+	field, relation := policyir.FieldID{0x23}, policyir.RelationID{0x24}
+	childField, _ := NewScalarSelection(policyir.FieldID{0x25})
+	child, err := NewRequest(RequestInput{Operation: FindMany, Model: target, Selection: []Selection{childField}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ordinary, _ := NewRelationSelection(field, relation, target, child)
+	if _, err := NewRequest(RequestInput{Operation: FindMany, Model: model, Selection: []Selection{ordinary, ordinary}}); err == nil {
+		t.Fatal("ordinary typed duplicate relation was accepted")
+	}
+	newest, _ := NewRelationSelectionOccurrence(1, field, relation, target, child)
+	oldest, _ := NewRelationSelectionOccurrence(2, field, relation, target, child)
+	request, err := NewRequest(RequestInput{Operation: FindMany, Model: model, Selection: []Selection{newest, oldest}})
+	if err != nil {
+		t.Fatalf("aliased occurrences rejected: %v", err)
+	}
+	selections := request.Selection()
+	if selections[0].OccurrenceID() != 1 || selections[1].OccurrenceID() != 2 {
+		t.Fatalf("occurrences = %#v", selections)
+	}
+	duplicate, _ := NewRelationSelectionOccurrence(1, field, relation, target, child)
+	if _, err := NewRequest(RequestInput{Operation: FindMany, Model: model, Selection: []Selection{newest, duplicate}}); err == nil {
+		t.Fatal("duplicate occurrence identity was accepted")
+	}
+}

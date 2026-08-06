@@ -48,12 +48,14 @@ type Column struct {
 }
 
 type CountColumn struct {
-	relation policyir.RelationID
-	alias    string
+	relation   policyir.RelationID
+	alias      string
+	occurrence readir.OccurrenceID
 }
 
-func (column CountColumn) RelationID() policyir.RelationID { return column.relation }
-func (column CountColumn) Alias() string                   { return column.alias }
+func (column CountColumn) RelationID() policyir.RelationID   { return column.relation }
+func (column CountColumn) Alias() string                     { return column.alias }
+func (column CountColumn) OccurrenceID() readir.OccurrenceID { return column.occurrence }
 
 func (column Column) FieldID() policyir.FieldID { return column.field }
 func (column Column) Alias() string             { return column.alias }
@@ -305,7 +307,7 @@ func renderRelationCounts(plan readplan.Plan, registry *schema.Registry, provide
 		alias := fmt.Sprintf("golem_count%d", index)
 		result[index] = renderedRelationCount{
 			expression: "(SELECT COUNT(*) FROM " + dialect.Table(childModel) + " AS " + dialect.Quote(childAlias) + " WHERE (" + fragment.SQL() + ") AND (" + strings.Join(correlations, " AND ") + ")) AS " + dialect.Quote(physical.PhysicalName(alias)),
-			column:     CountColumn{relation: count.RelationID(), alias: alias},
+			column:     CountColumn{relation: count.RelationID(), alias: alias, occurrence: count.OccurrenceID()},
 			args:       fragment.Args(),
 		}
 	}

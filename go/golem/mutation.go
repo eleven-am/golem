@@ -121,6 +121,16 @@ func GeneratedCreateFieldValue[M, V any](model ModelID, field ScalarColumn[M, V]
 	}}
 }
 
+// GeneratedCreateNullFieldValue preserves GraphQL's explicit-null versus
+// omitted distinction for nullable create fields, including fields that have a
+// database default. Generated packages expose it only on nullable writable
+// fields; the P4 binder revalidates that proof against the active schema.
+func GeneratedCreateNullFieldValue[M, V any](model ModelID, field ScalarColumn[M, V]) CreateValue[M] {
+	return createValue[M]{node: mutationValueNode{
+		model: model, field: scalarFieldIdentity(field), operation: MutationFieldNull,
+	}}
+}
+
 // GeneratedSetFieldValue constructs one typed scalar assignment usable by
 // both Update and UpdateMany inputs.
 func GeneratedSetFieldValue[M, V any](model ModelID, field ScalarColumn[M, V], value V) UpdateManyValue[M] {
@@ -354,7 +364,11 @@ func freezeMutationInput(operation string, model ModelID, values []mutationValue
 			result.relations = append(result.relations, frozen)
 			continue
 		}
-		if value.operation < minimum || value.operation > maximum {
+		validOperation := value.operation >= minimum && value.operation <= maximum
+		if operation == "create" {
+			validOperation = value.operation == MutationFieldCreate || value.operation == MutationFieldNull
+		}
+		if !validOperation {
 			return FrozenMutationInput{}, invalidMutation(operation, model, value.field, fmt.Sprintf("mutation value %d has an invalid operation", index))
 		}
 		if _, duplicate := seen[value.field]; duplicate {

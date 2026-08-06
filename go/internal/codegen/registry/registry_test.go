@@ -3,10 +3,16 @@ package registry
 import (
 	"bytes"
 	"fmt"
+	"go/ast"
+	"go/format"
+	"go/parser"
+	"go/token"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -14,6 +20,250 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
+
+func TestEmitShellMatchesFinalCallerABI(t *testing.T) {
+	actor := ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Actor"}
+	model := ir.ModelIR{
+		FormatVersion: ir.ModelFormatVersion,
+		Schema: ir.SchemaIdentityIR{
+			ID: "example.test/schema", StableName: "test", PackagePath: "example.test/app", RootFunction: "DefineSchema", Actor: actor,
+		},
+		Models: []ir.ModelDeclIR{
+			{
+				ID: "example.test/User", CanonicalIdentity: "example.test/User",
+				Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "User"}, LogicalName: "User",
+			},
+			{
+				ID: "example.test/AuditLog", CanonicalIdentity: "example.test/AuditLog",
+				Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "AuditLog"}, LogicalName: "AuditLog",
+			},
+		},
+	}
+	contract := ir.ContractIR{FormatVersion: ir.ContractFormatVersion}
+	modelFingerprint, err := ir.ModelFingerprint(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractFingerprint, err := ir.ContractFingerprint(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := modelcodegen.PackageSpec{ImportPath: "example.test/app", PackageName: "app"}
+	final, err := Emit(Request{
+		AppPackage: app, ModelPackages: []modelcodegen.PackageSpec{app}, Actor: actor,
+		GenerationDigest: strings.Repeat("0", 64), GeneratorVersion: "test-generator", TemplateABIVersion: "test-template",
+		Schema: SchemaInput{Model: model, Contract: contract, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	shell, err := EmitShell(ShellRequest{AppPackage: app, Actor: actor, Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repeated, err := EmitShell(ShellRequest{AppPackage: app, Actor: actor, Model: model})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(shell.Source, repeated.Source) {
+		t.Fatal("registry bootstrap is not deterministic")
+	}
+	want := callerABI(t, final.Source)
+	got := callerABI(t, shell.Source)
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("registry bootstrap caller ABI differs from final registry\nbootstrap: %v\nfinal:     %v\n\n%s", got, want, shell.Source)
+	}
+	wantExports := []string{"type Caller", "type CallerAuditLogClient", "type CallerTx", "type CallerTxAuditLogClient", "type CallerTxUserClient", "type CallerUserClient"}
+	if gotExports := registryTopLevelExports(t, shell.Source); fmt.Sprint(gotExports) != fmt.Sprint(wantExports) {
+		t.Fatalf("registry bootstrap exposed unexpected top-level declarations\ngot:  %v\nwant: %v\n\n%s", gotExports, wantExports, shell.Source)
+	}
+	assertRegistryShellClosed(t, shell.Source, []string{"context", modelcodegen.DefaultGolemImportPath})
+	for _, forbidden := range []string{"System", "App", "Config", "sqlx", "database/sql", "golemruntime", " runtime ", " DB ", " Tx "} {
+		if bytes.Contains(shell.Source, []byte(forbidden)) {
+			t.Fatalf("registry bootstrap leaked forbidden capability %q:\n%s", forbidden, shell.Source)
+		}
+	}
+}
+
+func assertRegistryShellClosed(t *testing.T, source []byte, wantImports []string) {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "registry.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var imports []string
+	for _, item := range file.Imports {
+		path, err := strconv.Unquote(item.Path.Value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		imports = append(imports, path)
+	}
+	sort.Strings(imports)
+	sort.Strings(wantImports)
+	if fmt.Sprint(imports) != fmt.Sprint(wantImports) {
+		t.Fatalf("registry bootstrap import capability differs: got %v want %v", imports, wantImports)
+	}
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok {
+					continue
+				}
+				if !callerTypeName(typeSpec.Name.Name) {
+					t.Fatalf("registry bootstrap contains non-caller type %s", typeSpec.Name.Name)
+				}
+				structure, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					t.Fatalf("registry bootstrap caller type %s is not a struct", typeSpec.Name.Name)
+				}
+				if typeSpec.Name.Name != "Caller" && typeSpec.Name.Name != "CallerTx" && len(structure.Fields.List) != 0 {
+					t.Fatalf("registry bootstrap client %s contains capabilities", typeSpec.Name.Name)
+				}
+				for _, field := range structure.Fields.List {
+					if len(field.Names) == 0 {
+						t.Fatalf("registry bootstrap %s contains embedded capability %s", typeSpec.Name.Name, registryExpr(t, field.Type))
+					}
+					for _, name := range field.Names {
+						if !ast.IsExported(name.Name) {
+							t.Fatalf("registry bootstrap %s contains hidden capability %s", typeSpec.Name.Name, name.Name)
+						}
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if value.Recv == nil {
+				t.Fatalf("registry bootstrap contains package function %s", value.Name.Name)
+			}
+		}
+	}
+}
+
+func callerABI(t *testing.T, source []byte) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "registry.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result []string
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				typeSpec, ok := spec.(*ast.TypeSpec)
+				if !ok || !callerTypeName(typeSpec.Name.Name) {
+					continue
+				}
+				result = append(result, "type "+typeSpec.Name.Name+registryTypeParameters(t, typeSpec.TypeParams))
+				if typeSpec.Name.Name != "Caller" && typeSpec.Name.Name != "CallerTx" {
+					continue
+				}
+				structure, ok := typeSpec.Type.(*ast.StructType)
+				if !ok {
+					t.Fatalf("%s is not a struct", typeSpec.Name.Name)
+				}
+				for _, field := range structure.Fields.List {
+					for _, name := range field.Names {
+						if ast.IsExported(name.Name) {
+							result = append(result, "field "+typeSpec.Name.Name+"."+name.Name+" "+registryExpr(t, field.Type))
+						}
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if value.Recv == nil || len(value.Recv.List) != 1 {
+				continue
+			}
+			receiver := registryExpr(t, value.Recv.List[0].Type)
+			base := strings.TrimPrefix(receiver, "*")
+			if index := strings.IndexByte(base, '['); index >= 0 {
+				base = base[:index]
+			}
+			if !callerTypeName(base) {
+				continue
+			}
+			result = append(result, "method "+receiver+"."+value.Name.Name+registryFieldList(t, value.Type.Params)+" "+registryFieldList(t, value.Type.Results))
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func callerTypeName(name string) bool {
+	return name == "Caller" || name == "CallerTx" || strings.HasPrefix(name, "Caller") && strings.HasSuffix(name, "Client")
+}
+
+func registryTypeParameters(t *testing.T, fields *ast.FieldList) string {
+	t.Helper()
+	if fields == nil {
+		return ""
+	}
+	value := registryFieldList(t, fields)
+	return "[" + strings.TrimSuffix(strings.TrimPrefix(value, "("), ")") + "]"
+}
+
+func registryTopLevelExports(t *testing.T, source []byte) []string {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "registry.go", source, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result []string
+	for _, declaration := range file.Decls {
+		switch value := declaration.(type) {
+		case *ast.GenDecl:
+			for _, spec := range value.Specs {
+				switch item := spec.(type) {
+				case *ast.TypeSpec:
+					if ast.IsExported(item.Name.Name) {
+						result = append(result, "type "+item.Name.Name)
+					}
+				case *ast.ValueSpec:
+					for _, name := range item.Names {
+						if ast.IsExported(name.Name) {
+							result = append(result, value.Tok.String()+" "+name.Name)
+						}
+					}
+				}
+			}
+		case *ast.FuncDecl:
+			if value.Recv == nil && ast.IsExported(value.Name.Name) {
+				result = append(result, "func "+value.Name.Name)
+			}
+		}
+	}
+	sort.Strings(result)
+	return result
+}
+
+func registryFieldList(t *testing.T, fields *ast.FieldList) string {
+	t.Helper()
+	if fields == nil {
+		return "()"
+	}
+	values := make([]string, 0, len(fields.List))
+	for _, field := range fields.List {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for range count {
+			values = append(values, registryExpr(t, field.Type))
+		}
+	}
+	return "(" + strings.Join(values, ",") + ")"
+}
+
+func registryExpr(t *testing.T, expression ast.Expr) string {
+	t.Helper()
+	var result bytes.Buffer
+	if err := format.Node(&result, token.NewFileSet(), expression); err != nil {
+		t.Fatal(err)
+	}
+	return result.String()
+}
 
 func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	request := completeRequest(t, Request{

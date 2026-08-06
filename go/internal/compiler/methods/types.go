@@ -1,4 +1,5 @@
-// Package methods type-checks and statically interprets GolemModel methods.
+// Package methods type-checks and statically interprets GolemModel and
+// GraphQL extension declarations.
 //
 // The interpreter consumes generated descriptor overlays; it never executes
 // application code and never recovers meaning by reparsing source text.
@@ -11,6 +12,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
 // Config contains the resolved model graph and the package locations needed
@@ -23,6 +26,7 @@ type Config struct {
 	Packages        []modelcodegen.PackageSpec
 	Bootstrap       modelcodegen.Result
 	Registry        *schemaexpr.Registry
+	IDRegistry      *ir.IDRegistry
 	GolemImportPath string
 }
 
@@ -41,11 +45,15 @@ type RelationOptionDeclaration struct {
 type Result struct {
 	Advanced        []keyindex.AdvancedModelDeclarations
 	RelationOptions []RelationOptionDeclaration
+	GraphQLModels   []graphqlcontract.ModelPatch
+	GraphQLComputed []graphqlextension.ComputedDeclaration
+	GraphQLCustom   []graphqlextension.CustomOperationDeclaration
 	Diagnostics     []ir.Diagnostic
 }
 
-// Interpret loads every registered model package with the fresh generated
-// overlay, type-checks it, and interprets each exact GolemModel declaration.
+// Interpret loads every registered model and schema package with the fresh
+// generated overlay, type-checks it, and interprets each exact GolemModel,
+// model DefineGraphQL, and schema DefineGraphQL declaration.
 func Interpret(ctx context.Context, config Config) Result {
 	return interpret(ctx, config)
 }

@@ -91,7 +91,7 @@ func Correlated(plan readplan.Plan, registry *schema.Registry, provider policyir
 			if err != nil {
 				return nil, &Error{Field: count.FieldID(), Detail: "correlated relation count is invalid", Cause: err}
 			}
-			row.counts[index] = RelationCount{field: count.FieldID(), relation: count.RelationID(), value: value}
+			row.counts[index] = RelationCount{field: count.FieldID(), relation: count.RelationID(), value: value, occurrence: count.OccurrenceID()}
 		}
 		result[rowIndex] = row
 	}

@@ -134,6 +134,11 @@ func (order Order) Direction() SortDirection  { return order.direction }
 
 type SelectionKind uint8
 
+// OccurrenceID addresses one response-path occurrence without changing the
+// stable field/relation identity used for authorization and SQL planning. Zero
+// is reserved for the ordinary typed Go projection API.
+type OccurrenceID uint32
+
 const (
 	SelectScalar SelectionKind = iota + 1
 	SelectRelation
@@ -149,11 +154,12 @@ const (
 )
 
 type Selection struct {
-	kind     SelectionKind
-	field    policyir.FieldID
-	relation policyir.RelationID
-	target   policyir.ModelID
-	request  *Request
+	kind       SelectionKind
+	field      policyir.FieldID
+	relation   policyir.RelationID
+	target     policyir.ModelID
+	request    *Request
+	occurrence OccurrenceID
 }
 
 func NewScalarSelection(field policyir.FieldID) (Selection, error) {
@@ -164,25 +170,34 @@ func NewScalarSelection(field policyir.FieldID) (Selection, error) {
 }
 
 func NewRelationSelection(field policyir.FieldID, relation policyir.RelationID, target policyir.ModelID, request Request) (Selection, error) {
+	return NewRelationSelectionOccurrence(0, field, relation, target, request)
+}
+
+func NewRelationSelectionOccurrence(occurrence OccurrenceID, field policyir.FieldID, relation policyir.RelationID, target policyir.ModelID, request Request) (Selection, error) {
 	if field == (policyir.FieldID{}) || relation == (policyir.RelationID{}) || target == (policyir.ModelID{}) || request.model != target {
 		return Selection{}, fmt.Errorf("P3_READ_IR_SELECTION: relation identities and matching child request are required")
 	}
 	child := request.clone()
-	return Selection{kind: SelectRelation, field: field, relation: relation, target: target, request: &child}, nil
+	return Selection{kind: SelectRelation, field: field, relation: relation, target: target, request: &child, occurrence: occurrence}, nil
 }
 
 func NewRelationCountSelection(field policyir.FieldID, relation policyir.RelationID, target policyir.ModelID, request Request) (Selection, error) {
+	return NewRelationCountSelectionOccurrence(0, field, relation, target, request)
+}
+
+func NewRelationCountSelectionOccurrence(occurrence OccurrenceID, field policyir.FieldID, relation policyir.RelationID, target policyir.ModelID, request Request) (Selection, error) {
 	if field == (policyir.FieldID{}) || relation == (policyir.RelationID{}) || target == (policyir.ModelID{}) || request.model != target || request.operation != Count {
 		return Selection{}, fmt.Errorf("P3_READ_IR_SELECTION: relation-count identities and matching count request are required")
 	}
 	child := request.clone()
-	return Selection{kind: SelectRelationCount, field: field, relation: relation, target: target, request: &child}, nil
+	return Selection{kind: SelectRelationCount, field: field, relation: relation, target: target, request: &child, occurrence: occurrence}, nil
 }
 
 func (selection Selection) Kind() SelectionKind             { return selection.kind }
 func (selection Selection) FieldID() policyir.FieldID       { return selection.field }
 func (selection Selection) RelationID() policyir.RelationID { return selection.relation }
 func (selection Selection) TargetModelID() policyir.ModelID { return selection.target }
+func (selection Selection) OccurrenceID() OccurrenceID      { return selection.occurrence }
 func (selection Selection) Request() (Request, bool) {
 	if selection.request == nil {
 		return Request{}, false
@@ -301,13 +316,22 @@ func NewRequest(input RequestInput) (Request, error) {
 		field policyir.FieldID
 		kind  SelectionKind
 	}
-	seenSelection := make(map[selectionIdentity]bool, len(result.selection))
+	seenSelection := make(map[selectionIdentity]Selection, len(result.selection))
+	seenOccurrence := make(map[OccurrenceID]bool, len(result.selection))
 	for _, selection := range result.selection {
 		identity := selectionIdentity{field: selection.field, kind: selection.kind}
-		if seenSelection[identity] {
-			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: selections are duplicate")
+		if previous, duplicate := seenSelection[identity]; duplicate {
+			if previous.occurrence == 0 || selection.occurrence == 0 || previous.occurrence == selection.occurrence {
+				return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: selections are duplicate")
+			}
 		}
-		seenSelection[identity] = true
+		if selection.occurrence != 0 && seenOccurrence[selection.occurrence] {
+			return Request{}, fmt.Errorf("P3_READ_IR_REQUEST: occurrence identities are duplicate")
+		}
+		seenSelection[identity] = selection
+		if selection.occurrence != 0 {
+			seenOccurrence[selection.occurrence] = true
+		}
 	}
 	seenOmit := make(map[policyir.FieldID]bool, len(result.omit))
 	for _, field := range result.omit {

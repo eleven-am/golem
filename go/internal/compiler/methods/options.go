@@ -2,10 +2,12 @@ package methods
 
 import (
 	"go/ast"
+	"go/constant"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 )
 
 func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
@@ -38,6 +40,12 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 			return
 		}
 		in.evalKey(call)
+	case "GraphQL":
+		if scope != ir.ProviderScopePortable {
+			in.errorAt("P5_GRAPHQL_PROVIDER_SCOPE", "GraphQL contract options cannot be provider-scoped", call)
+			return
+		}
+		in.evalGraphQL(call)
 	case "Check":
 		in.evalCheck(call, scope)
 	case "Generated":
@@ -53,6 +61,141 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		in.errorAt("P1_METHOD_OPTION_CALL", "call is not a recognized golem model-option constructor", expression)
 	}
+}
+
+func (in *interpreter) evalGraphQL(call *ast.CallExpr) {
+	if in.graphql != nil {
+		in.errorAt("P5_GRAPHQL_MODEL_DUPLICATE", "GraphQL may be declared only once in GolemModel", call)
+		return
+	}
+	patch := graphqlcontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
+	seen := map[string]bool{}
+	for _, expression := range call.Args {
+		option, ok := unparen(expression).(*ast.CallExpr)
+		if !ok {
+			in.errorAt("P5_GRAPHQL_OPTION", "GraphQL options must be direct constructor calls", expression)
+			continue
+		}
+		operation := in.callOperation(option)
+		if seen[operation] {
+			in.errorAt("P5_GRAPHQL_OPTION_DUPLICATE", operation+" may be declared only once", option)
+			continue
+		}
+		seen[operation] = true
+		switch operation {
+		case "GraphQLOperations":
+			values := make([]ir.Operation, 0, len(option.Args))
+			for _, argument := range option.Args {
+				value, valid := graphqlOperation(in.constantName(argument))
+				if !valid {
+					in.errorAt("P5_GRAPHQL_OPERATION", "GraphQLOperations accepts only typed golem GraphQL operation constants", argument)
+					continue
+				}
+				values = append(values, value)
+			}
+			patch.Operations = &values
+		case "GraphQLPlural":
+			if len(option.Args) != 1 {
+				in.errorAt("P5_GRAPHQL_PLURAL_ARITY", "GraphQLPlural requires one constant string", option)
+				continue
+			}
+			value, valid := in.constString(option.Args[0])
+			if !valid {
+				in.errorAt("P5_GRAPHQL_PLURAL", "GraphQLPlural requires one constant string", option.Args[0])
+				continue
+			}
+			patch.Plural = &value
+		case "GraphQLRoots":
+			if len(option.Args) != 1 {
+				in.errorAt("P5_GRAPHQL_ROOTS_ARITY", "GraphQLRoots requires one GraphQLRootNames literal", option)
+				continue
+			}
+			roots, valid := in.graphqlRoots(option.Args[0])
+			if valid {
+				patch.Roots = &roots
+			}
+		case "GraphQLPageSizes":
+			if len(option.Args) != 2 {
+				in.errorAt("P5_GRAPHQL_PAGE_ARITY", "GraphQLPageSizes requires default and maximum sizes", option)
+				continue
+			}
+			defaultSize, left := in.uint32Constant(option.Args[0])
+			maximumSize, right := in.uint32Constant(option.Args[1])
+			if !left || !right {
+				in.errorAt("P5_GRAPHQL_PAGE_VALUE", "GraphQL page sizes must be positive uint32 integer constants", option)
+				continue
+			}
+			patch.DefaultPage, patch.MaximumPage = &defaultSize, &maximumSize
+		case "GraphQLHidden":
+			if len(option.Args) != 0 {
+				in.errorAt("P5_GRAPHQL_HIDDEN_ARITY", "GraphQLHidden takes no arguments", option)
+				continue
+			}
+			patch.Hidden = true
+		default:
+			in.errorAt("P5_GRAPHQL_OPTION", "call is not a recognized GraphQL option constructor", expression)
+		}
+	}
+	in.graphql = &patch
+}
+
+func graphqlOperation(name string) (ir.Operation, bool) {
+	values := map[string]ir.Operation{
+		"GraphQLFindOne": ir.OperationFindOne, "GraphQLFindMany": ir.OperationFindMany,
+		"GraphQLCreate": ir.OperationCreate, "GraphQLUpdate": ir.OperationUpdate,
+		"GraphQLUpsert": ir.OperationUpsert, "GraphQLDelete": ir.OperationDelete,
+		"GraphQLUpdateMany": ir.OperationUpdateMany, "GraphQLDeleteMany": ir.OperationDeleteMany,
+	}
+	value, ok := values[name]
+	return value, ok
+}
+
+func (in *interpreter) uint32Constant(expression ast.Expr) (uint32, bool) {
+	value := in.pkg.TypesInfo.Types[expression].Value
+	if value == nil || value.Kind() != constant.Int {
+		return 0, false
+	}
+	integer, exact := constant.Uint64Val(value)
+	return uint32(integer), exact && integer > 0 && integer <= uint64(^uint32(0))
+}
+
+func (in *interpreter) graphqlRoots(expression ast.Expr) (ir.GraphQLRootNamesIR, bool) {
+	literal, ok := unparen(expression).(*ast.CompositeLit)
+	if !ok {
+		in.errorAt("P5_GRAPHQL_ROOTS_LITERAL", "GraphQLRoots requires a direct golem.GraphQLRootNames struct literal", expression)
+		return ir.GraphQLRootNamesIR{}, false
+	}
+	var result ir.GraphQLRootNamesIR
+	destinations := map[string]*string{
+		"FindOne": &result.FindOne, "FindMany": &result.FindMany, "Create": &result.Create,
+		"Update": &result.Update, "Upsert": &result.Upsert, "Delete": &result.Delete,
+		"UpdateMany": &result.UpdateMany, "DeleteMany": &result.DeleteMany,
+	}
+	seen := map[string]bool{}
+	for _, element := range literal.Elts {
+		item, ok := element.(*ast.KeyValueExpr)
+		if !ok {
+			in.errorAt("P5_GRAPHQL_ROOTS_KEYED", "GraphQLRootNames must use keyed fields", element)
+			return result, false
+		}
+		key, ok := item.Key.(*ast.Ident)
+		if !ok || destinations[key.Name] == nil {
+			in.errorAt("P5_GRAPHQL_ROOTS_FIELD", "GraphQLRootNames contains an unknown field", item.Key)
+			return result, false
+		}
+		if seen[key.Name] {
+			in.errorAt("P5_GRAPHQL_ROOTS_DUPLICATE", key.Name+" is assigned more than once", item.Key)
+			return result, false
+		}
+		seen[key.Name] = true
+		value, valid := in.constString(item.Value)
+		if !valid {
+			in.errorAt("P5_GRAPHQL_ROOTS_VALUE", "GraphQL root names must be constant strings", item.Value)
+			return result, false
+		}
+		*destinations[key.Name] = value
+	}
+	return result, true
 }
 
 func (in *interpreter) evalKey(call *ast.CallExpr) {

@@ -14,6 +14,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -36,6 +38,8 @@ type interpreter struct {
 	relations   []RelationOptionDeclaration
 	generated   []pendingGenerated
 	diagnostics []ir.Diagnostic
+	graphql     *graphqlcontract.ModelPatch
+	computed    []graphqlextension.ComputedDeclaration
 }
 
 type handleBinding struct {
@@ -57,6 +61,9 @@ func interpret(ctx context.Context, config Config) Result {
 	}
 	if len(config.Compilation.Model.Models) == 0 {
 		return Result{}
+	}
+	if config.IDRegistry == nil {
+		config.IDRegistry = ir.NewIDRegistry()
 	}
 	loaded, diagnostics := loadTyped(ctx, config)
 	result := Result{Diagnostics: diagnostics}
@@ -81,11 +88,19 @@ func interpret(ctx context.Context, config Config) Result {
 			advanced: keyindex.AdvancedModelDeclarations{ModelID: model.ID},
 		}
 		entry.interpretModel()
+		entry.interpretGraphQLModel()
 		entry.finishGenerated()
 		result.Advanced = append(result.Advanced, entry.advanced)
 		result.RelationOptions = append(result.RelationOptions, entry.relations...)
+		if entry.graphql != nil {
+			result.GraphQLModels = append(result.GraphQLModels, *entry.graphql)
+		}
+		result.GraphQLComputed = append(result.GraphQLComputed, entry.computed...)
 		result.Diagnostics = append(result.Diagnostics, entry.diagnostics...)
 	}
+	custom, customDiagnostics := interpretGraphQLSchema(config, loaded)
+	result.GraphQLCustom = append(result.GraphQLCustom, custom...)
+	result.Diagnostics = append(result.Diagnostics, customDiagnostics...)
 	sort.Slice(result.Advanced, func(i, j int) bool { return result.Advanced[i].ModelID < result.Advanced[j].ModelID })
 	sort.Slice(result.RelationOptions, func(i, j int) bool {
 		if result.RelationOptions[i].ModelID != result.RelationOptions[j].ModelID {
@@ -96,6 +111,8 @@ func interpret(ctx context.Context, config Config) Result {
 		}
 		return result.RelationOptions[i].Span.StartLine < result.RelationOptions[j].Span.StartLine
 	})
+	graphqlcontract.SortPatches(result.GraphQLModels)
+	graphqlextension.SortDeclarations(result.GraphQLComputed, result.GraphQLCustom)
 	ir.SortDiagnostics(result.Diagnostics)
 	return result
 }
@@ -107,7 +124,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast"} {
+	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}
@@ -118,6 +135,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		"IndexKey":           {"Desc"},
 		"IndexSpec":          {"Keys", "Where"},
 		"RelationOptionSpec": {"OnUpdate", "OnDelete"},
+		"GraphQLType":        {"NonNull"},
 	} {
 		object, _ := scope.Lookup(typeName).(*types.TypeName)
 		if object == nil {
@@ -138,7 +156,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 			}
 		}
 	}
-	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString"} {
+	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString", "GraphQLFindOne", "GraphQLFindMany", "GraphQLCreate", "GraphQLUpdate", "GraphQLUpsert", "GraphQLDelete", "GraphQLUpdateMany", "GraphQLDeleteMany"} {
 		if object := scope.Lookup(name); object != nil {
 			result.constants[object] = name
 		}

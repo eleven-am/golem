@@ -13,7 +13,7 @@ func correlatedPayloadAvailable(rows []executedRow, relation readplan.Relation) 
 		if rows[index].correlated == nil {
 			return false
 		}
-		if _, ok := rows[index].correlated[relation.FieldID()]; !ok {
+		if _, ok := rows[index].correlated[relationKey(relation)]; !ok {
 			return false
 		}
 	}
@@ -31,7 +31,7 @@ func finishCorrelatedRelation[P, A any](ctx context.Context, app *App[P, A], exe
 	sizes := make([]int, len(parents))
 	total := 0
 	for index := range parents {
-		children := parents[index].correlated[relation.FieldID()]
+		children := parents[index].correlated[relationKey(relation)]
 		if err := enforceDecodedResultLimit(operation, relation.Child(), golem.FieldID(relation.FieldID()), len(children)); err != nil {
 			return nil, err
 		}
@@ -40,7 +40,7 @@ func finishCorrelatedRelation[P, A any](ctx context.Context, app *App[P, A], exe
 	}
 	flat := make([]executedRow, 0, total)
 	for index := range parents {
-		flat = append(flat, parents[index].correlated[relation.FieldID()]...)
+		flat = append(flat, parents[index].correlated[relationKey(relation)]...)
 	}
 	finished, err := finishPlanRows(ctx, app, executor, operation, relation.Child(), flat)
 	if err != nil {

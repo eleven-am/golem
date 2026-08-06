@@ -399,6 +399,27 @@ func normalizeContract(contract *ContractIR) {
 			}
 		}
 		sort.Slice(model.Operations, func(a, b int) bool { return model.Operations[a] < model.Operations[b] })
+		sort.Slice(model.Computed, func(a, b int) bool {
+			if model.Computed[a].Name != model.Computed[b].Name {
+				return model.Computed[a].Name < model.Computed[b].Name
+			}
+			return model.Computed[a].ExtensionID < model.Computed[b].ExtensionID
+		})
+		for computedIndex := range model.Computed {
+			computed := &model.Computed[computedIndex]
+			sort.Slice(computed.Arguments, func(a, b int) bool { return computed.Arguments[a].Name < computed.Arguments[b].Name })
+			sort.Slice(computed.Requires, func(a, b int) bool { return computed.Requires[a] < computed.Requires[b] })
+			if computed.Arguments == nil {
+				computed.Arguments = []GraphQLArgumentContractIR{}
+			}
+			if computed.Requires == nil {
+				computed.Requires = []FieldID{}
+			}
+			normalizeGraphQLType(&computed.Result)
+			for argumentIndex := range computed.Arguments {
+				normalizeGraphQLType(&computed.Arguments[argumentIndex].Type)
+			}
+		}
 		if model.Fields == nil {
 			model.Fields = []FieldContractIR{}
 		}
@@ -408,6 +429,9 @@ func normalizeContract(contract *ContractIR) {
 		if model.Operations == nil {
 			model.Operations = []Operation{}
 		}
+		if model.Computed == nil {
+			model.Computed = []ComputedFieldContractIR{}
+		}
 		for fieldIndex := range model.Fields {
 			if model.Fields[fieldIndex].Modes == nil {
 				model.Fields[fieldIndex].Modes = []FieldMode{}
@@ -415,6 +439,34 @@ func normalizeContract(contract *ContractIR) {
 		}
 	}
 	sort.Slice(contract.Enums, func(i, j int) bool { return contract.Enums[i].EnumID < contract.Enums[j].EnumID })
+	for enumIndex := range contract.Enums {
+		sort.Slice(contract.Enums[enumIndex].Values, func(i, j int) bool {
+			return contract.Enums[enumIndex].Values[i].ValueID < contract.Enums[enumIndex].Values[j].ValueID
+		})
+		if contract.Enums[enumIndex].Values == nil {
+			contract.Enums[enumIndex].Values = []EnumValueContractIR{}
+		}
+	}
+	sort.Slice(contract.CustomOperations, func(i, j int) bool {
+		if contract.CustomOperations[i].Operation != contract.CustomOperations[j].Operation {
+			return contract.CustomOperations[i].Operation < contract.CustomOperations[j].Operation
+		}
+		if contract.CustomOperations[i].Name != contract.CustomOperations[j].Name {
+			return contract.CustomOperations[i].Name < contract.CustomOperations[j].Name
+		}
+		return contract.CustomOperations[i].ExtensionID < contract.CustomOperations[j].ExtensionID
+	})
+	for operationIndex := range contract.CustomOperations {
+		operation := &contract.CustomOperations[operationIndex]
+		sort.Slice(operation.Arguments, func(i, j int) bool { return operation.Arguments[i].Name < operation.Arguments[j].Name })
+		if operation.Arguments == nil {
+			operation.Arguments = []GraphQLArgumentContractIR{}
+		}
+		normalizeGraphQLType(&operation.Result)
+		for argumentIndex := range operation.Arguments {
+			normalizeGraphQLType(&operation.Arguments[argumentIndex].Type)
+		}
+	}
 	sort.Slice(contract.Methods, func(i, j int) bool {
 		left, right := contract.Methods[i], contract.Methods[j]
 		if left.Receiver.PackagePath != right.Receiver.PackagePath {
@@ -436,6 +488,15 @@ func normalizeContract(contract *ContractIR) {
 	}
 	if contract.Methods == nil {
 		contract.Methods = []AttachedMethodIR{}
+	}
+	if contract.CustomOperations == nil {
+		contract.CustomOperations = []CustomOperationContractIR{}
+	}
+}
+
+func normalizeGraphQLType(value *GraphQLTypeIR) {
+	if value != nil && value.Element != nil {
+		normalizeGraphQLType(value.Element)
 	}
 }
 

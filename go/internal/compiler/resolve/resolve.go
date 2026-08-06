@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 )
 
 type Result struct {
@@ -119,7 +120,15 @@ func (r *baseResolver) resolveEnums() {
 		}
 		r.diagnostics = append(r.diagnostics, scalar.ValidateEnum(enum, rawEnum.Span)...)
 		r.compilation.Model.Enums = append(r.compilation.Model.Enums, enum)
-		r.compilation.Contract.Enums = append(r.compilation.Contract.Enums, ir.EnumContractIR{EnumID: enumID, GraphQLName: rawEnum.GoName})
+		enumContract := ir.EnumContractIR{EnumID: enumID, GraphQLName: rawEnum.GoName}
+		for index, value := range enum.Values {
+			graphqlName := value.GoName
+			if index < len(values) && values[index].GraphQLName != nil {
+				graphqlName = *values[index].GraphQLName
+			}
+			enumContract.Values = append(enumContract.Values, ir.EnumValueContractIR{ValueID: value.ID, GraphQLName: graphqlName})
+		}
+		r.compilation.Contract.Enums = append(r.compilation.Contract.Enums, enumContract)
 		wireValues := make([]string, len(enum.Values))
 		for index := range enum.Values {
 			wireValues[index] = enum.Values[index].WireValue
@@ -226,7 +235,7 @@ func (r *baseResolver) resolveField(modelID ir.ModelID, rawField ir.RawFieldDecl
 	}
 	graphqlName, _ := attributeValue(rawField.GolemAttrs, "graphql")
 	if graphqlName == "" {
-		graphqlName = rawField.GoName
+		graphqlName = graphqlcontract.LowerCamel(rawField.GoName)
 	}
 	return field, ir.FieldContractIR{FieldID: fieldID, GraphQLName: graphqlName, Modes: modes}, diagnostics
 }

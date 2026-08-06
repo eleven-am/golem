@@ -287,7 +287,7 @@ func runtimeTypedHookRow[M any](model ModelID, runtime RuntimeModelRow) (Row[M],
 	if model == (ModelID{}) || runtime.model != model {
 		return Row[M]{}, fmt.Errorf("generated mutation hook: result model mismatch")
 	}
-	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts)}, nil
+	return Row[M]{model: model, cells: cloneReadCells(runtime.cells), counts: cloneReadCounts(runtime.counts), occurrences: cloneOccurrences(runtime.occurrences)}, nil
 }
 
 func thawCreateInput[M any](input FrozenMutationInput) CreateInput[M] {

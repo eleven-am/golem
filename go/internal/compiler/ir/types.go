@@ -6,7 +6,7 @@ package ir
 const (
 	RawDeclFormatVersion  uint16 = 1
 	ModelFormatVersion    uint16 = 1
-	ContractFormatVersion uint16 = 1
+	ContractFormatVersion uint16 = 2
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.
 	CanonicalFormatVersion uint16 = 1
@@ -155,11 +155,12 @@ type RawEnumDecl struct {
 }
 
 type RawEnumValue struct {
-	GoName    string     `json:"goName"`
-	WireValue string     `json:"wireValue"`
-	StableID  *string    `json:"stableId,omitempty"`
-	Ordinal   uint32     `json:"ordinal"`
-	Span      SourceSpan `json:"span"`
+	GoName      string     `json:"goName"`
+	WireValue   string     `json:"wireValue"`
+	GraphQLName *string    `json:"graphqlName,omitempty"`
+	StableID    *string    `json:"stableId,omitempty"`
+	Ordinal     uint32     `json:"ordinal"`
+	Span        SourceSpan `json:"span"`
 }
 
 type RawMethodRef struct {
@@ -597,30 +598,41 @@ type CompilationIR struct {
 }
 
 type ContractIR struct {
-	FormatVersion uint16             `json:"formatVersion"`
-	Models        []ModelContractIR  `json:"models"`
-	Enums         []EnumContractIR   `json:"enums"`
-	Methods       []AttachedMethodIR `json:"methods"`
+	FormatVersion     uint16                      `json:"formatVersion"`
+	GraphQLABIVersion uint16                      `json:"graphqlAbiVersion"`
+	Models            []ModelContractIR           `json:"models"`
+	Enums             []EnumContractIR            `json:"enums"`
+	Methods           []AttachedMethodIR          `json:"methods"`
+	CustomOperations  []CustomOperationContractIR `json:"customOperations"`
 }
 
 type ModelContractIR struct {
-	ModelID     ModelID              `json:"modelId"`
-	GraphQLName string               `json:"graphqlName"`
-	Fields      []FieldContractIR    `json:"fields"`
-	Selectors   []SelectorContractIR `json:"selectors"`
+	ModelID       ModelID              `json:"modelId"`
+	GraphQLName   string               `json:"graphqlName"`
+	GraphQLPlural string               `json:"graphqlPlural"`
+	Roots         GraphQLRootNamesIR   `json:"roots"`
+	Fields        []FieldContractIR    `json:"fields"`
+	Selectors     []SelectorContractIR `json:"selectors"`
 	// FieldModes is a bootstrap source-compatibility field. It is not serialized;
 	// normalized producers and consumers use Fields.
-	FieldModes    []FieldContractIR      `json:"-"`
-	Operations    []Operation            `json:"operations"`
-	Subscriptions bool                   `json:"subscriptions"`
-	Aggregation   *AggregationContractIR `json:"aggregation,omitempty"`
-	Limits        LimitContractIR        `json:"limits"`
-	Exposed       bool                   `json:"exposed"`
+	FieldModes    []FieldContractIR         `json:"-"`
+	Operations    []Operation               `json:"operations"`
+	Subscriptions bool                      `json:"subscriptions"`
+	Aggregation   *AggregationContractIR    `json:"aggregation,omitempty"`
+	Limits        LimitContractIR           `json:"limits"`
+	Computed      []ComputedFieldContractIR `json:"computed"`
+	Exposed       bool                      `json:"exposed"`
 }
 
 type EnumContractIR struct {
-	EnumID      EnumID `json:"enumId"`
-	GraphQLName string `json:"graphqlName"`
+	EnumID      EnumID                `json:"enumId"`
+	GraphQLName string                `json:"graphqlName"`
+	Values      []EnumValueContractIR `json:"values"`
+}
+
+type EnumValueContractIR struct {
+	ValueID     EnumValueID `json:"valueId"`
+	GraphQLName string      `json:"graphqlName"`
 }
 
 type FieldMode string
@@ -655,18 +667,113 @@ type SelectorContractIR struct {
 
 type Operation string
 
+const (
+	OperationFindOne    Operation = "findOne"
+	OperationFindMany   Operation = "findMany"
+	OperationCreate     Operation = "create"
+	OperationUpdate     Operation = "update"
+	OperationUpsert     Operation = "upsert"
+	OperationDelete     Operation = "delete"
+	OperationUpdateMany Operation = "updateMany"
+	OperationDeleteMany Operation = "deleteMany"
+)
+
+type GraphQLRootNamesIR struct {
+	FindOne    string `json:"findOne"`
+	FindMany   string `json:"findMany"`
+	Create     string `json:"create"`
+	Update     string `json:"update"`
+	Upsert     string `json:"upsert"`
+	Delete     string `json:"delete"`
+	UpdateMany string `json:"updateMany"`
+	DeleteMany string `json:"deleteMany"`
+	Aggregate  string `json:"aggregate"`
+	GroupBy    string `json:"groupBy"`
+	Events     string `json:"events"`
+}
+
 type AggregationContractIR struct {
 	Enabled bool `json:"enabled"`
 }
 
 type LimitContractIR struct {
-	MaxTake uint32 `json:"maxTake,omitempty"`
+	MaxTake         uint32 `json:"maxTake,omitempty"`
+	DefaultPageSize uint32 `json:"defaultPageSize,omitempty"`
+	MaxPageSize     uint32 `json:"maxPageSize,omitempty"`
+}
+
+type GraphQLTypeKind string
+
+const (
+	GraphQLTypeScalar          GraphQLTypeKind = "scalar"
+	GraphQLTypeEnum            GraphQLTypeKind = "enum"
+	GraphQLTypeModel           GraphQLTypeKind = "model"
+	GraphQLTypeList            GraphQLTypeKind = "list"
+	GraphQLTypePredicate       GraphQLTypeKind = "predicate"
+	GraphQLTypeSelector        GraphQLTypeKind = "selector"
+	GraphQLTypeCreateInput     GraphQLTypeKind = "createInput"
+	GraphQLTypeUpdateInput     GraphQLTypeKind = "updateInput"
+	GraphQLTypeUpdateManyInput GraphQLTypeKind = "updateManyInput"
+)
+
+// GraphQLTypeIR is a closed transport type tree. Name is populated only for a
+// scalar, enum, model, or model-derived input leaf; list nodes contain exactly
+// one Element.
+type GraphQLTypeIR struct {
+	Kind     GraphQLTypeKind `json:"kind"`
+	Name     string          `json:"name,omitempty"`
+	Nullable bool            `json:"nullable"`
+	Element  *GraphQLTypeIR  `json:"element,omitempty"`
+}
+
+type GraphQLArgumentContractIR struct {
+	Name string        `json:"name"`
+	Type GraphQLTypeIR `json:"type"`
+}
+
+type ComputedFieldContractIR struct {
+	ExtensionID ExtensionID                 `json:"extensionId"`
+	Name        string                      `json:"name"`
+	Result      GraphQLTypeIR               `json:"result"`
+	Arguments   []GraphQLArgumentContractIR `json:"arguments"`
+	Requires    []FieldID                   `json:"requires"`
+	Resolver    AttachedMethodIR            `json:"resolver"`
+	Batch       *ComputedBatchContractIR    `json:"batch,omitempty"`
+}
+
+type ComputedBatchContractIR struct {
+	KeyField     FieldID           `json:"keyField"`
+	Loader       AttachedMethodIR  `json:"loader"`
+	CacheKey     *AttachedMethodIR `json:"cacheKey,omitempty"`
+	MaxBatchSize uint32            `json:"maxBatchSize"`
+}
+
+type CustomOperationKind string
+
+const (
+	CustomOperationQuery    CustomOperationKind = "query"
+	CustomOperationMutation CustomOperationKind = "mutation"
+)
+
+type CustomOperationCapability string
+
+const CustomOperationCallerOnly CustomOperationCapability = "callerOnly"
+
+type CustomOperationContractIR struct {
+	ExtensionID ExtensionID                 `json:"extensionId"`
+	Operation   CustomOperationKind         `json:"operation"`
+	Name        string                      `json:"name"`
+	Arguments   []GraphQLArgumentContractIR `json:"arguments"`
+	Result      GraphQLTypeIR               `json:"result"`
+	Resolver    AttachedMethodIR            `json:"resolver"`
+	Capability  CustomOperationCapability   `json:"capability"`
 }
 
 type AttachedMethodIR struct {
-	ModelID  *ModelID       `json:"modelId,omitempty"`
-	Receiver GoNamedTypeIR  `json:"receiver"`
-	Name     string         `json:"name"`
-	Kind     string         `json:"kind"`
-	Actor    *GoNamedTypeIR `json:"actor,omitempty"`
+	ModelID     *ModelID       `json:"modelId,omitempty"`
+	PackagePath string         `json:"packagePath,omitempty"`
+	Receiver    GoNamedTypeIR  `json:"receiver"`
+	Name        string         `json:"name"`
+	Kind        string         `json:"kind"`
+	Actor       *GoNamedTypeIR `json:"actor,omitempty"`
 }

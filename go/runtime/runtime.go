@@ -229,6 +229,84 @@ func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRea
 	return PreparedRead{request: bound, system: true, executor: system.executor}, nil
 }
 
+// CallerExecuteFrozenRead is the model-erased P3 execution seam used by the
+// generated GraphQL adapter. It preserves the ordinary caller lifecycle:
+// generated typed before hooks may transform the frozen request, every
+// transformation is rebound before later hooks observe it, P3 owns all policy
+// and SQL work, and generated typed after hooks receive only masked rows.
+func CallerExecuteFrozenRead[P, A any](ctx context.Context, caller *Caller[P, A], request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {
+	if caller == nil || caller.app == nil || ctx == nil {
+		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+	}
+	envelope, err := golem.RuntimeReadHookRequestFromFrozen(request)
+	if err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
+	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	transformed, err := golem.RuntimeInvokeReadBeforeHooks(hookContext, caller.app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
+		_, prepareErr := caller.Prepare(value.Request())
+		return prepareErr
+	})
+	if err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read hook rejected the operation", err)
+	}
+	prepared, err := caller.Prepare(transformed.Request())
+	if err != nil {
+		return nil, err
+	}
+	rows, err := executeRuntimeRows(ctx, caller.app, prepared)
+	if err != nil {
+		return nil, err
+	}
+	found := len(rows) != 0
+	switch prepared.Operation() {
+	case golem.ReadFindUnique:
+		if len(rows) == 0 {
+			return nil, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.ModelID(), golem.FieldID{}, "record not found", nil)
+		}
+		if len(rows) != 1 {
+			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
+		}
+	case golem.ReadFindFirst:
+		if len(rows) > 1 {
+			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "findFirst", prepared.ModelID(), golem.FieldID{}, "first read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
+		}
+	case golem.ReadFindMany:
+	default:
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "operation is not row-shaped", nil)
+	}
+	if err := golem.RuntimeInvokeReadResultHooks(hookContext, caller.app.bindings, golem.RuntimeReadHookRows(transformed, rows, found)); err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read hook rejected the result", err)
+	}
+	return rows, nil
+}
+
+func (caller *Caller[P, A]) ExecuteFrozenRead(ctx context.Context, request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {
+	return CallerExecuteFrozenRead(ctx, caller, request)
+}
+
+func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) ([]golem.RuntimeModelRow, error) {
+	if app == nil || ctx == nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "read", prepared.ModelID(), golem.FieldID{}, "read execution is unavailable", nil)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	if err != nil {
+		return nil, publicPlanError(prepared, err)
+	}
+	executed, err := executePlan(ctx, app, prepared.executor, prepared.Operation(), planned)
+	if err != nil {
+		return nil, err
+	}
+	rows := make([]golem.RuntimeModelRow, len(executed))
+	for index := range executed {
+		rows[index] = executed[index].row
+	}
+	return rows, nil
+}
+
 // CallerFindMany is the generic execution primitive used by generated model
 // clients. Application code normally calls caller.Posts.FindMany instead.
 func CallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
@@ -440,11 +518,23 @@ type executedRow struct {
 	row    golem.RuntimeModelRow
 	record evaluate.Record
 	values map[policyir.FieldID]readdecode.Cell
-	counts map[policyir.FieldID]int64
+	counts map[readOccurrenceKey]int64
 	// batchKeys holds private correlation values appended by a row-shaped
 	// batch statement when the caller did not select the child key.
 	batchKeys  map[policyir.FieldID]policyir.Value
-	correlated map[policyir.FieldID][]executedRow
+	correlated map[readOccurrenceKey][]executedRow
+}
+
+type readOccurrenceKey struct {
+	field      policyir.FieldID
+	occurrence readir.OccurrenceID
+}
+
+func relationKey(relation readplan.Relation) readOccurrenceKey {
+	return readOccurrenceKey{field: relation.FieldID(), occurrence: relation.OccurrenceID()}
+}
+func countKey(count readplan.RelationCount) readOccurrenceKey {
+	return readOccurrenceKey{field: count.FieldID(), occurrence: count.OccurrenceID()}
 }
 
 func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, planned readplan.Plan) ([]executedRow, error) {
@@ -466,9 +556,9 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *execut
 	}
 	result := make([]executedRow, 0)
 	correlatedColumns := statement.CorrelatedColumns()
-	relationPlans := make(map[policyir.FieldID]readplan.Relation, len(planned.Relations()))
+	relationPlans := make(map[readOccurrenceKey]readplan.Relation, len(planned.Relations()))
 	for _, relation := range planned.Relations() {
-		relationPlans[relation.FieldID()] = relation
+		relationPlans[relationKey(relation)] = relation
 	}
 	for databaseRows.Next() {
 		scan := decoder.NewScan()
@@ -495,17 +585,18 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *execut
 			databaseRows.Close()
 			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "relation-count decode failed", err)
 		}
-		counts := make(map[policyir.FieldID]int64, len(decodedCounts))
+		counts := make(map[readOccurrenceKey]int64, len(decodedCounts))
 		for _, count := range decodedCounts {
-			counts[count.FieldID()] = count.Value()
+			counts[readOccurrenceKey{field: count.FieldID(), occurrence: count.OccurrenceID()}] = count.Value()
 		}
-		correlated := make(map[policyir.FieldID][]executedRow, len(correlatedColumns))
+		correlated := make(map[readOccurrenceKey][]executedRow, len(correlatedColumns))
 		for index, column := range correlatedColumns {
 			if !correlatedSlots[index].Valid {
 				databaseRows.Close()
 				return nil, fmt.Errorf("P3_RUNTIME_CORRELATED: model=%x relation=%x: correlated to-many JSON is NULL", planned.ModelID(), column.RelationID())
 			}
-			relation, ok := relationPlans[column.FieldID()]
+			key := readOccurrenceKey{field: column.FieldID(), occurrence: column.OccurrenceID()}
+			relation, ok := relationPlans[key]
 			if !ok || relation.RelationID() != column.RelationID() {
 				databaseRows.Close()
 				return nil, fmt.Errorf("P3_RUNTIME_CORRELATED: model=%x relation=%x: statement relation is absent from plan", planned.ModelID(), column.RelationID())
@@ -521,9 +612,9 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *execut
 				for _, cell := range decodedRow.Cells() {
 					childValues[cell.FieldID()] = cell
 				}
-				childCounts := make(map[policyir.FieldID]int64, len(decodedRow.RelationCounts()))
+				childCounts := make(map[readOccurrenceKey]int64, len(decodedRow.RelationCounts()))
 				for _, count := range decodedRow.RelationCounts() {
-					childCounts[count.FieldID()] = count.Value()
+					childCounts[readOccurrenceKey{field: count.FieldID(), occurrence: count.OccurrenceID()}] = count.Value()
 				}
 				children[childIndex] = executedRow{values: childValues, counts: childCounts}
 			}
@@ -532,7 +623,7 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *execut
 					children[left], children[right] = children[right], children[left]
 				}
 			}
-			correlated[column.FieldID()] = children
+			correlated[key] = children
 		}
 		result = append(result, executedRow{values: values, counts: counts, correlated: correlated})
 	}
@@ -606,6 +697,7 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 		}
 		publicCells := make([]golem.RuntimeReadCell, 0, len(plannedFields)+len(relations))
 		publicCounts := make([]golem.RuntimeRelationCountCell, 0, len(plannedCounts))
+		publicOccurrences := make([]golem.RuntimeOccurrenceCell, 0, len(relations))
 		for _, field := range plannedFields {
 			cell, ok := result[rowIndex].values[field.FieldID()]
 			if !ok || !cell.Public() {
@@ -630,7 +722,11 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 				return nil, maskInvariantError(planned.ModelID(), relation.FieldID(), "relation", visibilityErr)
 			}
 			if !visible {
-				publicCells = append(publicCells, golem.RuntimeNullReadCell(golem.FieldID(relation.FieldID())))
+				if relation.OccurrenceID() == 0 {
+					publicCells = append(publicCells, golem.RuntimeNullReadCell(golem.FieldID(relation.FieldID())))
+				} else {
+					publicOccurrences = append(publicOccurrences, golem.RuntimeNullOccurrenceCell(golem.FieldID(relation.FieldID()), golem.RuntimeOccurrenceID(relation.OccurrenceID())))
+				}
 				continue
 			}
 			children := relationRows[relationIndex][rowIndex]
@@ -639,15 +735,27 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 				for index, child := range children {
 					rows[index] = child.row
 				}
-				publicCells = append(publicCells, golem.RuntimeToManyReadCell(golem.FieldID(relation.FieldID()), rows))
+				if relation.OccurrenceID() == 0 {
+					publicCells = append(publicCells, golem.RuntimeToManyReadCell(golem.FieldID(relation.FieldID()), rows))
+				} else {
+					publicOccurrences = append(publicOccurrences, golem.RuntimeToManyOccurrenceCell(golem.FieldID(relation.FieldID()), golem.RuntimeOccurrenceID(relation.OccurrenceID()), rows))
+				}
 			} else if len(children) == 0 {
-				publicCells = append(publicCells, golem.RuntimeNullReadCell(golem.FieldID(relation.FieldID())))
+				if relation.OccurrenceID() == 0 {
+					publicCells = append(publicCells, golem.RuntimeNullReadCell(golem.FieldID(relation.FieldID())))
+				} else {
+					publicOccurrences = append(publicOccurrences, golem.RuntimeNullOccurrenceCell(golem.FieldID(relation.FieldID()), golem.RuntimeOccurrenceID(relation.OccurrenceID())))
+				}
 			} else {
-				publicCells = append(publicCells, golem.RuntimeToOneReadCell(golem.FieldID(relation.FieldID()), children[0].row))
+				if relation.OccurrenceID() == 0 {
+					publicCells = append(publicCells, golem.RuntimeToOneReadCell(golem.FieldID(relation.FieldID()), children[0].row))
+				} else {
+					publicOccurrences = append(publicOccurrences, golem.RuntimeToOneOccurrenceCell(golem.FieldID(relation.FieldID()), golem.RuntimeOccurrenceID(relation.OccurrenceID()), children[0].row))
+				}
 			}
 		}
 		for _, count := range plannedCounts {
-			value, ok := result[rowIndex].counts[count.FieldID()]
+			value, ok := result[rowIndex].counts[countKey(count)]
 			if !ok {
 				return nil, fmt.Errorf("P3_RUNTIME_COUNT: model=%x relation=%x: selected relation count was not decoded", planned.ModelID(), count.RelationID())
 			}
@@ -656,13 +764,21 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *exe
 				return nil, maskInvariantError(planned.ModelID(), count.FieldID(), "relation count", visibilityErr)
 			}
 			if !visible {
-				publicCounts = append(publicCounts, golem.RuntimeNullRelationCountCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID())))
+				if count.OccurrenceID() == 0 {
+					publicCounts = append(publicCounts, golem.RuntimeNullRelationCountCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID())))
+				} else {
+					publicCounts = append(publicCounts, golem.RuntimeNullRelationCountOccurrenceCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID()), golem.RuntimeOccurrenceID(count.OccurrenceID())))
+				}
 			} else {
-				publicCounts = append(publicCounts, golem.RuntimePresentRelationCountCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID()), value))
+				if count.OccurrenceID() == 0 {
+					publicCounts = append(publicCounts, golem.RuntimePresentRelationCountCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID()), value))
+				} else {
+					publicCounts = append(publicCounts, golem.RuntimePresentRelationCountOccurrenceCell(golem.FieldID(count.FieldID()), golem.RelationID(count.RelationID()), golem.RuntimeOccurrenceID(count.OccurrenceID()), value))
+				}
 			}
 		}
 		result[rowIndex].record = record
-		result[rowIndex].row, err = golem.RuntimeModelReadRowWithCounts(golem.ModelID(planned.ModelID()), publicCells, publicCounts)
+		result[rowIndex].row, err = golem.RuntimeModelReadRowWithOccurrences(golem.ModelID(planned.ModelID()), publicCells, publicCounts, publicOccurrences)
 		if err != nil {
 			return nil, err
 		}

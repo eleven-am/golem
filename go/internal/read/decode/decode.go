@@ -18,6 +18,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
@@ -213,14 +214,16 @@ func (scan *Scan) RawValues() []any {
 }
 
 type RelationCount struct {
-	field    policyir.FieldID
-	relation policyir.RelationID
-	value    int64
+	field      policyir.FieldID
+	relation   policyir.RelationID
+	value      int64
+	occurrence readir.OccurrenceID
 }
 
-func (count RelationCount) FieldID() policyir.FieldID       { return count.field }
-func (count RelationCount) RelationID() policyir.RelationID { return count.relation }
-func (count RelationCount) Value() int64                    { return count.value }
+func (count RelationCount) FieldID() policyir.FieldID         { return count.field }
+func (count RelationCount) RelationID() policyir.RelationID   { return count.relation }
+func (count RelationCount) Value() int64                      { return count.value }
+func (count RelationCount) OccurrenceID() readir.OccurrenceID { return count.occurrence }
 
 // RelationCounts returns the exact signed 64-bit values scanned from SQL
 // COUNT(*). A NULL or invalid relation identity is an internal statement/decode
@@ -232,7 +235,7 @@ func (scan *Scan) RelationCounts() ([]RelationCount, error) {
 		if !value.Valid || planned.RelationID() == (policyir.RelationID{}) {
 			return nil, &Error{Field: planned.FieldID(), Detail: "relation count returned NULL or has a zero relation identity"}
 		}
-		result[index] = RelationCount{field: planned.FieldID(), relation: planned.RelationID(), value: value.Int64}
+		result[index] = RelationCount{field: planned.FieldID(), relation: planned.RelationID(), value: value.Int64, occurrence: planned.OccurrenceID()}
 	}
 	return result, nil
 }

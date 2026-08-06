@@ -785,10 +785,12 @@ fail generation.
 
 ### 12.3 Conditional nullability
 
-When a visible scalar or enum can be conditionally masked, its GraphQL output is
-nullable regardless of database nullability. Inputs keep model/default
-requiredness. Masked values become `null`; the containing object, list, event, and
-relation remain present if otherwise authorized.
+When a visible scalar, enum, relation, or relation count can be conditionally
+masked, that GraphQL output occurrence is nullable regardless of database
+nullability or relation cardinality. A present to-many relation remains a
+non-null list of non-null authorized rows. Inputs keep model/default requiredness.
+Masked values become `null`; the containing object, enclosing list, and event
+remain present if otherwise authorized.
 
 ### 12.4 Filters and complexity
 

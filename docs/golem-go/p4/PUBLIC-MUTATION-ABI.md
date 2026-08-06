@@ -1,6 +1,6 @@
 # P4 public mutation and transaction ABI
 
-Status: **controlling contract; implementation not started**
+Status: **complete — controlling public contract implemented by P4**
 
 This document freezes the application-facing shape for P4. Names shown from a
 generated `social` model package and `socialapp` application package are exact

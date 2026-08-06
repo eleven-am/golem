@@ -494,6 +494,8 @@ type HookBinding[A any] struct {
 	operation      HookOperation
 	phase          HookPhase
 	invoke         func(context.Context, any) error
+	readBefore     readBeforeBridge
+	readResult     readResultBridge
 	mutationBefore mutationBeforeBridge
 	mutationResult mutationResultBridge
 	_              func() A
@@ -515,7 +517,7 @@ func GeneratedPolicyBinding[A, M any](model ModelID, build PolicyFactory[A]) Pol
 }
 
 func GeneratedBeforeHookBinding[A, M, Request any](model ModelID, operation HookOperation, invoke func(context.Context, *Request) error) HookBinding[A] {
-	return HookBinding[A]{model: model, operation: operation, phase: HookBefore, mutationBefore: generatedMutationBeforeBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
+	return HookBinding[A]{model: model, operation: operation, phase: HookBefore, readBefore: generatedReadBeforeBridge[M](operation, invoke), mutationBefore: generatedMutationBeforeBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
 		request, ok := value.(*Request)
 		if !ok {
 			return errGeneratedBindingType
@@ -525,7 +527,7 @@ func GeneratedBeforeHookBinding[A, M, Request any](model ModelID, operation Hook
 }
 
 func GeneratedAfterHookBinding[A, M, Result any](model ModelID, operation HookOperation, invoke func(context.Context, Result) error) HookBinding[A] {
-	return HookBinding[A]{model: model, operation: operation, phase: HookAfter, mutationResult: generatedMutationResultBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
+	return HookBinding[A]{model: model, operation: operation, phase: HookAfter, readResult: generatedReadResultBridge[M](operation, invoke), mutationResult: generatedMutationResultBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
 		result, ok := value.(Result)
 		if !ok {
 			return errGeneratedBindingType
@@ -669,6 +671,61 @@ func RuntimeInvokeMutationResultHooks[A any](ctx context.Context, bindings Appli
 				return fmt.Errorf("generated mutation hooks: matching result hook has no mutation bridge")
 			}
 			if err := binding.mutationResult(ctx, result); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RuntimeInvokeReadBeforeHooks restores the generated concrete model type for
+// each matching hook, then freezes and validates every transformation before a
+// later hook may observe it. No SQL is performed by this boundary.
+func RuntimeInvokeReadBeforeHooks[A any](ctx context.Context, bindings ApplicationBindings[A], request RuntimeReadHookRequest, validate func(RuntimeReadHookRequest) error) (RuntimeReadHookRequest, error) {
+	if ctx == nil || request.model == (ModelID{}) || validate == nil {
+		return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: context, request, and validator are required")
+	}
+	current := request
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: package %d generation mismatch", packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model != request.model || binding.operation != request.operation || binding.phase != HookBefore {
+				continue
+			}
+			if binding.readBefore == nil {
+				return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: matching before hook has no read bridge")
+			}
+			var err error
+			current, err = binding.readBefore(ctx, current)
+			if err != nil {
+				return RuntimeReadHookRequest{}, err
+			}
+			if err := validate(current); err != nil {
+				return RuntimeReadHookRequest{}, err
+			}
+		}
+	}
+	return current, nil
+}
+
+func RuntimeInvokeReadResultHooks[A any](ctx context.Context, bindings ApplicationBindings[A], result RuntimeReadHookResult) error {
+	if ctx == nil || result.model == (ModelID{}) {
+		return fmt.Errorf("generated read hooks: invalid result invocation")
+	}
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return fmt.Errorf("generated read hooks: package %d generation mismatch", packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model != result.model || binding.operation != result.operation || binding.phase != HookAfter {
+				continue
+			}
+			if binding.readResult == nil {
+				return fmt.Errorf("generated read hooks: matching result hook has no read bridge")
+			}
+			if err := binding.readResult(ctx, result); err != nil {
 				return err
 			}
 		}

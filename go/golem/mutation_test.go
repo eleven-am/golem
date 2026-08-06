@@ -22,6 +22,10 @@ func TestMutationInputsAreModelTypedFrozenAndDetached(t *testing.T) {
 		GeneratedCreateFieldValue(model, name, "name"),
 		GeneratedCreateFieldValue(model, bytesField, raw),
 	)
+	nullCreate, err := RuntimeFreezeCreateInput(GeneratedCreateInput(model, GeneratedCreateNullFieldValue(model, name)))
+	if err != nil || len(nullCreate.Fields()) != 1 || nullCreate.Fields()[0].Operation() != MutationFieldNull {
+		t.Fatalf("explicit create null = %#v err=%v", nullCreate, err)
+	}
 	raw[0] = 'x'
 	frozen, err := RuntimeFreezeCreateInput(create)
 	if err != nil {

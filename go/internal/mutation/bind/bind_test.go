@@ -96,6 +96,28 @@ func TestCreateInputBindsExactScalarsAndEnforcesRequiredness(t *testing.T) {
 	assertBindCode(t, err, CodeRequired, fixture.PostTitle)
 }
 
+func TestCreateInputPreservesExplicitNull(t *testing.T) {
+	fixture := schematest.NewMutationExactValues(t)
+	nullable := golem.GeneratedNullableTextField[bindPost, string](fixture.PostNullableText)
+	frozen := freezeCreate(t, golem.GeneratedCreateInput(fixture.Post, golem.GeneratedCreateNullFieldValue(fixture.Post, nullable)))
+	public := frozen.Fields()[0]
+	field, ok := fixture.Registry.Field(fixture.Post, fixture.PostNullableText)
+	if !ok {
+		t.Fatal("nullable fixture field is absent")
+	}
+	typ, err := bindType(field.LogicalType(), field.Nullable())
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation, err := bindScalarOperation(InputCreate, public, field, typ, fixture.Registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if operation.Kind() != mutationir.ScalarNull {
+		t.Fatal("explicit create null was not preserved as MutationIR null")
+	}
+}
+
 func TestSingleUpdateAcceptsRelationOnlyInputButRejectsTrulyEmptyInput(t *testing.T) {
 	fixture := schematest.New(t)
 	user := golem.GeneratedUniqueSelectorValue[bindUser](fixture.User, fixture.UserKey,

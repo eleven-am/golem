@@ -86,13 +86,14 @@ func (field Field) Mask() (policyir.Condition, bool) {
 func (field Field) Dependencies() dependency.Tree { return field.dependencies }
 
 type Relation struct {
-	field  policyir.FieldID
-	id     policyir.RelationID
-	target policyir.ModelID
-	toMany bool
-	public bool
-	mask   *policyir.Condition
-	child  *Plan
+	field      policyir.FieldID
+	id         policyir.RelationID
+	target     policyir.ModelID
+	toMany     bool
+	public     bool
+	mask       *policyir.Condition
+	child      *Plan
+	occurrence readir.OccurrenceID
 }
 
 // RelationCount is one independently authorized correlated count over a
@@ -100,16 +101,18 @@ type Relation struct {
 // carries only the target row policy conjoined with the caller's optional
 // per-count where predicate.
 type RelationCount struct {
-	field  policyir.FieldID
-	id     policyir.RelationID
-	target policyir.ModelID
-	mask   *policyir.Condition
-	child  *Plan
+	field      policyir.FieldID
+	id         policyir.RelationID
+	target     policyir.ModelID
+	mask       *policyir.Condition
+	child      *Plan
+	occurrence readir.OccurrenceID
 }
 
-func (count RelationCount) FieldID() policyir.FieldID       { return count.field }
-func (count RelationCount) RelationID() policyir.RelationID { return count.id }
-func (count RelationCount) TargetModelID() policyir.ModelID { return count.target }
+func (count RelationCount) FieldID() policyir.FieldID         { return count.field }
+func (count RelationCount) RelationID() policyir.RelationID   { return count.id }
+func (count RelationCount) TargetModelID() policyir.ModelID   { return count.target }
+func (count RelationCount) OccurrenceID() readir.OccurrenceID { return count.occurrence }
 func (count RelationCount) Mask() (policyir.Condition, bool) {
 	if count.mask == nil {
 		return policyir.Condition{}, false
@@ -123,11 +126,12 @@ func (count RelationCount) Child() Plan {
 	return count.child.clone()
 }
 
-func (relation Relation) FieldID() policyir.FieldID       { return relation.field }
-func (relation Relation) RelationID() policyir.RelationID { return relation.id }
-func (relation Relation) TargetModelID() policyir.ModelID { return relation.target }
-func (relation Relation) ToMany() bool                    { return relation.toMany }
-func (relation Relation) Public() bool                    { return relation.public }
+func (relation Relation) FieldID() policyir.FieldID         { return relation.field }
+func (relation Relation) RelationID() policyir.RelationID   { return relation.id }
+func (relation Relation) TargetModelID() policyir.ModelID   { return relation.target }
+func (relation Relation) OccurrenceID() readir.OccurrenceID { return relation.occurrence }
+func (relation Relation) ToMany() bool                      { return relation.toMany }
+func (relation Relation) Public() bool                      { return relation.public }
 func (relation Relation) Mask() (policyir.Condition, bool) {
 	if relation.mask == nil {
 		return policyir.Condition{}, false
@@ -518,7 +522,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			if endpoint.Cardinality() != compilerir.RelationMany || child.Operation() != readir.Count {
 				return Plan{}, fail(CodeProjection, model, selection.FieldID(), "relation count requires a to-many endpoint and count child", nil)
 			}
-			count := RelationCount{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), child: &child}
+			count := RelationCount{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), child: &child, occurrence: selection.OccurrenceID()}
 			if !system && classification.Access() == classify.AccessConditional {
 				mask, _ := classification.FieldCondition()
 				count.mask = &mask
@@ -528,7 +532,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			result.counts = append(result.counts, count)
 			continue
 		}
-		relation := Relation{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), toMany: endpoint.Cardinality() == compilerir.RelationMany, public: true, child: &child}
+		relation := Relation{field: selection.FieldID(), id: selection.RelationID(), target: selection.TargetModelID(), toMany: endpoint.Cardinality() == compilerir.RelationMany, public: true, child: &child, occurrence: selection.OccurrenceID()}
 		if !system && classification.Access() == classify.AccessConditional {
 			mask, _ := classification.FieldCondition()
 			relation.mask = &mask

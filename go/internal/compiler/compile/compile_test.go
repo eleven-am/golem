@@ -13,9 +13,13 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/methods"
 	"github.com/eleven-am/golem/go/internal/compiler/schema"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
 func TestCompleteSocialFixture(t *testing.T) {
@@ -107,6 +111,204 @@ func TestCompleteSocialFixture(t *testing.T) {
 	if string(summary) != string(golden) {
 		t.Fatalf("golden mismatch\nwant: %s\n got: %s", golden, summary)
 	}
+}
+
+func TestGraphQLContractNormalizationMaterializesNamesOperationsLimitsEnumsAndExtensions(t *testing.T) {
+	result := Compile(context.Background(), Config{Dir: "testdata/graphql_extensions", Pattern: ".", Root: "DefineSchema"})
+	if len(result.Diagnostics) != 0 || result.Compilation == nil {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+	contract := result.Compilation.Contract
+	if len(contract.Models) != 1 || len(contract.Models[0].Computed) != 2 {
+		t.Fatalf("computed contract = %#v", contract.Models)
+	}
+	modelContract := contract.Models[0]
+	if modelContract.GraphQLName != "User" || modelContract.GraphQLPlural != "Users" || modelContract.Roots.FindOne != "user" || modelContract.Roots.FindMany != "users" || len(modelContract.Operations) != 8 || modelContract.Limits.DefaultPageSize != 50 || modelContract.Limits.MaxPageSize != 500 {
+		t.Fatalf("normalized GraphQL names/operations/limits = %#v", modelContract)
+	}
+	fieldNames := map[string]bool{}
+	for _, field := range modelContract.Fields {
+		fieldNames[field.GraphQLName] = true
+	}
+	for _, name := range []string{"id", "name", "status"} {
+		if !fieldNames[name] {
+			t.Errorf("normalized contract omitted field name %q: %#v", name, modelContract.Fields)
+		}
+	}
+	if len(contract.Enums) != 1 || contract.Enums[0].GraphQLName != "UserStatus" || len(contract.Enums[0].Values) != 2 {
+		t.Fatalf("normalized enum contract = %#v", contract.Enums)
+	}
+	enumNames := map[string]bool{}
+	for _, value := range contract.Enums[0].Values {
+		enumNames[value.GraphQLName] = true
+	}
+	if !enumNames["UserStatusActive"] || !enumNames["UserStatusDisabled"] {
+		t.Fatalf("normalized enum value names = %#v", contract.Enums[0].Values)
+	}
+	if batch := contract.Models[0].Computed[0]; batch.Name != "batchGreeting" || batch.Batch == nil || batch.Batch.CacheKey == nil || batch.Batch.MaxBatchSize != 64 {
+		t.Fatalf("batch computed contract = %#v", contract.Models[0].Computed)
+	}
+	if len(contract.CustomOperations) != 2 || contract.CustomOperations[0].Name != "importUsers" || contract.CustomOperations[1].Name != "searchUsers" || contract.CustomOperations[0].Capability != ir.CustomOperationCallerOnly {
+		t.Fatalf("custom contract = %#v", contract.CustomOperations)
+	}
+	mutation := contract.CustomOperations[0]
+	argumentKinds := map[string]ir.GraphQLTypeKind{}
+	for _, argument := range mutation.Arguments {
+		argumentKinds[argument.Name] = argument.Type.Kind
+	}
+	if mutation.Operation != ir.CustomOperationMutation || len(mutation.Arguments) != 3 || argumentKinds["data"] != ir.GraphQLTypeCreateInput || argumentKinds["patch"] != ir.GraphQLTypeUpdateManyInput || argumentKinds["metadata"] != ir.GraphQLTypeScalar {
+		t.Fatalf("custom mutation typed arguments = %#v", mutation)
+	}
+	second := Compile(context.Background(), Config{Dir: "testdata/graphql_extensions", Pattern: ".", Root: "DefineSchema"})
+	if second.Compilation == nil || second.ContractFingerprint != result.ContractFingerprint || second.ModelFingerprint != result.ModelFingerprint {
+		t.Fatalf("extension compilation is not deterministic: first=%#v second=%#v", result, second)
+	}
+}
+
+func TestGraphQLOnlyChangesAffectContractFingerprintNotModelPhysicalOrMigration(t *testing.T) {
+	compiled := Compile(context.Background(), Config{Dir: "testdata/graphql_extensions", Pattern: ".", Root: "DefineSchema"})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	before := *compiled.Compilation
+	after := before
+	after.Contract.Models = append([]ir.ModelContractIR(nil), before.Contract.Models...)
+	after.Contract.Models[0].GraphQLName += "TransportRename"
+	after.Contract.Models[0].Roots.FindOne += "TransportRename"
+	beforeModel, err := ir.ModelFingerprint(before.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterModel, err := ir.ModelFingerprint(after.Model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeContract, err := ir.ContractFingerprint(before.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterContract, err := ir.ContractFingerprint(after.Contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeModel != afterModel || beforeContract == afterContract {
+		t.Fatalf("fingerprints model=%s/%s contract=%s/%s", beforeModel, afterModel, beforeContract, afterContract)
+	}
+
+	providers := []struct {
+		name      string
+		namespace physical.PhysicalName
+		lower     func(context.Context, ir.ModelIR, physical.LowerOptions) (physical.PhysicalSchema, error)
+	}{
+		{name: "sqlite", namespace: "main", lower: sqlite.New().Lower},
+		{name: "postgresql", namespace: "graphql_contract_only", lower: postgresql.New().Lower},
+	}
+	for _, provider := range providers {
+		t.Run(provider.name, func(t *testing.T) {
+			left, err := provider.lower(context.Background(), before.Model, physical.LowerOptions{Namespace: provider.namespace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			right, err := provider.lower(context.Background(), after.Model, physical.LowerOptions{Namespace: provider.namespace})
+			if err != nil {
+				t.Fatal(err)
+			}
+			leftFingerprint, err := physical.PhysicalFingerprint(left)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rightFingerprint, err := physical.PhysicalFingerprint(right)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan, err := migration.Diff(left, right)
+			if err != nil {
+				t.Fatal(err)
+			}
+			physicalOperations := 0
+			for _, operation := range plan.Operations {
+				if operation.Kind != migration.RecordSchemaVersion {
+					physicalOperations++
+				}
+			}
+			if leftFingerprint != rightFingerprint || physicalOperations != 0 {
+				t.Fatalf("contract-only change physical=%s/%s migration=%#v", leftFingerprint, rightFingerprint, plan.Operations)
+			}
+		})
+	}
+}
+
+func TestGraphQLContractRejectsEveryNameExposureTypeAndReservedCollision(t *testing.T) {
+	invalid := ir.CompilationIR{Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{
+		{ModelID: "a", GraphQLName: "__Post", GraphQLPlural: "posts", Exposed: true, Operations: []ir.Operation{ir.OperationFindOne}, Roots: ir.GraphQLRootNamesIR{FindOne: "node"}, Fields: []ir.FieldContractIR{{FieldID: "a1", GraphQLName: "same"}, {FieldID: "a2", GraphQLName: "same"}}, Limits: ir.LimitContractIR{DefaultPageSize: 10, MaxPageSize: 5}},
+		{ModelID: "b", GraphQLName: "Query", GraphQLPlural: "queries", Exposed: true, Operations: []ir.Operation{ir.OperationFindOne, ir.OperationFindOne, "invented"}, Roots: ir.GraphQLRootNamesIR{FindOne: "node"}},
+	}, Enums: []ir.EnumContractIR{{EnumID: "enum", GraphQLName: "Query", Values: []ir.EnumValueContractIR{{ValueID: "v1", GraphQLName: "SAME"}, {ValueID: "v2", GraphQLName: "SAME"}}}}}}
+	diagnostics := graphqlcontract.Normalize(&invalid, nil)
+	for _, code := range []string{"P5_GRAPHQL_MODEL_NAME", "P5_GRAPHQL_FIELD_COLLISION", "P5_GRAPHQL_PAGE_LIMIT", "P5_GRAPHQL_OPERATION_DUPLICATE", "P5_GRAPHQL_OPERATION_UNKNOWN", "P5_GRAPHQL_ROOT_COLLISION", "P5_GRAPHQL_TYPE_COLLISION", "P5_GRAPHQL_ENUM_VALUE_COLLISION"} {
+		if !compileHasDiagnostic(diagnostics, code) {
+			t.Errorf("missing %s in %#v", code, diagnostics)
+		}
+	}
+
+	capabilities := Compile(context.Background(), Config{Dir: "testdata/graphql_capabilities", Pattern: ".", Root: "DefineSchema"})
+	if capabilities.Compilation != nil || !compileHasDiagnostic(capabilities.Diagnostics, "P5_CUSTOM_SIGNATURE") || !compileHasDiagnostic(capabilities.Diagnostics, "P5_EXTENSION_ARGUMENT_TYPE") {
+		t.Fatalf("unknown/capability type diagnostics = %#v", capabilities.Diagnostics)
+	}
+
+	social := Compile(context.Background(), Config{Dir: "testdata/social", Pattern: ".", Root: "DefineSchema"})
+	if len(social.Diagnostics) != 0 || social.Compilation == nil {
+		t.Fatalf("social diagnostics = %#v", social.Diagnostics)
+	}
+	hidden := *social.Compilation
+	hidden.Contract.Models = append([]ir.ModelContractIR(nil), social.Compilation.Contract.Models...)
+	for index := range hidden.Contract.Models {
+		if hidden.Contract.Models[index].GraphQLName == "User" {
+			hidden.Contract.Models[index].Exposed = false
+		}
+	}
+	if _, err := graphqlschema.Build(hidden); err == nil || !strings.Contains(err.Error(), "targets hidden model") {
+		t.Fatalf("hidden relation target error = %v", err)
+	}
+
+	reserved := *social.Compilation
+	post := ir.ModelContractIR{}
+	for _, model := range reserved.Contract.Models {
+		if model.GraphQLName == "Post" {
+			post = model
+		}
+	}
+	custom := graphqlextension.CustomOperationDeclaration{Operation: ir.CustomOperationContractIR{
+		ExtensionID: "reserved-collision", Operation: ir.CustomOperationQuery, Name: post.Roots.Aggregate,
+		Result:   ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "Boolean"},
+		Resolver: ir.AttachedMethodIR{PackagePath: "example.test/social", Name: "AggregatePosts"}, Capability: ir.CustomOperationCallerOnly,
+	}}
+	reservedDiagnostics := graphqlextension.Normalize(&reserved, nil, []graphqlextension.CustomOperationDeclaration{custom})
+	if !compileHasDiagnostic(reservedDiagnostics, "P5_CUSTOM_ROOT_COLLISION") {
+		t.Fatalf("reserved-root diagnostics = %#v", reservedDiagnostics)
+	}
+}
+
+func TestCompileRejectsCustomRootCollisionFromSource(t *testing.T) {
+	result := Compile(context.Background(), Config{Dir: "testdata/graphql_collision", Pattern: ".", Root: "DefineSchema"})
+	if result.Compilation != nil || !compileHasDiagnostic(result.Diagnostics, "P5_CUSTOM_ROOT_COLLISION") {
+		t.Fatalf("collision diagnostics = %#v", result.Diagnostics)
+	}
+}
+
+func TestCompileRejectsCustomSystemTxDBAndRawSQLShapedCapabilitiesFromSource(t *testing.T) {
+	result := Compile(context.Background(), Config{Dir: "testdata/graphql_capabilities", Pattern: ".", Root: "DefineSchema"})
+	if result.Compilation != nil || !compileHasDiagnostic(result.Diagnostics, "P5_CUSTOM_SIGNATURE") || !compileHasDiagnostic(result.Diagnostics, "P5_EXTENSION_ARGUMENT_TYPE") {
+		t.Fatalf("capability diagnostics = %#v", result.Diagnostics)
+	}
+}
+
+func compileHasDiagnostic(diagnostics []ir.Diagnostic, code string) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Code == code {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCompileRawDeterministicUnderShuffledDeclarations(t *testing.T) {
