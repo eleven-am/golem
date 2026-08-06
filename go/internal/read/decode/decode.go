@@ -37,6 +37,7 @@ type Decoder struct {
 	provider policyir.Provider
 	registry *schema.Registry
 	fields   []readplan.Field
+	direct   []directField
 	counts   []readplan.RelationCount
 }
 
@@ -45,6 +46,66 @@ func New(plan readplan.Plan, registry *schema.Registry, provider policyir.Provid
 		return Decoder{}, fmt.Errorf("P3_DECODE_INPUT: plan, registry, and provider are required")
 	}
 	return Decoder{model: plan.ModelID(), provider: provider, registry: registry, fields: plan.Fields(), counts: plan.RelationCounts()}, nil
+}
+
+// NewFields constructs the exact P3 scalar decoder for an explicitly ordered
+// internal projection. Mutation RETURNING and locked-image statements use this
+// seam because their columns are derived from MutationIR rather than a public
+// read plan. Direct fields are always private: callers must apply the explicit
+// mutation result projection before constructing a public row.
+func NewFields(model policyir.ModelID, registry *schema.Registry, provider policyir.Provider, fields []policyir.FieldID) (Decoder, error) {
+	if registry == nil || model == (policyir.ModelID{}) || (provider != policyir.ProviderSQLite && provider != policyir.ProviderPostgreSQL) {
+		return Decoder{}, fmt.Errorf("P3_DECODE_INPUT: model, registry, and provider are required")
+	}
+	if _, ok := registry.Model(golem.ModelID(model)); !ok {
+		return Decoder{}, fmt.Errorf("P3_DECODE_INPUT: model is absent from the active registry")
+	}
+	result := Decoder{model: model, provider: provider, registry: registry, direct: make([]directField, len(fields))}
+	seen := make(map[policyir.FieldID]struct{}, len(fields))
+	for index, fieldID := range fields {
+		field, ok := registry.Field(golem.ModelID(model), golem.FieldID(fieldID))
+		if fieldID == (policyir.FieldID{}) || !ok || field.Kind() != compilerir.FieldScalar && field.Kind() != compilerir.FieldEnum && field.Kind() != compilerir.FieldScalarList {
+			return Decoder{}, fmt.Errorf("P3_DECODE_INPUT: direct field %x is zero, foreign, absent, or relational", fieldID)
+		}
+		if _, duplicate := seen[fieldID]; duplicate {
+			return Decoder{}, fmt.Errorf("P3_DECODE_INPUT: direct field %x appears more than once", fieldID)
+		}
+		seen[fieldID] = struct{}{}
+		result.direct[index] = directField{id: fieldID, typ: field.LogicalType(), nullable: field.Nullable()}
+	}
+	return result, nil
+}
+
+type plannedField interface {
+	FieldID() policyir.FieldID
+	LogicalType() compilerir.LogicalTypeIR
+	Nullable() bool
+	Public() bool
+}
+
+type directField struct {
+	id       policyir.FieldID
+	typ      compilerir.LogicalTypeIR
+	nullable bool
+}
+
+func (field directField) FieldID() policyir.FieldID             { return field.id }
+func (field directField) LogicalType() compilerir.LogicalTypeIR { return field.typ }
+func (field directField) Nullable() bool                        { return field.nullable }
+func (directField) Public() bool                                { return false }
+
+func (decoder Decoder) fieldCount() int {
+	if decoder.direct != nil {
+		return len(decoder.direct)
+	}
+	return len(decoder.fields)
+}
+
+func (decoder Decoder) field(index int) plannedField {
+	if decoder.direct != nil {
+		return decoder.direct[index]
+	}
+	return decoder.fields[index]
 }
 
 type slotKind uint8
@@ -112,8 +173,9 @@ type Scan struct {
 }
 
 func (decoder Decoder) NewScan() *Scan {
-	result := &Scan{decoder: decoder, slots: make([]slot, len(decoder.fields)), counts: make([]sql.NullInt64, len(decoder.counts))}
-	for index, field := range decoder.fields {
+	result := &Scan{decoder: decoder, slots: make([]slot, decoder.fieldCount()), counts: make([]sql.NullInt64, len(decoder.counts))}
+	for index := range result.slots {
+		field := decoder.field(index)
 		result.slots[index].kind = scanKind(decoder.provider, field.LogicalType().Kind)
 	}
 	return result
@@ -125,6 +187,27 @@ func (scan *Scan) Destinations() []any {
 	}
 	for index := range scan.counts {
 		result = append(result, &scan.counts[index])
+	}
+	return result
+}
+
+// RawValues returns the provider-facing scalar values produced by the same
+// typed scan slots that Decode consumes. Mutation statement programs retain
+// these values for prior-result bindings, so identity dataflow never round
+// trips through a logical/public value or a provider re-encoder. NULL is
+// represented by nil. Mutable byte slices are detached on every call.
+func (scan *Scan) RawValues() []any {
+	result := make([]any, len(scan.slots))
+	for index := range scan.slots {
+		value, present := scan.slots[index].value()
+		if !present {
+			continue
+		}
+		if bytes, ok := value.([]byte); ok {
+			result[index] = append([]byte(nil), bytes...)
+			continue
+		}
+		result[index] = value
 	}
 	return result
 }
@@ -175,7 +258,7 @@ func (cell Cell) IsNull() bool { return cell.null }
 func (scan *Scan) Decode() ([]Cell, error) {
 	result := make([]Cell, len(scan.slots))
 	for index := range scan.slots {
-		field := scan.decoder.fields[index]
+		field := scan.decoder.field(index)
 		raw, present := scan.slots[index].value()
 		if !present {
 			if !field.Nullable() {
@@ -226,7 +309,7 @@ func scanKind(provider policyir.Provider, kind compilerir.LogicalTypeKind) slotK
 	}
 }
 
-func decodeValue(registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, field readplan.Field, raw any) (Cell, error) {
+func decodeValue(registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, field plannedField, raw any) (Cell, error) {
 	typ, id := field.LogicalType(), field.FieldID()
 	cell := Cell{field: id, public: field.Public()}
 	var value any

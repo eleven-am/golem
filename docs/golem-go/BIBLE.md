@@ -828,7 +828,9 @@ after-image need, hook, and event fact.
 9. Write per-row event/outbox facts.
 10. Commit, then run explicit after-commit effects.
 
-Any denial or hook failure rolls back data and outbox facts.
+Any denial or before/transaction-local hook failure rolls back data and outbox
+facts. An after-commit failure is reported through the configured trusted error
+handler and cannot turn an already committed mutation into a returned failure.
 
 ### 13.2 Update and delete
 
@@ -866,16 +868,17 @@ Upsert correctness is database-backed:
   correctness dependency.
 - Serialization and unique interference cause a bounded retry of the complete
   attempt or a stable `CONFLICT`.
-- A retry cannot run irreversible transaction hooks twice; external effects are
-  after-commit only.
+- Transaction-local hooks may repeat during a complete-attempt retry and must be
+  retry-safe; irreversible external effects are after-commit only.
 - Only the committed branch emits an event naming its truthful action.
 
 ### 13.5 Nested writes
 
-Connect, disconnect, set, create, create-many, connect-or-create, update, upsert,
-delete, and delete-many are exposed only when the planner can enumerate and
-authorize every affected row and field, enforce depth/cardinality limits, and
-produce correct event facts. A parent grant never implies a child grant.
+Connect, disconnect, set, create, create-many, connect-or-create, update,
+update-many, upsert, delete, and delete-many are exposed only when the planner
+can enumerate and authorize every affected row and field, enforce
+depth/cardinality limits, and produce correct event facts. A parent grant never
+implies a child grant.
 
 ---
 

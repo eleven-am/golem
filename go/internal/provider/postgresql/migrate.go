@@ -123,6 +123,16 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 	if operation.Kind == migration.RecordSchemaVersion {
 		return nil, nil
 	}
+	if operation.Kind == migration.AddSystemObject {
+		object, exists := postgresqlSystemObject(r.schema.System, ir.ObjectID(operation.ObjectID))
+		if !exists || (!physical.IsOutboxSystemObjectV1(object) && !physical.IsUpsertGuardSystemObjectV1(object)) {
+			return nil, fmt.Errorf("system object %s is not registered", operation.ObjectID)
+		}
+		if physical.IsUpsertGuardSystemObjectV1(object) {
+			return nil, nil
+		}
+		return renderOutbox(r.schema.System.Namespace.Name, object.Name), nil
+	}
 	tableID, exists := owners[operation.ID]
 	if !exists {
 		return nil, fmt.Errorf("cannot resolve owning table")
@@ -385,7 +395,7 @@ func postgresqlOperationOwners(before, after physical.PhysicalSchema, operations
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range operations {
-		if operation.Kind == migration.RecordSchemaVersion {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject {
 			continue
 		}
 		owner, exists := owners[operation.ObjectID]
@@ -395,6 +405,15 @@ func postgresqlOperationOwners(before, after physical.PhysicalSchema, operations
 		result[operation.ID] = owner
 	}
 	return result, nil
+}
+
+func postgresqlSystemObject(system physical.SystemSchema, id ir.ObjectID) (physical.SystemObject, bool) {
+	for _, object := range system.Objects {
+		if object.ID == id {
+			return object, true
+		}
+	}
+	return physical.SystemObject{}, false
 }
 
 func postgresqlTableMap(tables []physical.PhysicalTable) map[ir.ModelID]physical.PhysicalTable {

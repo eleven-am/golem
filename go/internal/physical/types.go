@@ -285,13 +285,41 @@ const (
 	SystemMigrationLedger SystemObjectKind = "migration_ledger"
 	SystemMigrationLock   SystemObjectKind = "migration_lock"
 	SystemOutbox          SystemObjectKind = "outbox"
+	SystemUpsertGuard     SystemObjectKind = "upsert_guard"
 
-	// MigrationLedgerObjectIDV1 and MigrationLockObjectIDV1 identify the
+	// MigrationLedgerObjectIDV1, MigrationLockObjectIDV1, and OutboxObjectIDV1 identify the
 	// provider-neutral semantic system objects. Providers may render different
 	// namespaces and storage, but must not mint provider-specific identities.
 	MigrationLedgerObjectIDV1 ir.ObjectID = "cb3020cd708be72c384f431749769c98"
 	MigrationLockObjectIDV1   ir.ObjectID = "e28aeab0927ce864e8d65a1e1dc62fc9"
+	OutboxObjectIDV1          ir.ObjectID = "14b2d0b9de583fe675fa72de1d1c78c8"
+	UpsertGuardObjectIDV1     ir.ObjectID = "076704f0bfb30b5fed47137811a6dd18"
 )
+
+// OutboxSystemObjectV1 is the exact provider-neutral registry entry for the
+// transactional mutation-fact outbox. Its physical shape remains provider
+// owned and is selected solely by this kind/version pair.
+func OutboxSystemObjectV1() SystemObject {
+	return SystemObject{ID: OutboxObjectIDV1, Kind: SystemOutbox, Version: 1, Name: "_golem_outbox"}
+}
+
+// IsOutboxSystemObjectV1 accepts the canonical registry entry after deep-copy
+// normalization, which may represent empty registries as non-nil slices.
+func IsOutboxSystemObjectV1(object SystemObject) bool {
+	return object.ID == OutboxObjectIDV1 && object.Kind == SystemOutbox && object.Version == 1 && object.Name == "_golem_outbox" && len(object.Attributes) == 0 && len(object.RequiredCapabilities) == 0
+}
+
+// UpsertGuardSystemObjectV1 is the provider-neutral selector serialization
+// primitive. SQLite renders a guard-token relation; PostgreSQL implements the
+// same semantic object with transaction-scoped advisory locks and no relation.
+func UpsertGuardSystemObjectV1() SystemObject {
+	return SystemObject{ID: UpsertGuardObjectIDV1, Kind: SystemUpsertGuard, Version: 1, Name: "_golem_upsert_guard"}
+}
+
+// IsUpsertGuardSystemObjectV1 accepts only the closed v1 registry entry.
+func IsUpsertGuardSystemObjectV1(object SystemObject) bool {
+	return object.ID == UpsertGuardObjectIDV1 && object.Kind == SystemUpsertGuard && object.Version == 1 && object.Name == "_golem_upsert_guard" && len(object.Attributes) == 0 && len(object.RequiredCapabilities) == 0
+}
 
 // SystemObject is selected from a versioned closed registry. Its semantic kind
 // and version define its provider-specific columns and constraints without DDL.

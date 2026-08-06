@@ -49,19 +49,20 @@ func fail(code ErrorCode, path, format string, args ...any) error {
 // Registry contains only privately owned values and maps. It is immutable
 // after New returns; every collection-valued accessor returns a copy.
 type Registry struct {
-	generationDigest    golem.SchemaDigest
-	modelFingerprint    golem.SchemaDigest
-	contractFingerprint golem.SchemaDigest
-	providers           []golem.Provider
-	models              map[golem.ModelID]Model
-	fields              map[golem.ModelID]map[golem.FieldID]Field
-	relations           map[relationKey]RelationEndpoint
-	enumValues          map[compilerir.EnumID]map[string]compilerir.EnumValueID
-	enumLabels          map[compilerir.EnumID]map[compilerir.EnumValueID]string
-	physicalModels      map[golem.Provider]map[golem.ModelID]PhysicalModel
-	physicalFields      map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField
-	physicalNamespaces  map[golem.Provider]physical.PhysicalName
-	capabilities        map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
+	generationDigest         golem.SchemaDigest
+	modelFingerprint         golem.SchemaDigest
+	contractFingerprint      golem.SchemaDigest
+	providers                []golem.Provider
+	models                   map[golem.ModelID]Model
+	fields                   map[golem.ModelID]map[golem.FieldID]Field
+	relations                map[relationKey]RelationEndpoint
+	enumValues               map[compilerir.EnumID]map[string]compilerir.EnumValueID
+	enumLabels               map[compilerir.EnumID]map[compilerir.EnumValueID]string
+	physicalModels           map[golem.Provider]map[golem.ModelID]PhysicalModel
+	physicalFields           map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField
+	physicalNamespaces       map[golem.Provider]physical.PhysicalName
+	physicalSystemNamespaces map[golem.Provider]physical.PhysicalName
+	capabilities             map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
 }
 
 type relationKey struct {
@@ -138,6 +139,32 @@ func (registry *Registry) RelationEndpoint(model golem.ModelID, field golem.Fiel
 	return value.clone(), true
 }
 
+// IdentityChangeRequiresReferentialEnumeration reports whether changing any of
+// the supplied fields can alter a relation correlation owned by another row.
+// Scalar mutation planning uses this to permit unreferenced mutable identities
+// while refusing provider cascades whose complete affected set is absent from
+// the mutation graph.
+func (registry *Registry) IdentityChangeRequiresReferentialEnumeration(model golem.ModelID, fields []golem.FieldID) bool {
+	if registry == nil || model == (golem.ModelID{}) || len(fields) == 0 {
+		return false
+	}
+	changed := make(map[golem.FieldID]struct{}, len(fields))
+	for _, field := range fields {
+		changed[field] = struct{}{}
+	}
+	for _, endpoint := range registry.relations {
+		if endpoint.model != model {
+			continue
+		}
+		for _, pair := range endpoint.correlation {
+			if _, present := changed[pair.parent]; present {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (registry *Registry) EnumValue(enum compilerir.EnumID, authoredLabel string) (compilerir.EnumValueID, bool) {
 	values, ok := registry.enumValues[enum]
 	if !ok {
@@ -176,6 +203,14 @@ func (registry *Registry) PhysicalNamespace(provider golem.Provider) (physical.P
 	return value, ok
 }
 
+func (registry *Registry) PhysicalSystemNamespace(provider golem.Provider) (physical.PhysicalName, bool) {
+	if registry == nil {
+		return "", false
+	}
+	value, ok := registry.physicalSystemNamespaces[provider]
+	return value, ok
+}
+
 func (registry *Registry) PhysicalField(provider golem.Provider, model golem.ModelID, field golem.FieldID) (PhysicalField, bool) {
 	models, ok := registry.physicalFields[provider]
 	if !ok {
@@ -203,12 +238,13 @@ func (registry *Registry) Capability(provider golem.Provider, id compilerir.Capa
 
 // Model is the minimum provider-neutral model fact used by the binder.
 type Model struct {
-	id         golem.ModelID
-	fields     []golem.FieldID
-	primaryKey []golem.FieldID
-	identities []Identity
-	equality   map[golem.FieldID]struct{}
-	maxTake    uint32
+	id            golem.ModelID
+	fields        []golem.FieldID
+	primaryKey    []golem.FieldID
+	identities    []Identity
+	equality      map[golem.FieldID]struct{}
+	maxTake       uint32
+	subscriptions bool
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
@@ -233,6 +269,10 @@ func (model Model) Identity(key golem.KeyID) (Identity, bool) {
 }
 
 func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTake != 0 }
+
+// SubscriptionsEnabled is the normalized contract decision controlling
+// durable mutation-fact capture for this model.
+func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
 
 // EqualityIndexed reports the compiler-proven provider-neutral fact that an
 // equality lookup on this field is served by a leading key/index column.
@@ -266,15 +306,19 @@ func (identity Identity) clone() Identity { identity.fields = identity.Fields();
 
 // Field is a provider-neutral logical field fact.
 type Field struct {
-	model        golem.ModelID
-	id           golem.FieldID
-	kind         compilerir.FieldKind
-	logicalType  compilerir.LogicalTypeIR
-	nullable     bool
-	graphqlName  string
-	modes        []compilerir.FieldMode
-	relation     golem.RelationID
-	relationRole compilerir.RelationEndpointRole
+	model            golem.ModelID
+	id               golem.FieldID
+	kind             compilerir.FieldKind
+	logicalType      compilerir.LogicalTypeIR
+	nullable         bool
+	defaultValue     *compilerir.DefaultIR
+	generation       *compilerir.GeneratedColumnIR
+	updated          bool
+	databaseReadOnly bool
+	graphqlName      string
+	modes            []compilerir.FieldMode
+	relation         golem.RelationID
+	relationRole     compilerir.RelationEndpointRole
 }
 
 func (field Field) ModelID() golem.ModelID                { return field.model }
@@ -282,7 +326,21 @@ func (field Field) ID() golem.FieldID                     { return field.id }
 func (field Field) Kind() compilerir.FieldKind            { return field.kind }
 func (field Field) LogicalType() compilerir.LogicalTypeIR { return cloneLogicalType(field.logicalType) }
 func (field Field) Nullable() bool                        { return field.nullable }
-func (field Field) GraphQLName() string                   { return field.graphqlName }
+func (field Field) Default() (compilerir.DefaultIR, bool) {
+	if field.defaultValue == nil {
+		return compilerir.DefaultIR{}, false
+	}
+	return cloneDefault(*field.defaultValue), true
+}
+func (field Field) Generation() (compilerir.GeneratedColumnIR, bool) {
+	if field.generation == nil {
+		return compilerir.GeneratedColumnIR{}, false
+	}
+	return cloneGeneratedColumn(*field.generation), true
+}
+func (field Field) Updated() bool          { return field.updated }
+func (field Field) DatabaseReadOnly() bool { return field.databaseReadOnly }
+func (field Field) GraphQLName() string    { return field.graphqlName }
 func (field Field) Modes() []compilerir.FieldMode {
 	return append([]compilerir.FieldMode(nil), field.modes...)
 }
@@ -417,6 +475,45 @@ func cloneLogicalType(value compilerir.LogicalTypeIR) compilerir.LogicalTypeIR {
 		copy := *value.Capability
 		value.Capability = &copy
 	}
+	return value
+}
+
+func cloneDefault(value compilerir.DefaultIR) compilerir.DefaultIR {
+	if value.Literal != nil {
+		literal := *value.Literal
+		value.Literal = &literal
+	}
+	if value.Provider != nil {
+		provider := *value.Provider
+		value.Provider = &provider
+	}
+	return value
+}
+
+func cloneGeneratedColumn(value compilerir.GeneratedColumnIR) compilerir.GeneratedColumnIR {
+	value.Expr = cloneSchemaExpr(value.Expr)
+	return value
+}
+
+func cloneSchemaExpr(value compilerir.SchemaExprIR) compilerir.SchemaExprIR {
+	value.ResultType = cloneLogicalType(value.ResultType)
+	if value.Symbol != nil {
+		symbol := *value.Symbol
+		value.Symbol = &symbol
+	}
+	if value.Field != nil {
+		field := *value.Field
+		value.Field = &field
+	}
+	if value.Literal != nil {
+		literal := *value.Literal
+		value.Literal = &literal
+	}
+	value.Operands = make([]compilerir.SchemaExprIR, len(value.Operands))
+	for index, operand := range value.Operands {
+		value.Operands[index] = cloneSchemaExpr(operand)
+	}
+	value.ReferencedFields = append([]compilerir.FieldID(nil), value.ReferencedFields...)
 	return value
 }
 

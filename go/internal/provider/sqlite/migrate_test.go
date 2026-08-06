@@ -54,6 +54,82 @@ func TestSQLiteIncrementalAdditiveMigrationAndExactLedger(t *testing.T) {
 	assertForeignKeysState(t, database, 1)
 }
 
+func TestSystemOutboxV1MigratesIntrospectsAndFingerprintsSQLite(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	after := before
+	after.System.Objects = append(append([]physical.SystemObject(nil), before.System.Objects...), physical.OutboxSystemObjectV1())
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "outbox-v1.db")
+	manifest, files := migrationFixtureManifest(t, before, after, "001_outbox_v1.sql", nil)
+	script, err := provider.RenderMigration(manifest.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`CREATE TABLE "_golem_outbox"`, `"before_identity" BLOB`, `"delete_snapshot" BLOB`, `UNIQUE ("causation_id", "transaction_ordinal")`, `CREATE INDEX "_golem_outbox_pending"`} {
+		if !strings.Contains(script.SQL(), fragment) {
+			t.Fatalf("outbox migration missing %q:\n%s", fragment, script.SQL())
+		}
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	valid := `INSERT INTO "_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES ('event-1',1,'golem.fact.v1','fingerprint','model','created',X'01','cause',0,X'02',1)`
+	if _, err := database.ExecContext(ctx, valid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, strings.Replace(valid, "event-1", "event-2", 1)); err == nil {
+		t.Fatal("duplicate causation ordinal was accepted")
+	}
+	invalidShape := `INSERT INTO "_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","before_identity","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES ('event-3',1,'golem.fact.v1','fingerprint','model','created',X'00',X'01','other',0,X'02',1)`
+	if _, err := database.ExecContext(ctx, invalidShape); err == nil {
+		t.Fatal("invalid created identity shape was accepted")
+	}
+}
+
+func TestSystemUpsertGuardV1MigratesIntrospectsAndRollsBackSQLite(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	after := before
+	after.System.Objects = append(append([]physical.SystemObject(nil), before.System.Objects...), physical.UpsertGuardSystemObjectV1())
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "upsert-guard-v1.db")
+	manifest, files := migrationFixtureManifest(t, before, after, "001_upsert_guard_v1.sql", nil)
+	script, err := provider.RenderMigration(manifest.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fragment := `CREATE TABLE "_golem_upsert_guard" ("guard_token" BLOB NOT NULL, PRIMARY KEY ("guard_token")) STRICT`
+	if !strings.Contains(script.SQL(), fragment) {
+		t.Fatalf("upsert guard migration missing %q:\n%s", fragment, script.SQL())
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := database.BeginTxx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO "_golem_upsert_guard" ("guard_token") VALUES (X'0102')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.GetContext(ctx, &count, `SELECT count(*) FROM "_golem_upsert_guard"`); err != nil || count != 0 {
+		t.Fatalf("rolled-back guard rows=%d error=%v", count, err)
+	}
+}
+
 func TestSQLiteIncrementalRebuildUsesStableFieldMapping(t *testing.T) {
 	ctx := context.Background()
 	provider := New()

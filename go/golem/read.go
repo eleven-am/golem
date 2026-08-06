@@ -702,12 +702,34 @@ type ReadOption[M any] interface {
 	readOption(M) readOptionNode
 }
 
+// Projection is the projection-only subset of ReadOption accepted by
+// single-row mutation results. It is additive to the P3 read ABI: every
+// Projection is still a ReadOption, while filters, ordering, pagination,
+// cursors, and distinct values cannot satisfy this sealed interface.
+type Projection[M any] interface {
+	ReadOption[M]
+	mutationProjection(M) readOptionNode
+}
+
 type readOptionValue[M any] struct {
 	node readOptionNode
 	_    func() M
 }
 
 func (option readOptionValue[M]) readOption(M) readOptionNode { return cloneReadOption(option.node) }
+
+type projectionValue[M any] struct {
+	node readOptionNode
+	_    func() M
+}
+
+func (option projectionValue[M]) readOption(M) readOptionNode {
+	return cloneReadOption(option.node)
+}
+
+func (option projectionValue[M]) mutationProjection(M) readOptionNode {
+	return cloneReadOption(option.node)
+}
 
 func Where[M any](predicate Predicate[M]) ReadOption[M] {
 	return readOptionValue[M]{node: readOptionNode{kind: readOptionWhere, freezePredicate: predicate.freezeForModel}}
@@ -770,12 +792,12 @@ func Cursor[M any](selector UniqueSelectorValue[M]) ReadOption[M] {
 	return readOptionValue[M]{node: readOptionNode{kind: readOptionCursor, selectorModel: selector.model, selectorKey: selector.key, selectorValues: components}}
 }
 
-func Select[M any](fields ...Selection[M]) ReadOption[M] {
-	return readOptionValue[M]{node: projectionOption(fields)}
+func Select[M any](fields ...Selection[M]) Projection[M] {
+	return projectionValue[M]{node: projectionOption(fields)}
 }
 
-func Include[M any](relations ...RelationInclusion[M]) ReadOption[M] {
-	return readOptionValue[M]{node: includeOption(relations)}
+func Include[M any](relations ...RelationInclusion[M]) Projection[M] {
+	return projectionValue[M]{node: includeOption(relations)}
 }
 
 func includeOption[M any](relations []RelationInclusion[M]) readOptionNode {
@@ -789,8 +811,18 @@ func includeOption[M any](relations []RelationInclusion[M]) readOptionNode {
 	return readOptionNode{kind: readOptionInclude, selection: selection}
 }
 
-func Omit[M any](fields ...Column[M]) ReadOption[M] {
-	return readOptionValue[M]{node: omitOption(fields)}
+func Omit[M any](fields ...Column[M]) Projection[M] {
+	return projectionValue[M]{node: omitOption(fields)}
+}
+
+// RuntimeProjectionReadOption is the narrow bridge used by the mutation
+// runtime to reuse P3's projection binder and result planner.
+func RuntimeProjectionReadOption[M any](projection Projection[M]) ReadOption[M] {
+	if projection == nil {
+		return nil
+	}
+	var witness M
+	return readOptionValue[M]{node: projection.mutationProjection(witness)}
 }
 
 func omitOption[M any](fields []Column[M]) readOptionNode {
@@ -845,6 +877,7 @@ const (
 	CodeNotFound        ErrorCode = "NOT_FOUND"
 	CodeUnauthenticated ErrorCode = "UNAUTHENTICATED"
 	CodeForbidden       ErrorCode = "FORBIDDEN"
+	CodeConflict        ErrorCode = "CONFLICT"
 )
 
 // Error is the transport-neutral public operation error. Cause is retained for
@@ -862,7 +895,14 @@ type Error struct {
 // public read failure. The wrapped cause remains available to trusted logging
 // through errors.Unwrap but is never included in Error().
 func RuntimeReadError(code ErrorCode, operation string, model ModelID, field FieldID, message string, cause error) error {
-	if code != CodeBadUserInput && code != CodeNotFound && code != CodeUnauthenticated && code != CodeForbidden {
+	return RuntimeOperationError(code, operation, model, field, message, cause)
+}
+
+// RuntimeOperationError is the transport-neutral trusted-runtime constructor
+// shared by reads and mutations. RuntimeReadError remains as the P3-compatible
+// spelling.
+func RuntimeOperationError(code ErrorCode, operation string, model ModelID, field FieldID, message string, cause error) error {
+	if code != CodeBadUserInput && code != CodeNotFound && code != CodeUnauthenticated && code != CodeForbidden && code != CodeConflict {
 		code = CodeBadUserInput
 	}
 	return &Error{Code: code, Operation: operation, Model: model, Field: field, Message: message, cause: cause}

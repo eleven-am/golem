@@ -175,6 +175,19 @@ func TestJSONObjectCanonicalizesMemberOrderAndRejectsDuplicates(t *testing.T) {
 	}
 }
 
+func TestPortableJSONDomainRejectsNULInStringsAndKeys(t *testing.T) {
+	if _, err := JSONStringValue("value\x00suffix"); err == nil {
+		t.Fatal("JSON string containing NUL was accepted")
+	}
+	value, err := JSONStringValue("portable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := NewJSONMember("key\x00suffix", value); err == nil {
+		t.Fatal("JSON key containing NUL was accepted")
+	}
+}
+
 func TestConditionConstructionEnforcesClosedShapes(t *testing.T) {
 	model := testModel(1)
 	other := testModel(2)

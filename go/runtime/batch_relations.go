@@ -33,22 +33,22 @@ func forcedRelationLoadStrategy(ctx context.Context) (relationLoadStrategy, bool
 	return value, ok && (value == relationLoadBatched || value == relationLoadCorrelatedOracle)
 }
 
-func executeToManyBatch[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
-	return executeRelationBatch(ctx, app, operation, parent, relation, endpoint, relation.Child(), parents)
+func executeToManyBatch[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
+	return executeRelationBatch(ctx, app, executor, operation, parent, relation, endpoint, relation.Child(), parents)
 }
 
 // executeToOneBatch preserves cardinality checking without issuing one query
 // per parent. A cap of two is enough to distinguish zero, one, and corrupt
 // multi-row results; the caller performs the invariant check after attachment.
-func executeToOneBatch[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
+func executeToOneBatch[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
 	child, err := readplan.WithMaximumTake(relation.Child(), 2)
 	if err != nil {
 		return nil, err
 	}
-	return executeRelationBatch(ctx, app, operation, parent, relation, endpoint, child, parents)
+	return executeRelationBatch(ctx, app, executor, operation, parent, relation, endpoint, child, parents)
 }
 
-func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, child readplan.Plan, parents []executedRow) ([][]executedRow, error) {
+func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, child readplan.Plan, parents []executedRow) ([][]executedRow, error) {
 	attached := make([][]executedRow, len(parents))
 	for index := range attached {
 		attached[index] = make([]executedRow, 0)
@@ -103,11 +103,11 @@ func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], operati
 		if renderErr != nil {
 			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(parent.ModelID()), golem.FieldID(relation.FieldID()), "bounded relation batch did not render", renderErr)
 		}
-		decoded, decodeErr := executeBatchStatement(ctx, app, operation, child, statement)
+		decoded, decodeErr := executeBatchStatement(ctx, app, executor, operation, child, statement)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		decoded, decodeErr = finishPlanRows(ctx, app, operation, child, decoded)
+		decoded, decodeErr = finishPlanRows(ctx, app, executor, operation, child, decoded)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
@@ -166,7 +166,7 @@ func enforceBatchLoaderKeyLimitWith(operation golem.ReadOperation, model golem.M
 // an internal semantic oracle. Production never chooses it until a genuine
 // single-statement correlated renderer exists; this function intentionally
 // makes its per-parent query shape obvious.
-func executeToManyCorrelatedOracle[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
+func executeToManyCorrelatedOracle[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, parents []executedRow) ([][]executedRow, error) {
 	result := make([][]executedRow, len(parents))
 	for index := range result {
 		result[index] = make([]executedRow, 0)
@@ -181,7 +181,7 @@ func executeToManyCorrelatedOracle[P, A any](ctx context.Context, app *App[P, A]
 		if err != nil {
 			return nil, err
 		}
-		rows, err := executePlan(ctx, app, operation, child)
+		rows, err := executePlan(ctx, app, executor, operation, child)
 		if err != nil {
 			return nil, err
 		}
@@ -190,12 +190,16 @@ func executeToManyCorrelatedOracle[P, A any](ctx context.Context, app *App[P, A]
 	return result, nil
 }
 
-func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, child readplan.Plan, statement readsql.BatchStatement) ([]executedRow, error) {
+func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, child readplan.Plan, statement readsql.BatchStatement) ([]executedRow, error) {
 	decoder, err := readdecode.NewBatch(child, app.registry, app.provider, statement.ExtraCorrelationFields())
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch decoder could not be built", err)
 	}
-	rows, err := app.database.QueryxContext(ctx, statement.SQL(), statement.Args()...)
+	queryer, err := executor.queryerFor(app.database)
+	if err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation execution binding is unavailable", err)
+	}
+	rows, err := queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation execution failed", err)
 	}

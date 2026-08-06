@@ -174,6 +174,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		if operation.Kind == migration.RecordSchemaVersion {
 			continue
 		}
+		if operation.Kind == migration.AddSystemObject {
+			continue
+		}
 		tableID, ok := owners[operation.ID]
 		if !ok {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s cannot resolve owner of operation %s", entry.ID, operation.ID)
@@ -226,6 +229,22 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	emitted := map[ir.ModelID]bool{}
 	for _, operation := range semantic.Operations {
 		if operation.Kind == migration.RecordSchemaVersion {
+			continue
+		}
+		if operation.Kind == migration.AddSystemObject {
+			object, exists := findSystemObject(entry.AfterSnapshot.System, ir.ObjectID(operation.ObjectID))
+			if !exists || !sqliteRegisteredAdditiveSystemObject(object) {
+				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s system object %s is not registered", entry.ID, operation.ObjectID)
+			}
+			statement, renderErr := renderSystemObject(object)
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			indexes, renderErr := renderSystemIndexes(object)
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			plan.steps = append(plan.steps, migrationStep{statements: append([]string{statement}, indexes...)})
 			continue
 		}
 		tableID := owners[operation.ID]
@@ -477,7 +496,7 @@ func operationOwners(before, after physical.PhysicalSchema) (map[migration.Opera
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range plan.Operations {
-		if operation.Kind == migration.RecordSchemaVersion {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject {
 			continue
 		}
 		owner, exists := objectOwners[operation.ObjectID]
@@ -487,6 +506,19 @@ func operationOwners(before, after physical.PhysicalSchema) (map[migration.Opera
 		result[operation.ID] = owner
 	}
 	return result, nil
+}
+
+func findSystemObject(system physical.SystemSchema, id ir.ObjectID) (physical.SystemObject, bool) {
+	for _, object := range system.Objects {
+		if object.ID == id {
+			return object, true
+		}
+	}
+	return physical.SystemObject{}, false
+}
+
+func sqliteRegisteredAdditiveSystemObject(object physical.SystemObject) bool {
+	return physical.IsOutboxSystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
 }
 
 func tableMap(tables []physical.PhysicalTable) map[ir.ModelID]physical.PhysicalTable {

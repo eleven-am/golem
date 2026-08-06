@@ -23,7 +23,7 @@ func correlatedPayloadAvailable(rows []executedRow, relation readplan.Relation) 
 // finishCorrelatedRelation materializes nested graphs once over the flattened
 // child set, preserving the one-statement immediate relation while allowing
 // deeper relations to use bounded batches. It never falls back per parent.
-func finishCorrelatedRelation[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, relation readplan.Relation, parents []executedRow) ([][]executedRow, error) {
+func finishCorrelatedRelation[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, relation readplan.Relation, parents []executedRow) ([][]executedRow, error) {
 	if !correlatedPayloadAvailable(parents, relation) {
 		return nil, fmt.Errorf("P3_RUNTIME_CORRELATED: relation %x has no decoded correlated payload", relation.RelationID())
 	}
@@ -42,7 +42,7 @@ func finishCorrelatedRelation[P, A any](ctx context.Context, app *App[P, A], ope
 	for index := range parents {
 		flat = append(flat, parents[index].correlated[relation.FieldID()]...)
 	}
-	finished, err := finishPlanRows(ctx, app, operation, relation.Child(), flat)
+	finished, err := finishPlanRows(ctx, app, executor, operation, relation.Child(), flat)
 	if err != nil {
 		return nil, err
 	}

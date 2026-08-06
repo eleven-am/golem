@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"reflect"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -399,12 +401,20 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		return physical.SystemSchema{}, err
 	}
 	ledgerName := ""
+	outboxName := ""
+	var expectedRelations []string
 	for _, object := range expected.Objects {
-		if object.Kind == physical.SystemMigrationLedger {
+		switch object.Kind {
+		case physical.SystemMigrationLedger:
 			ledgerName = string(object.Name)
+			expectedRelations = append(expectedRelations, ledgerName)
+		case physical.SystemOutbox:
+			outboxName = string(object.Name)
+			expectedRelations = append(expectedRelations, outboxName)
 		}
 	}
-	if len(names) != 1 || names[0] != ledgerName {
+	sort.Strings(expectedRelations)
+	if fmt.Sprint(names) != fmt.Sprint(expectedRelations) {
 		return physical.SystemSchema{}, fmt.Errorf("postgresql system schema drift: relations=%v", names)
 	}
 	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(expected.Namespace.Name), ledgerName)
@@ -455,7 +465,102 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	if extraIndexes != 0 {
 		return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger has %d unmanaged indexes", extraIndexes)
 	}
-	return systemSchema(), nil
+	if outboxName != "" {
+		if err := introspectOutbox(ctx, q, expected.Namespace.Name, outboxName); err != nil {
+			return physical.SystemSchema{}, err
+		}
+	}
+	return expected, nil
+}
+
+func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string) error {
+	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	type outboxColumn struct {
+		name, storage, defaultExpression, identity, generated string
+		notNull                                               bool
+	}
+	var actualColumns []outboxColumn
+	for columnRows.Next() {
+		var value outboxColumn
+		if err := columnRows.Scan(&value.name, &value.storage, &value.notNull, &value.defaultExpression, &value.identity, &value.generated); err != nil {
+			columnRows.Close()
+			return err
+		}
+		actualColumns = append(actualColumns, value)
+	}
+	if err := columnRows.Close(); err != nil {
+		return err
+	}
+	wanted := []outboxColumn{
+		{name: "event_id", storage: "text", notNull: true},
+		{name: "fact_version", storage: "integer", notNull: true},
+		{name: "codec_identity", storage: "text", notNull: true},
+		{name: "generation_fingerprint", storage: "text", notNull: true},
+		{name: "model_id", storage: "text", notNull: true},
+		{name: "action", storage: "text", notNull: true},
+		{name: "before_identity", storage: "bytea"},
+		{name: "after_identity", storage: "bytea"},
+		{name: "causation_id", storage: "text", notNull: true},
+		{name: "transaction_ordinal", storage: "integer", notNull: true},
+		{name: "metadata", storage: "bytea", notNull: true},
+		{name: "delete_snapshot", storage: "bytea"},
+		{name: "recorded_at", storage: "timestamp(6) with time zone", notNull: true},
+	}
+	if fmt.Sprint(actualColumns) != fmt.Sprint(wanted) {
+		return fmt.Errorf("postgresql outbox column drift")
+	}
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	actualConstraints := map[string]int{}
+	for constraintRows.Next() {
+		var kind, keys string
+		var deferrable, validated bool
+		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+			constraintRows.Close()
+			return err
+		}
+		if deferrable || !validated {
+			constraintRows.Close()
+			return fmt.Errorf("postgresql outbox constraint drift")
+		}
+		actualConstraints[kind+"\x00"+keys]++
+	}
+	if err := constraintRows.Close(); err != nil {
+		return err
+	}
+	wantedConstraints := map[string]int{"p\x00{1}": 1, "u\x00{9,10}": 1, "c\x00{2}": 1, "c\x00{6}": 1, "c\x00{10}": 1, "c\x00{6,7,8}": 1}
+	if !reflect.DeepEqual(actualConstraints, wantedConstraints) {
+		return fmt.Errorf("postgresql outbox constraint drift")
+	}
+	indexRows, err := q.QueryxContext(ctx, `SELECT ic.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid WHERE n.nspname=$1 AND c.relname=$2 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ic.relname`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	defer indexRows.Close()
+	count := 0
+	for indexRows.Next() {
+		var indexName, keys, predicate string
+		var unique, valid bool
+		if err := indexRows.Scan(&indexName, &unique, &valid, &keys, &predicate); err != nil {
+			return err
+		}
+		count++
+		if indexName != "_golem_outbox_pending" || unique || !valid || keys != "13 1" || predicate != "" {
+			return fmt.Errorf("postgresql outbox index drift")
+		}
+	}
+	if err := indexRows.Err(); err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("postgresql outbox index drift: got %d indexes", count)
+	}
+	return nil
 }
 
 func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expected physical.PhysicalSchema) error {

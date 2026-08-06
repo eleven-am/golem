@@ -57,7 +57,7 @@ func (resolver schemaResolver) Field(provider ir.Provider, model ir.ModelID, fie
 		return Field{}, false
 	}
 	logical, ok := resolver.registry.Field(golem.ModelID(model), golem.FieldID(field))
-	if !ok || logical.Kind() != compilerir.FieldScalar {
+	if !ok || logical.Kind() != compilerir.FieldScalar && logical.Kind() != compilerir.FieldEnum && logical.Kind() != compilerir.FieldScalarList {
 		return Field{}, false
 	}
 	physicalField, ok := resolver.registry.PhysicalField(external, golem.ModelID(model), golem.FieldID(field))

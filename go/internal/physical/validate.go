@@ -654,7 +654,15 @@ func (v *validator) validateSystem() {
 		}
 		seen[object.ID] = struct{}{}
 		switch object.Kind {
-		case SystemMigrationLedger, SystemMigrationLock, SystemOutbox:
+		case SystemMigrationLedger, SystemMigrationLock:
+		case SystemOutbox:
+			if !IsOutboxSystemObjectV1(object) {
+				v.add(CodeExtension, path, "outbox system object does not match the closed v1 registry entry")
+			}
+		case SystemUpsertGuard:
+			if !IsUpsertGuardSystemObjectV1(object) {
+				v.add(CodeExtension, path, "upsert guard system object does not match the closed v1 registry entry")
+			}
 		default:
 			v.add(CodeExtension, path+".kind", fmt.Sprintf("unregistered system object kind %q", object.Kind))
 		}

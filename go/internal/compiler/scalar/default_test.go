@@ -112,4 +112,15 @@ func TestProviderDefaultAndUpdatedValidation(t *testing.T) {
 	}
 }
 
+func TestUUIDStringDefaultRequiresEnoughDeclaredLength(t *testing.T) {
+	short := uint32(35)
+	if value, diagnostics := ResolveDefault(ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &short}, "uuid", DefaultContext{}); value != nil || len(diagnostics) != 1 || diagnostics[0].Code != "P1_DEFAULT_UUID_LENGTH" {
+		t.Fatalf("short uuid string default = %#v diagnostics=%#v", value, diagnostics)
+	}
+	exact := uint32(36)
+	if value, diagnostics := ResolveDefault(ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &exact}, "uuid", DefaultContext{}); value == nil || len(diagnostics) != 0 {
+		t.Fatalf("exact uuid string default = %#v diagnostics=%#v", value, diagnostics)
+	}
+}
+
 func enumIDPointer(value ir.EnumID) *ir.EnumID { return &value }

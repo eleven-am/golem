@@ -43,7 +43,8 @@ func New(bundle golem.SchemaBundle) (*Registry, error) {
 			models: make(map[golem.ModelID]Model), fields: make(map[golem.ModelID]map[golem.FieldID]Field), relations: make(map[relationKey]RelationEndpoint),
 			enumValues: make(map[compilerir.EnumID]map[string]compilerir.EnumValueID), enumLabels: make(map[compilerir.EnumID]map[compilerir.EnumValueID]string), physicalModels: make(map[golem.Provider]map[golem.ModelID]PhysicalModel),
 			physicalFields: make(map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField), capabilities: make(map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact),
-			physicalNamespaces: make(map[golem.Provider]physical.PhysicalName),
+			physicalNamespaces:       make(map[golem.Provider]physical.PhysicalName),
+			physicalSystemNamespaces: make(map[golem.Provider]physical.PhysicalName),
 		},
 		logicalModels: make(map[compilerir.ModelID]compilerir.ModelDeclIR), logicalFields: make(map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR),
 	}
@@ -210,6 +211,16 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 			if logicalField.Scalar != nil {
 				fact.logicalType = cloneLogicalType(logicalField.Scalar.Type)
 				fact.nullable = logicalField.Scalar.Nullable
+				if logicalField.Scalar.Default != nil {
+					value := cloneDefault(*logicalField.Scalar.Default)
+					fact.defaultValue = &value
+				}
+				if logicalField.Scalar.Generation != nil {
+					value := cloneGeneratedColumn(*logicalField.Scalar.Generation)
+					fact.generation = &value
+				}
+				fact.updated = logicalField.Scalar.Updated
+				fact.databaseReadOnly = logicalField.Scalar.DatabaseReadOnly
 			}
 			if logicalField.Relation != nil {
 				rid, relationErr := relationID(logicalField.Relation.RelationID)
@@ -406,6 +417,7 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 		mid, _ := modelID(model.ModelID)
 		fact := builder.registry.models[mid]
 		fact.maxTake = model.Limits.MaxTake
+		fact.subscriptions = model.Subscriptions
 		builder.registry.models[mid] = fact
 		if len(model.Fields) != len(builder.logicalFields[model.ModelID]) {
 			return fail(CodeContract, path+".fields", "contract field inventory has %d entries, want %d", len(model.Fields), len(builder.logicalFields[model.ModelID]))
@@ -532,5 +544,6 @@ func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema ph
 	}
 	builder.registry.physicalModels[provider], builder.registry.physicalFields[provider], builder.registry.capabilities[provider] = models, fields, capabilities
 	builder.registry.physicalNamespaces[provider] = schema.Namespace.Name
+	builder.registry.physicalSystemNamespaces[provider] = schema.System.Namespace.Name
 	return nil
 }

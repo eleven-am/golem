@@ -19,6 +19,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/generate/publication"
 	"github.com/eleven-am/golem/go/internal/migration"
+	"github.com/eleven-am/golem/go/internal/physical"
 )
 
 func TestUsageErrorsExitTwoWithoutOutput(t *testing.T) {
@@ -49,7 +50,7 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "db7337575172e5d8828eda712410e1d184cbaa4d55cae8c347076b347965bc22"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "d1496b8127a7848ce938754b6074cb8240b1a2d2ab5cf98263ba3fa96a6d2eee"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
@@ -123,6 +124,17 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	for _, provider := range output.Providers {
 		if provider.Fingerprint == "" || provider.SystemFingerprint == "" {
 			t.Fatalf("inspect provider output omitted application or system fingerprint: %#v", provider)
+		}
+		if len(provider.Schema.System.Objects) != 4 {
+			t.Fatalf("inspect provider output omitted a system object: %#v", provider.Schema.System)
+		}
+		foundOutbox, foundUpsertGuard := false, false
+		for _, object := range provider.Schema.System.Objects {
+			foundOutbox = foundOutbox || object.Kind == physical.SystemOutbox && physical.IsOutboxSystemObjectV1(object)
+			foundUpsertGuard = foundUpsertGuard || object.Kind == physical.SystemUpsertGuard && physical.IsUpsertGuardSystemObjectV1(object)
+		}
+		if !foundOutbox || !foundUpsertGuard {
+			t.Fatalf("inspect provider output omitted P4 system objects: %#v", provider.Schema.System)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, manifest.DefaultPath)); !os.IsNotExist(err) {

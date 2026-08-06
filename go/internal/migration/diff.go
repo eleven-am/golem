@@ -44,10 +44,19 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 	}
 	initial := false
 	if beforeSystem != afterSystem {
-		if !emptySystemSchema(left.System) || len(left.Tables) != 0 || len(left.Extensions) != 0 || len(left.Unmanaged) != 0 || len(right.System.Objects) == 0 {
-			return Plan{}, fmt.Errorf("system schema changes require the explicit first-entry bootstrap from a canonical empty schema")
+		if emptySystemSchema(left.System) && len(left.Tables) == 0 && len(left.Extensions) == 0 && len(left.Unmanaged) == 0 && len(right.System.Objects) != 0 {
+			initial = true
+		} else {
+			additions, upgradeErr := systemObjectAdditions(left.System, right.System)
+			if upgradeErr != nil {
+				return Plan{}, upgradeErr
+			}
+			for _, object := range additions {
+				if err := builder.add(AddSystemObject, 15, string(object.ID), nil, object, RiskSafe); err != nil {
+					return Plan{}, err
+				}
+			}
 		}
-		initial = true
 	}
 	if initial && right.Provider.Provider == ir.PostgreSQL {
 		if err := builder.add(CreateNamespace, 10, string(right.Namespace.Name), nil, right.Namespace, RiskSafe); err != nil {
@@ -81,6 +90,38 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 		return Plan{}, err
 	}
 	return plan, nil
+}
+
+func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.SystemObject, error) {
+	if before.Version != after.Version || before.Namespace != after.Namespace {
+		return nil, fmt.Errorf("system schema changes may only add a registered system object in the existing namespace")
+	}
+	old := make(map[ir.ObjectID]physical.SystemObject, len(before.Objects))
+	for _, object := range before.Objects {
+		old[object.ID] = object
+	}
+	var additions []physical.SystemObject
+	for _, object := range after.Objects {
+		if previous, exists := old[object.ID]; exists {
+			if !reflect.DeepEqual(previous, object) {
+				return nil, fmt.Errorf("system object %s cannot be changed in place", object.ID)
+			}
+			delete(old, object.ID)
+			continue
+		}
+		additions = append(additions, object)
+	}
+	if len(old) != 0 {
+		return nil, fmt.Errorf("system objects cannot be removed")
+	}
+	if len(additions) != 1 || !registeredAdditiveSystemObject(additions[0]) {
+		return nil, fmt.Errorf("system schema change is not a registered additive system object")
+	}
+	return additions, nil
+}
+
+func registeredAdditiveSystemObject(object physical.SystemObject) bool {
+	return physical.IsOutboxSystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
 }
 
 func emptySystemSchema(system physical.SystemSchema) bool {
@@ -481,7 +522,7 @@ func (b *diffBuilder) dependencies() {
 		if op.Kind == BootstrapSystemSchema {
 			addDep(op, CreateNamespace, string(b.after.Namespace.Name))
 		}
-		if op.Kind != BootstrapSystemSchema && op.Kind != CreateNamespace && op.Kind != RecordSchemaVersion {
+		if op.Kind != BootstrapSystemSchema && op.Kind != AddSystemObject && op.Kind != CreateNamespace && op.Kind != RecordSchemaVersion {
 			addDep(op, BootstrapSystemSchema, "system-schema")
 		}
 		if op.Kind == CreateTable {

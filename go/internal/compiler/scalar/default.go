@@ -31,6 +31,9 @@ func ResolveDefault(logicalType ir.LogicalTypeIR, token string, context DefaultC
 		if normalizedType.Kind != ir.TypeUUID && normalizedType.Kind != ir.TypeString {
 			return nil, append(typeDiagnostics, defaultError("P1_DEFAULT_UUID_TYPE", "uuid default is accepted only on UUID or String", context.Span))
 		}
+		if normalizedType.Kind == ir.TypeString && normalizedType.MaxLength != nil && *normalizedType.MaxLength < 36 {
+			return nil, append(typeDiagnostics, defaultError("P1_DEFAULT_UUID_LENGTH", "uuid string default requires max length of at least 36", context.Span))
+		}
 		return &ir.DefaultIR{Kind: ir.DefaultUUID, Producer: ir.ProducerApplication}, typeDiagnostics
 	case "now":
 		if normalizedType.Kind != ir.TypeDate && normalizedType.Kind != ir.TypeTime && normalizedType.Kind != ir.TypeDateTime {

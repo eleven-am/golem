@@ -31,6 +31,11 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 			return Script{}, renderErr
 		}
 		statements = append(statements, statement)
+		indexStatements, renderErr := renderSystemIndexes(object)
+		if renderErr != nil {
+			return Script{}, renderErr
+		}
+		statements = append(statements, indexStatements...)
 	}
 	for _, table := range normalized.Tables {
 		statement, renderErr := renderTable(table, tables)
@@ -68,9 +73,42 @@ func renderSystemObject(object physical.SystemObject) (string, error) {
 			quote("applied_at") + " TEXT NOT NULL, PRIMARY KEY (" + quote("migration_id") + ")) STRICT", nil
 	case physical.SystemMigrationLock:
 		return "CREATE TABLE " + quote(object.Name) + " (" + quote("lock_id") + " INTEGER NOT NULL, PRIMARY KEY (" + quote("lock_id") + "), CHECK (" + quote("lock_id") + " = 1)) STRICT", nil
+	case physical.SystemOutbox:
+		return "CREATE TABLE " + quote(object.Name) + " (" +
+			quote("event_id") + " TEXT NOT NULL, " +
+			quote("fact_version") + " INTEGER NOT NULL, " +
+			quote("codec_identity") + " TEXT NOT NULL, " +
+			quote("generation_fingerprint") + " TEXT NOT NULL, " +
+			quote("model_id") + " TEXT NOT NULL, " +
+			quote("action") + " TEXT NOT NULL, " +
+			quote("before_identity") + " BLOB, " +
+			quote("after_identity") + " BLOB, " +
+			quote("causation_id") + " TEXT NOT NULL, " +
+			quote("transaction_ordinal") + " INTEGER NOT NULL, " +
+			quote("metadata") + " BLOB NOT NULL, " +
+			quote("delete_snapshot") + " BLOB, " +
+			quote("recorded_at") + " INTEGER NOT NULL, " +
+			"PRIMARY KEY (" + quote("event_id") + "), " +
+			"UNIQUE (" + quote("causation_id") + ", " + quote("transaction_ordinal") + "), " +
+			"CHECK (" + quote("fact_version") + " > 0), " +
+			"CHECK (" + quote("transaction_ordinal") + " >= 0), " +
+			"CHECK (" + quote("action") + " IN ('created','updated','deleted')), " +
+			"CHECK ((" + quote("action") + " = 'created' AND " + quote("before_identity") + " IS NULL AND " + quote("after_identity") + " IS NOT NULL) OR (" + quote("action") + " = 'updated' AND " + quote("before_identity") + " IS NOT NULL AND " + quote("after_identity") + " IS NOT NULL) OR (" + quote("action") + " = 'deleted' AND " + quote("before_identity") + " IS NOT NULL AND " + quote("after_identity") + " IS NULL))) STRICT", nil
+	case physical.SystemUpsertGuard:
+		return "CREATE TABLE " + quote(object.Name) + " (" + quote("guard_token") + " BLOB NOT NULL, PRIMARY KEY (" + quote("guard_token") + ")) STRICT", nil
 	default:
-		return "", fmt.Errorf("sqlite render: unsupported P1 system object kind %q", object.Kind)
+		return "", fmt.Errorf("sqlite render: unsupported system object kind %q", object.Kind)
 	}
+}
+
+func renderSystemIndexes(object physical.SystemObject) ([]string, error) {
+	if object.Version != 1 {
+		return nil, fmt.Errorf("sqlite render: unsupported system object %s version %d", object.Kind, object.Version)
+	}
+	if object.Kind != physical.SystemOutbox {
+		return nil, nil
+	}
+	return []string{"CREATE INDEX " + quote("_golem_outbox_pending") + " ON " + quote(object.Name) + " (" + quote("recorded_at") + ", " + quote("event_id") + ")"}, nil
 }
 
 func renderTable(table physical.PhysicalTable, tables map[ir.ModelID]physical.PhysicalTable) (string, error) {

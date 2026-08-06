@@ -124,7 +124,7 @@ func TestOpenCreatesIsolatedCallerAndExplicitSystemExecutions(t *testing.T) {
 	}
 }
 
-func TestForPrincipalFailureCannotBecomeSystem(t *testing.T) {
+func TestMutationPrincipalFailureCannotBecomeSystem(t *testing.T) {
 	ctx := context.Background()
 	fixture := schematest.New(t)
 	database, _, err := sqlite.New().Open(ctx, "file:"+filepath.Join(t.TempDir(), "runtime-auth.db"))

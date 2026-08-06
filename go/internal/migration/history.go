@@ -175,10 +175,14 @@ func VerifyManifest(manifest Manifest, files map[string][]byte) error {
 		}
 		bootstrapCount := 0
 		var bootstrap Operation
+		var systemAdditions []Operation
 		for _, operation := range entry.Operations {
 			if operation.Kind == BootstrapSystemSchema {
 				bootstrapCount++
 				bootstrap = operation
+			}
+			if operation.Kind == AddSystemObject {
+				systemAdditions = append(systemAdditions, operation)
 			}
 		}
 		if beforeSystem != afterSystem {
@@ -186,18 +190,27 @@ func VerifyManifest(manifest Manifest, files map[string][]byte) error {
 			afterFragment, afterFragmentErr := fragment(afterSnapshot.System)
 			expectedPlan, expectedPlanErr := Diff(beforeSnapshot, afterSnapshot)
 			var expectedBootstrap Operation
+			var expectedAdditions []Operation
 			if expectedPlanErr == nil {
 				for _, operation := range expectedPlan.Operations {
 					if operation.Kind == BootstrapSystemSchema {
 						expectedBootstrap = operation
 					}
+					if operation.Kind == AddSystemObject {
+						expectedAdditions = append(expectedAdditions, operation)
+					}
 				}
 			}
-			if index != 0 || !emptySystemSchema(beforeSnapshot.System) || len(beforeSnapshot.Tables) != 0 || len(beforeSnapshot.Extensions) != 0 || len(beforeSnapshot.Unmanaged) != 0 || len(afterSnapshot.System.Objects) == 0 || bootstrapCount != 1 || beforeFragmentErr != nil || afterFragmentErr != nil || bootstrap.ObjectID != "system-schema" || bootstrap.Before != beforeFragment || bootstrap.After != afterFragment || expectedPlanErr != nil || !reflect.DeepEqual(bootstrap, expectedBootstrap) {
-				return fmt.Errorf("migration %s changes the P1 system schema without the exact first-entry bootstrap operation", entry.ID)
+			initialTransition := emptySystemSchema(beforeSnapshot.System)
+			if initialTransition {
+				if index != 0 || len(beforeSnapshot.Tables) != 0 || len(beforeSnapshot.Extensions) != 0 || len(beforeSnapshot.Unmanaged) != 0 || len(afterSnapshot.System.Objects) == 0 || bootstrapCount != 1 || len(systemAdditions) != 0 || beforeFragmentErr != nil || afterFragmentErr != nil || bootstrap.ObjectID != "system-schema" || bootstrap.Before != beforeFragment || bootstrap.After != afterFragment || expectedPlanErr != nil || !reflect.DeepEqual(bootstrap, expectedBootstrap) {
+					return fmt.Errorf("migration %s changes the system schema without the exact first-entry bootstrap operation", entry.ID)
+				}
+			} else if bootstrapCount != 0 || expectedPlanErr != nil || len(systemAdditions) != 1 || !reflect.DeepEqual(systemAdditions, expectedAdditions) {
+				return fmt.Errorf("migration %s changes the system schema without the exact registered system-object addition", entry.ID)
 			}
-		} else if bootstrapCount != 0 {
-			return fmt.Errorf("migration %s contains a system bootstrap without a system transition", entry.ID)
+		} else if bootstrapCount != 0 || len(systemAdditions) != 0 {
+			return fmt.Errorf("migration %s contains a system operation without a system transition", entry.ID)
 		}
 		if index > 0 {
 			previous := manifest.Entries[index-1]

@@ -24,7 +24,103 @@ type readSurfaceArtifacts struct {
 	registry []byte
 }
 
-func TestGeneratedReadSurfaceExecutesEveryCallerAndSystemOperationFromFreshModule(t *testing.T) {
+func TestGeneratedMutationSurfaceEmitsEveryCallerAndSystemMethod(t *testing.T) {
+	source := string(buildReadSurfaceArtifacts(t).registry)
+	for _, fragment := range []string{
+		"func (client CallerUserClient[P]) Create(",
+		"func (client CallerUserClient[P]) Update(",
+		"func (client CallerUserClient[P]) Upsert(",
+		"func (client CallerUserClient[P]) Delete(",
+		"func (client CallerUserClient[P]) UpdateMany(",
+		"func (client CallerUserClient[P]) DeleteMany(",
+		"func (client SystemUserClient[P]) Create(",
+		"func (client SystemUserClient[P]) Update(",
+		"func (client SystemUserClient[P]) Upsert(",
+		"func (client SystemUserClient[P]) Delete(",
+		"func (client SystemUserClient[P]) UpdateMany(",
+		"func (client SystemUserClient[P]) DeleteMany(",
+		"func (client CallerTxUserClient[P]) Create(",
+		"func (client CallerTxUserClient[P]) Update(",
+		"func (client CallerTxUserClient[P]) Upsert(",
+		"func (client CallerTxUserClient[P]) Delete(",
+		"func (client CallerTxUserClient[P]) UpdateMany(",
+		"func (client CallerTxUserClient[P]) DeleteMany(",
+		"func (client SystemTxUserClient[P]) Create(",
+		"func (client SystemTxUserClient[P]) Update(",
+		"func (client SystemTxUserClient[P]) Upsert(",
+		"func (client SystemTxUserClient[P]) Delete(",
+		"func (client SystemTxUserClient[P]) UpdateMany(",
+		"func (client SystemTxUserClient[P]) DeleteMany(",
+		"golemruntime.CallerCreate", "golemruntime.SystemUpdate", "golemruntime.CallerUpsert", "golemruntime.SystemTxUpsert",
+		"golemruntime.CallerTxDelete", "golemruntime.SystemTxCreate",
+		"golemruntime.CallerUpdateMany", "golemruntime.SystemDeleteMany",
+		"golemruntime.CallerTxDeleteMany", "golemruntime.SystemTxUpdateMany",
+	} {
+		if !strings.Contains(source, fragment) {
+			t.Errorf("generated registry missing %q:\n%s", fragment, source)
+		}
+	}
+}
+
+func TestGeneratedMutationSurfaceExecutesEveryCallerAndSystemOperationFromFreshModule(t *testing.T) {
+	testGeneratedMutationAndTransactionSurfaceFromFreshModule(t)
+}
+
+func TestGeneratedTransactionClientsExecuteReadsAndWritesFromFreshModule(t *testing.T) {
+	testGeneratedMutationAndTransactionSurfaceFromFreshModule(t)
+}
+
+func TestGeneratedMutationSurfaceAcceptsLegalPrograms(t *testing.T) {
+	artifacts := buildReadSurfaceArtifacts(t)
+	files := cloneSourceFiles(artifacts.files)
+	files["generated/"+Filename] = string(artifacts.registry)
+	files["acceptance/legal_mutation_surface_test.go"] = `package acceptance_test
+
+import (
+	"example.test/app/models"
+	"github.com/eleven-am/golem/go/golem"
+)
+
+var legalUserID = golem.NewUUID([16]byte{1})
+var legalPostID = golem.NewUUID([16]byte{2})
+var legalUserTarget = models.Users.ByID.Value(legalUserID)
+var legalPostTarget = models.Posts.ByID.Value(legalPostID)
+var legalUserCreate = models.Users.Create(models.Users.ID.Create(legalUserID), models.Users.Name.Create("user"))
+var legalUserUpdate = models.Users.Update(models.Users.Name.Set("updated-user"))
+var legalPostCreate = models.Posts.Create(models.Posts.ID.Create(legalPostID), models.Posts.AuthorID.Create(legalUserID), models.Posts.Title.Create("post"))
+var legalPostUpdate = models.Posts.Update(models.Posts.Title.Set("updated-post"))
+var legalPostUpdateMany = models.Posts.UpdateMany(models.Posts.Title.Set("many"))
+
+var _ models.PostCreateInput = models.Posts.Create(
+	models.Posts.Author.Create(legalUserCreate),
+	models.Posts.Author.Connect(legalUserTarget),
+	models.Posts.Author.ConnectOrCreate(legalUserTarget, legalUserCreate),
+)
+var _ models.PostUpdateInput = models.Posts.Update(
+	models.Posts.Author.Update(legalUserUpdate),
+	models.Posts.Author.Upsert(legalUserCreate, legalUserUpdate),
+)
+var _ models.UserCreateInput = models.Users.Create(
+	models.Users.Posts.Create(legalPostCreate),
+	models.Users.Posts.CreateMany(legalPostCreate),
+	models.Users.Posts.Connect(legalPostTarget),
+	models.Users.Posts.ConnectOrCreate(legalPostTarget, legalPostCreate),
+)
+var _ models.UserUpdateInput = models.Users.Update(
+	models.Users.Posts.Disconnect(legalPostTarget),
+	models.Users.Posts.Set(legalPostTarget),
+	models.Users.Posts.Update(legalPostTarget, legalPostUpdate),
+	models.Users.Posts.UpdateMany(models.Posts.Title.Eq("post"), legalPostUpdateMany),
+	models.Users.Posts.Upsert(legalPostTarget, legalPostCreate, legalPostUpdate),
+	models.Users.Posts.Delete(legalPostTarget),
+	models.Users.Posts.DeleteMany(models.Posts.Title.Eq("post")),
+)
+`
+	runFreshReadSurfaceModule(t, files, false, nil)
+}
+
+func testGeneratedMutationAndTransactionSurfaceFromFreshModule(t *testing.T) {
+	t.Helper()
 	artifacts := buildReadSurfaceArtifacts(t)
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "generated-read-surface.db")
@@ -56,6 +152,7 @@ func TestGeneratedReadSurfaceExecutesEveryCallerAndSystemOperationFromFreshModul
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"example.test/app/generated"
@@ -103,6 +200,12 @@ func TestEveryGeneratedReadOperation(t *testing.T) {
 	if name, ok := golem.Value(callerUnique, models.Users.Name).Get(); !ok || name != "alice" { t.Fatalf("caller unique=%%q present=%%t", name, ok) }
 	callerCount, err := caller.Users.Count(ctx)
 	if err != nil || callerCount != 1 { t.Fatalf("caller count=%%d err=%%v", callerCount, err) }
+	if err := caller.Transaction(ctx, func(tx *generated.CallerTx[string]) error {
+		count, err := tx.Users.Count(ctx)
+		if err != nil || count != 1 { return fmt.Errorf("caller tx count=%%d err=%%v", count, err) }
+		_, err = tx.Users.FindUnique(ctx, alice, projection)
+		return err
+	}); err != nil { t.Fatal(err) }
 
 	system := application.System()
 	systemRows, err := system.Users.FindMany(ctx, order, projection)
@@ -115,12 +218,106 @@ func TestEveryGeneratedReadOperation(t *testing.T) {
 	if name, ok := golem.Value(systemUnique, models.Users.Name).Get(); !ok || name != "bob" { t.Fatalf("system unique=%%q present=%%t", name, ok) }
 	systemCount, err := system.Users.Count(ctx)
 	if err != nil || systemCount != 2 { t.Fatalf("system count=%%d err=%%v", systemCount, err) }
+	if err := system.Transaction(ctx, func(tx *generated.SystemTx[string]) error {
+		count, err := tx.Users.Count(ctx)
+		if err != nil || count != 2 { return fmt.Errorf("system tx count=%%d err=%%v", count, err) }
+		_, err = tx.Users.FindUnique(ctx, bob, projection)
+		return err
+	}); err != nil { t.Fatal(err) }
+
+	parseID := func(value string) golem.UUID {
+		parsed, err := golem.ParseUUID(value)
+		if err != nil { t.Fatal(err) }
+		return parsed
+	}
+	assertName := func(operation string, row golem.Row[models.User], want string) {
+		name, present := golem.Value(row, models.Users.Name).Get()
+		if !present || name != want { t.Fatalf("%%s name=%%q present=%%t", operation, name, present) }
+	}
+	mutate := func(operation string, create func(models.UserCreateInput) (golem.Row[models.User], error), update func(golem.MutationTarget[models.User], models.UserUpdateInput) (golem.Row[models.User], error), upsert func(golem.MutationTarget[models.User], models.UserCreateInput, models.UserUpdateInput) (golem.Row[models.User], error), deleteUser func(golem.MutationTarget[models.User]) (golem.Row[models.User], error), id golem.UUID, before, after string) error {
+		row, err := create(models.Users.Create(models.Users.ID.Create(id), models.Users.Name.Create(before)))
+		if err != nil { return fmt.Errorf("%%s create: %%w", operation, err) }
+		assertName(operation+" create", row, before)
+		target := models.Users.ByID.Value(id).And(models.Users.Name.StartsWith("a"))
+		row, err = update(target, models.Users.Update(models.Users.Name.Set(after)))
+		if err != nil { return fmt.Errorf("%%s update: %%w", operation, err) }
+		assertName(operation+" update", row, after)
+		row, err = upsert(target, models.Users.Create(models.Users.ID.Create(id), models.Users.Name.Create("wrong-branch")), models.Users.Update(models.Users.Name.Set(after+"-upsert")))
+		if err != nil { return fmt.Errorf("%%s upsert: %%w", operation, err) }
+		after += "-upsert"
+		assertName(operation+" upsert", row, after)
+		row, err = deleteUser(target)
+		if err != nil { return fmt.Errorf("%%s delete: %%w", operation, err) }
+		assertName(operation+" delete", row, after)
+		return nil
+	}
+	if err := mutate("caller",
+		func(input models.UserCreateInput) (golem.Row[models.User], error) { return caller.Users.Create(ctx, input, projection) },
+		func(target golem.MutationTarget[models.User], input models.UserUpdateInput) (golem.Row[models.User], error) { return caller.Users.Update(ctx, target, input, projection) },
+		func(target golem.MutationTarget[models.User], create models.UserCreateInput, update models.UserUpdateInput) (golem.Row[models.User], error) { return caller.Users.Upsert(ctx, target, create, update, projection) },
+		func(target golem.MutationTarget[models.User]) (golem.Row[models.User], error) { return caller.Users.Delete(ctx, target, projection) },
+		parseID("00000000-0000-0000-0000-000000000011"), "amy", "anna"); err != nil { t.Fatal(err) }
+	if err := mutate("system",
+		func(input models.UserCreateInput) (golem.Row[models.User], error) { return system.Users.Create(ctx, input, projection) },
+		func(target golem.MutationTarget[models.User], input models.UserUpdateInput) (golem.Row[models.User], error) { return system.Users.Update(ctx, target, input, projection) },
+		func(target golem.MutationTarget[models.User], create models.UserCreateInput, update models.UserUpdateInput) (golem.Row[models.User], error) { return system.Users.Upsert(ctx, target, create, update, projection) },
+		func(target golem.MutationTarget[models.User]) (golem.Row[models.User], error) { return system.Users.Delete(ctx, target, projection) },
+		parseID("00000000-0000-0000-0000-000000000012"), "azure", "apricot"); err != nil { t.Fatal(err) }
+	if err := caller.Transaction(ctx, func(tx *generated.CallerTx[string]) error {
+		return mutate("caller tx",
+			func(input models.UserCreateInput) (golem.Row[models.User], error) { return tx.Users.Create(ctx, input, projection) },
+			func(target golem.MutationTarget[models.User], input models.UserUpdateInput) (golem.Row[models.User], error) { return tx.Users.Update(ctx, target, input, projection) },
+			func(target golem.MutationTarget[models.User], create models.UserCreateInput, update models.UserUpdateInput) (golem.Row[models.User], error) { return tx.Users.Upsert(ctx, target, create, update, projection) },
+			func(target golem.MutationTarget[models.User]) (golem.Row[models.User], error) { return tx.Users.Delete(ctx, target, projection) },
+			parseID("00000000-0000-0000-0000-000000000013"), "ava", "aria")
+	}); err != nil { t.Fatal(err) }
+	if err := system.Transaction(ctx, func(tx *generated.SystemTx[string]) error {
+		return mutate("system tx",
+			func(input models.UserCreateInput) (golem.Row[models.User], error) { return tx.Users.Create(ctx, input, projection) },
+			func(target golem.MutationTarget[models.User], input models.UserUpdateInput) (golem.Row[models.User], error) { return tx.Users.Update(ctx, target, input, projection) },
+			func(target golem.MutationTarget[models.User], create models.UserCreateInput, update models.UserUpdateInput) (golem.Row[models.User], error) { return tx.Users.Upsert(ctx, target, create, update, projection) },
+			func(target golem.MutationTarget[models.User]) (golem.Row[models.User], error) { return tx.Users.Delete(ctx, target, projection) },
+			parseID("00000000-0000-0000-0000-000000000014"), "amber", "autumn")
+	}); err != nil { t.Fatal(err) }
+
+	batchMutate := func(operation string, create func(models.UserCreateInput) error, updateMany func(golem.Predicate[models.User], models.UserUpdateManyInput) (int64, error), deleteMany func(golem.Predicate[models.User]) (int64, error), id golem.UUID, before, after string, beforeWhere, afterWhere golem.Predicate[models.User], want int64) error {
+		if err := create(models.Users.Create(models.Users.ID.Create(id), models.Users.Name.Create(before))); err != nil { return fmt.Errorf("%%s create: %%w", operation, err) }
+		count, err := updateMany(beforeWhere, models.Users.UpdateMany(models.Users.Name.Set(after)))
+		if err != nil || count != want { return fmt.Errorf("%%s updateMany count=%%d: %%w", operation, count, err) }
+		count, err = deleteMany(afterWhere)
+		if err != nil || count != want { return fmt.Errorf("%%s deleteMany count=%%d: %%w", operation, count, err) }
+		return nil
+	}
+	if err := batchMutate("caller batch",
+		func(input models.UserCreateInput) error { _, err := caller.Users.Create(ctx, input); return err },
+		func(where golem.Predicate[models.User], input models.UserUpdateManyInput) (int64, error) { return caller.Users.UpdateMany(ctx, where, input) },
+		func(where golem.Predicate[models.User]) (int64, error) { return caller.Users.DeleteMany(ctx, where) },
+		parseID("00000000-0000-0000-0000-000000000021"), "abel", "adrian", models.Users.Name.StartsWith("a"), models.Users.Name.StartsWith("a"), 2); err != nil { t.Fatal(err) }
+	if err := batchMutate("system batch",
+		func(input models.UserCreateInput) error { _, err := system.Users.Create(ctx, input); return err },
+		func(where golem.Predicate[models.User], input models.UserUpdateManyInput) (int64, error) { return system.Users.UpdateMany(ctx, where, input) },
+		func(where golem.Predicate[models.User]) (int64, error) { return system.Users.DeleteMany(ctx, where) },
+		parseID("00000000-0000-0000-0000-000000000022"), "ben", "bruce", models.Users.Name.Eq("ben"), models.Users.Name.Eq("bruce"), 1); err != nil { t.Fatal(err) }
+	if err := caller.Transaction(ctx, func(tx *generated.CallerTx[string]) error {
+		return batchMutate("caller tx batch",
+			func(input models.UserCreateInput) error { _, err := tx.Users.Create(ctx, input); return err },
+			func(where golem.Predicate[models.User], input models.UserUpdateManyInput) (int64, error) { return tx.Users.UpdateMany(ctx, where, input) },
+			func(where golem.Predicate[models.User]) (int64, error) { return tx.Users.DeleteMany(ctx, where) },
+			parseID("00000000-0000-0000-0000-000000000023"), "alex", "andrew", models.Users.Name.StartsWith("a"), models.Users.Name.StartsWith("a"), 1)
+	}); err != nil { t.Fatal(err) }
+	if err := system.Transaction(ctx, func(tx *generated.SystemTx[string]) error {
+		return batchMutate("system tx batch",
+			func(input models.UserCreateInput) error { _, err := tx.Users.Create(ctx, input); return err },
+			func(where golem.Predicate[models.User], input models.UserUpdateManyInput) (int64, error) { return tx.Users.UpdateMany(ctx, where, input) },
+			func(where golem.Predicate[models.User]) (int64, error) { return tx.Users.DeleteMany(ctx, where) },
+			parseID("00000000-0000-0000-0000-000000000024"), "carl", "chris", models.Users.Name.Eq("carl"), models.Users.Name.Eq("chris"), 1)
+	}); err != nil { t.Fatal(err) }
 }
 `, "file:"+databasePath+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
 	runFreshReadSurfaceModule(t, files, false, nil)
 }
 
-func TestGeneratedReadSurfaceRejectsInvalidProgramsAtCompileTime(t *testing.T) {
+func TestGeneratedMutationSurfaceRejectsIllegalProgramsAtCompileTime(t *testing.T) {
 	artifacts := buildReadSurfaceArtifacts(t)
 	base := cloneSourceFiles(artifacts.files)
 	base["generated/"+Filename] = string(artifacts.registry)
@@ -159,12 +356,114 @@ func invalid(system generated.System[string]) {
 			diagnostics: []string{"cannot use forgedSelector", "UniqueSelectorValue[models.User]"},
 		},
 		{
-			name: "unsupported generated method",
+			name: "read option cannot be a mutation projection",
 			source: `package invalid
-import "example.test/app/generated"
-func invalid(caller *generated.Caller[string]) { _ = caller.Users.Create }
+import (
+	"context"
+	"example.test/app/generated"
+	"example.test/app/models"
+)
+func invalid(system generated.System[string], input models.UserCreateInput) {
+	_, _ = system.Users.Create(context.Background(), input, models.Users.Where(models.Users.Name.Eq("alice")))
+}
 `,
-			diagnostics: []string{"caller.Users.Create undefined", "no field or method Create"},
+			diagnostics: []string{"cannot use", "ReadOption[models.User]", "Projection[models.User]"},
+		},
+		{
+			name: "create operation cannot enter update input",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Update(models.Users.Name.Create("alice"))
+`,
+			diagnostics: []string{"cannot use", "CreateValue[models.User]", "UpdateValue[models.User]"},
+		},
+		{
+			name: "wrong scalar Go type",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Name.Create(42)
+`,
+			diagnostics: []string{"cannot use 42", "as string"},
+		},
+		{
+			name: "required to-one disconnect",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Posts.Author.Disconnect()
+`,
+			diagnostics: []string{"models.Posts.Author.Disconnect undefined"},
+		},
+		{
+			name: "to-one create-many",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Posts.Author.CreateMany()
+`,
+			diagnostics: []string{"models.Posts.Author.CreateMany undefined"},
+		},
+		{
+			name: "relation cannot enter update-many",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.UpdateMany(models.Users.Posts.Set())
+`,
+			diagnostics: []string{"does not implement golem.UpdateManyValue[models.User]"},
+		},
+		{
+			name: "top-level create-many is absent",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Posts.CreateMany()
+`,
+			diagnostics: []string{"models.Posts.CreateMany undefined"},
+		},
+		{
+			name: "top-level update requires a value",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Posts.Update()
+`,
+			diagnostics: []string{"not enough arguments"},
+		},
+		{
+			name: "top-level update-many requires a scalar value",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Posts.UpdateMany()
+`,
+			diagnostics: []string{"not enough arguments"},
+		},
+		{
+			name: "to-many create requires input",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Posts.Create()
+`,
+			diagnostics: []string{"not enough arguments"},
+		},
+		{
+			name: "to-many create-many requires input",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Posts.CreateMany()
+`,
+			diagnostics: []string{"not enough arguments"},
+		},
+		{
+			name: "to-many connect requires target",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Posts.Connect()
+`,
+			diagnostics: []string{"not enough arguments"},
+		},
+		{
+			name: "to-many disconnect requires target",
+			source: `package invalid
+import "example.test/app/models"
+var _ = models.Users.Posts.Disconnect()
+`,
+			diagnostics: []string{"not enough arguments"},
 		},
 	}
 	for _, test := range tests {
@@ -248,11 +547,17 @@ func GolemGeneratedBindings() golem.PackageBindings[security.Actor] {
 	user := golem.GeneratedPolicyBinding[security.Actor, User](GolemGeneratedUserDescriptor.Metadata().ModelID(), func(actor security.Actor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[User]()
 		rules.CanRead(Users.Name.StartsWith(actor.Prefix))
+		rules.CanCreate(golem.All[User]())
+		rules.CanUpdate(golem.All[User]())
+		rules.CanDelete(golem.All[User]())
 		return rules.Freeze(GolemGeneratedUserDescriptor.Metadata().ModelID())
 	})
 	post := golem.GeneratedPolicyBinding[security.Actor, Post](GolemGeneratedPostDescriptor.Metadata().ModelID(), func(security.Actor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[Post]()
 		rules.CanRead(golem.All[Post]())
+		rules.CanCreate(golem.All[Post]())
+		rules.CanUpdate(golem.All[Post]())
+		rules.CanDelete(golem.All[Post]())
 		return rules.Freeze(GolemGeneratedPostDescriptor.Metadata().ModelID())
 	})
 	return golem.GeneratedStampedPackageBindings[security.Actor](golem.SchemaDigest{31: 1}, []golem.PolicyBinding[security.Actor]{user, post}, nil)

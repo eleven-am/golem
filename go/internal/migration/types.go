@@ -18,6 +18,7 @@ type OperationKind string
 
 const (
 	BootstrapSystemSchema  OperationKind = "bootstrapSystemSchema"
+	AddSystemObject        OperationKind = "addSystemObject"
 	CreateNamespace        OperationKind = "createNamespace"
 	CreateTable            OperationKind = "createTable"
 	RenameTable            OperationKind = "renameTable"

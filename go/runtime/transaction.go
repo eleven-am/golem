@@ -1,0 +1,377 @@
+package runtime
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"sync"
+	"sync/atomic"
+
+	"github.com/eleven-am/golem/go/golem"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/jmoiron/sqlx"
+)
+
+// executionBinding is the single SQL execution authority carried by a prepared
+// operation. A binding is tied to the App database that created it, so a
+// transaction-bound operation can never silently fall back to another App or
+// to the App's connection pool.
+type executionBinding struct {
+	database     *sqlx.DB
+	executor     sqlx.QueryerContext
+	transaction  *sqlx.Tx
+	active       atomic.Bool
+	scoped       bool
+	nextScope    atomic.Uint64
+	invalidation atomic.Uint64
+	stateMu      sync.Mutex
+	state        *mutationState
+	stateErr     error
+	mutation     executionMutationConfig
+}
+
+type executionMutationConfig struct {
+	enabled          bool
+	provider         policyir.Provider
+	limits           normalizedMutationLimits
+	afterCommitError func(context.Context, golem.AfterCommitFailure)
+	invalidate       func()
+	outboxNamespace  string
+}
+
+func databaseExecution(database *sqlx.DB) *executionBinding {
+	binding := &executionBinding{database: database, executor: database}
+	binding.active.Store(true)
+	return binding
+}
+
+func transactionExecution(database *sqlx.DB, transaction *sqlx.Tx) *executionBinding {
+	binding := &executionBinding{database: database, executor: transaction, transaction: transaction, scoped: true}
+	binding.active.Store(true)
+	return binding
+}
+
+func scopedExecution(database *sqlx.DB, executor sqlx.QueryerContext) *executionBinding {
+	binding := &executionBinding{database: database, executor: executor, scoped: true}
+	binding.active.Store(true)
+	return binding
+}
+
+func (binding *executionBinding) queryerFor(database *sqlx.DB) (sqlx.QueryerContext, error) {
+	if binding == nil || database == nil || binding.database != database || binding.executor == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_EXECUTOR: execution binding does not belong to this application")
+	}
+	if !binding.active.Load() {
+		return nil, fmt.Errorf("P4_RUNTIME_EXECUTOR: transaction execution has ended")
+	}
+	return binding.executor, nil
+}
+
+// transactionFor is the future mutation-kernel seam. Runtime mutation entry
+// points must request this transaction rather than accepting an arbitrary SQL
+// executor or reaching back to App.database.
+func (binding *executionBinding) transactionFor(database *sqlx.DB) (*sqlx.Tx, error) {
+	if _, err := binding.queryerFor(database); err != nil {
+		return nil, err
+	}
+	if binding.transaction == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_EXECUTOR: operation requires a transaction-bound executor")
+	}
+	return binding.transaction, nil
+}
+
+func (binding *executionBinding) close() {
+	if binding != nil && binding.scoped {
+		binding.active.Store(false)
+	}
+}
+
+func (binding *executionBinding) nextSavepoint() (uint64, error) {
+	if binding == nil || binding.transaction == nil || !binding.active.Load() {
+		return 0, fmt.Errorf("P4_RUNTIME_EXECUTOR: active transaction is required for savepoint")
+	}
+	value := binding.nextScope.Add(1)
+	if value == 0 {
+		return 0, fmt.Errorf("P4_RUNTIME_EXECUTOR: savepoint identity exhausted")
+	}
+	return value, nil
+}
+
+// invalidationEpoch is the execution-wide cache generation. P3 currently
+// retains no cross-operation loader or decision cache; future caches must
+// snapshot this value and clear or rebuild when it changes.
+func (binding *executionBinding) invalidationEpoch() uint64 {
+	if binding == nil {
+		return 0
+	}
+	return binding.invalidation.Load()
+}
+
+func (binding *executionBinding) invalidateExecution() {
+	if binding != nil {
+		binding.invalidation.Add(1)
+	}
+}
+
+func (binding *executionBinding) enableMutation(config executionMutationConfig) error {
+	if binding == nil || !config.enabled {
+		return fmt.Errorf("P4_MUTATION_STATE: execution mutation configuration is unavailable")
+	}
+	binding.stateMu.Lock()
+	defer binding.stateMu.Unlock()
+	if binding.state != nil || binding.stateErr != nil {
+		return binding.stateErr
+	}
+	binding.mutation = config
+	binding.state, binding.stateErr = newMutationState(config.limits, [16]byte{})
+	if binding.stateErr == nil && config.invalidate != nil {
+		binding.stateErr = binding.state.setInvalidation(config.invalidate)
+	}
+	return binding.stateErr
+}
+
+func (binding *executionBinding) mutationState() (*mutationState, error) {
+	if binding == nil {
+		return nil, fmt.Errorf("P4_MUTATION_STATE: execution binding is unavailable")
+	}
+	binding.stateMu.Lock()
+	defer binding.stateMu.Unlock()
+	if binding.stateErr != nil {
+		return nil, binding.stateErr
+	}
+	if binding.state == nil {
+		return nil, fmt.Errorf("P4_MUTATION_STATE: execution has no outer mutation state")
+	}
+	return binding.state, nil
+}
+
+func (binding *executionBinding) discardMutation() {
+	if binding == nil {
+		return
+	}
+	binding.stateMu.Lock()
+	state := binding.state
+	binding.stateMu.Unlock()
+	state.discarded()
+}
+
+func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) executionMutationConfig {
+	if app == nil {
+		return executionMutationConfig{}
+	}
+	publicProvider := golem.SQLite
+	if app.provider == policyir.ProviderPostgreSQL {
+		publicProvider = golem.PostgreSQL
+	}
+	namespace, _ := app.registry.PhysicalSystemNamespace(publicProvider)
+	return executionMutationConfig{enabled: true, provider: app.provider, limits: app.mutationLimits, afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution, outboxNamespace: string(namespace)}
+}
+
+// CallerTx is the opaque caller authorization and transaction capability used
+// by generated transaction clients. Its fields deliberately expose neither
+// the App database nor the underlying sqlx transaction.
+type CallerTx[P, A any] struct {
+	caller *Caller[P, A]
+}
+
+// SystemTx is the opaque unrestricted transaction capability used by
+// generated system transaction clients.
+type SystemTx[P, A any] struct {
+	system System[P, A]
+}
+
+// CallerTransaction owns the outer transaction around one generated caller
+// callback. The callback is invoked exactly once; this function never retries
+// application code.
+func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], callback func(*CallerTx[P, A]) error) (err error) {
+	if caller == nil || caller.app == nil || caller.policies == nil || caller.execution == 0 {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: caller execution is unavailable")
+	}
+	if ctx == nil || callback == nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	transaction, err := caller.app.database.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin caller transaction: %w", err)
+	}
+	binding := transactionExecution(caller.app.database, transaction)
+	if err := binding.enableMutation(mutationConfig(caller.app, caller.executor)); err != nil {
+		binding.close()
+		return rollbackTransaction(transaction, err)
+	}
+	transactionCaller := &Caller[P, A]{
+		app:       caller.app,
+		policies:  caller.policies,
+		actor:     caller.actor,
+		execution: caller.execution,
+		executor:  binding,
+	}
+	capability := &CallerTx[P, A]{caller: transactionCaller}
+	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
+}
+
+// SystemTransaction owns the outer transaction around one generated system
+// callback. It does not construct caller policy or make caller hooks available.
+func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callback func(*SystemTx[P, A]) error) (err error) {
+	if system.app == nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: system capability is unavailable")
+	}
+	if ctx == nil || callback == nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: context and callback are required")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	transaction, err := system.app.database.BeginTxx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin system transaction: %w", err)
+	}
+	binding := transactionExecution(system.app.database, transaction)
+	if err := binding.enableMutation(mutationConfig(system.app, system.executor)); err != nil {
+		binding.close()
+		return rollbackTransaction(transaction, err)
+	}
+	capability := &SystemTx[P, A]{system: System[P, A]{app: system.app, executor: binding}}
+	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
+}
+
+func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, callback func() error) (err error) {
+	defer binding.close()
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			binding.discardMutation()
+			_ = transaction.Rollback()
+			panic(recovered)
+		}
+	}()
+
+	if callbackErr := callback(); callbackErr != nil {
+		binding.discardMutation()
+		return rollbackTransaction(transaction, callbackErr)
+	}
+	if contextErr := ctx.Err(); contextErr != nil {
+		binding.discardMutation()
+		return rollbackTransaction(transaction, contextErr)
+	}
+	if err := flushMutationBinding(ctx, transaction, binding); err != nil {
+		binding.discardMutation()
+		return rollbackTransaction(transaction, err)
+	}
+	if commitErr := transaction.Commit(); commitErr != nil {
+		binding.discardMutation()
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
+	}
+	commitMutationBinding(ctx, binding)
+	return nil
+}
+
+func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, binding *executionBinding) error {
+	state, err := binding.mutationState()
+	if err != nil {
+		return err
+	}
+	return state.flush(ctx, executor, binding.mutation.provider, binding.mutation.outboxNamespace)
+}
+
+func commitMutationBinding(ctx context.Context, binding *executionBinding) {
+	state, err := binding.mutationState()
+	if err != nil {
+		return
+	}
+	state.committed(ctx, binding.mutation.afterCommitError)
+}
+
+func rollbackTransaction(transaction *sqlx.Tx, cause error) error {
+	if rollbackErr := transaction.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+		return errors.Join(cause, fmt.Errorf("P4_RUNTIME_TRANSACTION: rollback: %w", rollbackErr))
+	}
+	return cause
+}
+
+// sqliteImmediateConnection is the small ownership surface shared by the
+// standalone SQLite mutation boundaries. Once COMMIT succeeds, a later driver
+// Close error cannot truthfully be reported as a failed mutation: the database
+// change is already durable and retrying it could duplicate the write.
+type sqliteImmediateConnection interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	Close() error
+}
+
+func commitSQLiteImmediate(ctx context.Context, connection sqliteImmediateConnection, committed func()) error {
+	if connection == nil {
+		return fmt.Errorf("P4_RUNTIME_TRANSACTION: SQLite connection is unavailable")
+	}
+	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+		return err
+	}
+	if committed != nil {
+		committed()
+	}
+	// COMMIT is the operation's durable success boundary. Close is cleanup and
+	// must not turn that success into an ordinary retryable operation error.
+	_ = connection.Close()
+	return nil
+}
+
+// CallerTxFindMany is the transaction-bound equivalent of CallerFindMany.
+// Generated Tx model clients call this seam; it preserves caller hooks and
+// policy isolation while forcing every statement through the bound sqlx.Tx.
+func CallerTxFindMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
+	if transaction == nil || transaction.caller == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerFindMany(ctx, transaction.caller, descriptor, options...)
+}
+
+func CallerTxFindFirst[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
+	if transaction == nil || transaction.caller == nil {
+		return golem.Row[M]{}, false, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerFindFirst(ctx, transaction.caller, descriptor, options...)
+}
+
+func CallerTxFindUnique[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
+	if transaction == nil || transaction.caller == nil {
+		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerFindUnique(ctx, transaction.caller, descriptor, selector, options...)
+}
+
+func CallerTxCount[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
+	if transaction == nil || transaction.caller == nil {
+		return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerCount(ctx, transaction.caller, descriptor, options...)
+}
+
+func SystemTxFindMany[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
+	if transaction == nil || transaction.system.app == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemFindMany(ctx, transaction.system, descriptor, options...)
+}
+
+func SystemTxFindFirst[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
+	if transaction == nil || transaction.system.app == nil {
+		return golem.Row[M]{}, false, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemFindFirst(ctx, transaction.system, descriptor, options...)
+}
+
+func SystemTxFindUnique[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
+	if transaction == nil || transaction.system.app == nil {
+		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemFindUnique(ctx, transaction.system, descriptor, selector, options...)
+}
+
+func SystemTxCount[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
+	if transaction == nil || transaction.system.app == nil {
+		return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemCount(ctx, transaction.system, descriptor, options...)
+}

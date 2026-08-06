@@ -38,6 +38,8 @@ type Config[P, A any] struct {
 	Bindings         golem.ApplicationBindings[A]
 	Descriptors      golem.ApplicationDescriptors
 	ReadLimits       ReadLimits
+	MutationLimits   MutationLimits
+	AfterCommitError func(context.Context, golem.AfterCommitFailure)
 	ResolvePrincipal func(context.Context, P) (A, error)
 	// SnapshotActor transfers ownership of mutable actor shapes into one stable
 	// caller snapshot shared by policy construction and hooks. When omitted,
@@ -58,6 +60,8 @@ type App[P, A any] struct {
 	resolvePrincipal func(context.Context, P) (A, error)
 	snapshotActor    func(A) (A, error)
 	readLimits       normalizedReadLimits
+	mutationLimits   normalizedMutationLimits
+	afterCommitError func(context.Context, golem.AfterCommitFailure)
 	nextExecution    atomic.Uint64
 }
 
@@ -68,11 +72,15 @@ type Caller[P, A any] struct {
 	policies  *policyruntime.Set
 	actor     A
 	execution uint64
+	executor  *executionBinding
 }
 
 // System is an explicit unrestricted capability. It never resolves a
 // principal, builds caller policy, or invokes caller hooks.
-type System[P, A any] struct{ app *App[P, A] }
+type System[P, A any] struct {
+	app      *App[P, A]
+	executor *executionBinding
+}
 
 // PreparedRead is an opaque, schema-bound request. Later P3 planning and
 // execution stages consume the private IR without reopening public identities.
@@ -80,6 +88,7 @@ type PreparedRead struct {
 	request  readir.Request
 	policies *policyruntime.Set
 	system   bool
+	executor *executionBinding
 }
 
 func (prepared PreparedRead) ModelID() golem.ModelID {
@@ -103,6 +112,10 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: invalid read limits: %w", err)
 	}
+	mutationLimits, err := normalizeMutationLimits(config.MutationLimits)
+	if err != nil {
+		return nil, fmt.Errorf("P4_RUNTIME_CONFIG: invalid mutation limits: %w", err)
+	}
 	registry, err := schema.New(config.Bundle)
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: %w", err)
@@ -121,6 +134,9 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err := validateInventory(config.Bindings, config.Descriptors, registry); err != nil {
 		return nil, err
 	}
+	if err := validateAfterCommitHandler(config.Bindings, config.AfterCommitError); err != nil {
+		return nil, err
+	}
 	expected, err := selectedPhysicalSchema(config.Bundle, config.Provider)
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: %w", err)
@@ -132,7 +148,19 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CAPABILITY: %w", err)
 	}
-	return &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits}, nil
+	return &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, afterCommitError: config.AfterCommitError}, nil
+}
+
+func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], handler func(context.Context, golem.AfterCommitFailure)) error {
+	if handler != nil {
+		return nil
+	}
+	for _, hook := range bindings.RuntimeHookInventory() {
+		if hook.Phase == golem.HookAfterCommit {
+			return fmt.Errorf("P4_RUNTIME_CONFIG: AfterCommitError is required when after-commit hooks are configured")
+		}
+	}
+	return nil
 }
 
 // ForPrincipal resolves the principal and builds every model policy exactly
@@ -158,10 +186,15 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 	if execution == 0 {
 		return nil, fmt.Errorf("P3_RUNTIME_EXECUTION: execution identity exhausted")
 	}
-	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution}, nil
+	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database)}, nil
 }
 
-func (app *App[P, A]) System() System[P, A] { return System[P, A]{app: app} }
+func (app *App[P, A]) System() System[P, A] {
+	if app == nil {
+		return System[P, A]{}
+	}
+	return System[P, A]{app: app, executor: databaseExecution(app.database)}
+}
 
 // Prepare binds a caller request to the exact schema fingerprint and execution
 // policy set. It performs no SQL and exposes no internal request representation.
@@ -176,7 +209,10 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 	if _, ok := caller.policies.Policy(bound.ModelID()); !ok {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read is not permitted", fmt.Errorf("model policy is absent"))
 	}
-	return PreparedRead{request: bound, policies: caller.policies}, nil
+	if _, err := caller.executor.queryerFor(caller.app.database); err != nil {
+		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
+	}
+	return PreparedRead{request: bound, policies: caller.policies, executor: caller.executor}, nil
 }
 
 func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRead, error) {
@@ -187,7 +223,10 @@ func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRea
 	if err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}
-	return PreparedRead{request: bound, system: true}, nil
+	if _, err := system.executor.queryerFor(system.app.database); err != nil {
+		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
+	}
+	return PreparedRead{request: bound, system: true, executor: system.executor}, nil
 }
 
 // CallerFindMany is the generic execution primitive used by generated model
@@ -383,7 +422,7 @@ func executeRows[P, A, M any](ctx context.Context, app *App[P, A], prepared Prep
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
 	}
-	executed, err := executePlan(ctx, app, prepared.Operation(), planned)
+	executed, err := executePlan(ctx, app, prepared.executor, prepared.Operation(), planned)
 	if err != nil {
 		return nil, err
 	}
@@ -408,7 +447,7 @@ type executedRow struct {
 	correlated map[policyir.FieldID][]executedRow
 }
 
-func executePlan[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, planned readplan.Plan) ([]executedRow, error) {
+func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, planned readplan.Plan) ([]executedRow, error) {
 	statement, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read plan could not be rendered", err)
@@ -417,7 +456,11 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], operation golem.
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read decoder could not be built", err)
 	}
-	databaseRows, err := app.database.QueryxContext(ctx, statement.SQL(), statement.Args()...)
+	queryer, err := executor.queryerFor(app.database)
+	if err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read execution binding is unavailable", err)
+	}
+	databaseRows, err := queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read execution failed", err)
 	}
@@ -509,20 +552,20 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], operation golem.
 		return nil, err
 	}
 
-	return finishPlanRows(ctx, app, operation, planned, result)
+	return finishPlanRows(ctx, app, executor, operation, planned, result)
 }
 
 // finishPlanRows completes one already-decoded row-shaped plan. Keeping this
 // separate from statement execution lets root and bounded batch statements use
 // exactly the same nested loading, mask evaluation, and public-row builder.
-func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, planned readplan.Plan, result []executedRow) ([]executedRow, error) {
+func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, planned readplan.Plan, result []executedRow) ([]executedRow, error) {
 	relations := planned.Relations()
-	relationRows, err := executeRelationViews(ctx, app, operation, planned, result, relations)
+	relationRows, err := executeRelationViews(ctx, app, executor, operation, planned, result, relations)
 	if err != nil {
 		return nil, err
 	}
 	hydrations := planned.Hydrations()
-	hydrationRows, err := executeRelationViews(ctx, app, operation, planned, result, hydrations)
+	hydrationRows, err := executeRelationViews(ctx, app, executor, operation, planned, result, hydrations)
 	if err != nil {
 		return nil, err
 	}
@@ -627,7 +670,7 @@ func finishPlanRows[P, A any](ctx context.Context, app *App[P, A], operation gol
 	return result, nil
 }
 
-func executeRelationViews[P, A any](ctx context.Context, app *App[P, A], operation golem.ReadOperation, parent readplan.Plan, result []executedRow, relations []readplan.Relation) ([][][]executedRow, error) {
+func executeRelationViews[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, result []executedRow, relations []readplan.Relation) ([][][]executedRow, error) {
 	relationRows := make([][][]executedRow, len(relations))
 	for relationIndex, relation := range relations {
 		relationRows[relationIndex] = make([][]executedRow, len(result))
@@ -637,7 +680,7 @@ func executeRelationViews[P, A any](ctx context.Context, app *App[P, A], operati
 		}
 		forcedStrategy, forced := forcedRelationLoadStrategy(ctx)
 		if !forced && readsql.ChooseRelationStrategy(parent, relation, app.registry, app.provider) == readsql.RelationCorrelated && correlatedPayloadAvailable(result, relation) {
-			children, correlatedErr := finishCorrelatedRelation(ctx, app, operation, relation, result)
+			children, correlatedErr := finishCorrelatedRelation(ctx, app, executor, operation, relation, result)
 			if correlatedErr != nil {
 				return nil, correlatedErr
 			}
@@ -660,9 +703,9 @@ func executeRelationViews[P, A any](ctx context.Context, app *App[P, A], operati
 			var batchErr error
 			switch strategy {
 			case relationLoadBatched:
-				children, batchErr = executeToManyBatch(ctx, app, operation, parent, relation, endpoint, result)
+				children, batchErr = executeToManyBatch(ctx, app, executor, operation, parent, relation, endpoint, result)
 			case relationLoadCorrelatedOracle:
-				children, batchErr = executeToManyCorrelatedOracle(ctx, app, operation, parent, relation, endpoint, result)
+				children, batchErr = executeToManyCorrelatedOracle(ctx, app, executor, operation, parent, relation, endpoint, result)
 			default:
 				batchErr = fmt.Errorf("P3_RUNTIME_RELATION_STRATEGY: unknown relation load strategy")
 			}
@@ -672,7 +715,7 @@ func executeRelationViews[P, A any](ctx context.Context, app *App[P, A], operati
 			relationRows[relationIndex] = children
 			continue
 		}
-		children, batchErr := executeToOneBatch(ctx, app, operation, parent, relation, endpoint, result)
+		children, batchErr := executeToOneBatch(ctx, app, executor, operation, parent, relation, endpoint, result)
 		if batchErr != nil {
 			return nil, batchErr
 		}
@@ -752,7 +795,11 @@ func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared Prepar
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count plan could not be rendered", err)
 	}
 	var count int64
-	if err := app.database.GetContext(ctx, &count, statement.SQL(), statement.Args()...); err != nil {
+	queryer, err := prepared.executor.queryerFor(app.database)
+	if err != nil {
+		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
+	}
+	if err := sqlx.GetContext(ctx, queryer, &count, statement.SQL(), statement.Args()...); err != nil {
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
 	}
 	return count, nil

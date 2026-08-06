@@ -34,6 +34,11 @@ func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script,
 			case object.Kind == physical.SystemMigrationLock && object.Version == 1:
 				// PostgreSQL represents the lock as the probed transaction-scoped
 				// advisory capability; it deliberately has no relation DDL.
+			case object.Kind == physical.SystemOutbox && object.Version == 1:
+				statements = append(statements, renderOutbox(normalized.System.Namespace.Name, object.Name)...)
+			case object.Kind == physical.SystemUpsertGuard && object.Version == 1:
+				// PostgreSQL implements selector serialization with a
+				// transaction-scoped advisory lock; no relation is rendered.
 			default:
 				return Script{}, fmt.Errorf("postgresql render: unsupported system object kind=%s version=%d", object.Kind, object.Version)
 			}
@@ -473,4 +478,11 @@ func cast(values []string, target string) (string, error) {
 
 func renderLedger(namespace, name physical.PhysicalName) string {
 	return fmt.Sprintf("CREATE TABLE %s (\n  %s text PRIMARY KEY,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s jsonb NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s jsonb NOT NULL,\n  %s timestamptz(6) NOT NULL\n)", qualified(namespace, name), quote("migration_id"), quote("parent_chain_hash"), quote("chain_hash"), quote("file_checksums"), quote("before_physical_fingerprint"), quote("after_physical_fingerprint"), quote("phases"), quote("applied_at"))
+}
+
+func renderOutbox(namespace, name physical.PhysicalName) []string {
+	table := fmt.Sprintf("CREATE TABLE %s (\n  %s text PRIMARY KEY,\n  %s integer NOT NULL CHECK (%s > 0),\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL CHECK (%s IN ('created','updated','deleted')),\n  %s bytea,\n  %s bytea,\n  %s text NOT NULL,\n  %s integer NOT NULL CHECK (%s >= 0),\n  %s bytea NOT NULL,\n  %s bytea,\n  %s timestamptz(6) NOT NULL,\n  UNIQUE (%s, %s),\n  CHECK ((%s = 'created' AND %s IS NULL AND %s IS NOT NULL) OR (%s = 'updated' AND %s IS NOT NULL AND %s IS NOT NULL) OR (%s = 'deleted' AND %s IS NOT NULL AND %s IS NULL))\n)",
+		qualified(namespace, name), quote("event_id"), quote("fact_version"), quote("fact_version"), quote("codec_identity"), quote("generation_fingerprint"), quote("model_id"), quote("action"), quote("action"), quote("before_identity"), quote("after_identity"), quote("causation_id"), quote("transaction_ordinal"), quote("transaction_ordinal"), quote("metadata"), quote("delete_snapshot"), quote("recorded_at"), quote("causation_id"), quote("transaction_ordinal"), quote("action"), quote("before_identity"), quote("after_identity"), quote("action"), quote("before_identity"), quote("after_identity"), quote("action"), quote("before_identity"), quote("after_identity"))
+	index := fmt.Sprintf("CREATE INDEX %s ON %s (%s, %s)", quote("_golem_outbox_pending"), qualified(namespace, name), quote("recorded_at"), quote("event_id"))
+	return []string{table, index}
 }

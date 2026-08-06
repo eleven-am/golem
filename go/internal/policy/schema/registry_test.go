@@ -38,6 +38,10 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	if !post.EqualityIndexed(ids.postID) || post.EqualityIndexed(ids.author) {
 		t.Fatal("model equality-index facts do not include the leading primary key exactly")
 	}
+	user, _ := registry.Model(ids.user)
+	if !post.SubscriptionsEnabled() || user.SubscriptionsEnabled() {
+		t.Fatal("model subscription fact did not preserve the exact contract setting")
+	}
 	author, ok := registry.Field(ids.post, ids.author)
 	if !ok || author.Kind() != compilerir.FieldScalar || author.ModelID() != ids.post {
 		t.Fatalf("author field = %#v, %v", author, ok)
@@ -47,6 +51,23 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	}
 	if _, ok := registry.Field(ids.user, ids.author); ok {
 		t.Fatal("cross-model field identity was accepted")
+	}
+	defaultValue, ok := author.Default()
+	if !ok || defaultValue.Kind != compilerir.DefaultUUID || defaultValue.Producer != compilerir.ProducerApplication {
+		t.Fatalf("author default = %#v, %v", defaultValue, ok)
+	}
+	price, ok := registry.Field(ids.post, ids.price)
+	if !ok || !price.Updated() || !price.DatabaseReadOnly() {
+		t.Fatalf("price write ownership = %#v, %v", price, ok)
+	}
+	generation, ok := price.Generation()
+	if !ok || generation.Storage != compilerir.GeneratedStored || generation.Expr.Kind != compilerir.SchemaExprLiteral {
+		t.Fatalf("price generation = %#v, %v", generation, ok)
+	}
+	generation.Expr.ReferencedFields = append(generation.Expr.ReferencedFields, compilerir.FieldID("forged"))
+	secondGeneration, _ := price.Generation()
+	if len(secondGeneration.Expr.ReferencedFields) != 0 {
+		t.Fatal("generation accessor leaked mutable registry storage")
 	}
 
 	source, ok := registry.RelationEndpoint(ids.post, ids.authorRelationField, ids.relation)
@@ -252,9 +273,21 @@ func testBundle(t *testing.T) (golem.SchemaBundle, testIDs) {
 		},
 		Relations: []compilerir.RelationIR{{ID: relationID, SourceModel: postID, TargetModel: userID, SourceField: authorRelation, InverseField: &postsRelation, Cardinality: compilerir.RelationMany, LocalFields: []compilerir.FieldID{author}, RemoteFields: []compilerir.FieldID{userKey}}},
 	}
+	model.Models[1].Fields[1].Scalar.Default = &compilerir.DefaultIR{Kind: compilerir.DefaultUUID, Producer: compilerir.ProducerApplication}
+	priceType := model.Models[1].Fields[2].Scalar.Type
+	model.Models[1].Fields[2].Scalar.Updated = true
+	model.Models[1].Fields[2].Scalar.DatabaseReadOnly = true
+	model.Models[1].Fields[2].Scalar.Generation = &compilerir.GeneratedColumnIR{
+		Expr: compilerir.SchemaExprIR{
+			Kind: compilerir.SchemaExprLiteral, ResultType: priceType,
+			Literal:  &compilerir.TypedLiteralIR{Kind: compilerir.LiteralDecimal, Canonical: "1"},
+			Provider: compilerir.ProviderScopePortable, Volatility: compilerir.SchemaVolatilityImmutable, Deterministic: true,
+		},
+		Storage: compilerir.GeneratedStored, Provider: compilerir.ProviderScopePortable,
+	}
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{
 		{ModelID: userID, Fields: []compilerir.FieldContractIR{{FieldID: userKey}, {FieldID: postsRelation}}},
-		{ModelID: postID, Fields: []compilerir.FieldContractIR{{FieldID: postKey}, {FieldID: author}, {FieldID: price}, {FieldID: authorRelation}}},
+		{ModelID: postID, Fields: []compilerir.FieldContractIR{{FieldID: postKey}, {FieldID: author}, {FieldID: price}, {FieldID: authorRelation}}, Subscriptions: true},
 	}}
 
 	modelBytes, err := compilerir.CanonicalModel(model)

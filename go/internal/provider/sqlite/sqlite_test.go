@@ -20,14 +20,14 @@ func TestLowerRenderApplyIntrospectRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(schema.System.Objects) != 2 {
-		t.Fatalf("system objects=%d; want ledger+lock", len(schema.System.Objects))
+	if len(schema.System.Objects) != 4 || !hasSystemObject(schema.System, physical.SystemOutbox) || !hasSystemObject(schema.System, physical.SystemUpsertGuard) {
+		t.Fatalf("system objects=%#v; want ledger+lock+outbox+upsert-guard", schema.System.Objects)
 	}
 	script, err := provider.RenderInitial(schema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fragment := range []string{`CREATE TABLE "users"`, `CONSTRAINT "pk_users" PRIMARY KEY`, `json_valid(`, `CREATE INDEX "idx_posts_author"`, `CREATE TABLE "_golem_migrations"`} {
+	for _, fragment := range []string{`CREATE TABLE "users"`, `CONSTRAINT "pk_users" PRIMARY KEY`, `json_valid(`, `CREATE INDEX "idx_posts_author"`, `CREATE TABLE "_golem_migrations"`, `CREATE TABLE "_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending"`, `CREATE TABLE "_golem_upsert_guard" ("guard_token" BLOB NOT NULL, PRIMARY KEY ("guard_token")) STRICT`} {
 		if !strings.Contains(script.SQL(), fragment) {
 			t.Errorf("DDL missing %q:\n%s", fragment, script.SQL())
 		}
@@ -88,6 +88,15 @@ func TestLowerRenderApplyIntrospectRoundTrip(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "drift") {
 		t.Fatalf("drift verification error=%v", err)
 	}
+}
+
+func hasSystemObject(system physical.SystemSchema, kind physical.SystemObjectKind) bool {
+	for _, object := range system.Objects {
+		if object.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func TestLowerAndRenderAreDeterministicUnderShuffle(t *testing.T) {

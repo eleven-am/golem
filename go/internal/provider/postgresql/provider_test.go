@@ -42,8 +42,8 @@ func TestLowerPreservesPortablePostgreSQLSemantics(t *testing.T) {
 	if len(posts.Checks) < 2 {
 		t.Fatalf("synthetic enum/list checks missing: %#v", posts.Checks)
 	}
-	if len(schema.System.Objects) != 2 || schema.System.Objects[0].Kind == physical.SystemOutbox {
-		t.Fatalf("P1 system schema = %#v", schema.System)
+	if len(schema.System.Objects) != 4 || !hasPostgreSQLSystemObject(schema.System, physical.SystemOutbox) || !hasPostgreSQLSystemObject(schema.System, physical.SystemUpsertGuard) {
+		t.Fatalf("system schema = %#v", schema.System)
 	}
 	first, _ := physical.PhysicalFingerprint(schema)
 	model := fixtureModel()
@@ -72,7 +72,10 @@ func TestRenderInitialFullyQualifiesAndQuotesEveryObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	sql := script.SQL()
-	for _, fragment := range []string{`CREATE SCHEMA IF NOT EXISTS "social"`, `CREATE SCHEMA IF NOT EXISTS "_golem"`, `CREATE TABLE "social"."posts"`, `CREATE TABLE "_golem"."_golem_migrations"`, `ALTER TABLE "social"."posts" ADD CONSTRAINT`, `REFERENCES "social"."users"`, `CREATE INDEX "idx_posts_created" ON "social"."posts"`} {
+	if strings.Contains(sql, `_golem_upsert_guard`) {
+		t.Fatalf("PostgreSQL selector guard must not render a relation:\n%s", sql)
+	}
+	for _, fragment := range []string{`CREATE SCHEMA IF NOT EXISTS "social"`, `CREATE SCHEMA IF NOT EXISTS "_golem"`, `CREATE TABLE "social"."posts"`, `CREATE TABLE "_golem"."_golem_migrations"`, `CREATE TABLE "_golem"."_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending" ON "_golem"."_golem_outbox"`, `ALTER TABLE "social"."posts" ADD CONSTRAINT`, `REFERENCES "social"."users"`, `CREATE INDEX "idx_posts_created" ON "social"."posts"`} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("DDL missing %q:\n%s", fragment, sql)
 		}
@@ -97,6 +100,15 @@ func TestRenderInitialFullyQualifiesAndQuotesEveryObject(t *testing.T) {
 	if first != second.SQL() {
 		t.Fatal("shuffled physical schema changed DDL")
 	}
+}
+
+func hasPostgreSQLSystemObject(system physical.SystemSchema, kind physical.SystemObjectKind) bool {
+	for _, object := range system.Objects {
+		if object.Kind == kind {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCatalogExpressionParserNormalizesPostgreSQLOutput(t *testing.T) {

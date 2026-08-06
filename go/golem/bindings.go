@@ -31,9 +31,9 @@ func RuntimeContextWithActor[A any](ctx context.Context, actor A) context.Contex
 	return context.WithValue(ctx, actorContextKey{}, actor)
 }
 
-// Hook request and result shells intentionally contain no operation data in
-// P1. Their package-level generated aliases and generic model ownership are the
-// ABI; P3/P4 may add payload without renaming them.
+// Hook request and result types retain the package-level generated aliases and
+// generic model ownership established in P1. P3 fills the read payloads and P4
+// fills the mutation payloads without renaming either ABI.
 type FindOneHookRequest[M any] struct {
 	selector UniqueSelectorValue[M]
 	options  []ReadOption[M]
@@ -46,16 +46,42 @@ type FindFirstHookResult[M any] struct {
 }
 type FindManyHookRequest[M any] struct{ options []ReadOption[M] }
 type FindManyHookResult[M any] struct{ rows []Row[M] }
-type CreateHookRequest[M any] struct{ _ func() M }
-type CreateHookResult[M any] struct{ _ func() M }
-type UpdateHookRequest[M any] struct{ _ func() M }
-type UpdateHookResult[M any] struct{ _ func() M }
-type DeleteHookRequest[M any] struct{ _ func() M }
-type DeleteHookResult[M any] struct{ _ func() M }
-type UpdateManyHookRequest[M any] struct{ _ func() M }
-type UpdateManyHookResult[M any] struct{ _ func() M }
-type DeleteManyHookRequest[M any] struct{ _ func() M }
-type DeleteManyHookResult[M any] struct{ _ func() M }
+type CreateHookRequest[M any] struct{ input CreateInput[M] }
+type CreateHookResult[M any] struct {
+	row      Row[M]
+	executor HookExecutor
+}
+type UpdateHookRequest[M any] struct {
+	target       mutationTargetNode[M]
+	frozenTarget *FrozenMutationTarget
+	input        UpdateInput[M]
+}
+type UpdateHookResult[M any] struct {
+	before   Row[M]
+	after    Row[M]
+	executor HookExecutor
+}
+type DeleteHookRequest[M any] struct {
+	target       mutationTargetNode[M]
+	frozenTarget *FrozenMutationTarget
+}
+type DeleteHookResult[M any] struct {
+	before   Row[M]
+	executor HookExecutor
+}
+type UpdateManyHookRequest[M any] struct {
+	where Predicate[M]
+	input UpdateManyInput[M]
+}
+type UpdateManyHookResult[M any] struct {
+	count    int64
+	executor HookExecutor
+}
+type DeleteManyHookRequest[M any] struct{ where Predicate[M] }
+type DeleteManyHookResult[M any] struct {
+	count    int64
+	executor HookExecutor
+}
 
 func RuntimeFindOneHookRequest[M any](selector UniqueSelectorValue[M], options []ReadOption[M]) *FindOneHookRequest[M] {
 	return &FindOneHookRequest[M]{selector: cloneUniqueSelectorValue(selector), options: cloneReadOptions(options)}
@@ -169,9 +195,271 @@ func cloneRows[M any](rows []Row[M]) []Row[M] {
 	return result
 }
 
-// SetCreate preserves model and value type identity at compile time. P4 owns
-// request mutation, validation, and errors.
-func SetCreate[M, V any](_ *CreateHookRequest[M], _ ScalarColumn[M, V], _ V) error { return nil }
+func RuntimeCreateHookRequest[M any](input CreateInput[M]) *CreateHookRequest[M] {
+	return &CreateHookRequest[M]{input: cloneCreateInput(input)}
+}
+
+func RuntimeUpdateHookRequest[M any](target MutationTarget[M], input UpdateInput[M]) *UpdateHookRequest[M] {
+	if frozen, err := RuntimeFreezeMutationTarget(target); err == nil {
+		return &UpdateHookRequest[M]{frozenTarget: &frozen, input: cloneUpdateInput(input)}
+	}
+	var node mutationTargetNode[M]
+	if target != nil {
+		var witness M
+		node = target.mutationTarget(witness)
+	}
+	return &UpdateHookRequest[M]{target: cloneMutationTargetNode(node), input: cloneUpdateInput(input)}
+}
+
+func RuntimeDeleteHookRequest[M any](target MutationTarget[M]) *DeleteHookRequest[M] {
+	if frozen, err := RuntimeFreezeMutationTarget(target); err == nil {
+		return &DeleteHookRequest[M]{frozenTarget: &frozen}
+	}
+	var node mutationTargetNode[M]
+	if target != nil {
+		var witness M
+		node = target.mutationTarget(witness)
+	}
+	return &DeleteHookRequest[M]{target: cloneMutationTargetNode(node)}
+}
+
+func RuntimeUpdateManyHookRequest[M any](where Predicate[M], input UpdateManyInput[M]) *UpdateManyHookRequest[M] {
+	return &UpdateManyHookRequest[M]{where: where, input: cloneUpdateManyInput(input)}
+}
+
+func RuntimeDeleteManyHookRequest[M any](where Predicate[M]) *DeleteManyHookRequest[M] {
+	return &DeleteManyHookRequest[M]{where: where}
+}
+
+func (request *CreateHookRequest[M]) Input() CreateInput[M] {
+	if request == nil {
+		return CreateInput[M]{}
+	}
+	return cloneCreateInput(request.input)
+}
+
+func (request *UpdateHookRequest[M]) Target() MutationTarget[M] {
+	if request == nil {
+		return nil
+	}
+	if request.frozenTarget != nil {
+		return runtimeFrozenMutationTarget[M]{target: cloneFrozenMutationTarget(*request.frozenTarget)}
+	}
+	return mutationTargetFromNode(request.target)
+}
+
+func (request *UpdateHookRequest[M]) Input() UpdateInput[M] {
+	if request == nil {
+		return UpdateInput[M]{}
+	}
+	return cloneUpdateInput(request.input)
+}
+
+func (request *DeleteHookRequest[M]) Target() MutationTarget[M] {
+	if request == nil {
+		return nil
+	}
+	if request.frozenTarget != nil {
+		return runtimeFrozenMutationTarget[M]{target: cloneFrozenMutationTarget(*request.frozenTarget)}
+	}
+	return mutationTargetFromNode(request.target)
+}
+
+func (request *UpdateManyHookRequest[M]) Where() Predicate[M] {
+	if request == nil {
+		return Predicate[M]{}
+	}
+	return request.where
+}
+
+func (request *UpdateManyHookRequest[M]) Input() UpdateManyInput[M] {
+	if request == nil {
+		return UpdateManyInput[M]{}
+	}
+	return cloneUpdateManyInput(request.input)
+}
+
+func (request *DeleteManyHookRequest[M]) Where() Predicate[M] {
+	if request == nil {
+		return Predicate[M]{}
+	}
+	return request.where
+}
+
+func (request *CreateHookRequest[M]) ReplaceInput(input CreateInput[M]) {
+	if request != nil {
+		request.input = cloneCreateInput(input)
+	}
+}
+
+func (request *UpdateHookRequest[M]) ReplaceInput(input UpdateInput[M]) {
+	if request != nil {
+		request.input = cloneUpdateInput(input)
+	}
+}
+
+func (request *UpdateHookRequest[M]) ReplaceTarget(target MutationTarget[M]) {
+	if request == nil {
+		return
+	}
+	if target == nil {
+		request.target = mutationTargetNode[M]{}
+		request.frozenTarget = nil
+		return
+	}
+	if frozen, err := RuntimeFreezeMutationTarget(target); err == nil {
+		request.frozenTarget = &frozen
+		request.target = mutationTargetNode[M]{}
+		return
+	}
+	request.frozenTarget = nil
+	var witness M
+	request.target = cloneMutationTargetNode(target.mutationTarget(witness))
+}
+
+func (request *DeleteHookRequest[M]) ReplaceTarget(target MutationTarget[M]) {
+	if request == nil {
+		return
+	}
+	if target == nil {
+		request.target = mutationTargetNode[M]{}
+		request.frozenTarget = nil
+		return
+	}
+	if frozen, err := RuntimeFreezeMutationTarget(target); err == nil {
+		request.frozenTarget = &frozen
+		request.target = mutationTargetNode[M]{}
+		return
+	}
+	request.frozenTarget = nil
+	var witness M
+	request.target = cloneMutationTargetNode(target.mutationTarget(witness))
+}
+
+func (request *UpdateManyHookRequest[M]) ReplaceInput(input UpdateManyInput[M]) {
+	if request != nil {
+		request.input = cloneUpdateManyInput(input)
+	}
+}
+
+func (request *UpdateManyHookRequest[M]) ReplaceWhere(where Predicate[M]) {
+	if request != nil {
+		request.where = where
+	}
+}
+
+func (request *DeleteManyHookRequest[M]) ReplaceWhere(where Predicate[M]) {
+	if request != nil {
+		request.where = where
+	}
+}
+
+// SetCreate preserves model and value type identity at compile time and
+// replaces the field's prior create assignment in the owned hook facade. The
+// P4 binder still verifies generated identity and write exposure afterward.
+func SetCreate[M, V any](request *CreateHookRequest[M], field CreateFieldCapability[M, V], value V) error {
+	if request == nil || field == nil {
+		return invalidMutation("create", ModelID{}, FieldID{}, "create hook request or field is invalid")
+	}
+	var modelWitness M
+	var valueWitness V
+	model, column := field.generatedCreateFieldCapability(modelWitness, valueWitness)
+	if column == nil {
+		return invalidMutation("create", request.input.model, FieldID{}, "create hook request or field is invalid")
+	}
+	if request.input.model == (ModelID{}) && model == (ModelID{}) && column.fieldIdentity() == (FieldID{}) {
+		// Preserve the P1 signature-probe behavior. Runtime-created P4 hook
+		// requests always carry a non-zero model identity and never take this
+		// compatibility-only zero-shell path.
+		return nil
+	}
+	if request.input.model == (ModelID{}) || model != request.input.model || column.fieldIdentity() == (FieldID{}) {
+		return invalidMutation("create", request.input.model, column.fieldIdentity(), "create hook request or field is invalid")
+	}
+	var witness M
+	node := GeneratedCreateFieldValue(request.input.model, column, value).createMutationValue(witness)
+	values := make([]mutationValueNode, 0, len(request.input.values)+1)
+	replaced := false
+	for _, existing := range request.input.values {
+		if existing.field == node.field {
+			if !replaced {
+				values = append(values, node.clone())
+				replaced = true
+			}
+			continue
+		}
+		values = append(values, existing.clone())
+	}
+	if !replaced {
+		values = append(values, node.clone())
+	}
+	request.input.values = values
+	return nil
+}
+
+func RuntimeCreateHookResult[M any](row Row[M]) CreateHookResult[M] {
+	return CreateHookResult[M]{row: cloneRow(row)}
+}
+
+func RuntimeUpdateHookResult[M any](before, after Row[M]) UpdateHookResult[M] {
+	return UpdateHookResult[M]{before: cloneRow(before), after: cloneRow(after)}
+}
+
+func RuntimeDeleteHookResult[M any](before Row[M]) DeleteHookResult[M] {
+	return DeleteHookResult[M]{before: cloneRow(before)}
+}
+
+func RuntimeUpdateManyHookResult[M any](count int64) UpdateManyHookResult[M] {
+	return UpdateManyHookResult[M]{count: count}
+}
+
+func RuntimeDeleteManyHookResult[M any](count int64) DeleteManyHookResult[M] {
+	return DeleteManyHookResult[M]{count: count}
+}
+
+func runtimeCreateHookResultWithExecutor[M any](row Row[M], executor HookExecutor) CreateHookResult[M] {
+	return CreateHookResult[M]{row: cloneRow(row), executor: executor}
+}
+func runtimeUpdateHookResultWithExecutor[M any](before, after Row[M], executor HookExecutor) UpdateHookResult[M] {
+	return UpdateHookResult[M]{before: cloneRow(before), after: cloneRow(after), executor: executor}
+}
+func runtimeDeleteHookResultWithExecutor[M any](before Row[M], executor HookExecutor) DeleteHookResult[M] {
+	return DeleteHookResult[M]{before: cloneRow(before), executor: executor}
+}
+func runtimeUpdateManyHookResultWithExecutor[M any](count int64, executor HookExecutor) UpdateManyHookResult[M] {
+	return UpdateManyHookResult[M]{count: count, executor: executor}
+}
+func runtimeDeleteManyHookResultWithExecutor[M any](count int64, executor HookExecutor) DeleteManyHookResult[M] {
+	return DeleteManyHookResult[M]{count: count, executor: executor}
+}
+
+func (result CreateHookResult[M]) Row() Row[M]                { return cloneRow(result.row) }
+func (result UpdateHookResult[M]) Before() Row[M]             { return cloneRow(result.before) }
+func (result UpdateHookResult[M]) After() Row[M]              { return cloneRow(result.after) }
+func (result DeleteHookResult[M]) Before() Row[M]             { return cloneRow(result.before) }
+func (result UpdateManyHookResult[M]) Count() int64           { return result.count }
+func (result DeleteManyHookResult[M]) Count() int64           { return result.count }
+func (result CreateHookResult[M]) Executor() HookExecutor     { return result.executor }
+func (result UpdateHookResult[M]) Executor() HookExecutor     { return result.executor }
+func (result DeleteHookResult[M]) Executor() HookExecutor     { return result.executor }
+func (result UpdateManyHookResult[M]) Executor() HookExecutor { return result.executor }
+func (result DeleteManyHookResult[M]) Executor() HookExecutor { return result.executor }
+
+// AfterCommitFailure reports trusted post-commit hook failures without
+// changing an already committed mutation into an operation error.
+type AfterCommitFailure struct {
+	operation HookOperation
+	model     ModelID
+	cause     error
+}
+
+func RuntimeAfterCommitFailure(operation HookOperation, model ModelID, cause error) AfterCommitFailure {
+	return AfterCommitFailure{operation: operation, model: model, cause: cause}
+}
+
+func (failure AfterCommitFailure) Operation() HookOperation { return failure.operation }
+func (failure AfterCommitFailure) Model() ModelID           { return failure.model }
+func (failure AfterCommitFailure) Cause() error             { return failure.cause }
 
 type HookOperation string
 type HookPhase string
@@ -202,11 +490,13 @@ type PolicyBinding[A any] struct {
 }
 
 type HookBinding[A any] struct {
-	model     ModelID
-	operation HookOperation
-	phase     HookPhase
-	invoke    func(context.Context, any) error
-	_         func() A
+	model          ModelID
+	operation      HookOperation
+	phase          HookPhase
+	invoke         func(context.Context, any) error
+	mutationBefore mutationBeforeBridge
+	mutationResult mutationResultBridge
+	_              func() A
 }
 
 type PackageBindings[A any] struct {
@@ -225,7 +515,7 @@ func GeneratedPolicyBinding[A, M any](model ModelID, build PolicyFactory[A]) Pol
 }
 
 func GeneratedBeforeHookBinding[A, M, Request any](model ModelID, operation HookOperation, invoke func(context.Context, *Request) error) HookBinding[A] {
-	return HookBinding[A]{model: model, operation: operation, phase: HookBefore, invoke: func(ctx context.Context, value any) error {
+	return HookBinding[A]{model: model, operation: operation, phase: HookBefore, mutationBefore: generatedMutationBeforeBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
 		request, ok := value.(*Request)
 		if !ok {
 			return errGeneratedBindingType
@@ -235,7 +525,7 @@ func GeneratedBeforeHookBinding[A, M, Request any](model ModelID, operation Hook
 }
 
 func GeneratedAfterHookBinding[A, M, Result any](model ModelID, operation HookOperation, invoke func(context.Context, Result) error) HookBinding[A] {
-	return HookBinding[A]{model: model, operation: operation, phase: HookAfter, invoke: func(ctx context.Context, value any) error {
+	return HookBinding[A]{model: model, operation: operation, phase: HookAfter, mutationResult: generatedMutationResultBridge[M](operation, invoke), invoke: func(ctx context.Context, value any) error {
 		result, ok := value.(Result)
 		if !ok {
 			return errGeneratedBindingType
@@ -324,6 +614,61 @@ func RuntimeInvokeHooks[A any](ctx context.Context, bindings ApplicationBindings
 				return fmt.Errorf("generated hooks: matching hook is incomplete")
 			}
 			if err := binding.invoke(ctx, payload); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// RuntimeInvokeMutationBeforeHooks runs generated hooks one at a time. The
+// validator is invoked after every transformation so a later hook can never
+// observe an unbound or unauthorized request produced by an earlier hook.
+func RuntimeInvokeMutationBeforeHooks[A any](ctx context.Context, bindings ApplicationBindings[A], request RuntimeMutationHookRequest, validate func(RuntimeMutationHookRequest) error) (RuntimeMutationHookRequest, error) {
+	if ctx == nil || request.model == (ModelID{}) || validate == nil {
+		return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: context, request, and validator are required")
+	}
+	current := request
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: package %d generation mismatch", packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model != request.model || binding.operation != request.operation || binding.phase != HookBefore {
+				continue
+			}
+			if binding.mutationBefore == nil {
+				return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: matching before hook has no mutation bridge")
+			}
+			var err error
+			current, err = binding.mutationBefore(ctx, current)
+			if err != nil {
+				return RuntimeMutationHookRequest{}, err
+			}
+			if err := validate(current); err != nil {
+				return RuntimeMutationHookRequest{}, err
+			}
+		}
+	}
+	return current, nil
+}
+
+func RuntimeInvokeMutationResultHooks[A any](ctx context.Context, bindings ApplicationBindings[A], result RuntimeMutationHookResult, phase HookPhase) error {
+	if ctx == nil || result.model == (ModelID{}) || (phase != HookAfter && phase != HookAfterCommit) {
+		return fmt.Errorf("generated mutation hooks: invalid result invocation")
+	}
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return fmt.Errorf("generated mutation hooks: package %d generation mismatch", packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model != result.model || binding.operation != result.operation || binding.phase != phase {
+				continue
+			}
+			if binding.mutationResult == nil {
+				return fmt.Errorf("generated mutation hooks: matching result hook has no mutation bridge")
+			}
+			if err := binding.mutationResult(ctx, result); err != nil {
 				return err
 			}
 		}

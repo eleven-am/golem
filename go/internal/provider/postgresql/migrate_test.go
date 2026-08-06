@@ -56,6 +56,56 @@ func TestPlanIncrementalRendersReviewedPostgreSQLBaseline(t *testing.T) {
 	}
 }
 
+func TestSystemOutboxV1IncrementalPlanPostgreSQL(t *testing.T) {
+	provider := New()
+	after, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.System.Objects = nil
+	for _, object := range after.System.Objects {
+		if object.Kind != physical.SystemOutbox {
+			before.System.Objects = append(before.System.Objects, object)
+		}
+	}
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "002_outbox_v1", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`CREATE TABLE "_golem"."_golem_outbox"`, `"before_identity" bytea`, `"delete_snapshot" bytea`, `UNIQUE ("causation_id", "transaction_ordinal")`, `CREATE INDEX "_golem_outbox_pending"`} {
+		if !strings.Contains(plan.SQL(), fragment) {
+			t.Fatalf("outbox migration missing %q:\n%s", fragment, plan.SQL())
+		}
+	}
+}
+
+func TestSystemUpsertGuardV1IncrementalPlanPostgreSQLHasNoRelationDDL(t *testing.T) {
+	provider := New()
+	after, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.System.Objects = nil
+	for _, object := range after.System.Objects {
+		if object.Kind != physical.SystemUpsertGuard {
+			before.System.Objects = append(before.System.Objects, object)
+		}
+	}
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "003_upsert_guard_v1", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(plan.SQL(), `_golem_upsert_guard`) {
+		t.Fatalf("PostgreSQL upsert guard rendered a relation:\n%s", plan.SQL())
+	}
+}
+
 func TestPlanIncrementalRefusesUnregisteredCastAndRequiredAdd(t *testing.T) {
 	provider := New()
 	base, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})

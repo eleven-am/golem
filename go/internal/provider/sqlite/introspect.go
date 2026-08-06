@@ -59,6 +59,13 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 			return physical.PhysicalSchema{}, renderErr
 		}
 		expectedObjects["table\x00"+string(object.Name)] = statement
+		indexStatements, renderErr := renderSystemIndexes(object)
+		if renderErr != nil {
+			return physical.PhysicalSchema{}, renderErr
+		}
+		for _, indexStatement := range indexStatements {
+			expectedObjects["index\x00_golem_outbox_pending"] = indexStatement
+		}
 	}
 	tableMap := make(map[ir.ModelID]physical.PhysicalTable, len(normalized.Tables))
 	for _, table := range normalized.Tables {

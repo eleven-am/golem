@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -432,6 +433,9 @@ func JSONStringValue(value string) (JSONValue, error) {
 	if !utf8.ValidString(value) {
 		return JSONValue{}, fmt.Errorf("policy IR: invalid UTF-8 JSON string")
 	}
+	if strings.ContainsRune(value, '\x00') {
+		return JSONValue{}, fmt.Errorf("policy IR: JSON string contains NUL, which is outside the portable provider value domain")
+	}
 	return JSONValue{kind: JSONString, text: value}, nil
 }
 func JSONArrayValue(values []JSONValue) (JSONValue, error) {
@@ -453,6 +457,9 @@ func JSONObjectValue(members []JSONMember) (JSONValue, error) {
 func NewJSONMember(key string, value JSONValue) (JSONMember, error) {
 	if !utf8.ValidString(key) {
 		return JSONMember{}, fmt.Errorf("policy IR: invalid UTF-8 JSON key")
+	}
+	if strings.ContainsRune(key, '\x00') {
+		return JSONMember{}, fmt.Errorf("policy IR: JSON key contains NUL, which is outside the portable provider value domain")
 	}
 	if err := value.validate(); err != nil {
 		return JSONMember{}, err

@@ -150,7 +150,7 @@ func Emit(request Request) (File, error) {
 		}
 	}
 	source.WriteString("\t)\n}\n")
-	emitReadRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, models, modelAliases)
+	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, models, modelAliases)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -162,8 +162,8 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitReadRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias string, models []ir.ModelDeclIR, aliases map[string]string) {
-	fmt.Fprintf(source, "\ntype Config[P any] struct {\n\tDB *%s.DB\n\tProvider %s.Provider\n\tReadLimits %s.ReadLimits\n\tResolvePrincipal func(%s.Context, P) (%s, error)\n\tSnapshotActor func(%s) (%s, error)\n}\n", sqlxAlias, golemAlias, runtimeAlias, contextAlias, actorType, actorType, actorType)
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias string, models []ir.ModelDeclIR, aliases map[string]string) {
+	fmt.Fprintf(source, "\ntype Config[P any] struct {\n\tDB *%s.DB\n\tProvider %s.Provider\n\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n\tResolvePrincipal func(%s.Context, P) (%s, error)\n\tSnapshotActor func(%s) (%s, error)\n}\n", sqlxAlias, golemAlias, runtimeAlias, runtimeAlias, contextAlias, golemAlias, contextAlias, actorType, actorType, actorType)
 	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s] }\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
@@ -175,26 +175,75 @@ func emitReadRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxA
 		fmt.Fprintf(source, "\t%s System%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("}\n")
+	fmt.Fprintf(source, "type CallerTx[P any] struct {\n\truntime *%s.CallerTx[P, %s]\n", runtimeAlias, actorType)
+	for _, model := range models {
+		fmt.Fprintf(source, "\t%s CallerTx%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("}\n")
+	fmt.Fprintf(source, "type SystemTx[P any] struct {\n\truntime *%s.SystemTx[P, %s]\n", runtimeAlias, actorType)
+	for _, model := range models {
+		fmt.Fprintf(source, "\t%s SystemTx%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("}\n")
 	for _, model := range models {
 		modelType := model.Go.Name
 		descriptor := "GolemGenerated" + model.Go.Name + "Descriptor"
+		createInput := model.Go.Name + "CreateInput"
+		updateInput := model.Go.Name + "UpdateInput"
+		updateManyInput := model.Go.Name + "UpdateManyInput"
 		if alias := aliases[model.Go.PackagePath]; alias != "" {
 			modelType, descriptor = alias+"."+modelType, alias+"."+descriptor
+			createInput, updateInput = alias+"."+createInput, alias+"."+updateInput
+			updateManyInput = alias + "." + updateManyInput
 		}
 		fmt.Fprintf(source, "\ntype Caller%sClient[P any] struct { runtime *%s.Caller[P, %s] }\n", model.Go.Name, runtimeAlias, actorType)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindMany(ctx %s.Context, options ...%s.ReadOption[%s]) ([]%s.Row[%s], error) { return %s.CallerFindMany(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) Delete(ctx %s.Context, target %s.MutationTarget[%s], projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerDelete(ctx, client.runtime, %s, target, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) UpdateMany(ctx %s.Context, where %s.Predicate[%s], input %s) (int64, error) { return %s.CallerUpdateMany(ctx, client.runtime, %s, where, input) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateManyInput, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client Caller%sClient[P]) DeleteMany(ctx %s.Context, where %s.Predicate[%s]) (int64, error) { return %s.CallerDeleteMany(ctx, client.runtime, %s, where) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "\ntype System%sClient[P any] struct { runtime %s.System[P, %s] }\n", model.Go.Name, runtimeAlias, actorType)
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindMany(ctx %s.Context, options ...%s.ReadOption[%s]) ([]%s.Row[%s], error) { return %s.SystemFindMany(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.SystemFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) Delete(ctx %s.Context, target %s.MutationTarget[%s], projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemDelete(ctx, client.runtime, %s, target, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) UpdateMany(ctx %s.Context, where %s.Predicate[%s], input %s) (int64, error) { return %s.SystemUpdateMany(ctx, client.runtime, %s, where, input) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateManyInput, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client System%sClient[P]) DeleteMany(ctx %s.Context, where %s.Predicate[%s]) (int64, error) { return %s.SystemDeleteMany(ctx, client.runtime, %s, where) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "\ntype CallerTx%sClient[P any] struct { runtime *%s.CallerTx[P, %s] }\n", model.Go.Name, runtimeAlias, actorType)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindMany(ctx %s.Context, options ...%s.ReadOption[%s]) ([]%s.Row[%s], error) { return %s.CallerTxFindMany(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Delete(ctx %s.Context, target %s.MutationTarget[%s], projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxDelete(ctx, client.runtime, %s, target, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) UpdateMany(ctx %s.Context, where %s.Predicate[%s], input %s) (int64, error) { return %s.CallerTxUpdateMany(ctx, client.runtime, %s, where, input) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateManyInput, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) DeleteMany(ctx %s.Context, where %s.Predicate[%s]) (int64, error) { return %s.CallerTxDeleteMany(ctx, client.runtime, %s, where) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "\ntype SystemTx%sClient[P any] struct { runtime *%s.SystemTx[P, %s] }\n", model.Go.Name, runtimeAlias, actorType)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindMany(ctx %s.Context, options ...%s.ReadOption[%s]) ([]%s.Row[%s], error) { return %s.SystemTxFindMany(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.SystemTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Delete(ctx %s.Context, target %s.MutationTarget[%s], projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxDelete(ctx, client.runtime, %s, target, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) UpdateMany(ctx %s.Context, where %s.Predicate[%s], input %s) (int64, error) { return %s.SystemTxUpdateMany(ctx, client.runtime, %s, where, input) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateManyInput, runtimeAlias, descriptor)
+		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) DeleteMany(ctx %s.Context, where %s.Predicate[%s]) (int64, error) { return %s.SystemTxDeleteMany(ctx, client.runtime, %s, where) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
-	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, ResolvePrincipal: config.ResolvePrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AfterCommitError: config.AfterCommitError, ResolvePrincipal: config.ResolvePrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) ForPrincipal(ctx %s.Context, principal P) (*Caller[P], error) {\n\tinner, err := app.runtime.ForPrincipal(ctx, principal)\n\tif err != nil { return nil, err }\n\tresult := &Caller[P]{runtime: inner}\n", contextAlias)
 	for _, model := range models {
@@ -206,6 +255,23 @@ func emitReadRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxA
 		fmt.Fprintf(source, "\tresult.%s = System%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\treturn result\n}\n")
+	fmt.Fprintf(source, "\nfunc (caller *Caller[P]) Transaction(ctx %s.Context, callback func(*CallerTx[P]) error) error {\n", contextAlias)
+	fmt.Fprintf(source, "\tif caller == nil { return %s.CallerTransaction(ctx, (*%s.Caller[P, %s])(nil), nil) }\n", runtimeAlias, runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tif callback == nil { return %s.CallerTransaction(ctx, caller.runtime, nil) }\n", runtimeAlias)
+	fmt.Fprintf(source, "\treturn %s.CallerTransaction(ctx, caller.runtime, func(inner *%s.CallerTx[P, %s]) error {\n", runtimeAlias, runtimeAlias, actorType)
+	source.WriteString("\t\tresult := &CallerTx[P]{runtime: inner}\n")
+	for _, model := range models {
+		fmt.Fprintf(source, "\t\tresult.%s = CallerTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+	fmt.Fprintf(source, "\nfunc (system System[P]) Transaction(ctx %s.Context, callback func(*SystemTx[P]) error) error {\n", contextAlias)
+	fmt.Fprintf(source, "\tif callback == nil { return %s.SystemTransaction(ctx, system.runtime, nil) }\n", runtimeAlias)
+	fmt.Fprintf(source, "\treturn %s.SystemTransaction(ctx, system.runtime, func(inner *%s.SystemTx[P, %s]) error {\n", runtimeAlias, runtimeAlias, actorType)
+	source.WriteString("\t\tresult := &SystemTx[P]{runtime: inner}\n")
+	for _, model := range models {
+		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
 }
 
 func pluralName(name string) string {

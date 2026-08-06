@@ -17,6 +17,18 @@ ABI, internal representation, and provider proof contracts are
 evidence, completion status, provider limits, and P3+ exclusions are tracked in
 [`p2/STATUS.md`](./p2/STATUS.md).
 
+P3 authorized reads are complete. Its controlling plan and public surface are
+[`p3/P3-PLAN.md`](./p3/P3-PLAN.md) and
+[`p3/PUBLIC-READ-ABI.md`](./p3/PUBLIC-READ-ABI.md); the exact completed test and
+provider ledger is [`p3/P3-EVIDENCE.md`](./p3/P3-EVIDENCE.md).
+
+P4 authorized mutations and closure transactions are complete. They are
+governed by [`p4/P4-PLAN.md`](./p4/P4-PLAN.md), with the frozen
+application surface in
+[`p4/PUBLIC-MUTATION-ABI.md`](./p4/PUBLIC-MUTATION-ABI.md). The completed local,
+provider, concurrency, race, repeat, and deterministic evidence ledger is
+[`p4/P4-EVIDENCE.md`](./p4/P4-EVIDENCE.md).
+
 The numbered documents are detailed supporting specifications and research:
 
 1. [`01-operators.md`](./01-operators.md) — operator semantics and agreement;

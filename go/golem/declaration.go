@@ -603,6 +603,26 @@ type ToOne[M any, R any] struct {
 	_           func(M) R
 }
 
+// ToOneRelationOption is the sealed schema-time capability accepted by
+// RelationOptions. Read-capable ToOne fields and generated mutation-only
+// wrappers both carry it, without giving write-only relations any predicate,
+// selection, or inclusion methods.
+type ToOneRelationOption[M any, R any] interface {
+	relationOption(M, R)
+}
+
+// ToOneSchemaField is embedded only in generated mutation-only to-one
+// wrappers. It exists so schema declarations can still name the relation in
+// RelationOptions while the runtime field surface remains non-readable.
+type ToOneSchemaField[M any, R any] struct{ _ func(M) R }
+
+func GeneratedToOneSchemaField[M any, R any]() ToOneSchemaField[M, R] {
+	return ToOneSchemaField[M, R]{}
+}
+
+func (ToOne[M, R]) relationOption(M, R)            {}
+func (ToOneSchemaField[M, R]) relationOption(M, R) {}
+
 type ToMany[M any, R any] struct {
 	fieldID     FieldID
 	relationID  RelationID
@@ -683,7 +703,7 @@ func ForProvider[M any](_ Provider, _ ...ModelOption[M]) ModelOption[M] {
 
 type RelationOptionSpec[M any] struct{ _ func() M }
 
-func RelationOptions[M any, R any](_ ToOne[M, R]) RelationOptionSpec[M] {
+func RelationOptions[M any, R any](_ ToOneRelationOption[M, R]) RelationOptionSpec[M] {
 	return RelationOptionSpec[M]{}
 }
 

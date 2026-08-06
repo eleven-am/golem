@@ -41,13 +41,13 @@ func TestEmitSamePackageSocialAndSelfRelationsCompiles(t *testing.T) {
 		"func (golemGeneratedPostFields) Skip(value int) golem.ReadOption[Post]",
 		"func (golemGeneratedPostFields) Distinct(fields ...golem.Column[Post]) golem.ReadOption[Post]",
 		"func (golemGeneratedPostFields) Cursor(selector golem.UniqueSelectorValue[Post]) golem.ReadOption[Post]",
-		"func (golemGeneratedPostFields) Select(fields ...golem.Selection[Post]) golem.ReadOption[Post]",
-		"func (golemGeneratedPostFields) Include(relations ...golem.RelationInclusion[Post]) golem.ReadOption[Post]",
-		"func (golemGeneratedPostFields) Omit(fields ...golem.Column[Post]) golem.ReadOption[Post]",
+		"func (golemGeneratedPostFields) Select(fields ...golem.Selection[Post]) golem.Projection[Post]",
+		"func (golemGeneratedPostFields) Include(relations ...golem.RelationInclusion[Post]) golem.Projection[Post]",
+		"func (golemGeneratedPostFields) Omit(fields ...golem.Column[Post]) golem.Projection[Post]",
 		"var Posts = golemGeneratedPostFields{",
-		"Author    golem.ToOne[Post, User]",
+		"Author    golemGeneratedPostAuthorMutationRelation",
 		"golem.ToMany[User, Post]",
-		"Manager       golem.ToOne[User, User]",
+		"Manager       golemGeneratedUserManagerMutationRelation",
 		"golem.GeneratedModeTextField[Post, string](golem.FieldID{",
 		"golem.GeneratedToOne[Post, User](golem.FieldID{",
 		"golem.GeneratedToMany[User, Post](golem.FieldID{",
@@ -144,6 +144,282 @@ func TestScalarHandleMappingIsExactForEveryLogicalFamily(t *testing.T) {
 				t.Fatalf("type=%q init=%q; want type=%q init prefix=%q", gotType, gotInit, test.wantType, test.wantInit)
 			}
 		})
+	}
+}
+
+func TestMutationSurfaceCapabilitiesCompileAndIllegalUsesDoNot(t *testing.T) {
+	compilation := socialCompilation()
+	var post *ir.ModelDeclIR
+	for index := range compilation.Model.Models {
+		if compilation.Model.Models[index].LogicalName == "Post" {
+			post = &compilation.Model.Models[index]
+			break
+		}
+	}
+	if post == nil {
+		t.Fatal("post fixture missing")
+	}
+	secret := scalarField(id(81), "Secret", 10, ir.TypeString)
+	password := scalarField(id(82), "Password", 11, ir.TypeString)
+	locked := scalarField(id(83), "Locked", 12, ir.TypeString)
+	counter := scalarField(id(84), "Counter", 13, ir.TypeInt64)
+	counter.Scalar.Nullable = true
+	readOnly := scalarField(id(85), "ReadOnly", 14, ir.TypeString)
+	generated := scalarField(id(86), "Generated", 15, ir.TypeString)
+	generated.Scalar.Generation = &ir.GeneratedColumnIR{Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}
+	post.Fields = append(post.Fields, secret, password, locked, counter, readOnly, generated)
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].ModelID != post.ID {
+			continue
+		}
+		compilation.Contract.Models[index].Fields = append(compilation.Contract.Models[index].Fields,
+			ir.FieldContractIR{FieldID: secret.ID, Modes: []ir.FieldMode{ir.ModeHidden}},
+			ir.FieldContractIR{FieldID: password.ID, Modes: []ir.FieldMode{ir.ModeWriteOnly, ir.ModeImmutable}},
+			ir.FieldContractIR{FieldID: locked.ID, Modes: []ir.FieldMode{ir.ModeImmutable}},
+			ir.FieldContractIR{FieldID: counter.ID, Modes: []ir.FieldMode{ir.ModeVisible}},
+			ir.FieldContractIR{FieldID: readOnly.ID, Modes: []ir.FieldMode{ir.ModeReadOnly}},
+			ir.FieldContractIR{FieldID: generated.ID, Modes: []ir.FieldMode{ir.ModeVisible}},
+		)
+	}
+	root := t.TempDir()
+	result, err := Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social", Directory: root}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(result.Files[0].Source)
+	for _, required := range []string{
+		"func (golemGeneratedPostFields) Create(values ...golem.CreateValue[Post]) PostCreateInput",
+		"func (golemGeneratedPostFields) Update(first golem.UpdateValue[Post], rest ...golem.UpdateValue[Post]) PostUpdateInput",
+		"func (golemGeneratedPostFields) UpdateMany(first golem.UpdateManyValue[Post], rest ...golem.UpdateManyValue[Post]) PostUpdateManyInput",
+		"func (field golemGeneratedPostPasswordMutationField) Create(value string)",
+		"func (field golemGeneratedPostLockedMutationField) Create(value string)",
+		"func (field golemGeneratedPostCounterMutationField) Null()",
+		"func (field golemGeneratedPostCounterMutationField) Increment(value int64)",
+		"func (field golemGeneratedPostCounterMutationField) Decrement(value int64)",
+		"CreateFieldCapability[Post, string]",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("generated mutation surface missing %q:\n%s", required, source)
+		}
+	}
+	for _, forbidden := range []string{
+		"Secret ",
+		"func (field golemGeneratedPostPasswordMutationField) Set(",
+		"func (field golemGeneratedPostLockedMutationField) Set(",
+		"golemGeneratedPostReadOnlyMutationField",
+		"golemGeneratedPostGeneratedMutationField",
+		"golemGeneratedPostTitleMutationField",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("generated mutation surface contains forbidden capability %q:\n%s", forbidden, source)
+		}
+	}
+	compileGenerated(t, root, map[string]string{
+		"models.go": "package social\n\ntype User struct{}\ntype Post struct{}\n",
+		"usage.go": `package social
+
+import golem "github.com/eleven-am/golem/go/golem"
+
+var _ PostCreateInput = Posts.Create(Posts.ID.Create("id"), Posts.Password.Create("secret"), Posts.Locked.Create("once"), Posts.Counter.Create(1))
+var _ PostUpdateInput = Posts.Update(Posts.ID.Set("next"), Posts.Counter.Increment(1), Posts.Counter.Decrement(1), Posts.Counter.Null())
+var _ PostUpdateManyInput = Posts.UpdateMany(Posts.Counter.Set(2))
+var _ golem.Projection[Post] = Posts.Select(Posts.ID, Posts.ReadOnly)
+var _ golem.ReadOption[Post] = Posts.Omit(Posts.ReadOnly)
+
+func mutateCreateHook(request *PostCreateHookRequest) error {
+	return golem.SetCreate(request, Posts.Password, "changed")
+}
+`,
+	}, result.Files)
+
+	negative := []struct {
+		name, usage, want string
+	}{
+		{"hidden", "var _ = Posts.Secret\n", "Posts.Secret undefined"},
+		{"read only create", "var _ = Posts.ReadOnly.Create(\"x\")\n", "Posts.ReadOnly.Create undefined"},
+		{"generated create", "var _ = Posts.Generated.Create(\"x\")\n", "Posts.Generated.Create undefined"},
+		{"database read only create", "var _ = Posts.Title.Create(\"x\")\n", "Posts.Title.Create undefined"},
+		{"immutable update", "var _ = Posts.Locked.Set(\"x\")\n", "Posts.Locked.Set undefined"},
+		{"write only projection", "var _ = Posts.Select(Posts.Password)\n", "does not implement golem.Selection"},
+		{"read only hook write", "func bad(request *PostCreateHookRequest) error { return golem.SetCreate(request, Posts.ReadOnly, \"x\") }\n", "does not match inferred type golem.CreateFieldCapability"},
+		{"cross model input", "var _ = Users.Create(Posts.ID.Create(\"x\"))\n", "does not implement golem.CreateValue[User]"},
+		{"non projection option", "var _ golem.Projection[Post] = Posts.Where(Posts.ID.Eq(\"x\"))\n", "does not implement golem.Projection"},
+		{"empty update", "var _ = Posts.Update()\n", "not enough arguments"},
+		{"empty update many", "var _ = Posts.UpdateMany()\n", "not enough arguments"},
+	}
+	for _, test := range negative {
+		t.Run(test.name, func(t *testing.T) {
+			compileGeneratedFailure(t, result.Files, test.usage, test.want)
+		})
+	}
+}
+
+func TestNestedMutationSurfaceCompilesExactCardinalityRequirednessOwnershipAndExposure(t *testing.T) {
+	compilation := socialCompilation()
+	var post *ir.ModelDeclIR
+	for index := range compilation.Model.Models {
+		if compilation.Model.Models[index].LogicalName == "Post" {
+			post = &compilation.Model.Models[index]
+			break
+		}
+	}
+	if post == nil {
+		t.Fatal("post fixture missing")
+	}
+	authorID := scalarField(id(87), "AuthorID", 20, ir.TypeUUID)
+	reviewerID := scalarField(id(88), "ReviewerID", 21, ir.TypeUUID)
+	reviewerID.Scalar.Nullable = true
+	post.Fields = append(post.Fields, authorID, reviewerID)
+	for index := range compilation.Model.Relations {
+		relation := &compilation.Model.Relations[index]
+		switch relation.ID {
+		case ir.RelationID(id(40)):
+			relation.LocalFields = []ir.FieldID{authorID.ID}
+			relation.RemoteFields = []ir.FieldID{ir.FieldID(id(11))}
+		case ir.RelationID(id(42)):
+			relation.LocalFields = []ir.FieldID{reviewerID.ID}
+			relation.RemoteFields = []ir.FieldID{ir.FieldID(id(11))}
+		}
+	}
+	for index := range compilation.Contract.Models {
+		contract := &compilation.Contract.Models[index]
+		if contract.ModelID == ir.ModelID(id(1)) {
+			contract.Fields = append(contract.Fields,
+				ir.FieldContractIR{FieldID: ir.FieldID(id(13)), Modes: []ir.FieldMode{ir.ModeImmutable}},
+				ir.FieldContractIR{FieldID: ir.FieldID(id(14)), Modes: []ir.FieldMode{ir.ModeWriteOnly}},
+				ir.FieldContractIR{FieldID: ir.FieldID(id(15)), Modes: []ir.FieldMode{ir.ModeHidden}},
+			)
+		}
+	}
+	root := t.TempDir()
+	result, err := Emit(Request{Compilation: compilation, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social", Directory: root}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(result.Files[0].Source)
+	for _, required := range []string{
+		"func (golemGeneratedPostAuthorMutationRelation) Connect(target golem.MutationTarget[User])",
+		"func (golemGeneratedPostReviewerMutationRelation) Disconnect()",
+		"func (golemGeneratedUserPostsMutationRelation) CreateMany(first golem.CreateInput[Post], rest ...golem.CreateInput[Post])",
+		"func (golemGeneratedUserPostsMutationRelation) UpdateMany(predicate golem.Predicate[Post]",
+		"func (golemGeneratedUserPostsMutationRelation) DeleteMany(predicate golem.Predicate[Post])",
+		"func (golemGeneratedUserReportsMutationRelation) Connect(first golem.MutationTarget[User], rest ...golem.MutationTarget[User])",
+	} {
+		if !strings.Contains(source, required) {
+			t.Errorf("generated nested mutation surface missing %q:\n%s", required, source)
+		}
+	}
+	for _, forbidden := range []string{
+		"func (golemGeneratedPostAuthorMutationRelation) Disconnect()",
+		"func (golemGeneratedPostAuthorMutationRelation) Delete()",
+		"func (golemGeneratedPostAuthorMutationRelation) CreateMany(",
+		"ReviewedPosts ",
+		"func (golemGeneratedPostFields) CreateMany(",
+	} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("generated nested mutation surface contains forbidden capability %q:\n%s", forbidden, source)
+		}
+	}
+	compileGenerated(t, root, map[string]string{
+		"models.go": "package social\n\ntype User struct{}\ntype Post struct{}\n",
+		"usage.go": `package social
+
+import golem "github.com/eleven-am/golem/go/golem"
+
+var userID = golem.NewUUID([16]byte{1})
+var userTarget = Users.ByID.Value(userID)
+var postTarget = Posts.ByID.Value("post")
+var compoundPostTarget = Posts.ByIDTitle.Value("post", "title")
+var userCreate = Users.Create(Users.ID.Create(userID))
+var userUpdate = Users.Update(Users.ID.Set(userID))
+var postCreate = Posts.Create(Posts.ID.Create("created"))
+var postUpdate = Posts.Update(Posts.ID.Set("updated"))
+var postUpdateMany = Posts.UpdateMany(Posts.ID.Set("many"))
+
+var _ PostCreateInput = Posts.Create(Posts.Author.Connect(userTarget), Posts.Reviewer.ConnectOrCreate(userTarget, userCreate))
+var _ PostUpdateInput = Posts.Update(Posts.Author.Update(userUpdate), Posts.Author.Upsert(userCreate, userUpdate), Posts.Reviewer.Disconnect(), Posts.Reviewer.Delete())
+var _ UserCreateInput = Users.Create(Users.Posts.Create(postCreate), Users.Posts.CreateMany(postCreate), Users.Posts.Connect(postTarget, compoundPostTarget), Users.Posts.ConnectOrCreate(postTarget, postCreate))
+var _ UserCreateInput = Users.Create(Users.Manager.Connect(userTarget))
+var _ UserCreateInput = Users.Create(Users.Reports.Connect(userTarget))
+var _ UserUpdateInput = Users.Update(
+	Users.Posts.Disconnect(postTarget),
+	Users.Posts.Set(postTarget),
+	Users.Posts.Update(postTarget, postUpdate),
+	Users.Posts.UpdateMany(Posts.ID.Eq("post"), postUpdateMany),
+	Users.Posts.Upsert(postTarget, postCreate, postUpdate),
+	Users.Posts.Delete(postTarget),
+	Users.Posts.DeleteMany(Posts.ID.Eq("post")),
+)
+`,
+	}, result.Files)
+
+	negative := []struct {
+		name, usage, want string
+	}{
+		{"required disconnect", "var _ = Posts.Author.Disconnect()\n", "Posts.Author.Disconnect undefined"},
+		{"to one list connect", "var _ = Posts.Author.Connect(Users.ByID.Value(golem.NewUUID([16]byte{})), Users.ByID.Value(golem.NewUUID([16]byte{})))\n", "too many arguments"},
+		{"to one create many", "var _ = Posts.Author.CreateMany()\n", "Posts.Author.CreateMany undefined"},
+		{"to one set", "var _ = Posts.Author.Set()\n", "Posts.Author.Set undefined"},
+		{"cross model selector", "var _ = Posts.Author.Connect(Posts.ByID.Value(\"post\"))\n", "cannot use Posts.ByID.Value"},
+		{"cross model input", "var _ = Users.Posts.Create(Users.Create())\n", "cannot use Users.Create()"},
+		{"cross model predicate", "var _ = Users.Posts.DeleteMany(Users.ID.Eq(golem.NewUUID([16]byte{})))\n", "cannot use Users.ID.Eq"},
+		{"top level update many relation", "var _ = Posts.UpdateMany(Posts.Reviewer.Disconnect())\n", "does not implement golem.UpdateManyValue[Post]"},
+		{"hidden relation", "var _ = Users.ReviewedPosts\n", "Users.ReviewedPosts undefined"},
+		{"write only relation projection", "var _ = Users.Select(Users.Reports)\n", "does not implement golem.Selection"},
+		{"immutable relation update", "var _ = Users.Update(Users.Manager.Connect(Users.ByID.Value(golem.NewUUID([16]byte{}))))\n", "does not implement golem.UpdateValue[User]"},
+		{"top level create many", "var _ = Posts.CreateMany()\n", "Posts.CreateMany undefined"},
+		{"to many create requires input", "var _ = Users.Posts.Create()\n", "not enough arguments"},
+		{"to many create-many requires input", "var _ = Users.Posts.CreateMany()\n", "not enough arguments"},
+		{"to many connect requires target", "var _ = Users.Posts.Connect()\n", "not enough arguments"},
+		{"to many disconnect requires target", "var _ = Users.Posts.Disconnect()\n", "not enough arguments"},
+	}
+	for _, test := range negative {
+		t.Run(test.name, func(t *testing.T) {
+			compileGeneratedFailure(t, result.Files, test.usage, test.want)
+		})
+	}
+}
+
+func TestInverseHasOneRequirednessComesFromSourceCorrelationFields(t *testing.T) {
+	compilation := socialCompilation()
+	post, user := &compilation.Model.Models[0], &compilation.Model.Models[1]
+	authorID := scalarField(id(87), "AuthorID", 20, ir.TypeUUID)
+	post.Fields = append(post.Fields, authorID)
+	for index := range user.Fields {
+		if user.Fields[index].ID == ir.FieldID(id(12)) {
+			user.Fields[index].Relation.Kind = ir.RelationHasOne
+		}
+	}
+	for index := range compilation.Model.Relations {
+		if compilation.Model.Relations[index].ID == ir.RelationID(id(40)) {
+			compilation.Model.Relations[index].LocalFields = []ir.FieldID{authorID.ID}
+			compilation.Model.Relations[index].RemoteFields = []ir.FieldID{ir.FieldID(id(11))}
+		}
+	}
+	emit := func(t *testing.T, value ir.CompilationIR) string {
+		t.Helper()
+		result, err := Emit(Request{Compilation: value, Packages: []PackageSpec{{ImportPath: "example.test/app/social", PackageName: "social"}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(result.Files[0].Source)
+	}
+	required := emit(t, compilation)
+	if forbidden := "func (golemGeneratedUserPostsMutationRelation) Disconnect()"; strings.Contains(required, forbidden) {
+		t.Fatalf("required inverse has-one exposed optional-only method %q", forbidden)
+	}
+	if method := "func (golemGeneratedUserPostsMutationRelation) Delete()"; !strings.Contains(required, method) {
+		t.Fatalf("required inverse has-one omitted safe child delete %q", method)
+	}
+	post.Fields[len(post.Fields)-1].Scalar.Nullable = true
+	optional := emit(t, compilation)
+	for _, requiredMethod := range []string{
+		"func (golemGeneratedUserPostsMutationRelation) Disconnect()",
+		"func (golemGeneratedUserPostsMutationRelation) Delete()",
+	} {
+		if !strings.Contains(optional, requiredMethod) {
+			t.Fatalf("optional inverse has-one omitted %q", requiredMethod)
+		}
 	}
 }
 
@@ -410,6 +686,30 @@ func compileGenerated(t *testing.T, root string, handwritten map[string]string, 
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("generated packages do not compile: %v\n%s", err, output)
+	}
+}
+
+func compileGeneratedFailure(t *testing.T, files []File, usage, want string) {
+	t.Helper()
+	root := t.TempDir()
+	_, currentFile, _, _ := runtime.Caller(0)
+	golemRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "../../.."))
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", golemRoot)
+	writeTestFile(t, filepath.Join(root, "go.mod"), module)
+	writeTestFile(t, filepath.Join(root, "models.go"), "package social\n\ntype User struct{}\ntype Post struct{}\n")
+	writeTestFile(t, filepath.Join(root, "usage.go"), "package social\n\nimport golem \"github.com/eleven-am/golem/go/golem\"\n\nvar _ = golem.All[Post]\n"+usage)
+	for _, file := range files {
+		writeTestFile(t, filepath.Join(root, filepath.Base(file.Path)), string(file.Source))
+	}
+	command := exec.Command("go", "test", "-mod=mod", "./...")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOWORK=off")
+	output, err := command.CombinedOutput()
+	if err == nil {
+		t.Fatalf("illegal generated usage compiled successfully:\n%s", usage)
+	}
+	if !strings.Contains(string(output), want) {
+		t.Fatalf("compile failure missing %q: %v\n%s", want, err, output)
 	}
 }
 
