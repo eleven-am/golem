@@ -1,6 +1,6 @@
 # P7 public event, publisher, subscription, and CDC ABI
 
-Status: **frozen contract; implementation and verification complete, final commit identifier pending**
+Status: **frozen contract; implementation and verification complete**
 
 This document fixes the source-level surface P7 must implement. Names and
 signatures shown here are normative unless a later committed contract change

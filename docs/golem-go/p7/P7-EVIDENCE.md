@@ -1,6 +1,6 @@
 # P7 mandatory evidence ledger
 
-Status: **all implementation and verification gates pass; final commit identifier pending**
+Status: **complete; all implementation and verification gates pass**
 
 Authority: [`P7-PLAN.md`](./P7-PLAN.md),
 [`PUBLIC-EVENT-ABI.md`](./PUBLIC-EVENT-ABI.md), and
@@ -160,12 +160,9 @@ fresh relation information.
 
 ## 5. Completion record
 
-Functional verification completed on 2026-08-07 in the uncommitted worktree on
-branch `codex/go-phase-0`, based on commit
-`b67b6a7d384a7a153f2e35a05e223030d25ecccb`. The P7 diff is intentionally
-uncommitted because no commit was requested. Consequently there is no final P7
-commit identifier yet; recording that identifier is the only remaining
-administrative closure item, and P8 must not begin before it is recorded.
+Functional verification completed on 2026-08-07 on branch
+`codex/go-phase-0`. The exact verified P7 implementation commit is
+`5f420c8d16be9817a62914d315d5babed0f0bca5`.
 
 Provider profiles:
 
@@ -202,7 +199,6 @@ Completion results:
 - All 94 P7 named test/fuzz functions referenced by this ledger exist. No
   generator-owned temporary module, lock, or fuzz corpus artifact remains.
 
-The Git worktree is not clean because it contains the reviewed P7
-implementation. Its content, formatting, and patch integrity are verified; the
-final commit ID and clean post-commit state must be appended after an explicitly
-requested commit.
+Commit `5f420c8d16be9817a62914d315d5babed0f0bca5` contains the verified P7
+implementation. The following documentation-only closure commit records that
+identifier and changes no tested Go code.

@@ -1,6 +1,6 @@
 # P7 events, subscriptions, outbox, and CDC plan
 
-Status: **implementation and verification complete; final commit identifier pending**
+Status: **complete**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 3, 5, 8, 16,
 17, 20, 21, and 23. P1 owns stable schema identities, physical schemas, and
@@ -761,6 +761,5 @@ Before P7 may be called complete:
     pass with zero required skips.
 18. `P7-EVIDENCE.md` records the exact commit and commands under test.
 
-Items 1–17 are verified in the current worktree. Item 18 awaits the explicitly
-requested P7 commit and its identifier; P8 must not begin before that final
-administrative closure.
+All eighteen items are verified. The exact tested implementation commit is
+recorded in `P7-EVIDENCE.md`; P7 is closed and P8 may begin.
