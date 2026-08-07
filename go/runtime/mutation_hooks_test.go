@@ -157,7 +157,7 @@ func assertPostgresAfterCommitFailureReportsCommittedSuccess(t *testing.T, profi
 		}),
 	}
 	fixture := newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, hooks)
-	app, err := Open(ctx, Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: fixture.app.database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
 		Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
@@ -167,7 +167,7 @@ func assertPostgresAfterCommitFailureReportsCommittedSuccess(t *testing.T, profi
 				t.Errorf("postgres after-commit report=%#v", failure)
 			}
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

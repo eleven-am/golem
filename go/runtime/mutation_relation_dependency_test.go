@@ -497,12 +497,12 @@ func mutationResultFixtureWithRelationPolicies(t testing.TB, fixture mutationRes
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

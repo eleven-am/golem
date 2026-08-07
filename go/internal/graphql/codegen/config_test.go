@@ -132,6 +132,67 @@ func TestGeneratedGraphQLUsesPinnedExecutableSchemaAsActiveServerPath(t *testing
 	}
 }
 
+func TestP7GeneratedGraphQLBindsTypedEventsAndNativeSubscriptionResolver(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	var post *ir.ModelDeclIR
+	for index := range compiled.Compilation.Model.Models {
+		if compiled.Compilation.Model.Models[index].Go.Name == "Post" {
+			post = &compiled.Compilation.Model.Models[index]
+			break
+		}
+	}
+	if post == nil || post.PrimaryKey == nil {
+		t.Fatal("Post model or primary key is absent")
+	}
+	for index := range compiled.Compilation.Contract.Models {
+		contract := &compiled.Compilation.Contract.Models[index]
+		if contract.ModelID != post.ID {
+			continue
+		}
+		shape, err := ir.BuildEventSchemaShape(*post, compiled.Compilation.Model.Enums, post.PrimaryKey.Fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprint, err := ir.EventSchemaFingerprint(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contract.Subscriptions = true
+		contract.Roots.Events = "postEvents"
+		contract.Event = &ir.EventContractIR{PayloadTypeName: "PostEvent", Schema: shape, SchemaFingerprint: fingerprint}
+	}
+	document, err := graphqlschema.Build(*compiled.Compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Emit(Request{
+		PackageName: "social", AppImportPath: compiled.Compilation.Model.Schema.PackagePath,
+		SDL: document.SDL, ContractFingerprint: compiled.ContractFingerprint, Actor: compiled.Compilation.Model.Schema.Actor,
+		Compilation: compiled.Compilation, GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := string(result.Source)
+	for _, required := range []string{"WebSocketInit", "Shutdown(ctx context.Context)", "SubscribeFrozenEvents", "CallerFrozenReadEvents", "AdaptGeneratedEventStream", "NewGeneratedEvent", `Kind: "subscription", Field: "postEvents"`} {
+		if !strings.Contains(adapter, required) {
+			t.Errorf("generated P7 adapter missing %q", required)
+		}
+	}
+	var resolvers string
+	for _, file := range result.Files {
+		if file.Filename == ResolversFilename {
+			resolvers = string(file.Source)
+		}
+	}
+	if !strings.Contains(resolvers, "ResolvePreparedSubscriptionRoot") || strings.Contains(resolvers, `panic("not implemented")`) {
+		t.Fatalf("generated subscription resolver is not bound:\n%s", resolvers)
+	}
+}
+
 func TestAUTHORIZE_IN_RESOLVERGeneratedResolversAreCapabilityFreePreparedProjectionOnly(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/graphql_extensions", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {

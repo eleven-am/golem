@@ -646,6 +646,8 @@ func (v *validator) validateSystem() {
 	}
 	v.validateName(system.Namespace.Name, "system.namespace", true)
 	seen := make(map[ir.ObjectID]struct{}, len(system.Objects))
+	hasOutbox := false
+	hasOutboxDelivery := false
 	for _, object := range system.Objects {
 		path := "system.object[" + string(object.ID) + "]"
 		v.validateStableID(string(object.ID), path+".id")
@@ -659,6 +661,12 @@ func (v *validator) validateSystem() {
 			if !IsOutboxSystemObjectV1(object) {
 				v.add(CodeExtension, path, "outbox system object does not match the closed v1 registry entry")
 			}
+			hasOutbox = hasOutbox || IsOutboxSystemObjectV1(object)
+		case SystemOutboxDelivery:
+			if !IsOutboxDeliverySystemObjectV1(object) {
+				v.add(CodeExtension, path, "outbox delivery system object does not match the closed v1 registry entry")
+			}
+			hasOutboxDelivery = hasOutboxDelivery || IsOutboxDeliverySystemObjectV1(object)
 		case SystemUpsertGuard:
 			if !IsUpsertGuardSystemObjectV1(object) {
 				v.add(CodeExtension, path, "upsert guard system object does not match the closed v1 registry entry")
@@ -673,6 +681,9 @@ func (v *validator) validateSystem() {
 		v.validateAttributes(object.Attributes, path+".attributes")
 		owner := ObjectRef{Kind: ir.ObjectKind("system"), ObjectID: object.ID}
 		v.validateRequirements(object.RequiredCapabilities, owner, path)
+	}
+	if hasOutboxDelivery && !hasOutbox {
+		v.add(CodeExtension, "system.objects", "outbox delivery v1 requires the immutable outbox v1 system object")
 	}
 }
 

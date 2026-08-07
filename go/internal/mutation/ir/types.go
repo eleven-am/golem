@@ -10,7 +10,10 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
-const CanonicalFormatVersion uint16 = 3
+// P7 adds an explicit delete-snapshot verification state to fact semantics.
+// Empty captured inventory and an unverifiable delete must fingerprint
+// differently, so this is a canonical mutation-plan format change.
+const CanonicalFormatVersion uint16 = 4
 
 type Operation uint8
 

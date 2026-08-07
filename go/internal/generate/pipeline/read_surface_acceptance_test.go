@@ -16,7 +16,7 @@ import (
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-func TestFreshSocialModuleGeneratesCompilesAndConstructsGraphQLServer(t *testing.T) {
+func TestFreshP7SocialModuleGeneratesCompilesAndConstructsApp(t *testing.T) {
 	root := t.TempDir()
 	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.test/social
 
@@ -55,6 +55,10 @@ type Post struct {
 	Author *User §db:"-" golem:"relation=belongs_to;fields=author_id;references=id"§
 	Comments []Comment §db:"-" golem:"relation=has_many;fields=id;references=post_id"§
 	PostTags []PostTag §db:"-" golem:"relation=has_many;fields=id;references=post_id"§
+}
+
+func (Post) GolemModel() golem.ModelSpec[Post] {
+	return golem.DefineModel(golem.Subscriptions[Post]())
 }
 
 type Comment struct {
@@ -150,7 +154,7 @@ func DefineSchema(schema *golem.Schema) {
 		t.Fatal(err)
 	}
 	for _, artifact := range result.Prospective.Artifacts {
-		if artifact.Kind != manifest.ArtifactModelGo && artifact.Kind != manifest.ArtifactBindingsGo && artifact.Kind != manifest.ArtifactRegistryGo && artifact.Kind != manifest.ArtifactGraphQLGo && artifact.Kind != manifest.ArtifactGraphQLSDL {
+		if artifact.Kind != manifest.ArtifactModelGo && artifact.Kind != manifest.ArtifactEventGo && artifact.Kind != manifest.ArtifactBindingsGo && artifact.Kind != manifest.ArtifactRegistryGo && artifact.Kind != manifest.ArtifactGraphQLGo && artifact.Kind != manifest.ArtifactGraphQLSDL {
 			continue
 		}
 		writePipelineAcceptanceFile(t, root, artifact.Path, string(artifact.Content))
@@ -191,6 +195,7 @@ import (
 	"example.test/social/actor"
 	"example.test/social/app"
 	"example.test/social/models"
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/jmoiron/sqlx"
@@ -203,9 +208,13 @@ func TestGeneratedCallerAndSystemReads(t *testing.T) {
 	database.SetMaxOpenConns(4)
 	database.SetMaxIdleConns(4)
 	t.Cleanup(func() { _ = database.Close() })
+	eventTransport, err := events.NewMemoryTransport(events.MemoryLimits{})
+	if err != nil { t.Fatal(err) }
 	application, err := app.Open(ctx, app.Config[string]{
 		DB: database, Provider: golem.SQLite,
 		ReadLimits: golemruntime.ReadLimits{MaxTake: 2},
+		EventTransport: eventTransport,
+		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 		ResolvePrincipal: func(context.Context, string) (actor.Actor, error) { return actor.Actor{Prefix: "a"}, nil },
 	})
 	if err != nil { t.Fatal(err) }

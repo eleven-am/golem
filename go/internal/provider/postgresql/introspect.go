@@ -402,6 +402,7 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	}
 	ledgerName := ""
 	outboxName := ""
+	deliveryName := ""
 	var expectedRelations []string
 	for _, object := range expected.Objects {
 		switch object.Kind {
@@ -411,6 +412,9 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		case physical.SystemOutbox:
 			outboxName = string(object.Name)
 			expectedRelations = append(expectedRelations, outboxName)
+		case physical.SystemOutboxDelivery:
+			deliveryName = string(object.Name)
+			expectedRelations = append(expectedRelations, deliveryName)
 		}
 	}
 	sort.Strings(expectedRelations)
@@ -467,6 +471,11 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	}
 	if outboxName != "" {
 		if err := introspectOutbox(ctx, q, expected.Namespace.Name, outboxName); err != nil {
+			return physical.SystemSchema{}, err
+		}
+	}
+	if deliveryName != "" {
+		if err := introspectOutboxDelivery(ctx, q, expected.Namespace.Name, deliveryName); err != nil {
 			return physical.SystemSchema{}, err
 		}
 	}
@@ -528,7 +537,7 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 			constraintRows.Close()
 			return fmt.Errorf("postgresql outbox constraint drift")
 		}
-		actualConstraints[kind+"\x00"+keys]++
+		actualConstraints[kind+"\x00"+canonicalSystemConstraintKeys(kind, keys)]++
 	}
 	if err := constraintRows.Close(); err != nil {
 		return err
@@ -559,6 +568,103 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 	}
 	if count != 1 {
 		return fmt.Errorf("postgresql outbox index drift: got %d indexes", count)
+	}
+	return nil
+}
+
+func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string) error {
+	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	type deliveryColumn struct {
+		name, storage, defaultExpression, identity, generated string
+		notNull                                               bool
+	}
+	var actualColumns []deliveryColumn
+	for columnRows.Next() {
+		var value deliveryColumn
+		if err := columnRows.Scan(&value.name, &value.storage, &value.notNull, &value.defaultExpression, &value.identity, &value.generated); err != nil {
+			columnRows.Close()
+			return err
+		}
+		actualColumns = append(actualColumns, value)
+	}
+	if err := columnRows.Close(); err != nil {
+		return err
+	}
+	wanted := []deliveryColumn{
+		{name: "causation_id", storage: "text", notNull: true},
+		{name: "status", storage: "text", notNull: true},
+		{name: "first_recorded_at", storage: "timestamp(6) with time zone", notNull: true},
+		{name: "attempt_count", storage: "bigint", notNull: true},
+		{name: "available_at", storage: "timestamp(6) with time zone", notNull: true},
+		{name: "lease_token", storage: "text"},
+		{name: "lease_until", storage: "timestamp(6) with time zone"},
+		{name: "delivered_at", storage: "timestamp(6) with time zone"},
+		{name: "last_failure_code", storage: "text"},
+		{name: "blocked_at", storage: "timestamp(6) with time zone"},
+		{name: "retired_at", storage: "timestamp(6) with time zone"},
+		{name: "updated_at", storage: "timestamp(6) with time zone", notNull: true},
+	}
+	if !reflect.DeepEqual(actualColumns, wanted) {
+		return fmt.Errorf("postgresql outbox delivery column drift")
+	}
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	actualConstraints := map[string]int{}
+	for constraintRows.Next() {
+		var kind, keys string
+		var deferrable, validated bool
+		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+			constraintRows.Close()
+			return err
+		}
+		if deferrable || !validated {
+			constraintRows.Close()
+			return fmt.Errorf("postgresql outbox delivery constraint drift")
+		}
+		actualConstraints[kind+"\x00"+canonicalSystemConstraintKeys(kind, keys)]++
+	}
+	if err := constraintRows.Close(); err != nil {
+		return err
+	}
+	wantedConstraints := map[string]int{
+		"p\x00{1}":               1,
+		"c\x00{1}":               1,
+		"c\x00{2}":               1,
+		"c\x00{4}":               1,
+		"c\x00{6}":               1,
+		"c\x00{9}":               1,
+		"c\x00{2,6,7,8,9,10,11}": 1,
+	}
+	if !reflect.DeepEqual(actualConstraints, wantedConstraints) {
+		return fmt.Errorf("postgresql outbox delivery constraint drift")
+	}
+	indexRows, err := q.QueryxContext(ctx, `SELECT ic.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid WHERE n.nspname=$1 AND c.relname=$2 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ic.relname`, string(namespace), name)
+	if err != nil {
+		return err
+	}
+	defer indexRows.Close()
+	count := 0
+	for indexRows.Next() {
+		var indexName, keys, predicate string
+		var unique, valid bool
+		if err := indexRows.Scan(&indexName, &unique, &valid, &keys, &predicate); err != nil {
+			return err
+		}
+		count++
+		if indexName != "_golem_outbox_delivery_pending" || unique || !valid || keys != "2 5 3 1" || predicate != "" {
+			return fmt.Errorf("postgresql outbox delivery index drift")
+		}
+	}
+	if err := indexRows.Err(); err != nil {
+		return err
+	}
+	if count != 1 {
+		return fmt.Errorf("postgresql outbox delivery index drift: got %d indexes", count)
 	}
 	return nil
 }
@@ -628,6 +734,31 @@ func parseCatalogNumbers(value string) []int {
 		}
 	}
 	return result
+}
+
+// PostgreSQL's pg_constraint.conkey is ordered for keys, where column order is
+// semantic, but its order for CHECK constraints follows the server's internal
+// expression-reference discovery. That order may differ from textual column
+// order (and may repeat a column) without changing the referenced column set.
+// Canonicalize CHECK references only; primary, unique, and foreign keys retain
+// their exact catalog order.
+func canonicalSystemConstraintKeys(kind, value string) string {
+	if kind != "c" {
+		return value
+	}
+	numbers := parseCatalogNumbers(value)
+	sort.Ints(numbers)
+	canonical := numbers[:0]
+	for _, number := range numbers {
+		if len(canonical) == 0 || canonical[len(canonical)-1] != number {
+			canonical = append(canonical, number)
+		}
+	}
+	parts := make([]string, len(canonical))
+	for index, number := range canonical {
+		parts[index] = strconv.Itoa(number)
+	}
+	return "{" + strings.Join(parts, ",") + "}"
 }
 func fieldIDs(numbers []int, columns map[int]physical.PhysicalColumn) ([]ir.FieldID, error) {
 	result := make([]ir.FieldID, len(numbers))

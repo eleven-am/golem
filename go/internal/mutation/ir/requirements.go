@@ -189,10 +189,31 @@ func (requirement HookRequirement) Operation() HookOperation { return requiremen
 type FactRequirement struct {
 	enabled               bool
 	action                FactAction
+	eventSchema           [32]byte
 	beforeIdentity        []policyir.FieldID
 	afterIdentity         []policyir.FieldID
+	deleteSnapshotState   DeleteSnapshotState
 	privateDeleteSnapshot []policyir.FieldID
 }
+
+func (requirement FactRequirement) WithEventSchema(digest [32]byte) (FactRequirement, error) {
+	if !requirement.enabled || digest == ([32]byte{}) {
+		return FactRequirement{}, fmt.Errorf("P7_MUTATION_IR_FACT: enabled fact and event-schema fingerprint are required")
+	}
+	requirement.eventSchema = digest
+	return requirement, nil
+}
+
+// DeleteSnapshotState distinguishes a sufficient stored-scalar pre-image from
+// a delete whose later subscription authorization must fail closed. Relation
+// hydration is never implied by a scalar snapshot.
+type DeleteSnapshotState uint8
+
+const (
+	DeleteSnapshotNotApplicable DeleteSnapshotState = 0
+	DeleteSnapshotUnverifiable  DeleteSnapshotState = 1
+	DeleteSnapshotStoredScalars DeleteSnapshotState = 2
+)
 
 func NewFactRequirement(action FactAction, beforeIdentity, afterIdentity, privateDeleteSnapshot []policyir.FieldID) (FactRequirement, error) {
 	value := FactRequirement{enabled: true, action: action}
@@ -215,6 +236,36 @@ func NewFactRequirement(action FactAction, beforeIdentity, afterIdentity, privat
 	if action != FactDeleted && len(value.privateDeleteSnapshot) != 0 {
 		return FactRequirement{}, fmt.Errorf("P4_MUTATION_IR_FACT: private delete snapshot is valid only for delete")
 	}
+	if action == FactDeleted {
+		value.deleteSnapshotState = DeleteSnapshotUnverifiable
+		if privateDeleteSnapshot != nil {
+			value.deleteSnapshotState = DeleteSnapshotStoredScalars
+		}
+	}
+	return value, nil
+}
+
+// NewDeleteFactRequirement makes the delete verification decision explicit.
+// The inventory must contain only compiler-selected stored scalar fields; the
+// registry-backed planner validates that invariant before SQL is rendered.
+func NewDeleteFactRequirement(beforeIdentity []policyir.FieldID, state DeleteSnapshotState, storedScalars []policyir.FieldID) (FactRequirement, error) {
+	if state != DeleteSnapshotUnverifiable && state != DeleteSnapshotStoredScalars {
+		return FactRequirement{}, fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: invalid verification state")
+	}
+	if state == DeleteSnapshotUnverifiable && len(storedScalars) != 0 {
+		return FactRequirement{}, fmt.Errorf("P7_MUTATION_IR_DELETE_SNAPSHOT: unverifiable snapshot cannot name fields")
+	}
+	input := storedScalars
+	if state == DeleteSnapshotUnverifiable {
+		input = nil
+	} else if input == nil {
+		input = []policyir.FieldID{}
+	}
+	value, err := NewFactRequirement(FactDeleted, beforeIdentity, nil, input)
+	if err != nil {
+		return FactRequirement{}, err
+	}
+	value.deleteSnapshotState = state
 	return value, nil
 }
 
@@ -231,6 +282,12 @@ func (requirement FactRequirement) AfterIdentity() []policyir.FieldID {
 }
 func (requirement FactRequirement) PrivateDeleteSnapshot() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), requirement.privateDeleteSnapshot...)
+}
+func (requirement FactRequirement) DeleteSnapshotState() DeleteSnapshotState {
+	return requirement.deleteSnapshotState
+}
+func (requirement FactRequirement) EventSchema() ([32]byte, bool) {
+	return requirement.eventSchema, requirement.eventSchema != ([32]byte{})
 }
 
 type ProviderRequirement struct {

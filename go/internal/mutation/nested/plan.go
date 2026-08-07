@@ -6,6 +6,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	"github.com/eleven-am/golem/go/internal/policy/classify"
@@ -282,9 +283,38 @@ func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.C
 			action, before = mutationir.FactDeleted, primary
 		}
 		if action != 0 {
-			fact, factErr := mutationir.NewFactRequirement(action, before, after, nil)
+			fingerprint, publicSnapshot, schemaOK := model.EventSchema()
+			if !schemaOK {
+				return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "subscription-enabled nested model has no normalized event schema", nil)
+			}
+			eventDigest, schemaErr := mutationfact.ParseEventSchemaFingerprint(fingerprint)
+			if schemaErr != nil {
+				return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested event schema is invalid", schemaErr)
+			}
+			eventSchema := [32]byte(eventDigest)
+			snapshot := make([]policyir.FieldID, len(publicSnapshot))
+			for index, field := range publicSnapshot {
+				snapshot[index] = policyir.FieldID(field)
+			}
+			var fact mutationir.FactRequirement
+			var factErr error
+			if action == mutationir.FactDeleted {
+				state := mutationir.DeleteSnapshotUnverifiable
+				if snapshot != nil {
+					state = mutationir.DeleteSnapshotStoredScalars
+				}
+				fact, factErr = mutationir.NewDeleteFactRequirement(before, state, snapshot)
+			} else {
+				fact, factErr = mutationir.NewFactRequirement(action, before, after, nil)
+			}
 			if factErr != nil {
 				return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested fact requirement is invalid", factErr)
+			}
+			if eventSchema != ([32]byte{}) {
+				fact, factErr = fact.WithEventSchema(eventSchema)
+				if factErr != nil {
+					return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested event schema is invalid", factErr)
+				}
 			}
 			node.Fact = fact
 		}
@@ -406,7 +436,7 @@ func (builder *builder) hooksFor(operation mutationir.Operation, model policyir.
 }
 
 func (builder *builder) finalizeImages(node mutationir.NodeInput) (mutationir.NodeInput, error) {
-	before, after, err := mutationplan.DeriveNodeImages(mutationplan.NodeImageRequest{Registry: builder.request.Registry, Node: node})
+	before, after, err := mutationplan.DeriveNodeImages(mutationplan.NodeImageRequest{Registry: builder.request.Registry, Node: node, PrivateDeleteSnapshot: node.Fact.PrivateDeleteSnapshot()})
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested image requirements are invalid", err)
 	}

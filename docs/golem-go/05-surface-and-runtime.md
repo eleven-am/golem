@@ -158,11 +158,12 @@ Generated per model only when subscriptions are enabled for it.
 `mEvents(where: MWhere): MEvent!` where
 
 ```
-MEvent { type: GolemEventType!, id: <identity>!, entity: M }
+MEvent { eventID: UUID!, type: GolemEventType!, id: <identity>!, entity: M }
 GolemEventType = CREATED | UPDATED | DELETED
 ```
 
-`<identity>` is the primary-key scalar for a single-key model, and a
+`eventID` is the stable outbox fact ID used to deduplicate at-least-once
+delivery. `<identity>` is the primary-key scalar for a single-key model, and a
 model-specific non-null object with the key components **in declared order** for
 a composite key. `entity` is nullable and is populated only when the caller
 selected it. Semantics, delivery rules and teardown are §5.

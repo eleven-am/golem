@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -122,7 +123,7 @@ func assertBatchMutationOrderedFacts(t testing.TB, fixture mutationResultFixture
 	if count, err := SystemUpdateMany(ctx, fixture.app.System(), fixture.postDescriptor, fixture.title.Eq("fact-order"), fixture.updateManyTitle("fact-ordered")); err != nil || count != 3 {
 		t.Fatalf("batch count=%d err=%v", count, err)
 	}
-	rows, err := fixture.app.database.QueryxContext(ctx, `SELECT "action", "causation_id", "transaction_ordinal" FROM `+nestedAcceptanceOutbox(fixture.app)+` ORDER BY "transaction_ordinal"`)
+	rows, err := fixture.app.database.QueryxContext(ctx, `SELECT "fact_version", "codec_identity", "action", "causation_id", "transaction_ordinal" FROM `+nestedAcceptanceOutbox(fixture.app)+` ORDER BY "transaction_ordinal"`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,13 +132,14 @@ func assertBatchMutationOrderedFacts(t testing.TB, fixture mutationResultFixture
 	ordinal := int64(0)
 	for rows.Next() {
 		var action, currentCausation string
-		var currentOrdinal int64
-		if err := rows.Scan(&action, &currentCausation, &currentOrdinal); err != nil {
+		var version, currentOrdinal int64
+		var codec string
+		if err := rows.Scan(&version, &codec, &action, &currentCausation, &currentOrdinal); err != nil {
 			t.Fatal(err)
 		}
 		ordinal++
-		if action != "updated" || currentOrdinal != ordinal || causation != "" && currentCausation != causation {
-			t.Fatalf("fact action=%q causation=%q ordinal=%d want=%d", action, currentCausation, currentOrdinal, ordinal)
+		if version != int64(mutationfact.FormatVersionV2) || codec != mutationfact.CodecIdentityV2 || action != "updated" || currentOrdinal != ordinal || causation != "" && currentCausation != causation {
+			t.Fatalf("fact version=%d codec=%q action=%q causation=%q ordinal=%d want=%d", version, codec, action, currentCausation, currentOrdinal, ordinal)
 		}
 		causation = currentCausation
 	}

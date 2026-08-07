@@ -56,8 +56,8 @@ func (envelope Envelope) OutboxRow(recordedAt time.Time) (OutboxRow, error) {
 		}
 	}
 	return OutboxRow{
-		EventID: formatUUID([16]byte(envelope.event)), FactVersion: int64(FormatVersion),
-		CodecIdentity: CodecIdentity, GenerationFingerprint: hex.EncodeToString(envelope.generation[:]),
+		EventID: formatUUID([16]byte(envelope.event)), FactVersion: int64(envelope.formatVersion),
+		CodecIdentity: envelope.codecIdentity, GenerationFingerprint: hex.EncodeToString(envelope.generation[:]),
 		ModelID: hex.EncodeToString(envelope.model[:]), Action: actionText(envelope.action),
 		BeforeIdentity: beforeIdentity, AfterIdentity: afterIdentity,
 		CausationID: formatUUID([16]byte(envelope.causation)), TransactionOrdinal: int64(envelope.ordinal),

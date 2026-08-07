@@ -74,6 +74,87 @@ func TestCompilerLowersAliasedRootAndNestedArgumentsToP3(t *testing.T) {
 	}
 }
 
+func TestP7CompilerLowersExactlyOneSubscriptionRootToFullFrozenRead(t *testing.T) {
+	compilation := social(t)
+	var postModel *compilerir.ModelDeclIR
+	for index := range compilation.Model.Models {
+		if compilation.Model.Models[index].Go.Name == "Post" {
+			postModel = &compilation.Model.Models[index]
+			break
+		}
+	}
+	if postModel == nil || postModel.PrimaryKey == nil {
+		t.Fatal("Post model or primary key is absent")
+	}
+	for index := range compilation.Contract.Models {
+		contract := &compilation.Contract.Models[index]
+		if contract.ModelID != postModel.ID {
+			continue
+		}
+		shape, err := compilerir.BuildEventSchemaShape(*postModel, compilation.Model.Enums, postModel.PrimaryKey.Fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprint, err := compilerir.EventSchemaFingerprint(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		contract.Subscriptions = true
+		contract.Roots.Events = "postEvents"
+		contract.Event = &compilerir.EventContractIR{PayloadTypeName: "PostEvent", Schema: shape, SchemaFingerprint: fingerprint}
+	}
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, errors := gqlparser.LoadQuery(schema, `subscription Feed($visible: Boolean!) {
+  feed: postEvents(where: { title: { contains: "go" } }) {
+    event: eventID
+    type
+    id
+	    entity {
+	      id
+	      author @include(if: $visible) { id }
+	      _count { comments }
+	    }
+	    summary: entity { value: title }
+  }
+}`)
+	if len(errors) != 0 {
+		t.Fatal(errors)
+	}
+	compiler, err := New(compilation, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := compiler.Compile(query, query.Operations.ForName("Feed"), map[string]any{"visible": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Event == nil || result.Event.ResponseName != "feed" || result.Event.Model != postModel.ID || !result.Event.EntitySelected {
+		t.Fatalf("event root = %#v", result.Event)
+	}
+	if result.Event.FrozenRead.Operation() != golem.ReadFindMany || result.Event.FrozenRead.ModelID() != golemModelID(postModel.ID) {
+		t.Fatalf("frozen event read = %v / %x", result.Event.FrozenRead.Operation(), result.Event.FrozenRead.ModelID())
+	}
+	if _, ok := result.Event.FrozenRead.Where(); !ok || len(result.Event.FrozenRead.Selection()) < 3 {
+		t.Fatalf("frozen event filter/selection = %#v", result.Event.FrozenRead.Selection())
+	}
+	if len(result.Event.Slots) != 5 || result.Event.Slots[0].ResponseName != "event" || len(result.Event.EntitySlots) != 4 || len(result.Event.Slots[3].EntitySlots) != 3 || len(result.Event.Slots[4].EntitySlots) != 1 || result.Event.Slots[4].EntitySlots[0].ResponseName != "value" {
+		t.Fatalf("event slots = %#v / entity %#v", result.Event.Slots, result.Event.EntitySlots)
+	}
+	second, errors := gqlparser.LoadQuery(schema, `subscription Invalid { first: postEvents { eventID } second: postEvents { eventID } }`)
+	if len(errors) == 0 {
+		if _, err := compiler.Compile(second, second.Operations.ForName("Invalid"), nil); err == nil {
+			t.Fatal("multi-root subscription was accepted")
+		}
+	}
+}
+
 func TestP6GraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys(t *testing.T) {
 	compilation := p6AnalyticsSocial(t, social(t))
 	document, err := graphqlschema.Build(compilation)

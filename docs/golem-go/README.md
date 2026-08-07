@@ -41,6 +41,16 @@ exact generated Go/GraphQL surface, and completed evidence are
 [`p6/PUBLIC-ANALYTICS-ABI.md`](./p6/PUBLIC-ANALYTICS-ABI.md), and
 [`p6/P6-EVIDENCE.md`](./p6/P6-EVIDENCE.md).
 
+P7 events, durable outbox publication, generated caller/GraphQL subscriptions,
+fresh per-event authorization, bounded fan-out, and the optional CDC boundary
+are fully planned and implementation is in progress. P7-A has established the
+closed subscription/event contract, event-schema-bound fact V2 foundation, and
+additive delivery-state system schema; P7-B, P7-C, and P7-D are active. The
+controlling architecture is
+[`p7/P7-PLAN.md`](./p7/P7-PLAN.md), the frozen source/transport/GraphQL contract
+is [`p7/PUBLIC-EVENT-ABI.md`](./p7/PUBLIC-EVENT-ABI.md), and every mandatory gate
+is honestly `PENDING` in [`p7/P7-EVIDENCE.md`](./p7/P7-EVIDENCE.md).
+
 The numbered documents are detailed supporting specifications and research:
 
 1. [`01-operators.md`](./01-operators.md) — operator semantics and agreement;

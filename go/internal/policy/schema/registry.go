@@ -5,6 +5,7 @@ package schema
 import (
 	"encoding/hex"
 	"fmt"
+	"sort"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -118,12 +119,34 @@ func (registry *Registry) HasScopedReads() bool {
 	return false
 }
 
+// EventModels returns the subscription-enabled model inventory in stable ID
+// order. It exists for the event history resolver, which must index generated
+// historical bundles without exposing the registry's mutable maps.
+func (registry *Registry) EventModels() []Model {
+	if registry == nil {
+		return nil
+	}
+	ids := make([]golem.ModelID, 0)
+	for id, model := range registry.models {
+		if model.subscriptions {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return string(ids[i][:]) < string(ids[j][:]) })
+	result := make([]Model, len(ids))
+	for index, id := range ids {
+		result[index], _ = registry.Model(id)
+	}
+	return result
+}
+
 // Model returns a model only when the fixed-width ID is present in this exact
 // fingerprinted registry.
 func (registry *Registry) Model(id golem.ModelID) (Model, bool) {
 	value, ok := registry.models[id]
 	value.fields = append([]golem.FieldID(nil), value.fields...)
 	value.primaryKey = append([]golem.FieldID(nil), value.primaryKey...)
+	value.eventSnapshot = append([]golem.FieldID(nil), value.eventSnapshot...)
 	value.identities = make([]Identity, len(registry.models[id].identities))
 	for index, identity := range registry.models[id].identities {
 		value.identities[index] = identity.clone()
@@ -277,6 +300,8 @@ type Model struct {
 	equality      map[golem.FieldID]struct{}
 	maxTake       uint32
 	subscriptions bool
+	eventSchema   compilerir.Fingerprint
+	eventSnapshot []golem.FieldID
 	analytics     *compilerir.AggregationContractIR
 	scopedReads   bool
 }
@@ -307,6 +332,17 @@ func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTak
 // SubscriptionsEnabled is the normalized contract decision controlling
 // durable mutation-fact capture for this model.
 func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
+
+// EventSchema returns the compiler-validated logical schema fingerprint and
+// complete private pre-delete scalar inventory for a subscription-enabled
+// model. The field order is declared model-field order and the returned slice
+// is privately owned by the caller.
+func (model Model) EventSchema() (compilerir.Fingerprint, []golem.FieldID, bool) {
+	if !model.subscriptions || model.eventSchema == "" {
+		return "", nil, false
+	}
+	return model.eventSchema, append([]golem.FieldID(nil), model.eventSnapshot...), true
+}
 func (model Model) Analytics() (compilerir.AggregationContractIR, bool) {
 	if model.analytics == nil {
 		return compilerir.AggregationContractIR{}, false

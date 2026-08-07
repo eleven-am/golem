@@ -36,6 +36,8 @@ func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script,
 				// advisory capability; it deliberately has no relation DDL.
 			case object.Kind == physical.SystemOutbox && object.Version == 1:
 				statements = append(statements, renderOutbox(normalized.System.Namespace.Name, object.Name)...)
+			case object.Kind == physical.SystemOutboxDelivery && object.Version == 1:
+				statements = append(statements, renderOutboxDelivery(normalized.System.Namespace.Name, object.Name)...)
 			case object.Kind == physical.SystemUpsertGuard && object.Version == 1:
 				// PostgreSQL implements selector serialization with a
 				// transaction-scoped advisory lock; no relation is rendered.
@@ -484,5 +486,32 @@ func renderOutbox(namespace, name physical.PhysicalName) []string {
 	table := fmt.Sprintf("CREATE TABLE %s (\n  %s text PRIMARY KEY,\n  %s integer NOT NULL CHECK (%s > 0),\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL,\n  %s text NOT NULL CHECK (%s IN ('created','updated','deleted')),\n  %s bytea,\n  %s bytea,\n  %s text NOT NULL,\n  %s integer NOT NULL CHECK (%s >= 0),\n  %s bytea NOT NULL,\n  %s bytea,\n  %s timestamptz(6) NOT NULL,\n  UNIQUE (%s, %s),\n  CHECK ((%s = 'created' AND %s IS NULL AND %s IS NOT NULL) OR (%s = 'updated' AND %s IS NOT NULL AND %s IS NOT NULL) OR (%s = 'deleted' AND %s IS NOT NULL AND %s IS NULL))\n)",
 		qualified(namespace, name), quote("event_id"), quote("fact_version"), quote("fact_version"), quote("codec_identity"), quote("generation_fingerprint"), quote("model_id"), quote("action"), quote("action"), quote("before_identity"), quote("after_identity"), quote("causation_id"), quote("transaction_ordinal"), quote("transaction_ordinal"), quote("metadata"), quote("delete_snapshot"), quote("recorded_at"), quote("causation_id"), quote("transaction_ordinal"), quote("action"), quote("before_identity"), quote("after_identity"), quote("action"), quote("before_identity"), quote("after_identity"), quote("action"), quote("before_identity"), quote("after_identity"))
 	index := fmt.Sprintf("CREATE INDEX %s ON %s (%s, %s)", quote("_golem_outbox_pending"), qualified(namespace, name), quote("recorded_at"), quote("event_id"))
+	return []string{table, index}
+}
+
+func renderOutboxDelivery(namespace, name physical.PhysicalName) []string {
+	q := quote
+	table := "CREATE TABLE " + qualified(namespace, name) + " (" +
+		q("causation_id") + " text NOT NULL, " +
+		q("status") + " text NOT NULL, " +
+		q("first_recorded_at") + " timestamptz(6) NOT NULL, " +
+		q("attempt_count") + " bigint NOT NULL, " +
+		q("available_at") + " timestamptz(6) NOT NULL, " +
+		q("lease_token") + " text, " +
+		q("lease_until") + " timestamptz(6), " +
+		q("delivered_at") + " timestamptz(6), " +
+		q("last_failure_code") + " text, " +
+		q("blocked_at") + " timestamptz(6), " +
+		q("retired_at") + " timestamptz(6), " +
+		q("updated_at") + " timestamptz(6) NOT NULL, " +
+		"PRIMARY KEY (" + q("causation_id") + "), " +
+		"CHECK (" + q("causation_id") + " ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'), " +
+		"CHECK (" + q("status") + " IN ('pending','leased','delivered','blocked','retired')), " +
+		"CHECK (" + q("attempt_count") + " >= 0), " +
+		"CHECK (" + q("lease_token") + " IS NULL OR " + q("lease_token") + " ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'), " +
+		"CHECK (" + q("last_failure_code") + " IS NULL OR " + q("last_failure_code") + " ~ '^[a-z0-9][a-z0-9._-]{0,127}$'), " +
+		"CHECK ((" + q("status") + " = 'pending' AND " + q("lease_token") + " IS NULL AND " + q("lease_until") + " IS NULL AND " + q("delivered_at") + " IS NULL AND " + q("blocked_at") + " IS NULL AND " + q("retired_at") + " IS NULL) OR (" + q("status") + " = 'leased' AND " + q("lease_token") + " IS NOT NULL AND " + q("lease_until") + " IS NOT NULL AND " + q("delivered_at") + " IS NULL AND " + q("blocked_at") + " IS NULL AND " + q("retired_at") + " IS NULL) OR (" + q("status") + " = 'delivered' AND " + q("lease_token") + " IS NULL AND " + q("lease_until") + " IS NULL AND " + q("delivered_at") + " IS NOT NULL AND " + q("blocked_at") + " IS NULL AND " + q("retired_at") + " IS NULL) OR (" + q("status") + " = 'blocked' AND " + q("lease_token") + " IS NULL AND " + q("lease_until") + " IS NULL AND " + q("delivered_at") + " IS NULL AND " + q("blocked_at") + " IS NOT NULL AND " + q("retired_at") + " IS NULL AND " + q("last_failure_code") + " IS NOT NULL) OR (" + q("status") + " = 'retired' AND " + q("lease_token") + " IS NULL AND " + q("lease_until") + " IS NULL AND " + q("delivered_at") + " IS NULL AND " + q("blocked_at") + " IS NULL AND " + q("retired_at") + " IS NOT NULL))" +
+		")"
+	index := "CREATE INDEX " + q("_golem_outbox_delivery_pending") + " ON " + qualified(namespace, name) + " (" + q("status") + ", " + q("available_at") + ", " + q("first_recorded_at") + ", " + q("causation_id") + ")"
 	return []string{table, index}
 }

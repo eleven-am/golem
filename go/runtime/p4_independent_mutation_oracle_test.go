@@ -118,7 +118,7 @@ func TestP4IndependentMutationOracleSQLite(t *testing.T) {
 		if err := rows.Scan(&action, &ordinal, &metadata); err != nil {
 			t.Fatal(err)
 		}
-		if action != "created" && action != "updated" && action != "deleted" || ordinal < 1 || len(metadata) < 11 || !bytes.Equal(metadata[:9], []byte("GOLEMFACT")) || binary.BigEndian.Uint16(metadata[9:11]) != 1 {
+		if action != "created" && action != "updated" && action != "deleted" || ordinal < 1 || !independentFactHeaderValid(metadata) {
 			t.Fatalf("invalid independent fact action=%q ordinal=%d metadata=%x", action, ordinal, metadata)
 		}
 		facts++
@@ -216,7 +216,7 @@ func TestP4IndependentMutationOraclePostgreSQLProfiles(t *testing.T) {
 				if err := rows.Scan(&action, &ordinal, &metadata); err != nil {
 					t.Fatal(err)
 				}
-				if ordinal < 1 || len(metadata) < 11 || string(metadata[:9]) != "GOLEMFACT" || binary.BigEndian.Uint16(metadata[9:11]) != 1 {
+				if ordinal < 1 || !independentFactHeaderValid(metadata) {
 					t.Fatalf("PostgreSQL fact action=%q ordinal=%d metadata=%x", action, ordinal, metadata)
 				}
 			}
@@ -254,6 +254,43 @@ func TestP4IndependentMutationOraclePostgreSQLProfiles(t *testing.T) {
 			}
 		})
 	}
+}
+
+// independentFactHeaderValid intentionally does not call the production fact
+// decoder. It understands the persisted V1/V2 prefix well enough to prove the
+// exact version/codec pairing and that V2 carries a non-zero event-schema
+// digest, while retaining historical V1 acceptance for upgrade coverage.
+func independentFactHeaderValid(metadata []byte) bool {
+	if len(metadata) < 15 || !bytes.Equal(metadata[:9], []byte("GOLEMFACT")) {
+		return false
+	}
+	version := binary.BigEndian.Uint16(metadata[9:11])
+	codecLength := int(binary.BigEndian.Uint32(metadata[11:15]))
+	if codecLength < 1 || codecLength > len(metadata)-15 {
+		return false
+	}
+	offset := 15
+	codec := string(metadata[offset : offset+codecLength])
+	offset += codecLength
+	if version == 1 && codec != "golem.fact.v1" || version == 2 && codec != "golem.fact.v2" || version != 1 && version != 2 {
+		return false
+	}
+	// event ID + generation digest are common to both formats.
+	if len(metadata)-offset < 16+32 {
+		return false
+	}
+	offset += 16 + 32
+	if version == 1 {
+		return true
+	}
+	if len(metadata)-offset < 32 {
+		return false
+	}
+	var nonZero bool
+	for _, value := range metadata[offset : offset+32] {
+		nonZero = nonZero || value != 0
+	}
+	return nonZero
 }
 
 func TestRollbackDoesNotPublishInvalidation(t *testing.T) {
@@ -380,13 +417,13 @@ func runInvisibleMissingMutationOracle(t *testing.T, profile mutationProviderAcc
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: fixture.app.database, Provider: profile.provider, Bundle: fixture.schema.Bundle,
 		Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -431,11 +468,11 @@ func newPostgreSQLMutationOracleFixture(t *testing.T, dsn, profile string) (muta
 		}
 	}
 	base := newMutationResultFixture(t)
-	app, err := Open(context.Background(), Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: database, Provider: golem.PostgreSQL, Bundle: schemaFixture.Bundle,
 		Bindings: base.app.bindings, Descriptors: base.app.descriptors,
 		ResolvePrincipal: base.app.resolvePrincipal, SnapshotActor: base.app.snapshotActor,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

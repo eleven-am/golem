@@ -27,6 +27,7 @@ type ArtifactKind string
 
 const (
 	ArtifactModelGo    ArtifactKind = "model_go"
+	ArtifactEventGo    ArtifactKind = "event_go"
 	ArtifactBindingsGo ArtifactKind = "bindings_go"
 	ArtifactRegistryGo ArtifactKind = "registry_go"
 	ArtifactGraphQLSDL ArtifactKind = "graphql_sdl"

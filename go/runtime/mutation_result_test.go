@@ -329,14 +329,14 @@ func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits Mutat
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: database, Provider: golem.SQLite, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		MutationLimits:   limits,
 		AfterCommitError: afterCommitError,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

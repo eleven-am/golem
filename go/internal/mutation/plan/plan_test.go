@@ -91,6 +91,75 @@ func TestSystemPlansOmitPoliciesAndHooksButRetainFactsAndValidation(t *testing.T
 	}
 }
 
+func TestP7DeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
+	fixture := schematest.New(t)
+	inputs := boundInputs(t, fixture)
+	predicate := boundBatchPredicate(t, fixture)
+	policy := allowAllPolicy(t, policyir.ModelID(fixture.Post))
+	allStored := []policyir.FieldID{
+		policyir.FieldID(fixture.PostID),
+		policyir.FieldID(fixture.AuthorID),
+		policyir.FieldID(fixture.PostTitle),
+	}
+	for _, test := range []struct {
+		name      string
+		stance    mutationir.Stance
+		operation mutationir.Operation
+		configure func(*RootRequest)
+	}{
+		{"root-caller", mutationir.Caller, mutationir.Delete, func(request *RootRequest) { request.Target = &inputs.target }},
+		{"root-system", mutationir.System, mutationir.Delete, func(request *RootRequest) { request.Target = &inputs.target }},
+		{"batch-caller", mutationir.Caller, mutationir.DeleteMany, func(request *RootRequest) { request.Predicate = &predicate }},
+		{"batch-system", mutationir.System, mutationir.DeleteMany, func(request *RootRequest) { request.Predicate = &predicate }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var policies PolicySet
+			if test.stance == mutationir.Caller {
+				policies = policySet(fixture, policy)
+			}
+			request := baseRequest(t, fixture, policies, test.stance, test.operation)
+			request.CaptureFacts, request.FactCodec = true, factCodec(t, fixture)
+			request.PrivateDeleteSnapshot = append([]policyir.FieldID(nil), allStored...)
+			test.configure(&request)
+			plan, err := BuildRoot(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root, _ := plan.Graph().Root()
+			if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(root.Fact().PrivateDeleteSnapshot()) != len(allStored) {
+				t.Fatalf("delete snapshot was not preserved: state=%d fields=%x", root.Fact().DeleteSnapshotState(), root.Fact().PrivateDeleteSnapshot())
+			}
+			for _, field := range root.Fact().PrivateDeleteSnapshot() {
+				if !containsField(root.BeforeRequirements().Fields(), field) {
+					t.Fatalf("before image omitted private snapshot field %x", field)
+				}
+			}
+		})
+	}
+
+	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
+	request.Target, request.CaptureFacts, request.FactCodec = &inputs.target, true, factCodec(t, fixture)
+	request.PrivateDeleteSnapshot = []policyir.FieldID{policyir.FieldID(fixture.PostAuthor)}
+	if _, err := BuildRoot(request); err == nil {
+		t.Fatal("relation field was accepted as a private stored-scalar snapshot")
+	}
+}
+
+func TestP7DeleteWithoutCompilerInventoryIsExplicitlyUnverifiable(t *testing.T) {
+	fixture := schematest.New(t)
+	inputs := boundInputs(t, fixture)
+	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
+	request.Target, request.CaptureFacts, request.FactCodec = &inputs.target, true, factCodec(t, fixture)
+	plan, err := BuildRoot(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := plan.Graph().Root()
+	if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotUnverifiable || len(root.Fact().PrivateDeleteSnapshot()) != 0 {
+		t.Fatal("missing compiler inventory was not represented as unverifiable")
+	}
+}
+
 func TestBuildRootCoversEverySystemScalarMutationShape(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)

@@ -63,8 +63,12 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 		if renderErr != nil {
 			return physical.PhysicalSchema{}, renderErr
 		}
-		for _, indexStatement := range indexStatements {
-			expectedObjects["index\x00_golem_outbox_pending"] = indexStatement
+		indexNames := renderedSystemIndexNames(object)
+		if len(indexNames) != len(indexStatements) {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect system index registry mismatch for %s", object.ID)
+		}
+		for index, indexStatement := range indexStatements {
+			expectedObjects["index\x00"+indexNames[index]] = indexStatement
 		}
 	}
 	tableMap := make(map[ir.ModelID]physical.PhysicalTable, len(normalized.Tables))

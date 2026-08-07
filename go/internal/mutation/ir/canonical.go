@@ -10,8 +10,8 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
-const planDomain = "golem:mutation-plan:v1\x00"
-const planFingerprintDomain = "golem:mutation-plan-fingerprint:v1\x00"
+const planDomain = "golem:mutation-plan:v2\x00"
+const planFingerprintDomain = "golem:mutation-plan-fingerprint:v2\x00"
 
 type Fingerprint [32]byte
 
@@ -277,8 +277,15 @@ func (encoder *canonicalEncoder) fact(fact FactRequirement) {
 		return
 	}
 	encoder.u8(uint8(fact.action))
+	if fact.eventSchema == ([32]byte{}) {
+		encoder.u8(0)
+	} else {
+		encoder.u8(1)
+		encoder.raw(fact.eventSchema[:])
+	}
 	encoder.fields(fact.beforeIdentity)
 	encoder.fields(fact.afterIdentity)
+	encoder.u8(uint8(fact.deleteSnapshotState))
 	encoder.fields(fact.privateDeleteSnapshot)
 }
 

@@ -28,9 +28,10 @@ func (User) GolemModel() g.ModelSpec[User] {
 		g.GraphQL[User](
 			g.GraphQLOperations(g.GraphQLFindOne, g.GraphQLFindMany, g.GraphQLCreate, g.GraphQLAggregate, g.GraphQLGroupBy),
 			g.GraphQLPlural("accounts"),
-			g.GraphQLRoots(g.GraphQLRootNames{FindOne: "account", FindMany: "accounts"}),
+			g.GraphQLRoots(g.GraphQLRootNames{FindOne: "account", FindMany: "accounts", Events: "accountEvents"}),
 			g.GraphQLPageSizes(25, 250),
 		),
+		g.Subscriptions[User](),
 		g.PrimaryKey("pk_users", Users.ID),
 		g.Unique("uq_users_name", Users.Name),
 		g.Index[User]("idx_users_name_age").Keys(

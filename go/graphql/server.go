@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"runtime/debug"
 	"strings"
+	"sync"
 
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/lexer"
@@ -56,6 +58,8 @@ type Config[P any] struct {
 	ContractFingerprint  golem.SchemaDigest
 	ReportInternalError  func(context.Context, error)
 	ExecutableSchema     gqlgengraphql.ExecutableSchema
+	EventLimits          events.Limits
+	WebSocketInit        func(context.Context, json.RawMessage) (context.Context, error)
 }
 
 type Operation struct {
@@ -87,6 +91,12 @@ type Server[P any] struct {
 	concurrency         chan struct{}
 	contractFingerprint golem.SchemaDigest
 	executable          gqlgengraphql.ExecutableSchema
+	eventLimits         events.Limits
+	lifecycle           context.Context
+	cancel              context.CancelFunc
+	connections         sync.WaitGroup
+	lifecycleMu         sync.Mutex
+	shuttingDown        bool
 }
 
 func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Server[P], error) {
@@ -103,6 +113,10 @@ func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Serv
 	if err != nil {
 		return nil, err
 	}
+	eventLimits, err := events.NormalizeLimits(config.EventLimits)
+	if err != nil {
+		return nil, err
+	}
 	schema, err := validator.LoadSchema(validator.Prelude, &ast.Source{Name: "golem.graphql", Input: sdl})
 	if err != nil {
 		return nil, fmt.Errorf("invalid generated GraphQL schema: %w", err)
@@ -110,7 +124,8 @@ func NewServer[P any](sdl string, config Config[P], executor Executor[P]) (*Serv
 	if config.ExecutableSchema != nil && config.ExecutableSchema.Schema() == nil {
 		return nil, fmt.Errorf("GraphQL executable schema is incomplete")
 	}
-	return &Server[P]{schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema}, nil
+	lifecycle, cancel := context.WithCancel(context.Background())
+	return &Server[P]{schema: schema, sdl: sdl, config: config, limits: limits, executor: executor, concurrency: make(chan struct{}, limits.MaxResolverConcurrency), contractFingerprint: config.ContractFingerprint, executable: config.ExecutableSchema, eventLimits: eventLimits, lifecycle: lifecycle, cancel: cancel}, nil
 }
 
 func (server *Server[P]) SDL() string {
@@ -140,7 +155,16 @@ type Request struct {
 }
 
 func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Request) {
+	if isWebSocketUpgrade(request) {
+		server.serveWebSocket(writer, request)
+		return
+	}
 	writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	if strings.Contains(strings.ToLower(request.Header.Get("Accept")), "text/event-stream") {
+		writer.WriteHeader(http.StatusNotAcceptable)
+		writeResponse(writer, Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_UNSUPPORTED", "GraphQL over SSE is unsupported")}})
+		return
+	}
 	if request.Method != http.MethodPost {
 		writer.WriteHeader(http.StatusMethodNotAllowed)
 		writeResponse(writer, Response{Errors: []Error{publicError("METHOD_NOT_ALLOWED", "GraphQL requires POST")}})
@@ -205,54 +229,12 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 			response = Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 		}
 	}()
-	if !byteLimitsChecked {
-		encodedVariables, encodeErr := json.Marshal(request.Variables)
-		if encodeErr != nil {
-			return Response{Errors: []Error{publicError("BAD_USER_INPUT", "GraphQL variables are invalid")}}
-		}
-		if len(encodedVariables) > server.limits.MaxVariableBytes {
-			return Response{Errors: []Error{publicError("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")}}
-		}
-		encodedEnvelope, encodeErr := json.Marshal(requestEnvelope{Query: request.Query, OperationName: request.OperationName, Variables: encodedVariables})
-		if encodeErr != nil || len(encodedEnvelope) > server.limits.MaxRequestBytes {
-			return Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL request exceeds a configured limit")}}
-		}
+	preparedOperation, failure := server.prepareRequest(request, byteLimitsChecked)
+	if failure != nil {
+		return *failure
 	}
-	if request.Query == "" || exceedsLexicalTokenLimit(request.Query, server.limits.MaxTokens) {
-		return Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")}}
-	}
-	document, parseErr := parser.ParseQuery(&ast.Source{Name: "request.graphql", Input: request.Query})
-	if parseErr != nil {
-		return Response{Errors: []Error{publicError("GRAPHQL_PARSE_FAILED", "GraphQL parsing failed")}}
-	}
-	if validationErrors := validator.Validate(server.schema, document); len(validationErrors) != 0 {
-		return Response{Errors: []Error{publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")}}
-	}
-	if len(document.Fragments) > server.limits.MaxFragments || documentASTNodesExceed(document, server.limits.MaxASTNodes) {
-		return Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")}}
-	}
-	definition := document.Operations.ForName(request.OperationName)
-	if definition == nil {
-		return Response{Errors: []Error{publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL operation was not found")}}
-	}
-	shape := boundedOperationShape(definition.SelectionSet, document.Fragments, server.limits)
-	if shape.exceeded {
-		return Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")}}
-	}
-	if !server.config.Introspection && shape.introspection {
-		return Response{Errors: []Error{publicError("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")}}
-	}
-	inputNodes, inputDepth, listItems, inputBytes := inputShape(request.Variables, 1)
-	if inputNodes > server.limits.MaxInputNodes || inputDepth > server.limits.MaxInputDepth || listItems > server.limits.MaxListItems || inputBytes > server.limits.MaxVariableBytes {
-		return Response{Errors: []Error{publicError("INPUT_LIMIT_EXCEEDED", "GraphQL input exceeds a configured limit")}}
-	}
-	coerced, coercionErr := validator.VariableValues(server.schema, definition, request.Variables)
-	if coercionErr != nil {
-		return Response{Errors: []Error{publicError("BAD_USER_INPUT", "GraphQL variables are invalid")}}
-	}
-	complexity, complexityErr := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.limits.MaxPageSize, server.limits.MaxComplexity, map[string]bool{})
-	if complexityErr != nil || complexity > server.limits.MaxComplexity {
-		return Response{Errors: []Error{publicError("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")}}
+	if preparedOperation.Operation.Definition.Operation == ast.Subscription {
+		return Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_REQUIRED", "GraphQL subscriptions require graphql-transport-ws")}}
 	}
 	select {
 	case server.concurrency <- struct{}{}:
@@ -260,11 +242,79 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 	case <-ctx.Done():
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "request was cancelled")}}
 	}
-	prepared := server.executor.Execute(ctx, principal, Operation{Document: document, Definition: definition, Variables: coerced})
+	prepared := server.executor.Execute(ctx, principal, preparedOperation.Operation)
 	if server.executable == nil || prepared.Data == nil {
 		return prepared
 	}
-	return server.executePrepared(ctx, request, document, definition, coerced, prepared)
+	return server.executePrepared(ctx, request, preparedOperation.Operation.Document, preparedOperation.Operation.Definition, preparedOperation.Operation.Variables, prepared)
+}
+
+type preparedRequest struct{ Operation Operation }
+
+func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool) (preparedRequest, *Response) {
+	fail := func(code, message string) (preparedRequest, *Response) {
+		response := Response{Errors: []Error{publicError(code, message)}}
+		return preparedRequest{}, &response
+	}
+	encodedVariables, err := json.Marshal(request.Variables)
+	if err != nil {
+		return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+	}
+	if !byteLimitsChecked && len(encodedVariables) > server.limits.MaxVariableBytes {
+		return fail("INPUT_LIMIT_EXCEEDED", "GraphQL variables exceed a configured limit")
+	}
+	ownedVariables := map[string]any{}
+	if string(encodedVariables) != "null" {
+		decoder := json.NewDecoder(bytes.NewReader(encodedVariables))
+		decoder.UseNumber()
+		if err := decoder.Decode(&ownedVariables); err != nil {
+			return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+		}
+	}
+	request.Variables = ownedVariables
+	if !byteLimitsChecked {
+		encodedEnvelope, err := json.Marshal(requestEnvelope{Query: request.Query, OperationName: request.OperationName, Variables: encodedVariables})
+		if err != nil || len(encodedEnvelope) > server.limits.MaxRequestBytes {
+			return fail("QUERY_LIMIT_EXCEEDED", "GraphQL request exceeds a configured limit")
+		}
+	}
+	if request.Query == "" || exceedsLexicalTokenLimit(request.Query, server.limits.MaxTokens) {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	document, err := parser.ParseQuery(&ast.Source{Name: "request.graphql", Input: request.Query})
+	if err != nil {
+		return fail("GRAPHQL_PARSE_FAILED", "GraphQL parsing failed")
+	}
+	if validationErrors := validator.Validate(server.schema, document); len(validationErrors) != 0 {
+		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")
+	}
+	if len(document.Fragments) > server.limits.MaxFragments || documentASTNodesExceed(document, server.limits.MaxASTNodes) {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	definition := document.Operations.ForName(request.OperationName)
+	if definition == nil {
+		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL operation was not found")
+	}
+	shape := boundedOperationShape(definition.SelectionSet, document.Fragments, server.limits)
+	if shape.exceeded {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	if !server.config.Introspection && shape.introspection {
+		return fail("GRAPHQL_VALIDATION_FAILED", "GraphQL validation failed")
+	}
+	inputNodes, inputDepth, listItems, inputBytes := inputShape(request.Variables, 1)
+	if inputNodes > server.limits.MaxInputNodes || inputDepth > server.limits.MaxInputDepth || listItems > server.limits.MaxListItems || inputBytes > server.limits.MaxVariableBytes {
+		return fail("INPUT_LIMIT_EXCEEDED", "GraphQL input exceeds a configured limit")
+	}
+	coerced, err := validator.VariableValues(server.schema, definition, request.Variables)
+	if err != nil {
+		return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
+	}
+	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.limits.MaxPageSize, server.limits.MaxComplexity, map[string]bool{})
+	if err != nil || complexity > server.limits.MaxComplexity {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	return preparedRequest{Operation: Operation{Document: document, Definition: definition, Variables: coerced}}, nil
 }
 
 func (server *Server[P]) executePrepared(ctx context.Context, request Request, document *ast.QueryDocument, definition *ast.OperationDefinition, variables map[string]any, prepared Response) Response {

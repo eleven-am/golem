@@ -86,7 +86,7 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 	}
 	sections = append(sections, withoutInputs...)
 	sections = append(sections, allRelationFilterTypes(views, contractByModel)...)
-	query, mutation, err := renderRoots(views, compilation.Contract.CustomOperations)
+	query, mutation, subscription, err := renderRoots(views, compilation.Contract.CustomOperations)
 	if err != nil {
 		return Document{}, err
 	}
@@ -96,6 +96,14 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 	sections = append(sections, query)
 	if mutation != "" {
 		sections = append(sections, mutation, "type BatchPayload {\n  count: Int!\n}")
+	}
+	if subscription != "" {
+		events, eventErr := renderEventTypes(views, enumByID)
+		if eventErr != nil {
+			return Document{}, eventErr
+		}
+		sections = append(sections, events...)
+		sections = append(sections, subscription)
 	}
 	return Document{SDL: strings.Join(sections, "\n\n") + "\n"}, nil
 }
@@ -490,11 +498,12 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 	return sections, nil
 }
 
-func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (string, string, error) {
-	var query, mutation bytes.Buffer
+func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (string, string, string, error) {
+	var query, mutation, subscription bytes.Buffer
 	query.WriteString("type Query {\n")
 	mutation.WriteString("type Mutation {\n")
-	queryCount, mutationCount := 0, 0
+	subscription.WriteString("type Subscription {\n")
+	queryCount, mutationCount, subscriptionCount := 0, 0, 0
 	for _, view := range views {
 		enabled := map[ir.Operation]bool{}
 		for _, operation := range view.contract.Operations {
@@ -546,6 +555,13 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 			fmt.Fprintf(&mutation, "  %s(where: %sWhereInput!): BatchPayload!\n", roots.DeleteMany, name)
 			mutationCount++
 		}
+		if view.contract.Subscriptions {
+			if view.contract.Event == nil {
+				return "", "", "", fmt.Errorf("model %s enables subscriptions without an event contract", name)
+			}
+			fmt.Fprintf(&subscription, "  %s(where: %sWhereInput): %s!\n", roots.Events, name, view.contract.Event.PayloadTypeName)
+			subscriptionCount++
+		}
 	}
 	operations := append([]ir.CustomOperationContractIR(nil), custom...)
 	sort.Slice(operations, func(i, j int) bool {
@@ -560,11 +576,11 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 	for _, operation := range operations {
 		result, err := graphQLTypeSDL(operation.Result)
 		if err != nil {
-			return "", "", fmt.Errorf("custom %s %s result: %w", operation.Operation, operation.Name, err)
+			return "", "", "", fmt.Errorf("custom %s %s result: %w", operation.Operation, operation.Name, err)
 		}
 		arguments, err := renderGraphQLArguments(operation.Arguments)
 		if err != nil {
-			return "", "", fmt.Errorf("custom %s %s: %w", operation.Operation, operation.Name, err)
+			return "", "", "", fmt.Errorf("custom %s %s: %w", operation.Operation, operation.Name, err)
 		}
 		switch operation.Operation {
 		case ir.CustomOperationQuery:
@@ -574,18 +590,73 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 			fmt.Fprintf(&mutation, "  %s%s: %s\n", operation.Name, arguments, result)
 			mutationCount++
 		default:
-			return "", "", fmt.Errorf("custom operation %s has unsupported kind %q", operation.Name, operation.Operation)
+			return "", "", "", fmt.Errorf("custom operation %s has unsupported kind %q", operation.Name, operation.Operation)
 		}
 	}
 	query.WriteString("}")
 	mutation.WriteString("}")
+	subscription.WriteString("}")
 	if queryCount == 0 {
-		return "", "", nil
+		return "", "", "", nil
 	}
 	if mutationCount == 0 {
-		return query.String(), "", nil
+		if subscriptionCount == 0 {
+			return query.String(), "", "", nil
+		}
+		return query.String(), "", subscription.String(), nil
 	}
-	return query.String(), mutation.String(), nil
+	if subscriptionCount == 0 {
+		return query.String(), mutation.String(), "", nil
+	}
+	return query.String(), mutation.String(), subscription.String(), nil
+}
+
+func renderEventTypes(views []modelView, enums map[ir.EnumID]ir.EnumContractIR) ([]string, error) {
+	sections := []string{"enum GolemEventType {\n  CREATED\n  UPDATED\n  DELETED\n}"}
+	for _, view := range views {
+		if !view.contract.Subscriptions {
+			continue
+		}
+		event := view.contract.Event
+		if event == nil || event.PayloadTypeName == "" || len(event.Schema.IdentityFields) == 0 {
+			return nil, fmt.Errorf("model %s has an incomplete event contract", view.contract.GraphQLName)
+		}
+		identityType := ""
+		if len(event.Schema.IdentityFields) == 1 {
+			field := fieldByID(view.model, event.Schema.IdentityFields[0].FieldID)
+			if field == nil || field.Scalar == nil {
+				return nil, fmt.Errorf("model %s event identity references a non-scalar field", view.contract.GraphQLName)
+			}
+			base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
+			if err != nil {
+				return nil, fmt.Errorf("model %s event identity: %w", view.contract.GraphQLName, err)
+			}
+			identityType = base
+		} else {
+			if event.IdentityTypeName == "" {
+				return nil, fmt.Errorf("model %s compound event identity has no type name", view.contract.GraphQLName)
+			}
+			var identity strings.Builder
+			fmt.Fprintf(&identity, "type %s {\n", event.IdentityTypeName)
+			for _, identityField := range event.Schema.IdentityFields {
+				field := fieldByID(view.model, identityField.FieldID)
+				contract, ok := view.fields[identityField.FieldID]
+				if field == nil || field.Scalar == nil || !ok || contract.GraphQLName == "" {
+					return nil, fmt.Errorf("model %s compound event identity references an unavailable field", view.contract.GraphQLName)
+				}
+				base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
+				if err != nil {
+					return nil, fmt.Errorf("model %s event identity field %s: %w", view.contract.GraphQLName, identityField.FieldID, err)
+				}
+				fmt.Fprintf(&identity, "  %s: %s!\n", contract.GraphQLName, base)
+			}
+			identity.WriteString("}")
+			sections = append(sections, identity.String())
+			identityType = event.IdentityTypeName
+		}
+		sections = append(sections, fmt.Sprintf("type %s {\n  eventID: UUID!\n  causationID: UUID!\n  transactionOrdinal: Int!\n  recordedAt: DateTime!\n  type: GolemEventType!\n  id: %s!\n  entity: %s\n}", event.PayloadTypeName, identityType, view.contract.GraphQLName))
+	}
+	return sections, nil
 }
 
 func renderGraphQLArguments(arguments []ir.GraphQLArgumentContractIR) (string, error) {

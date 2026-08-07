@@ -125,11 +125,15 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 	}
 	if operation.Kind == migration.AddSystemObject {
 		object, exists := postgresqlSystemObject(r.schema.System, ir.ObjectID(operation.ObjectID))
-		if !exists || (!physical.IsOutboxSystemObjectV1(object) && !physical.IsUpsertGuardSystemObjectV1(object)) {
+		if !exists || (!physical.IsOutboxSystemObjectV1(object) && !physical.IsOutboxDeliverySystemObjectV1(object) && !physical.IsUpsertGuardSystemObjectV1(object)) {
 			return nil, fmt.Errorf("system object %s is not registered", operation.ObjectID)
 		}
 		if physical.IsUpsertGuardSystemObjectV1(object) {
 			return nil, nil
+		}
+		if physical.IsOutboxDeliverySystemObjectV1(object) {
+			statements := renderOutboxDelivery(r.schema.System.Namespace.Name, object.Name)
+			return append(statements, postgresqlOutboxDeliveryBackfill(r.schema.System)), nil
 		}
 		return renderOutbox(r.schema.System.Namespace.Name, object.Name), nil
 	}
@@ -280,6 +284,21 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 	default:
 		return nil, fmt.Errorf("operation kind %s was not lowered", operation.Kind)
 	}
+}
+
+func postgresqlOutboxDeliveryBackfill(system physical.SystemSchema) string {
+	outbox := physical.OutboxSystemObjectV1().Name
+	delivery := physical.OutboxDeliverySystemObjectV1().Name
+	for _, object := range system.Objects {
+		if physical.IsOutboxSystemObjectV1(object) {
+			outbox = object.Name
+		}
+		if physical.IsOutboxDeliverySystemObjectV1(object) {
+			delivery = object.Name
+		}
+	}
+	columns := strings.Join([]string{quote("causation_id"), quote("status"), quote("first_recorded_at"), quote("attempt_count"), quote("available_at"), quote("updated_at")}, ",")
+	return "INSERT INTO " + qualified(system.Namespace.Name, delivery) + " (" + columns + ") SELECT " + quote("causation_id") + ",'pending',MIN(" + quote("recorded_at") + "),0,MIN(" + quote("recorded_at") + "),MIN(" + quote("recorded_at") + ") FROM " + qualified(system.Namespace.Name, outbox) + " GROUP BY " + quote("causation_id") + " ON CONFLICT (" + quote("causation_id") + ") DO NOTHING"
 }
 
 func validatePostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operations []migration.Operation) error {

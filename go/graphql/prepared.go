@@ -77,6 +77,21 @@ func ResolvePreparedRoot[T any](ctx context.Context) (T, error) {
 	return coercePrepared[T](value)
 }
 
+// ResolvePreparedSubscriptionRoot presents one already prepared event through
+// gqlgen's native subscription resolver contract. The protocol loop invokes a
+// fresh executable response handler per event, so this channel contains exactly
+// one value and never owns the long-lived application event stream.
+func ResolvePreparedSubscriptionRoot[T any](ctx context.Context) (<-chan T, error) {
+	value, err := ResolvePreparedRoot[T](ctx)
+	if err != nil {
+		return nil, err
+	}
+	result := make(chan T, 1)
+	result <- value
+	close(result)
+	return result, nil
+}
+
 // ResolvePreparedField is used only by generated gqlgen object resolvers. The
 // parent contains occurrence-aware response names, so aliases and repeated
 // relation selections remain independent.

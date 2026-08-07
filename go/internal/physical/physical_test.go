@@ -215,6 +215,40 @@ func TestPhysicalAndSystemFingerprintsHaveSeparateDomains(t *testing.T) {
 	}
 }
 
+func TestOutboxDeliveryV1RegistryValidationCanonicalizationAndFingerprint(t *testing.T) {
+	base := sqliteSocialSchema()
+	base.System.Objects = append(base.System.Objects, OutboxSystemObjectV1(), OutboxDeliverySystemObjectV1())
+	normalized, err := Normalize(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := SystemFingerprint(normalized.Provider, normalized.System)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shuffled := base
+	shuffled.System.Objects = append([]SystemObject(nil), base.System.Objects...)
+	reverse(shuffled.System.Objects)
+	second, err := SystemFingerprint(shuffled.Provider, shuffled.System)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != second {
+		t.Fatalf("system fingerprint changed under registry shuffle: %s != %s", first, second)
+	}
+	withoutOutbox := sqliteSocialSchema()
+	withoutOutbox.System.Objects = append(withoutOutbox.System.Objects, OutboxDeliverySystemObjectV1())
+	if _, err := Normalize(withoutOutbox); err == nil {
+		t.Fatal("outbox delivery without immutable outbox was accepted")
+	}
+	forged := base
+	forged.System.Objects = append([]SystemObject(nil), base.System.Objects...)
+	forged.System.Objects[len(forged.System.Objects)-1].Name = "_golem_delivery_forged"
+	if _, err := Normalize(forged); err == nil {
+		t.Fatal("forged outbox delivery registry entry was accepted")
+	}
+}
+
 func TestCanonicalFragmentIsStableAndRejectsUnsupportedKinds(t *testing.T) {
 	schema, err := Normalize(sqliteSocialSchema())
 	if err != nil {

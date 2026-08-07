@@ -99,7 +99,7 @@ func newP5OracleHarness(t *testing.T, indexed bool) p5OracleHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{DB: db, Provider: golem.SQLite, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, p oraclePrincipal) (oracleActor, error) { return p, nil }})
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[oraclePrincipal, oracleActor]{DB: db, Provider: golem.SQLite, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, p oraclePrincipal) (oracleActor, error) { return p, nil }}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +399,7 @@ func newP5RecursiveHarness(t *testing.T) p5RecursiveHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{DB: database, Provider: golem.SQLite, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil }})
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[oraclePrincipal, oracleActor]{DB: database, Provider: golem.SQLite, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil }}))
 	if err != nil {
 		t.Fatal(err)
 	}

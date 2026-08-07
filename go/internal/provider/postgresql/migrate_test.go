@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -62,15 +63,23 @@ func TestSystemOutboxV1IncrementalPlanPostgreSQL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := after
-	before.System.Objects = nil
+	legacyAfter := after
+	legacyAfter.System.Objects = nil
 	for _, object := range after.System.Objects {
+		if object.Kind != physical.SystemOutboxDelivery {
+			legacyAfter.System.Objects = append(legacyAfter.System.Objects, object)
+		}
+	}
+	legacyAfter = normalizePostgreSQLMigrationSchema(t, legacyAfter)
+	before := legacyAfter
+	before.System.Objects = nil
+	for _, object := range legacyAfter.System.Objects {
 		if object.Kind != physical.SystemOutbox {
 			before.System.Objects = append(before.System.Objects, object)
 		}
 	}
 	before = normalizePostgreSQLMigrationSchema(t, before)
-	entry := reviewedPostgreSQLEntry(t, "002_outbox_v1", before, after, nil)
+	entry := reviewedPostgreSQLEntry(t, "002_outbox_v1", before, legacyAfter, nil)
 	plan, err := provider.PlanIncremental(entry)
 	if err != nil {
 		t.Fatal(err)
@@ -103,6 +112,40 @@ func TestSystemUpsertGuardV1IncrementalPlanPostgreSQLHasNoRelationDDL(t *testing
 	}
 	if strings.Contains(plan.SQL(), `_golem_upsert_guard`) {
 		t.Fatalf("PostgreSQL upsert guard rendered a relation:\n%s", plan.SQL())
+	}
+}
+
+func TestP7DeliverySystemObjectUpgradePlanPostgreSQL(t *testing.T) {
+	provider := New()
+	after, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.System.Objects = nil
+	for _, object := range after.System.Objects {
+		if object.Kind != physical.SystemOutboxDelivery {
+			before.System.Objects = append(before.System.Objects, object)
+		}
+	}
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "004_p7_delivery", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`CREATE TABLE "_golem"."_golem_outbox_delivery"`,
+		`"first_recorded_at" timestamptz(6) NOT NULL`,
+		`"attempt_count" bigint NOT NULL`,
+		`"status" IN ('pending','leased','delivered','blocked','retired')`,
+		`CREATE INDEX "_golem_outbox_delivery_pending"`,
+		`INSERT INTO "_golem"."_golem_outbox_delivery"`,
+		`FROM "_golem"."_golem_outbox" GROUP BY "causation_id" ON CONFLICT ("causation_id") DO NOTHING`,
+	} {
+		if !strings.Contains(plan.SQL(), fragment) {
+			t.Fatalf("delivery migration missing %q:\n%s", fragment, plan.SQL())
+		}
 	}
 }
 
@@ -459,6 +502,56 @@ func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
 		ledger, err := provider.ReadLedger(context.Background(), database)
 		if err != nil || len(ledger) != 2 {
 			t.Fatalf("ledger=%#v error=%v", ledger, err)
+		}
+	})
+
+	t.Run("P6 to P7 delivery upgrade preserves and backfills facts", func(t *testing.T) {
+		const namespace = "golem_p7_delivery_upgrade"
+		cleanup(namespace)
+		defer cleanup(namespace)
+		empty := canonicalEmptyPostgreSQLMigrationSchema(t, namespace)
+		p7 := livePostgreSQLMigrationSchema(t, namespace, false, false)
+		p6 := p7
+		p6.System.Objects = nil
+		for _, object := range p7.System.Objects {
+			if object.Kind != physical.SystemOutboxDelivery {
+				p6.System.Objects = append(p6.System.Objects, object)
+			}
+		}
+		p6 = normalizePostgreSQLMigrationSchema(t, p6)
+		first := reviewedPostgreSQLEntry(t, "001_p6", empty, p6, nil)
+		first, firstFiles := finalizePostgreSQLEntry(t, provider, first)
+		second := reviewedPostgreSQLEntry(t, "002_p7_delivery", p6, p7, &first)
+		second, secondFiles := finalizePostgreSQLEntry(t, provider, second)
+		manifest := reviewedPostgreSQLManifest(provider, first, second)
+		files := mergePostgreSQLMigrationFiles(firstFiles, secondFiles)
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatalf("P6 bootstrap: %v", err)
+		}
+		const causation = "00000000-0000-4000-8000-000000000001"
+		for ordinal, recorded := range []string{"2026-08-07T10:00:02Z", "2026-08-07T10:00:01Z"} {
+			_, err := database.Exec(`INSERT INTO "_golem"."_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES ($1,1,'golem.fact.v1','fingerprint','model','created',$2,$3,$4,$5,$6::timestamptz)`,
+				fmt.Sprintf("00000000-0000-4000-8000-%012d", ordinal+1), []byte{1}, causation, ordinal+1, []byte{byte(ordinal + 1)}, recorded)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatalf("P7 delivery upgrade: %v", err)
+		}
+		if err := provider.Verify(context.Background(), database, p7); err != nil {
+			t.Fatal(err)
+		}
+		var status string
+		var facts, deliveries int
+		if err := database.Get(&facts, `SELECT count(*) FROM "_golem"."_golem_outbox"`); err != nil || facts != 2 {
+			t.Fatalf("facts=%d error=%v", facts, err)
+		}
+		if err := database.Get(&deliveries, `SELECT count(*) FROM "_golem"."_golem_outbox_delivery"`); err != nil || deliveries != 1 {
+			t.Fatalf("deliveries=%d error=%v", deliveries, err)
+		}
+		if err := database.Get(&status, `SELECT "status" FROM "_golem"."_golem_outbox_delivery" WHERE "causation_id"=$1`, causation); err != nil || status != "pending" {
+			t.Fatalf("status=%q error=%v", status, err)
 		}
 	})
 }

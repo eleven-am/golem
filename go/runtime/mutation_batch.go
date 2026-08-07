@@ -10,7 +10,6 @@ import (
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -219,11 +218,14 @@ func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.P
 	}
 	modelFact, _ := app.registry.Model(model)
 	if modelFact.SubscriptionsEnabled() {
-		factCodec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		factCodec, eventSchema, snapshot, err := mutationEventSchema(app.registry, policyir.ModelID(model))
 		if err != nil {
 			return mutationbatch.Program{}, err
 		}
-		request.CaptureFacts, request.FactCodec = true, &factCodec
+		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &factCodec, eventSchema
+		if operation == mutationir.DeleteMany {
+			request.PrivateDeleteSnapshot = snapshot
+		}
 	}
 	if operation == mutationir.UpdateMany {
 		if input == nil {

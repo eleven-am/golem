@@ -9,7 +9,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
@@ -108,11 +107,11 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	}
 	modelFact, _ := app.registry.Model(golem.ModelID(request.model))
 	if modelFact.SubscriptionsEnabled() {
-		factCodec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		factCodec, eventSchema, _, err := mutationEventSchema(app.registry, request.model)
 		if err != nil {
 			return preparedRuntimeUpsert{}, err
 		}
-		planning.CaptureFacts, planning.FactCodec = true, &factCodec
+		planning.CaptureFacts, planning.FactCodec, planning.EventSchema = true, &factCodec, eventSchema
 	}
 	plan, err := mutationplan.BuildRoot(planning)
 	if err != nil {

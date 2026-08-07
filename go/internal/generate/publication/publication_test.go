@@ -42,7 +42,7 @@ func TestPublishCheckAndStaleRemoval(t *testing.T) {
 	}
 }
 
-func TestGraphQLGenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
+func TestP7GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
 	directory := t.TempDir()
 	graphqlGo := func(path, version string) manifest.Artifact {
 		value := artifact(path, "package app\nconst graphQLVersion = \""+version+"\"\n")

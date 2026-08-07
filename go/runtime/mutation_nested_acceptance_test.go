@@ -409,13 +409,13 @@ func openGraphMutationFixtureWithHooks(t testing.TB, database *sqlx.DB, provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: database, Provider: provider, Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,12 +671,12 @@ func openRecursiveMutationFixture(t testing.TB, database *sqlx.DB, provider gole
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -783,12 +783,12 @@ func openCompositeMutationFixture(t testing.TB, database *sqlx.DB, provider gole
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -53,7 +53,7 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 		t.Fatalf("computed declarations = %#v", result.GraphQLComputed)
 	}
 	graphql := result.GraphQLModels[0]
-	if graphql.ModelID != userID || graphql.Plural == nil || *graphql.Plural != "accounts" || graphql.Roots == nil || graphql.Roots.FindOne != "account" || graphql.DefaultPage == nil || *graphql.DefaultPage != 25 || graphql.MaximumPage == nil || *graphql.MaximumPage != 250 {
+	if graphql.ModelID != userID || graphql.Plural == nil || *graphql.Plural != "accounts" || graphql.Roots == nil || graphql.Roots.FindOne != "account" || graphql.Roots.Events != "accountEvents" || graphql.Subscriptions == nil || !*graphql.Subscriptions || graphql.DefaultPage == nil || *graphql.DefaultPage != 25 || graphql.MaximumPage == nil || *graphql.MaximumPage != 250 {
 		t.Fatalf("GraphQL model patch = %#v", graphql)
 	}
 	if graphql.Operations == nil || len(*graphql.Operations) != 5 || (*graphql.Operations)[4] != ir.OperationGroupBy {

@@ -29,19 +29,20 @@ type vocabulary struct {
 }
 
 type interpreter struct {
-	config      Config
-	pkg         *packages.Package
-	model       ir.ModelDeclIR
-	engine      *schemaexpr.Engine
-	vocab       vocabulary
-	handles     map[*types.Var]handleBinding
-	advanced    keyindex.AdvancedModelDeclarations
-	relations   []RelationOptionDeclaration
-	generated   []pendingGenerated
-	diagnostics []ir.Diagnostic
-	graphql     *graphqlcontract.ModelPatch
-	analytics   *analyticscontract.ModelPatch
-	computed    []graphqlextension.ComputedDeclaration
+	config          Config
+	pkg             *packages.Package
+	model           ir.ModelDeclIR
+	engine          *schemaexpr.Engine
+	vocab           vocabulary
+	handles         map[*types.Var]handleBinding
+	advanced        keyindex.AdvancedModelDeclarations
+	relations       []RelationOptionDeclaration
+	generated       []pendingGenerated
+	diagnostics     []ir.Diagnostic
+	graphql         *graphqlcontract.ModelPatch
+	graphqlDeclared bool
+	analytics       *analyticscontract.ModelPatch
+	computed        []graphqlextension.ComputedDeclaration
 }
 
 type handleBinding struct {
@@ -130,7 +131,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}

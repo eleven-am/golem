@@ -312,7 +312,7 @@ func assertExactNestedUpsertFacts(t testing.TB, fixture graphMutationFixture, mo
 	}
 	var causation mutationfact.CausationID
 	for index, stored := range rows {
-		envelope, err := mutationfact.Decode(stored.Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, models[index], stored.Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -431,13 +431,13 @@ func TestUpsertHiddenExistingNeverFallsThroughToUnauthorizedUpdate(t *testing.T)
 		if fixture.app.provider == policyir.ProviderPostgreSQL {
 			provider = golem.PostgreSQL
 		}
-		app, err := Open(ctx, Config[mutationResultPrincipal, mutationResultActor]{
+		app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 			DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle,
 			Bindings: bindings, Descriptors: fixture.app.descriptors,
 			ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 				return mutationResultActor{}, nil
 			},
-		})
+		}))
 		if err != nil {
 			t.Fatal(err)
 		}

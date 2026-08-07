@@ -42,6 +42,18 @@ func TestRegistryIndexesImmutableLogicalRelationAndPhysicalFacts(t *testing.T) {
 	if !post.SubscriptionsEnabled() || user.SubscriptionsEnabled() {
 		t.Fatal("model subscription fact did not preserve the exact contract setting")
 	}
+	eventFingerprint, eventSnapshot, eventEnabled := post.EventSchema()
+	if !eventEnabled || eventFingerprint == "" || len(eventSnapshot) != 3 || eventSnapshot[0] != ids.postID || eventSnapshot[1] != ids.author || eventSnapshot[2] != ids.price {
+		t.Fatalf("event schema fingerprint=%q snapshot=%x enabled=%v", eventFingerprint, eventSnapshot, eventEnabled)
+	}
+	eventSnapshot[0] = golem.FieldID{99}
+	_, freshSnapshot, _ := post.EventSchema()
+	if freshSnapshot[0] != ids.postID {
+		t.Fatal("event snapshot accessor leaked registry ownership")
+	}
+	if _, _, enabled := user.EventSchema(); enabled {
+		t.Fatal("unsubscribed model exposed an event schema")
+	}
 	author, ok := registry.Field(ids.post, ids.author)
 	if !ok || author.Kind() != compilerir.FieldScalar || author.ModelID() != ids.post {
 		t.Fatalf("author field = %#v, %v", author, ok)
@@ -252,7 +264,10 @@ type testIDs struct {
 func testBundle(t *testing.T) (golem.SchemaBundle, testIDs) {
 	t.Helper()
 	userID, postID := compilerir.ModelID(testID(1)), compilerir.ModelID(testID(2))
-	userKey, postKey, author, price := compilerir.FieldID(testID(11)), compilerir.FieldID(testID(21)), compilerir.FieldID(testID(22)), compilerir.FieldID(testID(24))
+	// Keep the subscribed Post's declaration order deliberately different from
+	// canonical FieldID order. Event snapshot order is semantic and must survive
+	// canonical ModelIR sorting.
+	userKey, postKey, author, price := compilerir.FieldID(testID(11)), compilerir.FieldID(testID(24)), compilerir.FieldID(testID(22)), compilerir.FieldID(testID(21))
 	authorRelation, postsRelation := compilerir.FieldID(testID(23)), compilerir.FieldID(testID(12))
 	relationID := compilerir.RelationID(testID(31))
 	maxLength := uint32(128)
@@ -285,9 +300,21 @@ func testBundle(t *testing.T) (golem.SchemaBundle, testIDs) {
 		},
 		Storage: compilerir.GeneratedStored, Provider: compilerir.ProviderScopePortable,
 	}
+	postSnapshot := []compilerir.FieldID{postKey, author, price}
+	postEventSchema, err := compilerir.BuildEventSchemaShape(model.Models[1], model.Enums, postSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	postEventFingerprint, err := compilerir.EventSchemaFingerprint(postEventSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{
 		{ModelID: userID, Fields: []compilerir.FieldContractIR{{FieldID: userKey}, {FieldID: postsRelation}}},
-		{ModelID: postID, Fields: []compilerir.FieldContractIR{{FieldID: postKey}, {FieldID: author}, {FieldID: price}, {FieldID: authorRelation}}, Subscriptions: true},
+		{ModelID: postID, Fields: []compilerir.FieldContractIR{{FieldID: postKey}, {FieldID: author}, {FieldID: price}, {FieldID: authorRelation}}, Subscriptions: true, Event: &compilerir.EventContractIR{
+			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}, DeleteSnapshotFull: true,
+			Schema: postEventSchema, SchemaFingerprint: postEventFingerprint,
+		}},
 	}}
 
 	modelBytes, err := compilerir.CanonicalModel(model)

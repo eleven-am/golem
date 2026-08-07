@@ -47,6 +47,7 @@ func New(bundle golem.SchemaBundle) (*Registry, error) {
 			physicalSystemNamespaces: make(map[golem.Provider]physical.PhysicalName),
 		},
 		logicalModels: make(map[compilerir.ModelID]compilerir.ModelDeclIR), logicalFields: make(map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR),
+		logicalEnums: append([]compilerir.EnumIR(nil), model.Enums...),
 	}
 	if err := builder.indexLogical(model); err != nil {
 		return nil, err
@@ -130,6 +131,7 @@ type registryBuilder struct {
 	registry      Registry
 	logicalModels map[compilerir.ModelID]compilerir.ModelDeclIR
 	logicalFields map[compilerir.ModelID]map[compilerir.FieldID]compilerir.FieldIR
+	logicalEnums  []compilerir.EnumIR
 }
 
 func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
@@ -418,6 +420,52 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 		fact := builder.registry.models[mid]
 		fact.maxTake = model.Limits.MaxTake
 		fact.subscriptions = model.Subscriptions
+		if model.Subscriptions {
+			logical := builder.logicalModels[model.ModelID]
+			if model.Event == nil {
+				return fail(CodeContract, path+".event", "subscription-enabled model requires closed event metadata")
+			}
+			stored := make(map[compilerir.FieldID]bool, len(logical.Fields))
+			for _, field := range logical.Fields {
+				if field.Kind != compilerir.FieldRelation && field.Scalar != nil {
+					stored[field.ID] = true
+				}
+			}
+			snapshot := make([]compilerir.FieldID, len(model.Event.Schema.SnapshotFields))
+			seenSnapshot := make(map[compilerir.FieldID]bool, len(snapshot))
+			for index, field := range model.Event.Schema.SnapshotFields {
+				if !stored[field.FieldID] || seenSnapshot[field.FieldID] {
+					return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
+				}
+				seenSnapshot[field.FieldID] = true
+				snapshot[index] = field.FieldID
+			}
+			if len(seenSnapshot) != len(stored) {
+				return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
+			}
+			expected, err := compilerir.BuildEventSchemaShape(logical, builder.logicalEnums, snapshot)
+			if err != nil {
+				return fail(CodeContract, path+".event.schema", "%v", err)
+			}
+			if !reflect.DeepEqual(expected, model.Event.Schema) || !model.Event.DeleteSnapshotFull {
+				return fail(CodeContract, path+".event.schema", "event schema is not the complete normalized stored-scalar shape")
+			}
+			fingerprint, err := compilerir.EventSchemaFingerprint(model.Event.Schema)
+			if err != nil || fingerprint != model.Event.SchemaFingerprint {
+				return fail(CodeContract, path+".event.schemaFingerprint", "event schema fingerprint mismatch")
+			}
+			fact.eventSchema = fingerprint
+			fact.eventSnapshot = make([]golem.FieldID, len(snapshot))
+			for index, field := range snapshot {
+				fid, err := fieldID(field)
+				if err != nil {
+					return fail(CodeContract, path+".event.schema.snapshotFields", "%v", err)
+				}
+				fact.eventSnapshot[index] = fid
+			}
+		} else if model.Event != nil {
+			return fail(CodeContract, path+".event", "subscription-disabled model cannot carry event metadata")
+		}
 		fact.scopedReads = model.ScopedReads
 		if model.Aggregation != nil {
 			value := *model.Aggregation

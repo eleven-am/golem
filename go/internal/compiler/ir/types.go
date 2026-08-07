@@ -6,7 +6,7 @@ package ir
 const (
 	RawDeclFormatVersion  uint16 = 1
 	ModelFormatVersion    uint16 = 1
-	ContractFormatVersion uint16 = 3
+	ContractFormatVersion uint16 = 4
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.
 	CanonicalFormatVersion uint16 = 1
@@ -618,11 +618,50 @@ type ModelContractIR struct {
 	FieldModes    []FieldContractIR         `json:"-"`
 	Operations    []Operation               `json:"operations"`
 	Subscriptions bool                      `json:"subscriptions"`
+	Event         *EventContractIR          `json:"event,omitempty"`
 	Aggregation   *AggregationContractIR    `json:"aggregation,omitempty"`
 	ScopedReads   bool                      `json:"scopedReads"`
 	Limits        LimitContractIR           `json:"limits"`
 	Computed      []ComputedFieldContractIR `json:"computed"`
 	Exposed       bool                      `json:"exposed"`
+}
+
+const EventSchemaFormatVersion uint16 = 1
+
+// EventContractIR contains the generated/transport-facing names plus the
+// closed logical schema used to decode durable facts. Names deliberately live
+// outside EventSchemaShapeIR so transport-only renames cannot alter its digest.
+type EventContractIR struct {
+	PayloadTypeName    string             `json:"payloadTypeName"`
+	IdentityTypeName   string             `json:"identityTypeName,omitempty"`
+	MetadataFields     []string           `json:"metadataFields"`
+	DeleteSnapshotFull bool               `json:"deleteSnapshotFull"`
+	Schema             EventSchemaShapeIR `json:"schema"`
+	SchemaFingerprint  Fingerprint        `json:"schemaFingerprint"`
+}
+
+// EventSchemaShapeIR is the provider-neutral, GraphQL-independent schema for
+// one model's event identity and private pre-delete snapshot. IdentityFields
+// preserve primary-key component order. SnapshotFields preserve declared model
+// field order. Enum inventories are canonicalized by stable identity.
+type EventSchemaShapeIR struct {
+	FormatVersion  uint16               `json:"formatVersion"`
+	ModelID        ModelID              `json:"modelId"`
+	PrimaryKeyID   KeyID                `json:"primaryKeyId"`
+	IdentityFields []EventFieldSchemaIR `json:"identityFields"`
+	SnapshotFields []EventFieldSchemaIR `json:"snapshotFields"`
+	Enums          []EventEnumSchemaIR  `json:"enums"`
+}
+
+type EventFieldSchemaIR struct {
+	FieldID  FieldID       `json:"fieldId"`
+	Type     LogicalTypeIR `json:"type"`
+	Nullable bool          `json:"nullable"`
+}
+
+type EventEnumSchemaIR struct {
+	EnumID  EnumID        `json:"enumId"`
+	Members []EnumValueID `json:"members"`
 }
 
 type EnumContractIR struct {

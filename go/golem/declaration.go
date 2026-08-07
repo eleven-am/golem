@@ -114,6 +114,7 @@ type GraphQLRootNames struct {
 	Aggregate       string
 	GroupBy         string
 	RelationGroupBy string
+	Events          string
 }
 
 // Analytics declarations are compile-time-only shells. Their closed generic
@@ -153,6 +154,11 @@ func GraphQLPlural(_ string) GraphQLOption                  { return GraphQLOpti
 func GraphQLRoots(_ GraphQLRootNames) GraphQLOption         { return GraphQLOption{} }
 func GraphQLPageSizes(_, _ int) GraphQLOption               { return GraphQLOption{} }
 func GraphQLHidden() GraphQLOption                          { return GraphQLOption{} }
+
+// Subscriptions opts one model into durable event capture, generated typed
+// events, and its GraphQL subscription root. It is a compile-time declaration;
+// models that omit it remain subscription-disabled.
+func Subscriptions[M any]() ModelOption[M] { return modelOption[M]{} }
 
 type EnumValueOption struct{ _ enumValueOptionMarker }
 type enumValueOptionMarker struct{}

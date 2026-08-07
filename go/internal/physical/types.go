@@ -285,14 +285,16 @@ const (
 	SystemMigrationLedger SystemObjectKind = "migration_ledger"
 	SystemMigrationLock   SystemObjectKind = "migration_lock"
 	SystemOutbox          SystemObjectKind = "outbox"
+	SystemOutboxDelivery  SystemObjectKind = "outbox_delivery"
 	SystemUpsertGuard     SystemObjectKind = "upsert_guard"
 
-	// MigrationLedgerObjectIDV1, MigrationLockObjectIDV1, and OutboxObjectIDV1 identify the
-	// provider-neutral semantic system objects. Providers may render different
-	// namespaces and storage, but must not mint provider-specific identities.
+	// These IDs identify provider-neutral semantic system objects. Providers may
+	// render different namespaces and storage, but must not mint provider-specific
+	// identities.
 	MigrationLedgerObjectIDV1 ir.ObjectID = "cb3020cd708be72c384f431749769c98"
 	MigrationLockObjectIDV1   ir.ObjectID = "e28aeab0927ce864e8d65a1e1dc62fc9"
 	OutboxObjectIDV1          ir.ObjectID = "14b2d0b9de583fe675fa72de1d1c78c8"
+	OutboxDeliveryObjectIDV1  ir.ObjectID = "51aa5c96fd5d24e27e182ed85f7bcbf2"
 	UpsertGuardObjectIDV1     ir.ObjectID = "076704f0bfb30b5fed47137811a6dd18"
 )
 
@@ -307,6 +309,18 @@ func OutboxSystemObjectV1() SystemObject {
 // normalization, which may represent empty registries as non-nil slices.
 func IsOutboxSystemObjectV1(object SystemObject) bool {
 	return object.ID == OutboxObjectIDV1 && object.Kind == SystemOutbox && object.Version == 1 && object.Name == "_golem_outbox" && len(object.Attributes) == 0 && len(object.RequiredCapabilities) == 0
+}
+
+// OutboxDeliverySystemObjectV1 is the mutable operational state for one
+// immutable outbox causation. It is deliberately separate from Outbox V1 so
+// publication never rewrites commit-derived facts.
+func OutboxDeliverySystemObjectV1() SystemObject {
+	return SystemObject{ID: OutboxDeliveryObjectIDV1, Kind: SystemOutboxDelivery, Version: 1, Name: "_golem_outbox_delivery"}
+}
+
+// IsOutboxDeliverySystemObjectV1 accepts only the closed v1 registry entry.
+func IsOutboxDeliverySystemObjectV1(object SystemObject) bool {
+	return object.ID == OutboxDeliveryObjectIDV1 && object.Kind == SystemOutboxDelivery && object.Version == 1 && object.Name == "_golem_outbox_delivery" && len(object.Attributes) == 0 && len(object.RequiredCapabilities) == 0
 }
 
 // UpsertGuardSystemObjectV1 is the provider-neutral selector serialization

@@ -20,14 +20,14 @@ func TestLowerRenderApplyIntrospectRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(schema.System.Objects) != 4 || !hasSystemObject(schema.System, physical.SystemOutbox) || !hasSystemObject(schema.System, physical.SystemUpsertGuard) {
-		t.Fatalf("system objects=%#v; want ledger+lock+outbox+upsert-guard", schema.System.Objects)
+	if len(schema.System.Objects) != 5 || !hasSystemObject(schema.System, physical.SystemOutbox) || !hasSystemObject(schema.System, physical.SystemOutboxDelivery) || !hasSystemObject(schema.System, physical.SystemUpsertGuard) {
+		t.Fatalf("system objects=%#v; want ledger+lock+outbox+outbox-delivery+upsert-guard", schema.System.Objects)
 	}
 	script, err := provider.RenderInitial(schema)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fragment := range []string{`CREATE TABLE "users"`, `CONSTRAINT "pk_users" PRIMARY KEY`, `json_valid(`, `CREATE INDEX "idx_posts_author"`, `CREATE TABLE "_golem_migrations"`, `CREATE TABLE "_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending"`, `CREATE TABLE "_golem_upsert_guard" ("guard_token" BLOB NOT NULL, PRIMARY KEY ("guard_token")) STRICT`} {
+	for _, fragment := range []string{`CREATE TABLE "users"`, `CONSTRAINT "pk_users" PRIMARY KEY`, `json_valid(`, `CREATE INDEX "idx_posts_author"`, `CREATE TABLE "_golem_migrations"`, `CREATE TABLE "_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending"`, `CREATE TABLE "_golem_outbox_delivery"`, `CREATE INDEX "_golem_outbox_delivery_pending"`, `CREATE TABLE "_golem_upsert_guard" ("guard_token" BLOB NOT NULL, PRIMARY KEY ("guard_token")) STRICT`} {
 		if !strings.Contains(script.SQL(), fragment) {
 			t.Errorf("DDL missing %q:\n%s", fragment, script.SQL())
 		}

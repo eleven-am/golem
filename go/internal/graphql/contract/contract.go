@@ -13,7 +13,7 @@ import (
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
-const ABIVersion uint16 = 2
+const ABIVersion uint16 = 3
 
 const (
 	DefaultPageSize    uint32 = 50
@@ -35,14 +35,15 @@ var ordinaryOperations = []ir.Operation{
 // one GolemModel declaration. Nil members mean that the author did not override
 // the normalized convention.
 type ModelPatch struct {
-	ModelID     ir.ModelID
-	Operations  *[]ir.Operation
-	Plural      *string
-	Roots       *ir.GraphQLRootNamesIR
-	DefaultPage *uint32
-	MaximumPage *uint32
-	Hidden      bool
-	Span        ir.SourceSpan
+	ModelID       ir.ModelID
+	Operations    *[]ir.Operation
+	Plural        *string
+	Roots         *ir.GraphQLRootNamesIR
+	DefaultPage   *uint32
+	MaximumPage   *uint32
+	Hidden        bool
+	Subscriptions *bool
+	Span          ir.SourceSpan
 }
 
 func Operations() []ir.Operation { return append([]ir.Operation(nil), ordinaryOperations...) }
@@ -170,7 +171,11 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 				model.Exposed = false
 				model.Operations = []ir.Operation{}
 			}
+			if patch.Subscriptions != nil {
+				model.Subscriptions = *patch.Subscriptions
+			}
 		}
+		diagnostics = append(diagnostics, normalizeEventContract(compilation.Model, model, patch.Span)...)
 		diagnostics = append(diagnostics, validateModel(*model, patch.Span)...)
 	}
 	diagnostics = append(diagnostics, validateEnums(compilation.Contract.Enums)...)
@@ -181,6 +186,85 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 	diagnostics = append(diagnostics, graphqlextension.Normalize(compilation, nil, nil)...)
 	ir.SortDiagnostics(diagnostics)
 	return diagnostics
+}
+
+var eventMetadataFields = []string{
+	"eventID", "type", "id", "entity",
+	"causationID", "transactionOrdinal", "recordedAt",
+}
+
+func normalizeEventContract(logical ir.ModelIR, contract *ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic {
+	if !contract.Subscriptions {
+		contract.Event = nil
+		return nil
+	}
+	var model *ir.ModelDeclIR
+	for index := range logical.Models {
+		if logical.Models[index].ID == contract.ModelID {
+			model = &logical.Models[index]
+			break
+		}
+	}
+	if model == nil {
+		return []ir.Diagnostic{ir.NewError("P7_EVENT_MODEL_MISSING", fmt.Sprintf("subscription model %s has no logical model", contract.ModelID), span)}
+	}
+	if !contract.Exposed {
+		return []ir.Diagnostic{ir.NewError("P7_SUBSCRIPTION_MODEL_HIDDEN", fmt.Sprintf("model %s cannot enable subscriptions while hidden", contract.ModelID), span)}
+	}
+	if model.PrimaryKey == nil || len(model.PrimaryKey.Fields) == 0 {
+		return []ir.Diagnostic{ir.NewError("P7_SUBSCRIPTION_PRIMARY_KEY", fmt.Sprintf("model %s requires a primary key for subscriptions", contract.ModelID), span)}
+	}
+	fieldContracts := make(map[ir.FieldID]ir.FieldContractIR, len(contract.Fields))
+	for _, field := range contract.Fields {
+		fieldContracts[field.FieldID] = field
+	}
+	var diagnostics []ir.Diagnostic
+	for _, fieldID := range model.PrimaryKey.Fields {
+		field, exists := fieldContracts[fieldID]
+		if !exists || !eventIdentityFieldExposed(field) {
+			diagnostics = append(diagnostics, ir.NewError("P7_SUBSCRIPTION_IDENTITY_HIDDEN", fmt.Sprintf("subscription identity field %s on model %s must be exposed", fieldID, contract.ModelID), span))
+		}
+	}
+	if len(diagnostics) != 0 {
+		return diagnostics
+	}
+	// P7 event schema v1 deliberately captures the complete locally stored
+	// scalar pre-image. Policy factories are actor-dependent runtime code, so a
+	// static minimal dependency inventory would be unsound. Declaration order is
+	// preserved to make the private row shape deterministic and reconstructible.
+	snapshot := make([]ir.FieldID, 0, len(model.Fields))
+	for _, field := range model.Fields {
+		if field.Kind != ir.FieldRelation && field.Scalar != nil {
+			snapshot = append(snapshot, field.ID)
+		}
+	}
+	shape, err := ir.BuildEventSchemaShape(*model, logical.Enums, snapshot)
+	if err != nil {
+		return []ir.Diagnostic{ir.NewError("P7_EVENT_SCHEMA_INVALID", err.Error(), span)}
+	}
+	fingerprint, err := ir.EventSchemaFingerprint(shape)
+	if err != nil {
+		return []ir.Diagnostic{ir.NewError("P7_EVENT_SCHEMA_FINGERPRINT", err.Error(), span)}
+	}
+	identityType := ""
+	if len(shape.IdentityFields) > 1 {
+		identityType = contract.GraphQLName + "EventIdentity"
+	}
+	contract.Event = &ir.EventContractIR{
+		PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType,
+		MetadataFields: append([]string(nil), eventMetadataFields...), DeleteSnapshotFull: true,
+		Schema: shape, SchemaFingerprint: fingerprint,
+	}
+	return nil
+}
+
+func eventIdentityFieldExposed(field ir.FieldContractIR) bool {
+	for _, mode := range field.Modes {
+		if mode == ir.ModeHidden || mode == ir.ModeWriteOnly {
+			return false
+		}
+	}
+	return field.FieldID != "" && field.GraphQLName != ""
 }
 
 func overlayRoots(base, override ir.GraphQLRootNamesIR) ir.GraphQLRootNamesIR {
@@ -273,8 +357,15 @@ func validateEnums(enums []ir.EnumContractIR) []ir.Diagnostic {
 
 func validateSchemaCollisions(contract ir.ContractIR) []ir.Diagnostic {
 	types := map[string]string{"Query": "reserved root", "Mutation": "reserved root", "Subscription": "reserved root", "BatchPayload": "reserved generated type"}
+	for _, model := range contract.Models {
+		if model.Exposed && model.Subscriptions {
+			types["GolemEventType"] = "reserved generated event enum"
+			break
+		}
+	}
 	queryRoots := map[string]string{}
 	mutationRoots := map[string]string{}
+	subscriptionRoots := map[string]string{}
 	var diagnostics []ir.Diagnostic
 	for _, model := range contract.Models {
 		if !model.Exposed {
@@ -284,6 +375,18 @@ func validateSchemaCollisions(contract ir.ContractIR) []ir.Diagnostic {
 			diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_TYPE_COLLISION", fmt.Sprintf("model %s type %q collides with %s", model.ModelID, model.GraphQLName, owner), ir.SourceSpan{}))
 		} else {
 			types[model.GraphQLName] = "model " + string(model.ModelID)
+		}
+		if model.Subscriptions && model.Event != nil {
+			for _, generated := range []string{model.Event.PayloadTypeName, model.Event.IdentityTypeName} {
+				if generated == "" {
+					continue
+				}
+				if owner, duplicate := types[generated]; duplicate {
+					diagnostics = append(diagnostics, ir.NewError("P7_EVENT_TYPE_COLLISION", fmt.Sprintf("model %s event type %q collides with %s", model.ModelID, generated, owner), ir.SourceSpan{}))
+				} else {
+					types[generated] = "event type for model " + string(model.ModelID)
+				}
+			}
 		}
 		for _, enum := range contract.Enums {
 			if enum.GraphQLName == model.GraphQLName {
@@ -327,6 +430,15 @@ func validateSchemaCollisions(contract ir.ContractIR) []ir.Diagnostic {
 				diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_ROOT_COLLISION", fmt.Sprintf("%s and %s both use root %q", previous, root.owner, root.name), ir.SourceSpan{}))
 			} else {
 				registry[root.name] = root.owner
+			}
+		}
+		if model.Subscriptions {
+			if !validName(model.Roots.Events) {
+				diagnostics = append(diagnostics, ir.NewError("P7_EVENT_ROOT_NAME", fmt.Sprintf("%q is not a legal GraphQL subscription root name", model.Roots.Events), ir.SourceSpan{}))
+			} else if previous, duplicate := subscriptionRoots[model.Roots.Events]; duplicate {
+				diagnostics = append(diagnostics, ir.NewError("P7_EVENT_ROOT_COLLISION", fmt.Sprintf("%s and %s.events both use subscription root %q", previous, model.ModelID, model.Roots.Events), ir.SourceSpan{}))
+			} else {
+				subscriptionRoots[model.Roots.Events] = string(model.ModelID) + ".events"
 			}
 		}
 	}

@@ -314,7 +314,7 @@ func TestSystemScalarMutationPreparationBindsPlansRendersBeforeExecution(t *test
 	if err := database.GetContext(ctx, &stored, `SELECT "action", "transaction_ordinal", "metadata" FROM "_golem_outbox"`); err != nil {
 		t.Fatal(err)
 	}
-	envelope, err := mutationfact.Decode(stored.Metadata, fixture.Registry)
+	envelope, err := decodeCurrentMutationFactMetadata(fixture.Registry, policyir.ModelID(fixture.Post), stored.Metadata)
 	if err != nil {
 		t.Fatal(err)
 	}

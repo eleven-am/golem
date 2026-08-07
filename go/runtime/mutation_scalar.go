@@ -12,7 +12,6 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
@@ -143,11 +142,14 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 	}
 	modelFact, _ := app.registry.Model(golem.ModelID(request.model))
 	if modelFact.SubscriptionsEnabled() {
-		factCodec, err := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		factCodec, eventSchema, snapshot, err := mutationEventSchema(app.registry, request.model)
 		if err != nil {
 			return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvariant, 0, 0, "runtime fact codec requirement is invalid", err)
 		}
-		planning.CaptureFacts, planning.FactCodec = true, &factCodec
+		planning.CaptureFacts, planning.FactCodec, planning.EventSchema = true, &factCodec, eventSchema
+		if request.operation == mutationir.Delete {
+			planning.PrivateDeleteSnapshot = snapshot
+		}
 	}
 	switch request.operation {
 	case mutationir.Create:

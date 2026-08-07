@@ -176,7 +176,7 @@ func renderNestedScalarNode[P, A any](app *App[P, A], stance mutationir.Stance, 
 	}
 	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds}
 	if node.Fact().Enabled() {
-		codec, codecErr := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		codec, _, _, codecErr := mutationEventSchema(app.registry, node.ModelID())
 		if codecErr != nil {
 			return mutationsql.Program{}, codecErr
 		}
@@ -305,7 +305,7 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	result, _ := mutationir.NewImageRequirements(node.ModelID(), nil, nil)
 	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds}
 	if node.Fact().Enabled() {
-		codec, codecErr := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		codec, _, _, codecErr := mutationEventSchema(app.registry, node.ModelID())
 		if codecErr != nil {
 			return mutationnested.ApplyResult{}, codecErr
 		}
@@ -404,11 +404,14 @@ func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.Po
 		request.Hooks = mutationHookInventory(app.bindings, input.ModelID())
 	}
 	if model, ok := app.registry.Model(input.ModelID()); ok && model.SubscriptionsEnabled() {
-		codec, codecErr := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(app.registry.GenerationDigest()))
+		codec, eventSchema, snapshot, codecErr := mutationEventSchema(app.registry, policyir.ModelID(input.ModelID()))
 		if codecErr != nil {
 			return mutationnested.Result{}, codecErr
 		}
-		request.CaptureFacts, request.FactCodec = true, &codec
+		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
+		if operation == mutationir.Delete {
+			request.PrivateDeleteSnapshot = snapshot
+		}
 	}
 	if operation == mutationir.Create {
 		ownedFields, ownedErr := nestedRootSourceOwnedFields(*input, app.registry)
@@ -1372,11 +1375,11 @@ func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplace
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
 	}
 	if metadata, present := transaction.app.registry.Model(transformed.ModelID()); present && metadata.SubscriptionsEnabled() {
-		codec, codecErr := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(transaction.app.registry.GenerationDigest()))
+		codec, eventSchema, _, codecErr := mutationEventSchema(transaction.app.registry, policyir.ModelID(transformed.ModelID()))
 		if codecErr != nil {
 			return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, codecErr
 		}
-		request.CaptureFacts, request.FactCodec = true, &codec
+		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
 	}
 	plan, err := mutationplan.BuildRoot(request)
 	if err != nil {
@@ -1466,12 +1469,14 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		Result: result, Retry: mutationir.NoRetry,
 		Hooks: mutationHookInventory(transaction.app.bindings, transformed.ModelID()),
 	}
+	var deleteSnapshot []policyir.FieldID
 	if metadata, ok := transaction.app.registry.Model(transformed.ModelID()); ok && metadata.SubscriptionsEnabled() {
-		codec, codecErr := mutationir.NewFactCodecRequirement(mutationfact.FormatVersion, mutationfact.CodecIdentity, [32]byte(transaction.app.registry.GenerationDigest()))
+		codec, eventSchema, snapshot, codecErr := mutationEventSchema(transaction.app.registry, model)
 		if codecErr != nil {
 			return nil, mutationnested.SubtreeReplacement{}, codecErr
 		}
-		request.CaptureFacts, request.FactCodec = true, &codec
+		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
+		deleteSnapshot = snapshot
 	}
 	request.Bounds, err = mutationir.NewStatementBounds(uint32(transaction.app.mutationLimits.statementParameters), uint32(transaction.app.mutationLimits.touchedRows))
 	if err != nil {
@@ -1501,6 +1506,7 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		relations = input.Relations()
 	case golem.HookDelete:
 		request.Operation = mutationir.Delete
+		request.PrivateDeleteSnapshot = deleteSnapshot
 	default:
 		return nil, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: exact replacement operation %q is unsupported", transformed.Operation())
 	}
@@ -2183,7 +2189,7 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 	rows := append([]mutationfact.OutboxRow(nil), state.facts[checkpoint.start:]...)
 	envelopes := make([]mutationfact.Envelope, len(rows))
 	for index := range rows {
-		envelopes[index], err = mutationfact.DecodeOutbox(rows[index].Metadata, rows[index].DeleteSnapshot, transaction.app.registry)
+		envelopes[index], err = decodeRuntimeMutationFact(transaction.app.registry, rows[index])
 		if err != nil {
 			return err
 		}
@@ -2245,7 +2251,7 @@ func (transaction *systemNestedTransaction[P, A]) orderNestedFacts(applied []mut
 		}
 	}
 	for index := range ordered {
-		envelope, decodeErr := mutationfact.DecodeOutbox(ordered[index].Metadata, ordered[index].DeleteSnapshot, transaction.app.registry)
+		envelope, decodeErr := decodeRuntimeMutationFact(transaction.app.registry, ordered[index])
 		if decodeErr != nil {
 			return decodeErr
 		}

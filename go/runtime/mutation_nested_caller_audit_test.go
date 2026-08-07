@@ -266,10 +266,10 @@ func reopenMutationResultWithSourceTargetUpdateReach(t testing.TB, fixture mutat
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -320,10 +320,10 @@ func reopenMutationResultWithPostWriteDenials(t testing.TB, fixture mutationResu
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func assertPostFactSequence(t testing.TB, fixture mutationResultFixture, action 
 	}
 	var causation mutationfact.CausationID
 	for index, stored := range rows {
-		envelope, err := mutationfact.Decode(stored.Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(fixture.schema.Post), stored.Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -975,7 +975,8 @@ Events describe committed mutation facts, not resolver intent. Each fact include
 - globally unique event ID and version;
 - model and created/updated/deleted type;
 - ordered scalar or composite identity;
-- commit and causation metadata;
+- recorded-time provenance, causation ID, and transaction ordinal; recorded time
+  is not represented as a globally ordered commit timestamp;
 - exact scalar codec metadata; and
 - a private pre-delete snapshot when required for later authorization.
 

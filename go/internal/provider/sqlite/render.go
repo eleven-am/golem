@@ -94,6 +94,32 @@ func renderSystemObject(object physical.SystemObject) (string, error) {
 			"CHECK (" + quote("transaction_ordinal") + " >= 0), " +
 			"CHECK (" + quote("action") + " IN ('created','updated','deleted')), " +
 			"CHECK ((" + quote("action") + " = 'created' AND " + quote("before_identity") + " IS NULL AND " + quote("after_identity") + " IS NOT NULL) OR (" + quote("action") + " = 'updated' AND " + quote("before_identity") + " IS NOT NULL AND " + quote("after_identity") + " IS NOT NULL) OR (" + quote("action") + " = 'deleted' AND " + quote("before_identity") + " IS NOT NULL AND " + quote("after_identity") + " IS NULL))) STRICT", nil
+	case physical.SystemOutboxDelivery:
+		return "CREATE TABLE " + quote(object.Name) + " (" +
+			quote("causation_id") + " TEXT NOT NULL, " +
+			quote("status") + " TEXT NOT NULL, " +
+			quote("first_recorded_at") + " INTEGER NOT NULL, " +
+			quote("attempt_count") + " INTEGER NOT NULL, " +
+			quote("available_at") + " INTEGER NOT NULL, " +
+			quote("lease_token") + " TEXT, " +
+			quote("lease_until") + " INTEGER, " +
+			quote("delivered_at") + " INTEGER, " +
+			quote("last_failure_code") + " TEXT, " +
+			quote("blocked_at") + " INTEGER, " +
+			quote("retired_at") + " INTEGER, " +
+			quote("updated_at") + " INTEGER NOT NULL, " +
+			"PRIMARY KEY (" + quote("causation_id") + "), " +
+			"CHECK (length(" + quote("causation_id") + ") = 36 AND " + quote("causation_id") + " NOT GLOB '*[^0-9a-f-]*' AND substr(" + quote("causation_id") + ",9,1) = '-' AND substr(" + quote("causation_id") + ",14,1) = '-' AND substr(" + quote("causation_id") + ",19,1) = '-' AND substr(" + quote("causation_id") + ",24,1) = '-' AND length(replace(" + quote("causation_id") + ",'-','')) = 32), " +
+			"CHECK (" + quote("status") + " IN ('pending','leased','delivered','blocked','retired')), " +
+			"CHECK (" + quote("attempt_count") + " >= 0), " +
+			"CHECK (" + quote("first_recorded_at") + " >= 0 AND " + quote("available_at") + " >= 0 AND " + quote("updated_at") + " >= 0), " +
+			"CHECK (" + quote("lease_token") + " IS NULL OR (length(" + quote("lease_token") + ") = 36 AND " + quote("lease_token") + " NOT GLOB '*[^0-9a-f-]*' AND substr(" + quote("lease_token") + ",9,1) = '-' AND substr(" + quote("lease_token") + ",14,1) = '-' AND substr(" + quote("lease_token") + ",19,1) = '-' AND substr(" + quote("lease_token") + ",24,1) = '-' AND length(replace(" + quote("lease_token") + ",'-','')) = 32)), " +
+			"CHECK (" + quote("lease_until") + " IS NULL OR " + quote("lease_until") + " >= 0), " +
+			"CHECK (" + quote("delivered_at") + " IS NULL OR " + quote("delivered_at") + " >= 0), " +
+			"CHECK (" + quote("blocked_at") + " IS NULL OR " + quote("blocked_at") + " >= 0), " +
+			"CHECK (" + quote("retired_at") + " IS NULL OR " + quote("retired_at") + " >= 0), " +
+			"CHECK (" + quote("last_failure_code") + " IS NULL OR (length(" + quote("last_failure_code") + ") BETWEEN 1 AND 128 AND substr(" + quote("last_failure_code") + ",1,1) GLOB '[a-z0-9]' AND " + quote("last_failure_code") + " NOT GLOB '*[^a-z0-9._-]*')), " +
+			"CHECK ((" + quote("status") + " = 'pending' AND " + quote("lease_token") + " IS NULL AND " + quote("lease_until") + " IS NULL AND " + quote("delivered_at") + " IS NULL AND " + quote("blocked_at") + " IS NULL AND " + quote("retired_at") + " IS NULL) OR (" + quote("status") + " = 'leased' AND " + quote("lease_token") + " IS NOT NULL AND " + quote("lease_until") + " IS NOT NULL AND " + quote("delivered_at") + " IS NULL AND " + quote("blocked_at") + " IS NULL AND " + quote("retired_at") + " IS NULL) OR (" + quote("status") + " = 'delivered' AND " + quote("lease_token") + " IS NULL AND " + quote("lease_until") + " IS NULL AND " + quote("delivered_at") + " IS NOT NULL AND " + quote("blocked_at") + " IS NULL AND " + quote("retired_at") + " IS NULL) OR (" + quote("status") + " = 'blocked' AND " + quote("lease_token") + " IS NULL AND " + quote("lease_until") + " IS NULL AND " + quote("delivered_at") + " IS NULL AND " + quote("blocked_at") + " IS NOT NULL AND " + quote("retired_at") + " IS NULL AND " + quote("last_failure_code") + " IS NOT NULL) OR (" + quote("status") + " = 'retired' AND " + quote("lease_token") + " IS NULL AND " + quote("lease_until") + " IS NULL AND " + quote("delivered_at") + " IS NULL AND " + quote("blocked_at") + " IS NULL AND " + quote("retired_at") + " IS NOT NULL))) STRICT", nil
 	case physical.SystemUpsertGuard:
 		return "CREATE TABLE " + quote(object.Name) + " (" + quote("guard_token") + " BLOB NOT NULL, PRIMARY KEY (" + quote("guard_token") + ")) STRICT", nil
 	default:
@@ -105,10 +131,25 @@ func renderSystemIndexes(object physical.SystemObject) ([]string, error) {
 	if object.Version != 1 {
 		return nil, fmt.Errorf("sqlite render: unsupported system object %s version %d", object.Kind, object.Version)
 	}
-	if object.Kind != physical.SystemOutbox {
+	switch object.Kind {
+	case physical.SystemOutbox:
+		return []string{"CREATE INDEX " + quote("_golem_outbox_pending") + " ON " + quote(object.Name) + " (" + quote("recorded_at") + ", " + quote("event_id") + ")"}, nil
+	case physical.SystemOutboxDelivery:
+		return []string{"CREATE INDEX " + quote("_golem_outbox_delivery_pending") + " ON " + quote(object.Name) + " (" + quote("status") + ", " + quote("available_at") + ", " + quote("first_recorded_at") + ", " + quote("causation_id") + ")"}, nil
+	default:
 		return nil, nil
 	}
-	return []string{"CREATE INDEX " + quote("_golem_outbox_pending") + " ON " + quote(object.Name) + " (" + quote("recorded_at") + ", " + quote("event_id") + ")"}, nil
+}
+
+func renderedSystemIndexNames(object physical.SystemObject) []string {
+	switch object.Kind {
+	case physical.SystemOutbox:
+		return []string{"_golem_outbox_pending"}
+	case physical.SystemOutboxDelivery:
+		return []string{"_golem_outbox_delivery_pending"}
+	default:
+		return nil
+	}
 }
 
 func renderTable(table physical.PhysicalTable, tables map[ir.ModelID]physical.PhysicalTable) (string, error) {

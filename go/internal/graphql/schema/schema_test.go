@@ -38,6 +38,96 @@ func TestSocialSDLIsDeterministicAndValid(t *testing.T) {
 	}
 }
 
+func TestP7SubscriptionSDLUsesClosedEventABI(t *testing.T) {
+	assertP7GeneratedGraphQLSubscriptionSDLGolden(t)
+}
+
+func TestP7GeneratedGraphQLSubscriptionSDLGolden(t *testing.T) {
+	assertP7GeneratedGraphQLSubscriptionSDLGolden(t)
+}
+
+func assertP7GeneratedGraphQLSubscriptionSDLGolden(t *testing.T) {
+	t.Helper()
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	for index := range compiled.Compilation.Contract.Models {
+		contract := &compiled.Compilation.Contract.Models[index]
+		if contract.GraphQLName != "Post" && contract.GraphQLName != "Friendship" {
+			continue
+		}
+		contract.Subscriptions = true
+		if contract.GraphQLName == "Post" {
+			contract.Roots.Events = "postEvents"
+		} else {
+			contract.Roots.Events = "friendshipEvents"
+		}
+		var logical *compilerir.ModelDeclIR
+		for modelIndex := range compiled.Compilation.Model.Models {
+			if compiled.Compilation.Model.Models[modelIndex].ID == contract.ModelID {
+				logical = &compiled.Compilation.Model.Models[modelIndex]
+				break
+			}
+		}
+		if logical == nil || logical.PrimaryKey == nil {
+			t.Fatal("Post logical model or primary key is absent")
+		}
+		shape, err := compilerir.BuildEventSchemaShape(*logical, compiled.Compilation.Model.Enums, logical.PrimaryKey.Fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprint, err := compilerir.EventSchemaFingerprint(shape)
+		if err != nil {
+			t.Fatal(err)
+		}
+		identityType := ""
+		if len(shape.IdentityFields) > 1 {
+			identityType = contract.GraphQLName + "EventIdentity"
+		}
+		contract.Event = &compilerir.EventContractIR{PayloadTypeName: contract.GraphQLName + "Event", IdentityTypeName: identityType, MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"}, Schema: shape, SchemaFingerprint: fingerprint}
+	}
+	document, err := Build(*compiled.Compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := gqlparser.LoadSchema(astSource(document.SDL))
+	if err != nil {
+		t.Fatalf("invalid event SDL: %v\n%s", err, document.SDL)
+	}
+	eventType := requireDefinition(t, parsed, "GolemEventType")
+	var eventValues []string
+	for _, value := range eventType.EnumValues {
+		eventValues = append(eventValues, value.Name)
+	}
+	if strings.Join(eventValues, ",") != "CREATED,UPDATED,DELETED" {
+		t.Fatalf("event enum = %v", eventType.EnumValues)
+	}
+	event := requireDefinition(t, parsed, "PostEvent")
+	requireFieldNames(t, event, "eventID", "causationID", "transactionOrdinal", "recordedAt", "type", "id", "entity")
+	if event.Fields.ForName("entity").Type.String() != "Post" || event.Fields.ForName("id").Type.String() != "UUID!" {
+		t.Fatalf("event field types = entity %s / id %s", event.Fields.ForName("entity").Type, event.Fields.ForName("id").Type)
+	}
+	root := requireDefinition(t, parsed, "Subscription").Fields.ForName("postEvents")
+	if root == nil || root.Type.String() != "PostEvent!" || root.Arguments.ForName("where") == nil || root.Arguments.ForName("where").Type.String() != "PostWhereInput" {
+		t.Fatalf("subscription root = %#v", root)
+	}
+	if strings.Count(document.SDL, "enum GolemEventType") != 1 || strings.Count(document.SDL, "type Subscription") != 1 {
+		t.Fatal("shared event enum/root were emitted more than once")
+	}
+	friendshipIdentity := requireDefinition(t, parsed, "FriendshipEventIdentity")
+	if len(friendshipIdentity.Fields) != 2 || requireDefinition(t, parsed, "Subscription").Fields.ForName("friendshipEvents") == nil {
+		t.Fatalf("compound event identity/root = %#v", friendshipIdentity)
+	}
+}
+
+func TestP7SubscriptionDoesNotManufactureMissingQueryRoot(t *testing.T) {
+	compilation := compilerir.CompilationIR{Contract: compilerir.ContractIR{GraphQLABIVersion: 1}}
+	if _, err := Build(compilation); err == nil || !strings.Contains(err.Error(), "at least one enabled query root") {
+		t.Fatalf("subscription/no-query schema error = %v", err)
+	}
+}
+
 func TestP6GeneratedGraphQLAnalyticsSDLGolden(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {

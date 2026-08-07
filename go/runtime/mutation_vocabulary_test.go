@@ -169,12 +169,12 @@ func openMutationVocabularyFixture(t testing.TB, database *sqlx.DB, provider gol
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[mutationResultPrincipal, mutationResultActor]{
+	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		DB: database, Provider: provider, Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

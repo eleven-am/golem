@@ -6,11 +6,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
+
+type testHistoricalResolver struct {
+	registry *schema.Registry
+	digest   golem.SchemaDigest
+	enabled  bool
+}
+
+func (resolver testHistoricalResolver) ResolveFactSchema(reference SchemaReference) (*schema.Registry, golem.SchemaDigest, bool) {
+	return resolver.registry, resolver.digest, resolver.enabled && reference.EventSchema == resolver.digest
+}
 
 func TestOutboxExactCodecPreservesEveryLogicalType(t *testing.T) {
 	values := exactValueMatrix(t)
@@ -327,6 +339,79 @@ func TestDeleteSnapshotCanBeUnconfiguredAndAbsent(t *testing.T) {
 	if _, err := DecodeOutbox(row.Metadata, nil, fixture.Registry); err != nil {
 		t.Fatalf("absent unconfigured delete snapshot was rejected: %v", err)
 	}
+}
+
+func TestP7FactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
+	fixture := schematest.NewIndexedExact(t)
+	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{7}, "private", 101))
+	digest := golem.SchemaDigest{1, 2, 3, 4}
+	requirement, err := mutationir.NewDeleteFactRequirement(
+		[]policyir.FieldID{policyir.FieldID(fixture.PostID)},
+		mutationir.DeleteSnapshotStoredScalars,
+		[]policyir.FieldID{policyir.FieldID(fixture.PostTitle)},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	requirement, err = requirement.WithEventSchema([32]byte(digest))
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope, err := NewV2(fixture.Registry, digest, EventID{9}, requirement, CausationID{8}, 1, &before, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A contract-only deployment has a different generation while retaining the
+	// exact event schema. V2 resolution keys on the latter, not the former.
+	envelope.generation = golem.SchemaDigest{99}
+	row, err := envelope.OutboxRow(time.Unix(3, 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := testHistoricalResolver{registry: fixture.Registry, digest: digest, enabled: true}
+	decoded, err := DecodeOutboxWithResolver(row.Metadata, row.DeleteSnapshot, resolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.FormatVersion() != FormatVersionV2 || decoded.CodecIdentity() != CodecIdentityV2 || decoded.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars {
+		t.Fatalf("unexpected V2 fact shape: version=%d codec=%q snapshot=%d", decoded.FormatVersion(), decoded.CodecIdentity(), decoded.DeleteSnapshotState())
+	}
+	if snapshot, ok := decoded.PrivateDeleteSnapshot(); !ok || !mutationdecode.EqualRow(snapshot, mustSelect(t, fixture, before, []policyir.FieldID{policyir.FieldID(fixture.PostTitle)})) {
+		t.Fatal("historical V2 delete snapshot did not round-trip")
+	}
+	if _, err := DecodeOutboxWithResolver(row.Metadata, row.DeleteSnapshot, testHistoricalResolver{registry: fixture.Registry, digest: digest}); err == nil {
+		t.Fatal("missing historical event schema was accepted")
+	}
+	if _, err := ValidateStoredRow(row, resolver); err != nil {
+		t.Fatalf("stored-row duplicated columns did not validate: %v", err)
+	}
+	tampered := row
+	tampered.Action = "created"
+	if _, err := ValidateStoredRow(tampered, resolver); err == nil {
+		t.Fatal("duplicated action column tamper was accepted")
+	}
+
+	legacyRequirement, _ := mutationir.NewFactRequirement(mutationir.FactDeleted,
+		[]policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil,
+		[]policyir.FieldID{policyir.FieldID(fixture.PostTitle)})
+	legacy, err := New(fixture.Registry, EventID{1}, legacyRequirement, CausationID{2}, 1, &before, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyBytes, _ := Encode(legacy)
+	legacyDecoded, err := Decode(legacyBytes, fixture.Registry)
+	if err != nil || legacyDecoded.FormatVersion() != FormatVersionV1 {
+		t.Fatalf("historical V1 decode regressed: version=%d err=%v", legacyDecoded.FormatVersion(), err)
+	}
+}
+
+func mustSelect(t testing.TB, fixture schematest.Fixture, row mutationdecode.Row, fields []policyir.FieldID) mutationdecode.Row {
+	t.Helper()
+	selected, err := row.Select(fixture.Registry, fields)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return selected
 }
 
 func exactValueMatrix(t *testing.T) []policyir.Value {

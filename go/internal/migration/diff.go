@@ -121,7 +121,7 @@ func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.Syst
 }
 
 func registeredAdditiveSystemObject(object physical.SystemObject) bool {
-	return physical.IsOutboxSystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
+	return physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
 }
 
 func emptySystemSchema(system physical.SystemSchema) bool {

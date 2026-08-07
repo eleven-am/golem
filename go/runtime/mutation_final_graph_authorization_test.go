@@ -16,7 +16,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
@@ -1052,7 +1051,7 @@ func assertFinalGraphFactOrder(t testing.TB, fixture graphMutationFixture, want 
 		if rows[index].Model != hex.EncodeToString(expected.model[:]) || rows[index].Ordinal != int64(index+1) {
 			t.Fatalf("fact[%d]=%#v want model=%x ordinal=%d", index, rows[index], expected.model, index+1)
 		}
-		envelope, err := mutationfact.Decode(rows[index].Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(expected.model), rows[index].Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1085,7 +1084,7 @@ func assertFinalSocialFactOrder(t testing.TB, fixture socialMutationFixture, wan
 		if rows[index].Model != hex.EncodeToString(expected.model[:]) || rows[index].Ordinal != int64(index+1) {
 			t.Fatalf("social fact[%d]=%#v want model=%x ordinal=%d", index, rows[index], expected.model, index+1)
 		}
-		envelope, err := mutationfact.Decode(rows[index].Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(expected.model), rows[index].Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1143,13 +1142,13 @@ func reopenFinalGraphFixture(t testing.TB, fixture graphMutationFixture, policie
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1175,13 +1174,13 @@ func reopenFinalRecursiveFixture(t testing.TB, fixture recursiveMutationFixture,
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1243,7 +1242,7 @@ func assertFinalRecursiveFactOrder(t testing.TB, fixture recursiveMutationFixtur
 		t.Fatalf("recursive ordered facts=%d want=%d", len(rows), len(want))
 	}
 	for index, expected := range want {
-		envelope, err := mutationfact.Decode(rows[index].Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(fixture.schema.Comment), rows[index].Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -144,7 +144,12 @@ func (state *mutationState) buildFact(registry *schema.Registry, requirement mut
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
-	envelope, err := mutationfact.New(registry, event, requirement, state.causation, ordinal, before, after)
+	var envelope mutationfact.Envelope
+	if eventSchema, present := requirement.EventSchema(); present {
+		envelope, err = mutationfact.NewV2(registry, golem.SchemaDigest(eventSchema), event, requirement, state.causation, ordinal, before, after)
+	} else {
+		envelope, err = mutationfact.New(registry, event, requirement, state.causation, ordinal, before, after)
+	}
 	if err != nil {
 		return mutationfact.OutboxRow{}, err
 	}
@@ -220,7 +225,7 @@ func (state *mutationState) completeBeforeParentFacts(start int, ordinal uint32,
 		segment = append([]mutationfact.OutboxRow{segment[len(segment)-1]}, segment[:len(segment)-1]...)
 	}
 	for index := range segment {
-		envelope, err := mutationfact.DecodeOutbox(segment[index].Metadata, segment[index].DeleteSnapshot, registry)
+		envelope, err := decodeRuntimeMutationFact(registry, segment[index])
 		if err != nil {
 			return err
 		}
@@ -299,6 +304,15 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 	for _, statement := range statements {
 		if _, err := executor.ExecContext(ctx, statement.SQL(), statement.Args()...); err != nil {
 			return fmt.Errorf("P4_MUTATION_OUTBOX: insert facts: %w", err)
+		}
+	}
+	if len(state.facts) != 0 {
+		delivery, err := mutationfact.RenderDeliveryInsertAt(provider, namespace, state.facts)
+		if err != nil {
+			return err
+		}
+		if _, err := executor.ExecContext(ctx, delivery.SQL(), delivery.Args()...); err != nil {
+			return fmt.Errorf("P7_MUTATION_DELIVERY: insert causal state: %w", err)
 		}
 	}
 	state.flushed = true

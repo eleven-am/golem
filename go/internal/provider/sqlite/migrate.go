@@ -244,7 +244,11 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			if renderErr != nil {
 				return IncrementalPlan{}, renderErr
 			}
-			plan.steps = append(plan.steps, migrationStep{statements: append([]string{statement}, indexes...)})
+			statements := append([]string{statement}, indexes...)
+			if physical.IsOutboxDeliverySystemObjectV1(object) {
+				statements = append(statements, sqliteOutboxDeliveryBackfill(entry.AfterSnapshot.System))
+			}
+			plan.steps = append(plan.steps, migrationStep{statements: statements})
 			continue
 		}
 		tableID := owners[operation.ID]
@@ -518,7 +522,21 @@ func findSystemObject(system physical.SystemSchema, id ir.ObjectID) (physical.Sy
 }
 
 func sqliteRegisteredAdditiveSystemObject(object physical.SystemObject) bool {
-	return physical.IsOutboxSystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
+	return physical.IsOutboxSystemObjectV1(object) || physical.IsOutboxDeliverySystemObjectV1(object) || physical.IsUpsertGuardSystemObjectV1(object)
+}
+
+func sqliteOutboxDeliveryBackfill(system physical.SystemSchema) string {
+	outbox := physical.OutboxSystemObjectV1().Name
+	delivery := physical.OutboxDeliverySystemObjectV1().Name
+	for _, object := range system.Objects {
+		if physical.IsOutboxSystemObjectV1(object) {
+			outbox = object.Name
+		}
+		if physical.IsOutboxDeliverySystemObjectV1(object) {
+			delivery = object.Name
+		}
+	}
+	return "INSERT OR IGNORE INTO " + quote(delivery) + " (" + quote("causation_id") + "," + quote("status") + "," + quote("first_recorded_at") + "," + quote("attempt_count") + "," + quote("available_at") + "," + quote("updated_at") + ") SELECT " + quote("causation_id") + ",'pending',MIN(" + quote("recorded_at") + "),0,MIN(" + quote("recorded_at") + "),MIN(" + quote("recorded_at") + ") FROM " + quote(outbox) + " GROUP BY " + quote("causation_id")
 }
 
 func tableMap(tables []physical.PhysicalTable) map[ir.ModelID]physical.PhysicalTable {

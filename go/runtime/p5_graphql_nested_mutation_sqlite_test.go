@@ -267,12 +267,12 @@ func p5ReopenSocialMutation(t testing.TB, fixture socialMutationFixture, denied 
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(context.Background(), Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: fixture.app.database, Provider: golem.SQLite, Bundle: fixture.schema.Bundle,
 		Bindings: bindings, Descriptors: fixture.app.descriptors, MutationLimits: limits,
 		ResolvePrincipal: fixture.app.resolvePrincipal,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

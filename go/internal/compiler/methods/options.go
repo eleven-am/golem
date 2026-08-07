@@ -162,6 +162,20 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 			return
 		}
 		in.evalGraphQL(call)
+	case "Subscriptions":
+		if scope != ir.ProviderScopePortable || len(call.Args) != 0 {
+			in.errorAt("P7_SUBSCRIPTIONS_DECLARATION", "Subscriptions takes no arguments and cannot be provider-scoped", call)
+			return
+		}
+		if in.graphql == nil {
+			in.graphql = &graphqlcontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
+		}
+		if in.graphql.Subscriptions != nil {
+			in.errorAt("P7_SUBSCRIPTIONS_DUPLICATE", "Subscriptions may be declared only once in GolemModel", call)
+			return
+		}
+		enabled := true
+		in.graphql.Subscriptions = &enabled
 	case "Analytics":
 		if scope != ir.ProviderScopePortable {
 			in.errorAt("P6_ANALYTICS_PROVIDER_SCOPE", "Analytics cannot be provider-scoped", call)
@@ -195,11 +209,15 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 }
 
 func (in *interpreter) evalGraphQL(call *ast.CallExpr) {
-	if in.graphql != nil {
+	if in.graphqlDeclared {
 		in.errorAt("P5_GRAPHQL_MODEL_DUPLICATE", "GraphQL may be declared only once in GolemModel", call)
 		return
 	}
+	in.graphqlDeclared = true
 	patch := graphqlcontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
+	if in.graphql != nil {
+		patch.Subscriptions = in.graphql.Subscriptions
+	}
 	seen := map[string]bool{}
 	for _, expression := range call.Args {
 		option, ok := unparen(expression).(*ast.CallExpr)
@@ -305,6 +323,7 @@ func (in *interpreter) graphqlRoots(expression ast.Expr) (ir.GraphQLRootNamesIR,
 		"UpdateMany": &result.UpdateMany, "DeleteMany": &result.DeleteMany,
 		"Aggregate": &result.Aggregate, "GroupBy": &result.GroupBy,
 		"RelationGroupBy": &result.RelationGroupBy,
+		"Events":          &result.Events,
 	}
 	seen := map[string]bool{}
 	for _, element := range literal.Elts {

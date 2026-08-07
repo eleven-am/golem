@@ -6,10 +6,13 @@ package runtime
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
@@ -25,6 +28,7 @@ import (
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	"github.com/eleven-am/golem/go/internal/subscription"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -32,18 +36,27 @@ import (
 // application's authenticated principal type; A is the actor type consumed by
 // model policy methods.
 type Config[P, A any] struct {
-	DB                *sqlx.DB
-	Provider          golem.Provider
-	Bundle            golem.SchemaBundle
-	Bindings          golem.ApplicationBindings[A]
-	Descriptors       golem.ApplicationDescriptors
-	ReadLimits        ReadLimits
-	MutationLimits    MutationLimits
-	AnalyticsLimits   AnalyticsLimits
-	AfterCommitError  func(context.Context, golem.AfterCommitFailure)
-	AuditPrincipal    func(P) string
-	ReportScopedQuery func(context.Context, golem.ScopedAuditRecord)
-	ResolvePrincipal  func(context.Context, P) (A, error)
+	DB                     *sqlx.DB
+	Provider               golem.Provider
+	Bundle                 golem.SchemaBundle
+	Bindings               golem.ApplicationBindings[A]
+	Descriptors            golem.ApplicationDescriptors
+	ReadLimits             ReadLimits
+	MutationLimits         MutationLimits
+	AnalyticsLimits        AnalyticsLimits
+	EventRegistry          golem.EventRegistry
+	EventFactories         EventFactoryRegistry
+	EventLimits            events.Limits
+	EventTransport         events.EventTransport
+	EventObserver          events.Observer
+	CDCAdapters            []events.CDCAdapter
+	ReportEventOperator    events.OperatorAudit
+	HistoricalEventBundles []golem.SchemaBundle
+	AfterCommitError       func(context.Context, golem.AfterCommitFailure)
+	AuditPrincipal         func(P) string
+	ReportScopedQuery      func(context.Context, golem.ScopedAuditRecord)
+	ResolvePrincipal       func(context.Context, P) (A, error)
+	SnapshotPrincipal      func(P) (P, error)
 	// SnapshotActor transfers ownership of mutable actor shapes into one stable
 	// caller snapshot shared by policy construction and hooks. When omitted,
 	// ForPrincipal accepts only deeply immutable value actors.
@@ -65,6 +78,25 @@ type App[P, A any] struct {
 	readLimits        normalizedReadLimits
 	mutationLimits    normalizedMutationLimits
 	analyticsLimits   normalizedAnalyticsLimits
+	eventRegistry     golem.EventRegistry
+	eventFactories    EventFactoryRegistry
+	eventLimits       events.Limits
+	eventTransport    events.EventTransport
+	eventObserver     events.Observer
+	eventSchemas      *eventSchemaHistory
+	eventProvider     golem.Provider
+	eventPublisher    eventPublisherRunner
+	eventOperator     events.Operator
+	eventAdapters     []events.CDCAdapter
+	eventCDCWorkers   []eventCDCWorker
+	eventAdapterNames []string
+	eventModels       []golem.ModelID
+	eventTransportABI events.TransportCapabilities
+	eventRunning      atomic.Bool
+	snapshotPrincipal func(P) (P, error)
+	eventMu           sync.Mutex
+	eventHubs         map[golem.ModelID]*subscription.ModelHub[any]
+	nextSubscription  atomic.Uint64
 	afterCommitError  func(context.Context, golem.AfterCommitFailure)
 	auditPrincipal    func(P) string
 	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
@@ -80,6 +112,7 @@ type Caller[P, A any] struct {
 	execution uint64
 	executor  *executionBinding
 	auditID   string
+	principal P
 }
 
 // System is an explicit unrestricted capability. It never resolves a
@@ -134,6 +167,14 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if registry.HasScopedReads() && (config.AuditPrincipal == nil || config.ReportScopedQuery == nil) {
 		return nil, fmt.Errorf("P6_RUNTIME_CONFIG: AuditPrincipal and ReportScopedQuery are required when scoped reads are enabled")
 	}
+	eventSchemas, err := newEventSchemaHistory(registry, config.HistoricalEventBundles)
+	if err != nil {
+		return nil, err
+	}
+	eventLimits, err := validateEventConfiguration(config, registry)
+	if err != nil {
+		return nil, err
+	}
 	if config.Bindings.GenerationDigest() != registry.GenerationDigest() || config.Descriptors.GenerationDigest() != registry.GenerationDigest() {
 		return nil, fmt.Errorf("P3_RUNTIME_GENERATION: bindings, descriptors, and schema differ")
 	}
@@ -162,7 +203,72 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CAPABILITY: %w", err)
 	}
-	return &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}, nil
+	app := &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, eventObserver: config.EventObserver, eventSchemas: eventSchemas, eventProvider: config.Provider, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}
+	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
+		return nil, err
+	}
+	return app, nil
+}
+
+func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry) (events.Limits, error) {
+	limits, err := events.NormalizeLimits(config.EventLimits)
+	if err != nil {
+		return events.Limits{}, err
+	}
+	subscribed := make(map[golem.ModelID]bool)
+	for _, descriptor := range config.Descriptors.Models() {
+		model, ok := registry.Model(descriptor.ModelID())
+		if ok && model.SubscriptionsEnabled() {
+			subscribed[descriptor.ModelID()] = true
+		}
+	}
+	generated := config.EventRegistry.Models()
+	if len(subscribed) == 0 {
+		if len(generated) != 0 {
+			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event registry exists without subscription-enabled models")
+		}
+		if len(config.CDCAdapters) != 0 {
+			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: CDC adapters require subscription-enabled models")
+		}
+		return limits, nil
+	}
+	if config.EventRegistry.GenerationDigest() != registry.GenerationDigest() || len(generated) != len(subscribed) {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event registry and active schema differ")
+	}
+	if config.EventFactories.GenerationDigest() != registry.GenerationDigest() || len(config.EventFactories.modelIDs()) != len(subscribed) {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event factories and active schema differ")
+	}
+	for _, metadata := range generated {
+		model, ok := registry.Model(metadata.ModelID())
+		fingerprint, _, eventOK := model.EventSchema()
+		digest := metadata.EventSchemaDigest()
+		if !ok || !subscribed[metadata.ModelID()] || !eventOK || string(fingerprint) != hex.EncodeToString(digest[:]) {
+			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: generated event model and active schema differ")
+		}
+		factory := config.EventFactories.factories[metadata.ModelID()]
+		if factory == nil || factory.EventSchemaDigest() != metadata.EventSchemaDigest() {
+			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: generated event factory and schema differ")
+		}
+	}
+	if config.EventTransport == nil {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event transport is required for subscription-enabled models")
+	}
+	if config.ReportEventOperator == nil {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: ReportEventOperator is required for subscription-enabled models")
+	}
+	capabilities := events.CapabilitiesOf(config.EventTransport)
+	if _, err := events.NewTransportCapabilities(capabilities.Identity(), capabilities.Scope(), capabilities.Durable()); err != nil {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event transport capabilities are invalid")
+	}
+	if capabilities.Scope() == events.TransportScopeCrossProcess {
+		if _, ok := config.EventTransport.(events.RuntimeBindableTransport); !ok {
+			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport requires runtime binding")
+		}
+	}
+	if _, err := events.ValidateCDCAdapters(config.Provider, config.CDCAdapters); err != nil {
+		return events.Limits{}, err
+	}
+	return limits, nil
 }
 
 func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], handler func(context.Context, golem.AfterCommitFailure)) error {
@@ -204,7 +310,7 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 	if app.auditPrincipal != nil {
 		auditID = app.auditPrincipal(principal)
 	}
-	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database), auditID: auditID}, nil
+	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database), auditID: auditID, principal: principal}, nil
 }
 
 func (app *App[P, A]) System() System[P, A] {

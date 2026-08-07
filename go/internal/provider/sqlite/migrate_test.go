@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -127,6 +128,75 @@ func TestSystemUpsertGuardV1MigratesIntrospectsAndRollsBackSQLite(t *testing.T) 
 	var count int
 	if err := database.GetContext(ctx, &count, `SELECT count(*) FROM "_golem_upsert_guard"`); err != nil || count != 0 {
 		t.Fatalf("rolled-back guard rows=%d error=%v", count, err)
+	}
+}
+
+func TestP7DeliverySystemObjectMigratesBackfillsAndDriftChecksSQLite(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	before.System.Objects = append(append([]physical.SystemObject(nil), before.System.Objects...), physical.OutboxSystemObjectV1(), physical.UpsertGuardSystemObjectV1())
+	before = normalizeMigrationFixture(t, before)
+	after := before
+	after.System.Objects = append(append([]physical.SystemObject(nil), before.System.Objects...), physical.OutboxDeliverySystemObjectV1())
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "p7-delivery.db")
+	const causation = "00000000-0000-4000-8000-000000000001"
+	for ordinal, recorded := range []int64{20, 10} {
+		_, err := database.ExecContext(ctx, `INSERT INTO "_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			fmt.Sprintf("00000000-0000-4000-8000-%012d", ordinal+1), 1, "golem.fact.v1", "fingerprint", "model", "created", []byte{1}, causation, ordinal, []byte{byte(ordinal + 1)}, recorded)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_p7_delivery.sql", nil)
+	script, err := provider.RenderMigration(manifest.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`CREATE TABLE "_golem_outbox_delivery"`, `"status" IN ('pending','leased','delivered','blocked','retired')`, `CREATE INDEX "_golem_outbox_delivery_pending"`, `INSERT OR IGNORE INTO "_golem_outbox_delivery"`} {
+		if !strings.Contains(script.SQL(), fragment) {
+			t.Fatalf("delivery migration missing %q:\n%s", fragment, script.SQL())
+		}
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var delivery struct {
+		Causation string `db:"causation_id"`
+		Status    string `db:"status"`
+		First     int64  `db:"first_recorded_at"`
+		Available int64  `db:"available_at"`
+		Updated   int64  `db:"updated_at"`
+		Attempts  int64  `db:"attempt_count"`
+	}
+	if err := database.GetContext(ctx, &delivery, `SELECT "causation_id","status","first_recorded_at","available_at","updated_at","attempt_count" FROM "_golem_outbox_delivery"`); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.Causation != causation || delivery.Status != "pending" || delivery.First != 10 || delivery.Available != 10 || delivery.Updated != 10 || delivery.Attempts != 0 {
+		t.Fatalf("backfilled delivery=%#v", delivery)
+	}
+	if _, err := database.ExecContext(ctx, sqliteOutboxDeliveryBackfill(after.System)); err != nil {
+		t.Fatal(err)
+	}
+	var deliveryCount, factCount int
+	if err := database.GetContext(ctx, &deliveryCount, `SELECT count(*) FROM "_golem_outbox_delivery"`); err != nil || deliveryCount != 1 {
+		t.Fatalf("idempotent backfill rows=%d error=%v", deliveryCount, err)
+	}
+	if err := database.GetContext(ctx, &factCount, `SELECT count(*) FROM "_golem_outbox"`); err != nil || factCount != 2 {
+		t.Fatalf("preserved facts=%d error=%v", factCount, err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO "_golem_outbox_delivery" ("causation_id","status","first_recorded_at","attempt_count","available_at","updated_at") VALUES ('00000000-0000-4000-8000-000000000002','leased',1,0,1,1)`); err == nil {
+		t.Fatal("leased state without lease identity was accepted")
+	}
+	if _, err := database.ExecContext(ctx, `DROP INDEX "_golem_outbox_delivery_pending"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err == nil || !strings.Contains(err.Error(), "drift") {
+		t.Fatalf("delivery index drift error=%v", err)
 	}
 }
 

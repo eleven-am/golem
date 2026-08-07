@@ -63,6 +63,7 @@ func newSubscribedRecursiveComment(t testing.TB, postgresNamespace, postgresSyst
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{{
 		ModelID: comment, Fields: fieldContracts(commentID, parentID, body, parent, replies), Subscriptions: true,
 	}}}
+	normalizeSubscribedEvents(t, model, &contract)
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
 		if err != nil {

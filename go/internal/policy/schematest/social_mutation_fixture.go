@@ -166,6 +166,7 @@ func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystem
 		{ModelID: tag, Fields: fieldContracts(tagID, tagName, tagPostTags), Subscriptions: true},
 		{ModelID: postTag, Fields: fieldContracts(postTagPostID, postTagTagName, postTagPost, postTagTag), Subscriptions: true},
 	}}
+	normalizeSubscribedEvents(t, model, &contract)
 
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)

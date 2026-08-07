@@ -81,9 +81,57 @@ func RenderInsertsAt(provider policyir.Provider, namespace string, rows []Outbox
 	return statements, nil
 }
 
+// RenderDeliveryInsertAt renders the one idempotent causal delivery-state
+// insert that accompanies a non-empty fact flush. Callers execute it on the
+// same mutation transaction as the application data and immutable facts.
+// Existing legacy state is never replaced or reinterpreted.
+func RenderDeliveryInsertAt(provider policyir.Provider, namespace string, rows []OutboxRow) (InsertStatement, error) {
+	if provider != policyir.ProviderSQLite && provider != policyir.ProviderPostgreSQL {
+		return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: unsupported provider %d", provider)
+	}
+	if err := validateSystemNamespace(namespace); err != nil {
+		return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: %w", err)
+	}
+	if len(rows) == 0 {
+		return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: causal fact group is empty")
+	}
+	causation := rows[0].CausationID
+	firstRecordedAt := rows[0].RecordedAt.UTC().Truncate(time.Microsecond)
+	for index, row := range rows {
+		if err := validateOutboxRow(row); err != nil {
+			return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: row %d: %w", index, err)
+		}
+		if row.CausationID != causation {
+			return InsertStatement{}, fmt.Errorf("P7_FACT_DELIVERY_INSERT: row %d belongs to a different causation", index)
+		}
+		recordedAt := row.RecordedAt.UTC().Truncate(time.Microsecond)
+		if recordedAt.Before(firstRecordedAt) {
+			firstRecordedAt = recordedAt
+		}
+	}
+
+	table := `"` + namespace + `"."_golem_outbox_delivery"`
+	arguments := []any{
+		causation,
+		providerRecordedAt(provider, firstRecordedAt),
+		providerRecordedAt(provider, firstRecordedAt),
+		providerRecordedAt(provider, firstRecordedAt),
+	}
+	if provider == policyir.ProviderSQLite {
+		return InsertStatement{
+			sql:  `INSERT INTO ` + table + ` ("causation_id", "status", "first_recorded_at", "attempt_count", "available_at", "updated_at") VALUES (?, 'pending', ?, 0, ?, ?) ON CONFLICT ("causation_id") DO NOTHING`,
+			args: arguments,
+		}, nil
+	}
+	return InsertStatement{
+		sql:  `INSERT INTO ` + table + ` ("causation_id", "status", "first_recorded_at", "attempt_count", "available_at", "updated_at") VALUES ($1, 'pending', $2, 0, $3, $4) ON CONFLICT ("causation_id") DO NOTHING`,
+		args: arguments,
+	}, nil
+}
+
 func renderInsert(provider policyir.Provider, namespace string, rows []OutboxRow) (InsertStatement, error) {
-	if namespace == "" || strings.ContainsAny(namespace, "\x00\"") {
-		return InsertStatement{}, fmt.Errorf("invalid system namespace")
+	if err := validateSystemNamespace(namespace); err != nil {
+		return InsertStatement{}, err
 	}
 	var sql strings.Builder
 	sql.WriteString(`INSERT INTO "`)
@@ -139,11 +187,20 @@ func renderInsert(provider policyir.Provider, namespace string, rows []OutboxRow
 	return InsertStatement{sql: sql.String(), args: args}, nil
 }
 
+func validateSystemNamespace(namespace string) error {
+	if namespace == "" || strings.ContainsAny(namespace, "\x00\"") {
+		return fmt.Errorf("invalid system namespace")
+	}
+	return nil
+}
+
 func validateOutboxRow(row OutboxRow) error {
 	if row.EventID == "" || row.CausationID == "" || row.GenerationFingerprint == "" || row.ModelID == "" || row.CodecIdentity == "" {
 		return fmt.Errorf("required identity is empty")
 	}
-	if row.FactVersion != int64(FormatVersion) || row.CodecIdentity != CodecIdentity {
+	validCodec := row.FactVersion == int64(FormatVersionV1) && row.CodecIdentity == CodecIdentityV1 ||
+		row.FactVersion == int64(FormatVersionV2) && row.CodecIdentity == CodecIdentityV2
+	if !validCodec {
 		return fmt.Errorf("unsupported fact codec %q version %d", row.CodecIdentity, row.FactVersion)
 	}
 	if row.Action != "created" && row.Action != "updated" && row.Action != "deleted" {

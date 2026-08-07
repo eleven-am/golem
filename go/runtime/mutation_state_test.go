@@ -11,6 +11,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
 func TestMutationStateScopeRollbackRewindsAccountingAndOrdinals(t *testing.T) {
@@ -80,6 +81,10 @@ func TestMutationDataAndFactCommitOrRollbackTogether(t *testing.T) {
 	forEachMutationResultProvider(t, MutationLimits{}, assertMutationDataAndFactAtomic)
 }
 
+func TestP7DataFactsAndCausalDeliveryCommitOrRollbackTogether(t *testing.T) {
+	forEachMutationResultProvider(t, MutationLimits{}, assertMutationDataAndFactAtomic)
+}
+
 func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture) {
 	t.Helper()
 	ctx := context.Background()
@@ -89,6 +94,7 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 	}
 	posts := nestedAcceptanceTable(fixture.app, fixture.schema.Post)
 	outbox := nestedAcceptanceOutbox(fixture.app)
+	delivery := nestedAcceptanceOutboxDelivery(fixture.app)
 	insert := fixture.app.database.Rebind(`INSERT INTO ` + posts + `("id","author_id","title") VALUES (?,?,?)`)
 	payload := []byte{0x47, 0x4f, 0x00, 0xff, 0x10}
 	err = CallerTransaction(ctx, caller, func(transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
@@ -119,6 +125,14 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 	if !bytes.Equal(stored, payload) {
 		t.Fatalf("stored metadata=%x want=%x", stored, payload)
 	}
+	var deliveryCount int
+	var deliveryStatus string
+	if err := fixture.app.database.Get(&deliveryCount, `SELECT COUNT(*) FROM `+delivery); err != nil || deliveryCount != 1 {
+		t.Fatalf("committed causal delivery rows=%d err=%v", deliveryCount, err)
+	}
+	if err := fixture.app.database.Get(&deliveryStatus, `SELECT "status" FROM `+delivery); err != nil || deliveryStatus != "pending" {
+		t.Fatalf("committed causal delivery status=%q err=%v", deliveryStatus, err)
+	}
 	sentinel := errors.New("rollback data and fact")
 	err = CallerTransaction(ctx, caller, func(transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 		if _, err := transaction.caller.executor.transaction.ExecContext(ctx, insert, mutationResultUUIDText(79), mutationResultUUIDText(1), "rolled-back"); err != nil {
@@ -147,8 +161,11 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 	if err := fixture.app.database.Get(&factCount, `SELECT COUNT(*) FROM `+outbox); err != nil {
 		t.Fatal(err)
 	}
-	if dataCount != 0 || factCount != 1 {
-		t.Fatalf("rollback data=%d facts=%d", dataCount, factCount)
+	if err := fixture.app.database.Get(&deliveryCount, `SELECT COUNT(*) FROM `+delivery); err != nil {
+		t.Fatal(err)
+	}
+	if dataCount != 0 || factCount != 1 || deliveryCount != 1 {
+		t.Fatalf("rollback data=%d facts=%d delivery=%d", dataCount, factCount, deliveryCount)
 	}
 	for _, id := range []byte{73, 74} {
 		if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(id, golem.UUID{15: 1}, "batch-atomic")); err != nil {
@@ -156,6 +173,9 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 		}
 	}
 	if _, err := fixture.app.database.ExecContext(ctx, `DELETE FROM `+outbox); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.app.database.ExecContext(ctx, `DELETE FROM `+delivery); err != nil {
 		t.Fatal(err)
 	}
 	batchRollback := errors.New("rollback batch data and facts")
@@ -174,6 +194,17 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 	if err := fixture.app.database.Get(&factCount, `SELECT COUNT(*) FROM `+outbox); err != nil || factCount != 0 {
 		t.Fatalf("batch rollback facts=%d err=%v", factCount, err)
 	}
+	if err := fixture.app.database.Get(&deliveryCount, `SELECT COUNT(*) FROM `+delivery); err != nil || deliveryCount != 0 {
+		t.Fatalf("batch rollback delivery rows=%d err=%v", deliveryCount, err)
+	}
+}
+
+func nestedAcceptanceOutboxDelivery[P, A any](app *App[P, A]) string {
+	if app.provider != policyir.ProviderPostgreSQL {
+		return `"_golem_outbox_delivery"`
+	}
+	namespace, _ := app.registry.PhysicalSystemNamespace(golem.PostgreSQL)
+	return `"` + string(namespace) + `"."_golem_outbox_delivery"`
 }
 
 func TestFactLimitsRollBackInsteadOfDrop(t *testing.T) {

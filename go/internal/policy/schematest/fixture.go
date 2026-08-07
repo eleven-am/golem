@@ -221,6 +221,7 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 			compilerir.FieldContractIR{FieldID: postNullableText}, compilerir.FieldContractIR{FieldID: postBytes},
 			compilerir.FieldContractIR{FieldID: postJSON}, compilerir.FieldContractIR{FieldID: postList}, compilerir.FieldContractIR{FieldID: postDateTime})
 	}
+	normalizeSubscribedEvents(t, model, &contract)
 
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
@@ -321,6 +322,7 @@ func physicalSchema(provider compilerir.Provider, user, post compilerir.ModelID,
 		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},
 		{ID: physical.MigrationLockObjectIDV1, Kind: physical.SystemMigrationLock, Version: 1, Name: "_golem_migration_lock"},
 		physical.OutboxSystemObjectV1(),
+		physical.OutboxDeliverySystemObjectV1(),
 		physical.UpsertGuardSystemObjectV1(),
 	}}, Tables: []physical.PhysicalTable{
 		{ID: user, Name: "users", Columns: []physical.PhysicalColumn{{ID: userID, Name: "id", Ordinal: 0, Storage: physical.StorageType{Kind: uuid}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}, {ID: userName, Name: "name", Ordinal: 1, Storage: stringStorage, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}}, PrimaryKey: &physical.PhysicalKey{ID: userKey, Name: "pk_users", Columns: []compilerir.FieldID{userID}}},

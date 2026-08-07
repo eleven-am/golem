@@ -42,7 +42,7 @@ func TestLowerPreservesPortablePostgreSQLSemantics(t *testing.T) {
 	if len(posts.Checks) < 2 {
 		t.Fatalf("synthetic enum/list checks missing: %#v", posts.Checks)
 	}
-	if len(schema.System.Objects) != 4 || !hasPostgreSQLSystemObject(schema.System, physical.SystemOutbox) || !hasPostgreSQLSystemObject(schema.System, physical.SystemUpsertGuard) {
+	if len(schema.System.Objects) != 5 || !hasPostgreSQLSystemObject(schema.System, physical.SystemOutbox) || !hasPostgreSQLSystemObject(schema.System, physical.SystemOutboxDelivery) || !hasPostgreSQLSystemObject(schema.System, physical.SystemUpsertGuard) {
 		t.Fatalf("system schema = %#v", schema.System)
 	}
 	first, _ := physical.PhysicalFingerprint(schema)
@@ -75,7 +75,7 @@ func TestRenderInitialFullyQualifiesAndQuotesEveryObject(t *testing.T) {
 	if strings.Contains(sql, `_golem_upsert_guard`) {
 		t.Fatalf("PostgreSQL selector guard must not render a relation:\n%s", sql)
 	}
-	for _, fragment := range []string{`CREATE SCHEMA IF NOT EXISTS "social"`, `CREATE SCHEMA IF NOT EXISTS "_golem"`, `CREATE TABLE "social"."posts"`, `CREATE TABLE "_golem"."_golem_migrations"`, `CREATE TABLE "_golem"."_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending" ON "_golem"."_golem_outbox"`, `ALTER TABLE "social"."posts" ADD CONSTRAINT`, `REFERENCES "social"."users"`, `CREATE INDEX "idx_posts_created" ON "social"."posts"`} {
+	for _, fragment := range []string{`CREATE SCHEMA IF NOT EXISTS "social"`, `CREATE SCHEMA IF NOT EXISTS "_golem"`, `CREATE TABLE "social"."posts"`, `CREATE TABLE "_golem"."_golem_migrations"`, `CREATE TABLE "_golem"."_golem_outbox"`, `CREATE INDEX "_golem_outbox_pending" ON "_golem"."_golem_outbox"`, `CREATE TABLE "_golem"."_golem_outbox_delivery"`, `CREATE INDEX "_golem_outbox_delivery_pending" ON "_golem"."_golem_outbox_delivery"`, `ALTER TABLE "social"."posts" ADD CONSTRAINT`, `REFERENCES "social"."users"`, `CREATE INDEX "idx_posts_created" ON "social"."posts"`} {
 		if !strings.Contains(sql, fragment) {
 			t.Errorf("DDL missing %q:\n%s", fragment, sql)
 		}

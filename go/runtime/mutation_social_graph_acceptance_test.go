@@ -14,7 +14,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -270,7 +269,7 @@ func assertSocialFactModels(t testing.TB, fixture socialMutationFixture, models 
 		if rows[index].Model != hex.EncodeToString(model[:]) || rows[index].Ordinal != int64(index+1) || rows[index].Causation == "" || index > 0 && rows[index].Causation != rows[0].Causation {
 			t.Fatalf("social fact[%d]=%#v want model=%x ordinal=%d", index, rows[index], model, index+1)
 		}
-		envelope, err := mutationfact.Decode(rows[index].Metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(model), rows[index].Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -484,13 +483,13 @@ func openSocialMutationFixture(t testing.TB, database *sqlx.DB, provider golem.P
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(context.Background(), Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: database, Provider: provider, Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -567,12 +566,12 @@ func reopenSocialMutationWithPolicies(t testing.TB, fixture socialMutationFixtur
 	if fixture.app.provider == policyir.ProviderPostgreSQL {
 		provider = golem.PostgreSQL
 	}
-	app, err := Open(context.Background(), Config[graphMutationPrincipal, graphMutationActor]{
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
 		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
-	})
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}

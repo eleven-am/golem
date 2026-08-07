@@ -63,6 +63,10 @@ type RuntimeModelRow struct {
 	cells       map[FieldID]readCell
 	counts      map[relationCountKey]readCell
 	occurrences map[runtimeOccurrenceKey]readCell
+	// cdcExact is set only by RuntimeCDCModelRow. Ordinary public/authorized
+	// rows deliberately cannot be reinterpreted as exact database images:
+	// ReadNull intentionally conflates stored NULL with authorization masking.
+	cdcExact bool
 }
 
 func (row RuntimeModelRow) ModelID() ModelID { return row.model }
@@ -335,7 +339,7 @@ func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccur
 }
 
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences)}
+	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), cdcExact: row.cdcExact}
 }
 
 func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {

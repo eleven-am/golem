@@ -7,7 +7,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
-	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -52,7 +51,7 @@ func TestMutableSingleRowIdentityUpdateRebindsResultAndFactAcrossProviders(t *te
 		if err := fixture.app.database.GetContext(ctx, &metadata, `SELECT "metadata" FROM `+profile.outbox+` WHERE "action"='updated'`); err != nil {
 			t.Fatal(err)
 		}
-		envelope, err := mutationfact.Decode(metadata, fixture.schema.Registry)
+		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(fixture.schema.Post), metadata)
 		if err != nil {
 			t.Fatal(err)
 		}

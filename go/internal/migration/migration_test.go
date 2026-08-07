@@ -163,6 +163,38 @@ func TestDiffAllowsRegisteredUpsertGuardSystemUpgrade(t *testing.T) {
 	}
 }
 
+func TestDiffAllowsRegisteredOutboxDeliverySystemUpgrade(t *testing.T) {
+	before := schema()
+	before.System = physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: "main"}, Objects: []physical.SystemObject{
+		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},
+		{ID: physical.MigrationLockObjectIDV1, Kind: physical.SystemMigrationLock, Version: 1, Name: "_golem_migration_lock"},
+		physical.OutboxSystemObjectV1(),
+		physical.UpsertGuardSystemObjectV1(),
+	}}
+	after := before
+	after.System.Objects = append(append([]physical.SystemObject(nil), before.System.Objects...), physical.OutboxDeliverySystemObjectV1())
+	beforePhysical, _ := physical.PhysicalFingerprint(before)
+	afterPhysical, _ := physical.PhysicalFingerprint(after)
+	beforeSystem, _ := physical.SystemFingerprint(before.Provider, before.System)
+	afterSystem, _ := physical.SystemFingerprint(after.Provider, after.System)
+	if beforePhysical != afterPhysical || beforeSystem == afterSystem {
+		t.Fatal("delivery upgrade did not preserve physical and change system fingerprint domains")
+	}
+	plan, err := Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Initial || len(plan.Operations) != 2 || plan.Operations[0].Kind != AddSystemObject || plan.Operations[0].ObjectID != string(physical.OutboxDeliveryObjectIDV1) || plan.Operations[1].Kind != RecordSchemaVersion {
+		t.Fatalf("outbox delivery upgrade plan=%#v", plan)
+	}
+	forged := after
+	forged.System.Objects = append([]physical.SystemObject(nil), after.System.Objects...)
+	forged.System.Objects[len(forged.System.Objects)-1].Version = 2
+	if _, err := Diff(before, forged); err == nil {
+		t.Fatal("forged outbox delivery system object was accepted")
+	}
+}
+
 func TestTypeChangeDropsAndRestoresUnchangedIndexAndForeignKey(t *testing.T) {
 	before := relatedSchema()
 	after := relatedSchema()

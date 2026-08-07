@@ -211,6 +211,10 @@ func bindPreparedResolvers(source []byte, graphqlImportPath string) ([]byte, err
 		if receiver == "queryResolver" || receiver == "mutationResolver" {
 			helper = "ResolvePreparedRoot"
 			arguments = "ctx"
+		} else if receiver == "subscriptionResolver" {
+			helper = "ResolvePreparedSubscriptionRoot"
+			arguments = "ctx"
+			returnType = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(returnType), "<-chan"))
 		}
 		expression, err := parser.ParseExpr(fmt.Sprintf("%s.%s[%s](%s)", qualifier, helper, returnType, arguments))
 		if err != nil {

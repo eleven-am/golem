@@ -92,6 +92,8 @@ func Emit(request Request) (File, error) {
 		runtimePath = strings.TrimSuffix(request.GolemImportPath, "/golem") + "/runtime"
 	}
 	golemRuntime := imports.qualify(runtimePath, "golemruntime")
+	eventsPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/events"
+	eventsAlias := imports.qualify(eventsPath, "events")
 	contextAlias := imports.qualify("context", "context")
 	sqlxAlias := imports.qualify("github.com/jmoiron/sqlx", "sqlx")
 	models := append([]ir.ModelDeclIR(nil), request.Schema.Model.Models...)
@@ -150,7 +152,36 @@ func Emit(request Request) (File, error) {
 		}
 	}
 	source.WriteString("\t)\n}\n")
-	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, models, modelAliases, contractModels(request.Schema.Contract))
+	subscribedPackages := subscriptionPackages(request.Schema.Model, request.Schema.Contract)
+	if len(subscribedPackages) != 0 {
+		fmt.Fprintf(&source, "\nfunc GolemGeneratedApplicationEventRegistry() (%s.EventRegistry, error) {\n", golem)
+		fmt.Fprintf(&source, "\treturn %s.GeneratedEventRegistry(golemGeneratedGenerationDigest(),\n", golem)
+		for index, spec := range packages {
+			if !subscribedPackages[spec.ImportPath] {
+				continue
+			}
+			if aliases[index] == "" {
+				source.WriteString("\t\tGolemGeneratedEventModels(),\n")
+			} else {
+				fmt.Fprintf(&source, "\t\t%s.GolemGeneratedEventModels(),\n", aliases[index])
+			}
+		}
+		source.WriteString("\t)\n}\n")
+		fmt.Fprintf(&source, "\nfunc GolemGeneratedApplicationEventFactories() (%s.EventFactoryRegistry, error) {\n", golemRuntime)
+		fmt.Fprintf(&source, "\treturn %s.GeneratedEventFactoryRegistry(golemGeneratedGenerationDigest(),\n", golemRuntime)
+		for index, spec := range packages {
+			if !subscribedPackages[spec.ImportPath] {
+				continue
+			}
+			if aliases[index] == "" {
+				source.WriteString("\t\tGolemGeneratedEventFactories(),\n")
+			} else {
+				fmt.Fprintf(&source, "\t\t%s.GolemGeneratedEventFactories(),\n", aliases[index])
+			}
+		}
+		source.WriteString("\t)\n}\n")
+	}
+	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, eventsAlias, models, modelAliases, contractModels(request.Schema.Contract))
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -162,8 +193,19 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR) {
-	fmt.Fprintf(source, "\ntype Config[P any] struct {\n\tDB *%s.DB\n\tProvider %s.Provider\n\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n\tAuditPrincipal func(P) string\n\tReportScopedQuery func(%s.Context, %s.ScopedAuditRecord)\n\tResolvePrincipal func(%s.Context, P) (%s, error)\n\tSnapshotActor func(%s) (%s, error)\n}\n", sqlxAlias, golemAlias, runtimeAlias, runtimeAlias, runtimeAlias, contextAlias, golemAlias, contextAlias, golemAlias, contextAlias, actorType, actorType, actorType)
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias, eventsAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR) {
+	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
+	fmt.Fprintf(source, "\tDB *%s.DB\n\tProvider %s.Provider\n", sqlxAlias, golemAlias)
+	fmt.Fprintf(source, "\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n", runtimeAlias, runtimeAlias, runtimeAlias)
+	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tEventObserver %s.Observer\n", eventsAlias, eventsAlias, eventsAlias)
+	fmt.Fprintf(source, "\tCDCAdapters []%s.CDCAdapter\n\tReportEventOperator %s.OperatorAudit\n", eventsAlias, eventsAlias)
+	fmt.Fprintf(source, "\tHistoricalEventBundles []%s.SchemaBundle\n", golemAlias)
+	fmt.Fprintf(source, "\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n", contextAlias, golemAlias)
+	source.WriteString("\tAuditPrincipal func(P) string\n")
+	fmt.Fprintf(source, "\tReportScopedQuery func(%s.Context, %s.ScopedAuditRecord)\n", contextAlias, golemAlias)
+	fmt.Fprintf(source, "\tResolvePrincipal func(%s.Context, P) (%s, error)\n", contextAlias, actorType)
+	source.WriteString("\tSnapshotPrincipal func(P) (P, error)\n")
+	fmt.Fprintf(source, "\tSnapshotActor func(%s) (%s, error)\n}\n", actorType, actorType)
 	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s] }\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
@@ -202,6 +244,13 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		if contract.Subscriptions {
+			eventType := model.Go.Name + "Event"
+			if alias := aliases[model.Go.PackagePath]; alias != "" {
+				eventType = alias + "." + eventType
+			}
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) Events(ctx %s.Context, options ...%s.EventOption[%s]) (%s.EventStream[%s], error) { return %s.CallerEvents[P, %s, %s, %s](ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, eventType, runtimeAlias, actorType, modelType, eventType, descriptor)
+		}
 		emitAnalyticsClientMethods(source, "Caller", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
 			emitScopedClientMethod(source, "Caller", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
@@ -260,8 +309,17 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
-	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AnalyticsLimits: config.AnalyticsLimits, AfterCommitError: config.AfterCommitError, AuditPrincipal: config.AuditPrincipal, ReportScopedQuery: config.ReportScopedQuery, ResolvePrincipal: config.ResolvePrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
+	if hasSubscriptions(contracts) {
+		fmt.Fprintf(source, "\teventRegistry, err := GolemGeneratedApplicationEventRegistry()\n\tif err != nil { return nil, err }\n\teventFactories, err := GolemGeneratedApplicationEventFactories()\n\tif err != nil { return nil, err }\n")
+	} else {
+		fmt.Fprintf(source, "\teventRegistry := %s.EventRegistry{}\n\teventFactories := %s.EventFactoryRegistry{}\n", golemAlias, runtimeAlias)
+	}
+	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AnalyticsLimits: config.AnalyticsLimits, EventRegistry: eventRegistry, EventFactories: eventFactories, EventLimits: config.EventLimits, EventTransport: config.EventTransport, EventObserver: config.EventObserver, CDCAdapters: config.CDCAdapters, ReportEventOperator: config.ReportEventOperator, HistoricalEventBundles: config.HistoricalEventBundles, AfterCommitError: config.AfterCommitError, AuditPrincipal: config.AuditPrincipal, ReportScopedQuery: config.ReportScopedQuery, ResolvePrincipal: config.ResolvePrincipal, SnapshotPrincipal: config.SnapshotPrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine}, nil\n}\n")
+	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)
+	fmt.Fprintf(source, "func (app *App[P]) EventCapabilities() %s.Capabilities { if app == nil { return %s.Capabilities{} }; return app.runtime.EventCapabilities() }\n", eventsAlias, eventsAlias)
+	fmt.Fprintf(source, "func (app *App[P]) EventOperator() %s.Operator { if app == nil { return nil }; return app.runtime.EventOperator() }\n", eventsAlias)
+	fmt.Fprintf(source, "func (app *App[P]) EventLimits() %s.Limits { if app == nil { return %s.Limits{} }; return app.runtime.EventLimits() }\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "\nfunc (app *App[P]) ForPrincipal(ctx %s.Context, principal P) (*Caller[P], error) {\n\tinner, err := app.runtime.ForPrincipal(ctx, principal)\n\tif err != nil { return nil, err }\n\tresult := &Caller[P]{runtime: inner}\n", contextAlias)
 	for _, model := range models {
 		fmt.Fprintf(source, "\tresult.%s = Caller%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
@@ -291,10 +349,35 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
 }
 
+func hasSubscriptions(contracts map[ir.ModelID]ir.ModelContractIR) bool {
+	for _, contract := range contracts {
+		if contract.Subscriptions {
+			return true
+		}
+	}
+	return false
+}
+
 func contractModels(contract ir.ContractIR) map[ir.ModelID]ir.ModelContractIR {
 	result := make(map[ir.ModelID]ir.ModelContractIR, len(contract.Models))
 	for _, model := range contract.Models {
 		result[model.ModelID] = model
+	}
+	return result
+}
+
+func subscriptionPackages(model ir.ModelIR, contract ir.ContractIR) map[string]bool {
+	enabled := make(map[ir.ModelID]bool)
+	for _, entry := range contract.Models {
+		if entry.Subscriptions {
+			enabled[entry.ModelID] = true
+		}
+	}
+	result := make(map[string]bool)
+	for _, entry := range model.Models {
+		if enabled[entry.ID] {
+			result[entry.Go.PackagePath] = true
+		}
 	}
 	return result
 }

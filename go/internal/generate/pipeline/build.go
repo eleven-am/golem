@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
+	eventcodegen "github.com/eleven-am/golem/go/internal/codegen/event"
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/codegen/registry"
@@ -281,6 +282,10 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 	if err != nil {
 		return nil, fmt.Errorf("emit final model descriptors: %w", err)
 	}
+	eventFiles, err := eventcodegen.Emit(eventcodegen.Request{Compilation: compilation, Packages: compiled.Packages, GolemImportPath: request.GolemImportPath, FinalStamp: *stamp})
+	if err != nil {
+		return nil, fmt.Errorf("emit final event values: %w", err)
+	}
 	bound, err := bindings.Emit(bindings.Request{Compilation: compilation, Packages: compiled.Packages, Entries: entries, GolemImportPath: request.GolemImportPath, GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI})
 	if err != nil {
 		return nil, fmt.Errorf("emit final bindings: %w", err)
@@ -312,9 +317,16 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 	if err != nil {
 		return nil, fmt.Errorf("emit GraphQL Go adapter: %w", err)
 	}
-	artifacts := make([]manifest.Artifact, 0, len(models.Files)+len(bound)+len(providers)+4+len(graphqlAdapter.Files))
+	artifacts := make([]manifest.Artifact, 0, len(models.Files)+len(eventFiles)+len(bound)+len(providers)+4+len(graphqlAdapter.Files))
 	for _, file := range models.Files {
 		artifact, err := goArtifact(compiled.ModuleDir, file.Path, manifest.ArtifactModelGo, file.Source)
+		if err != nil {
+			return nil, err
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	for _, file := range eventFiles {
+		artifact, err := goArtifact(compiled.ModuleDir, file.Path, manifest.ArtifactEventGo, file.Source)
 		if err != nil {
 			return nil, err
 		}
@@ -649,7 +661,7 @@ func prospectiveModfile(moduleDir string) (string, func(), error) {
 }
 
 func isGoArtifact(kind manifest.ArtifactKind) bool {
-	return kind == manifest.ArtifactModelGo || kind == manifest.ArtifactBindingsGo || kind == manifest.ArtifactRegistryGo || kind == manifest.ArtifactGraphQLGo
+	return kind == manifest.ArtifactModelGo || kind == manifest.ArtifactEventGo || kind == manifest.ArtifactBindingsGo || kind == manifest.ArtifactRegistryGo || kind == manifest.ArtifactGraphQLGo
 }
 
 func firstLine(content []byte) string {

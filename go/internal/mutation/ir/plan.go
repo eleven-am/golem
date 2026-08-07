@@ -128,9 +128,16 @@ func (plan Plan) validate() error {
 		return fmt.Errorf("P4_MUTATION_IR_PLAN: upsert must declare retry ownership")
 	}
 	hasFact := false
+	hasEventSchemaFact := false
+	missingEventSchemaFact := false
 	for _, node := range plan.graph.nodes {
 		if node.fact.enabled {
 			hasFact = true
+			if node.fact.eventSchema == ([32]byte{}) {
+				missingEventSchemaFact = true
+			} else {
+				hasEventSchemaFact = true
+			}
 		}
 		if plan.stance == System {
 			if node.selection != nil || node.rowPostcondition != nil || len(node.fieldConditions) != 0 || len(node.hooks) != 0 {
@@ -158,6 +165,9 @@ func (plan Plan) validate() error {
 	if plan.factCodec != nil {
 		if plan.factCodec.formatVersion == 0 || plan.factCodec.codecID == "" || plan.factCodec.generation == ([32]byte{}) {
 			return fmt.Errorf("P4_MUTATION_IR_PLAN: invalid fact codec requirement")
+		}
+		if plan.factCodec.formatVersion >= 2 && missingEventSchemaFact || plan.factCodec.formatVersion < 2 && hasEventSchemaFact || hasEventSchemaFact && missingEventSchemaFact {
+			return fmt.Errorf("P7_MUTATION_IR_PLAN: fact codec and per-node event-schema requirements disagree")
 		}
 	}
 	return nil

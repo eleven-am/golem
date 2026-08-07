@@ -206,6 +206,15 @@ func socialUserContract() ir.ModelContractIR {
 }
 
 func socialPostContract() ir.ModelContractIR {
+	model := socialPostModel()
+	shape, err := ir.BuildEventSchemaShape(model, nil, []ir.FieldID{postIDFieldID, postAuthorIDFieldID, postTitleFieldID, postBodyFieldID, postCreatedAtFieldID})
+	if err != nil {
+		panic(err)
+	}
+	fingerprint, err := ir.EventSchemaFingerprint(shape)
+	if err != nil {
+		panic(err)
+	}
 	return ir.ModelContractIR{
 		ModelID:     postModelID,
 		GraphQLName: "Post",
@@ -222,8 +231,12 @@ func socialPostContract() ir.ModelContractIR {
 		},
 		Operations:    []ir.Operation{"findOne", "findMany", "create", "update", "delete", "updateMany", "deleteMany"},
 		Subscriptions: true,
-		Limits:        ir.LimitContractIR{MaxTake: 100},
-		Exposed:       true,
+		Event: &ir.EventContractIR{
+			PayloadTypeName: "PostEvent", MetadataFields: []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
+			DeleteSnapshotFull: true, Schema: shape, SchemaFingerprint: fingerprint,
+		},
+		Limits:  ir.LimitContractIR{MaxTake: 100},
+		Exposed: true,
 	}
 }
 

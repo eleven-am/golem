@@ -57,6 +57,42 @@ func TestRenderInsertsRejectsBelowOneRow(t *testing.T) {
 	}
 }
 
+func TestP7RenderDeliveryInsertIsOneIdempotentCausalRowOnBothProviders(t *testing.T) {
+	rows := []OutboxRow{testOutboxRow(1), testOutboxRow(2)}
+	rows[0].RecordedAt = time.Unix(1_700_000_001, 987_654_321)
+	rows[1].RecordedAt = time.Unix(1_700_000_000, 123_456_789)
+	rows[1].EventID = "00000000-0000-0000-0000-000000000003"
+	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
+		statement, err := RenderDeliveryInsertAt(provider, "closed_system", rows)
+		if err != nil {
+			t.Fatalf("provider %d: %v", provider, err)
+		}
+		if !strings.Contains(statement.SQL(), `"closed_system"."_golem_outbox_delivery"`) || len(statement.Args()) != 4 {
+			t.Fatalf("provider %d statement=%q args=%#v", provider, statement.SQL(), statement.Args())
+		}
+		if provider == policyir.ProviderSQLite {
+			if !strings.HasPrefix(statement.SQL(), "INSERT INTO") || !strings.Contains(statement.SQL(), `ON CONFLICT ("causation_id") DO NOTHING`) || strings.Count(statement.SQL(), "?") != 4 {
+				t.Fatalf("SQLite delivery insert is not idempotent/exact: %q", statement.SQL())
+			}
+			if got := statement.Args()[1]; got != rows[1].RecordedAt.UTC().Truncate(time.Microsecond).UnixMicro() {
+				t.Fatalf("SQLite first_recorded_at=%v", got)
+			}
+		} else {
+			if !strings.Contains(statement.SQL(), `ON CONFLICT ("causation_id") DO NOTHING`) || strings.Count(statement.SQL(), "$") != 4 {
+				t.Fatalf("PostgreSQL delivery insert is not idempotent/exact: %q", statement.SQL())
+			}
+			if got := statement.Args()[1].(time.Time); !got.Equal(rows[1].RecordedAt.UTC().Truncate(time.Microsecond)) {
+				t.Fatalf("PostgreSQL first_recorded_at=%v", got)
+			}
+		}
+	}
+	foreign := append([]OutboxRow(nil), rows...)
+	foreign[1].CausationID = "00000000-0000-0000-0000-000000000004"
+	if _, err := RenderDeliveryInsertAt(policyir.ProviderSQLite, "main", foreign); err == nil {
+		t.Fatal("mixed causations produced one delivery row")
+	}
+}
+
 func testOutboxRow(ordinal int64) OutboxRow {
 	return OutboxRow{
 		EventID:               "00000000-0000-0000-0000-000000000001",

@@ -318,6 +318,47 @@ func TestP5ActiveGeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) 
 	}
 }
 
+func TestP6GeneratedMetricsFixtureRegeneratesByteIdentically(t *testing.T) {
+	moduleRoot := p5ExtensionModuleRoot(t)
+	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p6metrics")
+	request := p6MetricsGenerationRequest(directory)
+	first, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Prospective.GenerationDigest != second.Prospective.GenerationDigest {
+		t.Fatalf("metrics repeat digest differs: %s != %s", first.Prospective.GenerationDigest, second.Prospective.GenerationDigest)
+	}
+	firstArtifacts, secondArtifacts := p5ExtensionArtifactMap(first), p5ExtensionArtifactMap(second)
+	for path, content := range firstArtifacts {
+		if !bytes.Equal(content, secondArtifacts[path]) {
+			t.Fatalf("metrics repeat artifact differs: %s", path)
+		}
+		if !strings.HasPrefix(path, "runtime/testdata/p6metrics/") {
+			continue
+		}
+		committed, err := os.ReadFile(filepath.Join(moduleRoot, filepath.FromSlash(path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(content, committed) {
+			t.Fatalf("committed metrics fixture is stale: %s: %s", path, p5ExtensionFirstDifference(committed, content))
+		}
+	}
+}
+
+func p6MetricsGenerationRequest(directory string) pipeline.Request {
+	return pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p6metrics", PackageName: "p6metrics", Directory: directory},
+		Lowerers:   []physical.Lowerer{p6MetricsPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
+	}
+}
+
 func p5ExtensionGenerationRequest(directory, importPath string) pipeline.Request {
 	return pipeline.Request{
 		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
@@ -335,6 +376,22 @@ const (
 )
 
 type p5ExtensionPostgreSQLLowerer struct{ delegate physical.Lowerer }
+
+type p6MetricsPostgreSQLLowerer struct{ delegate physical.Lowerer }
+
+func (lowerer p6MetricsPostgreSQLLowerer) Manifest() physical.ProviderManifest {
+	return lowerer.delegate.Manifest()
+}
+
+func (lowerer p6MetricsPostgreSQLLowerer) Lower(ctx context.Context, model compilerir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {
+	options.Namespace = p6MetricsPostgreSQLNamespace
+	schema, err := lowerer.delegate.Lower(ctx, model, options)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	schema.System.Namespace.Name = p6MetricsPostgreSQLSystemNamespace
+	return physical.Normalize(schema)
+}
 
 func (lowerer p5ExtensionPostgreSQLLowerer) Manifest() physical.ProviderManifest {
 	return lowerer.delegate.Manifest()

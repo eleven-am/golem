@@ -77,8 +77,12 @@ func validateRequest(request RootRequest) error {
 		return fail(CodeRequest, request, policyir.FieldID{}, "result requirements do not match active schema", err)
 	}
 	for _, field := range request.PrivateDeleteSnapshot {
-		if !request.Registry.HasField(golem.ModelID(request.Model), golem.FieldID(field)) {
+		metadata, present := request.Registry.Field(golem.ModelID(request.Model), golem.FieldID(field))
+		if !present {
 			return fail(CodeRequest, request, field, "private delete snapshot field is absent from model", nil)
+		}
+		if metadata.Kind() == compilerir.FieldRelation {
+			return fail(CodeRequest, request, field, "private delete snapshot may contain only stored scalar fields", nil)
 		}
 	}
 	if request.Stance == mutationir.Caller {
@@ -94,7 +98,7 @@ func validateRequest(request RootRequest) error {
 		if request.FactCodec == nil || request.FactCodec.Generation() != [32]byte(request.Registry.GenerationDigest()) {
 			return fail(CodeRequest, request, policyir.FieldID{}, "fact capture requires a codec for the active generation", nil)
 		}
-	} else if request.FactCodec != nil || len(request.PrivateDeleteSnapshot) != 0 {
+	} else if request.FactCodec != nil || request.EventSchema != ([32]byte{}) || len(request.PrivateDeleteSnapshot) != 0 {
 		return fail(CodeRequest, request, policyir.FieldID{}, "fact-only requirements were supplied while capture is disabled", nil)
 	}
 	if request.Operation != mutationir.Delete && request.Operation != mutationir.DeleteMany && len(request.PrivateDeleteSnapshot) != 0 {
@@ -529,9 +533,25 @@ func factFor(request RootRequest, operation mutationir.Operation) (mutationir.Fa
 	default:
 		return mutationir.NoFact(), nil
 	}
-	fact, err := mutationir.NewFactRequirement(action, before, after, request.PrivateDeleteSnapshot)
+	var fact mutationir.FactRequirement
+	var err error
+	if action == mutationir.FactDeleted {
+		state := mutationir.DeleteSnapshotUnverifiable
+		if request.PrivateDeleteSnapshot != nil {
+			state = mutationir.DeleteSnapshotStoredScalars
+		}
+		fact, err = mutationir.NewDeleteFactRequirement(before, state, request.PrivateDeleteSnapshot)
+	} else {
+		fact, err = mutationir.NewFactRequirement(action, before, after, nil)
+	}
 	if err != nil {
 		return mutationir.FactRequirement{}, fail(CodeIR, request, policyir.FieldID{}, "fact requirement is invalid", err)
+	}
+	if request.EventSchema != ([32]byte{}) {
+		fact, err = fact.WithEventSchema(request.EventSchema)
+		if err != nil {
+			return mutationir.FactRequirement{}, fail(CodeIR, request, policyir.FieldID{}, "fact event schema is invalid", err)
+		}
 	}
 	return fact, nil
 }

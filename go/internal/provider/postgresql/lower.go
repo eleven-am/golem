@@ -408,6 +408,7 @@ func systemSchema() physical.SystemSchema {
 		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},
 		{ID: physical.MigrationLockObjectIDV1, Kind: physical.SystemMigrationLock, Version: 1, Name: "_golem_migration_lock"},
 		physical.OutboxSystemObjectV1(),
+		physical.OutboxDeliverySystemObjectV1(),
 		physical.UpsertGuardSystemObjectV1(),
 	}}
 }

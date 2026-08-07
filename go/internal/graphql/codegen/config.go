@@ -22,7 +22,7 @@ import (
 const GQLGenVersion = "v0.17.70"
 
 const (
-	GraphQLABIVersion        = "p6-graphql-abi-v2"
+	GraphQLABIVersion        = "p7-graphql-abi-v3"
 	GoFilename               = "zz_golem_graphql.gen.go"
 	SDLFilename              = "zz_golem_graphql.schema.graphqls"
 	DefaultGolemImportPath   = "github.com/eleven-am/golem/go/golem"
@@ -121,6 +121,7 @@ func Emit(request Request) (Result, error) {
 	}
 	appendRoots("query", schema.Query)
 	appendRoots("mutation", schema.Mutation)
+	appendRoots("subscription", schema.Subscription)
 	sort.Slice(roots, func(i, j int) bool {
 		if roots[i].operation != roots[j].operation {
 			return roots[i].operation < roots[j].operation
@@ -175,8 +176,13 @@ func Emit(request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	eventBindings, err := renderEventBindings(request.Compilation, qualify)
+	if err != nil {
+		return Result{}, err
+	}
 	body.WriteString("import (\n")
 	body.WriteString("\t\"context\"\n")
+	body.WriteString("\t\"encoding/json\"\n")
 	body.WriteString("\t\"fmt\"\n")
 	body.WriteString("\t\"net/http\"\n\n")
 	fmt.Fprintf(&body, "\t\"%s\"\n", request.GolemImportPath)
@@ -211,12 +217,18 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tPrincipalFromContext func(context.Context) (P, bool)\n")
 	body.WriteString("\tLimits GraphQLLimits\n")
 	body.WriteString("\tIntrospection bool\n")
+	body.WriteString("\tWebSocketInit func(context.Context, json.RawMessage) (context.Context, error)\n")
 	body.WriteString("\tReportInternalError func(context.Context, error)\n")
 	body.WriteString("}\n\n")
 	body.WriteString("type GraphQLServer struct {\n")
 	body.WriteString("\thandler http.Handler\n")
 	body.WriteString("\tsdl string\n")
 	body.WriteString("\tcontractFingerprint golem.SchemaDigest\n")
+	body.WriteString("\tshutdown func(context.Context) error\n")
+	body.WriteString("}\n\n")
+	body.WriteString("func (server *GraphQLServer) Shutdown(ctx context.Context) error {\n")
+	body.WriteString("\tif server == nil || server.shutdown == nil { return nil }\n")
+	body.WriteString("\treturn server.shutdown(ctx)\n")
 	body.WriteString("}\n\n")
 	body.WriteString("func (server *GraphQLServer) Handler() http.Handler {\n")
 	body.WriteString("\tif server == nil { return nil }\n")
@@ -249,6 +261,23 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenMutation(ctx context.Context, request golem.RuntimeMutationRequest) (golem.RuntimeMutationResult, error) {\n")
 	body.WriteString("\treturn caller.execution.ExecuteFrozenMutation(ctx, request)\n")
 	body.WriteString("}\n\n")
+	if len(eventBindings) != 0 {
+		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) SubscribeFrozenEvents(ctx context.Context, request golem.FrozenReadRequest, entitySelected bool) (golemgraphql.EventStream, error) {\n")
+		body.WriteString("\tif caller == nil || caller.public == nil { return nil, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
+		body.WriteString("\tswitch request.ModelID() {\n")
+		for _, binding := range eventBindings {
+			fmt.Fprintf(&body, "\tcase %s.Metadata().ModelID():\n", binding.descriptor)
+			fmt.Fprintf(&body, "\t\tstream, err := golemruntime.CallerFrozenReadEvents[P, %s, %s](ctx, caller.public.runtime, request, entitySelected)\n", actorType, binding.eventType)
+			body.WriteString("\t\tif err != nil { return nil, err }\n")
+			fmt.Fprintf(&body, "\t\treturn golemgraphql.AdaptGeneratedEventStream(stream, func(event %s) (golemgraphql.GeneratedEvent, error) {\n", binding.eventType)
+			body.WriteString("\t\t\tidentity := event.ID()\n")
+			body.WriteString("\t\t\tvar entity *golem.RuntimeModelRow\n")
+			body.WriteString("\t\t\tif typed, present := event.Entity(); present { runtimeEntity := golem.RuntimeModelRowFromTyped(typed); entity = &runtimeEntity }\n")
+			fmt.Fprintf(&body, "\t\t\treturn golemgraphql.NewGeneratedEvent(event.Metadata(), []any{%s}, entity)\n", strings.Join(binding.identity, ", "))
+			body.WriteString("\t\t})\n")
+		}
+		body.WriteString("\tdefault:\n\t\treturn nil, fmt.Errorf(\"GraphQL subscription model is unavailable\")\n\t}\n}\n\n")
+	}
 	body.WriteString("func (app *App[P]) golemGeneratedGraphQLBeginCaller(ctx context.Context, principal P) (golemgraphql.CallerExecution, error) {\n")
 	body.WriteString("\tif app == nil || app.runtime == nil { return nil, fmt.Errorf(\"GraphQL application is unavailable\") }\n")
 	body.WriteString("\tcaller, err := app.ForPrincipal(ctx, principal)\n")
@@ -292,11 +321,11 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\t})\n")
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\tserver, err := golemgraphql.NewServer(golemGeneratedGraphQLSDL, golemgraphql.Config[P]{\n")
-	body.WriteString("\t\tPrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection,\n")
+	body.WriteString("\t\tPrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection, WebSocketInit: config.WebSocketInit, EventLimits: app.runtime.EventLimits(),\n")
 	body.WriteString("\t\tContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable,\n")
 	body.WriteString("\t}, executor)\n")
 	body.WriteString("\tif err != nil { return nil, err }\n")
-	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint()}, nil\n")
+	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint(), shutdown: server.Shutdown}, nil\n")
 	body.WriteString("}\n")
 	source, err := format.Source(body.Bytes())
 	if err != nil {
@@ -433,6 +462,57 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 		bindings = append(bindings, fmt.Sprintf("golemgraphql.%s(%s)", constructor, arguments))
 	}
 	return bindings, nil
+}
+
+type eventBinding struct {
+	descriptor string
+	eventType  string
+	identity   []string
+}
+
+func renderEventBindings(compilation *ir.CompilationIR, qualify func(string, string) string) ([]eventBinding, error) {
+	if compilation == nil {
+		return nil, nil
+	}
+	contracts := make(map[ir.ModelID]ir.ModelContractIR, len(compilation.Contract.Models))
+	for _, contract := range compilation.Contract.Models {
+		contracts[contract.ModelID] = contract
+	}
+	models := append([]ir.ModelDeclIR(nil), compilation.Model.Models...)
+	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
+	var result []eventBinding
+	for _, model := range models {
+		contract, ok := contracts[model.ID]
+		if !ok || !contract.Exposed || !contract.Subscriptions {
+			continue
+		}
+		if contract.Event == nil || model.PrimaryKey == nil || len(model.PrimaryKey.Fields) == 0 {
+			return nil, fmt.Errorf("GraphQL event binding model %s is incomplete", model.ID)
+		}
+		alias := qualify(model.Go.PackagePath, "golemmodels")
+		prefix := ""
+		if alias != "" {
+			prefix = alias + "."
+		}
+		fields := make(map[ir.FieldID]ir.FieldIR, len(model.Fields))
+		for _, field := range model.Fields {
+			fields[field.ID] = field
+		}
+		binding := eventBinding{descriptor: prefix + "GolemGenerated" + model.Go.Name + "Descriptor", eventType: prefix + model.Go.Name + "Event"}
+		if len(model.PrimaryKey.Fields) == 1 {
+			binding.identity = []string{"identity"}
+		} else {
+			for _, fieldID := range model.PrimaryKey.Fields {
+				field, present := fields[fieldID]
+				if !present || field.Scalar == nil || field.GoName == "" {
+					return nil, fmt.Errorf("GraphQL event binding model %s identity field %s is absent", model.ID, fieldID)
+				}
+				binding.identity = append(binding.identity, "identity."+field.GoName+"()")
+			}
+		}
+		result = append(result, binding)
+	}
+	return result, nil
 }
 
 func resultModelName(value ir.GraphQLTypeIR) string {

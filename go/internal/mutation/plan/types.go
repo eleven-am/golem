@@ -63,6 +63,7 @@ type RootRequest struct {
 
 	CaptureFacts          bool
 	FactCodec             *mutationir.FactCodecRequirement
+	EventSchema           [32]byte
 	PrivateDeleteSnapshot []policyir.FieldID
 	// AuthorizedRuntimeFields are relation-owned correlation fields injected by
 	// the nested compiler. They require the parent action's field grant even

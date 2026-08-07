@@ -213,6 +213,73 @@ func TestGraphQLNamesAndSelectorsAffectOnlyContractFingerprint(t *testing.T) {
 	}
 }
 
+func TestP7EventSchemaFingerprintCanonicalLogicalShape(t *testing.T) {
+	id := FieldID("00000000000000000000000000000001")
+	title := FieldID("00000000000000000000000000000002")
+	enumField := FieldID("00000000000000000000000000000003")
+	enumID := EnumID("00000000000000000000000000000004")
+	firstMember := EnumValueID("00000000000000000000000000000005")
+	secondMember := EnumValueID("00000000000000000000000000000006")
+	model := ModelDeclIR{
+		ID: "00000000000000000000000000000010",
+		Fields: []FieldIR{
+			{ID: id, Kind: FieldScalar, Scalar: &ScalarFieldIR{Type: LogicalTypeIR{Kind: TypeUUID}}},
+			{ID: title, Kind: FieldScalar, Scalar: &ScalarFieldIR{Type: LogicalTypeIR{Kind: TypeString}, Nullable: true}},
+			{ID: enumField, Kind: FieldEnum, Scalar: &ScalarFieldIR{Type: LogicalTypeIR{Kind: TypeEnum, EnumID: &enumID}}},
+		},
+		PrimaryKey: &KeyIR{ID: "00000000000000000000000000000011", Kind: KeyPrimary, Fields: []FieldID{id}},
+	}
+	enums := []EnumIR{{ID: enumID, Values: []EnumValueIR{{ID: secondMember}, {ID: firstMember}}}}
+	shape, err := BuildEventSchemaShape(model, enums, []FieldID{id, title, enumField})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shape.IdentityFields) != 1 || shape.IdentityFields[0].FieldID != id || len(shape.SnapshotFields) != 3 || shape.SnapshotFields[1].FieldID != title || len(shape.Enums) != 1 || shape.Enums[0].Members[0] != firstMember {
+		t.Fatalf("event schema shape = %#v", shape)
+	}
+	base, err := EventSchemaFingerprint(shape)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reorderedEnums, _ := cloneJSON(shape)
+	reorderedEnums.Enums[0].Members[0], reorderedEnums.Enums[0].Members[1] = reorderedEnums.Enums[0].Members[1], reorderedEnums.Enums[0].Members[0]
+	canonical, _ := EventSchemaFingerprint(reorderedEnums)
+	if canonical != base {
+		t.Fatal("enum inventory order changed the canonical event schema fingerprint")
+	}
+	reorderedSnapshot, _ := cloneJSON(shape)
+	reorderedSnapshot.SnapshotFields[0], reorderedSnapshot.SnapshotFields[1] = reorderedSnapshot.SnapshotFields[1], reorderedSnapshot.SnapshotFields[0]
+	changed, _ := EventSchemaFingerprint(reorderedSnapshot)
+	if changed == base {
+		t.Fatal("private snapshot semantic order did not change event schema fingerprint")
+	}
+	changedType, _ := cloneJSON(shape)
+	changedType.SnapshotFields[1].Type.Kind = TypeBytes
+	changed, _ = EventSchemaFingerprint(changedType)
+	if changed == base {
+		t.Fatal("logical value shape did not change event schema fingerprint")
+	}
+}
+
+func TestP7EventSchemaBuilderRejectsNonScalarDuplicateAndUnknownEnumShapes(t *testing.T) {
+	id := FieldID("00000000000000000000000000000001")
+	relation := FieldID("00000000000000000000000000000002")
+	enumField := FieldID("00000000000000000000000000000003")
+	missingEnum := EnumID("00000000000000000000000000000004")
+	model := ModelDeclIR{ID: "00000000000000000000000000000010", Fields: []FieldIR{
+		{ID: id, Kind: FieldScalar, Scalar: &ScalarFieldIR{Type: LogicalTypeIR{Kind: TypeUUID}}},
+		{ID: relation, Kind: FieldRelation, Relation: &RelationFieldIR{}},
+		{ID: enumField, Kind: FieldEnum, Scalar: &ScalarFieldIR{Type: LogicalTypeIR{Kind: TypeEnum, EnumID: &missingEnum}}},
+	}, PrimaryKey: &KeyIR{ID: "00000000000000000000000000000011", Kind: KeyPrimary, Fields: []FieldID{id}}}
+	for name, snapshot := range map[string][]FieldID{"relation": {relation}, "duplicate": {id, id}, "unknown-enum": {enumField}} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := BuildEventSchemaShape(model, nil, snapshot); err == nil {
+				t.Fatalf("snapshot %#v was accepted", snapshot)
+			}
+		})
+	}
+}
+
 func TestSelectorComponentsRemainOrderedWhileInventoriesCanonicalize(t *testing.T) {
 	left := ContractIR{FormatVersion: ContractFormatVersion, Models: []ModelContractIR{{
 		ModelID: "model",

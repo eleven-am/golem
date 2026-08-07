@@ -94,6 +94,152 @@ func ContractFingerprint(input ContractIR) (Fingerprint, error) {
 	return fingerprint("golem:contract-fingerprint:v1", encoded), nil
 }
 
+// BuildEventSchemaShape closes the exact value schema needed by fact codecs.
+// snapshotFields is semantic order supplied by the compiler; callers normally
+// pass every locally stored scalar/enum field in model declaration order.
+func BuildEventSchemaShape(model ModelDeclIR, enums []EnumIR, snapshotFields []FieldID) (EventSchemaShapeIR, error) {
+	if model.ID == "" {
+		return EventSchemaShapeIR{}, fmt.Errorf("event schema requires a model identity")
+	}
+	if model.PrimaryKey == nil || model.PrimaryKey.ID == "" || len(model.PrimaryKey.Fields) == 0 {
+		return EventSchemaShapeIR{}, fmt.Errorf("event schema for model %s requires a primary key", model.ID)
+	}
+	fields := make(map[FieldID]FieldIR, len(model.Fields))
+	for _, field := range model.Fields {
+		fields[field.ID] = field
+	}
+	shape := EventSchemaShapeIR{FormatVersion: EventSchemaFormatVersion, ModelID: model.ID, PrimaryKeyID: model.PrimaryKey.ID}
+	appendField := func(destination *[]EventFieldSchemaIR, fieldID FieldID) error {
+		field, exists := fields[fieldID]
+		if !exists || field.Scalar == nil || field.Kind == FieldRelation {
+			return fmt.Errorf("event schema field %s is not a stored scalar of model %s", fieldID, model.ID)
+		}
+		if err := validateEventLogicalType(field.Scalar.Type); err != nil {
+			return fmt.Errorf("event schema field %s: %w", fieldID, err)
+		}
+		*destination = append(*destination, EventFieldSchemaIR{FieldID: field.ID, Type: field.Scalar.Type, Nullable: field.Scalar.Nullable})
+		return nil
+	}
+	seenIdentity := make(map[FieldID]bool, len(model.PrimaryKey.Fields))
+	for _, fieldID := range model.PrimaryKey.Fields {
+		if seenIdentity[fieldID] {
+			return EventSchemaShapeIR{}, fmt.Errorf("event schema primary key repeats field %s", fieldID)
+		}
+		seenIdentity[fieldID] = true
+		if err := appendField(&shape.IdentityFields, fieldID); err != nil {
+			return EventSchemaShapeIR{}, err
+		}
+	}
+	seenSnapshot := make(map[FieldID]bool, len(snapshotFields))
+	for _, fieldID := range snapshotFields {
+		if seenSnapshot[fieldID] {
+			return EventSchemaShapeIR{}, fmt.Errorf("event schema snapshot repeats field %s", fieldID)
+		}
+		seenSnapshot[fieldID] = true
+		if err := appendField(&shape.SnapshotFields, fieldID); err != nil {
+			return EventSchemaShapeIR{}, err
+		}
+	}
+	referenced := map[EnumID]bool{}
+	var collectEnums func(LogicalTypeIR)
+	collectEnums = func(value LogicalTypeIR) {
+		if value.Kind == TypeEnum && value.EnumID != nil {
+			referenced[*value.EnumID] = true
+		}
+		if value.Element != nil {
+			collectEnums(*value.Element)
+		}
+	}
+	for _, field := range shape.IdentityFields {
+		collectEnums(field.Type)
+	}
+	for _, field := range shape.SnapshotFields {
+		collectEnums(field.Type)
+	}
+	enumByID := make(map[EnumID]EnumIR, len(enums))
+	for _, enum := range enums {
+		enumByID[enum.ID] = enum
+	}
+	for enumID := range referenced {
+		enum, exists := enumByID[enumID]
+		if !exists {
+			return EventSchemaShapeIR{}, fmt.Errorf("event schema references unknown enum %s", enumID)
+		}
+		entry := EventEnumSchemaIR{EnumID: enumID, Members: make([]EnumValueID, len(enum.Values))}
+		for index, member := range enum.Values {
+			entry.Members[index] = member.ID
+		}
+		sort.Slice(entry.Members, func(i, j int) bool { return entry.Members[i] < entry.Members[j] })
+		shape.Enums = append(shape.Enums, entry)
+	}
+	sort.Slice(shape.Enums, func(i, j int) bool { return shape.Enums[i].EnumID < shape.Enums[j].EnumID })
+	if shape.IdentityFields == nil {
+		shape.IdentityFields = []EventFieldSchemaIR{}
+	}
+	if shape.SnapshotFields == nil {
+		shape.SnapshotFields = []EventFieldSchemaIR{}
+	}
+	if shape.Enums == nil {
+		shape.Enums = []EventEnumSchemaIR{}
+	}
+	return shape, nil
+}
+
+func validateEventLogicalType(value LogicalTypeIR) error {
+	switch value.Kind {
+	case TypeBool, TypeInt16, TypeInt32, TypeInt64, TypeFloat32, TypeFloat64,
+		TypeDecimal, TypeString, TypeBytes, TypeUUID, TypeDate, TypeTime,
+		TypeDateTime, TypeJSON:
+		return nil
+	case TypeEnum:
+		if value.EnumID == nil || *value.EnumID == "" {
+			return fmt.Errorf("enum logical type requires a stable enum identity")
+		}
+		return nil
+	case TypeScalarList:
+		if value.Element == nil {
+			return fmt.Errorf("scalar-list logical type requires an element type")
+		}
+		return validateEventLogicalType(*value.Element)
+	default:
+		return fmt.Errorf("logical type %q has no lossless event codec", value.Kind)
+	}
+}
+
+// EventSchemaFingerprint is the sole event-schema digest definition shared by
+// compiler metadata and durable fact codecs. Ordered identity/snapshot fields
+// remain ordered; enum inventories canonicalize by stable identity.
+func EventSchemaFingerprint(input EventSchemaShapeIR) (Fingerprint, error) {
+	if input.FormatVersion != EventSchemaFormatVersion {
+		return "", fmt.Errorf("event schema version %d is unsupported; expected %d", input.FormatVersion, EventSchemaFormatVersion)
+	}
+	copy, err := cloneJSON(input)
+	if err != nil {
+		return "", err
+	}
+	sort.Slice(copy.Enums, func(i, j int) bool { return copy.Enums[i].EnumID < copy.Enums[j].EnumID })
+	for index := range copy.Enums {
+		sort.Slice(copy.Enums[index].Members, func(i, j int) bool { return copy.Enums[index].Members[i] < copy.Enums[index].Members[j] })
+		if copy.Enums[index].Members == nil {
+			copy.Enums[index].Members = []EnumValueID{}
+		}
+	}
+	if copy.IdentityFields == nil {
+		copy.IdentityFields = []EventFieldSchemaIR{}
+	}
+	if copy.SnapshotFields == nil {
+		copy.SnapshotFields = []EventFieldSchemaIR{}
+	}
+	if copy.Enums == nil {
+		copy.Enums = []EventEnumSchemaIR{}
+	}
+	encoded, err := json.Marshal(copy)
+	if err != nil {
+		return "", err
+	}
+	return fingerprint("golem:event-schema-fingerprint:v1", encoded), nil
+}
+
 func fingerprint(domain string, encoded []byte) Fingerprint {
 	hash := sha256.New()
 	hash.Write([]byte(domain))
@@ -418,6 +564,29 @@ func normalizeContract(contract *ContractIR) {
 				if model.Aggregation.RelationDimensions[relationIndex].Path == nil {
 					model.Aggregation.RelationDimensions[relationIndex].Path = []RelationID{}
 				}
+			}
+		}
+		if model.Event != nil {
+			if model.Event.MetadataFields == nil {
+				model.Event.MetadataFields = []string{}
+			}
+			if model.Event.Schema.IdentityFields == nil {
+				model.Event.Schema.IdentityFields = []EventFieldSchemaIR{}
+			}
+			if model.Event.Schema.SnapshotFields == nil {
+				model.Event.Schema.SnapshotFields = []EventFieldSchemaIR{}
+			}
+			sort.Slice(model.Event.Schema.Enums, func(a, b int) bool { return model.Event.Schema.Enums[a].EnumID < model.Event.Schema.Enums[b].EnumID })
+			for enumIndex := range model.Event.Schema.Enums {
+				sort.Slice(model.Event.Schema.Enums[enumIndex].Members, func(a, b int) bool {
+					return model.Event.Schema.Enums[enumIndex].Members[a] < model.Event.Schema.Enums[enumIndex].Members[b]
+				})
+				if model.Event.Schema.Enums[enumIndex].Members == nil {
+					model.Event.Schema.Enums[enumIndex].Members = []EnumValueID{}
+				}
+			}
+			if model.Event.Schema.Enums == nil {
+				model.Event.Schema.Enums = []EventEnumSchemaIR{}
 			}
 		}
 		sort.Slice(model.Computed, func(a, b int) bool {

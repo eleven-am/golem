@@ -50,14 +50,14 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "28d6db51acb7e16dbfa1bb97902faf73a444061a713749719733f294f9cd7571"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "4f02790d69bc3d5792c746c5649a4d7ced096068ae32aa05c6bf873eaaf17b67"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 2 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
+	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 3 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
 	}
 	for _, entry := range output.PolicyOperators {
@@ -128,16 +128,17 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 		if provider.Fingerprint == "" || provider.SystemFingerprint == "" {
 			t.Fatalf("inspect provider output omitted application or system fingerprint: %#v", provider)
 		}
-		if len(provider.Schema.System.Objects) != 4 {
+		if len(provider.Schema.System.Objects) != 5 {
 			t.Fatalf("inspect provider output omitted a system object: %#v", provider.Schema.System)
 		}
-		foundOutbox, foundUpsertGuard := false, false
+		foundOutbox, foundDelivery, foundUpsertGuard := false, false, false
 		for _, object := range provider.Schema.System.Objects {
 			foundOutbox = foundOutbox || object.Kind == physical.SystemOutbox && physical.IsOutboxSystemObjectV1(object)
+			foundDelivery = foundDelivery || object.Kind == physical.SystemOutboxDelivery && physical.IsOutboxDeliverySystemObjectV1(object)
 			foundUpsertGuard = foundUpsertGuard || object.Kind == physical.SystemUpsertGuard && physical.IsUpsertGuardSystemObjectV1(object)
 		}
-		if !foundOutbox || !foundUpsertGuard {
-			t.Fatalf("inspect provider output omitted P4 system objects: %#v", provider.Schema.System)
+		if !foundOutbox || !foundDelivery || !foundUpsertGuard {
+			t.Fatalf("inspect provider output omitted current system objects: %#v", provider.Schema.System)
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, manifest.DefaultPath)); !os.IsNotExist(err) {

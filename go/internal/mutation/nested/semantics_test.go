@@ -78,6 +78,7 @@ func TestNestedSemanticDecorationCoversAllElevenOperations(t *testing.T) {
 			t.Fatalf("subscribed row-changing operation %d has no fact", node.Operation())
 		}
 		assertFactImages(t, node)
+		assertP7NestedFactSchema(t, node, fixture)
 		assertCompleteHookSnapshot(t, node, fixture)
 	}
 	if retainedSources == 0 {
@@ -141,8 +142,45 @@ func TestNestedSystemOmitsPolicyAndHooksButRetainsConfiguredFacts(t *testing.T) 
 				t.Fatalf("system subscribed operation %d lost its configured fact", node.Operation())
 			}
 			assertFactImages(t, node)
+			assertP7NestedFactSchema(t, node, fixture)
 		}
 	}
+}
+
+func assertP7NestedFactSchema(t testing.TB, node mutationir.Node, fixture schematest.Fixture) {
+	t.Helper()
+	fact := node.Fact()
+	if _, present := fact.EventSchema(); !present {
+		t.Fatalf("nested fact %d silently fell back to V1", node.Ordinal())
+	}
+	if node.Operation() != mutationir.Delete && node.Operation() != mutationir.DeleteMany {
+		if fact.DeleteSnapshotState() != mutationir.DeleteSnapshotNotApplicable {
+			t.Fatalf("non-delete nested fact carries delete snapshot state %d", fact.DeleteSnapshotState())
+		}
+		return
+	}
+	model, present := fixture.Registry.Model(golem.ModelID(node.ModelID()))
+	if !present {
+		t.Fatal("nested fact model is absent")
+	}
+	_, expected, ok := model.EventSchema()
+	if !ok || fact.DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(fact.PrivateDeleteSnapshot()) != len(expected) {
+		t.Fatalf("nested delete fact has incomplete private snapshot: state=%d got=%x want=%x", fact.DeleteSnapshotState(), fact.PrivateDeleteSnapshot(), expected)
+	}
+	for _, field := range fact.PrivateDeleteSnapshot() {
+		if !containsNestedField(node.BeforeRequirements().Fields(), field) {
+			t.Fatalf("nested delete before image omitted snapshot field %x", field)
+		}
+	}
+}
+
+func containsNestedField(fields []policyir.FieldID, want policyir.FieldID) bool {
+	for _, field := range fields {
+		if field == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCompositeMembershipDecoratesEveryOwningFieldAndCompleteHookImage(t *testing.T) {

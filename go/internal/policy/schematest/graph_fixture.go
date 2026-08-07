@@ -97,6 +97,7 @@ func newGraphConfigured(t testing.TB, subscribed, runtimeDefaults bool, postgres
 		{ModelID: post, Fields: fieldContracts(postContractFields...), Subscriptions: subscribed},
 		{ModelID: comment, Fields: fieldContracts(commentID, commentPostID, commentBody, commentPost), Subscriptions: subscribed},
 	}}
+	normalizeSubscribedEvents(t, model, &contract)
 	modelDocument := document(t, uint32(compilerir.ModelFormatVersion), func() ([]byte, compilerir.Fingerprint, error) {
 		payload, err := compilerir.CanonicalModel(model)
 		if err != nil {
@@ -145,7 +146,7 @@ func graphSystemSchema(namespace physical.PhysicalName) physical.SystemSchema {
 	return physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: namespace}, Objects: []physical.SystemObject{
 		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},
 		{ID: physical.MigrationLockObjectIDV1, Kind: physical.SystemMigrationLock, Version: 1, Name: "_golem_migration_lock"},
-		physical.OutboxSystemObjectV1(), physical.UpsertGuardSystemObjectV1(),
+		physical.OutboxSystemObjectV1(), physical.OutboxDeliverySystemObjectV1(), physical.UpsertGuardSystemObjectV1(),
 	}}
 }
 
@@ -155,6 +156,51 @@ func fieldContracts(fields ...compilerir.FieldID) []compilerir.FieldContractIR {
 		result[index] = compilerir.FieldContractIR{FieldID: field}
 	}
 	return result
+}
+
+func normalizeSubscribedEvents(t testing.TB, model compilerir.ModelIR, contract *compilerir.ContractIR) {
+	t.Helper()
+	models := make(map[compilerir.ModelID]compilerir.ModelDeclIR, len(model.Models))
+	for _, logical := range model.Models {
+		models[logical.ID] = logical
+	}
+	for index := range contract.Models {
+		entry := &contract.Models[index]
+		if !entry.Subscriptions {
+			continue
+		}
+		logical, exists := models[entry.ModelID]
+		if !exists {
+			t.Fatalf("subscription fixture model %s is absent", entry.ModelID)
+		}
+		snapshot := make([]compilerir.FieldID, 0, len(logical.Fields))
+		for _, field := range logical.Fields {
+			if field.Kind != compilerir.FieldRelation && field.Scalar != nil {
+				snapshot = append(snapshot, field.ID)
+			}
+		}
+		shape, err := compilerir.BuildEventSchemaShape(logical, model.Enums, snapshot)
+		if err != nil {
+			t.Fatalf("build fixture event schema for %s: %v", entry.ModelID, err)
+		}
+		fingerprint, err := compilerir.EventSchemaFingerprint(shape)
+		if err != nil {
+			t.Fatalf("fingerprint fixture event schema for %s: %v", entry.ModelID, err)
+		}
+		name := entry.GraphQLName
+		if name == "" {
+			name = logical.LogicalName
+		}
+		identityType := ""
+		if len(shape.IdentityFields) > 1 {
+			identityType = name + "EventIdentity"
+		}
+		entry.Event = &compilerir.EventContractIR{
+			PayloadTypeName: name + "Event", IdentityTypeName: identityType,
+			MetadataFields:     []string{"eventID", "type", "id", "entity", "causationID", "transactionOrdinal", "recordedAt"},
+			DeleteSnapshotFull: true, Schema: shape, SchemaFingerprint: fingerprint,
+		}
+	}
 }
 
 func graphPhysicalSchema(provider compilerir.Provider, user, post, comment compilerir.ModelID, userID, userName, postID, authorID, postTitle, postUpdatedAt, commentID, commentPostID, commentBody compilerir.FieldID, userKey, postKey, commentKey compilerir.KeyID, runtimeDefaults bool) physical.PhysicalSchema {
