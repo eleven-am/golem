@@ -74,6 +74,114 @@ func TestCompilerLowersAliasedRootAndNestedArgumentsToP3(t *testing.T) {
 	}
 }
 
+func TestP6GraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys(t *testing.T) {
+	compilation := p6AnalyticsSocial(t, social(t))
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, errors := gqlparser.LoadQuery(schema, `query Analytics {
+  grouped: groupByPosts(
+    by: [title]
+    having: { min: { title: { not: "hidden" } } }
+    orderBy: [{ min: { title: desc } }]
+  ) {
+    key { title }
+    total: count
+    counted: countFields { title }
+  }
+}`)
+	if len(errors) != 0 {
+		t.Fatal(errors)
+	}
+	compiler, err := New(compilation, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := compiler.Compile(query, query.Operations.ForName("Analytics"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Analytics) != 1 || len(result.Reads) != 0 || result.Order[0].Kind != RootAnalytics {
+		t.Fatalf("analytics roots = %#v", result)
+	}
+	root := result.Analytics[0]
+	if root.ResponseName != "grouped" || root.Request.Operation() != golem.AnalyticsGroupBy || len(root.Request.Dimensions()) != 1 {
+		t.Fatalf("analytics root = %#v", root)
+	}
+	measures := root.Request.Measures()
+	if len(measures) != 2 {
+		t.Fatalf("selected measures = %#v", measures)
+	}
+	operators := map[golem.AggregateOperator]bool{}
+	for _, measure := range measures {
+		operators[measure.Operator] = true
+	}
+	if !operators[golem.AggregateCountAll] || !operators[golem.AggregateCountField] || operators[golem.AggregateMinimum] {
+		t.Fatalf("selection-driven operators = %#v", operators)
+	}
+	if _, present := root.Request.Having(); !present || len(root.Request.OrderBy()) != 1 || root.Request.OrderBy()[0].Term.Operator != golem.AggregateMinimum {
+		t.Fatalf("private having/order terms were not retained: %#v", root.Request)
+	}
+	dimension := root.Request.Dimensions()[0]
+	cells := []golem.RuntimeAnalyticsCell{golem.RuntimePresentAnalyticsCell(golem.RuntimeAnalyticsTermKey(dimension), "visible")}
+	for _, measure := range measures {
+		cells = append(cells, golem.RuntimePresentAnalyticsCell(golem.RuntimeAnalyticsTermKey(measure), int64(2)))
+	}
+	encoded, err := compiler.EncodeAnalytics(root, [][]golem.RuntimeAnalyticsCell{cells})
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := encoded.([]any)[0].(map[string]any)
+	if row["total"] != "2" || row["counted"].(map[string]any)["title"] != "2" || row["key"].(map[string]any)["title"] != "visible" {
+		t.Fatalf("exact/aliased analytics encoding = %#v", row)
+	}
+
+	invalid, validationErrors := gqlparser.LoadQuery(schema, `query { groupByPosts(by: [title]) { key { authorID } count } }`)
+	if len(validationErrors) != 0 {
+		t.Fatalf("query should be schema-valid before semantic by validation: %v", validationErrors)
+	}
+	if _, err := compiler.Compile(invalid, invalid.Operations[0], nil); err == nil {
+		t.Fatal("selected ungrouped key was accepted")
+	}
+}
+
+func p6AnalyticsSocial(t *testing.T, compilation compilerir.CompilationIR) compilerir.CompilationIR {
+	t.Helper()
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	for index := range compilation.Contract.Models {
+		contract := &compilation.Contract.Models[index]
+		if contract.GraphQLName != "Post" {
+			continue
+		}
+		var authorID, title compilerir.FieldID
+		for _, field := range contract.Fields {
+			switch field.GraphQLName {
+			case "authorID":
+				authorID = field.FieldID
+			case "title":
+				title = field.FieldID
+			}
+		}
+		if authorID == "" || title == "" {
+			t.Fatal("Post analytics fields are absent")
+		}
+		contract.Operations = append(contract.Operations, compilerir.OperationAggregate, compilerir.OperationGroupBy)
+		contract.Aggregation = &compilerir.AggregationContractIR{
+			Enabled: true, Dimensions: []compilerir.FieldID{authorID, title}, DimensionsExplicit: true,
+			Measures: []compilerir.FieldID{title}, MeasuresExplicit: true,
+			GraphQLMaxGroups: 100, RelationMaxIntermediateGroups: 10_000,
+		}
+		return compilation
+	}
+	t.Fatal("Post contract is absent")
+	return compilerir.CompilationIR{}
+}
+
 func TestCompilerRejectsIncompatibleMergedRoot(t *testing.T) {
 	compilation := social(t)
 	document, _ := graphqlschema.Build(compilation)

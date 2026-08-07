@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 
+	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/codegen/registry"
@@ -130,6 +131,9 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		diagnostics = append(diagnostics, applyRelationOptions(&resolved.Compilation.Model, interpreted.RelationOptions)...)
 	}
 	populateContractFields(raw, &resolved.Compilation)
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, analyticscontract.Normalize(&resolved.Compilation, interpreted.AnalyticsModels)...)
+	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlcontract.Normalize(&resolved.Compilation, interpreted.GraphQLModels)...)
 	}

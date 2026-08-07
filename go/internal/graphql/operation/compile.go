@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlanalytics "github.com/eleven-am/golem/go/internal/graphql/analytics"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqlcustom "github.com/eleven-am/golem/go/internal/graphql/custom"
 	graphqlmutation "github.com/eleven-am/golem/go/internal/graphql/mutation"
@@ -24,6 +25,7 @@ type Limits struct {
 	Fields    int
 	Aliases   int
 	ListItems int
+	MaxGroups int
 }
 
 type ReadRoot struct {
@@ -37,6 +39,7 @@ type ReadRoot struct {
 
 type Result struct {
 	Reads     []ReadRoot
+	Analytics []graphqlanalytics.Root
 	Mutations []MutationRoot
 	Custom    []CustomRoot
 	Order     []RootRef
@@ -46,6 +49,7 @@ type RootKind uint8
 
 const (
 	RootRead RootKind = iota + 1
+	RootAnalytics
 	RootMutation
 	RootCustomQuery
 	RootCustomMutation
@@ -88,6 +92,7 @@ type Compiler struct {
 	mutations   map[string]mutationRootBinding
 	mutation    *graphqlmutation.MapBinder
 	custom      *graphqlcustom.Registry
+	analytics   *graphqlanalytics.Compiler
 }
 
 type rootBinding struct {
@@ -128,7 +133,11 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 	if err != nil {
 		return nil, err
 	}
-	compiler := &Compiler{compilation: compilation, binder: binder, mutation: mutationBinder, custom: customRegistry, limits: limits, queries: map[string]rootBinding{}, mutations: map[string]mutationRootBinding{}}
+	analyticsCompiler, err := graphqlanalytics.New(compilation, graphqlanalytics.Limits{Bind: limits.Bind, MaxGroups: limits.MaxGroups, ListItems: limits.ListItems})
+	if err != nil {
+		return nil, err
+	}
+	compiler := &Compiler{compilation: compilation, binder: binder, mutation: mutationBinder, custom: customRegistry, analytics: analyticsCompiler, limits: limits, queries: map[string]rootBinding{}, mutations: map[string]mutationRootBinding{}}
 	for _, contract := range compilation.Contract.Models {
 		if !contract.Exposed {
 			continue
@@ -218,6 +227,16 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 	for _, root := range fields {
 		binding, ok := c.queries[root.field.Name]
 		if !ok {
+			analyticsRoot, analyticsOK, analyticsErr := c.analytics.Compile(root.field, document.Fragments, variables)
+			if analyticsErr != nil {
+				return Result{}, fmt.Errorf("P6_OPERATION_ANALYTICS: %s: %w", root.responseName, analyticsErr)
+			}
+			if analyticsOK {
+				analyticsRoot.ResponseName = root.responseName
+				result.Analytics = append(result.Analytics, analyticsRoot)
+				result.Order = append(result.Order, RootRef{Kind: RootAnalytics, Index: len(result.Analytics) - 1})
+				continue
+			}
 			custom, customErr := c.compileCustom(root, compilerir.CustomOperationQuery, document.Fragments, variables)
 			if customErr != nil {
 				return Result{}, customErr
@@ -262,6 +281,13 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 		result.Order = append(result.Order, RootRef{Kind: RootRead, Index: len(result.Reads) - 1})
 	}
 	return result, nil
+}
+
+func (c *Compiler) EncodeAnalytics(root graphqlanalytics.Root, rows [][]golem.RuntimeAnalyticsCell) (any, error) {
+	if c == nil || c.analytics == nil {
+		return nil, fmt.Errorf("P6_OPERATION_ANALYTICS: compiler is unavailable")
+	}
+	return c.analytics.Encode(root, rows)
 }
 
 func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.OperationDefinition, variables map[string]any) (Result, error) {

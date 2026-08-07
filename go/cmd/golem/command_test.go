@@ -50,14 +50,14 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "e1d57bf7460fb9ecc8d045d993d8dbe88edfb9d44231a93a5b38bed0a474ce1e"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "28d6db51acb7e16dbfa1bb97902faf73a444061a713749719733f294f9cd7571"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 2 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
+	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 2 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
 	}
 	for _, entry := range output.PolicyOperators {
@@ -101,8 +101,11 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 		t.Fatal("recursive Comment relation is absent")
 	}
 	for _, contract := range output.Contract.Models {
-		if !contract.Exposed || contract.GraphQLName == "" || len(contract.Fields) == 0 {
+		if !contract.Exposed || contract.GraphQLName == "" || len(contract.Fields) == 0 || contract.Roots.RelationGroupBy == "" {
 			t.Fatalf("incomplete exposure contract: %#v", contract)
+		}
+		if contract.Aggregation != nil || contract.ScopedReads {
+			t.Fatalf("plain social fixture unexpectedly enabled P6 analytics or scoped reads: %#v", contract)
 		}
 	}
 	foundDefault, foundNullable, foundIndex := false, false, false

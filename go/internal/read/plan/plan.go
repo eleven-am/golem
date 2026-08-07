@@ -69,6 +69,8 @@ type Field struct {
 	typ          compilerir.LogicalTypeIR
 	nullable     bool
 	public       bool
+	conditional  bool
+	discharged   bool
 	mask         *policyir.Condition
 	dependencies dependency.Tree
 }
@@ -77,6 +79,8 @@ func (field Field) FieldID() policyir.FieldID             { return field.id }
 func (field Field) LogicalType() compilerir.LogicalTypeIR { return cloneLogicalType(field.typ) }
 func (field Field) Nullable() bool                        { return field.nullable }
 func (field Field) Public() bool                          { return field.public }
+func (field Field) Conditional() bool                     { return field.conditional }
+func (field Field) DischargedByConstraint() bool          { return field.discharged }
 func (field Field) Mask() (policyir.Condition, bool) {
 	if field.mask == nil {
 		return policyir.Condition{}, false
@@ -481,8 +485,9 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 			}
 		}
 		if selection.Kind() == readir.SelectScalar {
-			field := Field{id: selection.FieldID(), typ: fact.LogicalType(), nullable: fact.Nullable(), public: true}
+			field := Field{id: selection.FieldID(), typ: fact.LogicalType(), nullable: fact.Nullable(), public: true, discharged: system || classification.Access() != classify.AccessConditional || classification.DischargedByConstraint()}
 			if !system && classification.Access() == classify.AccessConditional {
+				field.conditional = true
 				mask, _ := classification.FieldCondition()
 				field.mask = &mask
 				field.dependencies = classification.Dependencies()

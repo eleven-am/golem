@@ -89,26 +89,60 @@ func DefineModel[M any](_ ...ModelOption[M]) ModelSpec[M] { return ModelSpec[M]{
 type GraphQLOperation string
 
 const (
-	GraphQLFindOne    GraphQLOperation = "findOne"
-	GraphQLFindMany   GraphQLOperation = "findMany"
-	GraphQLCreate     GraphQLOperation = "create"
-	GraphQLUpdate     GraphQLOperation = "update"
-	GraphQLUpsert     GraphQLOperation = "upsert"
-	GraphQLDelete     GraphQLOperation = "delete"
-	GraphQLUpdateMany GraphQLOperation = "updateMany"
-	GraphQLDeleteMany GraphQLOperation = "deleteMany"
+	GraphQLFindOne         GraphQLOperation = "findOne"
+	GraphQLFindMany        GraphQLOperation = "findMany"
+	GraphQLCreate          GraphQLOperation = "create"
+	GraphQLUpdate          GraphQLOperation = "update"
+	GraphQLUpsert          GraphQLOperation = "upsert"
+	GraphQLDelete          GraphQLOperation = "delete"
+	GraphQLUpdateMany      GraphQLOperation = "updateMany"
+	GraphQLDeleteMany      GraphQLOperation = "deleteMany"
+	GraphQLAggregate       GraphQLOperation = "aggregate"
+	GraphQLGroupBy         GraphQLOperation = "groupBy"
+	GraphQLRelationGroupBy GraphQLOperation = "relationGroupBy"
 )
 
 type GraphQLRootNames struct {
-	FindOne    string
-	FindMany   string
-	Create     string
-	Update     string
-	Upsert     string
-	Delete     string
-	UpdateMany string
-	DeleteMany string
+	FindOne         string
+	FindMany        string
+	Create          string
+	Update          string
+	Upsert          string
+	Delete          string
+	UpdateMany      string
+	DeleteMany      string
+	Aggregate       string
+	GroupBy         string
+	RelationGroupBy string
 }
+
+// Analytics declarations are compile-time-only shells. Their closed generic
+// types let the compiler reject foreign-model fields before interpretation.
+type AnalyticsOption[M any] interface{ analyticsOption(M) }
+type analyticsOption[M any] struct{ _ func() M }
+
+func (analyticsOption[M]) analyticsOption(M) {}
+
+type RelationDimensionSpec[M any] struct{ _ func() M }
+type RelationDimensionPath[M any, V any] struct{ _ func(M) V }
+
+func Analytics[M any](_ ...AnalyticsOption[M]) ModelOption[M]      { return modelOption[M]{} }
+func AnalyticsDimensions[M any](_ ...Column[M]) AnalyticsOption[M] { return analyticsOption[M]{} }
+func AnalyticsMeasures[M any](_ ...Column[M]) AnalyticsOption[M]   { return analyticsOption[M]{} }
+func AnalyticsRelationDimensions[M any](_ ...RelationDimensionSpec[M]) AnalyticsOption[M] {
+	return analyticsOption[M]{}
+}
+func NamedRelationDimension[M, V any](_ string, _ RelationDimensionPath[M, V]) RelationDimensionSpec[M] {
+	return RelationDimensionSpec[M]{}
+}
+func DimensionField[M, V any](_ ScalarColumn[M, V]) RelationDimensionPath[M, V] {
+	return RelationDimensionPath[M, V]{}
+}
+func Via[M, R, V any](_ ToOneRelation[M, R], _ RelationDimensionPath[R, V]) RelationDimensionPath[M, V] {
+	return RelationDimensionPath[M, V]{}
+}
+func AnalyticsLimits[M any](_, _ int) AnalyticsOption[M] { return analyticsOption[M]{} }
+func ScopedReads[M any]() ModelOption[M]                 { return modelOption[M]{} }
 
 type GraphQLOption struct{ _ graphqlOptionMarker }
 type graphqlOptionMarker struct{}
@@ -648,6 +682,13 @@ type ToOneRelationOption[M any, R any] interface {
 	relationOption(M, R)
 }
 
+// ToOneRelation is the readable, sealed forward-to-one capability accepted by
+// analytical relation paths. Mutation-only schema wrappers do not implement it.
+type ToOneRelation[M any, R any] interface {
+	relationOption(M, R)
+	toOneRelation(M, R)
+}
+
 // ToOneSchemaField is embedded only in generated mutation-only to-one
 // wrappers. It exists so schema declarations can still name the relation in
 // RelationOptions while the runtime field surface remains non-readable.
@@ -658,6 +699,7 @@ func GeneratedToOneSchemaField[M any, R any]() ToOneSchemaField[M, R] {
 }
 
 func (ToOne[M, R]) relationOption(M, R)            {}
+func (ToOne[M, R]) toOneRelation(M, R)             {}
 func (ToOneSchemaField[M, R]) relationOption(M, R) {}
 
 type ToMany[M any, R any] struct {

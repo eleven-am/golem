@@ -74,6 +74,11 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 			return Document{}, err
 		}
 		sections = append(sections, section...)
+		analytics, err := renderAnalyticsModel(view, models, contractByModel, enumByID)
+		if err != nil {
+			return Document{}, err
+		}
+		sections = append(sections, analytics...)
 	}
 	withoutInputs, err := allRelationWithoutInputTypes(views, models, contractByModel, enumByID, relations)
 	if err != nil {
@@ -115,6 +120,9 @@ enum QueryMode { sensitive insensitive }`
 	for _, scalar := range scalarDefinitions() {
 		fmt.Fprintf(&out, "\n%s", renderScalarFilter(scalar, false))
 		fmt.Fprintf(&out, "\n%s", renderScalarFilter(scalar, true))
+		if analyticsScalar(scalar.name) {
+			fmt.Fprintf(&out, "\n%s", renderAnalyticsFilter(scalar.name, scalar.ordered))
+		}
 		fmt.Fprintf(&out, "\n%s", renderUpdateEnvelope(scalar.name, scalar.name, scalar.numeric, false))
 		fmt.Fprintf(&out, "\n%s", renderUpdateEnvelope("Nullable"+scalar.name, scalar.name, scalar.numeric, true))
 	}
@@ -190,6 +198,27 @@ func renderScalarFilter(definition scalarDefinition, nullable bool) string {
 	return fmt.Sprintf("input %sFilter { %s }", name, strings.Join(fields, " "))
 }
 
+func analyticsScalar(name string) bool {
+	switch name {
+	case "Boolean", "Int", "BigInt", "Float", "Decimal", "String", "UUID", "Date", "Time", "DateTime":
+		return true
+	default:
+		return false
+	}
+}
+
+func renderAnalyticsFilter(name string, ordered bool) string {
+	fields := []string{"equals: " + name, "not: " + name}
+	if ordered {
+		fields = append(fields, "lt: "+name, "lte: "+name, "gt: "+name, "gte: "+name)
+	}
+	if name == "String" {
+		fields = append(fields, "contains: String", "startsWith: String", "endsWith: String", "mode: QueryMode")
+	}
+	fields = append(fields, "isNull: Boolean")
+	return fmt.Sprintf("input %sAnalyticsFilter { %s }", name, strings.Join(fields, " "))
+}
+
 func renderListFilter(name, element string, nullable bool) string {
 	fields := []string{"equals: [" + element + "!]", "has: " + element, "hasEvery: [" + element + "!]", "hasSome: [" + element + "!]", "isEmpty: Boolean"}
 	if nullable {
@@ -248,6 +277,7 @@ func renderEnum(enum ir.EnumContractIR) string {
 	out.WriteString("}")
 	fmt.Fprintf(&out, "\n\ninput %sFilter { equals: %s not: %s in: [%s!] notIn: [%s!] }", enum.GraphQLName, enum.GraphQLName, enum.GraphQLName, enum.GraphQLName, enum.GraphQLName)
 	fmt.Fprintf(&out, "\n\ninput Nullable%sFilter { equals: %s not: %s in: [%s!] notIn: [%s!] isNull: Boolean }", enum.GraphQLName, enum.GraphQLName, enum.GraphQLName, enum.GraphQLName, enum.GraphQLName)
+	fmt.Fprintf(&out, "\n\ninput %sAnalyticsFilter { equals: %s not: %s isNull: Boolean }", enum.GraphQLName, enum.GraphQLName, enum.GraphQLName)
 	fmt.Fprintf(&out, "\n\n%s", renderUpdateEnvelope(enum.GraphQLName, enum.GraphQLName, false, false))
 	fmt.Fprintf(&out, "\n\n%s", renderUpdateEnvelope("Nullable"+enum.GraphQLName, enum.GraphQLName, false, true))
 	fmt.Fprintf(&out, "\n\n%s", renderListFilter(enum.GraphQLName, enum.GraphQLName, false))
@@ -478,6 +508,18 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 		}
 		if enabled[ir.OperationFindMany] {
 			fmt.Fprintf(&query, "  %s(where: %sWhereInput, orderBy: [%sOrderByInput!], cursor: %sWhereUniqueInput, distinct: [%sScalarField!], skip: Int, take: Int = %d): [%s!]!\n", roots.FindMany, name, name, name, name, limit, name)
+			queryCount++
+		}
+		if enabled[ir.OperationAggregate] {
+			fmt.Fprintf(&query, "  %s(where: %sWhereInput): %sAggregate!\n", roots.Aggregate, name, name)
+			queryCount++
+		}
+		if enabled[ir.OperationGroupBy] {
+			fmt.Fprintf(&query, "  %s(by: [%sGroupField!]!, where: %sWhereInput, having: %sGroupHavingInput, orderBy: [%sGroupOrderByInput!], skip: Int, take: Int): [%sGroup!]!\n", roots.GroupBy, name, name, name, name, name)
+			queryCount++
+		}
+		if enabled[ir.OperationRelationGroupBy] {
+			fmt.Fprintf(&query, "  %s(by: [%sRelationGroupField!]!, where: %sWhereInput, having: %sRelationGroupHavingInput, orderBy: [%sRelationGroupOrderByInput!], skip: Int, take: Int): [%sRelationGroup!]!\n", roots.RelationGroupBy, name, name, name, name, name)
 			queryCount++
 		}
 		if enabled[ir.OperationCreate] && hasCreate {

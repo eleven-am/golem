@@ -20,6 +20,12 @@ type CallerExecution interface {
 	ExecuteFrozenRead(context.Context, golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error)
 }
 
+// CallerAnalyticsExecution is required only when the selected operation
+// contains an explicitly generated P6 analytics root.
+type CallerAnalyticsExecution interface {
+	ExecuteFrozenAnalytics(context.Context, golem.FrozenAnalyticsRequest) ([][]golem.RuntimeAnalyticsCell, error)
+}
+
 type BeginCaller[P any] func(context.Context, P) (CallerExecution, error)
 
 type GeneratedExecutorConfig[P any] struct {
@@ -55,7 +61,7 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 	}
 	compiler, err := graphqloperation.New(compilation, graphqloperation.Limits{
 		Bind:  graphqlbind.Limits{MaxInputDepth: limits.MaxInputDepth, MaxInputNodes: limits.MaxInputNodes, MaxListItems: limits.MaxListItems, MaxPageSize: limits.MaxPageSize},
-		Depth: limits.MaxDepth, Fields: limits.MaxSelectedFields, Aliases: limits.MaxAliases,
+		Depth: limits.MaxDepth, Fields: limits.MaxSelectedFields, Aliases: limits.MaxAliases, ListItems: limits.MaxListItems, MaxGroups: limits.MaxGroups,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("GraphQL operation compiler: %w", err)
@@ -101,6 +107,14 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 			return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
 		}
 	}
+	var analyticsCaller CallerAnalyticsExecution
+	if len(compiled.Analytics) != 0 {
+		capability, ok := caller.(CallerAnalyticsExecution)
+		if !ok {
+			return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
+		}
+		analyticsCaller = capability
+	}
 	if operation.Definition.Operation == "mutation" {
 		mutationCaller, ok := caller.(CallerMutationExecution)
 		if !ok && len(compiled.Mutations) != 0 {
@@ -111,6 +125,23 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	data := make(map[string]any, len(compiled.Reads))
 	response := Response{Data: data}
 	for _, reference := range compiled.Order {
+		if reference.Kind == graphqloperation.RootAnalytics {
+			root := compiled.Analytics[reference.Index]
+			rows, executeErr := analyticsCaller.ExecuteFrozenAnalytics(ctx, root.Request)
+			if executeErr != nil {
+				response.Errors = append(response.Errors, PresentError(ctx, executeErr, []any{root.ResponseName}, executor.report))
+				data[root.ResponseName] = nil
+				continue
+			}
+			encoded, encodeErr := executor.compiler.EncodeAnalytics(root, rows)
+			if encodeErr != nil {
+				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
+				data[root.ResponseName] = nil
+				continue
+			}
+			data[root.ResponseName] = encoded
+			continue
+		}
 		if reference.Kind == graphqloperation.RootCustomQuery {
 			root := compiled.Custom[reference.Index]
 			result, executeErr := customCaller.Execute(ctx, CustomQuery, root.Name, root.Arguments)

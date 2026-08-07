@@ -559,17 +559,24 @@ func p5CleanupExtensionPostgreSQLSchemas(t *testing.T, dsn string) {
 type p5ExtensionSQLTrace struct {
 	lock       sync.Mutex
 	statements []string
+	afterNext  func()
 }
 
 func (trace *p5ExtensionSQLTrace) record(statement string) {
 	trace.lock.Lock()
 	trace.statements = append(trace.statements, statement)
+	after := trace.afterNext
+	trace.afterNext = nil
 	trace.lock.Unlock()
+	if after != nil {
+		after()
+	}
 }
 
 func (trace *p5ExtensionSQLTrace) reset() {
 	trace.lock.Lock()
 	trace.statements = nil
+	trace.afterNext = nil
 	trace.lock.Unlock()
 }
 
@@ -577,6 +584,12 @@ func (trace *p5ExtensionSQLTrace) snapshot() []string {
 	trace.lock.Lock()
 	defer trace.lock.Unlock()
 	return append([]string(nil), trace.statements...)
+}
+
+func (trace *p5ExtensionSQLTrace) afterNextStatement(callback func()) {
+	trace.lock.Lock()
+	trace.afterNext = callback
+	trace.lock.Unlock()
 }
 
 type p5ExtensionTraceConnector struct {

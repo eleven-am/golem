@@ -104,6 +104,20 @@ func (registry *Registry) HasField(model golem.ModelID, field golem.FieldID) boo
 	return ok
 }
 
+// HasScopedReads reports whether the fingerprinted contract enables at least
+// one audited scoped root. It exposes no mutable model inventory.
+func (registry *Registry) HasScopedReads() bool {
+	if registry == nil {
+		return false
+	}
+	for _, model := range registry.models {
+		if model.scopedReads {
+			return true
+		}
+	}
+	return false
+}
+
 // Model returns a model only when the fixed-width ID is present in this exact
 // fingerprinted registry.
 func (registry *Registry) Model(id golem.ModelID) (Model, bool) {
@@ -113,6 +127,9 @@ func (registry *Registry) Model(id golem.ModelID) (Model, bool) {
 	value.identities = make([]Identity, len(registry.models[id].identities))
 	for index, identity := range registry.models[id].identities {
 		value.identities[index] = identity.clone()
+	}
+	if analytics, present := value.Analytics(); present {
+		value.analytics = &analytics
 	}
 	return value, ok
 }
@@ -137,6 +154,21 @@ func (registry *Registry) RelationEndpoint(model golem.ModelID, field golem.Fiel
 		return RelationEndpoint{}, false
 	}
 	return value.clone(), true
+}
+
+// ForwardToOneRelation resolves only the compiler-owned source traversal for a
+// relation identity. Configured analytical paths store stable relation IDs,
+// never author-controlled SQL or field names.
+func (registry *Registry) ForwardToOneRelation(model golem.ModelID, relation golem.RelationID) (RelationEndpoint, bool) {
+	if registry == nil {
+		return RelationEndpoint{}, false
+	}
+	for _, endpoint := range registry.relations {
+		if endpoint.model == model && endpoint.relation == relation && endpoint.role == compilerir.RelationSource && endpoint.cardinality == compilerir.RelationOne {
+			return endpoint.clone(), true
+		}
+	}
+	return RelationEndpoint{}, false
 }
 
 // IdentityChangeRequiresReferentialEnumeration reports whether changing any of
@@ -245,6 +277,8 @@ type Model struct {
 	equality      map[golem.FieldID]struct{}
 	maxTake       uint32
 	subscriptions bool
+	analytics     *compilerir.AggregationContractIR
+	scopedReads   bool
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
@@ -273,6 +307,20 @@ func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTak
 // SubscriptionsEnabled is the normalized contract decision controlling
 // durable mutation-fact capture for this model.
 func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
+func (model Model) Analytics() (compilerir.AggregationContractIR, bool) {
+	if model.analytics == nil {
+		return compilerir.AggregationContractIR{}, false
+	}
+	value := *model.analytics
+	value.Dimensions = append([]compilerir.FieldID(nil), value.Dimensions...)
+	value.Measures = append([]compilerir.FieldID(nil), value.Measures...)
+	value.RelationDimensions = append([]compilerir.RelationDimensionContractIR(nil), value.RelationDimensions...)
+	for index := range value.RelationDimensions {
+		value.RelationDimensions[index].Path = append([]compilerir.RelationID(nil), value.RelationDimensions[index].Path...)
+	}
+	return value, true
+}
+func (model Model) ScopedReadsEnabled() bool { return model.scopedReads }
 
 // EqualityIndexed reports the compiler-proven provider-neutral fact that an
 // equality lookup on this field is served by a leading key/index column.

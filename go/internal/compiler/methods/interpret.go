@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 
+	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
@@ -39,6 +40,7 @@ type interpreter struct {
 	generated   []pendingGenerated
 	diagnostics []ir.Diagnostic
 	graphql     *graphqlcontract.ModelPatch
+	analytics   *analyticscontract.ModelPatch
 	computed    []graphqlextension.ComputedDeclaration
 }
 
@@ -95,6 +97,9 @@ func interpret(ctx context.Context, config Config) Result {
 		if entry.graphql != nil {
 			result.GraphQLModels = append(result.GraphQLModels, *entry.graphql)
 		}
+		if entry.analytics != nil {
+			result.AnalyticsModels = append(result.AnalyticsModels, *entry.analytics)
+		}
 		result.GraphQLComputed = append(result.GraphQLComputed, entry.computed...)
 		result.Diagnostics = append(result.Diagnostics, entry.diagnostics...)
 	}
@@ -112,6 +117,7 @@ func interpret(ctx context.Context, config Config) Result {
 		return result.RelationOptions[i].Span.StartLine < result.RelationOptions[j].Span.StartLine
 	})
 	graphqlcontract.SortPatches(result.GraphQLModels)
+	analyticscontract.SortPatches(result.AnalyticsModels)
 	graphqlextension.SortDeclarations(result.GraphQLComputed, result.GraphQLCustom)
 	ir.SortDiagnostics(result.Diagnostics)
 	return result
@@ -124,7 +130,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}
@@ -156,7 +162,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 			}
 		}
 	}
-	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString", "GraphQLFindOne", "GraphQLFindMany", "GraphQLCreate", "GraphQLUpdate", "GraphQLUpsert", "GraphQLDelete", "GraphQLUpdateMany", "GraphQLDeleteMany"} {
+	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString", "GraphQLFindOne", "GraphQLFindMany", "GraphQLCreate", "GraphQLUpdate", "GraphQLUpsert", "GraphQLDelete", "GraphQLUpdateMany", "GraphQLDeleteMany", "GraphQLAggregate", "GraphQLGroupBy", "GraphQLRelationGroupBy"} {
 		if object := scope.Lookup(name); object != nil {
 			result.constants[object] = name
 		}
@@ -353,6 +359,11 @@ func (in *interpreter) receiver(call *ast.CallExpr) ast.Expr {
 }
 
 func (in *interpreter) resolveHandle(expression ast.Expr) (modelcodegen.Symbol, bool) {
+	symbol, ok := in.resolveAnyHandle(expression)
+	return symbol, ok && symbol.ModelID == in.model.ID
+}
+
+func (in *interpreter) resolveAnyHandle(expression ast.Expr) (modelcodegen.Symbol, bool) {
 	selector, ok := unparen(expression).(*ast.SelectorExpr)
 	if !ok {
 		return modelcodegen.Symbol{}, false
@@ -367,7 +378,7 @@ func (in *interpreter) resolveHandle(expression ast.Expr) (modelcodegen.Symbol, 
 		return modelcodegen.Symbol{}, false
 	}
 	namespace, ok := unparen(selector.X).(*ast.Ident)
-	if !ok || in.pkg.TypesInfo.Uses[namespace] != binding.namespace || binding.symbol.ModelID != in.model.ID {
+	if !ok || in.pkg.TypesInfo.Uses[namespace] != binding.namespace {
 		return modelcodegen.Symbol{}, false
 	}
 	return binding.symbol, true

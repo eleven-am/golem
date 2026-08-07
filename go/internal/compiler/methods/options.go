@@ -4,11 +4,127 @@ import (
 	"go/ast"
 	"go/constant"
 
+	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 )
+
+func (in *interpreter) evalAnalytics(call *ast.CallExpr) {
+	if in.analytics != nil && in.analytics.Enabled {
+		in.errorAt("P6_ANALYTICS_MODEL_DUPLICATE", "Analytics may be declared only once in GolemModel", call)
+		return
+	}
+	if in.analytics == nil {
+		in.analytics = &analyticscontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
+	}
+	in.analytics.Enabled = true
+	seen := map[string]bool{}
+	for _, expression := range call.Args {
+		option, ok := unparen(expression).(*ast.CallExpr)
+		if !ok {
+			in.errorAt("P6_ANALYTICS_OPTION", "Analytics options must be direct constructor calls", expression)
+			continue
+		}
+		operation := in.callOperation(option)
+		if seen[operation] {
+			in.errorAt("P6_ANALYTICS_OPTION_DUPLICATE", operation+" may be declared only once", option)
+			continue
+		}
+		seen[operation] = true
+		switch operation {
+		case "AnalyticsDimensions", "AnalyticsMeasures":
+			values := make([]ir.FieldID, 0, len(option.Args))
+			for _, argument := range option.Args {
+				symbol, valid := in.resolveHandle(argument)
+				if !valid || symbol.Kind != "field" {
+					in.errorAt("P6_ANALYTICS_FIELD", operation+" accepts only scalar handles of this model", argument)
+					continue
+				}
+				values = append(values, symbol.FieldID)
+			}
+			if operation == "AnalyticsDimensions" {
+				in.analytics.Dimensions = &values
+			} else {
+				in.analytics.Measures = &values
+			}
+		case "AnalyticsRelationDimensions":
+			for _, argument := range option.Args {
+				dimension, valid := in.relationDimension(argument)
+				if valid {
+					in.analytics.RelationDimensions = append(in.analytics.RelationDimensions, dimension)
+				}
+			}
+		case "AnalyticsLimits":
+			if len(option.Args) != 2 {
+				in.errorAt("P6_ANALYTICS_LIMIT_ARITY", "AnalyticsLimits requires GraphQL and intermediate-group limits", option)
+				continue
+			}
+			graphqlLimit, left := in.uint32Constant(option.Args[0])
+			relationLimit, right := in.uint32Constant(option.Args[1])
+			if !left || !right {
+				in.errorAt("P6_ANALYTICS_LIMIT_VALUE", "analytics limits must be positive uint32 constants", option)
+				continue
+			}
+			in.analytics.GraphQLMaxGroups, in.analytics.RelationMaxIntermediateGroups = &graphqlLimit, &relationLimit
+		default:
+			in.errorAt("P6_ANALYTICS_OPTION", "call is not a recognized Analytics option constructor", expression)
+		}
+	}
+}
+
+func (in *interpreter) relationDimension(expression ast.Expr) (ir.RelationDimensionContractIR, bool) {
+	call, ok := unparen(expression).(*ast.CallExpr)
+	if !ok || in.callOperation(call) != "NamedRelationDimension" || len(call.Args) != 2 {
+		in.errorAt("P6_RELATION_DIMENSION_DECLARATION", "relation dimensions require NamedRelationDimension(name, path)", expression)
+		return ir.RelationDimensionContractIR{}, false
+	}
+	name, valid := in.constString(call.Args[0])
+	if !valid {
+		in.errorAt("P6_RELATION_DIMENSION_NAME", "relation dimension names must be constant strings", call.Args[0])
+		return ir.RelationDimensionContractIR{}, false
+	}
+	path, terminal, start, valid := in.relationDimensionPath(call.Args[1])
+	if !valid || start != in.model.ID {
+		in.errorAt("P6_RELATION_DIMENSION_PATH", "relation dimension path must start at this model and contain only forward to-one hops", call.Args[1])
+		return ir.RelationDimensionContractIR{}, false
+	}
+	return ir.RelationDimensionContractIR{Name: name, Path: path, TerminalField: terminal}, true
+}
+
+func (in *interpreter) relationDimensionPath(expression ast.Expr) ([]ir.RelationID, ir.FieldID, ir.ModelID, bool) {
+	call, ok := unparen(expression).(*ast.CallExpr)
+	if !ok {
+		return nil, "", "", false
+	}
+	switch in.callOperation(call) {
+	case "DimensionField":
+		if len(call.Args) != 1 {
+			return nil, "", "", false
+		}
+		symbol, valid := in.resolveAnyHandle(call.Args[0])
+		return []ir.RelationID{}, symbol.FieldID, symbol.ModelID, valid && symbol.Kind == "field"
+	case "Via":
+		if len(call.Args) != 2 {
+			return nil, "", "", false
+		}
+		relationSymbol, valid := in.resolveAnyHandle(call.Args[0])
+		if !valid || relationSymbol.Kind != "relation" {
+			return nil, "", "", false
+		}
+		tail, terminal, tailStart, valid := in.relationDimensionPath(call.Args[1])
+		if !valid {
+			return nil, "", "", false
+		}
+		for _, relation := range in.config.Compilation.Model.Relations {
+			if relation.ID == relationSymbol.RelationID && relation.SourceModel == relationSymbol.ModelID && relation.TargetModel == tailStart {
+				return append([]ir.RelationID{relation.ID}, tail...), terminal, relation.SourceModel, true
+			}
+		}
+	}
+	return nil, "", "", false
+}
 
 func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 	call, ok := unparen(expression).(*ast.CallExpr)
@@ -46,6 +162,21 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 			return
 		}
 		in.evalGraphQL(call)
+	case "Analytics":
+		if scope != ir.ProviderScopePortable {
+			in.errorAt("P6_ANALYTICS_PROVIDER_SCOPE", "Analytics cannot be provider-scoped", call)
+			return
+		}
+		in.evalAnalytics(call)
+	case "ScopedReads":
+		if scope != ir.ProviderScopePortable || len(call.Args) != 0 {
+			in.errorAt("P6_SCOPED_READS_DECLARATION", "ScopedReads takes no arguments and cannot be provider-scoped", call)
+			return
+		}
+		if in.analytics == nil {
+			in.analytics = &analyticscontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
+		}
+		in.analytics.ScopedReads = true
 	case "Check":
 		in.evalCheck(call, scope)
 	case "Generated":
@@ -145,6 +276,8 @@ func graphqlOperation(name string) (ir.Operation, bool) {
 		"GraphQLCreate": ir.OperationCreate, "GraphQLUpdate": ir.OperationUpdate,
 		"GraphQLUpsert": ir.OperationUpsert, "GraphQLDelete": ir.OperationDelete,
 		"GraphQLUpdateMany": ir.OperationUpdateMany, "GraphQLDeleteMany": ir.OperationDeleteMany,
+		"GraphQLAggregate": ir.OperationAggregate, "GraphQLGroupBy": ir.OperationGroupBy,
+		"GraphQLRelationGroupBy": ir.OperationRelationGroupBy,
 	}
 	value, ok := values[name]
 	return value, ok
@@ -170,6 +303,8 @@ func (in *interpreter) graphqlRoots(expression ast.Expr) (ir.GraphQLRootNamesIR,
 		"FindOne": &result.FindOne, "FindMany": &result.FindMany, "Create": &result.Create,
 		"Update": &result.Update, "Upsert": &result.Upsert, "Delete": &result.Delete,
 		"UpdateMany": &result.UpdateMany, "DeleteMany": &result.DeleteMany,
+		"Aggregate": &result.Aggregate, "GroupBy": &result.GroupBy,
+		"RelationGroupBy": &result.RelationGroupBy,
 	}
 	seen := map[string]bool{}
 	for _, element := range literal.Elts {

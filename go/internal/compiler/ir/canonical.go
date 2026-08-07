@@ -399,6 +399,27 @@ func normalizeContract(contract *ContractIR) {
 			}
 		}
 		sort.Slice(model.Operations, func(a, b int) bool { return model.Operations[a] < model.Operations[b] })
+		if model.Aggregation != nil {
+			sort.Slice(model.Aggregation.Dimensions, func(a, b int) bool { return model.Aggregation.Dimensions[a] < model.Aggregation.Dimensions[b] })
+			sort.Slice(model.Aggregation.Measures, func(a, b int) bool { return model.Aggregation.Measures[a] < model.Aggregation.Measures[b] })
+			sort.Slice(model.Aggregation.RelationDimensions, func(a, b int) bool {
+				return model.Aggregation.RelationDimensions[a].Name < model.Aggregation.RelationDimensions[b].Name
+			})
+			if model.Aggregation.Dimensions == nil {
+				model.Aggregation.Dimensions = []FieldID{}
+			}
+			if model.Aggregation.Measures == nil {
+				model.Aggregation.Measures = []FieldID{}
+			}
+			if model.Aggregation.RelationDimensions == nil {
+				model.Aggregation.RelationDimensions = []RelationDimensionContractIR{}
+			}
+			for relationIndex := range model.Aggregation.RelationDimensions {
+				if model.Aggregation.RelationDimensions[relationIndex].Path == nil {
+					model.Aggregation.RelationDimensions[relationIndex].Path = []RelationID{}
+				}
+			}
+		}
 		sort.Slice(model.Computed, func(a, b int) bool {
 			if model.Computed[a].Name != model.Computed[b].Name {
 				return model.Computed[a].Name < model.Computed[b].Name

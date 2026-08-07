@@ -163,6 +163,135 @@ func TestP5GeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
 	}
 }
 
+func TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat(t *testing.T) {
+	moduleRoot := p5ExtensionModuleRoot(t)
+	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5social")
+	request := pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5social", PackageName: "p5social", Directory: directory},
+		Lowerers:   []physical.Lowerer{p5SocialPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
+		Env:        append([]string(nil), os.Environ()...),
+	}
+	first, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	shuffled := request
+	shuffled.Lowerers = []physical.Lowerer{sqliteprovider.New(), p5SocialPostgreSQLLowerer{delegate: postgresprovider.New()}}
+	shuffled.Env = append([]string(nil), request.Env...)
+	for left, right := 0, len(shuffled.Env)-1; left < right; left, right = left+1, right-1 {
+		shuffled.Env[left], shuffled.Env[right] = shuffled.Env[right], shuffled.Env[left]
+	}
+	third, err := pipeline.Build(context.Background(), shuffled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline := p5ExtensionArtifactMap(first)
+	for label, result := range map[string]pipeline.Result{"repeat": second, "shuffled": third} {
+		if result.Prospective.GenerationDigest != first.Prospective.GenerationDigest {
+			t.Fatalf("%s generation digest differs: %s != %s; model=%s/%s contract=%s/%s providers=%v/%v artifacts=%v/%v", label,
+				result.Prospective.GenerationDigest, first.Prospective.GenerationDigest,
+				result.ModelFingerprint, first.ModelFingerprint, result.ContractFingerprint, first.ContractFingerprint,
+				result.Prospective.Manifest.ProviderFingerprints, first.Prospective.Manifest.ProviderFingerprints,
+				sortedP5ExtensionKeys(p5ExtensionArtifactMap(result)), sortedP5ExtensionKeys(baseline))
+		}
+		candidate := p5ExtensionArtifactMap(result)
+		if fmt.Sprint(sortedP5ExtensionKeys(candidate)) != fmt.Sprint(sortedP5ExtensionKeys(baseline)) {
+			t.Fatalf("%s artifact inventory differs", label)
+		}
+		for path, content := range baseline {
+			if !bytes.Equal(content, candidate[path]) {
+				t.Fatalf("%s artifact differs: %s", label, path)
+			}
+		}
+	}
+	assertArtifactContains := func(path string, values ...string) {
+		t.Helper()
+		content := string(baseline[path])
+		for _, value := range values {
+			if !strings.Contains(content, value) {
+				t.Fatalf("P6 artifact %s omitted %q", path, value)
+			}
+		}
+	}
+	assertArtifactContains("runtime/testdata/p5social/zz_golem_models.gen.go", "func (golemGeneratedPostFields) Aggregate", "func (golemGeneratedPostFields) Scope")
+	assertArtifactContains("runtime/testdata/p5social/zz_golem_registry.gen.go", "func (client CallerPostClient[P]) Scoped", "func (client CallerPostClient[P]) GroupBy")
+	assertArtifactContains("runtime/testdata/p5social/zz_golem_graphql.schema.graphqls", "aggregatePosts", "groupByPosts", "relationGroupByPosts")
+}
+
+func TestFreshP6SocialModuleGeneratesCompilesAndConstructsApp(t *testing.T) {
+	moduleRoot := p5ExtensionModuleRoot(t)
+	directory := t.TempDir()
+	for _, name := range []string{"models.go", "policies.go", "schema.go"} {
+		content, err := os.ReadFile(filepath.Join(moduleRoot, "runtime", "testdata", "p5social", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	goMod := fmt.Sprintf("module example.test/p6social\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot)
+	if err := os.WriteFile(filepath.Join(directory, "go.mod"), []byte(goMod), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := func(name string, arguments ...string) {
+		t.Helper()
+		command := exec.Command(name, arguments...)
+		command.Dir = directory
+		command.Env = append(os.Environ(), "GOWORK=off")
+		if output, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%s %v: %v\n%s", name, arguments, err, output)
+		}
+	}
+	run("go", "mod", "tidy")
+	request := pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/p6social", PackageName: "p5social", Directory: directory},
+		Lowerers:   []physical.Lowerer{postgresprovider.New(), sqliteprovider.New()},
+		Env:        append(os.Environ(), "GOWORK=off"),
+	}
+	generated, err := pipeline.Build(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, artifact := range generated.Prospective.Artifacts {
+		absolute := filepath.Join(directory, filepath.FromSlash(artifact.Path))
+		if err := os.MkdirAll(filepath.Dir(absolute), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(absolute, artifact.Content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const construction = `package p5social
+
+import (
+	"context"
+	"testing"
+)
+
+func TestConstructGeneratedP6AppSurface(t *testing.T) {
+	app := &App[Principal]{}
+	if app == nil { t.Fatal("generated App was not constructed") }
+	_ = Posts.Scope()
+	_ = Posts.Aggregate(Posts.AggregateSelect(Posts.CountAll()))
+	if _, err := Open(context.Background(), Config[Principal]{}); err == nil {
+		t.Fatal("Open accepted missing infrastructure")
+	}
+}
+`
+	if err := os.WriteFile(filepath.Join(directory, "p6_construct_test.go"), []byte(construction), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("go", "mod", "tidy")
+	run("go", "test", "./...")
+}
+
 func TestP5ActiveGeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
 	moduleRoot := p5ExtensionModuleRoot(t)
 	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5socialactive")

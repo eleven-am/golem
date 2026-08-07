@@ -19,8 +19,14 @@ const adultAge int64 = 18
 
 func (User) GolemModel() g.ModelSpec[User] {
 	return g.DefineModel(
+		g.Analytics[User](
+			g.AnalyticsDimensions(Users.Age, Users.Name),
+			g.AnalyticsMeasures(Users.Age, Users.Score),
+			g.AnalyticsLimits[User](75, 5_000),
+		),
+		g.ScopedReads[User](),
 		g.GraphQL[User](
-			g.GraphQLOperations(g.GraphQLFindOne, g.GraphQLFindMany, g.GraphQLCreate),
+			g.GraphQLOperations(g.GraphQLFindOne, g.GraphQLFindMany, g.GraphQLCreate, g.GraphQLAggregate, g.GraphQLGroupBy),
 			g.GraphQLPlural("accounts"),
 			g.GraphQLRoots(g.GraphQLRootNames{FindOne: "account", FindMany: "accounts"}),
 			g.GraphQLPageSizes(25, 250),

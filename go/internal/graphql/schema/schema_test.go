@@ -38,6 +38,167 @@ func TestSocialSDLIsDeterministicAndValid(t *testing.T) {
 	}
 }
 
+func TestP6GeneratedGraphQLAnalyticsSDLGolden(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	compilation := analyticsSocialCompilation(t, *compiled.Compilation)
+	document, err := Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := gqlparser.LoadSchema(astSource(document.SDL))
+	if err != nil {
+		t.Fatalf("invalid analytics SDL: %v\n%s", err, document.SDL)
+	}
+	query := requireDefinition(t, parsed, "Query")
+	goldenRoots := map[string]string{
+		"aggregatePosts":       "PostAggregate!",
+		"groupByPosts":         "[PostGroup!]!",
+		"relationGroupByPosts": "[PostRelationGroup!]!",
+	}
+	for name, expected := range goldenRoots {
+		field := query.Fields.ForName(name)
+		if field == nil || field.Type.String() != expected {
+			t.Errorf("%s type = %#v, want %s", name, field, expected)
+		}
+	}
+	requireFieldNames(t, requireDefinition(t, parsed, "PostAggregate"), "count", "countFields", "max", "min")
+	requireFieldNames(t, requireDefinition(t, parsed, "PostCountAggregate"), "title")
+	if parsed.Types["PostSumAggregate"] != nil || parsed.Types["PostAvgAggregate"] != nil {
+		t.Fatal("unsupported string sum/average capability was emitted")
+	}
+	requireFieldNames(t, requireDefinition(t, parsed, "PostGroupKey"), "authorID", "title")
+	requireFieldNames(t, requireDefinition(t, parsed, "PostRelationGroupKey"), "authorHandle", "authorID", "title")
+	if requireDefinition(t, parsed, "PostMinAggregate").Fields.ForName("authorID") != nil {
+		t.Fatal("UUID min capability was emitted")
+	}
+
+	ordinary := socialDocument(t)
+	for _, reserved := range []string{"aggregatePosts", "groupByPosts", "relationGroupByPosts"} {
+		if strings.Contains(ordinary.SDL, reserved+"(") {
+			t.Fatalf("ordinary P5 schema exposed reserved analytics root %s", reserved)
+		}
+	}
+}
+
+func TestP6GraphQLAnalyticsRejectsHiddenAllowlistsTerminalsAndNameCollisions(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	for name, mutate := range map[string]func(*compilerir.CompilationIR){
+		"hidden allowlisted local field": func(compilation *compilerir.CompilationIR) {
+			for modelIndex := range compilation.Contract.Models {
+				if compilation.Contract.Models[modelIndex].GraphQLName != "Post" {
+					continue
+				}
+				for fieldIndex := range compilation.Contract.Models[modelIndex].Fields {
+					if compilation.Contract.Models[modelIndex].Fields[fieldIndex].GraphQLName == "title" {
+						compilation.Contract.Models[modelIndex].Fields[fieldIndex].Modes = []compilerir.FieldMode{compilerir.ModeHidden}
+					}
+				}
+			}
+		},
+		"hidden relation terminal": func(compilation *compilerir.CompilationIR) {
+			for modelIndex := range compilation.Contract.Models {
+				if compilation.Contract.Models[modelIndex].GraphQLName != "User" {
+					continue
+				}
+				for fieldIndex := range compilation.Contract.Models[modelIndex].Fields {
+					if compilation.Contract.Models[modelIndex].Fields[fieldIndex].GraphQLName == "handle" {
+						compilation.Contract.Models[modelIndex].Fields[fieldIndex].Modes = []compilerir.FieldMode{compilerir.ModeHidden}
+					}
+				}
+			}
+		},
+		"relation name collides with local field": func(compilation *compilerir.CompilationIR) {
+			for index := range compilation.Contract.Models {
+				contract := &compilation.Contract.Models[index]
+				if contract.GraphQLName == "Post" {
+					contract.Aggregation.RelationDimensions[0].Name = "title"
+				}
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			compilation := analyticsSocialCompilation(t, *compiled.Compilation)
+			for index := range compilation.Contract.Models {
+				compilation.Contract.Models[index].Fields = append([]compilerir.FieldContractIR(nil), compilation.Contract.Models[index].Fields...)
+				if compilation.Contract.Models[index].Aggregation != nil {
+					copy := *compilation.Contract.Models[index].Aggregation
+					copy.RelationDimensions = append([]compilerir.RelationDimensionContractIR(nil), copy.RelationDimensions...)
+					compilation.Contract.Models[index].Aggregation = &copy
+				}
+			}
+			mutate(&compilation)
+			if _, err := Build(compilation); err == nil {
+				t.Fatal("invalid analytics GraphQL contract was accepted")
+			}
+		})
+	}
+}
+
+func analyticsSocialCompilation(t *testing.T, compilation compilerir.CompilationIR) compilerir.CompilationIR {
+	t.Helper()
+	compilation.Contract.Models = append([]compilerir.ModelContractIR(nil), compilation.Contract.Models...)
+	var postModel, userModel compilerir.ModelDeclIR
+	for _, model := range compilation.Model.Models {
+		for _, contract := range compilation.Contract.Models {
+			if contract.ModelID != model.ID {
+				continue
+			}
+			switch contract.GraphQLName {
+			case "Post":
+				postModel = model
+			case "User":
+				userModel = model
+			}
+		}
+	}
+	fieldID := func(model compilerir.ModelDeclIR, contract compilerir.ModelContractIR, name string) compilerir.FieldID {
+		for _, field := range contract.Fields {
+			if field.GraphQLName == name {
+				return field.FieldID
+			}
+		}
+		t.Fatalf("missing %s.%s", contract.GraphQLName, name)
+		return ""
+	}
+	var postContract, userContract *compilerir.ModelContractIR
+	for index := range compilation.Contract.Models {
+		switch compilation.Contract.Models[index].GraphQLName {
+		case "Post":
+			postContract = &compilation.Contract.Models[index]
+		case "User":
+			userContract = &compilation.Contract.Models[index]
+		}
+	}
+	if postContract == nil || userContract == nil {
+		t.Fatal("social Post/User contract is absent")
+	}
+	var authorRelation compilerir.RelationID
+	for _, relation := range compilation.Model.Relations {
+		if relation.SourceModel == postModel.ID && relation.TargetModel == userModel.ID {
+			authorRelation = relation.ID
+			break
+		}
+	}
+	if authorRelation == "" {
+		t.Fatal("Post.author relation is absent")
+	}
+	postContract.Operations = append(postContract.Operations, compilerir.OperationAggregate, compilerir.OperationGroupBy, compilerir.OperationRelationGroupBy)
+	postContract.Aggregation = &compilerir.AggregationContractIR{
+		Enabled:    true,
+		Dimensions: []compilerir.FieldID{fieldID(postModel, *postContract, "authorID"), fieldID(postModel, *postContract, "title")}, DimensionsExplicit: true,
+		Measures: []compilerir.FieldID{fieldID(postModel, *postContract, "title")}, MeasuresExplicit: true,
+		RelationDimensions: []compilerir.RelationDimensionContractIR{{Name: "authorHandle", Path: []compilerir.RelationID{authorRelation}, TerminalField: fieldID(userModel, *userContract, "handle")}},
+		GraphQLMaxGroups:   100, RelationMaxIntermediateGroups: 10_000,
+	}
+	return compilation
+}
+
 func TestGeneratedGraphQLSDLMatchesExposureOperationAndNullabilityMatrix(t *testing.T) {
 	document := socialDocument(t)
 	parsed, err := gqlparser.LoadSchema(astSource(document.SDL))

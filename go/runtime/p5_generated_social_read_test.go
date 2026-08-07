@@ -20,6 +20,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -42,6 +43,30 @@ type p5SocialGeneratedHarness struct {
 	server      *p5social.GraphQLServer
 	app         *p5social.App[p5social.Principal]
 	resolutions *atomic.Int64
+	audits      *p5SocialAuditSink
+}
+
+type p5SocialAuditSink struct {
+	mu      sync.Mutex
+	records []golem.ScopedAuditRecord
+}
+
+func (sink *p5SocialAuditSink) report(_ context.Context, record golem.ScopedAuditRecord) {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.records = append(sink.records, record)
+}
+
+func (sink *p5SocialAuditSink) snapshot() []golem.ScopedAuditRecord {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	return append([]golem.ScopedAuditRecord(nil), sink.records...)
+}
+
+func (sink *p5SocialAuditSink) reset() {
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	sink.records = nil
 }
 
 type p5SocialGeneratedResponse struct {
@@ -54,6 +79,10 @@ type p5SocialGeneratedResponse struct {
 }
 
 func newP5SocialGeneratedHarness(t *testing.T, profile p5ExtensionProviderProfile) *p5SocialGeneratedHarness {
+	return newP5SocialGeneratedHarnessWithAnalyticsLimits(t, profile, golemruntime.AnalyticsLimits{})
+}
+
+func newP5SocialGeneratedHarnessWithAnalyticsLimits(t *testing.T, profile p5ExtensionProviderProfile, analyticsLimits golemruntime.AnalyticsLimits) *p5SocialGeneratedHarness {
 	t.Helper()
 	ctx := context.Background()
 	trace := &p5ExtensionSQLTrace{}
@@ -85,6 +114,7 @@ func newP5SocialGeneratedHarness(t *testing.T, profile p5ExtensionProviderProfil
 		configuration.RuntimeParams["intervalstyle"] = "iso_8601"
 		configuration.RuntimeParams["standard_conforming_strings"] = "on"
 		database = sqlx.NewDb(sql.OpenDB(p5ExtensionTraceConnector{base: stdlib.GetConnector(*configuration), trace: trace}), "pgx")
+		p6AcquirePostgreSQLTestLock(t, profile.dsn, 0x5036534f4349414c)
 		p5CleanupSocialPostgreSQL(t, database)
 		apply = postgresprovider.New().ApplyInitial
 		t.Cleanup(func() {
@@ -117,8 +147,12 @@ func newP5SocialGeneratedHarness(t *testing.T, profile p5ExtensionProviderProfil
 		t.Fatal(err)
 	}
 	resolutions := &atomic.Int64{}
+	audits := &p5SocialAuditSink{}
 	app, err := p5social.Open(ctx, p5social.Config[p5social.Principal]{
 		DB: database, Provider: profile.provider,
+		AnalyticsLimits:   analyticsLimits,
+		AuditPrincipal:    func(principal p5social.Principal) string { return principal.UserID.String() },
+		ReportScopedQuery: audits.report,
 		ResolvePrincipal: func(_ context.Context, principal p5social.Principal) (p5social.Actor, error) {
 			resolutions.Add(1)
 			if !principal.Valid {
@@ -141,11 +175,34 @@ func newP5SocialGeneratedHarness(t *testing.T, profile p5ExtensionProviderProfil
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness := &p5SocialGeneratedHarness{profile: profile, database: database, trace: trace, server: server, app: app, resolutions: resolutions}
+	harness := &p5SocialGeneratedHarness{profile: profile, database: database, trace: trace, server: server, app: app, resolutions: resolutions, audits: audits}
 	harness.seed(t)
 	trace.reset()
 	p5social.ResetPolicyProbe()
 	return harness
+}
+
+func p6AcquirePostgreSQLTestLock(t *testing.T, dsn string, key int64) {
+	t.Helper()
+	lockDB, _, err := postgresprovider.New().Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatalf("open PostgreSQL test lock database: %v", err)
+	}
+	connection, err := lockDB.Connx(context.Background())
+	if err != nil {
+		_ = lockDB.Close()
+		t.Fatalf("reserve PostgreSQL test lock connection: %v", err)
+	}
+	if _, err := connection.ExecContext(context.Background(), `SELECT pg_advisory_lock($1)`, key); err != nil {
+		_ = connection.Close()
+		_ = lockDB.Close()
+		t.Fatalf("acquire PostgreSQL test lock: %v", err)
+	}
+	t.Cleanup(func() {
+		_, _ = connection.ExecContext(context.Background(), `SELECT pg_advisory_unlock($1)`, key)
+		_ = connection.Close()
+		_ = lockDB.Close()
+	})
 }
 
 func p5CleanupSocialPostgreSQL(t *testing.T, database *sqlx.DB) {

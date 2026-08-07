@@ -13,7 +13,7 @@ import (
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
-const ABIVersion uint16 = 1
+const ABIVersion uint16 = 2
 
 const (
 	DefaultPageSize    uint32 = 50
@@ -113,7 +113,8 @@ func DefaultRoots(graphqlName, plural string) ir.GraphQLRootNamesIR {
 		Upsert: "upsert" + graphqlName, Delete: "delete" + graphqlName,
 		UpdateMany: "updateMany" + plural, DeleteMany: "deleteMany" + plural,
 		Aggregate: "aggregate" + plural, GroupBy: "groupBy" + plural,
-		Events: singularRoot + "Events",
+		RelationGroupBy: "relationGroupBy" + plural,
+		Events:          singularRoot + "Events",
 	}
 }
 
@@ -183,8 +184,8 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 }
 
 func overlayRoots(base, override ir.GraphQLRootNamesIR) ir.GraphQLRootNamesIR {
-	fields := []*string{&base.FindOne, &base.FindMany, &base.Create, &base.Update, &base.Upsert, &base.Delete, &base.UpdateMany, &base.DeleteMany, &base.Aggregate, &base.GroupBy, &base.Events}
-	values := []string{override.FindOne, override.FindMany, override.Create, override.Update, override.Upsert, override.Delete, override.UpdateMany, override.DeleteMany, override.Aggregate, override.GroupBy, override.Events}
+	fields := []*string{&base.FindOne, &base.FindMany, &base.Create, &base.Update, &base.Upsert, &base.Delete, &base.UpdateMany, &base.DeleteMany, &base.Aggregate, &base.GroupBy, &base.RelationGroupBy, &base.Events}
+	values := []string{override.FindOne, override.FindMany, override.Create, override.Update, override.Upsert, override.Delete, override.UpdateMany, override.DeleteMany, override.Aggregate, override.GroupBy, override.RelationGroupBy, override.Events}
 	for index, value := range values {
 		if value != "" {
 			*fields[index] = value
@@ -215,6 +216,9 @@ func validateModel(model ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic
 	for _, operation := range ordinaryOperations {
 		allowed[operation] = true
 	}
+	allowed[ir.OperationAggregate] = true
+	allowed[ir.OperationGroupBy] = true
+	allowed[ir.OperationRelationGroupBy] = true
 	seenOperations := map[ir.Operation]bool{}
 	for _, operation := range model.Operations {
 		if !allowed[operation] {
@@ -224,6 +228,22 @@ func validateModel(model ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic
 			diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_OPERATION_DUPLICATE", fmt.Sprintf("model %s enables GraphQL operation %q more than once", model.ModelID, operation), span))
 		}
 		seenOperations[operation] = true
+	}
+	if seenOperations[ir.OperationAggregate] || seenOperations[ir.OperationGroupBy] || seenOperations[ir.OperationRelationGroupBy] {
+		if model.Aggregation == nil || !model.Aggregation.Enabled {
+			diagnostics = append(diagnostics, ir.NewError("P6_GRAPHQL_ANALYTICS_REQUIRED", fmt.Sprintf("model %s enables analytics roots without Analytics", model.ModelID), span))
+		}
+	}
+	if model.Aggregation != nil {
+		if seenOperations[ir.OperationGroupBy] && model.Aggregation.DimensionsExplicit && len(model.Aggregation.Dimensions) == 0 {
+			diagnostics = append(diagnostics, ir.NewError("P6_GRAPHQL_DIMENSION_ALLOWLIST_EMPTY", fmt.Sprintf("model %s enables groupBy with an explicit empty dimension allowlist", model.ModelID), span))
+		}
+		if (seenOperations[ir.OperationAggregate] || seenOperations[ir.OperationGroupBy] || seenOperations[ir.OperationRelationGroupBy]) && model.Aggregation.MeasuresExplicit && len(model.Aggregation.Measures) == 0 {
+			diagnostics = append(diagnostics, ir.NewError("P6_GRAPHQL_MEASURE_ALLOWLIST_EMPTY", fmt.Sprintf("model %s enables analytics with an explicit empty measure allowlist", model.ModelID), span))
+		}
+	}
+	if seenOperations[ir.OperationRelationGroupBy] && (model.Aggregation == nil || len(model.Aggregation.RelationDimensions) == 0) {
+		diagnostics = append(diagnostics, ir.NewError("P6_GRAPHQL_RELATION_DIMENSION_REQUIRED", fmt.Sprintf("model %s enables relationGroupBy without a named relation dimension", model.ModelID), span))
 	}
 	if model.Limits.DefaultPageSize == 0 || model.Limits.MaxPageSize == 0 || model.Limits.DefaultPageSize > model.Limits.MaxPageSize {
 		diagnostics = append(diagnostics, ir.NewError("P5_GRAPHQL_PAGE_LIMIT", fmt.Sprintf("model %s requires 0 < default page size <= maximum page size", model.ModelID), span))
@@ -287,6 +307,9 @@ func validateSchemaCollisions(contract ir.ContractIR) []ir.Diagnostic {
 			{model.Roots.Delete, string(model.ModelID) + ".delete", true, enabled[ir.OperationDelete]},
 			{model.Roots.UpdateMany, string(model.ModelID) + ".updateMany", true, enabled[ir.OperationUpdateMany]},
 			{model.Roots.DeleteMany, string(model.ModelID) + ".deleteMany", true, enabled[ir.OperationDeleteMany]},
+			{model.Roots.Aggregate, string(model.ModelID) + ".aggregate", false, enabled[ir.OperationAggregate]},
+			{model.Roots.GroupBy, string(model.ModelID) + ".groupBy", false, enabled[ir.OperationGroupBy]},
+			{model.Roots.RelationGroupBy, string(model.ModelID) + ".relationGroupBy", false, enabled[ir.OperationRelationGroupBy]},
 		}
 		for _, root := range roots {
 			if !root.enabled {

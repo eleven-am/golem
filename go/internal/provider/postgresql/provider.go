@@ -16,6 +16,7 @@ const (
 	CapabilityJSONB            ir.CapabilityID = "postgresql.jsonb"
 	CapabilityGeneratedColumns ir.CapabilityID = "postgresql.generated_columns"
 	CapabilityAdvisoryLocks    ir.CapabilityID = "postgresql.advisory_xact_lock"
+	CapabilityAnalyticsExact   ir.CapabilityID = "analytics.exact-arithmetic.v1"
 )
 
 type Provider struct{}
@@ -33,6 +34,7 @@ func (*Provider) Manifest() physical.ProviderManifest {
 		physical.CapabilityFact{ID: CapabilityPolicyExactJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityPolicyScalarListJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityPolicyRelationCorrelation, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityAnalyticsExact, Version: 1, Verification: physical.VerificationRuntimeProbe},
 	)
 }
 
@@ -46,6 +48,7 @@ type CapabilityReport struct {
 	ExactJSON           bool
 	ScalarListJSON      bool
 	RelationCorrelation bool
+	AnalyticsExact      bool
 }
 
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {

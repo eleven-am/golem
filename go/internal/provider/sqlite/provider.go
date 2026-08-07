@@ -21,6 +21,7 @@ const (
 	CapabilityPolicyExactJSON   ir.CapabilityID = "policy.exact-json.v1"
 	CapabilityPolicyScalarList  ir.CapabilityID = "scalar-list.json-array.v1"
 	CapabilityPolicyRelation    ir.CapabilityID = "policy.relation-correlation.v1"
+	CapabilityAnalyticsExact    ir.CapabilityID = "analytics.exact-arithmetic.v1"
 )
 
 type Provider struct{}
@@ -38,6 +39,7 @@ func (*Provider) Manifest() physical.ProviderManifest {
 		physical.CapabilityFact{ID: CapabilityPolicyExactJSON, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityPolicyScalarList, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityPolicyRelation, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityAnalyticsExact, Version: 1, Verification: physical.VerificationRuntimeProbe},
 	)
 }
 
@@ -51,6 +53,7 @@ type CapabilityReport struct {
 	PolicyExactJSON  bool
 	PolicyScalarList bool
 	PolicyRelation   bool
+	AnalyticsExact   bool
 }
 
 // Open opens a modernc.org/sqlite database through sqlx and proves the provider

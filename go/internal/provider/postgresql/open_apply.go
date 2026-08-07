@@ -41,6 +41,10 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 		database.Close()
 		return nil, CapabilityReport{}, fmt.Errorf("postgresql policy capabilities missing: binary=%t ascii=%t exactJSON=%t scalarListJSON=%t relation=%t", report.BinaryText, report.ASCIIInsensitive, report.ExactJSON, report.ScalarListJSON, report.RelationCorrelation)
 	}
+	if !report.AnalyticsExact {
+		database.Close()
+		return nil, CapabilityReport{}, fmt.Errorf("postgresql analytical exact-arithmetic capability is missing")
+	}
 	return database, report, nil
 }
 
@@ -92,9 +96,16 @@ pg_catalog.translate('ÅAZ', 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrst
 pg_catalog.jsonb_array_length('[1,2,1]'::jsonb) = 3
   AND ('[1,2]'::jsonb <> '[2,1]'::jsonb),
 EXISTS (SELECT 1 FROM (VALUES (1)) AS parent(id) WHERE EXISTS (SELECT 1 FROM (VALUES (1)) AS child(parent_id) WHERE child.parent_id = parent.id))`
+	const analytics = `,
+(
+  (SELECT pg_catalog.sum(value)::text = '18446744073709551614' FROM (VALUES (9223372036854775807::bigint), (9223372036854775807::bigint)) AS exact_integer(value))
+  AND (SELECT pg_catalog.round(pg_catalog.avg(value), 0)::text = '2' FROM (VALUES (1::numeric), (2::numeric)) AS positive_half(value))
+  AND (SELECT pg_catalog.round(pg_catalog.avg(value), 0)::text = '-2' FROM (VALUES (-1::numeric), (-2::numeric)) AS negative_half(value))
+)`
+	statementWithAnalytics := statement + analytics
 	var version int
 	var report CapabilityReport
-	if err := query.QueryRowxContext(ctx, statement).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks, &report.BinaryText, &report.ASCIIInsensitive, &report.ExactJSON, &report.ScalarListJSON, &report.RelationCorrelation); err != nil {
+	if err := query.QueryRowxContext(ctx, statementWithAnalytics).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks, &report.BinaryText, &report.ASCIIInsensitive, &report.ExactJSON, &report.ScalarListJSON, &report.RelationCorrelation, &report.AnalyticsExact); err != nil {
 		return CapabilityReport{}, fmt.Errorf("postgresql capability probe: %w", err)
 	}
 	report.Version = physical.Version{Major: uint32(version / 10000), Minor: uint32((version / 100) % 100), Patch: uint32(version % 100)}

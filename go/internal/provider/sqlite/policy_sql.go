@@ -74,10 +74,14 @@ func (PolicyDialect) Encode(bound policysql.BoundValue) (any, error) {
 	case ir.ValueDateTime:
 		seconds, nanos, _ := value.DateTime()
 		microseconds := int64(nanos) / 1_000
-		if seconds > 0 && seconds > (math.MaxInt64-microseconds)/1_000_000 || seconds < 0 && seconds < (math.MinInt64-microseconds)/1_000_000 {
+		if seconds > math.MaxInt64/1_000_000 || seconds < math.MinInt64/1_000_000 {
 			return nil, fmt.Errorf("sqlite policy codec: datetime is outside microsecond storage range")
 		}
-		return seconds*1_000_000 + microseconds, nil
+		whole := seconds * 1_000_000
+		if whole > math.MaxInt64-microseconds {
+			return nil, fmt.Errorf("sqlite policy codec: datetime is outside microsecond storage range")
+		}
+		return whole + microseconds, nil
 	case ir.ValueEnum:
 		if len(bound.EnumWires) != 1 {
 			return nil, fmt.Errorf("sqlite policy codec: enum wire label is missing")

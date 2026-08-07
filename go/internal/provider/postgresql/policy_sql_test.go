@@ -349,7 +349,7 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 	manifest := New().Manifest()
 	want := map[string]bool{
 		CapabilityPolicyBinaryText: false, CapabilityPolicyASCIIInsensitive: false, CapabilityPolicyExactJSON: false,
-		CapabilityPolicyScalarListJSON: false, CapabilityPolicyRelationCorrelation: false,
+		CapabilityPolicyScalarListJSON: false, CapabilityPolicyRelationCorrelation: false, string(CapabilityAnalyticsExact): false,
 	}
 	for _, fact := range manifest.Capabilities {
 		if _, ok := want[string(fact.ID)]; ok {
@@ -362,7 +362,7 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 		}
 	}
 	fingerprint := [32]byte{9}
-	report := CapabilityReport{Version: physical.Version{Major: 15}, JSONB: true, BinaryText: true, ASCIIInsensitive: true, ExactJSON: true, ScalarListJSON: true, RelationCorrelation: true}
+	report := CapabilityReport{Version: physical.Version{Major: 15}, JSONB: true, BinaryText: true, ASCIIInsensitive: true, ExactJSON: true, ScalarListJSON: true, RelationCorrelation: true, AnalyticsExact: true}
 	proof, err := New().policyCapabilityProof(fingerprint, report)
 	if err != nil {
 		t.Fatal(err)
@@ -373,6 +373,11 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 	report.ExactJSON = false
 	if _, err := New().policyCapabilityProof(fingerprint, report); err == nil {
 		t.Fatal("incomplete runtime report produced proof")
+	}
+	report.ExactJSON = true
+	report.AnalyticsExact = false
+	if _, err := New().policyCapabilityProof(fingerprint, report); err == nil {
+		t.Fatal("analytics-exact capability loss produced an application proof")
 	}
 }
 

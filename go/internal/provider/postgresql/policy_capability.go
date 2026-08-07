@@ -14,7 +14,7 @@ import (
 // fingerprint prevents a proof from being reused with a different descriptor
 // registry.
 func (*Provider) policyCapabilityProof(fingerprint [32]byte, report CapabilityReport) (policysql.CapabilityProof, error) {
-	if report.Version.Major < 15 || !report.JSONB || !report.BinaryText || !report.ASCIIInsensitive || !report.ExactJSON || !report.ScalarListJSON || !report.RelationCorrelation {
+	if report.Version.Major < 15 || !report.JSONB || !report.BinaryText || !report.ASCIIInsensitive || !report.ExactJSON || !report.ScalarListJSON || !report.RelationCorrelation || !report.AnalyticsExact {
 		return policysql.CapabilityProof{}, fmt.Errorf("postgresql policy capability proof: incomplete runtime measurements")
 	}
 	return policysql.NewCapabilityProof(

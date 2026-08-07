@@ -15,42 +15,52 @@ enum SortOrder { asc desc }
 enum QueryMode { sensitive insensitive }
 input BooleanFilter { equals: Boolean not: Boolean in: [Boolean!] notIn: [Boolean!] }
 input NullableBooleanFilter { equals: Boolean not: Boolean in: [Boolean!] notIn: [Boolean!] isNull: Boolean }
+input BooleanAnalyticsFilter { equals: Boolean not: Boolean isNull: Boolean }
 input BooleanUpdateOperationsInput @oneOf { set: Boolean }
 input NullableBooleanUpdateOperationsInput @oneOf { set: Boolean setNull: Boolean }
 input IntFilter { equals: Int not: Int in: [Int!] notIn: [Int!] lt: Int lte: Int gt: Int gte: Int }
 input NullableIntFilter { equals: Int not: Int in: [Int!] notIn: [Int!] lt: Int lte: Int gt: Int gte: Int isNull: Boolean }
+input IntAnalyticsFilter { equals: Int not: Int lt: Int lte: Int gt: Int gte: Int isNull: Boolean }
 input IntUpdateOperationsInput @oneOf { set: Int increment: Int decrement: Int }
 input NullableIntUpdateOperationsInput @oneOf { set: Int setNull: Boolean increment: Int decrement: Int }
 input BigIntFilter { equals: BigInt not: BigInt in: [BigInt!] notIn: [BigInt!] lt: BigInt lte: BigInt gt: BigInt gte: BigInt }
 input NullableBigIntFilter { equals: BigInt not: BigInt in: [BigInt!] notIn: [BigInt!] lt: BigInt lte: BigInt gt: BigInt gte: BigInt isNull: Boolean }
+input BigIntAnalyticsFilter { equals: BigInt not: BigInt lt: BigInt lte: BigInt gt: BigInt gte: BigInt isNull: Boolean }
 input BigIntUpdateOperationsInput @oneOf { set: BigInt increment: BigInt decrement: BigInt }
 input NullableBigIntUpdateOperationsInput @oneOf { set: BigInt setNull: Boolean increment: BigInt decrement: BigInt }
 input FloatFilter { equals: Float not: Float in: [Float!] notIn: [Float!] lt: Float lte: Float gt: Float gte: Float }
 input NullableFloatFilter { equals: Float not: Float in: [Float!] notIn: [Float!] lt: Float lte: Float gt: Float gte: Float isNull: Boolean }
+input FloatAnalyticsFilter { equals: Float not: Float lt: Float lte: Float gt: Float gte: Float isNull: Boolean }
 input FloatUpdateOperationsInput @oneOf { set: Float increment: Float decrement: Float }
 input NullableFloatUpdateOperationsInput @oneOf { set: Float setNull: Boolean increment: Float decrement: Float }
 input DecimalFilter { equals: Decimal not: Decimal in: [Decimal!] notIn: [Decimal!] lt: Decimal lte: Decimal gt: Decimal gte: Decimal }
 input NullableDecimalFilter { equals: Decimal not: Decimal in: [Decimal!] notIn: [Decimal!] lt: Decimal lte: Decimal gt: Decimal gte: Decimal isNull: Boolean }
+input DecimalAnalyticsFilter { equals: Decimal not: Decimal lt: Decimal lte: Decimal gt: Decimal gte: Decimal isNull: Boolean }
 input DecimalUpdateOperationsInput @oneOf { set: Decimal increment: Decimal decrement: Decimal }
 input NullableDecimalUpdateOperationsInput @oneOf { set: Decimal setNull: Boolean increment: Decimal decrement: Decimal }
 input StringFilter { equals: String not: String in: [String!] notIn: [String!] lt: String lte: String gt: String gte: String contains: String startsWith: String endsWith: String mode: QueryMode }
 input NullableStringFilter { equals: String not: String in: [String!] notIn: [String!] lt: String lte: String gt: String gte: String contains: String startsWith: String endsWith: String mode: QueryMode isNull: Boolean }
+input StringAnalyticsFilter { equals: String not: String lt: String lte: String gt: String gte: String contains: String startsWith: String endsWith: String mode: QueryMode isNull: Boolean }
 input StringUpdateOperationsInput @oneOf { set: String }
 input NullableStringUpdateOperationsInput @oneOf { set: String setNull: Boolean }
 input UUIDFilter { equals: UUID not: UUID in: [UUID!] notIn: [UUID!] }
 input NullableUUIDFilter { equals: UUID not: UUID in: [UUID!] notIn: [UUID!] isNull: Boolean }
+input UUIDAnalyticsFilter { equals: UUID not: UUID isNull: Boolean }
 input UUIDUpdateOperationsInput @oneOf { set: UUID }
 input NullableUUIDUpdateOperationsInput @oneOf { set: UUID setNull: Boolean }
 input DateFilter { equals: Date not: Date in: [Date!] notIn: [Date!] lt: Date lte: Date gt: Date gte: Date }
 input NullableDateFilter { equals: Date not: Date in: [Date!] notIn: [Date!] lt: Date lte: Date gt: Date gte: Date isNull: Boolean }
+input DateAnalyticsFilter { equals: Date not: Date lt: Date lte: Date gt: Date gte: Date isNull: Boolean }
 input DateUpdateOperationsInput @oneOf { set: Date }
 input NullableDateUpdateOperationsInput @oneOf { set: Date setNull: Boolean }
 input TimeFilter { equals: Time not: Time in: [Time!] notIn: [Time!] lt: Time lte: Time gt: Time gte: Time }
 input NullableTimeFilter { equals: Time not: Time in: [Time!] notIn: [Time!] lt: Time lte: Time gt: Time gte: Time isNull: Boolean }
+input TimeAnalyticsFilter { equals: Time not: Time lt: Time lte: Time gt: Time gte: Time isNull: Boolean }
 input TimeUpdateOperationsInput @oneOf { set: Time }
 input NullableTimeUpdateOperationsInput @oneOf { set: Time setNull: Boolean }
 input DateTimeFilter { equals: DateTime not: DateTime in: [DateTime!] notIn: [DateTime!] lt: DateTime lte: DateTime gt: DateTime gte: DateTime }
 input NullableDateTimeFilter { equals: DateTime not: DateTime in: [DateTime!] notIn: [DateTime!] lt: DateTime lte: DateTime gt: DateTime gte: DateTime isNull: Boolean }
+input DateTimeAnalyticsFilter { equals: DateTime not: DateTime lt: DateTime lte: DateTime gt: DateTime gte: DateTime isNull: Boolean }
 input DateTimeUpdateOperationsInput @oneOf { set: DateTime }
 input NullableDateTimeUpdateOperationsInput @oneOf { set: DateTime setNull: Boolean }
 input BytesFilter { equals: Bytes not: Bytes in: [Bytes!] notIn: [Bytes!] }
@@ -504,6 +514,161 @@ input PostTagUpdateWithWhereWithoutPostInput { where: PostTagWhereUniqueInput! d
 input PostTagUpdateManyWithWhereWithoutPostInput { where: PostTagWhereInput! data: PostTagUpdateManyInput! }
 
 input PostTagUpsertWithWhereWithoutPostInput { where: PostTagWhereUniqueInput! create: PostTagCreateWithoutPostInput! update: PostTagUpdateWithoutPostInput! }
+
+type PostCountAggregate {
+  authorID: BigInt!
+  id: BigInt!
+  title: BigInt!
+}
+
+input PostCountAggregateHavingInput {
+  authorID: BigIntAnalyticsFilter
+  id: BigIntAnalyticsFilter
+  title: BigIntAnalyticsFilter
+}
+
+input PostCountAggregateOrderByInput {
+  authorID: SortOrder
+  id: SortOrder
+  title: SortOrder
+}
+
+type PostMinAggregate {
+  title: String
+}
+
+input PostMinAggregateHavingInput {
+  title: StringAnalyticsFilter
+}
+
+input PostMinAggregateOrderByInput {
+  title: SortOrder
+}
+
+type PostMaxAggregate {
+  title: String
+}
+
+input PostMaxAggregateHavingInput {
+  title: StringAnalyticsFilter
+}
+
+input PostMaxAggregateOrderByInput {
+  title: SortOrder
+}
+
+type PostAggregate {
+  count: BigInt!
+  countFields: PostCountAggregate!
+  min: PostMinAggregate!
+  max: PostMaxAggregate!
+}
+
+enum PostGroupField {
+  authorID
+  id
+  title
+}
+
+type PostGroupKey {
+  authorID: UUID!
+  id: UUID!
+  title: String!
+}
+
+input PostGroupKeyHavingInput {
+  authorID: UUIDAnalyticsFilter
+  id: UUIDAnalyticsFilter
+  title: StringAnalyticsFilter
+}
+
+input PostGroupKeyOrderByInput {
+  authorID: SortOrder
+  id: SortOrder
+  title: SortOrder
+}
+
+type PostGroup {
+  key: PostGroupKey!
+  count: BigInt!
+  countFields: PostCountAggregate!
+  min: PostMinAggregate!
+  max: PostMaxAggregate!
+}
+
+input PostGroupHavingInput {
+  AND: [PostGroupHavingInput!]
+  OR: [PostGroupHavingInput!]
+  NOT: PostGroupHavingInput
+  key: PostGroupKeyHavingInput
+  count: BigIntAnalyticsFilter
+  countFields: PostCountAggregateHavingInput
+  min: PostMinAggregateHavingInput
+  max: PostMaxAggregateHavingInput
+}
+
+input PostGroupOrderByInput {
+  key: PostGroupKeyOrderByInput
+  count: SortOrder
+  countFields: PostCountAggregateOrderByInput
+  min: PostMinAggregateOrderByInput
+  max: PostMaxAggregateOrderByInput
+}
+
+enum PostRelationGroupField {
+  authorID
+  authorName
+  id
+  title
+}
+
+type PostRelationGroupKey {
+  authorID: UUID!
+  authorName: String!
+  id: UUID!
+  title: String!
+}
+
+input PostRelationGroupKeyHavingInput {
+  authorID: UUIDAnalyticsFilter
+  authorName: StringAnalyticsFilter
+  id: UUIDAnalyticsFilter
+  title: StringAnalyticsFilter
+}
+
+input PostRelationGroupKeyOrderByInput {
+  authorID: SortOrder
+  authorName: SortOrder
+  id: SortOrder
+  title: SortOrder
+}
+
+type PostRelationGroup {
+  key: PostRelationGroupKey!
+  count: BigInt!
+  countFields: PostCountAggregate!
+  min: PostMinAggregate!
+  max: PostMaxAggregate!
+}
+
+input PostRelationGroupHavingInput {
+  AND: [PostRelationGroupHavingInput!]
+  OR: [PostRelationGroupHavingInput!]
+  NOT: PostRelationGroupHavingInput
+  key: PostRelationGroupKeyHavingInput
+  count: BigIntAnalyticsFilter
+  countFields: PostCountAggregateHavingInput
+  min: PostMinAggregateHavingInput
+  max: PostMaxAggregateHavingInput
+}
+
+input PostRelationGroupOrderByInput {
+  key: PostRelationGroupKeyOrderByInput
+  count: SortOrder
+  countFields: PostCountAggregateOrderByInput
+  min: PostMinAggregateOrderByInput
+  max: PostMaxAggregateOrderByInput
+}
 
 type PostTag {
   postID: UUID
@@ -1136,6 +1301,9 @@ type Query {
   friendships(where: FriendshipWhereInput, orderBy: [FriendshipOrderByInput!], cursor: FriendshipWhereUniqueInput, distinct: [FriendshipScalarField!], skip: Int, take: Int = 50): [Friendship!]!
   post(where: PostWhereUniqueInput!): Post
   posts(where: PostWhereInput, orderBy: [PostOrderByInput!], cursor: PostWhereUniqueInput, distinct: [PostScalarField!], skip: Int, take: Int = 50): [Post!]!
+  aggregatePosts(where: PostWhereInput): PostAggregate!
+  groupByPosts(by: [PostGroupField!]!, where: PostWhereInput, having: PostGroupHavingInput, orderBy: [PostGroupOrderByInput!], skip: Int, take: Int): [PostGroup!]!
+  relationGroupByPosts(by: [PostRelationGroupField!]!, where: PostWhereInput, having: PostRelationGroupHavingInput, orderBy: [PostRelationGroupOrderByInput!], skip: Int, take: Int): [PostRelationGroup!]!
   postTag(where: PostTagWhereUniqueInput!): PostTag
   postTags(where: PostTagWhereInput, orderBy: [PostTagOrderByInput!], cursor: PostTagWhereUniqueInput, distinct: [PostTagScalarField!], skip: Int, take: Int = 50): [PostTag!]!
   tag(where: TagWhereUniqueInput!): Tag

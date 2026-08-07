@@ -150,7 +150,7 @@ func Emit(request Request) (File, error) {
 		}
 	}
 	source.WriteString("\t)\n}\n")
-	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, models, modelAliases)
+	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, models, modelAliases, contractModels(request.Schema.Contract))
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -162,8 +162,8 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias string, models []ir.ModelDeclIR, aliases map[string]string) {
-	fmt.Fprintf(source, "\ntype Config[P any] struct {\n\tDB *%s.DB\n\tProvider %s.Provider\n\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n\tResolvePrincipal func(%s.Context, P) (%s, error)\n\tSnapshotActor func(%s) (%s, error)\n}\n", sqlxAlias, golemAlias, runtimeAlias, runtimeAlias, contextAlias, golemAlias, contextAlias, actorType, actorType, actorType)
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR) {
+	fmt.Fprintf(source, "\ntype Config[P any] struct {\n\tDB *%s.DB\n\tProvider %s.Provider\n\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n\tAuditPrincipal func(P) string\n\tReportScopedQuery func(%s.Context, %s.ScopedAuditRecord)\n\tResolvePrincipal func(%s.Context, P) (%s, error)\n\tSnapshotActor func(%s) (%s, error)\n}\n", sqlxAlias, golemAlias, runtimeAlias, runtimeAlias, runtimeAlias, contextAlias, golemAlias, contextAlias, golemAlias, contextAlias, actorType, actorType, actorType)
 	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s] }\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
@@ -186,6 +186,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 	}
 	source.WriteString("}\n")
 	for _, model := range models {
+		contract := contracts[model.ID]
 		modelType := model.Go.Name
 		descriptor := "GolemGenerated" + model.Go.Name + "Descriptor"
 		createInput := model.Go.Name + "CreateInput"
@@ -201,6 +202,10 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		emitAnalyticsClientMethods(source, "Caller", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
+		if contract.ScopedReads {
+			emitScopedClientMethod(source, "Caller", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
+		}
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
@@ -212,6 +217,10 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.SystemFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		emitAnalyticsClientMethods(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
+		if contract.ScopedReads {
+			emitScopedClientMethod(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
+		}
 		fmt.Fprintf(source, "func (client System%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
@@ -223,6 +232,10 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		emitAnalyticsClientMethods(source, "CallerTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
+		if contract.ScopedReads {
+			emitScopedClientMethod(source, "CallerTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
+		}
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.CallerTxUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
@@ -234,6 +247,10 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.SystemTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		emitAnalyticsClientMethods(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
+		if contract.ScopedReads {
+			emitScopedClientMethod(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
+		}
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Create(ctx %s.Context, input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxCreate(ctx, client.runtime, %s, input, projection...) }\n", model.Go.Name, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Update(ctx %s.Context, target %s.MutationTarget[%s], input %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxUpdate(ctx, client.runtime, %s, target, input, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Upsert(ctx %s.Context, target %s.MutationTarget[%s], create %s, update %s, projection ...%s.Projection[%s]) (%s.Row[%s], error) { return %s.SystemTxUpsert(ctx, client.runtime, %s, target, create, update, projection...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
@@ -243,7 +260,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
-	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AfterCommitError: config.AfterCommitError, ResolvePrincipal: config.ResolvePrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
+	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AnalyticsLimits: config.AnalyticsLimits, AfterCommitError: config.AfterCommitError, AuditPrincipal: config.AuditPrincipal, ReportScopedQuery: config.ReportScopedQuery, ResolvePrincipal: config.ResolvePrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) ForPrincipal(ctx %s.Context, principal P) (*Caller[P], error) {\n\tinner, err := app.runtime.ForPrincipal(ctx, principal)\n\tif err != nil { return nil, err }\n\tresult := &Caller[P]{runtime: inner}\n", contextAlias)
 	for _, model := range models {
@@ -272,6 +289,28 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+}
+
+func contractModels(contract ir.ContractIR) map[ir.ModelID]ir.ModelContractIR {
+	result := make(map[ir.ModelID]ir.ModelContractIR, len(contract.Models))
+	for _, model := range contract.Models {
+		result[model.ModelID] = model
+	}
+	return result
+}
+func contractHasRelationDimensions(contract ir.ModelContractIR) bool {
+	return contract.Aggregation != nil && len(contract.Aggregation.RelationDimensions) > 0
+}
+func emitAnalyticsClientMethods(source *bytes.Buffer, prefix, goName, modelType, contextAlias, golemAlias, runtimeAlias, descriptor string, relation bool) {
+	fmt.Fprintf(source, "func (client %s%sClient[P]) Aggregate(ctx %s.Context, request %s.AggregateRequest[%s]) (%s.AggregateResult[%s], error) { return %s.%sAggregate(ctx, client.runtime, %s, request) }\n", prefix, goName, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, prefix, descriptor)
+	fmt.Fprintf(source, "func (client %s%sClient[P]) GroupBy(ctx %s.Context, request %s.GroupRequest[%s]) ([]%s.GroupRow[%s], error) { return %s.%sGroupBy(ctx, client.runtime, %s, request) }\n", prefix, goName, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, prefix, descriptor)
+	if relation {
+		fmt.Fprintf(source, "func (client %s%sClient[P]) RelationGroupBy(ctx %s.Context, request %s.RelationGroupRequest[%s]) ([]%s.RelationGroupRow[%s], error) { return %s.%sRelationGroupBy(ctx, client.runtime, %s, request) }\n", prefix, goName, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, prefix, descriptor)
+	}
+}
+
+func emitScopedClientMethod(source *bytes.Buffer, prefix, goName, modelType, contextAlias, golemAlias, runtimeAlias, descriptor string) {
+	fmt.Fprintf(source, "func (client %s%sClient[P]) Scoped(ctx %s.Context, query %s.ScopedQuery[%s]) ([]%s.ScopedRow, error) { return %s.%sScoped(ctx, client.runtime, %s, query) }\n", prefix, goName, contextAlias, golemAlias, modelType, golemAlias, runtimeAlias, prefix, descriptor)
 }
 
 func pluralName(name string) string {

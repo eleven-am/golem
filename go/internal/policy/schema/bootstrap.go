@@ -418,6 +418,17 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 		fact := builder.registry.models[mid]
 		fact.maxTake = model.Limits.MaxTake
 		fact.subscriptions = model.Subscriptions
+		fact.scopedReads = model.ScopedReads
+		if model.Aggregation != nil {
+			value := *model.Aggregation
+			value.Dimensions = append([]compilerir.FieldID(nil), value.Dimensions...)
+			value.Measures = append([]compilerir.FieldID(nil), value.Measures...)
+			value.RelationDimensions = append([]compilerir.RelationDimensionContractIR(nil), value.RelationDimensions...)
+			for index := range value.RelationDimensions {
+				value.RelationDimensions[index].Path = append([]compilerir.RelationID(nil), value.RelationDimensions[index].Path...)
+			}
+			fact.analytics = &value
+		}
 		builder.registry.models[mid] = fact
 		if len(model.Fields) != len(builder.logicalFields[model.ModelID]) {
 			return fail(CodeContract, path+".fields", "contract field inventory has %d entries, want %d", len(model.Fields), len(builder.logicalFields[model.ModelID]))

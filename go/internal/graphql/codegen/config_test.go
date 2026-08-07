@@ -85,7 +85,7 @@ func TestEmitIsDeterministicValidGoAndCarriesCallerOnlyServerAssembly(t *testing
 		t.Fatalf("generated adapter is not valid Go: %v\n%s", err, first.Source)
 	}
 	source := string(first.Source)
-	for _, required := range []string{GQLGenVersion, GraphQLABIVersion, string(compiled.ContractFingerprint), request.GenerationDigest, request.GeneratorVersion, request.TemplateABIVersion, `Kind: "mutation", Field: "createPost"`, `Kind: "query", Field: "posts"`, "type GraphQLLimits = golemgraphql.Limits", "type GraphQLConfig[P any] struct", "type GraphQLServer struct", "func (app *App[P]) GraphQL", "NewGeneratedExecutor", "golemGeneratedGraphQLBeginCaller", "app.ForPrincipal", "NewCallerMutationExecution", "GolemGraphQLCallerCapability", "CallerMutationModel[P, Actor](GolemGeneratedPostDescriptor)", "bundle.Contract().Fingerprint()"} {
+	for _, required := range []string{GQLGenVersion, GraphQLABIVersion, string(compiled.ContractFingerprint), request.GenerationDigest, request.GeneratorVersion, request.TemplateABIVersion, `Kind: "mutation", Field: "createPost"`, `Kind: "query", Field: "posts"`, "type GraphQLLimits = golemgraphql.Limits", "type GraphQLConfig[P any] struct", "type GraphQLServer struct", "func (app *App[P]) GraphQL", "NewGeneratedExecutor", "golemGeneratedGraphQLBeginCaller", "app.ForPrincipal", "NewCallerMutationExecution", "ExecuteFrozenAnalytics", "CallerExecuteFrozenAnalytics", "GolemGraphQLCallerCapability", "CallerMutationModel[P, Actor](GolemGeneratedPostDescriptor)", "bundle.Contract().Fingerprint()"} {
 		if !strings.Contains(source, required) {
 			t.Errorf("generated adapter missing %q", required)
 		}

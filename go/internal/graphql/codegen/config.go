@@ -22,7 +22,7 @@ import (
 const GQLGenVersion = "v0.17.70"
 
 const (
-	GraphQLABIVersion        = "p5-graphql-abi-v1"
+	GraphQLABIVersion        = "p6-graphql-abi-v2"
 	GoFilename               = "zz_golem_graphql.gen.go"
 	SDLFilename              = "zz_golem_graphql.schema.graphqls"
 	DefaultGolemImportPath   = "github.com/eleven-am/golem/go/golem"
@@ -241,6 +241,10 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("}\n\n")
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenRead(ctx context.Context, request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {\n")
 	body.WriteString("\treturn caller.execution.ExecuteFrozenRead(ctx, request)\n")
+	body.WriteString("}\n\n")
+	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenAnalytics(ctx context.Context, request golem.FrozenAnalyticsRequest) ([][]golem.RuntimeAnalyticsCell, error) {\n")
+	body.WriteString("\tif caller == nil { return nil, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
+	body.WriteString("\treturn golemruntime.CallerExecuteFrozenAnalytics(ctx, caller.public.runtime, request)\n")
 	body.WriteString("}\n\n")
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenMutation(ctx context.Context, request golem.RuntimeMutationRequest) (golem.RuntimeMutationResult, error) {\n")
 	body.WriteString("\treturn caller.execution.ExecuteFrozenMutation(ctx, request)\n")

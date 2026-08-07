@@ -36,6 +36,13 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	if len(result.GraphQLModels) != 1 {
 		t.Fatalf("GraphQL model patches = %#v", result.GraphQLModels)
 	}
+	if len(result.AnalyticsModels) != 1 {
+		t.Fatalf("analytics patches = %#v", result.AnalyticsModels)
+	}
+	analytics := result.AnalyticsModels[0]
+	if !analytics.Enabled || !analytics.ScopedReads || analytics.Dimensions == nil || len(*analytics.Dimensions) != 2 || analytics.GraphQLMaxGroups == nil || *analytics.GraphQLMaxGroups != 75 {
+		t.Fatalf("analytics patch = %#v", analytics)
+	}
 	if len(result.GraphQLComputed) != 3 {
 		t.Fatalf("computed GraphQL declarations = %#v", result.GraphQLComputed)
 	}
@@ -49,7 +56,7 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	if graphql.ModelID != userID || graphql.Plural == nil || *graphql.Plural != "accounts" || graphql.Roots == nil || graphql.Roots.FindOne != "account" || graphql.DefaultPage == nil || *graphql.DefaultPage != 25 || graphql.MaximumPage == nil || *graphql.MaximumPage != 250 {
 		t.Fatalf("GraphQL model patch = %#v", graphql)
 	}
-	if graphql.Operations == nil || len(*graphql.Operations) != 3 || (*graphql.Operations)[2] != ir.OperationCreate {
+	if graphql.Operations == nil || len(*graphql.Operations) != 5 || (*graphql.Operations)[4] != ir.OperationGroupBy {
 		t.Fatalf("GraphQL operations = %#v", graphql.Operations)
 	}
 	user := result.Advanced[0]

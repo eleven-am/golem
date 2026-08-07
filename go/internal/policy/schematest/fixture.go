@@ -66,11 +66,11 @@ func NewSubscribedIndexed(t testing.TB) Fixture {
 }
 
 func NewSubscribedIndexedPostgreSQLNamespace(t testing.TB, namespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, "_golem", false, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, "_golem", false, false, false)
 }
 
 func NewSubscribedIndexedPostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, false, false)
 }
 
 // NewSubscribedIndexedInverseRequiredHasOne is the ordinary subscribed
@@ -78,19 +78,19 @@ func NewSubscribedIndexedPostgreSQLNamespaces(t testing.TB, namespace, systemNam
 // remains non-null, so User.Post is a required inverse one endpoint whose
 // optional-only Disconnect surface must be rejected before SQL.
 func NewSubscribedIndexedInverseRequiredHasOne(t testing.TB) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", true, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", true, false, false)
 }
 
 func NewSubscribedIndexedInverseRequiredHasOnePostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, true, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, true, false, false)
 }
 
 func NewSubscribedIndexedOptionalSource(t testing.TB) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, true)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, true, false)
 }
 
 func NewSubscribedIndexedOptionalSourcePostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, true)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, true, false)
 }
 
 // NewIndexedExact adds portable Int64 and Decimal(18,13) child fields to the
@@ -99,21 +99,25 @@ func NewIndexedExact(t testing.TB) Fixture {
 	return newFixture(t, 0, 0, ContractModes{}, true, true)
 }
 
+func NewIndexedExactScoped(t testing.TB) Fixture {
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, false, "public", "_golem", false, false, true)
+}
+
 // NewMutationVocabulary exposes exact numeric fields plus one nullable numeric
 // field for live public Set/Null/Increment/Decrement mutation acceptance.
 func NewMutationVocabulary(t testing.TB) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, true, true, false, "public", "_golem", false, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, true, true, false, "public", "_golem", false, false, false)
 }
 
 func NewMutationVocabularyPostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, true, true, false, namespace, systemNamespace, false, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, true, true, false, namespace, systemNamespace, false, false, false)
 }
 
 // NewMutationExactValues adds the complete live cross-provider mutation value
 // vocabulary required by P4: nullable scalar, bytes, JSON, scalar-list JSON,
 // Decimal, BigInt, and microsecond DateTime.
 func NewMutationExactValues(t testing.TB) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, true, "public", "_golem", false, false)
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, true, "public", "_golem", false, false, false)
 }
 
 func NewWithMaxTake(t testing.TB, userMaxTake, postMaxTake uint32) Fixture {
@@ -129,10 +133,10 @@ func newFixture(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractMod
 }
 
 func newFixtureWithSubscriptions(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, postSubscriptions bool) Fixture {
-	return newFixtureConfigured(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, false, postSubscriptions, false, "public", "_golem", false, false)
+	return newFixtureConfigured(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, false, postSubscriptions, false, "public", "_golem", false, false, false)
 }
 
-func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor bool) Fixture {
+func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads bool) Fixture {
 	t.Helper()
 	user, post := compilerir.ModelID(id(1)), compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
@@ -204,6 +208,8 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 		{ModelID: user, Fields: []compilerir.FieldContractIR{{FieldID: userID, Modes: modes.UserID}, {FieldID: userName, Modes: modes.UserName}, {FieldID: userPosts, Modes: modes.UserPosts}}, Limits: compilerir.LimitContractIR{MaxTake: userMaxTake}},
 		{ModelID: post, Fields: []compilerir.FieldContractIR{{FieldID: postID, Modes: modes.PostID}, {FieldID: authorID, Modes: modes.AuthorID}, {FieldID: postTitle, Modes: modes.PostTitle}, {FieldID: postAuthor, Modes: modes.PostAuthor}}, Limits: compilerir.LimitContractIR{MaxTake: postMaxTake}, Subscriptions: postSubscriptions},
 	}}
+	contract.Models[1].ScopedReads = scopedReads
+	contract.Models[0].ScopedReads = scopedReads
 	if exactValues {
 		contract.Models[1].Fields = append(contract.Models[1].Fields, compilerir.FieldContractIR{FieldID: postBigInt}, compilerir.FieldContractIR{FieldID: postDecimal})
 	}

@@ -109,6 +109,13 @@ func contractMap(contract ir.ContractIR) map[ir.ModelID]ir.ModelContractIR {
 }
 
 func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.ModelID]ir.ModelDeclIR, enumByID map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, contracts map[ir.ModelID]ir.ModelContractIR, golemPath string, stamp *FinalStamp) (File, []Symbol, error) {
+	scopedSchema := false
+	for _, contract := range contracts {
+		if contract.ScopedReads {
+			scopedSchema = true
+			break
+		}
+	}
 	namespaces := make(map[string]ir.ModelID, len(models))
 	for _, model := range models {
 		namespace := plural(model.LogicalName)
@@ -123,6 +130,12 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			"Where": "read method", "OrderBy": "read method", "Take": "read method",
 			"Skip": "read method", "Distinct": "read method", "Cursor": "read method", "Select": "read method", "Include": "read method", "Omit": "read method",
 			"Create": "mutation input method", "Update": "mutation input method", "UpdateMany": "mutation input method",
+			"CountAll": "analytics method", "Aggregate": "analytics method", "AggregateWhere": "analytics method", "AggregateSelect": "analytics method",
+			"GroupBy": "analytics method", "GroupDimensions": "analytics method", "GroupMeasures": "analytics method", "GroupWhere": "analytics method",
+			"GroupHaving": "analytics method", "GroupOrderBy": "analytics method", "GroupTake": "analytics method", "GroupSkip": "analytics method",
+		}
+		if contracts[model.ID].ScopedReads {
+			members["Scope"] = "scoped-read method"
 		}
 		for _, field := range model.Fields {
 			if fieldIsHidden(field.ID, contracts[model.ID]) {
@@ -142,6 +155,15 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 				return File{}, nil, fmt.Errorf("model codegen: namespace %s member %q collides between %s and selector %s", namespace, name, prior, selector.KeyID)
 			}
 			members[name] = "selector"
+		}
+		if contracts[model.ID].Aggregation != nil {
+			for _, dimension := range contracts[model.ID].Aggregation.RelationDimensions {
+				name := exportedName(dimension.Name)
+				if !token.IsIdentifier(name) || members[name] != "" {
+					return File{}, nil, fmt.Errorf("model codegen: relation dimension %q collides in namespace %s", dimension.Name, namespace)
+				}
+				members[name] = "relation dimension"
+			}
 		}
 	}
 
@@ -198,7 +220,7 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 				continue
 			}
 			if field.Scalar != nil {
-				if err := emitMutationFieldType(&body, field, model, contract, enumByID, imports); err != nil {
+				if err := emitMutationFieldType(&body, field, model, contract, enumByID, imports, scopedSchema); err != nil {
 					return File{}, nil, err
 				}
 			}
@@ -222,7 +244,23 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		for _, selector := range orderedSelectors(contract, model) {
 			fmt.Fprintf(&body, "\t%s %s\n", generatedSelectorName(selector, model), generatedSelectorType(model, selector))
 		}
+		if contract.Aggregation != nil {
+			for _, dimension := range contract.Aggregation.RelationDimensions {
+				_, terminal, terminalErr := relationDimensionTerminal(dimension, modelByID)
+				if terminalErr != nil {
+					return File{}, nil, terminalErr
+				}
+				valueType, valueErr := logicalGoType(terminal.Scalar.Type, enumByID, imports)
+				if valueErr != nil {
+					return File{}, nil, valueErr
+				}
+				fmt.Fprintf(&body, "\t%s golem.RelationDimension[%s, %s]\n", exportedName(dimension.Name), model.Go.Name, valueType)
+			}
+		}
 		body.WriteString("}\n\n")
+		if contract.ScopedReads {
+			fmt.Fprintf(&body, "func (%s) Scope() golem.Scope[%s] { return golem.GeneratedScope[%s](%s) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
+		}
 		fmt.Fprintf(&body, "func (%s) Create(values ...golem.CreateValue[%s]) %sCreateInput {\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.GeneratedCreateInput(%s, values...)\n}\n\n", modelLiteral)
 		fmt.Fprintf(&body, "func (%s) Update(first golem.UpdateValue[%s], rest ...golem.UpdateValue[%s]) %sUpdateInput {\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
@@ -247,6 +285,28 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		fmt.Fprintf(&body, "\treturn golem.Include(relations...)\n}\n\n")
 		fmt.Fprintf(&body, "func (%s) Omit(fields ...golem.Column[%s]) golem.Projection[%s] {\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.Omit(fields...)\n}\n\n")
+		fmt.Fprintf(&body, "func (%s) CountAll() golem.Measure[%s, int64] { return golem.GeneratedCountAll[%s](%s) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
+		fmt.Fprintf(&body, "func (%s) Aggregate(options ...golem.AggregateOption[%s]) golem.AggregateRequest[%s] { return golem.GeneratedAggregate(%s, options...) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
+		fmt.Fprintf(&body, "func (%s) AggregateWhere(predicate golem.Predicate[%s]) golem.AggregateOption[%s] { return golem.GeneratedAggregateWhere(predicate) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) AggregateSelect(first golem.AggregateMeasure[%s], rest ...golem.AggregateMeasure[%s]) golem.AggregateOption[%s] { return golem.GeneratedAggregateSelect(first, rest...) }\n\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupBy(options ...golem.GroupOption[%s]) golem.GroupRequest[%s] { return golem.GeneratedGroupBy(%s, options...) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
+		fmt.Fprintf(&body, "func (%s) GroupDimensions(first golem.LocalGroupDimension[%s], rest ...golem.LocalGroupDimension[%s]) golem.GroupOption[%s] { return golem.GeneratedGroupDimensions(first, rest...) }\n\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupMeasures(values ...golem.AggregateMeasure[%s]) golem.GroupOption[%s] { return golem.GeneratedGroupMeasures(values...) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupWhere(predicate golem.Predicate[%s]) golem.GroupOption[%s] { return golem.GeneratedGroupWhere(predicate) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupHaving(predicate golem.GroupPredicate[%s]) golem.GroupOption[%s] { return golem.GeneratedGroupHaving(predicate) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupOrderBy(first golem.GroupOrder[%s], rest ...golem.GroupOrder[%s]) golem.GroupOption[%s] { return golem.GeneratedGroupOrderBy(first, rest...) }\n\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupTake(value int) golem.GroupOption[%s] { return golem.GeneratedGroupTake[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		fmt.Fprintf(&body, "func (%s) GroupSkip(value int) golem.GroupOption[%s] { return golem.GeneratedGroupSkip[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		if contract.Aggregation != nil && len(contract.Aggregation.RelationDimensions) != 0 {
+			fmt.Fprintf(&body, "func (%s) RelationGroupBy(options ...golem.RelationGroupOption[%s]) golem.RelationGroupRequest[%s] { return golem.GeneratedRelationGroupBy(%s, options...) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
+			fmt.Fprintf(&body, "func (%s) RelationGroupDimensions(first golem.RelationGroupDimension[%s], rest ...golem.RelationGroupDimension[%s]) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupDimensions(first, rest...) }\n\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupMeasures(values ...golem.AggregateMeasure[%s]) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupMeasures(values...) }\n\n", typeName, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupWhere(predicate golem.Predicate[%s]) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupWhere(predicate) }\n\n", typeName, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupHaving(predicate golem.GroupPredicate[%s]) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupHaving(predicate) }\n\n", typeName, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupOrderBy(first golem.GroupOrder[%s], rest ...golem.GroupOrder[%s]) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupOrderBy(first, rest...) }\n\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupTake(value int) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupTake[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "func (%s) RelationGroupSkip(value int) golem.RelationGroupOption[%s] { return golem.GeneratedRelationGroupSkip[%s](value) }\n\n", typeName, model.Go.Name, model.Go.Name)
+		}
 		fmt.Fprintf(&body, "var %s = %s{\n", namespace, typeName)
 		for _, field := range orderedFields(model.Fields) {
 			if fieldIsHidden(field.ID, contract) {
@@ -268,6 +328,31 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			name := generatedSelectorName(selector, model)
 			fmt.Fprintf(&body, "\t%s: %s{},\n", name, generatedSelectorType(model, selector))
 			symbols = append(symbols, Symbol{PackagePath: spec.ImportPath, Namespace: namespace, Name: name, Kind: SymbolSelector, ModelID: model.ID, KeyID: selector.KeyID, Fields: append([]ir.FieldID(nil), selector.Fields...)})
+		}
+		if contract.Aggregation != nil {
+			for _, dimension := range contract.Aggregation.RelationDimensions {
+				_, terminal, terminalErr := relationDimensionTerminal(dimension, modelByID)
+				if terminalErr != nil {
+					return File{}, nil, terminalErr
+				}
+				valueType, valueErr := logicalGoType(terminal.Scalar.Type, enumByID, imports)
+				if valueErr != nil {
+					return File{}, nil, valueErr
+				}
+				terminalLiteral, literalErr := idLiteral("FieldID", string(dimension.TerminalField))
+				if literalErr != nil {
+					return File{}, nil, literalErr
+				}
+				pathLiterals := make([]string, len(dimension.Path))
+				for index, id := range dimension.Path {
+					value, literalErr := idLiteral("RelationID", string(id))
+					if literalErr != nil {
+						return File{}, nil, literalErr
+					}
+					pathLiterals[index] = value
+				}
+				fmt.Fprintf(&body, "\t%s: golem.GeneratedRelationDimension[%s, %s](%s, %q, []golem.RelationID{%s}, %s, %t),\n", exportedName(dimension.Name), model.Go.Name, valueType, modelLiteral, dimension.Name, strings.Join(pathLiterals, ", "), terminalLiteral, analyticsDimensionOrdered(terminal.Scalar.Type.Kind))
+			}
 		}
 		body.WriteString("}\n\n")
 	}
@@ -313,6 +398,25 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		path = filepath.Join(spec.Directory, filename)
 	}
 	return File{ImportPath: spec.ImportPath, PackageName: spec.PackageName, Path: path, Source: formatted}, symbols, nil
+}
+
+func exportedName(value string) string {
+	if value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	runes[0] = unicode.ToUpper(runes[0])
+	return string(runes)
+}
+func relationDimensionTerminal(dimension ir.RelationDimensionContractIR, models map[ir.ModelID]ir.ModelDeclIR) (ir.ModelDeclIR, ir.FieldIR, error) {
+	for _, model := range models {
+		for _, field := range model.Fields {
+			if field.ID == dimension.TerminalField && field.Scalar != nil {
+				return model, field, nil
+			}
+		}
+	}
+	return ir.ModelDeclIR{}, ir.FieldIR{}, fmt.Errorf("model codegen: relation dimension %q has unknown terminal field %s", dimension.Name, dimension.TerminalField)
 }
 
 func schemaDigestLiteral(value string) (string, error) {
@@ -398,6 +502,13 @@ func generatedMutationFieldType(model ir.ModelDeclIR, field ir.FieldIR) string {
 	return "golemGenerated" + model.Go.Name + field.GoName + "MutationField"
 }
 
+func generatedScalarFieldType(model ir.ModelDeclIR, field ir.FieldIR, capabilities scalarMutationCapabilities) string {
+	if capabilities.create || capabilities.set {
+		return generatedMutationFieldType(model, field)
+	}
+	return "golemGenerated" + model.Go.Name + field.GoName + "AnalyticsField"
+}
+
 func emitMutationAliases(body *bytes.Buffer, model ir.ModelDeclIR) {
 	fmt.Fprintf(body, "type %sCreateInput = golem.CreateInput[%s]\n", model.Go.Name, model.Go.Name)
 	fmt.Fprintf(body, "type %sUpdateInput = golem.UpdateInput[%s]\n", model.Go.Name, model.Go.Name)
@@ -409,9 +520,11 @@ func emitMutationAliases(body *bytes.Buffer, model ir.ModelDeclIR) {
 	body.WriteByte('\n')
 }
 
-func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet) error {
+func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet, scopedSchema bool) error {
 	capabilities := mutationCapabilities(field, contract)
-	if !capabilities.create && !capabilities.set {
+	analytics := capabilities.readable && analyticsFieldSupported(field)
+	scoped := scopedSchema && analytics
+	if !capabilities.create && !capabilities.set && !analytics && !scoped {
 		return nil
 	}
 	baseHandle, _, err := scalarHandle(field.Scalar, enums, imports)
@@ -426,7 +539,7 @@ func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelD
 	if err != nil {
 		return err
 	}
-	typeName := generatedMutationFieldType(model, field)
+	typeName := generatedScalarFieldType(model, field, capabilities)
 	createCapabilityType := fmt.Sprintf("golem.CreateFieldCapability[%s, %s]", model.Go.Name, valueType)
 	if capabilities.readable {
 		fmt.Fprintf(body, "type %s struct {\n\t%s\n", typeName, baseType)
@@ -467,7 +580,76 @@ func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelD
 		fmt.Fprintf(body, "func (field %s) Decrement(value %s) golem.UpdateManyValue[%s] {\n", typeName, valueType, model.Go.Name)
 		fmt.Fprintf(body, "\treturn golem.GeneratedDecrementFieldValue(%s, %s, value)\n}\n\n", modelLiteral, column)
 	}
+	if scoped {
+		constructor, resultType := scopedFieldConstructor(field, valueType)
+		fmt.Fprintf(body, "func (field %s) At(scope golem.Scope[%s]) %s { return golem.%s(scope, %s) }\n\n", typeName, model.Go.Name, resultType, constructor, column)
+	}
+	if analytics {
+		column := "field." + baseHandle
+		ordered := analyticsDimensionOrdered(field.Scalar.Type.Kind)
+		fmt.Fprintf(body, "func (field %s) Dimension() golem.Dimension[%s, %s] { return golem.GeneratedDimension(%s, %s, %t) }\n\n", typeName, model.Go.Name, valueType, modelLiteral, column, ordered)
+		fmt.Fprintf(body, "func (field %s) Count() golem.Measure[%s, int64] { return golem.GeneratedMeasure[%s, %s, int64](%s, %s, golem.AggregateCountField) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+		switch field.Scalar.Type.Kind {
+		case ir.TypeInt16, ir.TypeInt32, ir.TypeInt64:
+			fmt.Fprintf(body, "func (field %s) Sum() golem.Measure[%s, golem.ExactInteger] { return golem.GeneratedMeasure[%s, %s, golem.ExactInteger](%s, %s, golem.AggregateSum) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+			fmt.Fprintf(body, "func (field %s) Avg() golem.Measure[%s, float64] { return golem.GeneratedMeasure[%s, %s, float64](%s, %s, golem.AggregateAverage) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+		case ir.TypeFloat32, ir.TypeFloat64:
+			fmt.Fprintf(body, "func (field %s) Sum() golem.Measure[%s, float64] { return golem.GeneratedMeasure[%s, %s, float64](%s, %s, golem.AggregateSum) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+			fmt.Fprintf(body, "func (field %s) Avg() golem.Measure[%s, float64] { return golem.GeneratedMeasure[%s, %s, float64](%s, %s, golem.AggregateAverage) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+		case ir.TypeDecimal:
+			fmt.Fprintf(body, "func (field %s) Sum() golem.Measure[%s, golem.ExactDecimal] { return golem.GeneratedMeasure[%s, %s, golem.ExactDecimal](%s, %s, golem.AggregateSum) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+			fmt.Fprintf(body, "func (field %s) Avg() golem.Measure[%s, golem.ExactDecimal] { return golem.GeneratedMeasure[%s, %s, golem.ExactDecimal](%s, %s, golem.AggregateAverage) }\n\n", typeName, model.Go.Name, model.Go.Name, valueType, modelLiteral, column)
+		}
+		if analyticsMinMax(field.Scalar.Type.Kind) {
+			fmt.Fprintf(body, "func (field %s) Min() golem.Measure[%s, %s] { return golem.GeneratedMeasure[%s, %s, %s](%s, %s, golem.AggregateMinimum) }\n\n", typeName, model.Go.Name, valueType, model.Go.Name, valueType, valueType, modelLiteral, column)
+			fmt.Fprintf(body, "func (field %s) Max() golem.Measure[%s, %s] { return golem.GeneratedMeasure[%s, %s, %s](%s, %s, golem.AggregateMaximum) }\n\n", typeName, model.Go.Name, valueType, model.Go.Name, valueType, valueType, modelLiteral, column)
+		}
+	}
 	return nil
+}
+
+func scopedFieldConstructor(field ir.FieldIR, valueType string) (string, string) {
+	prefix := ""
+	if field.Scalar.Nullable {
+		prefix = "Nullable"
+	}
+	switch field.Scalar.Type.Kind {
+	case ir.TypeInt16, ir.TypeInt32, ir.TypeInt64:
+		return "GeneratedScoped" + prefix + "IntegerField", "golem.Scoped" + prefix + "IntegerField[" + valueType + "]"
+	case ir.TypeFloat32, ir.TypeFloat64:
+		return "GeneratedScoped" + prefix + "FloatField", "golem.Scoped" + prefix + "FloatField[" + valueType + "]"
+	case ir.TypeDecimal:
+		return "GeneratedScoped" + prefix + "DecimalField", "golem.Scoped" + prefix + "DecimalField"
+	case ir.TypeString:
+		return "GeneratedScoped" + prefix + "TextField", "golem.Scoped" + prefix + "TextField[" + valueType + "]"
+	case ir.TypeDate, ir.TypeTime, ir.TypeDateTime:
+		return "GeneratedScoped" + prefix + "OrderedField", "golem.Scoped" + prefix + "OrderedField[" + valueType + "]"
+	default:
+		return "GeneratedScoped" + prefix + "EqualField", "golem.Scoped" + prefix + "EqualField[" + valueType + "]"
+	}
+}
+
+func analyticsFieldSupported(field ir.FieldIR) bool {
+	if field.Scalar == nil {
+		return false
+	}
+	switch field.Scalar.Type.Kind {
+	case ir.TypeBool, ir.TypeInt16, ir.TypeInt32, ir.TypeInt64, ir.TypeFloat32, ir.TypeFloat64, ir.TypeDecimal, ir.TypeString, ir.TypeUUID, ir.TypeDate, ir.TypeTime, ir.TypeDateTime, ir.TypeEnum:
+		return true
+	default:
+		return false
+	}
+}
+
+func analyticsDimensionOrdered(kind ir.LogicalTypeKind) bool {
+	return kind != ir.TypeBool && kind != ir.TypeUUID && kind != ir.TypeEnum
+}
+func analyticsMinMax(kind ir.LogicalTypeKind) bool {
+	switch kind {
+	case ir.TypeInt16, ir.TypeInt32, ir.TypeInt64, ir.TypeFloat32, ir.TypeFloat64, ir.TypeDecimal, ir.TypeString, ir.TypeDate, ir.TypeTime, ir.TypeDateTime:
+		return true
+	}
+	return false
 }
 
 type relationMutationCapabilities struct {
@@ -643,8 +825,8 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 func emittedFieldHandle(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
 	if field.Scalar != nil {
 		capabilities := mutationCapabilities(field, contract)
-		if capabilities.create || capabilities.set {
-			return generatedMutationFieldType(model, field), nil
+		if capabilities.create || capabilities.set || (capabilities.readable && analyticsFieldSupported(field)) {
+			return generatedScalarFieldType(model, field, capabilities), nil
 		}
 	}
 	if field.Relation != nil {
@@ -693,10 +875,10 @@ func emittedFieldInitializer(field ir.FieldIR, model ir.ModelDeclIR, contract ir
 		return initializer, nil
 	}
 	capabilities := mutationCapabilities(field, contract)
-	if !capabilities.create && !capabilities.set {
+	if !capabilities.create && !capabilities.set && !(capabilities.readable && analyticsFieldSupported(field)) {
 		return initializer, nil
 	}
-	typeName := generatedMutationFieldType(model, field)
+	typeName := generatedScalarFieldType(model, field, capabilities)
 	valueType, valueErr := logicalGoType(field.Scalar.Type, enums, imports)
 	if valueErr != nil {
 		return "", valueErr

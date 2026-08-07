@@ -6,7 +6,7 @@ package ir
 const (
 	RawDeclFormatVersion  uint16 = 1
 	ModelFormatVersion    uint16 = 1
-	ContractFormatVersion uint16 = 2
+	ContractFormatVersion uint16 = 3
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.
 	CanonicalFormatVersion uint16 = 1
@@ -619,6 +619,7 @@ type ModelContractIR struct {
 	Operations    []Operation               `json:"operations"`
 	Subscriptions bool                      `json:"subscriptions"`
 	Aggregation   *AggregationContractIR    `json:"aggregation,omitempty"`
+	ScopedReads   bool                      `json:"scopedReads"`
 	Limits        LimitContractIR           `json:"limits"`
 	Computed      []ComputedFieldContractIR `json:"computed"`
 	Exposed       bool                      `json:"exposed"`
@@ -668,32 +669,51 @@ type SelectorContractIR struct {
 type Operation string
 
 const (
-	OperationFindOne    Operation = "findOne"
-	OperationFindMany   Operation = "findMany"
-	OperationCreate     Operation = "create"
-	OperationUpdate     Operation = "update"
-	OperationUpsert     Operation = "upsert"
-	OperationDelete     Operation = "delete"
-	OperationUpdateMany Operation = "updateMany"
-	OperationDeleteMany Operation = "deleteMany"
+	OperationFindOne         Operation = "findOne"
+	OperationFindMany        Operation = "findMany"
+	OperationCreate          Operation = "create"
+	OperationUpdate          Operation = "update"
+	OperationUpsert          Operation = "upsert"
+	OperationDelete          Operation = "delete"
+	OperationUpdateMany      Operation = "updateMany"
+	OperationDeleteMany      Operation = "deleteMany"
+	OperationAggregate       Operation = "aggregate"
+	OperationGroupBy         Operation = "groupBy"
+	OperationRelationGroupBy Operation = "relationGroupBy"
 )
 
 type GraphQLRootNamesIR struct {
-	FindOne    string `json:"findOne"`
-	FindMany   string `json:"findMany"`
-	Create     string `json:"create"`
-	Update     string `json:"update"`
-	Upsert     string `json:"upsert"`
-	Delete     string `json:"delete"`
-	UpdateMany string `json:"updateMany"`
-	DeleteMany string `json:"deleteMany"`
-	Aggregate  string `json:"aggregate"`
-	GroupBy    string `json:"groupBy"`
-	Events     string `json:"events"`
+	FindOne         string `json:"findOne"`
+	FindMany        string `json:"findMany"`
+	Create          string `json:"create"`
+	Update          string `json:"update"`
+	Upsert          string `json:"upsert"`
+	Delete          string `json:"delete"`
+	UpdateMany      string `json:"updateMany"`
+	DeleteMany      string `json:"deleteMany"`
+	Aggregate       string `json:"aggregate"`
+	GroupBy         string `json:"groupBy"`
+	RelationGroupBy string `json:"relationGroupBy"`
+	Events          string `json:"events"`
 }
 
 type AggregationContractIR struct {
-	Enabled bool `json:"enabled"`
+	Enabled                       bool                          `json:"enabled"`
+	Dimensions                    []FieldID                     `json:"dimensions"`
+	DimensionsExplicit            bool                          `json:"dimensionsExplicit"`
+	Measures                      []FieldID                     `json:"measures"`
+	MeasuresExplicit              bool                          `json:"measuresExplicit"`
+	RelationDimensions            []RelationDimensionContractIR `json:"relationDimensions"`
+	GraphQLMaxGroups              uint32                        `json:"graphqlMaxGroups"`
+	RelationMaxIntermediateGroups uint32                        `json:"relationMaxIntermediateGroups"`
+}
+
+// RelationDimensionContractIR names one compiler-validated forward-to-one
+// traversal. Path order is semantic and therefore never canonical-sorted.
+type RelationDimensionContractIR struct {
+	Name          string       `json:"name"`
+	Path          []RelationID `json:"path"`
+	TerminalField FieldID      `json:"terminalField"`
 }
 
 type LimitContractIR struct {

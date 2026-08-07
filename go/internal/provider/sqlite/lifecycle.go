@@ -85,6 +85,7 @@ func (*Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport
 		PolicyExactJSON:  firstReport.PolicyExactJSON && secondReport.PolicyExactJSON,
 		PolicyScalarList: firstReport.PolicyScalarList && secondReport.PolicyScalarList,
 		PolicyRelation:   firstReport.PolicyRelation && secondReport.PolicyRelation,
+		AnalyticsExact:   firstReport.AnalyticsExact && secondReport.AnalyticsExact,
 	}, nil
 }
 
@@ -132,7 +133,12 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 	if err := connection.GetContext(ctx, &jsonExact, "SELECT golem_policy_json('{\"n\":9007199254740993}', '[[\"k\",\"n\"]]', '9007199254740993', 203, 1, 2)"); err != nil || jsonExact != 1 {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection policy JSON exactness unavailable: value=%d error=%v", label, jsonExact, err)
 	}
-	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true}, nil
+	var integerSum, decimalSum, decimalAverage string
+	var comparison, ordering int
+	if err := connection.QueryRowxContext(ctx, analyticsProbeSQL()).Scan(&integerSum, &decimalSum, &decimalAverage, &comparison, &ordering); err != nil || !validAnalyticsProbe(integerSum, decimalSum, decimalAverage, comparison, ordering) {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection analytical exactness unavailable: integer=%q decimalSum=%q decimalAverage=%q comparison=%d ordering=%d error=%v", label, integerSum, decimalSum, decimalAverage, comparison, ordering, err)
+	}
+	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true}, nil
 }
 
 // PolicyCapabilityProof measures the complete SQLite P2 policy function set on

@@ -305,7 +305,7 @@ type Node { value: Int! nested: Node }`
 		}
 	})
 
-	for index := 0; index < 15; index++ {
+	for index := 0; index < 16; index++ {
 		limit := Limits{}
 		setFuzzLimit(&limit, index, fuzzLimitMaximum(index)+1)
 		if _, err := NormalizeLimits(limit); err == nil {

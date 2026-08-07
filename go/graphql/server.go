@@ -27,16 +27,17 @@ type Limits struct {
 	MaxRequestBytes, MaxVariableBytes, MaxTokens, MaxASTNodes, MaxFragments                int
 	MaxDepth, MaxSelectedFields, MaxAliases, MaxInputDepth, MaxInputNodes                  int
 	MaxListItems, MaxComplexity, MaxPageSize, MaxResolverConcurrency, MaxComputedBatchSize int
+	MaxGroups                                                                              int
 }
 
-var defaultLimits = Limits{1 << 20, 512 << 10, 16_384, 8_192, 64, 12, 256, 128, 16, 8_192, 1_000, 10_000, 500, 64, 256}
-var hardLimits = Limits{8 << 20, 4 << 20, 65_536, 32_768, 256, 32, 2_048, 1_024, 32, 32_768, 10_000, 100_000, 1_000, 256, 4_096}
+var defaultLimits = Limits{1 << 20, 512 << 10, 16_384, 8_192, 64, 12, 256, 128, 16, 8_192, 1_000, 10_000, 500, 64, 256, 10_000}
+var hardLimits = Limits{8 << 20, 4 << 20, 65_536, 32_768, 256, 32, 2_048, 1_024, 32, 32_768, 10_000, 100_000, 1_000, 256, 4_096, 10_000}
 
 func NormalizeLimits(input Limits) (Limits, error) {
 	result := input
-	values := []*int{&result.MaxRequestBytes, &result.MaxVariableBytes, &result.MaxTokens, &result.MaxASTNodes, &result.MaxFragments, &result.MaxDepth, &result.MaxSelectedFields, &result.MaxAliases, &result.MaxInputDepth, &result.MaxInputNodes, &result.MaxListItems, &result.MaxComplexity, &result.MaxPageSize, &result.MaxResolverConcurrency, &result.MaxComputedBatchSize}
-	defaults := []int{defaultLimits.MaxRequestBytes, defaultLimits.MaxVariableBytes, defaultLimits.MaxTokens, defaultLimits.MaxASTNodes, defaultLimits.MaxFragments, defaultLimits.MaxDepth, defaultLimits.MaxSelectedFields, defaultLimits.MaxAliases, defaultLimits.MaxInputDepth, defaultLimits.MaxInputNodes, defaultLimits.MaxListItems, defaultLimits.MaxComplexity, defaultLimits.MaxPageSize, defaultLimits.MaxResolverConcurrency, defaultLimits.MaxComputedBatchSize}
-	maximums := []int{hardLimits.MaxRequestBytes, hardLimits.MaxVariableBytes, hardLimits.MaxTokens, hardLimits.MaxASTNodes, hardLimits.MaxFragments, hardLimits.MaxDepth, hardLimits.MaxSelectedFields, hardLimits.MaxAliases, hardLimits.MaxInputDepth, hardLimits.MaxInputNodes, hardLimits.MaxListItems, hardLimits.MaxComplexity, hardLimits.MaxPageSize, hardLimits.MaxResolverConcurrency, hardLimits.MaxComputedBatchSize}
+	values := []*int{&result.MaxRequestBytes, &result.MaxVariableBytes, &result.MaxTokens, &result.MaxASTNodes, &result.MaxFragments, &result.MaxDepth, &result.MaxSelectedFields, &result.MaxAliases, &result.MaxInputDepth, &result.MaxInputNodes, &result.MaxListItems, &result.MaxComplexity, &result.MaxPageSize, &result.MaxResolverConcurrency, &result.MaxComputedBatchSize, &result.MaxGroups}
+	defaults := []int{defaultLimits.MaxRequestBytes, defaultLimits.MaxVariableBytes, defaultLimits.MaxTokens, defaultLimits.MaxASTNodes, defaultLimits.MaxFragments, defaultLimits.MaxDepth, defaultLimits.MaxSelectedFields, defaultLimits.MaxAliases, defaultLimits.MaxInputDepth, defaultLimits.MaxInputNodes, defaultLimits.MaxListItems, defaultLimits.MaxComplexity, defaultLimits.MaxPageSize, defaultLimits.MaxResolverConcurrency, defaultLimits.MaxComputedBatchSize, defaultLimits.MaxGroups}
+	maximums := []int{hardLimits.MaxRequestBytes, hardLimits.MaxVariableBytes, hardLimits.MaxTokens, hardLimits.MaxASTNodes, hardLimits.MaxFragments, hardLimits.MaxDepth, hardLimits.MaxSelectedFields, hardLimits.MaxAliases, hardLimits.MaxInputDepth, hardLimits.MaxInputNodes, hardLimits.MaxListItems, hardLimits.MaxComplexity, hardLimits.MaxPageSize, hardLimits.MaxResolverConcurrency, hardLimits.MaxComputedBatchSize, hardLimits.MaxGroups}
 	for index, value := range values {
 		if *value == 0 {
 			*value = defaults[index]

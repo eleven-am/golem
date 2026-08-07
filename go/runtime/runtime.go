@@ -32,15 +32,18 @@ import (
 // application's authenticated principal type; A is the actor type consumed by
 // model policy methods.
 type Config[P, A any] struct {
-	DB               *sqlx.DB
-	Provider         golem.Provider
-	Bundle           golem.SchemaBundle
-	Bindings         golem.ApplicationBindings[A]
-	Descriptors      golem.ApplicationDescriptors
-	ReadLimits       ReadLimits
-	MutationLimits   MutationLimits
-	AfterCommitError func(context.Context, golem.AfterCommitFailure)
-	ResolvePrincipal func(context.Context, P) (A, error)
+	DB                *sqlx.DB
+	Provider          golem.Provider
+	Bundle            golem.SchemaBundle
+	Bindings          golem.ApplicationBindings[A]
+	Descriptors       golem.ApplicationDescriptors
+	ReadLimits        ReadLimits
+	MutationLimits    MutationLimits
+	AnalyticsLimits   AnalyticsLimits
+	AfterCommitError  func(context.Context, golem.AfterCommitFailure)
+	AuditPrincipal    func(P) string
+	ReportScopedQuery func(context.Context, golem.ScopedAuditRecord)
+	ResolvePrincipal  func(context.Context, P) (A, error)
 	// SnapshotActor transfers ownership of mutable actor shapes into one stable
 	// caller snapshot shared by policy construction and hooks. When omitted,
 	// ForPrincipal accepts only deeply immutable value actors.
@@ -50,19 +53,22 @@ type Config[P, A any] struct {
 // App contains immutable process-wide metadata only. No actor, policy set,
 // loader, request context, or decoded row is retained here.
 type App[P, A any] struct {
-	database         *sqlx.DB
-	provider         policyir.Provider
-	registry         *schema.Registry
-	providers        policyir.ProviderSet
-	capabilities     policysql.CapabilityProof
-	bindings         golem.ApplicationBindings[A]
-	descriptors      golem.ApplicationDescriptors
-	resolvePrincipal func(context.Context, P) (A, error)
-	snapshotActor    func(A) (A, error)
-	readLimits       normalizedReadLimits
-	mutationLimits   normalizedMutationLimits
-	afterCommitError func(context.Context, golem.AfterCommitFailure)
-	nextExecution    atomic.Uint64
+	database          *sqlx.DB
+	provider          policyir.Provider
+	registry          *schema.Registry
+	providers         policyir.ProviderSet
+	capabilities      policysql.CapabilityProof
+	bindings          golem.ApplicationBindings[A]
+	descriptors       golem.ApplicationDescriptors
+	resolvePrincipal  func(context.Context, P) (A, error)
+	snapshotActor     func(A) (A, error)
+	readLimits        normalizedReadLimits
+	mutationLimits    normalizedMutationLimits
+	analyticsLimits   normalizedAnalyticsLimits
+	afterCommitError  func(context.Context, golem.AfterCommitFailure)
+	auditPrincipal    func(P) string
+	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
+	nextExecution     atomic.Uint64
 }
 
 // Caller is one principal-bound execution. Its policy set and identity are not
@@ -73,6 +79,7 @@ type Caller[P, A any] struct {
 	actor     A
 	execution uint64
 	executor  *executionBinding
+	auditID   string
 }
 
 // System is an explicit unrestricted capability. It never resolves a
@@ -116,9 +123,16 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, fmt.Errorf("P4_RUNTIME_CONFIG: invalid mutation limits: %w", err)
 	}
+	analyticsLimits, err := normalizeAnalyticsLimits(config.AnalyticsLimits)
+	if err != nil {
+		return nil, fmt.Errorf("P6_RUNTIME_CONFIG: invalid analytics limits: %w", err)
+	}
 	registry, err := schema.New(config.Bundle)
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: %w", err)
+	}
+	if registry.HasScopedReads() && (config.AuditPrincipal == nil || config.ReportScopedQuery == nil) {
+		return nil, fmt.Errorf("P6_RUNTIME_CONFIG: AuditPrincipal and ReportScopedQuery are required when scoped reads are enabled")
 	}
 	if config.Bindings.GenerationDigest() != registry.GenerationDigest() || config.Descriptors.GenerationDigest() != registry.GenerationDigest() {
 		return nil, fmt.Errorf("P3_RUNTIME_GENERATION: bindings, descriptors, and schema differ")
@@ -148,7 +162,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CAPABILITY: %w", err)
 	}
-	return &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, afterCommitError: config.AfterCommitError}, nil
+	return &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}, nil
 }
 
 func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], handler func(context.Context, golem.AfterCommitFailure)) error {
@@ -186,7 +200,11 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 	if execution == 0 {
 		return nil, fmt.Errorf("P3_RUNTIME_EXECUTION: execution identity exhausted")
 	}
-	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database)}, nil
+	auditID := ""
+	if app.auditPrincipal != nil {
+		auditID = app.auditPrincipal(principal)
+	}
+	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database), auditID: auditID}, nil
 }
 
 func (app *App[P, A]) System() System[P, A] {

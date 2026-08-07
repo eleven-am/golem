@@ -8,6 +8,7 @@ package methods
 import (
 	"context"
 
+	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
@@ -48,6 +49,7 @@ type Result struct {
 	GraphQLModels   []graphqlcontract.ModelPatch
 	GraphQLComputed []graphqlextension.ComputedDeclaration
 	GraphQLCustom   []graphqlextension.CustomOperationDeclaration
+	AnalyticsModels []analyticscontract.ModelPatch
 	Diagnostics     []ir.Diagnostic
 }
 

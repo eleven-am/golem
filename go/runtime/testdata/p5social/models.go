@@ -25,6 +25,33 @@ type Post struct {
 	PostTags []PostTag  `db:"-" golem:"relation=has_many;fields=id;references=post_id"`
 }
 
+func (Post) GolemModel() golem.ModelSpec[Post] {
+	return golem.DefineModel(
+		golem.ScopedReads[Post](),
+		golem.Analytics[Post](
+			golem.AnalyticsRelationDimensions(
+				golem.NamedRelationDimension("authorName", golem.Via(Posts.Author, golem.DimensionField(Users.Name))),
+			),
+			golem.AnalyticsLimits[Post](100, 10_000),
+		),
+		golem.GraphQL[Post](
+			golem.GraphQLOperations(
+				golem.GraphQLFindOne,
+				golem.GraphQLFindMany,
+				golem.GraphQLCreate,
+				golem.GraphQLUpdate,
+				golem.GraphQLUpsert,
+				golem.GraphQLDelete,
+				golem.GraphQLUpdateMany,
+				golem.GraphQLDeleteMany,
+				golem.GraphQLAggregate,
+				golem.GraphQLGroupBy,
+				golem.GraphQLRelationGroupBy,
+			),
+		),
+	)
+}
+
 type Comment struct {
 	_ struct{} `golem:"model;id=p5social.Comment;table=comments;graphql=Comment"`
 	_ struct{} `golem:"index=idx_comments_post_parent(post_id,parent_id)"`
@@ -67,4 +94,10 @@ type PostTag struct {
 	TagName string     `db:"tag_name" golem:"type=varchar(64)"`
 	Post    *Post      `db:"-" golem:"relation=belongs_to;fields=post_id;references=id"`
 	Tag     *Tag       `db:"-" golem:"relation=belongs_to;fields=tag_name;references=name"`
+}
+
+func (PostTag) GolemModel() golem.ModelSpec[PostTag] {
+	return golem.DefineModel(
+		golem.Analytics[PostTag](golem.AnalyticsLimits[PostTag](100, 10_000)),
+	)
 }

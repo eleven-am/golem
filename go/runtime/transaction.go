@@ -178,7 +178,8 @@ type CallerTx[P, A any] struct {
 // SystemTx is the opaque unrestricted transaction capability used by
 // generated system transaction clients.
 type SystemTx[P, A any] struct {
-	system System[P, A]
+	system    System[P, A]
+	execution uint64
 }
 
 // CallerTransaction owns the outer transaction around one generated caller
@@ -209,6 +210,7 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 		actor:     caller.actor,
 		execution: caller.execution,
 		executor:  binding,
+		auditID:   caller.auditID,
 	}
 	capability := &CallerTx[P, A]{caller: transactionCaller}
 	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
@@ -235,7 +237,12 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 		binding.close()
 		return rollbackTransaction(transaction, err)
 	}
-	capability := &SystemTx[P, A]{system: System[P, A]{app: system.app, executor: binding}}
+	execution := system.app.nextExecution.Add(1)
+	if execution == 0 {
+		binding.close()
+		return rollbackTransaction(transaction, fmt.Errorf("P6_RUNTIME_EXECUTION: execution identity exhausted"))
+	}
+	capability := &SystemTx[P, A]{system: System[P, A]{app: system.app, executor: binding}, execution: execution}
 	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
 }
 
