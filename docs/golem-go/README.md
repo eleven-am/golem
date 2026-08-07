@@ -35,12 +35,11 @@ P5 generated GraphQL is complete. Its controlling architecture and work waves ar
 completed local evidence gates are recorded in
 [`p5/P5-EVIDENCE.md`](./p5/P5-EVIDENCE.md).
 
-P6 analytics and scoped reads are fully planned but implementation has not
-started. The controlling architecture, exact generated Go/GraphQL surface, and
-mandatory pending evidence are [`p6/P6-PLAN.md`](./p6/P6-PLAN.md),
+P6 analytics and scoped reads are complete. The controlling architecture,
+exact generated Go/GraphQL surface, and completed evidence are
+[`p6/P6-PLAN.md`](./p6/P6-PLAN.md),
 [`p6/PUBLIC-ANALYTICS-ABI.md`](./p6/PUBLIC-ANALYTICS-ABI.md), and
-[`p6/P6-EVIDENCE.md`](./p6/P6-EVIDENCE.md). P6 is not complete while any ledger
-row remains pending.
+[`p6/P6-EVIDENCE.md`](./p6/P6-EVIDENCE.md).
 
 The numbered documents are detailed supporting specifications and research:
 

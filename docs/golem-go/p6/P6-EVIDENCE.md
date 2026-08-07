@@ -1,16 +1,16 @@
 # P6 completion evidence
 
-Status: **working-tree verification complete; exact-commit ledger remains pending**
+Status: **complete; all definition-of-done and mutation gates passed**
 
 This ledger is normative. P6 is not complete because its plan or public ABI
 exists, because generated names compile, or because a mock SQL renderer passes.
 Every required row must be backed by the named evidence on live SQLite,
 PostgreSQL `C`, and PostgreSQL linguistic profiles where listed.
 
-The implementation and all required working-tree gates passed on 2026-08-07.
-Rows remain `PENDING` because the verified changes have not yet been committed,
-so there is no exact immutable commit to record or rerun. This is an evidence
-boundary, not unfinished implementation.
+The immutable implementation commit
+`0bbd69a8ca96b21c0a00909ac69457b7ca673109` passed every required command on
+2026-08-07. The evidence-only follow-up commit does not alter the verified Go
+implementation or generated artifacts.
 
 Evidence labels:
 
@@ -28,24 +28,24 @@ Evidence labels:
 
 | # | Required result | Exact planned evidence | Providers/gate | State |
 | --- | --- | --- | --- | --- |
-| 1 | ContractIR v3 contains every normalized analytics/scoped fact while ModelIR, physical schema, and migrations remain unchanged | `TestP6ContractNormalizationMaterializesOperationsAllowlistsPathsLimitsAndScopedRoots`; `TestAnalyticsOnlyChangesContractFingerprintAndNeverModelOrMigration`; `TestP6ContractRejectsNamesTypesPathsLimitsAndCollisions` | portable unit + compile | **PENDING** |
-| 2 | Generated declarations, handles, clients, GraphQL artifacts, manifest, and fingerprints are deterministic and compile from a clean module | `TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat`; `TestFreshP6SocialModuleGeneratesCompilesAndConstructsApp`; `TestP6GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts` | compile + repeat | **PENDING** |
-| 3 | Illegal field/operator/path/request combinations are absent at compile time where possible and all zero/foreign/duplicate values fail before SQL | `TestP6PublicABICapabilityCompileMatrix`; `TestP6TextMeasureHavingFunctionsFreezeExactModeAndOperator`; `TestP6InvalidProgrammaticRequestCorpusTouchesDatabaseZeroTimes`; `TestP6FrozenRequestClonesMutableValuesAndRejectsForeignSchemaNodes` | compile + portable unit + statement spy | **PENDING** |
-| 4 | Existing Count, aggregate count-all, and field-count share the authorized root scope without disclosing field/null information improperly | `TestP6CountAndAggregateCountAuthorizedScopeOracle`; `TestP6CountFieldClassifiesNullDistributionButCountAllDoesNot`; `TestP6CountMissingInvisibleAndSystemStances` | SQLite/PostgreSQL C/linguistic live + oracle | **PENDING** |
-| 5 | Every accepted aggregate type/operator has exact provider-neutral empty, null, overflow, and decode semantics | `TestP6GeneratedMetricExactNullAndScalarMatrixAcrossProviders`; `TestP6AggregateScalarResultMatrixProviderAgreement`; `TestP6AggregateScalarResultMatrixAndStableOverflowDecode`; `TestP6EmptyAndAllNullAggregateCells`; `TestP6ExactIntegerDecimalAndTemporalNeverPassThroughFloat`; `TestP6AggregateOverflowIsStableAndNeverCoerced` | SQLite/PostgreSQL C/linguistic live + fuzz | **PENDING** |
-| 6 | SQLite exact functions are installed/probed and PostgreSQL numeric SQL agrees without a Go row-evaluation fallback | `TestP6SQLiteExactAggregateCapabilityProbeAndLoss`; `TestP6SQLiteDecimalAverageNeverUsesReal`; `TestP6PostgreSQLExactNumericRenderer`; `TestP6PostgreSQLExactNumericAndBinaryAnalyticsProfiles`; `TestP6AnalyticsStatementCountIsOneAndNoContributionRowsAreDecoded` | SQLite/PostgreSQL live + structural + statement spy | **PENDING** |
-| 7 | Conditional fields are accepted only when the complete contribution predicate proves access; every analytical position is classified | `TestP6ConditionalMeasureDimensionHavingAndOrderDischarge`; `TestP6UndischargedFieldRefusesByLogicalNameBeforeSQL`; `TestP6ClassificationPositionSpyCoversWhereCountMeasureDimensionHavingOrderAndGraphQLSelection` | portable unit + SQLite/PostgreSQL live + statement spy | **PENDING** |
-| 8 | Local group-by preserves null grouping, dimension order, private having/order measures, signed paging, and deterministic ties | `TestP6LocalGroupByCompleteSemanticOracle`; `TestP6NullKeyAndNullableMeasureGroups`; `TestP6HavingAndOrderPrivateMeasureIsAuthorizedButNotReturned`; `TestP6SignedTakeSkipAndCanonicalTieBreakAgreement` | SQLite/PostgreSQL C/linguistic live + oracle | **PENDING** |
-| 9 | Contribution, intermediate-group, programmatic-result, and GraphQL-result bounds refuse visibly and never return a partial prefix | `TestP6ContributionAndIntermediateOverflowReturnNoRows`; `TestP6ProgrammaticGroupLimitIsIndependentOfGraphQL`; `TestP6GraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps`; `TestP6Programmatic34424GroupsAreComplete` | SQLite/PostgreSQL live + GraphQL + scale | **PENDING** |
-| 10 | Binary string grouping/min/max/order agrees on SQLite and both PostgreSQL collation profiles while ordinary P2 text filters retain their semantics | `TestP6BinaryAnalyticalStringSemanticsAcrossProviderCollations`; `TestP6TextWhereStillUsesDeclaredP2ComparisonMode`; `TestP6TextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders`; `TestP6GraphQLTextMeasureHavingComparisonModesAcrossProviders`; `TestP6StringNullAndUnicodeCorpus` | SQLite/PostgreSQL C/linguistic live + GraphQL | **PENDING** |
-| 11 | Forward-to-one relation grouping applies policy at every hop, contributes each authorized root once, and uses inner semantics for absent/invisible targets | `TestP6ForwardToOneRelationGroupProviderOracle`; `TestP6RelationAbsentAndInvisibleTargetsAreIndistinguishable`; `TestP6RelationHopPolicyAndConditionalTerminalDischarge`; `TestP6RelationAverageUsesOneSQLContributionSet` | SQLite/PostgreSQL C/linguistic live + oracle + statement spy | **PENDING** |
-| 12 | Unsupported to-many/reverse/multiple-path/related-measure requests fail explicitly and explicit join models remain ordinary local analytics | `TestP6RelationDeclarationRejectsToManyReverseAndMultiplePaths`; `TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths`; `TestP6PostTagExplicitJoinModelAnalytics` | compile + portable unit + SQLite/PostgreSQL live | **PENDING** |
-| 13 | Generated GraphQL roots/types expose only configured capabilities and lower selection/input into the same runtime plan as Go | `TestP6GeneratedGraphQLAnalyticsSDLGolden`; `TestP6GraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys`; `TestP6GraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle`; `TestP6GraphQLErrorSanitizationAndPrincipalIsolation` | GraphQL + SQLite/PostgreSQL C/linguistic live + race | **PENDING** |
-| 14 | Scoped roots/joins/fields are schema-owned, every caller scope is authorized/classified, and left joins put target policy in ON | `TestP6ScopedAuthorizedInnerAndLeftJoinOracle`; `TestP6ScopedClassificationPositionSpy`; `TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable`; `TestP6ScopedSystemAndTransactionParity` | SQLite/PostgreSQL C/linguistic live + statement spy | **PENDING** |
-| 15 | Scoped grouping/aggregation has explicit SQL row-multiplication semantics, exact results, deterministic ordering, and all normal limits | `TestP6ScopedAggregateAndGroupProviderOracle`; `TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication`; `TestP6ScopedLimitAndCancellationCorpus` | SQLite/PostgreSQL live + oracle | **PENDING** |
-| 16 | Raw SQL, identifiers, custom ON, writes, DDL, connection access, forged roots, mixed scopes, and unsupported AST nodes cannot execute | `TestP6ScopedPublicCompileFailRedTeam`; `TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes`; `TestP6ScopedIRStructuralAllowlist` | compile + portable unit + statement spy | **PENDING** |
-| 17 | Every enabled scoped execution emits one sanitized complete audit record and no record leaks SQL/values/principal/driver details | `TestP6ScopedAuditStartupRequirements`; `TestP6ScopedAuditSuccessFailureCancellationAndTx`; `TestP6ScopedAuditContainsStableInventoryAndFingerprintsOnly`; `TestP6ConcurrentAuditPrincipalIsolation` | portable unit + SQLite/PostgreSQL live + race | **PENDING** |
-| 18 | The complete social/metrics application passes independent provider, cross-entry-point, race, repeat, fuzz, vet, format, and determinism gates | `TestP6IndependentSocialAnalyticsOracleSQLite`; `TestP6IndependentSocialAnalyticsOraclePostgreSQLProfiles`; `TestP6PostgreSQLProfilesAreLiveDistinctAndCollationVerified`; `TestP6AnalyticsCallerSystemAndTransactionParity`; `TestP6AnalyticsTransactionFamiliesBindToTxAndRollbackAcrossProviders`; `TestP6AnalyticsCancelledContextReturnsNoResultAfterOneStatementAcrossProviders`; `TestP6AnalyticsAndScopedNeverInvokeOrdinaryReadHooks`; all mutations below; all commands in section 3 | all | **PENDING** |
+| 1 | ContractIR v3 contains every normalized analytics/scoped fact while ModelIR, physical schema, and migrations remain unchanged | `TestP6ContractNormalizationMaterializesOperationsAllowlistsPathsLimitsAndScopedRoots`; `TestAnalyticsOnlyChangesContractFingerprintAndNeverModelOrMigration`; `TestP6ContractRejectsNamesTypesPathsLimitsAndCollisions` | portable unit + compile | **PASS** |
+| 2 | Generated declarations, handles, clients, GraphQL artifacts, manifest, and fingerprints are deterministic and compile from a clean module | `TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat`; `TestFreshP6SocialModuleGeneratesCompilesAndConstructsApp`; `TestP6GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts` | compile + repeat | **PASS** |
+| 3 | Illegal field/operator/path/request combinations are absent at compile time where possible and all zero/foreign/duplicate values fail before SQL | `TestP6PublicABICapabilityCompileMatrix`; `TestP6TextMeasureHavingFunctionsFreezeExactModeAndOperator`; `TestP6InvalidProgrammaticRequestCorpusTouchesDatabaseZeroTimes`; `TestP6FrozenRequestClonesMutableValuesAndRejectsForeignSchemaNodes` | compile + portable unit + statement spy | **PASS** |
+| 4 | Existing Count, aggregate count-all, and field-count share the authorized root scope without disclosing field/null information improperly | `TestP6CountAndAggregateCountAuthorizedScopeOracle`; `TestP6CountFieldClassifiesNullDistributionButCountAllDoesNot`; `TestP6CountMissingInvisibleAndSystemStances` | SQLite/PostgreSQL C/linguistic live + oracle | **PASS** |
+| 5 | Every accepted aggregate type/operator has exact provider-neutral empty, null, overflow, and decode semantics | `TestP6GeneratedMetricExactNullAndScalarMatrixAcrossProviders`; `TestP6AggregateScalarResultMatrixProviderAgreement`; `TestP6AggregateScalarResultMatrixAndStableOverflowDecode`; `TestP6EmptyAndAllNullAggregateCells`; `TestP6ExactIntegerDecimalAndTemporalNeverPassThroughFloat`; `TestP6AggregateOverflowIsStableAndNeverCoerced` | SQLite/PostgreSQL C/linguistic live + fuzz | **PASS** |
+| 6 | SQLite exact functions are installed/probed and PostgreSQL numeric SQL agrees without a Go row-evaluation fallback | `TestP6SQLiteExactAggregateCapabilityProbeAndLoss`; `TestP6SQLiteDecimalAverageNeverUsesReal`; `TestP6PostgreSQLExactNumericRenderer`; `TestP6PostgreSQLExactNumericAndBinaryAnalyticsProfiles`; `TestP6ProviderExactRendererQualifiesCollatesClassifiesTiesAndReverses`; `TestP6AnalyticsStatementCountIsOneAndNoContributionRowsAreDecoded` | SQLite/PostgreSQL live + structural + statement spy | **PASS** |
+| 7 | Conditional fields are accepted only when the complete contribution predicate proves access; every analytical position is classified | `TestP6ConditionalMeasureDimensionHavingAndOrderDischarge`; `TestP6UndischargedFieldRefusesByLogicalNameBeforeSQL`; `TestP6ClassificationPositionSpyCoversWhereCountMeasureDimensionHavingOrderAndGraphQLSelection` | portable unit + SQLite/PostgreSQL live + statement spy | **PASS** |
+| 8 | Local group-by preserves null grouping, dimension order, private having/order measures, signed paging, and deterministic ties | `TestP6LocalGroupByCompleteSemanticOracle`; `TestP6NullKeyAndNullableMeasureGroups`; `TestP6HavingAndOrderPrivateMeasureIsAuthorizedButNotReturned`; `TestP6SignedTakeSkipAndCanonicalTieBreakAgreement` | SQLite/PostgreSQL C/linguistic live + oracle | **PASS** |
+| 9 | Contribution, intermediate-group, programmatic-result, and GraphQL-result bounds refuse visibly and never return a partial prefix | `TestP6ContributionAndIntermediateOverflowReturnNoRows`; `TestP6ProgrammaticGroupLimitIsIndependentOfGraphQL`; `TestP6GraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps`; `TestP6Programmatic34424GroupsAreComplete` | SQLite/PostgreSQL live + GraphQL + scale | **PASS** |
+| 10 | Binary string grouping/min/max/order agrees on SQLite and both PostgreSQL collation profiles while ordinary P2 text filters retain their semantics | `TestP6BinaryAnalyticalStringSemanticsAcrossProviderCollations`; `TestP6TextWhereStillUsesDeclaredP2ComparisonMode`; `TestP6TextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders`; `TestP6GraphQLTextMeasureHavingComparisonModesAcrossProviders`; `TestP6StringNullAndUnicodeCorpus` | SQLite/PostgreSQL C/linguistic live + GraphQL | **PASS** |
+| 11 | Forward-to-one relation grouping applies policy at every hop, contributes each authorized root once, and uses inner semantics for absent/invisible targets | `TestP6ForwardToOneRelationGroupProviderOracle`; `TestP6RelationAbsentAndInvisibleTargetsAreIndistinguishable`; `TestP6RelationHopPolicyAndConditionalTerminalDischarge`; `TestP6RelationAverageUsesOneSQLContributionSet` | SQLite/PostgreSQL C/linguistic live + oracle + statement spy | **PASS** |
+| 12 | Unsupported to-many/reverse/multiple-path/related-measure requests fail explicitly and explicit join models remain ordinary local analytics | `TestP6RelationDeclarationRejectsToManyReverseAndMultiplePaths`; `TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths`; `TestP6PostTagExplicitJoinModelAnalytics` | compile + portable unit + SQLite/PostgreSQL live | **PASS** |
+| 13 | Generated GraphQL roots/types expose only configured capabilities and lower selection/input into the same runtime plan as Go | `TestP6GeneratedGraphQLAnalyticsSDLGolden`; `TestP6GraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys`; `TestP6GraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle`; `TestP6GraphQLErrorSanitizationAndPrincipalIsolation` | GraphQL + SQLite/PostgreSQL C/linguistic live + race | **PASS** |
+| 14 | Scoped roots/joins/fields are schema-owned, every caller scope is authorized/classified, and left joins put target policy in ON | `TestP6ScopedAuthorizedInnerAndLeftJoinOracle`; `TestP6ScopedClassificationPositionSpy`; `TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable`; `TestP6ScopedSystemAndTransactionParity` | SQLite/PostgreSQL C/linguistic live + statement spy | **PASS** |
+| 15 | Scoped grouping/aggregation has explicit SQL row-multiplication semantics, exact results, deterministic ordering, and all normal limits | `TestP6ScopedAggregateAndGroupProviderOracle`; `TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication`; `TestP6ScopedLimitAndCancellationCorpus` | SQLite/PostgreSQL live + oracle | **PASS** |
+| 16 | Raw SQL, identifiers, custom ON, writes, DDL, connection access, forged roots, mixed scopes, and unsupported AST nodes cannot execute | `TestP6ScopedPublicCompileFailRedTeam`; `TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes`; `TestP6ScopedIRStructuralAllowlist` | compile + portable unit + statement spy | **PASS** |
+| 17 | Every enabled scoped execution emits one sanitized complete audit record and no record leaks SQL/values/principal/driver details | `TestP6ScopedAuditStartupRequirements`; `TestP6ScopedAuditSuccessFailureCancellationAndTx`; `TestP6ScopedAuditContainsStableInventoryAndFingerprintsOnly`; `TestP6ScopedAuditShapeExcludesValuesButIncludesSignedPaging`; `TestP6ConcurrentAuditPrincipalIsolation` | portable unit + SQLite/PostgreSQL live + race | **PASS** |
+| 18 | The complete social/metrics application passes independent provider, cross-entry-point, race, repeat, fuzz, vet, format, and determinism gates | `TestP6IndependentSocialAnalyticsOracleSQLite`; `TestP6IndependentSocialAnalyticsOraclePostgreSQLProfiles`; `TestP6PostgreSQLProfilesAreLiveDistinctAndCollationVerified`; `TestP6AnalyticsCallerSystemAndTransactionParity`; `TestP6AnalyticsTransactionFamiliesBindToTxAndRollbackAcrossProviders`; `TestP6AnalyticsCancelledContextReturnsNoResultAfterOneStatementAcrossProviders`; `TestP6AnalyticsAndScopedNeverInvokeOrdinaryReadHooks`; all mutations below; all commands in section 3 | all | **PASS** |
 
 ## 2. Named-mutation matrix
 
@@ -54,31 +54,31 @@ would notice the mutation is not sufficient.
 
 | Mutation | Required failing evidence | State |
 | --- | --- | --- |
-| `AGGREGATE_IN_GO` — fetch contributing rows and aggregate/group/merge them in Go | one-statement/no-contribution-decode test in row 6 and relation statement spy in row 11 | **PENDING** |
-| `POLICY_AFTER_GROUP` — aggregate first and filter authorized rows afterward | count/local/relation independent oracles in rows 4, 8, and 11 | **PENDING** |
-| `SKIP_MEASURE_CLASSIFICATION` — omit a selected or private measure from classification | position spy and undischarged refusal in row 7 | **PENDING** |
-| `COUNT_FIELD_AS_COUNT_ALL` — expose nullable field distribution without field authorization | field-count distinction in row 4 | **PENDING** |
-| `MASK_AGGREGATE` — return null/partial aggregate for an unauthorized field | no-SQL named refusal in row 7 | **PENDING** |
-| `DISCHARGE_BY_SAMPLE` — inspect current rows instead of proving the contribution predicate | conditional implication corpus in row 7 | **PENDING** |
-| `DECIMAL_TO_REAL` — render SQLite Decimal sum/avg through REAL | exact SQL/function tests in rows 5–6 | **PENDING** |
-| `INTEGER_SUM_INT64` — overflow integer sum instead of exact arbitrary precision | exact/overflow corpus in row 5 | **PENDING** |
-| `NATIVE_COLLATION_GROUP` — inherit provider/default collation for analytical strings | dual-collation oracle in row 10 | **PENDING** |
-| `NULL_SUM_ZERO` — coalesce empty/all-null sum to zero | null result matrix in row 5 | **PENDING** |
-| `SILENT_PROGRAMMATIC_CAP` — apply GraphQL maxGroups to generated Go GroupBy | 34,424-group and independent-limit tests in row 9 | **PENDING** |
-| `SILENT_GRAPHQL_TRUNCATION` — return the first maxGroups when take is omitted | plus-one overflow test in row 9 | **PENDING** |
-| `LIMIT_BEFORE_HAVING` — test final cap on pre-having groups only | complete local oracle and cap boundary tests in rows 8–9 | **PENDING** |
-| `DROP_ORDER_TIEBREAK` — omit canonical complete-key tie terms | signed paging/tie provider test in row 8 | **PENDING** |
-| `RELATION_TWO_PHASE_MERGE` — fetch terminal rows and merge relation groups in Go | one-statement relation average test in row 11 | **PENDING** |
-| `RELATION_TARGET_UNSCOPED` — omit a target-hop read policy | hop-policy/absent-invisible tests in row 11 | **PENDING** |
-| `LEFT_POLICY_IN_WHERE` — turn a scoped left join into an inner join by placing target policy in WHERE | scoped left-join test in row 14 | **PENDING** |
-| `IMPLICIT_RELATION_DEDUP` — deduplicate explicit scoped to-many pairs | explicit pair-count test in row 15 | **PENDING** |
-| `ALLOW_RAW_NODE` — accept raw SQL/identifier/custom ON/write node | compile and runtime red-team tests in row 16 | **PENDING** |
-| `MIX_SCOPE_NONCE` — accept a field/join scope from another query | mixed-root zero-SQL corpus in row 16 | **PENDING** |
-| `AUDIT_ONLY_SUCCESS` — omit failed/cancelled scoped executions from audit | audit outcome corpus in row 17 | **PENDING** |
-| `AUDIT_RAW_SQL_OR_VALUES` — include sensitive statement/bind/principal data | audit sanitization test in row 17 | **PENDING** |
-| `GRAPHQL_SECOND_ENGINE` — authorize or query directly inside analytics resolvers | Go/GraphQL plan/policy/SQL equality in row 13 | **PENDING** |
-| `EMIT_ANALYTICS_BY_RESERVED_NAME` — expose P6 roots without explicit operation/configuration | SDL allowlist/collision golden in rows 1 and 13 | **PENDING** |
-| `RUN_AGGREGATE_HOOKS` — infer analytics behavior from ordinary read hooks | hook-spy portion of complete application oracle in row 18 | **PENDING** |
+| `AGGREGATE_IN_GO` — fetch contributing rows and aggregate/group/merge them in Go | one-statement/no-contribution-decode test in row 6 and relation statement spy in row 11 | **PASS** |
+| `POLICY_AFTER_GROUP` — aggregate first and filter authorized rows afterward | count/local/relation independent oracles in rows 4, 8, and 11 | **PASS** |
+| `SKIP_MEASURE_CLASSIFICATION` — omit a selected or private measure from classification | position spy and undischarged refusal in row 7 | **PASS** |
+| `COUNT_FIELD_AS_COUNT_ALL` — expose nullable field distribution without field authorization | field-count distinction in row 4 | **PASS** |
+| `MASK_AGGREGATE` — return null/partial aggregate for an unauthorized field | no-SQL named refusal in row 7 | **PASS** |
+| `DISCHARGE_BY_SAMPLE` — inspect current rows instead of proving the contribution predicate | conditional implication corpus in row 7 | **PASS** |
+| `DECIMAL_TO_REAL` — render SQLite Decimal sum/avg through REAL | exact SQL/function tests in rows 5–6 | **PASS** |
+| `INTEGER_SUM_INT64` — overflow integer sum instead of exact arbitrary precision | exact/overflow corpus in row 5 | **PASS** |
+| `NATIVE_COLLATION_GROUP` — inherit provider/default collation for analytical strings | dual-collation oracle in row 10 | **PASS** |
+| `NULL_SUM_ZERO` — coalesce empty/all-null sum to zero | null result matrix in row 5 | **PASS** |
+| `SILENT_PROGRAMMATIC_CAP` — apply GraphQL maxGroups to generated Go GroupBy | 34,424-group and independent-limit tests in row 9 | **PASS** |
+| `SILENT_GRAPHQL_TRUNCATION` — return the first maxGroups when take is omitted | plus-one overflow test in row 9 | **PASS** |
+| `LIMIT_BEFORE_HAVING` — test final cap on pre-having groups only | complete local oracle and cap boundary tests in rows 8–9 | **PASS** |
+| `DROP_ORDER_TIEBREAK` — omit canonical complete-key tie terms | signed paging/tie provider test in row 8 | **PASS** |
+| `RELATION_TWO_PHASE_MERGE` — fetch terminal rows and merge relation groups in Go | one-statement relation average test in row 11 | **PASS** |
+| `RELATION_TARGET_UNSCOPED` — omit a target-hop read policy | hop-policy/absent-invisible tests in row 11 | **PASS** |
+| `LEFT_POLICY_IN_WHERE` — turn a scoped left join into an inner join by placing target policy in WHERE | scoped left-join test in row 14 | **PASS** |
+| `IMPLICIT_RELATION_DEDUP` — deduplicate explicit scoped to-many pairs | explicit pair-count test in row 15 | **PASS** |
+| `ALLOW_RAW_NODE` — accept raw SQL/identifier/custom ON/write node | compile and runtime red-team tests in row 16 | **PASS** |
+| `MIX_SCOPE_NONCE` — accept a field/join scope from another query | mixed-root zero-SQL corpus in row 16 | **PASS** |
+| `AUDIT_ONLY_SUCCESS` — omit failed/cancelled scoped executions from audit | audit outcome corpus in row 17 | **PASS** |
+| `AUDIT_RAW_SQL_OR_VALUES` — include sensitive statement/bind/principal data | audit sanitization test in row 17 | **PASS** |
+| `GRAPHQL_SECOND_ENGINE` — authorize or query directly inside analytics resolvers | Go/GraphQL plan/policy/SQL equality in row 13 | **PASS** |
+| `EMIT_ANALYTICS_BY_RESERVED_NAME` — expose P6 roots without explicit operation/configuration | SDL allowlist/collision golden in rows 1 and 13 | **PASS** |
+| `RUN_AGGREGATE_HOOKS` — infer analytics behavior from ordinary read hooks | hook-spy portion of complete application oracle in row 18 | **PASS** |
 
 ## 3. Required completion commands
 
@@ -152,16 +152,36 @@ field, and relation reach.
 
 ## 5. Completion record
 
-The implementation-complete working tree passed the full verification matrix
-on 2026-08-07, including SQLite, PostgreSQL `C` on `127.0.0.1:55433`, and
-PostgreSQL linguistic (`en_US.utf8`) on `127.0.0.1:55432`. The structured race
-stream recorded 16/16 package passes, 1,546 test passes, 452 named PostgreSQL
-profile subtest passes, zero skips, and zero failures. All 25 mutation labels
-were killed with zero survived, invalid, or skipped mutations. The five
-required 30-second fuzz targets, the serial count-one/count-two module runs,
-ten shuffled iterations, vet, gofmt, and `git diff --check` passed.
+Verified implementation commit:
+`0bbd69a8ca96b21c0a00909ac69457b7ca673109`.
 
-This is not yet the formal completion record: the changes remain uncommitted,
-so no exact commit hash exists. After the P6 commit is created, the required
-clean-commit commands must be rerun and the matrix rows changed from `PENDING`
-only from that immutable result.
+Provider profiles were SQLite, PostgreSQL `C` on `127.0.0.1:55433`, and
+PostgreSQL linguistic (`en_US.utf8`) on `127.0.0.1:55432`. Credentials were not
+recorded. Required command results:
+
+- provider package count-one: **PASS**, 426 seconds;
+- compiler/generator/codegen: **PASS**, 83 seconds;
+- provider package race: **PASS**, 880 seconds;
+- full serial module count-one: **PASS**, 417 seconds;
+- full serial module count-two: **PASS**, 797 seconds;
+- ten shuffled analytics/scoped/GraphQL iterations: **PASS**, 190 seconds;
+- structured provider race: **PASS**, 901 seconds, 16/16 packages, 1,546 test
+  passes, 452 named PostgreSQL-profile subtest passes, zero skips, zero
+  failures;
+- exact decode fuzz: **PASS**, 30,243 executions in 32.222 seconds;
+- frozen analytics-request fuzz: **PASS**, 2,131,016 executions in 30.503
+  seconds;
+- frozen scoped-request fuzz: **PASS**, 1,260,857 executions in 30.435
+  seconds;
+- GraphQL exact-scalar fuzz: **PASS**, 2,018,068 executions in 32.456 seconds;
+- GraphQL parse/input-limit fuzz: **PASS**, 77,015 executions in 32.249
+  seconds;
+- mutation verification: **PASS**, 341 seconds, 25 killed, zero survived,
+  invalid, or skipped; and
+- `go vet`, gofmt cleanliness, `git diff --check`, exact HEAD, and clean tracked
+  and untracked tree checks: **PASS**.
+
+The structured JSON stream and expected/passed inventories were retained during
+verification as `/tmp/p6-0bbd69a-provider-test.json`,
+`/tmp/p6-0bbd69a-provider-expected.txt`, and
+`/tmp/p6-0bbd69a-provider-passed.txt`.

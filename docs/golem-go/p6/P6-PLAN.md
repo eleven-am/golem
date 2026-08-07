@@ -1,6 +1,6 @@
 # P6 analytics and scoped reads plan
 
-Status: **implementation complete on the working tree; formal exact-commit evidence pending**
+Status: **complete; exact implementation commit and evidence ledger recorded**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 3, 5, 8, 11,
 12, 15, 18–21, and 23. P1 owns logical/physical schema, stable identities,
