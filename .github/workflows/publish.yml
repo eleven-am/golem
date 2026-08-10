@@ -15,6 +15,7 @@ defaults:
 
 jobs:
   publish:
+    if: github.event_name == 'workflow_dispatch' || !startsWith(github.event.release.tag_name, 'go/v')
     runs-on: ubuntu-latest
     environment: npm
     env:
