@@ -1,5 +1,6 @@
 node_modules/
 dist/
+go/bin/
 *.db
 *.db-journal
 typescript/apps/demo/src/generated/
