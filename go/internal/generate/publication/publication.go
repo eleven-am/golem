@@ -14,7 +14,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"syscall"
 
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 )
@@ -433,7 +432,10 @@ func finishCommitted(moduleDir string, value journal) error {
 	return removeJournal(moduleDir)
 }
 
-type generationLock struct{ file *os.File }
+type generationLock struct {
+	file   *os.File
+	unlock func() error
+}
 
 func acquireLock(moduleDir string) (*generationLock, error) {
 	path := filepath.Join(moduleDir, filepath.FromSlash(lockPath))
@@ -444,14 +446,15 @@ func acquireLock(moduleDir string) (*generationLock, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+	unlock, err := lockGenerationFile(file)
+	if err != nil {
 		file.Close()
 		return nil, fmt.Errorf("another generation process holds %s", lockPath)
 	}
-	return &generationLock{file}, nil
+	return &generationLock{file: file, unlock: unlock}, nil
 }
 func (lock *generationLock) close() {
-	_ = syscall.Flock(int(lock.file.Fd()), syscall.LOCK_UN)
+	_ = lock.unlock()
 	_ = lock.file.Close()
 }
 
