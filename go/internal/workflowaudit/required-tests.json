@@ -11,7 +11,9 @@
       "required": [
         "github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized",
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c",
-        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic"
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
+        "github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticSQLiteApplicationOwnsEmbeddingLifecycle",
+        "github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle"
       ],
       "allowedSkips": [
         "github.com/eleven-am/golem/go/cmd/golem:TestP8MigrationInterruptionProcess"

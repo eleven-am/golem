@@ -272,7 +272,7 @@ func TestCanonicalFragmentIsStableAndRejectsUnsupportedKinds(t *testing.T) {
 
 func TestProviderManifestFloorsAndFactsAreValidated(t *testing.T) {
 	sqlite := SQLiteManifest()
-	if sqlite.Driver != (DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}) || sqlite.MinimumVersion != (Version{Major: 3, Minor: 38}) {
+	if sqlite.Driver != (DriverIdentity{Module: "github.com/ncruces/go-sqlite3", Adapter: "sqlx"}) || sqlite.MinimumVersion != (Version{Major: 3, Minor: 38}) {
 		t.Fatalf("SQLite manifest = %#v", sqlite)
 	}
 	if len(sqlite.Capabilities) != 1 || sqlite.Capabilities[0].ID != CapabilitySQLiteForeignKeys || sqlite.Capabilities[0].Verification != VerificationRuntimeProbe {
@@ -284,6 +284,16 @@ func TestProviderManifestFloorsAndFactsAreValidated(t *testing.T) {
 	}
 
 	schema := sqliteSocialSchema()
+	schema.Provider.Driver = DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+	if err := Validate(schema); err != nil {
+		t.Fatalf("historical reviewed SQLite driver identity was rejected: %v", err)
+	}
+	schema = sqliteSocialSchema()
+	schema.Provider.Driver = DriverIdentity{Module: "example.com/unknown", Adapter: "sqlx"}
+	if err := Validate(schema); err == nil || !IsValidationCode(err, CodeProvider) {
+		t.Fatalf("unknown SQLite driver error = %v", err)
+	}
+	schema = sqliteSocialSchema()
 	schema.Provider.MinimumVersion = Version{Major: 3, Minor: 37}
 	if err := Validate(schema); err == nil || !IsValidationCode(err, CodeProvider) {
 		t.Fatalf("old SQLite floor error = %v", err)

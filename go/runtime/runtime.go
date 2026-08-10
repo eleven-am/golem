@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/observeexec"
@@ -29,6 +30,7 @@ import (
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 	"github.com/eleven-am/golem/go/internal/subscription"
 	"github.com/eleven-am/golem/go/observe"
 	providerapi "github.com/eleven-am/golem/go/provider"
@@ -40,6 +42,7 @@ import (
 // model policy methods.
 type Config[P, A any] struct {
 	Database               *providerapi.Database
+	Embeddings             embedding.Registry
 	Bundle                 golem.SchemaBundle
 	Bindings               golem.ApplicationBindings[A]
 	Descriptors            golem.ApplicationDescriptors
@@ -105,6 +108,7 @@ type App[P, A any] struct {
 	auditPrincipal    func(P) string
 	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
 	nextExecution     atomic.Uint64
+	semantic          *semanticruntime.Manager
 }
 
 // Caller is one principal-bound execution. Its policy set and identity are not
@@ -239,6 +243,16 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if err != nil {
 		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: generated physical schema is invalid")
 	}
+	semanticInventory, err := semanticruntime.NewInventory(expected, config.Embeddings)
+	if err != nil {
+		openReason = observe.ReasonCapability
+		return nil, err
+	}
+	semanticManager, err := semanticruntime.NewManager(database, expected.Provider.Provider, expected, semanticInventory, config.Observer)
+	if err != nil {
+		openReason = observe.ReasonCapability
+		return nil, err
+	}
 	migrationStartup, err := prepareReviewedMigrationStartup(databaseHandle, config.Bundle, providerIdentity, expected)
 	if err != nil {
 		openReason = observe.ReasonMigrationHistory
@@ -260,12 +274,21 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonSchemaDrift
 		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
 	}
-	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}
+	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err
 	}
 	return app, nil
+}
+
+// RefreshSemanticIndexes reconciles every declared semantic index with its
+// current source rows. Unchanged rows do not call the embedding provider.
+func (app *App[P, A]) RefreshSemanticIndexes(ctx context.Context) error {
+	if app == nil || app.semantic == nil || ctx == nil {
+		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application and context are required")
+	}
+	return app.semantic.RefreshAll(ctx)
 }
 
 func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry, providerIdentity golem.Provider) (events.Limits, error) {

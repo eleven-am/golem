@@ -250,6 +250,11 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 				HashAlgorithm: "sha256", GeneratorVersion: GeneratorVersion, Provider: provider.Result.Provider,
 				Entries: history.Manifest.Entries,
 			}
+		} else {
+			// The manifest is the mutable head of an immutable entry chain. Record
+			// an explicitly supported provider-runtime transition there while old
+			// entry snapshots retain their provider identity byte-for-byte.
+			history.Manifest.Provider = provider.Result.Provider
 		}
 		for filename, content := range newFiles {
 			if history.Files == nil {
@@ -316,7 +321,7 @@ func Load(ctx context.Context, moduleDir, root string, providers []Provider) (St
 		if !exists {
 			return State{}, fmt.Errorf("migration publication is missing provider %s manifest", providerID)
 		}
-		if !equalProvider(history.Provider, provider.Result.Provider) {
+		if !physical.CompatibleProviderHistory(history.Provider, provider.Result.Provider) {
 			return State{}, fmt.Errorf("migration provider %s manifest identity differs from the current provider", providerID)
 		}
 		for _, entry := range history.Manifest.Entries {

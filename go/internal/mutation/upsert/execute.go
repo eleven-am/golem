@@ -8,6 +8,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	"github.com/jackc/pgx/v5/pgconn"
+	ncrucsqlite "github.com/ncruces/go-sqlite3"
 	moderncsqlite "modernc.org/sqlite"
 )
 
@@ -191,6 +192,17 @@ func retryableInterference(err error) bool {
 	if errors.As(err, &postgres) {
 		switch postgres.Code {
 		case "23505", "40001", "40P01":
+			return true
+		}
+	}
+	var ncruces *ncrucsqlite.Error
+	if errors.As(err, &ncruces) {
+		switch ncruces.ExtendedCode() {
+		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
+			return true
+		}
+		switch ncruces.Code() {
+		case ncrucsqlite.BUSY, ncrucsqlite.LOCKED:
 			return true
 		}
 	}

@@ -10,8 +10,76 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	"github.com/jmoiron/sqlx"
 )
+
+func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
+	provider := New()
+	model := socialModelIR()
+	payload, err := semanticcontract.Encode(semanticcontract.Index{
+		Name: "related", Space: "content", Dimensions: 3,
+		Fields: []string{id(21), id(22)}, Metric: "cosine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{
+		ID: ir.ExtensionID(id(70)), Provider: ir.SQLite, Version: semanticcontract.Version,
+		Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload,
+	})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(schema.Extensions) != 1 {
+		t.Fatalf("extensions = %#v", schema.Extensions)
+	}
+	database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "semantic.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_semantic_" + id(70)
+	for key, values := range map[string][]float32{"a": {1, 0, 0}, "b": {0.8, 0.2, 0}, "c": {0, 1, 0}} {
+		encoded, encodeErr := sqlitevec.Serialize(values, 3)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		if _, err := database.Exec(`INSERT INTO "`+base+`_state" (record_key,source_hash,space_fingerprint,status,updated_at) VALUES (?,x'01','space-v1','ready',1)`, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO "`+base+`_vec" (record_key,embedding) VALUES (?,?)`, key, encoded); err != nil {
+			t.Fatal(err)
+		}
+	}
+	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
+	var keys []string
+	rows, err := database.Queryx(`SELECT record_key FROM "`+base+`_vec" WHERE embedding MATCH ? AND k = 3 ORDER BY distance`, query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(keys, []string{"a", "b", "c"}) {
+		t.Fatalf("nearest keys = %v", keys)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestLowerRenderApplyIntrospectRoundTrip(t *testing.T) {
 	provider := New()

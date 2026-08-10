@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"math/rand"
 	"strings"
 	"testing"
@@ -90,6 +92,157 @@ func TestTypedDiffInitialRenameAndTypeChange(t *testing.T) {
 	}
 	if plan.Operations[0].Kind != AlterColumnType || plan.Operations[0].Risk != RiskDataLoss {
 		t.Fatalf("type change=%#v", plan.Operations)
+	}
+}
+
+func TestSemanticExtensionDiffIsAdditiveAndDropsOnlyWithDataLoss(t *testing.T) {
+	modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
+	fieldID := ir.FieldID("1123456789abcdef0123456789abcdef")
+	desired := schema()
+	desired.Tables = []physical.PhysicalTable{{
+		ID: modelID, Name: "posts",
+		Columns:    []physical.PhysicalColumn{{ID: fieldID, Name: "title", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}},
+		PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_posts", Columns: []ir.FieldID{fieldID}},
+	}}
+	payload, _ := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{string(fieldID)}, Metric: "cosine"})
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload})
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired.Extensions = []physical.Extension{extension}
+	plan, err := Diff(schema(), desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	kinds := operationKinds(plan.Operations, RecordSchemaVersion)
+	if len(kinds) != 2 || kinds[0] != CreateTable || kinds[1] != CreateProviderExtension {
+		t.Fatalf("semantic add operations=%v", kinds)
+	}
+	var create Operation
+	for _, operation := range plan.Operations {
+		if operation.Kind == CreateProviderExtension {
+			create = operation
+		}
+	}
+	if len(create.Dependencies) != 1 {
+		t.Fatalf("semantic extension lacks owner-table dependency: %#v", create)
+	}
+
+	without := desired
+	without.Extensions = nil
+	drop, err := Diff(desired, without)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range drop.Operations {
+		if operation.Kind == DropProviderExtension && operation.Risk == RiskDataLoss {
+			return
+		}
+	}
+	t.Fatalf("semantic drop is not explicit data loss: %#v", drop.Operations)
+}
+
+func TestSemanticExtensionChangeIsReviewedOrderedRewrite(t *testing.T) {
+	modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
+	identityID := ir.FieldID("1123456789abcdef0123456789abcdef")
+	titleID := ir.FieldID("1223456789abcdef0123456789abcdef")
+	bodyID := ir.FieldID("1323456789abcdef0123456789abcdef")
+	base := schema()
+	base.Tables = []physical.PhysicalTable{{
+		ID: modelID, Name: "posts",
+		Columns: []physical.PhysicalColumn{
+			{ID: identityID, Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+			{ID: titleID, Name: "title", Ordinal: 1, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+			{ID: bodyID, Name: "body", Ordinal: 2, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+		},
+		PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_posts", Columns: []ir.FieldID{identityID}},
+	}}
+	extensionID := ir.ExtensionID("3123456789abcdef0123456789abcdef")
+	semanticExtension := func(dimensions uint16, fields ...ir.FieldID) physical.Extension {
+		t.Helper()
+		encodedFields := make([]string, len(fields))
+		for index := range fields {
+			encodedFields[index] = string(fields[index])
+		}
+		payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: dimensions, Fields: encodedFields, Metric: "cosine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return extension
+	}
+	before := base
+	before.Extensions = []physical.Extension{semanticExtension(3, titleID)}
+	after := base
+	after.Extensions = []physical.Extension{semanticExtension(4, titleID, bodyID)}
+	plan, err := Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var drop, create Operation
+	for _, operation := range plan.Operations {
+		switch operation.Kind {
+		case DropProviderExtension:
+			drop = operation
+		case CreateProviderExtension:
+			create = operation
+		}
+	}
+	if drop.ID == "" || create.ID == "" || drop.Risk != RiskRewrite || create.Risk != RiskRewrite {
+		t.Fatalf("semantic rewrite operations=%#v", plan.Operations)
+	}
+	if len(create.Dependencies) != 1 || create.Dependencies[0] != drop.ID {
+		t.Fatalf("semantic recreate does not depend on drop: drop=%#v create=%#v", drop, create)
+	}
+	ordered, err := Order(plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	positions := map[OperationKind]int{}
+	for index, operation := range ordered {
+		positions[operation.Kind] = index
+	}
+	if positions[DropProviderExtension] >= positions[CreateProviderExtension] {
+		t.Fatalf("semantic rewrite order=%#v", ordered)
+	}
+	if err := ValidatePlan(plan, nil); err != nil {
+		t.Fatalf("derived semantic rewrite required destructive approval: %v", err)
+	}
+}
+
+func TestUnknownProviderExtensionChangeRemainsClosed(t *testing.T) {
+	base := schema()
+	owner := physical.ObjectRef{Kind: ir.ObjectModel, ModelID: "0123456789abcdef0123456789abcdef"}
+	before := base
+	before.Extensions = []physical.Extension{{
+		ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite,
+		Kind: "example.unknown", Version: 1, Owner: owner,
+	}}
+	after := base
+	after.Extensions = []physical.Extension{{
+		ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite,
+		Kind: "example.unknown", Version: 1, Owner: owner,
+		Attributes: []physical.Attribute{{Name: "changed", Value: physical.SemanticValue{Kind: physical.ValueBool, Bool: true}}},
+	}}
+	if _, err := Diff(before, after); err == nil || !strings.Contains(err.Error(), "cannot change in place") {
+		t.Fatalf("unknown same-ID provider extension change error=%v", err)
+	}
+}
+
+func TestSQLiteRuntimeTransitionIsReviewedAsMetadataOnly(t *testing.T) {
+	before := schema()
+	before.Provider.Driver = physical.DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+	after := schema()
+	after.Provider = physical.SQLiteManifest(physical.CapabilityFact{ID: "sqlite.vec0.v1", Version: 1, Verification: physical.VerificationRuntimeProbe})
+	plan, err := Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Operations) != 1 || plan.Operations[0].Kind != RecordSchemaVersion || plan.BeforeFingerprint == plan.AfterFingerprint {
+		t.Fatalf("provider-runtime transition plan=%#v", plan)
 	}
 }
 

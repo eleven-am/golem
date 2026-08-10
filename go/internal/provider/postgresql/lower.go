@@ -12,6 +12,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 const capabilityAdvancedIndexes ir.CapabilityID = "postgresql.advanced_indexes"
@@ -74,9 +76,19 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 	}
 	for _, extension := range model.Extensions {
 		if extension.Provider != ir.PostgreSQL {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: extension %q is scoped to %s", extension.Kind, extension.Provider)
+			continue
 		}
-		return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
+		if extension.Kind == semanticcontract.SpaceKind {
+			continue
+		}
+		if extension.Kind != semanticcontract.IndexKind {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
+		}
+		lowered, err := semanticstorage.Lower(extension)
+		if err != nil {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower extension %s: %w", extension.ID, err)
+		}
+		schema.Extensions = append(schema.Extensions, lowered)
 	}
 	return physical.Normalize(schema)
 }

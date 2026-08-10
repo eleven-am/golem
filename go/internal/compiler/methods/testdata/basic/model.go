@@ -35,6 +35,7 @@ func (User) GolemModel() g.ModelSpec[User] {
 		g.Subscriptions[User](),
 		g.PrimaryKey("pk_users", Users.ID),
 		g.Unique("uq_users_name", Users.Name),
+		g.SemanticIndex("profile", "content", Users.Name),
 		g.Index[User]("idx_users_name_age").Keys(
 			g.IndexColumn(Users.Name).Desc(),
 			g.IndexExpr(g.Lower(Users.Name)),

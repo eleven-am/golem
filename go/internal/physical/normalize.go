@@ -253,6 +253,9 @@ func cloneAttributes(values []Attribute) []Attribute {
 }
 
 func cloneSemanticValue(value SemanticValue) SemanticValue {
+	// Canonical physical format v1 historically normalized list payloads to
+	// their zero values. Preserve those bytes until a versioned v2 decoder and
+	// migration exists; new extensions must use closed scalar encodings.
 	value.List = make([]SemanticValue, len(value.List))
 	for index, item := range value.List {
 		value.List[index] = cloneSemanticValue(item)

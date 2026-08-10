@@ -12,8 +12,108 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
+
+func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{string(fixtureItemNameField)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{
+		ID: "70000000000000000000000000000001", Provider: ir.SQLite, Version: semanticcontract.Version,
+		Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.Extensions = []physical.Extension{extension}
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "semantic-index.db")
+	manifest, files := migrationFixtureManifest(t, before, after, "001_semantic_index.sql", nil)
+	if len(manifest.Entries[0].Operations) != 2 || manifest.Entries[0].Operations[0].Kind != migration.CreateProviderExtension {
+		t.Fatalf("semantic operations = %#v", manifest.Entries[0].Operations)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var version string
+	if err := database.GetContext(ctx, &version, "SELECT vec_version()"); err != nil || version == "" {
+		t.Fatalf("sqlite-vec version=%q error=%v", version, err)
+	}
+}
+
+func TestSQLiteIncrementalSemanticIndexRewritePreservesOwnerRowsAndClearsDerivedState(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	base := incrementalFixtureSchema(t, false)
+	extensionID := ir.ExtensionID("70000000000000000000000000000001")
+	semanticExtension := func(dimensions uint16) physical.Extension {
+		t.Helper()
+		payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: dimensions, Fields: []string{string(fixtureItemNameField)}, Metric: "cosine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: semanticcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return extension
+	}
+	before := base
+	before.Extensions = []physical.Extension{semanticExtension(3)}
+	before = normalizeMigrationFixture(t, before)
+	after := base
+	after.Extensions = []physical.Extension{semanticExtension(4)}
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "semantic-rewrite.db")
+	if _, err := database.ExecContext(ctx, `INSERT INTO "items" ("id","name") VALUES (1,'preserved')`); err != nil {
+		t.Fatal(err)
+	}
+	baseName := "_golem_semantic_" + string(extensionID)
+	encoded, err := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_vec" (record_key,embedding) VALUES ('old',?)`, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_state" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at) VALUES ('old',X'01','old','ready',1,NULL,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, files := migrationFixtureManifest(t, before, after, "002_semantic_rewrite.sql", nil)
+	operations := manifest.Entries[0].Operations
+	if len(operations) != 3 || operations[0].Kind != migration.DropProviderExtension || operations[1].Kind != migration.CreateProviderExtension || operations[0].Risk != migration.RiskRewrite || operations[1].Risk != migration.RiskRewrite {
+		t.Fatalf("semantic rewrite operations=%#v", operations)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := database.GetContext(ctx, &name, `SELECT "name" FROM "items" WHERE "id"=1`); err != nil || name != "preserved" {
+		t.Fatalf("owner row name=%q error=%v", name, err)
+	}
+	for _, suffix := range []string{"_state", "_vec"} {
+		var count int
+		if err := database.GetContext(ctx, &count, `SELECT COUNT(*) FROM "`+baseName+suffix+`"`); err != nil || count != 0 {
+			t.Fatalf("rebuilt %s count=%d error=%v", suffix, count, err)
+		}
+	}
+}
 
 func TestSQLiteIncrementalAdditiveMigrationAndExactLedger(t *testing.T) {
 	ctx := context.Background()

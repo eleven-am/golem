@@ -29,7 +29,7 @@ func main() {
 	public, err := compatibility.BuildAPIInventory(ctx, compatibility.APIRequest{
 		Directory: root,
 		Patterns: []string{
-			"./events", "./golem", "./graphql", "./observe", "./provider",
+			"./embedding", "./events", "./golem", "./graphql", "./observe", "./provider",
 			"./provider/postgresql", "./provider/sqlite", "./runtime",
 		},
 	})

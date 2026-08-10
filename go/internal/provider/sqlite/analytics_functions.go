@@ -6,8 +6,6 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
-
-	modernsqlite "modernc.org/sqlite"
 )
 
 // These names are versioned because their exact arithmetic and canonical-text
@@ -20,30 +18,7 @@ const (
 	AnalyticsNumericCollation       = "golem_analytics_numeric_v1"
 )
 
-func init() {
-	modernsqlite.MustRegisterFunction(AnalyticsIntegerSumFunction, &modernsqlite.FunctionImpl{
-		NArgs: 1, Deterministic: true,
-		MakeAggregate: func(modernsqlite.FunctionContext) (modernsqlite.AggregateFunction, error) {
-			return &exactIntegerAggregate{}, nil
-		},
-	})
-	modernsqlite.MustRegisterFunction(AnalyticsDecimalSumFunction, &modernsqlite.FunctionImpl{
-		NArgs: 2, Deterministic: true,
-		MakeAggregate: func(modernsqlite.FunctionContext) (modernsqlite.AggregateFunction, error) {
-			return &exactDecimalAggregate{}, nil
-		},
-	})
-	modernsqlite.MustRegisterFunction(AnalyticsDecimalAvgFunction, &modernsqlite.FunctionImpl{
-		NArgs: 2, Deterministic: true,
-		MakeAggregate: func(modernsqlite.FunctionContext) (modernsqlite.AggregateFunction, error) {
-			return &exactDecimalAggregate{average: true}, nil
-		},
-	})
-	modernsqlite.MustRegisterDeterministicScalarFunction(AnalyticsNumericCompareFunction, 2, analyticsNumericCompare)
-	modernsqlite.MustRegisterCollationUtf8(AnalyticsNumericCollation, compareAnalyticsNumbers)
-}
-
-func analyticsNumericCompare(_ *modernsqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+func analyticsNumericCompare(arguments []driver.Value) (driver.Value, error) {
 	if len(arguments) != 2 {
 		return nil, fmt.Errorf("%s: arity", AnalyticsNumericCompareFunction)
 	}
@@ -90,7 +65,7 @@ type exactIntegerAggregate struct {
 	count uint64
 }
 
-func (aggregate *exactIntegerAggregate) Step(_ *modernsqlite.FunctionContext, arguments []driver.Value) error {
+func (aggregate *exactIntegerAggregate) Step(arguments []driver.Value) error {
 	if len(arguments) != 1 {
 		return fmt.Errorf("%s: arity", AnalyticsIntegerSumFunction)
 	}
@@ -106,16 +81,12 @@ func (aggregate *exactIntegerAggregate) Step(_ *modernsqlite.FunctionContext, ar
 	return nil
 }
 
-func (*exactIntegerAggregate) WindowInverse(*modernsqlite.FunctionContext, []driver.Value) error {
-	return fmt.Errorf("%s: window use is unsupported", AnalyticsIntegerSumFunction)
-}
-func (aggregate *exactIntegerAggregate) WindowValue(*modernsqlite.FunctionContext) (driver.Value, error) {
+func (aggregate *exactIntegerAggregate) Value() (driver.Value, error) {
 	if aggregate.count == 0 {
 		return nil, nil
 	}
 	return aggregate.sum.String(), nil
 }
-func (*exactIntegerAggregate) Final(*modernsqlite.FunctionContext) {}
 
 type exactDecimalAggregate struct {
 	sum      big.Int
@@ -125,7 +96,7 @@ type exactDecimalAggregate struct {
 	average  bool
 }
 
-func (aggregate *exactDecimalAggregate) Step(_ *modernsqlite.FunctionContext, arguments []driver.Value) error {
+func (aggregate *exactDecimalAggregate) Step(arguments []driver.Value) error {
 	if len(arguments) != 2 {
 		return fmt.Errorf("SQLite exact decimal aggregate: arity")
 	}
@@ -146,10 +117,7 @@ func (aggregate *exactDecimalAggregate) Step(_ *modernsqlite.FunctionContext, ar
 	return nil
 }
 
-func (*exactDecimalAggregate) WindowInverse(*modernsqlite.FunctionContext, []driver.Value) error {
-	return fmt.Errorf("SQLite exact decimal aggregate: window use is unsupported")
-}
-func (aggregate *exactDecimalAggregate) WindowValue(*modernsqlite.FunctionContext) (driver.Value, error) {
+func (aggregate *exactDecimalAggregate) Value() (driver.Value, error) {
 	if aggregate.count == 0 {
 		return nil, nil
 	}
@@ -159,7 +127,6 @@ func (aggregate *exactDecimalAggregate) WindowValue(*modernsqlite.FunctionContex
 	}
 	return formatScaledInteger(coefficient, int(aggregate.scale)), nil
 }
-func (*exactDecimalAggregate) Final(*modernsqlite.FunctionContext) {}
 
 func divideHalfAwayFromZero(value *big.Int, divisor uint64) *big.Int {
 	denominator := new(big.Int).SetUint64(divisor)

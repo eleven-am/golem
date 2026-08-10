@@ -22,6 +22,27 @@ import (
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
+func TestSQLiteProviderHistoryAllowsOnlyTheReviewedDriverTransition(t *testing.T) {
+	vec := physical.CapabilityFact{ID: "sqlite.vec0.v1", Version: 1, Verification: physical.VerificationRuntimeProbe}
+	current := physical.SQLiteManifest(vec)
+	historical := current
+	historical.Driver = physical.DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+	historical.Capabilities = append([]physical.CapabilityFact(nil), historical.Capabilities[:len(historical.Capabilities)-1]...)
+	if !physical.CompatibleProviderHistory(historical, current) {
+		t.Fatal("reviewed modernc-to-ncruces transition was rejected")
+	}
+	forged := historical
+	forged.Driver.Module = "example.com/unknown"
+	if physical.CompatibleProviderHistory(forged, current) {
+		t.Fatal("unknown historical driver was accepted")
+	}
+	downgraded := current
+	downgraded.Capabilities = nil
+	if physical.CompatibleProviderHistory(historical, downgraded) {
+		t.Fatal("capability-losing provider transition was accepted")
+	}
+}
+
 func TestInitialIncrementalDeterminismAndNoOpRefusal(t *testing.T) {
 	compiled, providers := socialResult(t)
 	module := t.TempDir()

@@ -171,7 +171,7 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 		if beforeNormalizeErr != nil || afterNormalizeErr != nil {
 			return fmt.Errorf("migration %s embeds invalid physical snapshot", entry.ID)
 		}
-		if !reflect.DeepEqual(beforeSnapshot.Provider, manifest.Provider) || !reflect.DeepEqual(afterSnapshot.Provider, manifest.Provider) {
+		if !physical.CompatibleProviderHistory(beforeSnapshot.Provider, manifest.Provider) || !physical.CompatibleProviderHistory(afterSnapshot.Provider, manifest.Provider) {
 			return fmt.Errorf("migration %s snapshot provider differs from manifest provider", entry.ID)
 		}
 		before, beforeErr := physical.PhysicalFingerprint(beforeSnapshot)
@@ -200,7 +200,11 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 				systemAdditions = append(systemAdditions, operation)
 			}
 		}
-		if beforeSystem != afterSystem {
+		if beforeSystem != afterSystem && reflect.DeepEqual(beforeSnapshot.System, afterSnapshot.System) {
+			if bootstrapCount != 0 || len(systemAdditions) != 0 {
+				return fmt.Errorf("migration %s contains a system operation for a provider-metadata transition", entry.ID)
+			}
+		} else if beforeSystem != afterSystem {
 			beforeFragment, beforeFragmentErr := fragment(beforeSnapshot.System)
 			afterFragment, afterFragmentErr := fragment(afterSnapshot.System)
 			expectedPlan, expectedPlanErr := Diff(beforeSnapshot, afterSnapshot)

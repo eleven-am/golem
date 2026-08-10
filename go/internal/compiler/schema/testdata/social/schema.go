@@ -8,6 +8,7 @@ func DefineSchema(schema *golem.Schema) {
 	golem.Model[User](schema)
 	golem.Model[Post](schema)
 	golem.Providers(schema, golem.SQLite, golem.PostgreSQL)
+	golem.EmbeddingSpace(schema, "content", 384)
 }
 
 type Actor struct {

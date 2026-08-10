@@ -15,6 +15,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -51,6 +52,15 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	for _, table := range expectedNormalized.Tables {
 		expectedTables[string(table.Name)] = table
 	}
+	semanticTables := map[string]bool{}
+	for _, extension := range expectedNormalized.Extensions {
+		descriptor, decodeErr := semanticstorage.Decode(extension)
+		if decodeErr != nil {
+			return physical.PhysicalSchema{}, decodeErr
+		}
+		semanticTables[string(descriptor.Storage)+"_state"] = true
+		semanticTables[string(descriptor.Storage)+"_vec"] = true
+	}
 	tableByOID := map[int64]*physical.PhysicalTable{}
 	tableOIDByName := map[string]int64{}
 	rows, err := query.QueryxContext(ctx, `SELECT c.oid::bigint, c.relname,c.relkind::text,c.relpersistence::text,c.relrowsecurity,c.relforcerowsecurity
@@ -68,6 +78,15 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 			return physical.PhysicalSchema{}, err
 		}
 		if allowed["table\x00"+name] {
+			continue
+		}
+		if semanticTables[name] {
+			if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+			}
+			if err := validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity); err != nil {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+			}
 			continue
 		}
 		if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
@@ -231,7 +250,76 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
+	if err := introspectSemanticExtensions(ctx, query, expectedNormalized); err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	actual.Extensions = append([]physical.Extension(nil), expectedNormalized.Extensions...)
 	return physical.Normalize(actual)
+}
+
+func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema) error {
+	if len(expected.Extensions) == 0 {
+		return nil
+	}
+	var vectorVersion string
+	if err := query.QueryRowxContext(ctx, `SELECT extversion FROM pg_catalog.pg_extension WHERE extname='vector'`).Scan(&vectorVersion); err != nil || !supportedPGVectorVersion(vectorVersion) {
+		return fmt.Errorf("postgresql semantic introspect: pgvector >=0.8.0 is required")
+	}
+	for _, extension := range expected.Extensions {
+		descriptor, err := semanticstorage.Decode(extension)
+		if err != nil {
+			return err
+		}
+		state := string(descriptor.Storage) + "_state"
+		vectors := string(descriptor.Storage) + "_vec"
+		index := string(descriptor.Storage) + "_hnsw"
+		var stateColumns, vectorColumns string
+		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
+		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), state).Scan(&stateColumns); err != nil {
+			return err
+		}
+		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), vectors).Scan(&vectorColumns); err != nil {
+			return err
+		}
+		wantState := "record_key:text:true,source_hash:bytea:true,space_fingerprint:text:true,status:text:true,attempt_count:integer:true,error_code:text:false,updated_at:bigint:true"
+		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
+		if stateColumns != wantState || vectorColumns != wantVectors {
+			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)
+		}
+		var indexMethod, opclass string
+		var valid, ready bool
+		if err := query.QueryRowxContext(ctx, `SELECT am.amname,opc.opcname,i.indisvalid,i.indisready FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ci.relam JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0] WHERE n.nspname=$1 AND ct.relname=$2 AND ci.relname=$3`, string(expected.Namespace.Name), vectors, index).Scan(&indexMethod, &opclass, &valid, &ready); err != nil {
+			return fmt.Errorf("postgresql semantic introspect: HNSW index missing extension=%s", extension.ID)
+		}
+		if indexMethod != "hnsw" || opclass != "vector_cosine_ops" || !valid || !ready {
+			return fmt.Errorf("postgresql semantic introspect: HNSW index drift extension=%s", extension.ID)
+		}
+	}
+	return nil
+}
+
+func supportedPGVectorVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	numbers := make([]int, len(parts))
+	for index, part := range parts {
+		if part == "" || len(part) > 1 && part[0] == '0' {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return false
+		}
+		numbers[index] = value
+	}
+	return numbers[0] > 0 || numbers[0] == 0 && numbers[1] >= 8
 }
 
 func introspectConstraints(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, columns map[int64]map[int]physical.PhysicalColumn) error {

@@ -12,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 func TestPlanIncrementalRendersReviewedPostgreSQLBaseline(t *testing.T) {
@@ -54,6 +55,74 @@ func TestPlanIncrementalRendersReviewedPostgreSQLBaseline(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(sql), "search_path") {
 		t.Fatalf("migration SQL depends on search_path:\n%s", sql)
+	}
+}
+
+func TestPlanIncrementalCreatesSemanticPgvectorStorage(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 384, Fields: []string{id(29)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(73)), Provider: ir.PostgreSQL, Version: 1, Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload})
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.Extensions = nil
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "002_semantic", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_semantic_" + id(73)
+	for _, fragment := range []string{"CREATE EXTENSION IF NOT EXISTS vector", `CREATE TABLE "reviewed"."` + base + `_state"`, `CREATE TABLE "reviewed"."` + base + `_vec"`, `USING hnsw ("embedding" vector_cosine_ops)`} {
+		if !strings.Contains(plan.SQL(), fragment) {
+			t.Fatalf("semantic incremental SQL missing %q:\n%s", fragment, plan.SQL())
+		}
+	}
+}
+
+func TestPlanIncrementalRebuildsChangedSemanticPgvectorStorageInOrder(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	extensionID := ir.ExtensionID(id(73))
+	setSemantic := func(dimensions uint16) {
+		t.Helper()
+		payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: dimensions, Fields: []string{id(29)}, Metric: "cosine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		model.Extensions = []ir.ProviderExtensionIR{{ID: extensionID, Provider: ir.PostgreSQL, Version: 1, Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload}}
+	}
+	setSemantic(3)
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSemantic(4)
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reviewedPostgreSQLEntry(t, "002_semantic_rewrite", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	base := "_golem_semantic_" + string(extensionID)
+	drop := `DROP TABLE "reviewed"."` + base + `_vec"`
+	create := `CREATE TABLE "reviewed"."` + base + `_vec"`
+	dropPosition, createPosition := strings.Index(sql, drop), strings.Index(sql, create)
+	if dropPosition < 0 || createPosition < 0 || dropPosition >= createPosition {
+		t.Fatalf("semantic rewrite did not drop before recreate:\n%s", sql)
+	}
+	if !strings.Contains(sql[createPosition:], `vector(4)`) || !strings.Contains(sql[createPosition:], `USING hnsw ("embedding" vector_cosine_ops)`) {
+		t.Fatalf("semantic rewrite omitted new pgvector contract:\n%s", sql)
 	}
 }
 

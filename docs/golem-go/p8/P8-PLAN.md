@@ -527,4 +527,6 @@ described as a released model-driven backend framework for SQLite and
 PostgreSQL within the documented boundaries. New databases, federation, vendor
 transports/CDC, broader analytics, render, queue, or other feature families are
 post-roadmap extensions and require their own contracts and evidence; they do
-not retroactively reopen P8.
+not retroactively reopen P8. Accepted post-P8 direction is recorded in
+[`../ROADMAP.md`](../ROADMAP.md) and remains unshipped until its own contract
+and evidence are complete.

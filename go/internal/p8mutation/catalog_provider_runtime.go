@@ -64,7 +64,7 @@ func providerRuntimeMutations() []Mutation {
 		},
 		{
 			Label: "APP_OPEN_STARTS_WORKER", Summary: "start an unowned background worker from runtime Open",
-			Patches: []Patch{{Path: "go/runtime/runtime.go", Before: "\treturn app, nil\n}\n\nfunc validateEventConfiguration", After: "\tgo func() { select {} }()\n\treturn app, nil\n}\n\nfunc validateEventConfiguration"}},
+			Patches: []Patch{{Path: "go/runtime/runtime.go", Before: "\treturn app, nil\n}\n\n// RefreshSemanticIndexes", After: "\tgo func() { select {} }()\n\treturn app, nil\n}\n\n// RefreshSemanticIndexes"}},
 			Gate:    gate("./runtime", "TestP8AppOpenIsReadOnlyAndStartsNoBackgroundWork"), Timeout: 5 * time.Minute,
 		},
 		{

@@ -9,7 +9,44 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
+
+func TestSemanticIndexRendersPgvectorHNSWStorage(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := semanticcontract.Encode(semanticcontract.Index{
+		Name: "related", Space: "content", Dimensions: 384,
+		Fields: []string{id(29)}, Metric: "cosine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{
+		ID: ir.ExtensionID(id(73)), Provider: ir.PostgreSQL, Version: semanticcontract.Version,
+		Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload,
+	})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "social"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := provider.RenderInitial(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_semantic_" + id(73)
+	for _, fragment := range []string{
+		"CREATE EXTENSION IF NOT EXISTS vector",
+		`CREATE TABLE "social"."` + base + `_state"`,
+		`CREATE TABLE "social"."` + base + `_vec"`,
+		`"embedding" vector(384) NOT NULL`,
+		`CREATE INDEX "` + base + `_hnsw" ON "social"."` + base + `_vec" USING hnsw ("embedding" vector_cosine_ops)`,
+	} {
+		if !strings.Contains(script.SQL(), fragment) {
+			t.Fatalf("PostgreSQL semantic DDL missing %q:\n%s", fragment, script.SQL())
+		}
+	}
+}
 
 func TestLowerPreservesPortablePostgreSQLSemantics(t *testing.T) {
 	provider := New()

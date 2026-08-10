@@ -50,6 +50,7 @@ type Result struct {
 	GraphQLComputed []graphqlextension.ComputedDeclaration
 	GraphQLCustom   []graphqlextension.CustomOperationDeclaration
 	AnalyticsModels []analyticscontract.ModelPatch
+	Extensions      []ir.ProviderExtensionIR
 	Diagnostics     []ir.Diagnostic
 }
 

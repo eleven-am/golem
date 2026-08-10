@@ -98,7 +98,7 @@ func compatibilityFixture() Manifest {
 			GraphQLABI: strings.Repeat("3", 64), CLIJSON: strings.Repeat("4", 64), Observation: strings.Repeat("5", 64),
 		},
 		Versions: Versions{
-			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v5",
+			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v6",
 			SchemaBundle: 2, GeneratedManifest: 2, GraphQL: 4,
 			ModelIR: 1, ContractIR: 5, CanonicalIR: 1, PhysicalSchema: 1, PhysicalCanonical: 1,
 			MigrationManifest: 1, MigrationCanonical: 1, MigrationLedger: 1, EventSchema: 1,

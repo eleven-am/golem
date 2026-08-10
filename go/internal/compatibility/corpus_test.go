@@ -20,7 +20,7 @@ func TestP8PublicGoAPIDiffGate(t *testing.T) {
 	current, err := BuildAPIInventory(context.Background(), APIRequest{
 		Directory: root,
 		Patterns: []string{
-			"./events", "./golem", "./graphql", "./observe", "./provider",
+			"./embedding", "./events", "./golem", "./graphql", "./observe", "./provider",
 			"./provider/postgresql", "./provider/sqlite", "./runtime",
 		},
 	})

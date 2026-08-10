@@ -136,8 +136,10 @@ func (v *validator) validateHeader() {
 	manifest := v.schema.Provider
 	switch manifest.Provider {
 	case ir.SQLite:
-		if manifest.Driver != (DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}) {
-			v.add(CodeProvider, "provider.driver", "SQLite driver must be modernc.org/sqlite through sqlx")
+		current := DriverIdentity{Module: "github.com/ncruces/go-sqlite3", Adapter: "sqlx"}
+		historical := DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+		if manifest.Driver != current && manifest.Driver != historical {
+			v.add(CodeProvider, "provider.driver", "SQLite driver is not a supported current or historical identity")
 		}
 		if manifest.MinimumVersion != (Version{Major: 3, Minor: 38}) {
 			v.add(CodeProvider, "provider.minimumVersion", "SQLite semantic floor must be 3.38.0")

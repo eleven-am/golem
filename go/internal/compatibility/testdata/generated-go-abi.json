@@ -15,6 +15,7 @@
             "pointer:EventOperatorfunc() github.com/eleven-am/golem/go/events.Operator",
             "pointer:ForPrincipalfunc(ctx context.Context, principal P) (*github.com/eleven-am/golem/go/examples/social/social.Caller[P], error)",
             "pointer:GraphQLfunc(config github.com/eleven-am/golem/go/examples/social/social.GraphQLConfig[P]) (*github.com/eleven-am/golem/go/examples/social/social.GraphQLServer, error)",
+            "pointer:RefreshSemanticIndexesfunc(ctx context.Context) error",
             "pointer:RunEventPublisherfunc(ctx context.Context) error",
             "pointer:Systemfunc() github.com/eleven-am/golem/go/examples/social/social.System[P]"
           ]
@@ -667,7 +668,7 @@
           "name": "Config",
           "kind": "type",
           "typeKind": "struct",
-          "signature": "[P any]struct{Database *github.com/eleven-am/golem/go/provider.Database;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (github.com/eleven-am/golem/go/examples/social/social.Actor, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(github.com/eleven-am/golem/go/examples/social/social.Actor) (github.com/eleven-am/golem/go/examples/social/social.Actor, error)}",
+          "signature": "[P any]struct{Database *github.com/eleven-am/golem/go/provider.Database;Embeddings github.com/eleven-am/golem/go/embedding.Registry;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (github.com/eleven-am/golem/go/examples/social/social.Actor, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(github.com/eleven-am/golem/go/examples/social/social.Actor) (github.com/eleven-am/golem/go/examples/social/social.Actor, error)}",
           "methods": null
         },
         {

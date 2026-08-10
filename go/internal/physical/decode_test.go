@@ -73,7 +73,7 @@ func TestCanonicalDecodeRejectsMalformedDocuments(t *testing.T) {
 		{name: "unknown struct type", payload: replaceCanonicalText(t, encoded, "PhysicalSchema", "PhysicalSchemX"), contains: "unknown struct type"},
 		{name: "unknown field", payload: replaceCanonicalText(t, encoded, "CanonicalVersion", "CanonicalVersioX"), contains: "unknown or out-of-order field"},
 		{name: "trailing bytes", payload: append(append([]byte(nil), encoded...), 0), contains: "trailing bytes"},
-		{name: "invalid schema", payload: replaceCanonicalText(t, encoded, "modernc.org/sqlite", "modernc.org/sqlitX"), contains: "invalid schema"},
+		{name: "invalid schema", payload: replaceCanonicalText(t, encoded, "github.com/ncruces/go-sqlite3", "github.com/ncruces/go-sqliteX"), contains: "invalid schema"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

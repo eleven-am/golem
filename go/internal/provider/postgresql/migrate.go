@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/migration"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -88,9 +89,6 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err != nil {
 		return IncrementalPlan{}, err
 	}
-	if len(before.Extensions) != 0 || len(after.Extensions) != 0 {
-		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s provider extensions are outside the transactional baseline", entry.ID)
-	}
 	for _, phase := range semantic.Phases {
 		if phase.Mode != migration.Transactional {
 			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s phase %d is not transactional", entry.ID, phase.Ordinal)
@@ -115,7 +113,11 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err := validatePostgreSQLColumnOrder(beforeTables, afterTables, owners, semantic.Operations); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s: %w", entry.ID, err)
 	}
-	renderer := ddlRenderer{schema: after, tables: afterTables}
+	beforeExtensions := make(map[ir.ExtensionID]physical.Extension, len(before.Extensions))
+	for _, extension := range before.Extensions {
+		beforeExtensions[extension.ID] = extension
+	}
+	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions}
 	plan := IncrementalPlan{MigrationID: entry.ID}
 	for _, operation := range semantic.Operations {
 		statements, renderErr := renderer.incrementalOperation(operation, owners, beforeTables, afterTables)
@@ -144,6 +146,31 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			return append(statements, postgresqlOutboxDeliveryBackfill(r.schema.System)), nil
 		}
 		return renderOutbox(r.schema.System.Namespace.Name, object.Name), nil
+	}
+	if operation.Kind == migration.CreateProviderExtension {
+		extension, exists := postgresqlExtension(r.schema.Extensions, ir.ExtensionID(operation.ObjectID))
+		if !exists {
+			return nil, fmt.Errorf("semantic extension target is absent")
+		}
+		statements, err := renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension)
+		if err != nil {
+			return nil, err
+		}
+		return append([]string{"CREATE EXTENSION IF NOT EXISTS vector"}, statements...), nil
+	}
+	if operation.Kind == migration.DropProviderExtension {
+		extension, exists := r.beforeExtensions[ir.ExtensionID(operation.ObjectID)]
+		if !exists {
+			return nil, fmt.Errorf("semantic extension target is absent")
+		}
+		descriptor, err := semanticstorage.Decode(extension)
+		if err != nil {
+			return nil, err
+		}
+		return []string{
+			"DROP TABLE " + qualified(r.schema.Namespace.Name, physical.PhysicalName(string(descriptor.Storage)+"_vec")),
+			"DROP TABLE " + qualified(r.schema.Namespace.Name, physical.PhysicalName(string(descriptor.Storage)+"_state")),
+		}, nil
 	}
 	tableID, exists := owners[operation.ID]
 	if !exists {
@@ -294,6 +321,15 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 	}
 }
 
+func postgresqlExtension(extensions []physical.Extension, id ir.ExtensionID) (physical.Extension, bool) {
+	for _, extension := range extensions {
+		if extension.ID == id {
+			return extension, true
+		}
+	}
+	return physical.Extension{}, false
+}
+
 func postgresqlOutboxDeliveryBackfill(system physical.SystemSchema) string {
 	outbox := physical.OutboxSystemObjectV1().Name
 	delivery := physical.OutboxDeliverySystemObjectV1().Name
@@ -422,7 +458,7 @@ func postgresqlOperationOwners(before, after physical.PhysicalSchema, operations
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range operations {
-		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
 			continue
 		}
 		owner, exists := owners[operation.ObjectID]
@@ -744,8 +780,8 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err := migration.ValidatePlan(semantic, entry.Approvals); err != nil {
 		return fmt.Errorf("postgresql initial migration %s invalid reviewed plan: %w", entry.ID, err)
 	}
-	if len(entry.Manual) != 0 || len(entry.AfterSnapshot.Extensions) != 0 {
-		return fmt.Errorf("postgresql initial migration %s uses unsupported manual or extension semantics", entry.ID)
+	if len(entry.Manual) != 0 {
+		return fmt.Errorf("postgresql initial migration %s uses unsupported manual semantics", entry.ID)
 	}
 	for _, operation := range semantic.Operations {
 		if operation.Mode != migration.Transactional || operation.Transform != nil || operation.Kind == migration.ManualStep || operation.Kind == migration.BackfillColumn || operation.Kind == migration.RebuildTable || operation.Kind == migration.ValidateConstraint || operation.Kind == migration.AlterColumnType {

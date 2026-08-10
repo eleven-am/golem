@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 const fixturePackage = "github.com/eleven-am/golem/go/internal/compiler/methods/testdata/basic"
@@ -38,6 +39,15 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	}
 	if len(result.AnalyticsModels) != 1 {
 		t.Fatalf("analytics patches = %#v", result.AnalyticsModels)
+	}
+	if len(result.Extensions) != 2 {
+		t.Fatalf("semantic extensions = %#v", result.Extensions)
+	}
+	for _, extension := range result.Extensions {
+		index, err := semanticcontract.DecodeIndex(extension.Payload)
+		if err != nil || extension.Kind != semanticcontract.IndexKind || index.Name != "profile" || index.Space != "content" || index.Dimensions != 384 || !reflect.DeepEqual(index.Fields, []string{"13000000000000000000000000000000"}) {
+			t.Fatalf("semantic extension = %#v, index=%#v, err=%v", extension, index, err)
+		}
 	}
 	analytics := result.AnalyticsModels[0]
 	if !analytics.Enabled || !analytics.ScopedReads || analytics.Dimensions == nil || len(*analytics.Dimensions) != 2 || analytics.GraphQLMaxGroups == nil || *analytics.GraphQLMaxGroups != 75 {
@@ -190,7 +200,7 @@ func fixtureCompilation() ir.CompilationIR {
 	field := func(id, name string, kind ir.LogicalTypeKind) ir.FieldIR {
 		return ir.FieldIR{ID: ir.FieldID(id), GoName: name, LogicalName: name, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: ir.SQLIdentifier(name), Type: ir.LogicalTypeIR{Kind: kind}}}
 	}
-	return ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{
+	return ir.CompilationIR{Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Providers: []ir.Provider{ir.SQLite, ir.PostgreSQL}, Models: []ir.ModelDeclIR{
 		{ID: userID, Go: ir.GoNamedTypeIR{PackagePath: fixturePackage, Name: "User"}, LogicalName: "User", Table: ir.TableBindingIR{PhysicalName: "users"}, Fields: []ir.FieldIR{
 			field("11000000000000000000000000000000", "ID", ir.TypeInt64),
 			field("12000000000000000000000000000000", "Age", ir.TypeInt64),
@@ -201,6 +211,9 @@ func fixtureCompilation() ir.CompilationIR {
 		{ID: auditID, Go: ir.GoNamedTypeIR{PackagePath: fixturePackage, Name: "Audit"}, LogicalName: "Audit", Table: ir.TableBindingIR{PhysicalName: "audits"}, Fields: []ir.FieldIR{
 			field("21000000000000000000000000000000", "ID", ir.TypeInt64),
 		}},
+	}, Extensions: []ir.ProviderExtensionIR{
+		{ID: "31000000000000000000000000000000", Provider: ir.SQLite, Version: semanticcontract.Version, Owner: "30000000000000000000000000000000", Kind: semanticcontract.SpaceKind, Payload: `{"name":"content","dimensions":384}`},
+		{ID: "32000000000000000000000000000000", Provider: ir.PostgreSQL, Version: semanticcontract.Version, Owner: "30000000000000000000000000000000", Kind: semanticcontract.SpaceKind, Payload: `{"name":"content","dimensions":384}`},
 	}}}
 }
 

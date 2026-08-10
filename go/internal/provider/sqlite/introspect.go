@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -87,6 +88,32 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 				return physical.PhysicalSchema{}, renderErr
 			}
 			expectedObjects["index\x00"+string(index.Name)] = statement
+		}
+	}
+	for _, extension := range normalized.Extensions {
+		statements, renderErr := renderSemanticExtension(extension)
+		if renderErr != nil {
+			return physical.PhysicalSchema{}, renderErr
+		}
+		descriptor, decodeErr := semanticstorage.Decode(extension)
+		if decodeErr != nil {
+			return physical.PhysicalSchema{}, decodeErr
+		}
+		stateName := string(descriptor.Storage) + "_state"
+		vectorName := string(descriptor.Storage) + "_vec"
+		expectedObjects["table\x00"+stateName] = statements[0]
+		vectorKey := "table\x00" + vectorName
+		vector, exists := actual[vectorKey]
+		if !exists || strings.TrimSpace(vector.SQL) != statements[1] {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)
+		}
+		delete(actual, vectorKey)
+		for _, suffix := range []string{"_chunks", "_info", "_rowids", "_vector_chunks00"} {
+			key := "table\x00" + vectorName + suffix
+			if _, exists := actual[key]; !exists {
+				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector shadow table %s%s", vectorName, suffix)
+			}
+			delete(actual, key)
 		}
 	}
 	for _, unmanaged := range normalized.Unmanaged {

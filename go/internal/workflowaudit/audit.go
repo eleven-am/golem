@@ -87,7 +87,10 @@ func AuditWorkflow(contents []byte) []Violation {
 	text := string(contents)
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "image: postgres:") && !strings.Contains(trimmed, "@sha256:") && !strings.Contains(trimmed, "${{") {
+		if strings.HasPrefix(trimmed, "image: postgres:") || strings.HasPrefix(trimmed, "image: pgvector/pgvector") {
+			if strings.Contains(trimmed, "@sha256:") || strings.Contains(trimmed, "${{") {
+				continue
+			}
 			violations = append(violations, Violation{Code: "P8_WORKFLOW_MUTABLE_SERVICE_IMAGE"})
 		}
 	}
@@ -104,6 +107,10 @@ func AuditWorkflow(contents []byte) []Violation {
 		{"P8_WORKFLOW_POSTGRES_C_MISSING", "POSTGRES_INITDB_ARGS: --locale=C"},
 		{"P8_WORKFLOW_POSTGRES_LINGUISTIC_MISSING", "POSTGRES_INITDB_ARGS: --locale=en_US.utf8"},
 		{"P8_WORKFLOW_REQUIRED_PROVIDER_MODE_MISSING", "GOLEM_P8_REQUIRE_POSTGRESQL: \"1\""},
+		{"P8_WORKFLOW_PGVECTOR_IMAGE_MISSING", "pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38"},
+		{"P8_WORKFLOW_PGVECTOR_REQUIRED_MODE_MISSING", "GOLEM_REQUIRE_PGVECTOR: \"1\""},
+		{"P8_WORKFLOW_PGVECTOR_DSN_MISSING", "GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres@127.0.0.1:55434/golem?sslmode=disable"},
+		{"P8_WORKFLOW_PGVECTOR_GATE_MISSING", "TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle"},
 		{"P8_WORKFLOW_JSON_EVENTS_MISSING", "go test -json"},
 		{"P8_WORKFLOW_SKIP_DETECTOR_MISSING", "-reject-skips"},
 		{"P8_WORKFLOW_EXPECTED_PROFILE_MISSING", "-inventory internal/workflowaudit/required-tests.json"},

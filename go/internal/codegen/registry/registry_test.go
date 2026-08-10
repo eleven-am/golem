@@ -19,6 +19,7 @@ import (
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 func TestEmitShellMatchesFinalCallerABI(t *testing.T) {
@@ -287,7 +288,7 @@ func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	if strings.Index(source, `"example.test/models/a"`) > strings.Index(source, `"example.test/models/z"`) {
 		t.Fatal("model accessors are not ordered by import path")
 	}
-	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "*provider.Database", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "Observer", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "engineConfig.ReadLimits = config.ReadLimits", "engineConfig.MutationLimits = config.MutationLimits", "engineConfig.EventLimits = config.EventLimits", "engineConfig.EventTransport = config.EventTransport", "engineConfig.Observer = config.Observer", "engineConfig.CDCAdapters = config.CDCAdapters", "engineConfig.ReportEventOperator = config.ReportEventOperator", "engineConfig.AfterCommitError = config.AfterCommitError", "engineConfig.AuditPrincipal = config.AuditPrincipal", "engineConfig.ReportScopedQuery = config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "engineConfig.SnapshotActor = config.SnapshotActor", "Golem generation digest:"} {
+	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "*provider.Database", "Embeddings", "embedding.Registry", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "Observer", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "engineConfig.Embeddings = config.Embeddings", "engineConfig.ReadLimits = config.ReadLimits", "engineConfig.MutationLimits = config.MutationLimits", "engineConfig.EventLimits = config.EventLimits", "engineConfig.EventTransport = config.EventTransport", "engineConfig.Observer = config.Observer", "engineConfig.CDCAdapters = config.CDCAdapters", "engineConfig.ReportEventOperator = config.ReportEventOperator", "engineConfig.AfterCommitError = config.AfterCommitError", "engineConfig.AuditPrincipal = config.AuditPrincipal", "engineConfig.ReportScopedQuery = config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) RefreshSemanticIndexes", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "engineConfig.SnapshotActor = config.SnapshotActor", "Golem generation digest:"} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("source missing %q:\n%s", fragment, source)
 		}
@@ -299,6 +300,38 @@ func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	}
 	if strings.Contains(source, "func init(") {
 		t.Fatal("registry emitted global init registration")
+	}
+}
+
+func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
+	modelID := ir.ModelID("10000000000000000000000000000000")
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related_posts", Space: "content", Dimensions: 3, Fields: []string{"20000000000000000000000000000000"}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{ID: modelID, CanonicalIdentity: string(modelID), Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Post"}, LogicalName: "Post"}}, Extensions: []ir.ProviderExtensionIR{
+		{ID: "30000000000000000000000000000000", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload},
+		{ID: "40000000000000000000000000000000", Provider: ir.PostgreSQL, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload},
+	}}
+	contract := ir.ContractIR{FormatVersion: ir.ContractFormatVersion}
+	modelFingerprint, _ := ir.ModelFingerprint(model)
+	contractFingerprint, _ := ir.ContractFingerprint(contract)
+	file, err := Emit(Request{
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/app", PackageName: "app"}, ModelPackages: []modelcodegen.PackageSpec{{ImportPath: "example.test/app", PackageName: "app"}},
+		Actor: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Actor"}, GenerationDigest: strings.Repeat("a", 64), GeneratorVersion: "test", TemplateABIVersion: "test",
+		Schema: SchemaInput{Model: model, Contract: contract, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(file.Source)
+	for _, fragment := range []string{"func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", `"related_posts"`} {
+		if !strings.Contains(source, fragment) {
+			t.Fatalf("semantic generated surface missing %q:\n%s", fragment, source)
+		}
+	}
+	if strings.Count(source, "SimilarRelatedPosts(") != 2 {
+		t.Fatalf("provider definitions duplicated semantic method:\n%s", source)
 	}
 }
 

@@ -56,6 +56,8 @@ func TestP8WorkflowAuditKillsRequiredProfileSkipAndSupplyChainMutations(t *testi
 		{"tag-protection-removed", "-verify-tag-protection", "-reject-tag-protection", "P8_WORKFLOW_TAG_PROTECTION_MISSING"},
 		{"uncontrolled-secret-substitution", "${{ secrets.GOLEM_RELEASE_ALLOWED_SIGNERS_B64 }}", "${{ secrets.UNCONTROLLED_SIGNER }}", "P8_WORKFLOW_SECRET_REFERENCE"},
 		{"mutable-service-image", "postgres:15@sha256:6eb0add3b77c081df18aa518ce43df58fdcc40f2e6d868a6fd08038dc7acd425", "postgres:15", "P8_WORKFLOW_MUTABLE_SERVICE_IMAGE"},
+		{"mutable-pgvector-image", "pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38", "pgvector/pgvector:pg17", "P8_WORKFLOW_MUTABLE_SERVICE_IMAGE"},
+		{"semantic-pgvector-gate-removed", "TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle", "TestFreshGeneratedSemanticPostgreSQLApplicationSkipped", "P8_WORKFLOW_PGVECTOR_GATE_MISSING"},
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {

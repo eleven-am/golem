@@ -11,7 +11,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	"github.com/jmoiron/sqlx"
-	_ "modernc.org/sqlite"
+	"github.com/ncruces/go-sqlite3/driver"
 )
 
 func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
@@ -19,10 +19,11 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 	if err != nil {
 		return nil, CapabilityReport{}, err
 	}
-	database, err := sqlx.Open("sqlite", configured)
+	standard, err := driver.Open(configured)
 	if err != nil {
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
 	}
+	database := sqlx.NewDb(standard, "sqlite3")
 	return provider.verifyOpenedDatabase(ctx, database)
 }
 
@@ -94,6 +95,9 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 	} else if hasQuery {
 		separator = ""
 	}
+	if !strings.HasPrefix(base, "file:") {
+		dataSourceName = "file:" + dataSourceName
+	}
 	return dataSourceName + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate", nil
 }
 
@@ -153,6 +157,8 @@ func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (Capabil
 		PolicyScalarList: firstReport.PolicyScalarList && secondReport.PolicyScalarList,
 		PolicyRelation:   firstReport.PolicyRelation && secondReport.PolicyRelation,
 		AnalyticsExact:   firstReport.AnalyticsExact && secondReport.AnalyticsExact,
+		Vec0:             firstReport.Vec0 && secondReport.Vec0,
+		VecVersion:       firstReport.VecVersion,
 	}, nil
 }
 
@@ -205,6 +211,10 @@ func (*Provider) VerifyPool(ctx context.Context, database *sqlx.DB, width int) (
 		combined.PolicyScalarList = combined.PolicyScalarList && report.PolicyScalarList
 		combined.PolicyRelation = combined.PolicyRelation && report.PolicyRelation
 		combined.AnalyticsExact = combined.AnalyticsExact && report.AnalyticsExact
+		combined.Vec0 = combined.Vec0 && report.Vec0
+		if combined.VecVersion != report.VecVersion {
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed different sqlite-vec versions")
+		}
 	}
 	if database.Stats().WaitCount != waitCount {
 		return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed concurrent pool use")
@@ -268,7 +278,11 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 	if err := connection.QueryRowxContext(ctx, analyticsProbeSQL()).Scan(&integerSum, &decimalSum, &decimalAverage, &comparison, &ordering); err != nil || !validAnalyticsProbe(integerSum, decimalSum, decimalAverage, comparison, ordering) {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection analytical exactness unavailable: integer=%q decimalSum=%q decimalAverage=%q comparison=%d ordering=%d error=%v", label, integerSum, decimalSum, decimalAverage, comparison, ordering, err)
 	}
-	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true}, nil
+	var vecVersion string
+	if err := connection.GetContext(ctx, &vecVersion, "SELECT vec_version()"); err != nil || vecVersion == "" {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection sqlite-vec unavailable", label)
+	}
+	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true, Vec0: true, VecVersion: vecVersion}, nil
 }
 
 // PolicyCapabilityProof measures the complete SQLite P2 policy function set on

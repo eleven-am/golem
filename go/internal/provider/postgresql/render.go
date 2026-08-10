@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
@@ -24,7 +25,11 @@ func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script,
 	for _, table := range normalized.Tables {
 		renderer.tables[table.ID] = table
 	}
-	statements := []string{fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.Namespace.Name))}
+	statements := make([]string, 0, len(normalized.Tables)+len(normalized.Extensions)*4+2)
+	if len(normalized.Extensions) != 0 {
+		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS vector")
+	}
+	statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.Namespace.Name)))
 	if normalized.System.Version != 0 {
 		statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.System.Namespace.Name)))
 		for _, object := range normalized.System.Objects {
@@ -72,12 +77,44 @@ func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script,
 			statements = append(statements, statement)
 		}
 	}
+	for _, extension := range normalized.Extensions {
+		rendered, renderErr := renderPostgreSQLSemanticExtension(normalized.Namespace.Name, extension)
+		if renderErr != nil {
+			return Script{}, renderErr
+		}
+		statements = append(statements, rendered...)
+	}
 	return Script{statements: statements}, nil
 }
 
+func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extension physical.Extension) ([]string, error) {
+	descriptor, err := semanticstorage.Decode(extension)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql render semantic extension %s: %w", extension.ID, err)
+	}
+	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
+	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
+	index := physical.PhysicalName(string(descriptor.Storage) + "_hnsw")
+	return []string{
+		"CREATE TABLE " + qualified(namespace, state) + " (" +
+			quote("record_key") + " text NOT NULL PRIMARY KEY, " +
+			quote("source_hash") + " bytea NOT NULL, " +
+			quote("space_fingerprint") + " text NOT NULL, " +
+			quote("status") + " text NOT NULL CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
+			quote("attempt_count") + " integer NOT NULL DEFAULT 0 CHECK (" + quote("attempt_count") + " >= 0), " +
+			quote("error_code") + " text, " +
+			quote("updated_at") + " bigint NOT NULL CHECK (" + quote("updated_at") + " >= 0))",
+		"CREATE TABLE " + qualified(namespace, vectors) + " (" +
+			quote("record_key") + " text NOT NULL PRIMARY KEY, " +
+			quote("embedding") + " vector(" + strconv.Itoa(int(descriptor.Dimensions)) + ") NOT NULL)",
+		"CREATE INDEX " + quote(index) + " ON " + qualified(namespace, vectors) + " USING hnsw (" + quote("embedding") + " vector_cosine_ops)",
+	}, nil
+}
+
 type ddlRenderer struct {
-	schema physical.PhysicalSchema
-	tables map[ir.ModelID]physical.PhysicalTable
+	schema           physical.PhysicalSchema
+	tables           map[ir.ModelID]physical.PhysicalTable
+	beforeExtensions map[ir.ExtensionID]physical.Extension
 }
 
 func (r ddlRenderer) table(table physical.PhysicalTable) (string, error) {

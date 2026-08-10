@@ -4,18 +4,18 @@
   "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
   "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
   "provider": "sqlite",
-  "physicalFingerprint": "b3bc71cff41872d698c72e78ec3340e36ec42627f43ee3e5a2b3abcb59a47b37",
-  "systemFingerprint": "9fdb2f09f5111c397e21c62e75168a6edc9c826a1b0dce0d1a2a24b1dd56dbf1",
-  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "physicalFingerprint": "b2095b8f8bd11a26bb21dd1013b7f9b4243ebabb9a8fbedf1883786c06c0c97c",
+  "systemFingerprint": "8dba78af7d9b43d11b4c8f53075f5fc9577ca9f07bd408d4a299ed233cc81e4e",
+  "generationDigest": "67e09dc14051301561faf0abeb051cae667ef0a297e1041961ab9de8acf86636",
   "generatorVersion": "p1-v1",
-  "templateAbiVersion": "p8-go-abi-v5",
+  "templateAbiVersion": "p8-go-abi-v6",
   "payload": {
     "Version": 1,
     "CanonicalVersion": 1,
     "Provider": {
       "Provider": "sqlite",
       "Driver": {
-        "Module": "modernc.org/sqlite",
+        "Module": "github.com/ncruces/go-sqlite3",
         "Adapter": "sqlx"
       },
       "MinimumVersion": {
@@ -78,6 +78,11 @@
           "ID": "sqlite.partial_indexes",
           "Version": 1,
           "Verification": "version_floor"
+        },
+        {
+          "ID": "sqlite.vec0.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
         }
       ]
     },

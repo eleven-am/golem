@@ -108,7 +108,7 @@ func (connection *mutationBoundaryConnection) ExecContext(ctx context.Context, q
 
 func openMutationBoundarySQLite(t testing.TB) (*sqlx.DB, *mutationBoundaryCounts) {
 	t.Helper()
-	registered, err := sql.Open("sqlite", ":memory:")
+	registered, err := sql.Open("sqlite3", ":memory:")
 	if err != nil {
 		t.Fatal(err)
 	}

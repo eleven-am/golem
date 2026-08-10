@@ -149,11 +149,13 @@ func TestP8ObservationCoverageManifest(t *testing.T) {
 		{"test", "./internal/p8oracle/mutation", "-run", `^TestP8`, "-count=1", "-v"},
 		{"test", "./internal/p8oracle/analytics", "-run", `^TestP8`, "-count=1", "-v"},
 		{"test", "./internal/p8oracle/event", "-run", `^TestP8`, "-count=1", "-v"},
+		{"test", "./internal/generate/pipeline", "-run", `^TestFreshGeneratedSemantic(SQLiteApplicationOwnsEmbeddingLifecycle|PostgreSQLApplicationOwnsPGVectorLifecycle)$`, "-count=1", "-v"},
 	}
 	for _, arguments := range commands {
 		command := exec.Command("go", arguments...)
 		command.Dir = ".."
 		command.Env = p8CoverageEnvironment(os.Environ(), "P8_OBSERVATION_COVERAGE_FILE", path)
+		command.Env = p8CoverageEnvironment(command.Env, "GOLEM_REQUIRE_PGVECTOR", "1")
 		output, err := command.CombinedOutput()
 		if err != nil {
 			t.Fatalf("dynamic production coverage command failed: go %s: %v\n%s", strings.Join(arguments, " "), err, output)

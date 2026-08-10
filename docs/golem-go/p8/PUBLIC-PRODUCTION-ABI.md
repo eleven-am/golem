@@ -225,7 +225,7 @@ configuration no longer retains the superseded `EventObserver events.Observer`
 field.
 
 P8 deliberately advances the generated schema ABI to
-`SchemaBundleFormatVersion == 2` and the template ABI to `p8-go-abi-v5`.
+`SchemaBundleFormatVersion == 2` and the template ABI to `p8-go-abi-v6`.
 The generated-manifest format is likewise version 2: each provider inventory
 may carry the SHA-256 fingerprint of its canonical reviewed migration manifest,
 and that fingerprint participates directly in `GenerationDigest`. The
@@ -424,9 +424,23 @@ most 2,147,483,647. `ModelID` is a stable opaque identity, not a public
 model name.
 
 Observation covers runtime, read, mutation, GraphQL, analytics, hook,
-migration, event, subscription, CDC, and shutdown families. Existing event
-observations are adapted into this stream; there is no duplicate event metric
-engine.
+migration, event, subscription, CDC, semantic, and shutdown families. Existing
+event observations are adapted into this stream; there is no duplicate event
+metric engine.
+
+Semantic work has three closed operations. `semantic.refresh` counts the source
+and state scans plus executed vector/state writes and stale-row deletes;
+transaction-control statements are excluded, and `AggregateCount` is the
+number of dirty plus stale rows affected. `semantic.provider` is emitted once
+per embedding-provider `Embed` call with zero statements and the input batch
+size as `AggregateCount`. `semantic.rank` counts only the provider-native
+ranking SQL actually executed, including PostgreSQL `SET LOCAL` and an exact
+fallback or boundary query when reached; its `AggregateCount` is the number of
+deduplicated authorized candidate identities. Semantic records never expose a
+provider/index name, document, database identity, embedding-provider input key,
+vector, or raw error. A refresh buffers its records while the manager's refresh
+mutex is held and invokes the application observer only after releasing that
+mutex, so observer re-entry cannot deadlock refresh.
 
 Observer invocation:
 

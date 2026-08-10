@@ -27,6 +27,9 @@ func TestExtractSocialRawDeclarations(t *testing.T) {
 	if got := []ir.Provider{root.Providers[0].Provider, root.Providers[1].Provider}; !reflect.DeepEqual(got, []ir.Provider{ir.SQLite, ir.PostgreSQL}) {
 		t.Fatalf("providers = %#v", got)
 	}
+	if !reflect.DeepEqual(root.EmbeddingSpaces, []ir.RawEmbeddingSpace{{Name: "content", Dimensions: 384, Span: root.EmbeddingSpaces[0].Span}}) {
+		t.Fatalf("embedding spaces = %#v", root.EmbeddingSpaces)
+	}
 	if len(root.Models) != 2 || root.Models[0].GoName != "User" || root.Models[1].GoName != "Post" {
 		t.Fatalf("model registrations = %#v", root.Models)
 	}

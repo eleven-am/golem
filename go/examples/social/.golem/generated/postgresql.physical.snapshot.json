@@ -6,9 +6,9 @@
   "provider": "postgresql",
   "physicalFingerprint": "6f5c233fcdf40200bea4c9215b0c2328900f1ec2f2a9ae486979345208b161f6",
   "systemFingerprint": "f79c9b02093303ec68b920a182618939090abc76e596b67697ed1549f20c18b0",
-  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "generationDigest": "67e09dc14051301561faf0abeb051cae667ef0a297e1041961ab9de8acf86636",
   "generatorVersion": "p1-v1",
-  "templateAbiVersion": "p8-go-abi-v5",
+  "templateAbiVersion": "p8-go-abi-v6",
   "payload": {
     "Version": 1,
     "CanonicalVersion": 1,

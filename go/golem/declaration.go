@@ -20,6 +20,11 @@ func Actor[A any](_ *Schema)             {}
 func Model[M any](_ *Schema)             {}
 func Providers(_ *Schema, _ ...Provider) {}
 
+// EmbeddingSpace declares one schema-wide embedding space. Dimensions are
+// frozen into reviewed provider migrations; runtime configuration must supply
+// an embedding.Provider with the same dimensions.
+func EmbeddingSpace(_ *Schema, _ string, _ uint16) {}
+
 type (
 	// Descriptor IDs are fixed-width values rather than string aliases. The
 	// compiler IR owns hexadecimal serialization; generated Go emits array
@@ -85,6 +90,11 @@ type modelOption[M any] struct{ _ func() M }
 func (modelOption[M]) modelOption(M) {}
 
 func DefineModel[M any](_ ...ModelOption[M]) ModelSpec[M] { return ModelSpec[M]{} }
+
+// SemanticIndex declares a named semantic projection over ordered text fields.
+// The embedding space is declared once in DefineSchema. Golem owns projection
+// storage, refresh, similarity queries, and authorization.
+func SemanticIndex[M any](_, _ string, _ ...Column[M]) ModelOption[M] { return modelOption[M]{} }
 
 type GraphQLOperation string
 

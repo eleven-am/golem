@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 // Diff compares validated normalized physical schemas by stable IDs. It never
@@ -44,7 +45,12 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 	}
 	initial := false
 	if beforeSystem != afterSystem {
-		if emptySystemSchema(left.System) && len(left.Tables) == 0 && len(left.Extensions) == 0 && len(left.Unmanaged) == 0 && len(right.System.Objects) != 0 {
+		if reflect.DeepEqual(left.System, right.System) {
+			// Provider runtime/capability transitions alter the physical and
+			// system fingerprints without changing a database system object. The
+			// reviewed before/after snapshots and RecordSchemaVersion operation
+			// own this metadata-only transition.
+		} else if emptySystemSchema(left.System) && len(left.Tables) == 0 && len(left.Extensions) == 0 && len(left.Unmanaged) == 0 && len(right.System.Objects) != 0 {
 			initial = true
 		} else {
 			additions, upgradeErr := systemObjectAdditions(left.System, right.System)
@@ -74,6 +80,9 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 	if err := builder.recreateDestructiveDependents(); err != nil {
 		return Plan{}, err
 	}
+	if err := builder.extensions(); err != nil {
+		return Plan{}, err
+	}
 	recordBefore, recordAfter := Digest(leftFP.String()), Digest(rightFP.String())
 	record := Operation{Kind: RecordSchemaVersion, Stage: 100, ObjectID: "schema-version", Before: recordBefore, After: recordAfter, Mode: Transactional, Risk: RiskSafe, LogicalPath: "schema"}
 	record.ID = stableOperationID(record.Kind, record.ObjectID, record.Before, record.After)
@@ -90,6 +99,60 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 		return Plan{}, err
 	}
 	return plan, nil
+}
+
+func (b *diffBuilder) extensions() error {
+	before := make(map[ir.ExtensionID]physical.Extension, len(b.before.Extensions))
+	after := make(map[ir.ExtensionID]physical.Extension, len(b.after.Extensions))
+	for _, extension := range b.before.Extensions {
+		before[extension.ID] = extension
+	}
+	for _, extension := range b.after.Extensions {
+		after[extension.ID] = extension
+	}
+	ids := make([]ir.ExtensionID, 0, len(before)+len(after))
+	seen := map[ir.ExtensionID]bool{}
+	for id := range before {
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	for id := range after {
+		if !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		left, had := before[id]
+		right, has := after[id]
+		switch {
+		case !had:
+			if err := b.add(CreateProviderExtension, 45, string(id), nil, right, RiskSafe); err != nil {
+				return err
+			}
+		case !has:
+			if err := b.add(DropProviderExtension, 75, string(id), left, nil, RiskDataLoss); err != nil {
+				return err
+			}
+		case !reflect.DeepEqual(left, right):
+			if left.Kind != semanticcontract.IndexKind || right.Kind != semanticcontract.IndexKind || left.Version != semanticcontract.Version || right.Version != semanticcontract.Version || left.Owner != right.Owner || left.Provider != right.Provider {
+				return fmt.Errorf("provider extension %s cannot change in place", id)
+			}
+			// Semantic shadow state is derived entirely from the unchanged owner
+			// rows. A reviewed projection or dimension change therefore rebuilds
+			// the same stable extension identity by dropping its old state/vector
+			// tables and recreating the new physical contract. It is a rewrite, not
+			// owner-row data loss; runtime refresh repopulates the empty shadow
+			// storage from the source table.
+			if err := b.add(DropProviderExtension, 44, string(id), left, nil, RiskRewrite); err != nil {
+				return err
+			}
+			if err := b.add(CreateProviderExtension, 45, string(id), nil, right, RiskRewrite); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.SystemObject, error) {
@@ -497,6 +560,7 @@ func (b *diffBuilder) dependencies() {
 	}
 	columnTable := map[string]ir.ModelID{}
 	objects := map[string]ir.ModelID{}
+	extensionModels := map[string]ir.ModelID{}
 	for _, table := range tables {
 		for _, column := range table.Columns {
 			columnTable[string(column.ID)] = table.ID
@@ -517,6 +581,14 @@ func (b *diffBuilder) dependencies() {
 			objects[string(index.ID)] = table.ID
 		}
 	}
+	for _, extension := range b.after.Extensions {
+		extensionModels[string(extension.ID)] = extension.Owner.ModelID
+	}
+	for _, extension := range b.before.Extensions {
+		if extensionModels[string(extension.ID)] == "" {
+			extensionModels[string(extension.ID)] = extension.Owner.ModelID
+		}
+	}
 	for index := range b.operations {
 		op := &b.operations[index]
 		if op.Kind == BootstrapSystemSchema {
@@ -527,6 +599,17 @@ func (b *diffBuilder) dependencies() {
 		}
 		if op.Kind == CreateTable {
 			addDep(op, CreateNamespace, string(b.after.Namespace.Name))
+		}
+		if op.Kind == CreateProviderExtension {
+			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
+			addDep(op, DropProviderExtension, op.ObjectID)
+		}
+		if op.Kind == DropTable {
+			for extensionID, modelID := range extensionModels {
+				if string(modelID) == op.ObjectID {
+					addDep(op, DropProviderExtension, extensionID)
+				}
+			}
 		}
 		tableID := columnTable[op.ObjectID]
 		if tableID == "" {

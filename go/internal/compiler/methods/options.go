@@ -3,13 +3,17 @@ package methods
 import (
 	"go/ast"
 	"go/constant"
+	"regexp"
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
+
+var semanticIndexNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 func (in *interpreter) evalAnalytics(call *ast.CallExpr) {
 	if in.analytics != nil && in.analytics.Enabled {
@@ -191,6 +195,12 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 			in.analytics = &analyticscontract.ModelPatch{ModelID: in.model.ID, Span: in.span(call)}
 		}
 		in.analytics.ScopedReads = true
+	case "SemanticIndex":
+		if scope != ir.ProviderScopePortable {
+			in.errorAt("P9_SEMANTIC_INDEX_PROVIDER_SCOPE", "SemanticIndex is portable and cannot be provider-scoped", call)
+			return
+		}
+		in.evalSemanticIndex(call)
 	case "Check":
 		in.evalCheck(call, scope)
 	case "Generated":
@@ -206,6 +216,121 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		in.errorAt("P1_METHOD_OPTION_CALL", "call is not a recognized golem model-option constructor", expression)
 	}
+}
+
+func (in *interpreter) evalSemanticIndex(call *ast.CallExpr) {
+	if len(call.Args) < 3 {
+		in.errorAt("P9_SEMANTIC_INDEX_ARITY", "SemanticIndex requires a name, embedding space, and at least one text field", call)
+		return
+	}
+	name, valid := in.constString(call.Args[0])
+	if !valid || !semanticIndexNamePattern.MatchString(name) {
+		in.errorAt("P9_SEMANTIC_INDEX_NAME", "semantic index name must be a constant matching [a-z][a-z0-9_-]{0,62}", call.Args[0])
+		return
+	}
+	if in.semanticIndexes[name] {
+		in.errorAt("P9_SEMANTIC_INDEX_DUPLICATE", "semantic index names must be unique within a model", call.Args[0])
+		return
+	}
+	spaceName, valid := in.constString(call.Args[1])
+	if !valid {
+		in.errorAt("P9_SEMANTIC_INDEX_SPACE", "SemanticIndex requires a constant embedding-space name", call.Args[1])
+		return
+	}
+	dimensionsByProvider := map[ir.Provider]uint16{}
+	for _, extension := range in.config.Compilation.Model.Extensions {
+		if extension.Kind != semanticcontract.SpaceKind || extension.Version != semanticcontract.Version {
+			continue
+		}
+		space, err := semanticcontract.DecodeSpace(extension.Payload)
+		if err == nil && space.Name == spaceName {
+			dimensionsByProvider[extension.Provider] = space.Dimensions
+		}
+	}
+	var dimensions uint16
+	for _, provider := range in.config.Compilation.Model.Providers {
+		value, exists := dimensionsByProvider[provider]
+		if !exists {
+			in.errorAt("P9_SEMANTIC_INDEX_SPACE_UNKNOWN", "SemanticIndex references an undeclared embedding space", call.Args[1])
+			return
+		}
+		if dimensions == 0 {
+			dimensions = value
+		} else if dimensions != value {
+			in.errorAt("P9_SEMANTIC_INDEX_SPACE_DIVERGENT", "embedding-space dimensions must agree across providers", call.Args[1])
+			return
+		}
+	}
+	fields := make([]string, 0, len(call.Args)-2)
+	seenFields := map[ir.FieldID]bool{}
+	for _, argument := range call.Args[2:] {
+		symbol, resolved := in.resolveHandle(argument)
+		if !resolved || symbol.Kind != "field" || symbol.ModelID != in.model.ID {
+			in.errorAt("P9_SEMANTIC_INDEX_FIELD", "SemanticIndex accepts only text field handles of this model", argument)
+			continue
+		}
+		if seenFields[symbol.FieldID] {
+			in.errorAt("P9_SEMANTIC_INDEX_FIELD_DUPLICATE", "SemanticIndex lists a field more than once", argument)
+			continue
+		}
+		field, exists := semanticField(in.model, symbol.FieldID)
+		if !exists || field.Scalar == nil || field.Scalar.Type.Kind != ir.TypeString {
+			in.errorAt("P9_SEMANTIC_INDEX_FIELD_TYPE", "SemanticIndex fields must have logical type String", argument)
+			continue
+		}
+		seenFields[symbol.FieldID] = true
+		fields = append(fields, string(symbol.FieldID))
+	}
+	if len(fields) != len(call.Args)-2 {
+		return
+	}
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: name, Space: spaceName, Dimensions: dimensions, Fields: fields, Metric: "cosine"})
+	if err != nil {
+		in.errorAt("P9_SEMANTIC_INDEX_ENCODE", err.Error(), call)
+		return
+	}
+	for _, provider := range in.config.Compilation.Model.Providers {
+		canonical := ir.OwnedIdentity(string(in.model.ID), semanticcontract.IndexKind+"\x00"+string(provider)+"\x00"+name)
+		identity, diagnostic := in.config.IDRegistry.Register(ir.ObjectExtension, canonical, in.span(call))
+		if diagnostic != nil {
+			in.diagnostics = append(in.diagnostics, *diagnostic)
+			continue
+		}
+		in.extensions = append(in.extensions, ir.ProviderExtensionIR{
+			ID:       ir.ExtensionIDFrom(identity),
+			Provider: provider,
+			Version:  semanticcontract.Version,
+			Owner:    ir.ObjectID(in.model.ID),
+			Kind:     semanticcontract.IndexKind,
+			Payload:  payload,
+		})
+	}
+	in.semanticIndexes[name] = true
+	in.semanticNodes = append(in.semanticNodes, call)
+}
+
+func (in *interpreter) finishSemantic() {
+	// Primary keys authored as struct tags are linked after method
+	// interpretation. Semantic identity validation therefore belongs to the
+	// completed compilation, where both tag- and method-authored keys exist.
+}
+
+func semanticIdentityType(kind ir.LogicalTypeKind) bool {
+	switch kind {
+	case ir.TypeString, ir.TypeUUID, ir.TypeInt16, ir.TypeInt32, ir.TypeInt64:
+		return true
+	default:
+		return false
+	}
+}
+
+func semanticField(model ir.ModelDeclIR, fieldID ir.FieldID) (ir.FieldIR, bool) {
+	for _, field := range model.Fields {
+		if field.ID == fieldID {
+			return field, true
+		}
+	}
+	return ir.FieldIR{}, false
 }
 
 func (in *interpreter) evalGraphQL(call *ast.CallExpr) {

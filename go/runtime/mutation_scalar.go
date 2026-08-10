@@ -20,6 +20,7 @@ import (
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
+	ncrucsqlite "github.com/ncruces/go-sqlite3"
 	moderncsqlite "modernc.org/sqlite"
 )
 
@@ -575,7 +576,7 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 	defer rows.Close()
 	if !rows.Next() {
 		if streamErr := rows.Err(); streamErr != nil {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation result stream failed", streamErr)
+			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProviderFailureKind(streamErr), statement.Role(), statementIndex, "mutation result stream failed", streamErr)
 		}
 		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
 	}
@@ -592,7 +593,7 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "mutation statement returned more than one row", nil)
 	}
 	if err := rows.Err(); err != nil {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation result stream failed", err)
+		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProviderFailureKind(err), statement.Role(), statementIndex, "mutation result stream failed", err)
 	}
 	if err := rows.Close(); err != nil {
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation result stream could not close", err)
@@ -821,6 +822,19 @@ func scalarMutationProviderFailureKind(err error) scalarMutationFailureKind {
 			"40001", // serialization_failure
 			"40P01", // deadlock_detected
 			"27000": // triggered_data_change_violation: captured target changed during the statement
+			return scalarMutationConflict
+		default:
+			return scalarMutationProvider
+		}
+	}
+	var ncruces *ncrucsqlite.Error
+	if errors.As(err, &ncruces) {
+		switch ncruces.ExtendedCode() {
+		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
+			return scalarMutationConflict
+		}
+		switch ncruces.Code() {
+		case ncrucsqlite.BUSY, ncrucsqlite.LOCKED:
 			return scalarMutationConflict
 		default:
 			return scalarMutationProvider

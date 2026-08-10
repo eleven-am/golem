@@ -89,6 +89,7 @@ func TestP8DocumentationStatusAndLinkAudit(t *testing.T) {
 		filepath.Join(repositoryRoot, "docs", "golem-go", "BIBLE.md"),
 		filepath.Join(repositoryRoot, "docs", "golem-go", "QUICKSTART.md"),
 		filepath.Join(repositoryRoot, "docs", "golem-go", "PRODUCTION.md"),
+		filepath.Join(repositoryRoot, "docs", "golem-go", "SEMANTIC-INDEXES.md"),
 		filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "P8-PLAN.md"),
 		filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "P8-EVIDENCE.md"),
 		filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "PUBLIC-PRODUCTION-ABI.md"),
@@ -104,6 +105,7 @@ func TestP8DocumentationStatusAndLinkAudit(t *testing.T) {
 	evidence := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "P8-EVIDENCE.md"))
 	quickstart := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "QUICKSTART.md"))
 	production := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "PRODUCTION.md"))
+	semanticIndexes := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "SEMANTIC-INDEXES.md"))
 	productionABI := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "PUBLIC-PRODUCTION-ABI.md"))
 
 	p8RequireDocumentText(t, "root README", rootReadme, "released TypeScript/NestJS implementation", "Go implementation is a separate, unreleased module")
@@ -111,6 +113,7 @@ func TestP8DocumentationStatusAndLinkAudit(t *testing.T) {
 	p8RequireDocumentText(t, "P8 plan", plan, "implementation in progress", "P8 is not complete while any mandatory ledger row is `PENDING`")
 	p8RequireDocumentText(t, "quickstart", quickstart, "unreleased P8 working documentation", "There is no released `vX.Y.Z` to install yet")
 	p8RequireDocumentText(t, "production guide", production, "unreleased P8 working documentation", "P8 evidence is still pending")
+	p8RequireDocumentText(t, "semantic indexes", semanticIndexes, "unreleased Go feature", "SimilarRelated", "10,000 authorized candidates", "batch-local opaque", "deletion or erasure SLA", "pgvector 0.8.0 or newer", "CREATE EXTENSION IF NOT EXISTS vector")
 	p8RequireDocumentText(t, "production ABI", productionABI, "P8 implementation is ongoing")
 	p8RequireDocumentText(t, "production ABI", productionABI, "tracked `compatibility/manifest.json` is the canonical development template", "does not and cannot embed the hash of the commit that contains it", "signed provenance binds the checked-template digest, published-manifest digest, tag commit")
 

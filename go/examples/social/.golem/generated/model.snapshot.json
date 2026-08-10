@@ -3,9 +3,9 @@
   "formatVersion": 1,
   "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
   "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
-  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "generationDigest": "67e09dc14051301561faf0abeb051cae667ef0a297e1041961ab9de8acf86636",
   "generatorVersion": "p1-v1",
-  "templateAbiVersion": "p8-go-abi-v5",
+  "templateAbiVersion": "p8-go-abi-v6",
   "payload": {
     "formatVersion": 1,
     "schema": {

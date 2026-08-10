@@ -14,6 +14,8 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {
@@ -27,10 +29,6 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 	if !containsProvider(model.Providers, ir.SQLite) {
 		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: logical schema %s does not target SQLite", model.Schema.ID)
 	}
-	if len(model.Extensions) != 0 {
-		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: provider extensions require a registered SQLite lowering implementation; extension=%s owner=%s", model.Extensions[0].ID, model.Extensions[0].Owner)
-	}
-
 	lowering := lowerState{
 		model:     model,
 		manifest:  provider.Manifest(),
@@ -79,6 +77,22 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 		if err := lowering.lowerForeignKeys(&schema.Tables[index]); err != nil {
 			return physical.PhysicalSchema{}, err
 		}
+	}
+	for _, extension := range model.Extensions {
+		if extension.Provider != ir.SQLite {
+			continue
+		}
+		if extension.Kind == semanticcontract.SpaceKind {
+			continue
+		}
+		if extension.Kind != semanticcontract.IndexKind {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
+		}
+		lowered, err := semanticstorage.Lower(extension)
+		if err != nil {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower extension %s: %w", extension.ID, err)
+		}
+		schema.Extensions = append(schema.Extensions, lowered)
 	}
 	return physical.Normalize(schema)
 }

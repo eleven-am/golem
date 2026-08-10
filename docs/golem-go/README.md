@@ -5,6 +5,17 @@ For application authors, begin with the executable
 [`PRODUCTION.md`](./PRODUCTION.md) for authorization, hooks, custom operations,
 analytics, migrations, events, deployment, security, recovery, and upgrades.
 Both are honestly marked as unreleased while P8 evidence remains pending.
+Applications that opt into managed vector search should also read
+[`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) for the schema, provider,
+authorization, refresh, portability, privacy, and operational contract.
+Accepted work beyond the first-release P0–P8 plans is recorded separately in
+[`ROADMAP.md`](./ROADMAP.md); roadmap entries are direction, not claims of
+shipped functionality. Accepted implementation handoffs are the
+[`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md),
+[`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md),
+[`HUMAN-READABLE-MIGRATION-PLANS.md`](./HUMAN-READABLE-MIGRATION-PLANS.md),
+[`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md), and
+[`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md) contracts.
 
 Start with [`BIBLE.md`](./BIBLE.md). It is the controlling merged product,
 security, provider, authoring, and runtime specification.
@@ -69,9 +80,25 @@ The numbered documents are detailed supporting specifications and research:
 1. [`01-operators.md`](./01-operators.md) — operator semantics and agreement;
 2. [`02-policy-resolution.md`](./02-policy-resolution.md) — row and field rules;
 3. [`03-classification.md`](./03-classification.md) — field-reference security;
-4. [`04-statement-shape.md`](./04-statement-shape.md) — SQL planning; and
+4. [`04-statement-shape.md`](./04-statement-shape.md) — SQL planning;
 5. [`05-surface-and-runtime.md`](./05-surface-and-runtime.md) — operations and
-   execution.
+   execution; and
+6. [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) — managed embedding spaces,
+   sqlite-vec, pgvector, and provider-neutral similarity search; and
+7. [`ROADMAP.md`](./ROADMAP.md) — explicitly accepted post-P8 product direction
+   and its non-goals;
+8. [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md) — the unshipped public
+   policy inspection/testing implementation contract; and
+9. [`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md)
+   — the unshipped SQLite WAL, PostgreSQL widening, and reviewed-backfill
+   implementation contract;
+10. [`HUMAN-READABLE-MIGRATION-PLANS.md`](./HUMAN-READABLE-MIGRATION-PLANS.md)
+    — the unshipped read-only migration explanation implementation contract;
+11. [`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md) — the unshipped
+    portable compare-and-swap implementation contract; and
+12. [`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md) — the
+    unshipped authorized, sanitized query-plan diagnostic implementation
+    contract.
 
 Those chapters include measured TypeScript behavior, deliberate Go improvements,
 and unresolved findings from their original research pass. When one conflicts

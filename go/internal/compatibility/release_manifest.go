@@ -5,7 +5,7 @@ import "strings"
 // TrustedManifestSHA256 is compiled separately from compatibility/manifest.json.
 // Release tooling and tests must use this trust root rather than a digest read
 // from, or recomputed and accepted alongside, the artifact itself.
-const TrustedManifestSHA256 = "59bd82177890ff594f053ab0cc06f4d1a0b15567d85e673ae6ca563602062c1c"
+const TrustedManifestSHA256 = "1c0fe59945f16d15dd99f3bd992b3de172721cc2ab721209485040a78e0c32f5"
 
 func DevelopmentManifest() Manifest {
 	return Manifest{
@@ -28,10 +28,10 @@ func DevelopmentManifest() Manifest {
 			GeneratedGoABI: GeneratedGoABICorpusSHA256,
 			GraphQLABI:     GraphQLABICorpusSHA256,
 			CLIJSON:        "3a9d2a922b5784438145fd116a00b2aee46eb9ed73e97784ba60c577172ed137",
-			Observation:    "4a439f570a9561d587a22064ee3f7aa0040103624e303578149b5dec6d2e3cd5",
+			Observation:    "98829745b18842eb32a37e132cd7035a42eef0d1473da735c4ae8a4848d1e4c6",
 		},
 		Versions: Versions{
-			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v5",
+			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v6",
 			SchemaBundle: 2, GeneratedManifest: 2, GraphQL: 4,
 			ModelIR: 1, ContractIR: 5, CanonicalIR: 1,
 			PhysicalSchema: 1, PhysicalCanonical: 1,

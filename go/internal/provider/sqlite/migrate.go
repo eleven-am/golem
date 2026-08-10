@@ -17,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/migration"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -197,6 +198,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		if operation.Kind == migration.AddSystemObject {
 			continue
 		}
+		if operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
+			continue
+		}
 		tableID, ok := owners[operation.ID]
 		if !ok {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s cannot resolve owner of operation %s", entry.ID, operation.ID)
@@ -271,6 +275,33 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			plan.steps = append(plan.steps, migrationStep{statements: statements})
 			continue
 		}
+		if operation.Kind == migration.CreateProviderExtension {
+			extension, exists := findPhysicalExtension(entry.AfterSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
+			if !exists {
+				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
+			}
+			statements, renderErr := renderSemanticExtension(extension)
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			plan.steps = append(plan.steps, migrationStep{statements: statements})
+			continue
+		}
+		if operation.Kind == migration.DropProviderExtension {
+			extension, exists := findPhysicalExtension(entry.BeforeSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
+			if !exists {
+				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
+			}
+			descriptor, decodeErr := semanticstorage.Decode(extension)
+			if decodeErr != nil {
+				return IncrementalPlan{}, decodeErr
+			}
+			plan.steps = append(plan.steps, migrationStep{statements: []string{
+				"DROP TABLE " + quote(physical.PhysicalName(string(descriptor.Storage)+"_vec")),
+				"DROP TABLE " + quote(physical.PhysicalName(string(descriptor.Storage)+"_state")),
+			}})
+			continue
+		}
 		tableID := owners[operation.ID]
 		if emitted[tableID] && (newTables[tableID] || rebuildTables[tableID]) {
 			continue
@@ -302,6 +333,15 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		plan.steps = append(plan.steps, migrationStep{statements: statements})
 	}
 	return plan, nil
+}
+
+func findPhysicalExtension(extensions []physical.Extension, id ir.ExtensionID) (physical.Extension, bool) {
+	for _, extension := range extensions {
+		if extension.ID == id {
+			return extension, true
+		}
+	}
+	return physical.Extension{}, false
 }
 
 func directSQLiteOperation(operation migration.Operation, before, after physical.PhysicalTable) bool {
@@ -520,7 +560,7 @@ func operationOwners(before, after physical.PhysicalSchema) (map[migration.Opera
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range plan.Operations {
-		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
 			continue
 		}
 		owner, exists := objectOwners[operation.ObjectID]

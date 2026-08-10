@@ -2,6 +2,189 @@
   "formatVersion": 1,
   "packages": [
     {
+      "path": "github.com/eleven-am/golem/go/embedding",
+      "declarations": [
+        {
+          "name": "Code",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "CodeInvalidInput",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_INVALID_INPUT\"",
+          "methods": []
+        },
+        {
+          "name": "CodeOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(err error) (github.com/eleven-am/golem/go/embedding.Code, bool)",
+          "methods": []
+        },
+        {
+          "name": "CodeProvider",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_PROVIDER\"",
+          "methods": []
+        },
+        {
+          "name": "CodeUnavailable",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_UNAVAILABLE\"",
+          "methods": []
+        },
+        {
+          "name": "Error",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Errorfunc() string",
+            "pointer:Unwrapfunc() error"
+          ]
+        },
+        {
+          "name": "Input",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Keyfunc() string",
+            "pointer:Textfunc() string",
+            "value:Keyfunc() string",
+            "value:Textfunc() string"
+          ]
+        },
+        {
+          "name": "MaximumBatchSize",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=2048",
+          "methods": []
+        },
+        {
+          "name": "MaximumDimensions",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=2000",
+          "methods": []
+        },
+        {
+          "name": "MaximumInputBytes",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=16777216",
+          "methods": []
+        },
+        {
+          "name": "NewError",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(code github.com/eleven-am/golem/go/embedding.Code, cause error) error",
+          "methods": []
+        },
+        {
+          "name": "NewInput",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(key string, text string) (github.com/eleven-am/golem/go/embedding.Input, error)",
+          "methods": []
+        },
+        {
+          "name": "NewRegistry",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(providers map[string]github.com/eleven-am/golem/go/embedding.Provider) (github.com/eleven-am/golem/go/embedding.Registry, error)",
+          "methods": []
+        },
+        {
+          "name": "NewSpecification",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(provider string, model string, revision string, dimensions int, maximumBatch int) (github.com/eleven-am/golem/go/embedding.Specification, error)",
+          "methods": []
+        },
+        {
+          "name": "NewVector",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(values []float32) (github.com/eleven-am/golem/go/embedding.Vector, error)",
+          "methods": []
+        },
+        {
+          "name": "Provider",
+          "kind": "type",
+          "typeKind": "interface",
+          "signature": "interface{Embedfunc(ctx context.Context, inputs []github.com/eleven-am/golem/go/embedding.Input) ([]github.com/eleven-am/golem/go/embedding.Vector, error);Specificationfunc() github.com/eleven-am/golem/go/embedding.Specification}",
+          "methods": [
+            "value:Embedfunc(ctx context.Context, inputs []github.com/eleven-am/golem/go/embedding.Input) ([]github.com/eleven-am/golem/go/embedding.Vector, error)",
+            "value:Specificationfunc() github.com/eleven-am/golem/go/embedding.Specification"
+          ]
+        },
+        {
+          "name": "Registry",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Lookupfunc(name string) (github.com/eleven-am/golem/go/embedding.Provider, bool)",
+            "pointer:Namesfunc() []string",
+            "pointer:Specificationfunc(name string) (github.com/eleven-am/golem/go/embedding.Specification, bool)",
+            "value:Lookupfunc(name string) (github.com/eleven-am/golem/go/embedding.Provider, bool)",
+            "value:Namesfunc() []string",
+            "value:Specificationfunc(name string) (github.com/eleven-am/golem/go/embedding.Specification, bool)"
+          ]
+        },
+        {
+          "name": "Specification",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Dimensionsfunc() int",
+            "pointer:FingerprintInputfunc() string",
+            "pointer:MaximumBatchfunc() int",
+            "pointer:Modelfunc() string",
+            "pointer:Providerfunc() string",
+            "pointer:Revisionfunc() string",
+            "pointer:Validatefunc() error",
+            "value:Dimensionsfunc() int",
+            "value:FingerprintInputfunc() string",
+            "value:MaximumBatchfunc() int",
+            "value:Modelfunc() string",
+            "value:Providerfunc() string",
+            "value:Revisionfunc() string",
+            "value:Validatefunc() error"
+          ]
+        },
+        {
+          "name": "ValidateResult",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(specification github.com/eleven-am/golem/go/embedding.Specification, inputs []github.com/eleven-am/golem/go/embedding.Input, vectors []github.com/eleven-am/golem/go/embedding.Vector) error",
+          "methods": []
+        },
+        {
+          "name": "Vector",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Dimensionsfunc() int",
+            "pointer:Valuesfunc() []float32",
+            "value:Dimensionsfunc() int",
+            "value:Valuesfunc() []float32"
+          ]
+        }
+      ]
+    },
+    {
       "path": "github.com/eleven-am/golem/go/events",
       "declarations": [
         {
@@ -1572,6 +1755,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[M any](fields ...github.com/eleven-am/golem/go/golem.Column[M]) github.com/eleven-am/golem/go/golem.ReadOption[M]",
+          "methods": []
+        },
+        {
+          "name": "EmbeddingSpace",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(_ *github.com/eleven-am/golem/go/golem.Schema, _ string, _ uint16)",
           "methods": []
         },
         {
@@ -7328,6 +7518,20 @@
           "methods": null
         },
         {
+          "name": "RuntimeSemanticRecordKey",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](row github.com/eleven-am/golem/go/golem.Row[M], fields []github.com/eleven-am/golem/go/golem.FieldID) (string, error)",
+          "methods": []
+        },
+        {
+          "name": "RuntimeSemanticResult",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](row github.com/eleven-am/golem/go/golem.Row[M], distance float64) (github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
+          "methods": []
+        },
+        {
           "name": "RuntimeToManyOccurrenceCell",
           "kind": "func",
           "typeKind": "",
@@ -8535,6 +8739,27 @@
           "methods": null
         },
         {
+          "name": "SemanticIndex",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](_ string, _ string, _ ...github.com/eleven-am/golem/go/golem.Column[M]) github.com/eleven-am/golem/go/golem.ModelOption[M]",
+          "methods": []
+        },
+        {
+          "name": "SemanticResult",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Distancefunc() float64",
+            "pointer:Rowfunc() github.com/eleven-am/golem/go/golem.Row[M]",
+            "pointer:Similarityfunc() float64",
+            "value:Distancefunc() float64",
+            "value:Rowfunc() github.com/eleven-am/golem/go/golem.Row[M]",
+            "value:Similarityfunc() float64"
+          ]
+        },
+        {
           "name": "SetCreate",
           "kind": "func",
           "typeKind": "",
@@ -9563,6 +9788,13 @@
           "methods": []
         },
         {
+          "name": "KindSemantic",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Kind=\"semantic\"",
+          "methods": []
+        },
+        {
           "name": "KindShutdown",
           "kind": "const",
           "typeKind": "",
@@ -9995,6 +10227,27 @@
           "kind": "const",
           "typeKind": "",
           "signature": "github.com/eleven-am/golem/go/observe.Operation=\"scoped.read\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticProvider",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.provider\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticRank",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.rank\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticRefresh",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.refresh\"",
           "methods": []
         },
         {
@@ -10644,6 +10897,7 @@
             "pointer:EventLimitsfunc() github.com/eleven-am/golem/go/events.Limits",
             "pointer:EventOperatorfunc() github.com/eleven-am/golem/go/events.Operator",
             "pointer:ForPrincipalfunc(ctx context.Context, principal P) (*github.com/eleven-am/golem/go/runtime.Caller[P, A], error)",
+            "pointer:RefreshSemanticIndexesfunc(ctx context.Context) error",
             "pointer:RunEventPublisherfunc(ctx context.Context) (resultErr error)",
             "pointer:Systemfunc() github.com/eleven-am/golem/go/runtime.System[P, A]"
           ]
@@ -10796,6 +11050,13 @@
           "methods": []
         },
         {
+          "name": "CallerSimilar",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
+          "methods": []
+        },
+        {
           "name": "CallerTransaction",
           "kind": "func",
           "typeKind": "",
@@ -10932,7 +11193,7 @@
           "name": "Config",
           "kind": "type",
           "typeKind": "struct",
-          "signature": "[P any,A any]struct{Database *github.com/eleven-am/golem/go/provider.Database;Bundle github.com/eleven-am/golem/go/golem.SchemaBundle;Bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A];Descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventRegistry github.com/eleven-am/golem/go/golem.EventRegistry;EventFactories github.com/eleven-am/golem/go/runtime.EventFactoryRegistry;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (A, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(A) (A, error)}",
+          "signature": "[P any,A any]struct{Database *github.com/eleven-am/golem/go/provider.Database;Embeddings github.com/eleven-am/golem/go/embedding.Registry;Bundle github.com/eleven-am/golem/go/golem.SchemaBundle;Bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A];Descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventRegistry github.com/eleven-am/golem/go/golem.EventRegistry;EventFactories github.com/eleven-am/golem/go/runtime.EventFactoryRegistry;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (A, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(A) (A, error)}",
           "methods": null
         },
         {
@@ -11160,6 +11421,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], query github.com/eleven-am/golem/go/golem.ScopedQuery[M]) ([]github.com/eleven-am/golem/go/golem.ScopedRow, error)",
+          "methods": []
+        },
+        {
+          "name": "SystemSimilar",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
           "methods": []
         },
         {

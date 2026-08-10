@@ -263,6 +263,8 @@ gateway outside Golem.
 - [`PRODUCTION.md`](./PRODUCTION.md) covers authorization, hooks, custom
   operations, analytics, events, security, deployment, troubleshooting, and
   upgrades.
+- [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) covers the optional managed
+  embedding-provider and similarity-search lifecycle.
 - [`p1/MIGRATION-COMMAND-CONTRACT.md`](./p1/MIGRATION-COMMAND-CONTRACT.md)
   defines review and refusal behavior for migration commands.
 - [`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md) is the frozen

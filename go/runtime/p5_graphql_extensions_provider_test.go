@@ -693,6 +693,13 @@ type p5ExtensionTraceStmt struct {
 	trace *p5ExtensionSQLTrace
 }
 
+func (statement *p5ExtensionTraceStmt) CheckNamedValue(value *driver.NamedValue) error {
+	if checker, ok := statement.Stmt.(driver.NamedValueChecker); ok {
+		return checker.CheckNamedValue(value)
+	}
+	return driver.ErrSkip
+}
+
 func (statement *p5ExtensionTraceStmt) Exec(arguments []driver.Value) (driver.Result, error) {
 	statement.trace.record(statement.query)
 	return statement.Stmt.Exec(arguments)

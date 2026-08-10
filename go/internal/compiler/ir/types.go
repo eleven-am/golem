@@ -4,7 +4,7 @@
 package ir
 
 const (
-	RawDeclFormatVersion  uint16 = 1
+	RawDeclFormatVersion  uint16 = 2
 	ModelFormatVersion    uint16 = 1
 	ContractFormatVersion uint16 = 5
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
@@ -55,15 +55,22 @@ type RawDeclIR struct {
 }
 
 type RawSchemaDecl struct {
-	PackagePath    string           `json:"packagePath"`
-	FunctionName   string           `json:"functionName"`
-	ParameterName  string           `json:"parameterName"`
-	SchemaName     string           `json:"schemaName"`
-	SchemaNameSpan SourceSpan       `json:"schemaNameSpan"`
-	Actor          *RawNamedTypeRef `json:"actor,omitempty"`
-	Providers      []RawProviderRef `json:"providers"`
-	Models         []RawModelRef    `json:"models"`
-	Span           SourceSpan       `json:"span"`
+	PackagePath     string              `json:"packagePath"`
+	FunctionName    string              `json:"functionName"`
+	ParameterName   string              `json:"parameterName"`
+	SchemaName      string              `json:"schemaName"`
+	SchemaNameSpan  SourceSpan          `json:"schemaNameSpan"`
+	Actor           *RawNamedTypeRef    `json:"actor,omitempty"`
+	Providers       []RawProviderRef    `json:"providers"`
+	EmbeddingSpaces []RawEmbeddingSpace `json:"embeddingSpaces"`
+	Models          []RawModelRef       `json:"models"`
+	Span            SourceSpan          `json:"span"`
+}
+
+type RawEmbeddingSpace struct {
+	Name       string     `json:"name"`
+	Dimensions uint16     `json:"dimensions"`
+	Span       SourceSpan `json:"span"`
 }
 
 type RawNamedTypeRef struct {

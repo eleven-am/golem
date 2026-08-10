@@ -138,6 +138,36 @@ typed joins and expressions. They are not raw SQL: only generated scope fields,
 approved joins, predicates, grouping, selections, and ordering can be composed,
 and every accepted/refused execution emits the configured safe audit record.
 
+## Semantic indexes
+
+Semantic indexes are an optional generated Go-client capability. The schema
+declares an embedding space and ordered text projection; application startup
+registers a matching `embedding.Provider`. Generated caller and system clients
+then expose one `Similar<Name>` method per index. Similarity is not currently a
+generated GraphQL root and is not exposed on transaction clients because
+refresh and vector ranking are separate managed database operations.
+
+Similarity first applies ordinary read authorization and hooks to fix a
+bounded candidate set. An empty or refused read performs no embedding work;
+otherwise Golem refreshes the durable index and ranks only that fixed set. The
+embedding provider is trusted
+infrastructure: it receives the exact query text and canonical documents for
+all indexed rows, including rows the current caller cannot read. Golem does not
+implicitly send principals or database primary identities, although an
+identity-bearing field deliberately declared in the index is sent as indexed
+text. Approve the provider for
+every indexed field, make its `Embed` implementation concurrency-safe, and
+honor cancellation. Authorization protects returned rows; it does not make an
+external embedding service a data-loss-prevention boundary.
+
+Refresh scans all source rows to compute hashes but embeds only missing,
+changed, or provider-fingerprint-stale documents. Deleted-row vectors are
+removed during the next explicit or query-triggered refresh, not synchronously
+with the model delete. Provider batch writes are individually transactional and
+retry-safe. See [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) for limits, error
+codes, SQLite portability, pgvector prerequisites, and deletion/retention
+guidance.
+
 ## Migrations and generated artifacts
 
 The reviewed history is part of the generated application identity. Generation
