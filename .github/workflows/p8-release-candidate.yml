@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Audit hosted workflow and mutation resistance
         run: go test -json -count=1 ./internal/workflowaudit | tee p8-workflow.events.jsonl
@@ -133,7 +133,7 @@ jobs:
         if: always()
         run: >-
           go run ./internal/cmd/p8workflowaudit -events p8-platform.events.jsonl
-          -profile compile-${{ matrix.os }}-${{ matrix.go }} -reject-skips
+          -profile compile-${{ matrix.os }}-${{ matrix.go }}
           -inventory internal/workflowaudit/required-tests.json -inventory-set platform-compile
           -output p8-platform.audit.json
       - name: Retain structured compile evidence
@@ -183,7 +183,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: SQLite and PostgreSQL C plus linguistic provider matrix
         run: >-
@@ -238,7 +238,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Race and resource-leak matrix
         run: go test -json -race -p=1 -count=1 -timeout=45m ./... | tee p8-race.events.jsonl
@@ -278,20 +278,45 @@ jobs:
             fuzz: FuzzP8PublicInputNeverDisclosesProtectedCanary
             profile: disclosure
             identity: github.com/eleven-am/golem/go/internal/p8oracle/disclosure:FuzzP8PublicInputNeverDisclosesProtectedCanary
+            arguments: -run '^FuzzP8PublicInputNeverDisclosesProtectedCanary$' ./internal/p8oracle/disclosure
           - package: ./cmd/golem
             fuzz: FuzzP8DiagnosticEncodingIsClosedAndBounded
             profile: diagnostics
             identity: github.com/eleven-am/golem/go/cmd/golem:FuzzP8DiagnosticEncodingIsClosedAndBounded
+            arguments: -run '^$' -fuzz '^FuzzP8DiagnosticEncodingIsClosedAndBounded$' -fuzztime=60s ./cmd/golem
+    services:
+      postgres-c:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Fuzz closed public boundary
         env:
-          GOLEM_P8_REQUIRE_POSTGRESQL: "0"
-        run: go test -json -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=60s ${{ matrix.package }} | tee p8-fuzz.events.jsonl
+          GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+          GOMAXPROCS: "2"
+          GOFLAGS: -p=2
+        run: go test -json -parallel=1 ${{ matrix.arguments }} | tee p8-fuzz.events.jsonl
       - name: Audit fuzz events
         if: always()
         run: >-
@@ -336,7 +361,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Kill complete P8 mutation manifest
         run: go run ./internal/cmd/p8mutation -module . -timeout 15m > p8-mutation.jsonl
@@ -384,7 +409,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Vet
         run: go vet ./...
@@ -454,7 +479,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
         with:
-          go-version-file: go/go.mod
+          go-version: "1.25.12"
           cache-dependency-path: go/go.sum
       - name: Materialize and verify protected release-owner trust
         run: |

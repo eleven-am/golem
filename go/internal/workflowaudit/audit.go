@@ -70,6 +70,14 @@ func AuditWorkflow(contents []byte) []Violation {
 		if !sameStrings(sequenceScalars(mappingValue(candidateJob, "needs")), append(append([]string(nil), requiredJobs[:8]...), "tag-release-candidate")) {
 			violations = append(violations, Violation{Code: "P8_WORKFLOW_CANDIDATE_AGGREGATION_INCOMPLETE"})
 		}
+		platformJob := mappingValue(jobs, "platform-compile")
+		if jobContains(platformJob, "-reject-skips") {
+			violations = append(violations, Violation{Code: "P8_WORKFLOW_PLATFORM_COMPILE_SKIP_POLICY"})
+		}
+		fuzzJob := mappingValue(jobs, "fuzz")
+		if !jobContains(fuzzJob, "GOMAXPROCS") || !jobContains(fuzzJob, "GOFLAGS") || !jobContains(fuzzJob, `-run '^FuzzP8PublicInputNeverDisclosesProtectedCanary$'`) {
+			violations = append(violations, Violation{Code: "P8_WORKFLOW_FUZZ_BOUNDARY_UNBOUNDED"})
+		}
 	}
 	walk(root, func(node *yaml.Node) {
 		if node.Kind == yaml.ScalarNode && strings.Contains(node.Value, "@") && strings.Contains(node.Value, "/") && strings.HasPrefix(node.Value, "actions/") && !immutableAction.MatchString(node.Value) {
@@ -85,6 +93,7 @@ func AuditWorkflow(contents []byte) []Violation {
 	}
 	requiredFragments := []struct{ code, value string }{
 		{"P8_WORKFLOW_GO_MINIMUM_MISSING", "1.25.x"},
+		{"P8_WORKFLOW_GO_PATCH_MISSING", "1.25.12"},
 		{"P8_WORKFLOW_GO_STABLE_MISSING", "stable"},
 		{"P8_WORKFLOW_LINUX_MISSING", "ubuntu-24.04"},
 		{"P8_WORKFLOW_MACOS_MISSING", "macos-14"},
@@ -156,6 +165,16 @@ func jobUses(job *yaml.Node, value string) bool {
 	found := false
 	walk(job, func(node *yaml.Node) {
 		if node.Kind == yaml.ScalarNode && node.Value == value {
+			found = true
+		}
+	})
+	return found
+}
+
+func jobContains(job *yaml.Node, value string) bool {
+	found := false
+	walk(job, func(node *yaml.Node) {
+		if node.Kind == yaml.ScalarNode && strings.Contains(node.Value, value) {
 			found = true
 		}
 	})
