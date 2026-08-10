@@ -1,0 +1,58 @@
+{
+  "formatVersion": 1,
+  "adapterABI": "golem.observe.adapter.v1",
+  "attributes": [
+    {"name": "golem.kind", "type": "string"},
+    {"name": "golem.phase", "type": "string"},
+    {"name": "golem.outcome", "type": "string"},
+    {"name": "golem.reason", "type": "string"},
+    {"name": "golem.provider", "type": "string"},
+    {"name": "golem.operation", "type": "string"},
+    {"name": "golem.model_id", "type": "hex16"},
+    {"name": "golem.duration_ns", "type": "int64"},
+    {"name": "golem.statement_count", "type": "int64"},
+    {"name": "golem.attempt", "type": "int64"},
+    {"name": "golem.queue_depth", "type": "int64"},
+    {"name": "golem.queue_limit", "type": "int64"},
+    {"name": "golem.aggregate_count", "type": "int64"}
+  ],
+  "slog": {
+    "message": "golem.observation.v1",
+    "level": "INFO"
+  },
+  "otel": {
+    "instrumentationScope": "github.com/eleven-am/golem/go/observe/otel",
+    "span": "golem.operation.v1",
+    "metrics": [
+      {"name": "golem.observation.records", "kind": "counter", "unit": "{record}"},
+      {"name": "golem.observation.duration_ns", "kind": "histogram", "unit": "ns"},
+      {"name": "golem.observation.statement_count", "kind": "histogram", "unit": "{statement}"},
+      {"name": "golem.observation.attempt", "kind": "histogram", "unit": "{attempt}"},
+      {"name": "golem.observation.queue_depth", "kind": "histogram", "unit": "{record}"},
+      {"name": "golem.observation.queue_limit", "kind": "histogram", "unit": "{record}"},
+      {"name": "golem.observation.aggregate_count", "kind": "histogram", "unit": "{item}"}
+    ]
+  },
+  "providerIndependentOperations": [
+    "event.publisher_retry",
+    "event.publisher_block",
+    "event.retention",
+    "event.transport_reconnect"
+  ],
+  "coverage": [
+    {"kind": "runtime", "operations": ["runtime.open"]},
+    {"kind": "read", "operations": ["read.find_unique", "read.find_first", "read.find_many", "read.count"]},
+    {"kind": "mutation", "operations": ["mutation.create", "mutation.update", "mutation.upsert", "mutation.delete", "mutation.update_many", "mutation.delete_many", "mutation.connect", "mutation.disconnect", "mutation.set_relation"]},
+    {"kind": "graphql", "operations": ["graphql.request", "graphql.query", "graphql.mutation", "graphql.subscription", "graphql.custom_query", "graphql.custom_mutation", "graphql.computed", "graphql.batched_computed"]},
+    {"kind": "analytics", "operations": ["analytics.aggregate", "analytics.group_by", "analytics.relation_group_by"]},
+    {"kind": "scoped_read", "operations": ["scoped.read"]},
+    {"kind": "transaction", "operations": ["transaction.caller", "transaction.system"]},
+    {"kind": "hook", "operations": ["hook.find_one", "hook.find_first", "hook.find_many", "hook.create", "hook.update", "hook.delete", "hook.update_many", "hook.delete_many"]},
+    {"kind": "relation_load", "operations": ["relation.load"]},
+    {"kind": "migration", "operations": ["migration.inspect"]},
+    {"kind": "event", "operations": ["event.publisher_claim", "event.publisher_attempt", "event.publisher_acknowledge", "event.publisher_retry", "event.publisher_block", "event.depth_pending", "event.depth_blocked", "event.depth_retired", "event.retention", "event.transport_receive", "event.transport_reconnect"]},
+    {"kind": "subscription", "operations": ["subscription.membership", "subscription.evaluation", "subscription.delivery", "subscription.suppression", "subscription.overflow", "subscription.cancellation"]},
+    {"kind": "cdc", "operations": ["cdc.receive", "cdc.acknowledge"]},
+    {"kind": "shutdown", "operations": ["shutdown.http", "shutdown.publisher"]}
+  ]
+}

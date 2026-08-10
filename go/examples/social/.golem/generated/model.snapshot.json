@@ -1,0 +1,1575 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "model_snapshot",
+  "formatVersion": 1,
+  "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
+  "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
+  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p8-go-abi-v5",
+  "payload": {
+    "formatVersion": 1,
+    "schema": {
+      "id": "63ca2e9d2c45498f434315c47df76afe",
+      "stableName": "golem_social_example",
+      "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+      "rootFunction": "DefineSchema",
+      "actor": {
+        "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+        "name": "Actor"
+      }
+    },
+    "providers": [
+      "sqlite",
+      "postgresql"
+    ],
+    "enums": [
+      {
+        "id": "2c24eef9cbc254050b30441dcc1a7ab0",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Visibility"
+        },
+        "logicalName": "Visibility",
+        "values": [
+          {
+            "id": "f80fccf29206874e9e625e110bf79bec",
+            "goName": "VisibilityPublic",
+            "wireValue": "PUBLIC"
+          },
+          {
+            "id": "ca85ac3e55295037e617c3123298998a",
+            "goName": "VisibilityFollowers",
+            "wireValue": "FOLLOWERS"
+          },
+          {
+            "id": "fa3ee020e5421e9feca68eddff90020d",
+            "goName": "VisibilityPrivate",
+            "wireValue": "PRIVATE"
+          }
+        ]
+      }
+    ],
+    "models": [
+      {
+        "id": "364a3861c2d382ec0f02e83974f3b3c4",
+        "canonicalIdentity": "example.social.Comment",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Comment"
+        },
+        "logicalName": "Comment",
+        "table": {
+          "physicalName": "comments"
+        },
+        "fields": [
+          {
+            "id": "025be8ae0426b680839a18767fd00978",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000PostID",
+            "goName": "PostID",
+            "logicalName": "PostID",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "post_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "261ea68243c89744b84b2f37e90ce903",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000Post",
+            "goName": "Post",
+            "logicalName": "Post",
+            "declarationOrder": 6,
+            "kind": "relation",
+            "relation": {
+              "relationId": "a11833fcadb80f9a26a6f7e237deeeed",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "428030fabfab54bd4019b44a60a33098",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000Replies",
+            "goName": "Replies",
+            "logicalName": "Replies",
+            "declarationOrder": 9,
+            "kind": "relation",
+            "relation": {
+              "relationId": "cb9d58c74e6d92be1b32fb50a3690c04",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "74780c9d955be686287e3fac79a30eb2",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000Body",
+            "goName": "Body",
+            "logicalName": "Body",
+            "declarationOrder": 4,
+            "kind": "scalar",
+            "scalar": {
+              "column": "body",
+              "type": {
+                "kind": "string"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "7e12e57c54b9b4785a8928db1172ad00",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000ParentID",
+            "goName": "ParentID",
+            "logicalName": "ParentID",
+            "declarationOrder": 3,
+            "kind": "scalar",
+            "scalar": {
+              "column": "parent_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": true,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "8a40c9a6b0f4ca5c7c03148a36903a73",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000Parent",
+            "goName": "Parent",
+            "logicalName": "Parent",
+            "declarationOrder": 8,
+            "kind": "relation",
+            "relation": {
+              "relationId": "cb9d58c74e6d92be1b32fb50a3690c04",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "93873b13a4b34c536891e08240918eb7",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000CreatedAt",
+            "goName": "CreatedAt",
+            "logicalName": "CreatedAt",
+            "declarationOrder": 5,
+            "kind": "scalar",
+            "scalar": {
+              "column": "created_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "default": {
+                "kind": "now",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "9a1015ac166c66934d347f7ec9daf925",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000AuthorID",
+            "goName": "AuthorID",
+            "logicalName": "AuthorID",
+            "declarationOrder": 2,
+            "kind": "scalar",
+            "scalar": {
+              "column": "author_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "a1b8335883c74028b9d15f7bba2d0f30",
+            "canonicalIdentity": "example.social.Comment.ID",
+            "goName": "ID",
+            "logicalName": "ID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "uuid",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "ddc9f98674f8402a0ffd7a9b52fe9531",
+            "canonicalIdentity": "364a3861c2d382ec0f02e83974f3b3c4\u0000Author",
+            "goName": "Author",
+            "logicalName": "Author",
+            "declarationOrder": 7,
+            "kind": "relation",
+            "relation": {
+              "relationId": "3823f85a8315a38bc36367d411c5f90b",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "57e8e4fe611eb12c6261a6077346cf5c",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_comments",
+          "fields": [
+            "a1b8335883c74028b9d15f7bba2d0f30"
+          ]
+        },
+        "uniques": [],
+        "indexes": [
+          {
+            "id": "d66898568578c9181ee8eb4017e9de49",
+            "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
+            "physicalName": "idx_comments_post_parent_created",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "025be8ae0426b680839a18767fd00978",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "7e12e57c54b9b4785a8928db1172ad00",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "93873b13a4b34c536891e08240918eb7",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "a1b8335883c74028b9d15f7bba2d0f30",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          }
+        ],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "025be8ae0426b680839a18767fd00978",
+            "kind": "index",
+            "indexId": "d66898568578c9181ee8eb4017e9de49"
+          },
+          {
+            "fieldId": "a1b8335883c74028b9d15f7bba2d0f30",
+            "kind": "key",
+            "keyId": "57e8e4fe611eb12c6261a6077346cf5c"
+          }
+        ]
+      },
+      {
+        "id": "80fe9aaf21426d7926ca36ad6e8a95df",
+        "canonicalIdentity": "example.social.Tag",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Tag"
+        },
+        "logicalName": "Tag",
+        "table": {
+          "physicalName": "tags"
+        },
+        "fields": [
+          {
+            "id": "62a8e6209f084cfeed07d00271c92f56",
+            "canonicalIdentity": "80fe9aaf21426d7926ca36ad6e8a95df\u0000PostTags",
+            "goName": "PostTags",
+            "logicalName": "PostTags",
+            "declarationOrder": 2,
+            "kind": "relation",
+            "relation": {
+              "relationId": "15716585e9eb0a1412c3c92b57c8baaa",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "927ba64decd704c758567b1b35e6c7fa",
+            "canonicalIdentity": "80fe9aaf21426d7926ca36ad6e8a95df\u0000Name",
+            "goName": "Name",
+            "logicalName": "Name",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "name",
+              "type": {
+                "kind": "string",
+                "maxLength": 64
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "b5d7a5b516a8ed94b498d2363a247cf1",
+            "canonicalIdentity": "example.social.Tag.ID",
+            "goName": "ID",
+            "logicalName": "ID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "uuid",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "0694442681975a158ae95164361a06a3",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_tags",
+          "fields": [
+            "b5d7a5b516a8ed94b498d2363a247cf1"
+          ]
+        },
+        "uniques": [
+          {
+            "id": "21e8a4b720d18bbe29408664db144813",
+            "kind": "unique",
+            "logicalName": "Name",
+            "physicalName": "uq_tags_name",
+            "fields": [
+              "927ba64decd704c758567b1b35e6c7fa"
+            ]
+          }
+        ],
+        "indexes": [],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "927ba64decd704c758567b1b35e6c7fa",
+            "kind": "key",
+            "keyId": "21e8a4b720d18bbe29408664db144813"
+          },
+          {
+            "fieldId": "b5d7a5b516a8ed94b498d2363a247cf1",
+            "kind": "key",
+            "keyId": "0694442681975a158ae95164361a06a3"
+          }
+        ]
+      },
+      {
+        "id": "9f0a32ff74e8340344dbde26a58ba9b2",
+        "canonicalIdentity": "example.social.Session",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Session"
+        },
+        "logicalName": "Session",
+        "table": {
+          "physicalName": "sessions"
+        },
+        "fields": [
+          {
+            "id": "230e5e19e0a2649a5fc5a304a7dbd158",
+            "canonicalIdentity": "example.social.Session.ID",
+            "goName": "ID",
+            "logicalName": "ID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "uuid",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "42e3e2bd1988a04db96d90478750a7fb",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000ExpiresAt",
+            "goName": "ExpiresAt",
+            "logicalName": "ExpiresAt",
+            "declarationOrder": 3,
+            "kind": "scalar",
+            "scalar": {
+              "column": "expires_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "44933764614533b988c40e0a89b1c9aa",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000TokenHash",
+            "goName": "TokenHash",
+            "logicalName": "TokenHash",
+            "declarationOrder": 2,
+            "kind": "scalar",
+            "scalar": {
+              "column": "token_hash",
+              "type": {
+                "kind": "bytes"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "e5c12c57b16ed638dbb0d9df456d3965",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000UserID",
+            "goName": "UserID",
+            "logicalName": "UserID",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "user_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "ef7ad40c6dd5694cc92ab3e4e87969cb",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000User",
+            "goName": "User",
+            "logicalName": "User",
+            "declarationOrder": 5,
+            "kind": "relation",
+            "relation": {
+              "relationId": "6964e75c2669d58e7f371071f27356b8",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "fb3dcb5c417c3754b24dec493e09ed5b",
+            "canonicalIdentity": "9f0a32ff74e8340344dbde26a58ba9b2\u0000CreatedAt",
+            "goName": "CreatedAt",
+            "logicalName": "CreatedAt",
+            "declarationOrder": 4,
+            "kind": "scalar",
+            "scalar": {
+              "column": "created_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "default": {
+                "kind": "now",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "f261c97c2c9901331ca61b195b58dbe7",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_sessions",
+          "fields": [
+            "230e5e19e0a2649a5fc5a304a7dbd158"
+          ]
+        },
+        "uniques": [
+          {
+            "id": "7a68c5c5360721307ab3a86124fb05dd",
+            "kind": "unique",
+            "logicalName": "TokenHash",
+            "physicalName": "uq_sessions_token_hash",
+            "fields": [
+              "44933764614533b988c40e0a89b1c9aa"
+            ]
+          }
+        ],
+        "indexes": [
+          {
+            "id": "7d9812e57dc863700c146b1bceb8568a",
+            "modelId": "9f0a32ff74e8340344dbde26a58ba9b2",
+            "physicalName": "idx_sessions_user_expires",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "e5c12c57b16ed638dbb0d9df456d3965",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "42e3e2bd1988a04db96d90478750a7fb",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          }
+        ],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "230e5e19e0a2649a5fc5a304a7dbd158",
+            "kind": "key",
+            "keyId": "f261c97c2c9901331ca61b195b58dbe7"
+          },
+          {
+            "fieldId": "44933764614533b988c40e0a89b1c9aa",
+            "kind": "key",
+            "keyId": "7a68c5c5360721307ab3a86124fb05dd"
+          },
+          {
+            "fieldId": "e5c12c57b16ed638dbb0d9df456d3965",
+            "kind": "index",
+            "indexId": "7d9812e57dc863700c146b1bceb8568a"
+          }
+        ]
+      },
+      {
+        "id": "b11b75f11668a6f7019d05b1740d5118",
+        "canonicalIdentity": "example.social.Post",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "logicalName": "Post",
+        "table": {
+          "physicalName": "posts"
+        },
+        "fields": [
+          {
+            "id": "11f9c4adff40cc4daa268c6132ad36d8",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Metadata",
+            "goName": "Metadata",
+            "logicalName": "Metadata",
+            "declarationOrder": 13,
+            "kind": "scalar",
+            "scalar": {
+              "column": "metadata",
+              "type": {
+                "kind": "json",
+                "jsonSchemaId": "github.com/eleven-am/golem/go/examples/social/social.PostMetadata"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "29224b6d31711950e2ef31749e0f3bd0",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000AuthorID",
+            "goName": "AuthorID",
+            "logicalName": "AuthorID",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "author_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "2ac2d0174bc2fc76b10167255ba2c0dc",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Momentum",
+            "goName": "Momentum",
+            "logicalName": "Momentum",
+            "declarationOrder": 8,
+            "kind": "scalar",
+            "scalar": {
+              "column": "momentum",
+              "type": {
+                "kind": "float32"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "float",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "3c205e617cd8c798bd907ff5fd8a2fb6",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Priority",
+            "goName": "Priority",
+            "logicalName": "Priority",
+            "declarationOrder": 6,
+            "kind": "scalar",
+            "scalar": {
+              "column": "priority",
+              "type": {
+                "kind": "int32"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "464e7eb85629348cdcdb079a6ce847a8",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Topics",
+            "goName": "Topics",
+            "logicalName": "Topics",
+            "declarationOrder": 15,
+            "kind": "scalarList",
+            "scalar": {
+              "column": "topics",
+              "type": {
+                "kind": "scalarList",
+                "element": {
+                  "kind": "string"
+                },
+                "capability": "scalar-list:json-array:v1"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "5525976ba84c55e7ea0bdfb82d539695",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Budget",
+            "goName": "Budget",
+            "logicalName": "Budget",
+            "declarationOrder": 10,
+            "kind": "scalar",
+            "scalar": {
+              "column": "budget",
+              "type": {
+                "kind": "decimal",
+                "precision": 18,
+                "scale": 2
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "decimal",
+                  "canonical": "0.00"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "6070119d21df1182108edda39cb5a8fa",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Author",
+            "goName": "Author",
+            "logicalName": "Author",
+            "declarationOrder": 18,
+            "kind": "relation",
+            "relation": {
+              "relationId": "97b5b6194f0e3678f2e8c6eb18f397de",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "62c5faa04f85a2985a6da0e2d755bed1",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000CreatedAt",
+            "goName": "CreatedAt",
+            "logicalName": "CreatedAt",
+            "declarationOrder": 16,
+            "kind": "scalar",
+            "scalar": {
+              "column": "created_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "default": {
+                "kind": "now",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "84a84e6d04dbca50e5109e55b455a4f9",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000LiveTime",
+            "goName": "LiveTime",
+            "logicalName": "LiveTime",
+            "declarationOrder": 12,
+            "kind": "scalar",
+            "scalar": {
+              "column": "live_time",
+              "type": {
+                "kind": "time",
+                "precision": 6
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "939477f819b14905043b736dcced5148",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Rating",
+            "goName": "Rating",
+            "logicalName": "Rating",
+            "declarationOrder": 9,
+            "kind": "scalar",
+            "scalar": {
+              "column": "rating",
+              "type": {
+                "kind": "float64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "float",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "99dba4ce733b9a849ddcc603c31b5c83",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Visibility",
+            "goName": "Visibility",
+            "logicalName": "Visibility",
+            "declarationOrder": 14,
+            "kind": "enum",
+            "scalar": {
+              "column": "visibility",
+              "type": {
+                "kind": "enum",
+                "enumId": "2c24eef9cbc254050b30441dcc1a7ab0"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "enum",
+                  "canonical": "PUBLIC"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "afce81771edaa185328ec949768aaff2",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Title",
+            "goName": "Title",
+            "logicalName": "Title",
+            "declarationOrder": 2,
+            "kind": "scalar",
+            "scalar": {
+              "column": "title",
+              "type": {
+                "kind": "string",
+                "maxLength": 160
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "b5ecc8d7bbd4b2770289e1a7add5ad69",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Comments",
+            "goName": "Comments",
+            "logicalName": "Comments",
+            "declarationOrder": 19,
+            "kind": "relation",
+            "relation": {
+              "relationId": "a11833fcadb80f9a26a6f7e237deeeed",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "c33e834a8be4f1df23ed1783efcbdfe8",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000PostTags",
+            "goName": "PostTags",
+            "logicalName": "PostTags",
+            "declarationOrder": 20,
+            "kind": "relation",
+            "relation": {
+              "relationId": "09f5a80ad9f41a509cae3a7ac8730144",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "ca003a48c4490b5e5891a02655b831d5",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000UpdatedAt",
+            "goName": "UpdatedAt",
+            "logicalName": "UpdatedAt",
+            "declarationOrder": 17,
+            "kind": "scalar",
+            "scalar": {
+              "column": "updated_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "updated": true,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "cdcefdcbcd9fbe3d0533d250541e159a",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Views",
+            "goName": "Views",
+            "logicalName": "Views",
+            "declarationOrder": 7,
+            "kind": "scalar",
+            "scalar": {
+              "column": "views",
+              "type": {
+                "kind": "int64"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "d3b5a464f819a7f0ac93e1491a2279fe",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Reactions",
+            "goName": "Reactions",
+            "logicalName": "Reactions",
+            "declarationOrder": 5,
+            "kind": "scalar",
+            "scalar": {
+              "column": "reactions",
+              "type": {
+                "kind": "int16"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "integer",
+                  "canonical": "0"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "d998a29c13569fe87d74f00b7f28a78f",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Published",
+            "goName": "Published",
+            "logicalName": "Published",
+            "declarationOrder": 4,
+            "kind": "scalar",
+            "scalar": {
+              "column": "published",
+              "type": {
+                "kind": "bool"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "literal",
+                "producer": "database",
+                "literal": {
+                  "kind": "bool",
+                  "canonical": "false"
+                }
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "e20069ceb3135c47447fc322989acceb",
+            "canonicalIdentity": "example.social.Post.ID",
+            "goName": "ID",
+            "logicalName": "ID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "uuid",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "ede0935e24386b508a62332396f6508b",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000LiveDate",
+            "goName": "LiveDate",
+            "logicalName": "LiveDate",
+            "declarationOrder": 11,
+            "kind": "scalar",
+            "scalar": {
+              "column": "live_date",
+              "type": {
+                "kind": "date"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "f8f2f3fcc4efbe5905f9ea29c949762a",
+            "canonicalIdentity": "b11b75f11668a6f7019d05b1740d5118\u0000Body",
+            "goName": "Body",
+            "logicalName": "Body",
+            "declarationOrder": 3,
+            "kind": "scalar",
+            "scalar": {
+              "column": "body",
+              "type": {
+                "kind": "string"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "ad5ef8d08dc489b6b76c49de55317479",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_posts",
+          "fields": [
+            "e20069ceb3135c47447fc322989acceb"
+          ]
+        },
+        "uniques": [],
+        "indexes": [
+          {
+            "id": "28c22df0a265496faf6aa4a0fd0774ce",
+            "modelId": "b11b75f11668a6f7019d05b1740d5118",
+            "physicalName": "idx_posts_feed",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "d998a29c13569fe87d74f00b7f28a78f",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "62c5faa04f85a2985a6da0e2d755bed1",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "e20069ceb3135c47447fc322989acceb",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          },
+          {
+            "id": "f0500cb5bdb7cc06bb0f6f596178050e",
+            "modelId": "b11b75f11668a6f7019d05b1740d5118",
+            "physicalName": "idx_posts_author_created",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "29224b6d31711950e2ef31749e0f3bd0",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "62c5faa04f85a2985a6da0e2d755bed1",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "e20069ceb3135c47447fc322989acceb",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          }
+        ],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "29224b6d31711950e2ef31749e0f3bd0",
+            "kind": "index",
+            "indexId": "f0500cb5bdb7cc06bb0f6f596178050e"
+          },
+          {
+            "fieldId": "d998a29c13569fe87d74f00b7f28a78f",
+            "kind": "index",
+            "indexId": "28c22df0a265496faf6aa4a0fd0774ce"
+          },
+          {
+            "fieldId": "e20069ceb3135c47447fc322989acceb",
+            "kind": "key",
+            "keyId": "ad5ef8d08dc489b6b76c49de55317479"
+          }
+        ]
+      },
+      {
+        "id": "b2a6fb289365ab32869f1b2862cc6b5b",
+        "canonicalIdentity": "example.social.PostTag",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "PostTag"
+        },
+        "logicalName": "PostTag",
+        "table": {
+          "physicalName": "post_tags"
+        },
+        "fields": [
+          {
+            "id": "44075e35d88b9d06bdc3c011f32f8c73",
+            "canonicalIdentity": "b2a6fb289365ab32869f1b2862cc6b5b\u0000PostID",
+            "goName": "PostID",
+            "logicalName": "PostID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "post_id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "c0c3c66292c388279d73411b0b6153a1",
+            "canonicalIdentity": "b2a6fb289365ab32869f1b2862cc6b5b\u0000Post",
+            "goName": "Post",
+            "logicalName": "Post",
+            "declarationOrder": 2,
+            "kind": "relation",
+            "relation": {
+              "relationId": "09f5a80ad9f41a509cae3a7ac8730144",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          },
+          {
+            "id": "dc4c50eb34defbd52abb9d4fc5e51be2",
+            "canonicalIdentity": "b2a6fb289365ab32869f1b2862cc6b5b\u0000TagName",
+            "goName": "TagName",
+            "logicalName": "TagName",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "tag_name",
+              "type": {
+                "kind": "string",
+                "maxLength": 64
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "fe3669fe5cc1796a498ac1da4e077e4b",
+            "canonicalIdentity": "b2a6fb289365ab32869f1b2862cc6b5b\u0000Tag",
+            "goName": "Tag",
+            "logicalName": "Tag",
+            "declarationOrder": 3,
+            "kind": "relation",
+            "relation": {
+              "relationId": "15716585e9eb0a1412c3c92b57c8baaa",
+              "role": "source",
+              "kind": "belongsTo"
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "c86ed7ebd8270aeab98eb584f906c439",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_post_tags",
+          "fields": [
+            "44075e35d88b9d06bdc3c011f32f8c73",
+            "dc4c50eb34defbd52abb9d4fc5e51be2"
+          ]
+        },
+        "uniques": [],
+        "indexes": [
+          {
+            "id": "7ca42b5e056007232b865485b54c2535",
+            "modelId": "b2a6fb289365ab32869f1b2862cc6b5b",
+            "physicalName": "idx_post_tags_tag_post",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "44075e35d88b9d06bdc3c011f32f8c73",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          }
+        ],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "44075e35d88b9d06bdc3c011f32f8c73",
+            "kind": "key",
+            "keyId": "c86ed7ebd8270aeab98eb584f906c439"
+          },
+          {
+            "fieldId": "dc4c50eb34defbd52abb9d4fc5e51be2",
+            "kind": "index",
+            "indexId": "7ca42b5e056007232b865485b54c2535"
+          }
+        ]
+      },
+      {
+        "id": "d5239ec6065febe61dad1b8d0b66bf07",
+        "canonicalIdentity": "example.social.User",
+        "go": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "User"
+        },
+        "logicalName": "User",
+        "table": {
+          "physicalName": "users"
+        },
+        "fields": [
+          {
+            "id": "184fbe94f719aa72470b6ab6b0eecfa1",
+            "canonicalIdentity": "example.social.User.ID",
+            "goName": "ID",
+            "logicalName": "ID",
+            "declarationOrder": 0,
+            "kind": "scalar",
+            "scalar": {
+              "column": "id",
+              "type": {
+                "kind": "uuid"
+              },
+              "nullable": false,
+              "default": {
+                "kind": "uuid",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "3ed132b2c728ed7f27301bc3690b8fba",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000Posts",
+            "goName": "Posts",
+            "logicalName": "Posts",
+            "declarationOrder": 5,
+            "kind": "relation",
+            "relation": {
+              "relationId": "97b5b6194f0e3678f2e8c6eb18f397de",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "572d5086401285786732c644f23928fd",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000Handle",
+            "goName": "Handle",
+            "logicalName": "Handle",
+            "declarationOrder": 1,
+            "kind": "scalar",
+            "scalar": {
+              "column": "handle",
+              "type": {
+                "kind": "string",
+                "maxLength": 40
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "7950f0c2d483b3af4f5d2531db4eead6",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000Comments",
+            "goName": "Comments",
+            "logicalName": "Comments",
+            "declarationOrder": 6,
+            "kind": "relation",
+            "relation": {
+              "relationId": "3823f85a8315a38bc36367d411c5f90b",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "b08968231b12e11781e4041b8ca5f15d",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000Sessions",
+            "goName": "Sessions",
+            "logicalName": "Sessions",
+            "declarationOrder": 4,
+            "kind": "relation",
+            "relation": {
+              "relationId": "6964e75c2669d58e7f371071f27356b8",
+              "role": "inverse",
+              "kind": "hasMany"
+            }
+          },
+          {
+            "id": "b16aa8e13cab4c3f4fcd1e40e940417a",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000Email",
+            "goName": "Email",
+            "logicalName": "Email",
+            "declarationOrder": 2,
+            "kind": "scalar",
+            "scalar": {
+              "column": "email",
+              "type": {
+                "kind": "string",
+                "maxLength": 255
+              },
+              "nullable": false,
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          },
+          {
+            "id": "d3b38a1584a601d5280c8456c574acf2",
+            "canonicalIdentity": "d5239ec6065febe61dad1b8d0b66bf07\u0000CreatedAt",
+            "goName": "CreatedAt",
+            "logicalName": "CreatedAt",
+            "declarationOrder": 3,
+            "kind": "scalar",
+            "scalar": {
+              "column": "created_at",
+              "type": {
+                "kind": "dateTime",
+                "precision": 6
+              },
+              "nullable": false,
+              "default": {
+                "kind": "now",
+                "producer": "application"
+              },
+              "updated": false,
+              "databaseReadOnly": false
+            }
+          }
+        ],
+        "primaryKey": {
+          "id": "3851793d71591b5196fc7d8e636d77d2",
+          "kind": "primary",
+          "logicalName": "primary",
+          "physicalName": "pk_users",
+          "fields": [
+            "184fbe94f719aa72470b6ab6b0eecfa1"
+          ]
+        },
+        "uniques": [
+          {
+            "id": "4efeaffa9dd9390632a136d603942dd4",
+            "kind": "unique",
+            "logicalName": "Handle",
+            "physicalName": "uq_users_handle",
+            "fields": [
+              "572d5086401285786732c644f23928fd"
+            ]
+          }
+        ],
+        "indexes": [
+          {
+            "id": "b4aadff0f57e36295c9027590f1c96a8",
+            "modelId": "d5239ec6065febe61dad1b8d0b66bf07",
+            "physicalName": "idx_users_created",
+            "unique": false,
+            "method": "btree",
+            "keys": [
+              {
+                "column": "d3b38a1584a601d5280c8456c574acf2",
+                "direction": "asc",
+                "nulls": "default"
+              },
+              {
+                "column": "184fbe94f719aa72470b6ab6b0eecfa1",
+                "direction": "asc",
+                "nulls": "default"
+              }
+            ],
+            "include": [],
+            "provider": "portable"
+          }
+        ],
+        "checks": [],
+        "equalityIndexes": [
+          {
+            "fieldId": "184fbe94f719aa72470b6ab6b0eecfa1",
+            "kind": "key",
+            "keyId": "3851793d71591b5196fc7d8e636d77d2"
+          },
+          {
+            "fieldId": "572d5086401285786732c644f23928fd",
+            "kind": "key",
+            "keyId": "4efeaffa9dd9390632a136d603942dd4"
+          },
+          {
+            "fieldId": "d3b38a1584a601d5280c8456c574acf2",
+            "kind": "index",
+            "indexId": "b4aadff0f57e36295c9027590f1c96a8"
+          }
+        ]
+      }
+    ],
+    "relations": [
+      {
+        "id": "09f5a80ad9f41a509cae3a7ac8730144",
+        "name": "Post",
+        "sourceModel": "b2a6fb289365ab32869f1b2862cc6b5b",
+        "targetModel": "b11b75f11668a6f7019d05b1740d5118",
+        "sourceField": "c0c3c66292c388279d73411b0b6153a1",
+        "inverseField": "c33e834a8be4f1df23ed1783efcbdfe8",
+        "cardinality": "many",
+        "localFields": [
+          "44075e35d88b9d06bdc3c011f32f8c73"
+        ],
+        "remoteFields": [
+          "e20069ceb3135c47447fc322989acceb"
+        ],
+        "foreignKey": {
+          "id": "fae7acd008cdadf3660296730a3ecf88",
+          "physicalName": "fk_post_tags_post_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "15716585e9eb0a1412c3c92b57c8baaa",
+        "name": "Tag",
+        "sourceModel": "b2a6fb289365ab32869f1b2862cc6b5b",
+        "targetModel": "80fe9aaf21426d7926ca36ad6e8a95df",
+        "sourceField": "fe3669fe5cc1796a498ac1da4e077e4b",
+        "inverseField": "62a8e6209f084cfeed07d00271c92f56",
+        "cardinality": "many",
+        "localFields": [
+          "dc4c50eb34defbd52abb9d4fc5e51be2"
+        ],
+        "remoteFields": [
+          "927ba64decd704c758567b1b35e6c7fa"
+        ],
+        "foreignKey": {
+          "id": "7b7df9bded5e2529a8c8d18d400df54e",
+          "physicalName": "fk_post_tags_tag_name",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "3823f85a8315a38bc36367d411c5f90b",
+        "name": "Author",
+        "sourceModel": "364a3861c2d382ec0f02e83974f3b3c4",
+        "targetModel": "d5239ec6065febe61dad1b8d0b66bf07",
+        "sourceField": "ddc9f98674f8402a0ffd7a9b52fe9531",
+        "inverseField": "7950f0c2d483b3af4f5d2531db4eead6",
+        "cardinality": "many",
+        "localFields": [
+          "9a1015ac166c66934d347f7ec9daf925"
+        ],
+        "remoteFields": [
+          "184fbe94f719aa72470b6ab6b0eecfa1"
+        ],
+        "foreignKey": {
+          "id": "20f270cf987865089477fd4954db3d79",
+          "physicalName": "fk_comments_author_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "6964e75c2669d58e7f371071f27356b8",
+        "name": "User",
+        "sourceModel": "9f0a32ff74e8340344dbde26a58ba9b2",
+        "targetModel": "d5239ec6065febe61dad1b8d0b66bf07",
+        "sourceField": "ef7ad40c6dd5694cc92ab3e4e87969cb",
+        "inverseField": "b08968231b12e11781e4041b8ca5f15d",
+        "cardinality": "many",
+        "localFields": [
+          "e5c12c57b16ed638dbb0d9df456d3965"
+        ],
+        "remoteFields": [
+          "184fbe94f719aa72470b6ab6b0eecfa1"
+        ],
+        "foreignKey": {
+          "id": "459e935424153b30fdfae2474c33af69",
+          "physicalName": "fk_sessions_user_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "97b5b6194f0e3678f2e8c6eb18f397de",
+        "name": "Author",
+        "sourceModel": "b11b75f11668a6f7019d05b1740d5118",
+        "targetModel": "d5239ec6065febe61dad1b8d0b66bf07",
+        "sourceField": "6070119d21df1182108edda39cb5a8fa",
+        "inverseField": "3ed132b2c728ed7f27301bc3690b8fba",
+        "cardinality": "many",
+        "localFields": [
+          "29224b6d31711950e2ef31749e0f3bd0"
+        ],
+        "remoteFields": [
+          "184fbe94f719aa72470b6ab6b0eecfa1"
+        ],
+        "foreignKey": {
+          "id": "c5a005dd9ac0f876deb2fe9b548915e6",
+          "physicalName": "fk_posts_author_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "a11833fcadb80f9a26a6f7e237deeeed",
+        "name": "Post",
+        "sourceModel": "364a3861c2d382ec0f02e83974f3b3c4",
+        "targetModel": "b11b75f11668a6f7019d05b1740d5118",
+        "sourceField": "261ea68243c89744b84b2f37e90ce903",
+        "inverseField": "b5ecc8d7bbd4b2770289e1a7add5ad69",
+        "cardinality": "many",
+        "localFields": [
+          "025be8ae0426b680839a18767fd00978"
+        ],
+        "remoteFields": [
+          "e20069ceb3135c47447fc322989acceb"
+        ],
+        "foreignKey": {
+          "id": "8efb3b16d3aa3ff12f99fe4447bed086",
+          "physicalName": "fk_comments_post_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      },
+      {
+        "id": "cb9d58c74e6d92be1b32fb50a3690c04",
+        "name": "CommentTree",
+        "sourceModel": "364a3861c2d382ec0f02e83974f3b3c4",
+        "targetModel": "364a3861c2d382ec0f02e83974f3b3c4",
+        "sourceField": "8a40c9a6b0f4ca5c7c03148a36903a73",
+        "inverseField": "428030fabfab54bd4019b44a60a33098",
+        "cardinality": "many",
+        "localFields": [
+          "7e12e57c54b9b4785a8928db1172ad00"
+        ],
+        "remoteFields": [
+          "a1b8335883c74028b9d15f7bba2d0f30"
+        ],
+        "foreignKey": {
+          "id": "0b289ac87a91ab0b939c260eb88ddb1e",
+          "physicalName": "fk_comments_parent_id",
+          "onUpdate": "noAction",
+          "onDelete": "cascade",
+          "match": "simple",
+          "deferrable": "notDeferrable"
+        }
+      }
+    ],
+    "extensions": []
+  }
+}

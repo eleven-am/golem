@@ -23,7 +23,7 @@ model GolemUpsertGuard {
 }
 ```
 
-Copy the model from `packages/core/prisma/golem-core.prisma` or apply the provider SQL in `packages/core/prisma/migrations/sqlite/001_golem_upsert_guard.sql` or `packages/core/prisma/migrations/postgresql/001_golem_upsert_guard.sql`, then run your normal Prisma migration and generation workflow. Golem reserves `GolemUpsertGuard`, removes it from generated GraphQL and `forContext` model surfaces, and validates the delegate/table during Nest startup. Missing infrastructure now fails deployment rather than waiting for the first upsert.
+Copy the model from `typescript/packages/core/prisma/golem-core.prisma` or apply the provider SQL in `typescript/packages/core/prisma/migrations/sqlite/001_golem_upsert_guard.sql` or `typescript/packages/core/prisma/migrations/postgresql/001_golem_upsert_guard.sql`, then run your normal Prisma migration and generation workflow. Golem reserves `GolemUpsertGuard`, removes it from generated GraphQL and `forContext` model surfaces, and validates the delegate/table during Nest startup. Missing infrastructure now fails deployment rather than waiting for the first upsert.
 
 The table stays bounded by `defaults.upsertGuardStripes` (4,096 by default). It stores only a stripe and monotonic sequence; model names and unique selector values are hashed and never persisted. All participating context-aware upserts for the same canonical model/selector serialize before the policy branch probe. Plain Prisma/external writers and differently addressed selectors do not participate. A caller-owned SQLite transaction that established an incompatible snapshot before the guard write now returns stable `CONFLICT`; retry only by repeating the complete transaction when that is safe.
 
@@ -406,7 +406,7 @@ For relation-backed computed fields, declare `@BatchedComputedField` instead of 
 
 ## Optional SPA rendering package
 
-`@eleven-am/golem-render` is a new independent package for hosting a compiled SPA and injecting route-specific Open Graph/Twitter metadata. It has no dependency on Golem Core and adds no authorization behavior. See `packages/render/README.md` before exposing unscoped metadata.
+`@eleven-am/golem-render` is a new independent package for hosting a compiled SPA and injecting route-specific Open Graph/Twitter metadata. It has no dependency on Golem Core and adds no authorization behavior. See `typescript/packages/render/README.md` before exposing unscoped metadata.
 
 ---
 

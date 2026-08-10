@@ -1,9 +1,10 @@
 node_modules/
 dist/
+go/bin/
 *.db
 *.db-journal
-apps/demo/src/generated/
-packages/queue/test/prisma7/generated/
+typescript/apps/demo/src/generated/
+typescript/packages/queue/test/prisma7/generated/
 .DS_Store
-packages/queue/test/sqlite/out
-packages/queue/test/postgres/out
+typescript/packages/queue/test/sqlite/out
+typescript/packages/queue/test/postgres/out

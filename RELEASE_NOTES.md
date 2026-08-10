@@ -1,5 +1,15 @@
 # Release notes — 0.6.1
 
+These are the release notes for the TypeScript/NestJS packages. They do not
+announce a Go module release. Golem for Go remains unreleased while its P8
+ledger is pending; follow its [quickstart](./docs/golem-go/QUICKSTART.md),
+[production boundaries](./docs/golem-go/PRODUCTION.md), and
+[mandatory evidence ledger](./docs/golem-go/p8/P8-EVIDENCE.md) for current
+status. In particular, the Go implementation does not claim MySQL, federation,
+automatic production migration, raw SQL through authorized surfaces, built-in
+multi-process event transport or vendor CDC drivers, or observation of external
+writes without a conformant CDC adapter.
+
 Golem generates the SQL for the queries it generates, and enforces
 permissions with its own semantics rather than Prisma's.
 
@@ -13,7 +23,7 @@ of a query golem generates.
 
 Policy-aware upserts now acquire a bounded striped guard before probing the update-visible branch. The guard key is a SHA-256 hash of the model plus a typed canonical selector, mapped into 4,096 stripes by default; no selector value is stored. Engine-owned transactions acquire it as their first statement, then run exactly one create/update pipeline with exactly that branch's hooks and commit-buffered event. Concurrent participating PostgreSQL clients converge on one row and one truthful create event. SQLite snapshot conflicts are translated to stable `CONFLICT`.
 
-This requires the reserved `_golem_upsert_guard` table. Provider Prisma/SQL examples ship under `packages/core/prisma`; authorization-enabled Nest applications validate it at startup. The guarantee is cooperative: external/plain Prisma writers and differently addressed selectors remain outside it.
+This requires the reserved `_golem_upsert_guard` table. Provider Prisma/SQL examples ship under `typescript/packages/core/prisma`; authorization-enabled Nest applications validate it at startup. The guarantee is cooperative: external/plain Prisma writers and differently addressed selectors remain outside it.
 
 ### Subscription fan-out is bounded and observable
 

@@ -1,0 +1,2635 @@
+{
+  "formatVersion": 1,
+  "canonicalVersion": 1,
+  "hashAlgorithm": "sha256",
+  "generatorVersion": "golem-p1-migration-v1",
+  "provider": {
+    "Provider": "postgresql",
+    "Driver": {
+      "Module": "github.com/jackc/pgx/v5/stdlib",
+      "Adapter": "sqlx"
+    },
+    "MinimumVersion": {
+      "Major": 15,
+      "Minor": 0,
+      "Patch": 0
+    },
+    "Capabilities": [
+      {
+        "ID": "analytics.exact-arithmetic.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.ascii-insensitive-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.binary-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.exact-json.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.relation-correlation.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.advanced_indexes",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.advisory_xact_lock",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.generated_columns",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.jsonb",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "scalar-list.json-array.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      }
+    ]
+  },
+  "entries": [
+    {
+      "id": "0001_initial",
+      "parentChainHash": "",
+      "chainHash": "1e6c1e82f8f56994b90b24697563f6ca4df9616b059a06736b2d0a1372ee1477",
+      "files": [
+        {
+          "path": "migrations/postgresql/0001_initial.after.snapshot.json",
+          "sha256": "233a849c4c796d68d65b889cec6f79664d3814205dabcbeeb6c093135a34ec20"
+        },
+        {
+          "path": "migrations/postgresql/0001_initial.before.snapshot.json",
+          "sha256": "26b293bbeb7360cc4533a7cc4494e6472301d6e7bfb7969756612ac959002b60"
+        },
+        {
+          "path": "migrations/postgresql/0001_initial.sql",
+          "sha256": "196bfebf70f8c4b2487bf87b5ff1a7a5ec94251967e10701aab5566deafc2136"
+        }
+      ],
+      "manual": null,
+      "operations": [
+        {
+          "id": "1401a57b7b64b4d3e50bb20845cc3fc3",
+          "kind": "createNamespace",
+          "stage": 10,
+          "objectId": "public",
+          "after": "6027cecf46c6bd1509cb6e5dc831edb28aa3430d3721e2546ce4eac9442317e7",
+          "dependencies": null,
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "public"
+        },
+        {
+          "id": "6da29818c371cf5fcf7dd4721fa8e2f1",
+          "kind": "bootstrapSystemSchema",
+          "stage": 15,
+          "objectId": "system-schema",
+          "before": "27e1f825a4d2b6601be859b5c05f1f57b91b11abb7894aae5e4c814ac9478571",
+          "after": "fb59fe3d4017367f6fc941d694b3379e8edbd1c31e5350b9ed7fe7a9212aa9a1",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "system-schema"
+        },
+        {
+          "id": "4109c4f9f36e7c46a32f927247420116",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "364a3861c2d382ec0f02e83974f3b3c4",
+          "after": "060b019a22d10c64124704ffc3750be8dfa39cdc294e8f0d21c7024e0f0d1b87",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "364a3861c2d382ec0f02e83974f3b3c4"
+        },
+        {
+          "id": "685c3169e54b51f045e70f6a1c9921bf",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "80fe9aaf21426d7926ca36ad6e8a95df",
+          "after": "0f6945833e327a62b6eab14b332dd3bd7092ca4f90a16b0e3ff3438f7f9e722d",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "80fe9aaf21426d7926ca36ad6e8a95df"
+        },
+        {
+          "id": "19512497d0440388ef3f40bb3989f079",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "9f0a32ff74e8340344dbde26a58ba9b2",
+          "after": "cb6dcf006431277ad3965af0799ec4a91163efd31d757d12de3dd3820d2c01ae",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "9f0a32ff74e8340344dbde26a58ba9b2"
+        },
+        {
+          "id": "fc49c505163399ddd1b211770c7950d0",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "b11b75f11668a6f7019d05b1740d5118",
+          "after": "560e622b1eea20bdf297cee8eb8924c8421b09b712fd6df07f64643bdc49189e",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "b11b75f11668a6f7019d05b1740d5118"
+        },
+        {
+          "id": "1c0849ee88030a1ee57ad90505aa14ab",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "b2a6fb289365ab32869f1b2862cc6b5b",
+          "after": "bdbf36d9b99431b26df4fc578fba9f8a8bea82bee2864429bb3aaf2fa323242d",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "b2a6fb289365ab32869f1b2862cc6b5b"
+        },
+        {
+          "id": "3333488492b1b31576cf2d2e551bddfe",
+          "kind": "createTable",
+          "stage": 20,
+          "objectId": "d5239ec6065febe61dad1b8d0b66bf07",
+          "after": "ee222f5a111f6f7d852f07c5bcffb38139d6424835d70bd4366edb6b3bb4989c",
+          "dependencies": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "d5239ec6065febe61dad1b8d0b66bf07"
+        },
+        {
+          "id": "7091309717084a5fc683686039d5749d",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "28c22df0a265496faf6aa4a0fd0774ce",
+          "after": "b18be7ad34c6830ee40c128b632fa0f17052b74bb9a1c95f35d7ba514bea4b73",
+          "dependencies": [
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "28c22df0a265496faf6aa4a0fd0774ce"
+        },
+        {
+          "id": "0c1306066a87648c22c2ceca3ee53b3b",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "7ca42b5e056007232b865485b54c2535",
+          "after": "7d40fc0637c3097d3e7be31f110604f1e4e16cfaee5bd0dd27256e43e8efb8f5",
+          "dependencies": [
+            "1c0849ee88030a1ee57ad90505aa14ab",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "7ca42b5e056007232b865485b54c2535"
+        },
+        {
+          "id": "9dfeb8e5547815d5ff4e17834573c32e",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "7d9812e57dc863700c146b1bceb8568a",
+          "after": "c59b44fe00830e98aaeae5751c308c8bad03e372a7c503ec0b4b8a4b0c1508c3",
+          "dependencies": [
+            "19512497d0440388ef3f40bb3989f079",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "7d9812e57dc863700c146b1bceb8568a"
+        },
+        {
+          "id": "d5e33d74501a6bd800d28a6206443395",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "b4aadff0f57e36295c9027590f1c96a8",
+          "after": "f5368767381654a4cec1104da67baa11b600cda0ca7295c1f8dd80abcdfddbde",
+          "dependencies": [
+            "3333488492b1b31576cf2d2e551bddfe",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "b4aadff0f57e36295c9027590f1c96a8"
+        },
+        {
+          "id": "c7f2266a9204dcbbbd28681d340336d0",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "d66898568578c9181ee8eb4017e9de49",
+          "after": "005f13ca18cfdacabef0da4dcd326b066ede80b50b721824f2a81bdc778d46f7",
+          "dependencies": [
+            "4109c4f9f36e7c46a32f927247420116",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "d66898568578c9181ee8eb4017e9de49"
+        },
+        {
+          "id": "ac873599dd3c3c025dcf0ba523280650",
+          "kind": "createIndex",
+          "stage": 40,
+          "objectId": "f0500cb5bdb7cc06bb0f6f596178050e",
+          "after": "f2d4e760539b758fd9083ee6ddb778fe602d566ac7987e8da5457100a84720f1",
+          "dependencies": [
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "f0500cb5bdb7cc06bb0f6f596178050e"
+        },
+        {
+          "id": "7f13e32dc143eed8a4745a86f147f49e",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "0b289ac87a91ab0b939c260eb88ddb1e",
+          "after": "98055c2acde349f9207781c7985412913d93bf5dcdea573bf81d409d8b103413",
+          "dependencies": [
+            "4109c4f9f36e7c46a32f927247420116",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "0b289ac87a91ab0b939c260eb88ddb1e"
+        },
+        {
+          "id": "b8e82da6d7c7d9a4d9cdd7d92ceb65a1",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "20f270cf987865089477fd4954db3d79",
+          "after": "0ab92727f73848fabdf31dc00114cb529e5f3ef1525f7997212494254ebc4d3d",
+          "dependencies": [
+            "3333488492b1b31576cf2d2e551bddfe",
+            "4109c4f9f36e7c46a32f927247420116",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "20f270cf987865089477fd4954db3d79"
+        },
+        {
+          "id": "3a08fe7cc0e3ac77a888d6bee11c4cd4",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "459e935424153b30fdfae2474c33af69",
+          "after": "ac28e5e98c249b86fe4d77d91fd1a948e6117cde66c017a53392fede523d3c75",
+          "dependencies": [
+            "19512497d0440388ef3f40bb3989f079",
+            "3333488492b1b31576cf2d2e551bddfe",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "459e935424153b30fdfae2474c33af69"
+        },
+        {
+          "id": "d33a78ffde2de29aec21485787652bba",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "7b7df9bded5e2529a8c8d18d400df54e",
+          "after": "b65b7bbeb7d44bfff62bc04611480fc76dc0ee7062a0fa960e9837f05eb3b885",
+          "dependencies": [
+            "1c0849ee88030a1ee57ad90505aa14ab",
+            "685c3169e54b51f045e70f6a1c9921bf",
+            "6da29818c371cf5fcf7dd4721fa8e2f1"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "7b7df9bded5e2529a8c8d18d400df54e"
+        },
+        {
+          "id": "a37a1e6aa673baf95a1409249a353ee8",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "8efb3b16d3aa3ff12f99fe4447bed086",
+          "after": "7d553f4048962a73758da18e57b6cd520b13fb5fc3ac9ff61155fafdb4ec3067",
+          "dependencies": [
+            "4109c4f9f36e7c46a32f927247420116",
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "8efb3b16d3aa3ff12f99fe4447bed086"
+        },
+        {
+          "id": "8c7082390c0edf32ea22c59e34df30b2",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "c5a005dd9ac0f876deb2fe9b548915e6",
+          "after": "eabcae34aeecb0b50fb8b0ff9ff3fe3532c11ab29f98a8b9b17e544c1d27c3b1",
+          "dependencies": [
+            "3333488492b1b31576cf2d2e551bddfe",
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "c5a005dd9ac0f876deb2fe9b548915e6"
+        },
+        {
+          "id": "5fc8d1658b4a641918238d58189eac42",
+          "kind": "addForeignKey",
+          "stage": 50,
+          "objectId": "fae7acd008cdadf3660296730a3ecf88",
+          "after": "300b830206ba7de67d72e646c1b9471c53c7ace2235cb908743a54fa02a2d3b3",
+          "dependencies": [
+            "1c0849ee88030a1ee57ad90505aa14ab",
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "locking",
+          "logicalPath": "fae7acd008cdadf3660296730a3ecf88"
+        },
+        {
+          "id": "2ed3daf71219cabc83392696e43fe039",
+          "kind": "recordSchemaVersion",
+          "stage": 100,
+          "objectId": "schema-version",
+          "before": "621b071f293f911cef1f618da298120aa5493c672dba0d39fa53e586596ac082",
+          "after": "6f5c233fcdf40200bea4c9215b0c2328900f1ec2f2a9ae486979345208b161f6",
+          "dependencies": [
+            "0c1306066a87648c22c2ceca3ee53b3b",
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "19512497d0440388ef3f40bb3989f079",
+            "1c0849ee88030a1ee57ad90505aa14ab",
+            "3333488492b1b31576cf2d2e551bddfe",
+            "3a08fe7cc0e3ac77a888d6bee11c4cd4",
+            "4109c4f9f36e7c46a32f927247420116",
+            "5fc8d1658b4a641918238d58189eac42",
+            "685c3169e54b51f045e70f6a1c9921bf",
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "7091309717084a5fc683686039d5749d",
+            "7f13e32dc143eed8a4745a86f147f49e",
+            "8c7082390c0edf32ea22c59e34df30b2",
+            "9dfeb8e5547815d5ff4e17834573c32e",
+            "a37a1e6aa673baf95a1409249a353ee8",
+            "ac873599dd3c3c025dcf0ba523280650",
+            "b8e82da6d7c7d9a4d9cdd7d92ceb65a1",
+            "c7f2266a9204dcbbbd28681d340336d0",
+            "d33a78ffde2de29aec21485787652bba",
+            "d5e33d74501a6bd800d28a6206443395",
+            "fc49c505163399ddd1b211770c7950d0"
+          ],
+          "capabilities": null,
+          "mode": "transactional",
+          "risk": "safe",
+          "logicalPath": "schema"
+        }
+      ],
+      "phases": [
+        {
+          "ordinal": 0,
+          "mode": "transactional",
+          "operations": [
+            "1401a57b7b64b4d3e50bb20845cc3fc3",
+            "6da29818c371cf5fcf7dd4721fa8e2f1",
+            "4109c4f9f36e7c46a32f927247420116",
+            "685c3169e54b51f045e70f6a1c9921bf",
+            "19512497d0440388ef3f40bb3989f079",
+            "fc49c505163399ddd1b211770c7950d0",
+            "1c0849ee88030a1ee57ad90505aa14ab",
+            "3333488492b1b31576cf2d2e551bddfe",
+            "7091309717084a5fc683686039d5749d",
+            "0c1306066a87648c22c2ceca3ee53b3b",
+            "9dfeb8e5547815d5ff4e17834573c32e",
+            "d5e33d74501a6bd800d28a6206443395",
+            "c7f2266a9204dcbbbd28681d340336d0",
+            "ac873599dd3c3c025dcf0ba523280650",
+            "7f13e32dc143eed8a4745a86f147f49e",
+            "b8e82da6d7c7d9a4d9cdd7d92ceb65a1",
+            "3a08fe7cc0e3ac77a888d6bee11c4cd4",
+            "d33a78ffde2de29aec21485787652bba",
+            "a37a1e6aa673baf95a1409249a353ee8",
+            "8c7082390c0edf32ea22c59e34df30b2",
+            "5fc8d1658b4a641918238d58189eac42",
+            "2ed3daf71219cabc83392696e43fe039"
+          ],
+          "beforeFingerprint": "621b071f293f911cef1f618da298120aa5493c672dba0d39fa53e586596ac082",
+          "afterFingerprint": "6f5c233fcdf40200bea4c9215b0c2328900f1ec2f2a9ae486979345208b161f6"
+        }
+      ],
+      "risks": [
+        {
+          "operationId": "1401a57b7b64b4d3e50bb20845cc3fc3",
+          "risk": "safe"
+        },
+        {
+          "operationId": "6da29818c371cf5fcf7dd4721fa8e2f1",
+          "risk": "safe"
+        },
+        {
+          "operationId": "4109c4f9f36e7c46a32f927247420116",
+          "risk": "safe"
+        },
+        {
+          "operationId": "685c3169e54b51f045e70f6a1c9921bf",
+          "risk": "safe"
+        },
+        {
+          "operationId": "19512497d0440388ef3f40bb3989f079",
+          "risk": "safe"
+        },
+        {
+          "operationId": "fc49c505163399ddd1b211770c7950d0",
+          "risk": "safe"
+        },
+        {
+          "operationId": "1c0849ee88030a1ee57ad90505aa14ab",
+          "risk": "safe"
+        },
+        {
+          "operationId": "3333488492b1b31576cf2d2e551bddfe",
+          "risk": "safe"
+        },
+        {
+          "operationId": "7091309717084a5fc683686039d5749d",
+          "risk": "safe"
+        },
+        {
+          "operationId": "0c1306066a87648c22c2ceca3ee53b3b",
+          "risk": "safe"
+        },
+        {
+          "operationId": "9dfeb8e5547815d5ff4e17834573c32e",
+          "risk": "safe"
+        },
+        {
+          "operationId": "d5e33d74501a6bd800d28a6206443395",
+          "risk": "safe"
+        },
+        {
+          "operationId": "c7f2266a9204dcbbbd28681d340336d0",
+          "risk": "safe"
+        },
+        {
+          "operationId": "ac873599dd3c3c025dcf0ba523280650",
+          "risk": "safe"
+        },
+        {
+          "operationId": "7f13e32dc143eed8a4745a86f147f49e",
+          "risk": "locking"
+        },
+        {
+          "operationId": "b8e82da6d7c7d9a4d9cdd7d92ceb65a1",
+          "risk": "locking"
+        },
+        {
+          "operationId": "3a08fe7cc0e3ac77a888d6bee11c4cd4",
+          "risk": "locking"
+        },
+        {
+          "operationId": "d33a78ffde2de29aec21485787652bba",
+          "risk": "locking"
+        },
+        {
+          "operationId": "a37a1e6aa673baf95a1409249a353ee8",
+          "risk": "locking"
+        },
+        {
+          "operationId": "8c7082390c0edf32ea22c59e34df30b2",
+          "risk": "locking"
+        },
+        {
+          "operationId": "5fc8d1658b4a641918238d58189eac42",
+          "risk": "locking"
+        },
+        {
+          "operationId": "2ed3daf71219cabc83392696e43fe039",
+          "risk": "safe"
+        }
+      ],
+      "approvals": null,
+      "beforeModel": "6992d8f98da0f93040ac17317f91a65107dd916ff7af5b302e61474782de7a20",
+      "afterModel": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
+      "beforePhysical": "621b071f293f911cef1f618da298120aa5493c672dba0d39fa53e586596ac082",
+      "afterPhysical": "6f5c233fcdf40200bea4c9215b0c2328900f1ec2f2a9ae486979345208b161f6",
+      "beforeSnapshot": {
+        "Version": 1,
+        "CanonicalVersion": 1,
+        "Provider": {
+          "Provider": "postgresql",
+          "Driver": {
+            "Module": "github.com/jackc/pgx/v5/stdlib",
+            "Adapter": "sqlx"
+          },
+          "MinimumVersion": {
+            "Major": 15,
+            "Minor": 0,
+            "Patch": 0
+          },
+          "Capabilities": [
+            {
+              "ID": "analytics.exact-arithmetic.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.ascii-insensitive-text.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.binary-text.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.exact-json.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.relation-correlation.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "postgresql.advanced_indexes",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "postgresql.advisory_xact_lock",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "postgresql.generated_columns",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "postgresql.jsonb",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "scalar-list.json-array.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            }
+          ]
+        },
+        "Namespace": {
+          "Name": "public"
+        },
+        "Tables": [],
+        "Extensions": [],
+        "System": {
+          "Version": 0,
+          "Namespace": {
+            "Name": ""
+          },
+          "Objects": []
+        },
+        "Unmanaged": null
+      },
+      "afterSnapshot": {
+        "Version": 1,
+        "CanonicalVersion": 1,
+        "Provider": {
+          "Provider": "postgresql",
+          "Driver": {
+            "Module": "github.com/jackc/pgx/v5/stdlib",
+            "Adapter": "sqlx"
+          },
+          "MinimumVersion": {
+            "Major": 15,
+            "Minor": 0,
+            "Patch": 0
+          },
+          "Capabilities": [
+            {
+              "ID": "analytics.exact-arithmetic.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.ascii-insensitive-text.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.binary-text.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.exact-json.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "policy.relation-correlation.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "postgresql.advanced_indexes",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "postgresql.advisory_xact_lock",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            },
+            {
+              "ID": "postgresql.generated_columns",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "postgresql.jsonb",
+              "Version": 1,
+              "Verification": "version_floor"
+            },
+            {
+              "ID": "scalar-list.json-array.v1",
+              "Version": 1,
+              "Verification": "runtime_probe"
+            }
+          ]
+        },
+        "Namespace": {
+          "Name": "public"
+        },
+        "Tables": [
+          {
+            "ID": "364a3861c2d382ec0f02e83974f3b3c4",
+            "Name": "comments",
+            "Columns": [
+              {
+                "ID": "a1b8335883c74028b9d15f7bba2d0f30",
+                "Name": "id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "025be8ae0426b680839a18767fd00978",
+                "Name": "post_id",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "9a1015ac166c66934d347f7ec9daf925",
+                "Name": "author_id",
+                "Ordinal": 2,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "7e12e57c54b9b4785a8928db1172ad00",
+                "Name": "parent_id",
+                "Ordinal": 3,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": true,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "74780c9d955be686287e3fac79a30eb2",
+                "Name": "body",
+                "Ordinal": 4,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "93873b13a4b34c536891e08240918eb7",
+                "Name": "created_at",
+                "Ordinal": 5,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "57e8e4fe611eb12c6261a6077346cf5c",
+              "Name": "pk_comments",
+              "Columns": [
+                "a1b8335883c74028b9d15f7bba2d0f30"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [],
+            "ForeignKeys": [
+              {
+                "ID": "0b289ac87a91ab0b939c260eb88ddb1e",
+                "Name": "fk_comments_parent_id",
+                "Columns": [
+                  "7e12e57c54b9b4785a8928db1172ad00"
+                ],
+                "ReferencedTable": "364a3861c2d382ec0f02e83974f3b3c4",
+                "ReferencedColumns": [
+                  "a1b8335883c74028b9d15f7bba2d0f30"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "20f270cf987865089477fd4954db3d79",
+                "Name": "fk_comments_author_id",
+                "Columns": [
+                  "9a1015ac166c66934d347f7ec9daf925"
+                ],
+                "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+                "ReferencedColumns": [
+                  "184fbe94f719aa72470b6ab6b0eecfa1"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "8efb3b16d3aa3ff12f99fe4447bed086",
+                "Name": "fk_comments_post_id",
+                "Columns": [
+                  "025be8ae0426b680839a18767fd00978"
+                ],
+                "ReferencedTable": "b11b75f11668a6f7019d05b1740d5118",
+                "ReferencedColumns": [
+                  "e20069ceb3135c47447fc322989acceb"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              }
+            ],
+            "Checks": [],
+            "Indexes": [
+              {
+                "ID": "d66898568578c9181ee8eb4017e9de49",
+                "Name": "idx_comments_post_parent_created",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "025be8ae0426b680839a18767fd00978",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "7e12e57c54b9b4785a8928db1172ad00",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "93873b13a4b34c536891e08240918eb7",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "a1b8335883c74028b9d15f7bba2d0f30",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              }
+            ],
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b2a6fb289365ab32869f1b2862cc6b5b",
+            "Name": "post_tags",
+            "Columns": [
+              {
+                "ID": "44075e35d88b9d06bdc3c011f32f8c73",
+                "Name": "post_id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                "Name": "tag_name",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "c86ed7ebd8270aeab98eb584f906c439",
+              "Name": "pk_post_tags",
+              "Columns": [
+                "44075e35d88b9d06bdc3c011f32f8c73",
+                "dc4c50eb34defbd52abb9d4fc5e51be2"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [],
+            "ForeignKeys": [
+              {
+                "ID": "7b7df9bded5e2529a8c8d18d400df54e",
+                "Name": "fk_post_tags_tag_name",
+                "Columns": [
+                  "dc4c50eb34defbd52abb9d4fc5e51be2"
+                ],
+                "ReferencedTable": "80fe9aaf21426d7926ca36ad6e8a95df",
+                "ReferencedColumns": [
+                  "927ba64decd704c758567b1b35e6c7fa"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "fae7acd008cdadf3660296730a3ecf88",
+                "Name": "fk_post_tags_post_id",
+                "Columns": [
+                  "44075e35d88b9d06bdc3c011f32f8c73"
+                ],
+                "ReferencedTable": "b11b75f11668a6f7019d05b1740d5118",
+                "ReferencedColumns": [
+                  "e20069ceb3135c47447fc322989acceb"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              }
+            ],
+            "Checks": [
+              {
+                "ID": "eb8121184135aa37e713ebc809065214",
+                "Name": "ck_max_length_eb8121184135",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.less-equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.schema.function.length.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "portable"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.text",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "integer",
+                        "canonical": "64"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              }
+            ],
+            "Indexes": [
+              {
+                "ID": "7ca42b5e056007232b865485b54c2535",
+                "Name": "idx_post_tags_tag_post",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "dc4c50eb34defbd52abb9d4fc5e51be2",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "44075e35d88b9d06bdc3c011f32f8c73",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              }
+            ],
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b11b75f11668a6f7019d05b1740d5118",
+            "Name": "posts",
+            "Columns": [
+              {
+                "ID": "e20069ceb3135c47447fc322989acceb",
+                "Name": "id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "29224b6d31711950e2ef31749e0f3bd0",
+                "Name": "author_id",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "afce81771edaa185328ec949768aaff2",
+                "Name": "title",
+                "Ordinal": 2,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "f8f2f3fcc4efbe5905f9ea29c949762a",
+                "Name": "body",
+                "Ordinal": 3,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "d998a29c13569fe87d74f00b7f28a78f",
+                "Name": "published",
+                "Ordinal": 4,
+                "Storage": {
+                  "Kind": "postgresql.boolean",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "bool",
+                    "canonical": "false"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "d3b5a464f819a7f0ac93e1491a2279fe",
+                "Name": "reactions",
+                "Ordinal": 5,
+                "Storage": {
+                  "Kind": "postgresql.smallint",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "0"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "3c205e617cd8c798bd907ff5fd8a2fb6",
+                "Name": "priority",
+                "Ordinal": 6,
+                "Storage": {
+                  "Kind": "postgresql.integer",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "0"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "cdcefdcbcd9fbe3d0533d250541e159a",
+                "Name": "views",
+                "Ordinal": 7,
+                "Storage": {
+                  "Kind": "postgresql.bigint",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "0"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "2ac2d0174bc2fc76b10167255ba2c0dc",
+                "Name": "momentum",
+                "Ordinal": 8,
+                "Storage": {
+                  "Kind": "postgresql.real",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "float",
+                    "canonical": "0"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "939477f819b14905043b736dcced5148",
+                "Name": "rating",
+                "Ordinal": 9,
+                "Storage": {
+                  "Kind": "postgresql.double_precision",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "float",
+                    "canonical": "0"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "5525976ba84c55e7ea0bdfb82d539695",
+                "Name": "budget",
+                "Ordinal": 10,
+                "Storage": {
+                  "Kind": "postgresql.numeric",
+                  "Precision": 18,
+                  "Scale": 2,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "decimal",
+                    "canonical": "0.00"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "ede0935e24386b508a62332396f6508b",
+                "Name": "live_date",
+                "Ordinal": 11,
+                "Storage": {
+                  "Kind": "postgresql.date",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "84a84e6d04dbca50e5109e55b455a4f9",
+                "Name": "live_time",
+                "Ordinal": 12,
+                "Storage": {
+                  "Kind": "postgresql.time",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "11f9c4adff40cc4daa268c6132ad36d8",
+                "Name": "metadata",
+                "Ordinal": 13,
+                "Storage": {
+                  "Kind": "postgresql.jsonb",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": [
+                  {
+                    "Capability": "postgresql.jsonb",
+                    "Owner": {
+                      "Kind": "field",
+                      "ModelID": "b11b75f11668a6f7019d05b1740d5118",
+                      "FieldID": "11f9c4adff40cc4daa268c6132ad36d8",
+                      "ObjectID": ""
+                    }
+                  }
+                ]
+              },
+              {
+                "ID": "99dba4ce733b9a849ddcc603c31b5c83",
+                "Name": "visibility",
+                "Ordinal": 14,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "literal",
+                  "Literal": {
+                    "kind": "string",
+                    "canonical": "PUBLIC"
+                  },
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "464e7eb85629348cdcdb079a6ce847a8",
+                "Name": "topics",
+                "Ordinal": 15,
+                "Storage": {
+                  "Kind": "postgresql.jsonb",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": [
+                  {
+                    "Capability": "postgresql.jsonb",
+                    "Owner": {
+                      "Kind": "field",
+                      "ModelID": "b11b75f11668a6f7019d05b1740d5118",
+                      "FieldID": "464e7eb85629348cdcdb079a6ce847a8",
+                      "ObjectID": ""
+                    }
+                  }
+                ]
+              },
+              {
+                "ID": "62c5faa04f85a2985a6da0e2d755bed1",
+                "Name": "created_at",
+                "Ordinal": 16,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "ca003a48c4490b5e5891a02655b831d5",
+                "Name": "updated_at",
+                "Ordinal": 17,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "ad5ef8d08dc489b6b76c49de55317479",
+              "Name": "pk_posts",
+              "Columns": [
+                "e20069ceb3135c47447fc322989acceb"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [],
+            "ForeignKeys": [
+              {
+                "ID": "c5a005dd9ac0f876deb2fe9b548915e6",
+                "Name": "fk_posts_author_id",
+                "Columns": [
+                  "29224b6d31711950e2ef31749e0f3bd0"
+                ],
+                "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+                "ReferencedColumns": [
+                  "184fbe94f719aa72470b6ab6b0eecfa1"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              }
+            ],
+            "Checks": [
+              {
+                "ID": "1f8e4251522864292ffc1dbcaa05d54a",
+                "Name": "ck_json_array_1f8e42515228",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.postgresql.function.jsonb-typeof.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "postgresql"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.jsonb",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "464e7eb85629348cdcdb079a6ce847a8",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "string",
+                        "canonical": "array"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "7aace88823b249b92c066b799ffa52ea",
+                "Name": "ck_max_length_7aace88823b2",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.less-equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.schema.function.length.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "portable"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.text",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "afce81771edaa185328ec949768aaff2",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "integer",
+                        "canonical": "160"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "eb9c2f1cf6eca9d1d3f77d8cc14a9f08",
+                "Name": "ck_enum_eb9c2f1cf6ec",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.in.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "99dba4ce733b9a849ddcc603c31b5c83",
+                      "Literal": null,
+                      "Operands": []
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "string",
+                        "canonical": "PUBLIC"
+                      },
+                      "Operands": []
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "string",
+                        "canonical": "FOLLOWERS"
+                      },
+                      "Operands": []
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "string",
+                        "canonical": "PRIVATE"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              }
+            ],
+            "Indexes": [
+              {
+                "ID": "28c22df0a265496faf6aa4a0fd0774ce",
+                "Name": "idx_posts_feed",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "d998a29c13569fe87d74f00b7f28a78f",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "62c5faa04f85a2985a6da0e2d755bed1",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "e20069ceb3135c47447fc322989acceb",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "f0500cb5bdb7cc06bb0f6f596178050e",
+                "Name": "idx_posts_author_created",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "29224b6d31711950e2ef31749e0f3bd0",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "62c5faa04f85a2985a6da0e2d755bed1",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "e20069ceb3135c47447fc322989acceb",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              }
+            ],
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "9f0a32ff74e8340344dbde26a58ba9b2",
+            "Name": "sessions",
+            "Columns": [
+              {
+                "ID": "230e5e19e0a2649a5fc5a304a7dbd158",
+                "Name": "id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "e5c12c57b16ed638dbb0d9df456d3965",
+                "Name": "user_id",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "44933764614533b988c40e0a89b1c9aa",
+                "Name": "token_hash",
+                "Ordinal": 2,
+                "Storage": {
+                  "Kind": "postgresql.bytea",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "42e3e2bd1988a04db96d90478750a7fb",
+                "Name": "expires_at",
+                "Ordinal": 3,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "fb3dcb5c417c3754b24dec493e09ed5b",
+                "Name": "created_at",
+                "Ordinal": 4,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "f261c97c2c9901331ca61b195b58dbe7",
+              "Name": "pk_sessions",
+              "Columns": [
+                "230e5e19e0a2649a5fc5a304a7dbd158"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [
+              {
+                "ID": "7a68c5c5360721307ab3a86124fb05dd",
+                "Name": "uq_sessions_token_hash",
+                "Columns": [
+                  "44933764614533b988c40e0a89b1c9aa"
+                ],
+                "RequiredCapabilities": null
+              }
+            ],
+            "ForeignKeys": [
+              {
+                "ID": "459e935424153b30fdfae2474c33af69",
+                "Name": "fk_sessions_user_id",
+                "Columns": [
+                  "e5c12c57b16ed638dbb0d9df456d3965"
+                ],
+                "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+                "ReferencedColumns": [
+                  "184fbe94f719aa72470b6ab6b0eecfa1"
+                ],
+                "OnUpdate": "noAction",
+                "OnDelete": "cascade",
+                "Deferrable": "notDeferrable",
+                "RequiredCapabilities": null
+              }
+            ],
+            "Checks": [],
+            "Indexes": [
+              {
+                "ID": "7d9812e57dc863700c146b1bceb8568a",
+                "Name": "idx_sessions_user_expires",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "e5c12c57b16ed638dbb0d9df456d3965",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "42e3e2bd1988a04db96d90478750a7fb",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              }
+            ],
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "80fe9aaf21426d7926ca36ad6e8a95df",
+            "Name": "tags",
+            "Columns": [
+              {
+                "ID": "b5d7a5b516a8ed94b498d2363a247cf1",
+                "Name": "id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "927ba64decd704c758567b1b35e6c7fa",
+                "Name": "name",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "0694442681975a158ae95164361a06a3",
+              "Name": "pk_tags",
+              "Columns": [
+                "b5d7a5b516a8ed94b498d2363a247cf1"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [
+              {
+                "ID": "21e8a4b720d18bbe29408664db144813",
+                "Name": "uq_tags_name",
+                "Columns": [
+                  "927ba64decd704c758567b1b35e6c7fa"
+                ],
+                "RequiredCapabilities": null
+              }
+            ],
+            "ForeignKeys": [],
+            "Checks": [
+              {
+                "ID": "1d00396c5e8c75c2181bfca7aa072129",
+                "Name": "ck_max_length_1d00396c5e8c",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.less-equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.schema.function.length.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "portable"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.text",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "927ba64decd704c758567b1b35e6c7fa",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "integer",
+                        "canonical": "64"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              }
+            ],
+            "Indexes": [],
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "d5239ec6065febe61dad1b8d0b66bf07",
+            "Name": "users",
+            "Columns": [
+              {
+                "ID": "184fbe94f719aa72470b6ab6b0eecfa1",
+                "Name": "id",
+                "Ordinal": 0,
+                "Storage": {
+                  "Kind": "postgresql.uuid",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "572d5086401285786732c644f23928fd",
+                "Name": "handle",
+                "Ordinal": 1,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "b16aa8e13cab4c3f4fcd1e40e940417a",
+                "Name": "email",
+                "Ordinal": 2,
+                "Storage": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "d3b38a1584a601d5280c8456c574acf2",
+                "Name": "created_at",
+                "Ordinal": 3,
+                "Storage": {
+                  "Kind": "postgresql.timestamptz",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 6,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Default": {
+                  "Kind": "none",
+                  "Literal": null,
+                  "Expression": null
+                },
+                "Generated": null,
+                "Collation": null,
+                "RequiredCapabilities": null
+              }
+            ],
+            "PrimaryKey": {
+              "ID": "3851793d71591b5196fc7d8e636d77d2",
+              "Name": "pk_users",
+              "Columns": [
+                "184fbe94f719aa72470b6ab6b0eecfa1"
+              ],
+              "RequiredCapabilities": null
+            },
+            "Uniques": [
+              {
+                "ID": "4efeaffa9dd9390632a136d603942dd4",
+                "Name": "uq_users_handle",
+                "Columns": [
+                  "572d5086401285786732c644f23928fd"
+                ],
+                "RequiredCapabilities": null
+              }
+            ],
+            "ForeignKeys": [],
+            "Checks": [
+              {
+                "ID": "4815c37e72be8d27e32656d23f91b005",
+                "Name": "ck_max_length_4815c37e72be",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.less-equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.schema.function.length.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "portable"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.text",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "572d5086401285786732c644f23928fd",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "integer",
+                        "canonical": "40"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              },
+              {
+                "ID": "7f9f055183f748a814f1d9404dfd62ab",
+                "Name": "ck_max_length_7f9f055183f7",
+                "Expression": {
+                  "Kind": "operator",
+                  "Type": {
+                    "Kind": "postgresql.boolean",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.predicate.less-equal.v1",
+                    "Kind": "operator",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "function",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": {
+                        "Identity": "golem.schema.function.length.v1",
+                        "Kind": "function",
+                        "Version": 1,
+                        "Provider": "portable"
+                      },
+                      "Column": null,
+                      "Literal": null,
+                      "Operands": [
+                        {
+                          "Kind": "column",
+                          "Type": {
+                            "Kind": "postgresql.text",
+                            "Precision": 0,
+                            "Scale": 0,
+                            "Length": 0,
+                            "Symbol": null
+                          },
+                          "Nullable": false,
+                          "Symbol": null,
+                          "Column": "b16aa8e13cab4c3f4fcd1e40e940417a",
+                          "Literal": null,
+                          "Operands": []
+                        }
+                      ]
+                    },
+                    {
+                      "Kind": "literal",
+                      "Type": {
+                        "Kind": "postgresql.bigint",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": null,
+                      "Literal": {
+                        "kind": "integer",
+                        "canonical": "255"
+                      },
+                      "Operands": []
+                    }
+                  ]
+                },
+                "RequiredCapabilities": null
+              }
+            ],
+            "Indexes": [
+              {
+                "ID": "b4aadff0f57e36295c9027590f1c96a8",
+                "Name": "idx_users_created",
+                "Unique": false,
+                "Method": "btree",
+                "Keys": [
+                  {
+                    "Column": "d3b38a1584a601d5280c8456c574acf2",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  },
+                  {
+                    "Column": "184fbe94f719aa72470b6ab6b0eecfa1",
+                    "Expression": null,
+                    "Direction": "asc",
+                    "Nulls": "default",
+                    "Collation": null,
+                    "OpClass": null
+                  }
+                ],
+                "Include": null,
+                "Predicate": null,
+                "CreationMode": "transactional",
+                "RequiredCapabilities": null
+              }
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "Extensions": [],
+        "System": {
+          "Version": 1,
+          "Namespace": {
+            "Name": "_golem"
+          },
+          "Objects": [
+            {
+              "ID": "076704f0bfb30b5fed47137811a6dd18",
+              "Kind": "upsert_guard",
+              "Version": 1,
+              "Name": "_golem_upsert_guard",
+              "Attributes": [],
+              "RequiredCapabilities": null
+            },
+            {
+              "ID": "14b2d0b9de583fe675fa72de1d1c78c8",
+              "Kind": "outbox",
+              "Version": 1,
+              "Name": "_golem_outbox",
+              "Attributes": [],
+              "RequiredCapabilities": null
+            },
+            {
+              "ID": "51aa5c96fd5d24e27e182ed85f7bcbf2",
+              "Kind": "outbox_delivery",
+              "Version": 1,
+              "Name": "_golem_outbox_delivery",
+              "Attributes": [],
+              "RequiredCapabilities": null
+            },
+            {
+              "ID": "cb3020cd708be72c384f431749769c98",
+              "Kind": "migration_ledger",
+              "Version": 1,
+              "Name": "_golem_migrations",
+              "Attributes": [],
+              "RequiredCapabilities": null
+            },
+            {
+              "ID": "e28aeab0927ce864e8d65a1e1dc62fc9",
+              "Kind": "migration_lock",
+              "Version": 1,
+              "Name": "_golem_migration_lock",
+              "Attributes": [],
+              "RequiredCapabilities": null
+            }
+          ]
+        },
+        "Unmanaged": null
+      },
+      "unmanagedAllowlistDigest": "667cdaa536484e26d01ef38b74fc4e1e941ada545eab42b5c847359e9c864cea"
+    }
+  ]
+}

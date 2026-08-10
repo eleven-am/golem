@@ -1,0 +1,53 @@
+{
+  "name": "@eleven-am/golem-authorizer",
+  "version": "0.6.1",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "jest"
+  },
+  "dependencies": {
+    "@casl/prisma": "^2.0.0",
+    "@eleven-am/golem-core": "^0.6.1",
+    "@eleven-am/golem-policy": "^0.6.0"
+  },
+  "peerDependencies": {
+    "@eleven-am/authorizer": "^2.2.1",
+    "@nestjs/common": "^11.0.0"
+  },
+  "devDependencies": {
+    "@eleven-am/authorizer": "^2.2.1",
+    "@nestjs/common": "^11.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.0",
+    "graphql": "^16.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
+    "typescript": "^5.7.0"
+  },
+  "license": "GPL-3.0",
+  "author": "Roy OSSAI",
+  "engines": {
+    "node": ">=20.19"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "description": "Golem authorization adapter for @eleven-am/authorizer (CASL): constraints, verified writes, field permissions, read masking",
+  "keywords": [
+    "golem",
+    "casl",
+    "authorization",
+    "prisma"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eleven-am/golem.git",
+    "directory": "typescript/packages/authorizer"
+  }
+}

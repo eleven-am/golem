@@ -1,0 +1,37 @@
+[
+  {
+    "name": "newer-grant-restores-denied-row",
+    "rules": [
+      { "effect": "can" },
+      { "effect": "cannot", "where": { "published": false } },
+      { "effect": "can", "where": { "authorId": "u1" } }
+    ],
+    "expectedIds": ["own-draft", "other-published"]
+  },
+  {
+    "name": "newer-denial-overrides-grant",
+    "rules": [
+      { "effect": "can" },
+      { "effect": "can", "where": { "authorId": "u1" } },
+      { "effect": "cannot", "where": { "published": false } }
+    ],
+    "expectedIds": ["other-published"]
+  },
+  {
+    "name": "unconditional-denial-stops-older-grant",
+    "rules": [
+      { "effect": "can" },
+      { "effect": "cannot" }
+    ],
+    "expectedIds": []
+  },
+  {
+    "name": "newer-conditional-grant-precedes-unconditional-denial",
+    "rules": [
+      { "effect": "can" },
+      { "effect": "cannot" },
+      { "effect": "can", "where": { "authorId": "u1" } }
+    ],
+    "expectedIds": ["own-draft"]
+  }
+]

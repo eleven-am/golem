@@ -5,7 +5,7 @@ Status: **implemented and published** as `@eleven-am/golem-render@0.1.0` (Golem 
 Author of record: design discussion with Roy Ossai.
 
 This document is kept for the decisions in §3, which explain why the code is shaped
-as it is. For usage, see `packages/render/README.md`. Deviations made during
+as it is. For usage, see `typescript/packages/render/README.md`. Deviations made during
 implementation are recorded in §9.
 
 ---
@@ -280,7 +280,7 @@ Tests: metadata resolves and injects; stacked patterns both match; `=` patterns 
 
 ## 6. Package placement
 
-`packages/render` in the golem monorepo → `@eleven-am/golem-render`. Same build, test, and release train as `@eleven-am/golem-queue`: `tsc` build, colocated `*.test.ts`, ts-jest, CommonJS, extensionless relative imports.
+`typescript/packages/render` in the golem monorepo → `@eleven-am/golem-render`. Same build, test, and release train as `@eleven-am/golem-queue`: `tsc` build, colocated `*.test.ts`, ts-jest, CommonJS, extensionless relative imports.
 
 Add it to the root `build` script and to the publish workflow's dependency-ordered `publish` list.
 

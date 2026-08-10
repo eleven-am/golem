@@ -1,0 +1,155 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "contract_metadata",
+  "formatVersion": 1,
+  "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+  "contractFingerprint": "38ddc31ce6116da13233ccb7459d0ebe1d241052eb98fc541f90ce7f26b00a30",
+  "generationDigest": "6fc580e090c93bebaadd082f9842b5a18001ade12c82f694216ba264963d1116",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p2-go-abi-v4",
+  "payload": {
+    "formatVersion": 4,
+    "graphqlAbiVersion": 3,
+    "models": [
+      {
+        "modelId": "7b649ef09d1d2ce36c52750ce2f1827a",
+        "graphqlName": "Post",
+        "graphqlPlural": "Posts",
+        "roots": {
+          "findOne": "post",
+          "findMany": "posts",
+          "create": "createPost",
+          "update": "updatePost",
+          "upsert": "upsertPost",
+          "delete": "deletePost",
+          "updateMany": "updateManyPosts",
+          "deleteMany": "deleteManyPosts",
+          "aggregate": "aggregatePosts",
+          "groupBy": "groupByPosts",
+          "relationGroupBy": "relationGroupByPosts",
+          "events": "postEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "9c02b9dce137c301718e28b8c8edd0ca",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "aac3e4dbf707bac9cce3b05eb554c35f",
+            "graphqlName": "title",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "d4659767e3174fdbccb1262eb7190377",
+            "graphqlName": "ownerID",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "selectors": [
+          {
+            "keyId": "95e85d808b02abec2cd274caf205eb5d",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "9c02b9dce137c301718e28b8c8edd0ca"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "PostEvent",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt"
+          ],
+          "deleteSnapshotFull": true,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "7b649ef09d1d2ce36c52750ce2f1827a",
+            "primaryKeyId": "95e85d808b02abec2cd274caf205eb5d",
+            "identityFields": [
+              {
+                "fieldId": "9c02b9dce137c301718e28b8c8edd0ca",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "9c02b9dce137c301718e28b8c8edd0ca",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "d4659767e3174fdbccb1262eb7190377",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "aac3e4dbf707bac9cce3b05eb554c35f",
+                "type": {
+                  "kind": "string",
+                  "maxLength": 80
+                },
+                "nullable": false
+              }
+            ],
+            "enums": []
+          },
+          "schemaFingerprint": "5cb820997ec5f1f0df681fb7585bfad222f9c893b12d6289639036955161871b"
+        },
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      }
+    ],
+    "enums": [],
+    "methods": [
+      {
+        "modelId": "7b649ef09d1d2ce36c52750ce2f1827a",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/internal/compatibility/testdata/p7-event/source",
+          "name": "Post"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/internal/compatibility/testdata/p7-event/source",
+          "name": "Actor"
+        }
+      }
+    ],
+    "customOperations": []
+  }
+}

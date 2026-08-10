@@ -1,0 +1,19 @@
+{
+  "formatVersion": 1,
+  "sourceCommit": "aafa3e965abe53deed887181b675d667574ea954",
+  "row": {
+    "EventID": "f3791322-08b8-49be-b2ea-d1d66a797873",
+    "FactVersion": 2,
+    "CodecIdentity": "golem.fact.v2",
+    "GenerationFingerprint": "6fc580e090c93bebaadd082f9842b5a18001ade12c82f694216ba264963d1116",
+    "ModelID": "7b649ef09d1d2ce36c52750ce2f1827a",
+    "Action": "created",
+    "BeforeIdentity": null,
+    "AfterIdentity": "R09MRU1JRAABlehdgIsCq+ws0nTK8gXrXQAAAAGcArnc4TfDAXGOKLjI7dDKAQpxAAAAAABAAIAAAAAAAAAB",
+    "CausationID": "3f7bb9c4-9b73-49ed-b3c7-fa2e6a16ad63",
+    "TransactionOrdinal": 1,
+    "Metadata": "R09MRU1GQUNUAAIAAAANZ29sZW0uZmFjdC52MvN5EyIIuEm+surR1mp5eHNvxYDgkMk766rdCC+YQrWhgAGt4SyC9pQha6Jklj0RFly4IJl+xfHw32gft1hb+tIi+ciTsS1iiWOQNpVRYYcbe2Se8J0dLONsUnUM4vGCegE/e7nEm3NJ7bPH+i5qFq1jAAAAAQABlehdgIsCq+ws0nTK8gXrXQAAAAGcArnc4TfDAXGOKLjI7dDKAQpxAAAAAABAAIAAAAAAAAABAAAAAAA=",
+    "DeleteSnapshot": null,
+    "RecordedAt": "2026-08-09T14:59:08.264317Z"
+  }
+}

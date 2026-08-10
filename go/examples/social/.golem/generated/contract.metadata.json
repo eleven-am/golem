@@ -1,0 +1,1285 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "contract_metadata",
+  "formatVersion": 1,
+  "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
+  "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
+  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p8-go-abi-v5",
+  "payload": {
+    "formatVersion": 5,
+    "graphqlAbiVersion": 4,
+    "models": [
+      {
+        "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
+        "graphqlName": "Comment",
+        "graphqlPlural": "Comments",
+        "roots": {
+          "findOne": "comment",
+          "findMany": "comments",
+          "create": "createComment",
+          "update": "updateComment",
+          "upsert": "upsertComment",
+          "delete": "deleteComment",
+          "updateMany": "updateManyComments",
+          "deleteMany": "deleteManyComments",
+          "aggregate": "aggregateComments",
+          "groupBy": "groupByComments",
+          "relationGroupBy": "relationGroupByComments",
+          "events": "commentEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "025be8ae0426b680839a18767fd00978",
+            "graphqlName": "postID",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "261ea68243c89744b84b2f37e90ce903",
+            "graphqlName": "post",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "428030fabfab54bd4019b44a60a33098",
+            "graphqlName": "replies",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "74780c9d955be686287e3fac79a30eb2",
+            "graphqlName": "body",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "7e12e57c54b9b4785a8928db1172ad00",
+            "graphqlName": "parentID",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "8a40c9a6b0f4ca5c7c03148a36903a73",
+            "graphqlName": "parent",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "93873b13a4b34c536891e08240918eb7",
+            "graphqlName": "createdAt",
+            "modes": [
+              "readOnly"
+            ]
+          },
+          {
+            "fieldId": "9a1015ac166c66934d347f7ec9daf925",
+            "graphqlName": "authorID",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "a1b8335883c74028b9d15f7bba2d0f30",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "ddc9f98674f8402a0ffd7a9b52fe9531",
+            "graphqlName": "author",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "57e8e4fe611eb12c6261a6077346cf5c",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "a1b8335883c74028b9d15f7bba2d0f30"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "CommentEvent",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt"
+          ],
+          "deleteSnapshotFull": true,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
+            "primaryKeyId": "57e8e4fe611eb12c6261a6077346cf5c",
+            "identityFields": [
+              {
+                "fieldId": "a1b8335883c74028b9d15f7bba2d0f30",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "a1b8335883c74028b9d15f7bba2d0f30",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "025be8ae0426b680839a18767fd00978",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "9a1015ac166c66934d347f7ec9daf925",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "7e12e57c54b9b4785a8928db1172ad00",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": true
+              },
+              {
+                "fieldId": "74780c9d955be686287e3fac79a30eb2",
+                "type": {
+                  "kind": "string"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "93873b13a4b34c536891e08240918eb7",
+                "type": {
+                  "kind": "dateTime",
+                  "precision": 6
+                },
+                "nullable": false
+              }
+            ],
+            "enums": []
+          },
+          "schemaFingerprint": "802a4642ebc1822c53f1fe773c452ddff992abf1897e043296f83f451133153b"
+        },
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      },
+      {
+        "modelId": "80fe9aaf21426d7926ca36ad6e8a95df",
+        "graphqlName": "Tag",
+        "graphqlPlural": "Tags",
+        "roots": {
+          "findOne": "tag",
+          "findMany": "tags",
+          "create": "createTag",
+          "update": "updateTag",
+          "upsert": "upsertTag",
+          "delete": "deleteTag",
+          "updateMany": "updateManyTags",
+          "deleteMany": "deleteManyTags",
+          "aggregate": "aggregateTags",
+          "groupBy": "groupByTags",
+          "relationGroupBy": "relationGroupByTags",
+          "events": "tagEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "62a8e6209f084cfeed07d00271c92f56",
+            "graphqlName": "postTags",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "927ba64decd704c758567b1b35e6c7fa",
+            "graphqlName": "name",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "b5d7a5b516a8ed94b498d2363a247cf1",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "0694442681975a158ae95164361a06a3",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "b5d7a5b516a8ed94b498d2363a247cf1"
+            ]
+          },
+          {
+            "keyId": "21e8a4b720d18bbe29408664db144813",
+            "kind": "unique",
+            "name": "Name",
+            "fields": [
+              "927ba64decd704c758567b1b35e6c7fa"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      },
+      {
+        "modelId": "9f0a32ff74e8340344dbde26a58ba9b2",
+        "graphqlName": "Session",
+        "graphqlPlural": "Sessions",
+        "roots": {
+          "findOne": "session",
+          "findMany": "sessions",
+          "create": "createSession",
+          "update": "updateSession",
+          "upsert": "upsertSession",
+          "delete": "deleteSession",
+          "updateMany": "updateManySessions",
+          "deleteMany": "deleteManySessions",
+          "aggregate": "aggregateSessions",
+          "groupBy": "groupBySessions",
+          "relationGroupBy": "relationGroupBySessions",
+          "events": "sessionEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "230e5e19e0a2649a5fc5a304a7dbd158",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "42e3e2bd1988a04db96d90478750a7fb",
+            "graphqlName": "expiresAt",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "44933764614533b988c40e0a89b1c9aa",
+            "graphqlName": "tokenHash",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "e5c12c57b16ed638dbb0d9df456d3965",
+            "graphqlName": "userID",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "ef7ad40c6dd5694cc92ab3e4e87969cb",
+            "graphqlName": "user",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "fb3dcb5c417c3754b24dec493e09ed5b",
+            "graphqlName": "createdAt",
+            "modes": [
+              "readOnly"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "f261c97c2c9901331ca61b195b58dbe7",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "230e5e19e0a2649a5fc5a304a7dbd158"
+            ]
+          },
+          {
+            "keyId": "7a68c5c5360721307ab3a86124fb05dd",
+            "kind": "unique",
+            "name": "TokenHash",
+            "fields": [
+              "44933764614533b988c40e0a89b1c9aa"
+            ]
+          }
+        ],
+        "operations": [],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": false
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "graphqlName": "Post",
+        "graphqlPlural": "Posts",
+        "roots": {
+          "findOne": "post",
+          "findMany": "posts",
+          "create": "createPost",
+          "update": "updatePost",
+          "upsert": "upsertPost",
+          "delete": "deletePost",
+          "updateMany": "updateManyPosts",
+          "deleteMany": "deleteManyPosts",
+          "aggregate": "aggregatePosts",
+          "groupBy": "groupByPosts",
+          "relationGroupBy": "relationGroupByPosts",
+          "events": "postEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "11f9c4adff40cc4daa268c6132ad36d8",
+            "graphqlName": "metadata",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "29224b6d31711950e2ef31749e0f3bd0",
+            "graphqlName": "authorID",
+            "modes": [
+              "immutable"
+            ]
+          },
+          {
+            "fieldId": "2ac2d0174bc2fc76b10167255ba2c0dc",
+            "graphqlName": "momentum",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "3c205e617cd8c798bd907ff5fd8a2fb6",
+            "graphqlName": "priority",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "464e7eb85629348cdcdb079a6ce847a8",
+            "graphqlName": "topics",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "5525976ba84c55e7ea0bdfb82d539695",
+            "graphqlName": "budget",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "6070119d21df1182108edda39cb5a8fa",
+            "graphqlName": "author",
+            "modes": [
+              "immutable"
+            ]
+          },
+          {
+            "fieldId": "62c5faa04f85a2985a6da0e2d755bed1",
+            "graphqlName": "createdAt",
+            "modes": [
+              "readOnly"
+            ]
+          },
+          {
+            "fieldId": "84a84e6d04dbca50e5109e55b455a4f9",
+            "graphqlName": "liveTime",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "939477f819b14905043b736dcced5148",
+            "graphqlName": "rating",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "99dba4ce733b9a849ddcc603c31b5c83",
+            "graphqlName": "visibility",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "afce81771edaa185328ec949768aaff2",
+            "graphqlName": "title",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "b5ecc8d7bbd4b2770289e1a7add5ad69",
+            "graphqlName": "comments",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "c33e834a8be4f1df23ed1783efcbdfe8",
+            "graphqlName": "postTags",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "ca003a48c4490b5e5891a02655b831d5",
+            "graphqlName": "updatedAt",
+            "modes": [
+              "readOnly"
+            ]
+          },
+          {
+            "fieldId": "cdcefdcbcd9fbe3d0533d250541e159a",
+            "graphqlName": "views",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "d3b5a464f819a7f0ac93e1491a2279fe",
+            "graphqlName": "reactions",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "d998a29c13569fe87d74f00b7f28a78f",
+            "graphqlName": "published",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "e20069ceb3135c47447fc322989acceb",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "ede0935e24386b508a62332396f6508b",
+            "graphqlName": "liveDate",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "f8f2f3fcc4efbe5905f9ea29c949762a",
+            "graphqlName": "body",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [
+          "29224b6d31711950e2ef31749e0f3bd0"
+        ],
+        "selectors": [
+          {
+            "keyId": "ad5ef8d08dc489b6b76c49de55317479",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "e20069ceb3135c47447fc322989acceb"
+            ]
+          }
+        ],
+        "operations": [
+          "aggregate",
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "groupBy",
+          "relationGroupBy",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": true,
+        "event": {
+          "payloadTypeName": "PostEvent",
+          "metadataFields": [
+            "eventID",
+            "type",
+            "id",
+            "entity",
+            "causationID",
+            "transactionOrdinal",
+            "recordedAt"
+          ],
+          "deleteSnapshotFull": true,
+          "schema": {
+            "formatVersion": 1,
+            "modelId": "b11b75f11668a6f7019d05b1740d5118",
+            "primaryKeyId": "ad5ef8d08dc489b6b76c49de55317479",
+            "identityFields": [
+              {
+                "fieldId": "e20069ceb3135c47447fc322989acceb",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              }
+            ],
+            "snapshotFields": [
+              {
+                "fieldId": "e20069ceb3135c47447fc322989acceb",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "29224b6d31711950e2ef31749e0f3bd0",
+                "type": {
+                  "kind": "uuid"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "afce81771edaa185328ec949768aaff2",
+                "type": {
+                  "kind": "string",
+                  "maxLength": 160
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "f8f2f3fcc4efbe5905f9ea29c949762a",
+                "type": {
+                  "kind": "string"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "d998a29c13569fe87d74f00b7f28a78f",
+                "type": {
+                  "kind": "bool"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "d3b5a464f819a7f0ac93e1491a2279fe",
+                "type": {
+                  "kind": "int16"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "3c205e617cd8c798bd907ff5fd8a2fb6",
+                "type": {
+                  "kind": "int32"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "cdcefdcbcd9fbe3d0533d250541e159a",
+                "type": {
+                  "kind": "int64"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "2ac2d0174bc2fc76b10167255ba2c0dc",
+                "type": {
+                  "kind": "float32"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "939477f819b14905043b736dcced5148",
+                "type": {
+                  "kind": "float64"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "5525976ba84c55e7ea0bdfb82d539695",
+                "type": {
+                  "kind": "decimal",
+                  "precision": 18,
+                  "scale": 2
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "ede0935e24386b508a62332396f6508b",
+                "type": {
+                  "kind": "date"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "84a84e6d04dbca50e5109e55b455a4f9",
+                "type": {
+                  "kind": "time",
+                  "precision": 6
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "11f9c4adff40cc4daa268c6132ad36d8",
+                "type": {
+                  "kind": "json",
+                  "jsonSchemaId": "github.com/eleven-am/golem/go/examples/social/social.PostMetadata"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "99dba4ce733b9a849ddcc603c31b5c83",
+                "type": {
+                  "kind": "enum",
+                  "enumId": "2c24eef9cbc254050b30441dcc1a7ab0"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "464e7eb85629348cdcdb079a6ce847a8",
+                "type": {
+                  "kind": "scalarList",
+                  "element": {
+                    "kind": "string"
+                  },
+                  "capability": "scalar-list:json-array:v1"
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "62c5faa04f85a2985a6da0e2d755bed1",
+                "type": {
+                  "kind": "dateTime",
+                  "precision": 6
+                },
+                "nullable": false
+              },
+              {
+                "fieldId": "ca003a48c4490b5e5891a02655b831d5",
+                "type": {
+                  "kind": "dateTime",
+                  "precision": 6
+                },
+                "nullable": false
+              }
+            ],
+            "enums": [
+              {
+                "enumId": "2c24eef9cbc254050b30441dcc1a7ab0",
+                "members": [
+                  "ca85ac3e55295037e617c3123298998a",
+                  "f80fccf29206874e9e625e110bf79bec",
+                  "fa3ee020e5421e9feca68eddff90020d"
+                ]
+              }
+            ]
+          },
+          "schemaFingerprint": "4540729d2fb7946545cb434e93e9dbccc21a453ac667064fc76c872847929105"
+        },
+        "aggregation": {
+          "enabled": true,
+          "dimensions": [
+            "29224b6d31711950e2ef31749e0f3bd0",
+            "99dba4ce733b9a849ddcc603c31b5c83",
+            "d998a29c13569fe87d74f00b7f28a78f"
+          ],
+          "dimensionsExplicit": true,
+          "measures": [
+            "5525976ba84c55e7ea0bdfb82d539695",
+            "939477f819b14905043b736dcced5148",
+            "cdcefdcbcd9fbe3d0533d250541e159a",
+            "e20069ceb3135c47447fc322989acceb"
+          ],
+          "measuresExplicit": true,
+          "relationDimensions": [
+            {
+              "name": "authorHandle",
+              "path": [
+                "97b5b6194f0e3678f2e8c6eb18f397de"
+              ],
+              "terminalField": "572d5086401285786732c644f23928fd"
+            }
+          ],
+          "graphqlMaxGroups": 100,
+          "relationMaxIntermediateGroups": 10000
+        },
+        "scopedReads": true,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [
+          {
+            "extensionId": "2f1d3fbba69a51fcec1ab208be867f1c",
+            "name": "displayCode",
+            "result": {
+              "kind": "scalar",
+              "name": "String",
+              "nullable": false
+            },
+            "arguments": [
+              {
+                "name": "prefix",
+                "type": {
+                  "kind": "scalar",
+                  "name": "String",
+                  "nullable": false
+                }
+              }
+            ],
+            "requires": [],
+            "resolver": {
+              "modelId": "b11b75f11668a6f7019d05b1740d5118",
+              "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+              "receiver": {
+                "packagePath": "",
+                "name": ""
+              },
+              "name": "LoadPostDisplayCodes",
+              "kind": "computedBatch"
+            },
+            "batch": {
+              "keyField": "e20069ceb3135c47447fc322989acceb",
+              "loader": {
+                "modelId": "b11b75f11668a6f7019d05b1740d5118",
+                "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+                "receiver": {
+                  "packagePath": "",
+                  "name": ""
+                },
+                "name": "LoadPostDisplayCodes",
+                "kind": "computedBatch"
+              },
+              "cacheKey": {
+                "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+                "receiver": {
+                  "packagePath": "",
+                  "name": ""
+                },
+                "name": "PostDisplayCodeCacheKey",
+                "kind": "computedCacheKey"
+              },
+              "maxBatchSize": 64
+            }
+          },
+          {
+            "extensionId": "e962a39733687db7a56462e1672e0767",
+            "name": "excerpt",
+            "result": {
+              "kind": "scalar",
+              "name": "String",
+              "nullable": true
+            },
+            "arguments": [
+              {
+                "name": "maximum",
+                "type": {
+                  "kind": "scalar",
+                  "name": "Int",
+                  "nullable": false
+                }
+              }
+            ],
+            "requires": [
+              "f8f2f3fcc4efbe5905f9ea29c949762a"
+            ],
+            "resolver": {
+              "modelId": "b11b75f11668a6f7019d05b1740d5118",
+              "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+              "receiver": {
+                "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+                "name": "Post"
+              },
+              "name": "Excerpt",
+              "kind": "computed"
+            }
+          }
+        ],
+        "exposed": true
+      },
+      {
+        "modelId": "b2a6fb289365ab32869f1b2862cc6b5b",
+        "graphqlName": "PostTag",
+        "graphqlPlural": "PostTags",
+        "roots": {
+          "findOne": "postTag",
+          "findMany": "postTags",
+          "create": "createPostTag",
+          "update": "updatePostTag",
+          "upsert": "upsertPostTag",
+          "delete": "deletePostTag",
+          "updateMany": "updateManyPostTags",
+          "deleteMany": "deleteManyPostTags",
+          "aggregate": "aggregatePostTags",
+          "groupBy": "groupByPostTags",
+          "relationGroupBy": "relationGroupByPostTags",
+          "events": "postTagEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "44075e35d88b9d06bdc3c011f32f8c73",
+            "graphqlName": "postID",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "c0c3c66292c388279d73411b0b6153a1",
+            "graphqlName": "post",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "dc4c50eb34defbd52abb9d4fc5e51be2",
+            "graphqlName": "tagName",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "fe3669fe5cc1796a498ac1da4e077e4b",
+            "graphqlName": "tag",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "c86ed7ebd8270aeab98eb584f906c439",
+            "kind": "primary",
+            "name": "PostID_TagName",
+            "fields": [
+              "44075e35d88b9d06bdc3c011f32f8c73",
+              "dc4c50eb34defbd52abb9d4fc5e51be2"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      },
+      {
+        "modelId": "d5239ec6065febe61dad1b8d0b66bf07",
+        "graphqlName": "User",
+        "graphqlPlural": "Users",
+        "roots": {
+          "findOne": "user",
+          "findMany": "users",
+          "create": "createUser",
+          "update": "updateUser",
+          "upsert": "upsertUser",
+          "delete": "deleteUser",
+          "updateMany": "updateManyUsers",
+          "deleteMany": "deleteManyUsers",
+          "aggregate": "aggregateUsers",
+          "groupBy": "groupByUsers",
+          "relationGroupBy": "relationGroupByUsers",
+          "events": "userEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "184fbe94f719aa72470b6ab6b0eecfa1",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "3ed132b2c728ed7f27301bc3690b8fba",
+            "graphqlName": "posts",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "572d5086401285786732c644f23928fd",
+            "graphqlName": "handle",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "7950f0c2d483b3af4f5d2531db4eead6",
+            "graphqlName": "comments",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "b08968231b12e11781e4041b8ca5f15d",
+            "graphqlName": "sessions",
+            "modes": [
+              "hidden"
+            ]
+          },
+          {
+            "fieldId": "b16aa8e13cab4c3f4fcd1e40e940417a",
+            "graphqlName": "email",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "d3b38a1584a601d5280c8456c574acf2",
+            "graphqlName": "createdAt",
+            "modes": [
+              "readOnly"
+            ]
+          }
+        ],
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "4efeaffa9dd9390632a136d603942dd4",
+            "kind": "unique",
+            "name": "Handle",
+            "fields": [
+              "572d5086401285786732c644f23928fd"
+            ]
+          },
+          {
+            "keyId": "3851793d71591b5196fc7d8e636d77d2",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "184fbe94f719aa72470b6ab6b0eecfa1"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "deleteMany",
+          "findMany",
+          "findOne",
+          "update",
+          "updateMany",
+          "upsert"
+        ],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 25,
+          "maxPageSize": 100
+        },
+        "computed": [],
+        "exposed": true
+      }
+    ],
+    "enums": [
+      {
+        "enumId": "2c24eef9cbc254050b30441dcc1a7ab0",
+        "graphqlName": "Visibility",
+        "values": [
+          {
+            "valueId": "ca85ac3e55295037e617c3123298998a",
+            "graphqlName": "VisibilityFollowers"
+          },
+          {
+            "valueId": "f80fccf29206874e9e625e110bf79bec",
+            "graphqlName": "VisibilityPublic"
+          },
+          {
+            "valueId": "fa3ee020e5421e9feca68eddff90020d",
+            "graphqlName": "VisibilityPrivate"
+          }
+        ]
+      }
+    ],
+    "methods": [
+      {
+        "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Comment"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "AfterCommitCreate",
+        "kind": "hook"
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "AfterCreate",
+        "kind": "hook"
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "AfterFindMany",
+        "kind": "hook"
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "BeforeCreate",
+        "kind": "hook"
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "BeforeFindMany",
+        "kind": "hook"
+      },
+      {
+        "modelId": "b11b75f11668a6f7019d05b1740d5118",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Post"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "b2a6fb289365ab32869f1b2862cc6b5b",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "PostTag"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "9f0a32ff74e8340344dbde26a58ba9b2",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Session"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "80fe9aaf21426d7926ca36ad6e8a95df",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Tag"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "d5239ec6065febe61dad1b8d0b66bf07",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "User"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      }
+    ],
+    "customOperations": [
+      {
+        "extensionId": "a8f267a7fb3bf7b8df8bea632c1c4887",
+        "operation": "mutation",
+        "name": "publishPost",
+        "arguments": [
+          {
+            "name": "fail",
+            "type": {
+              "kind": "scalar",
+              "name": "Boolean",
+              "nullable": false
+            }
+          },
+          {
+            "name": "postID",
+            "type": {
+              "kind": "scalar",
+              "name": "UUID",
+              "nullable": false
+            }
+          }
+        ],
+        "result": {
+          "kind": "scalar",
+          "name": "BigInt",
+          "nullable": false
+        },
+        "resolver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "receiver": {
+            "packagePath": "",
+            "name": ""
+          },
+          "name": "PublishPost",
+          "kind": "custommutation"
+        },
+        "capability": "callerOnly"
+      },
+      {
+        "extensionId": "4cc2edb716c61c87bc544b0751a08be1",
+        "operation": "query",
+        "name": "searchPosts",
+        "arguments": [
+          {
+            "name": "take",
+            "type": {
+              "kind": "scalar",
+              "name": "Int",
+              "nullable": false
+            }
+          },
+          {
+            "name": "where",
+            "type": {
+              "kind": "predicate",
+              "name": "Post",
+              "nullable": false
+            }
+          }
+        ],
+        "result": {
+          "kind": "list",
+          "nullable": false,
+          "element": {
+            "kind": "model",
+            "name": "Post",
+            "nullable": false
+          }
+        },
+        "resolver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "receiver": {
+            "packagePath": "",
+            "name": ""
+          },
+          "name": "SearchPosts",
+          "kind": "customquery"
+        },
+        "capability": "callerOnly"
+      }
+    ]
+  }
+}
