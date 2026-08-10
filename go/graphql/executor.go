@@ -11,6 +11,8 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
+	"github.com/eleven-am/golem/go/internal/observeexec"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 // CallerExecution is the caller-only runtime capability accepted by generated
@@ -144,12 +146,15 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		}
 		if reference.Kind == graphqloperation.RootCustomQuery {
 			root := compiled.Custom[reference.Index]
-			result, executeErr := customCaller.Execute(ctx, CustomQuery, root.Name, root.Arguments)
+			customContext, observation := observeexec.BeginChild(ctx, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLCustomQuery, observe.PhaseFinish)
+			result, executeErr := customCaller.Execute(customContext, CustomQuery, root.Name, root.Arguments)
 			if executeErr != nil {
+				finishGraphQLChild(observation, executeErr)
 				response.Errors = append(response.Errors, PresentError(ctx, executeErr, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil
 			} else {
-				encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(ctx, root, result.Value(), computed.resolve)
+				encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, result.Value(), computed.resolve)
+				finishGraphQLChild(observation, encodeErr)
 				if encodeErr != nil {
 					response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
 					data[root.ResponseName] = nil
@@ -214,8 +219,10 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 			}
 		case graphqloperation.RootCustomMutation:
 			root := compiled.Custom[reference.Index]
-			result, err := custom.Execute(ctx, CustomMutation, root.Name, root.Arguments)
+			customContext, observation := observeexec.BeginChild(ctx, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.PhaseFinish)
+			result, err := custom.Execute(customContext, CustomMutation, root.Name, root.Arguments)
 			if err != nil {
+				finishGraphQLChild(observation, err)
 				response.Errors = append(response.Errors, PresentError(ctx, err, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil
 				if !root.Result.Nullable {
@@ -228,7 +235,8 @@ func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, 
 			// result later fails GraphQL encoding. Invalidate before encoding so
 			// subsequent serial mutation roots cannot observe stale loader state.
 			computed.invalidateAfterWrite()
-			encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(ctx, root, result.Value(), computed.resolve)
+			encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, result.Value(), computed.resolve)
+			finishGraphQLChild(observation, encodeErr)
 			if encodeErr != nil {
 				response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil

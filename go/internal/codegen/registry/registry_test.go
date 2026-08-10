@@ -287,9 +287,14 @@ func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	if strings.Index(source, `"example.test/models/a"`) > strings.Index(source, `"example.test/models/z"`) {
 		t.Fatal("model accessors are not ordered by import path")
 	}
-	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "EventObserver", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "ReadLimits: config.ReadLimits", "MutationLimits: config.MutationLimits", "EventLimits: config.EventLimits", "EventTransport: config.EventTransport", "CDCAdapters: config.CDCAdapters", "ReportEventOperator: config.ReportEventOperator", "AfterCommitError: config.AfterCommitError", "AuditPrincipal: config.AuditPrincipal", "ReportScopedQuery: config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "SnapshotActor: config.SnapshotActor", "Golem generation digest:"} {
+	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "*provider.Database", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "Observer", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "engineConfig.ReadLimits = config.ReadLimits", "engineConfig.MutationLimits = config.MutationLimits", "engineConfig.EventLimits = config.EventLimits", "engineConfig.EventTransport = config.EventTransport", "engineConfig.Observer = config.Observer", "engineConfig.CDCAdapters = config.CDCAdapters", "engineConfig.ReportEventOperator = config.ReportEventOperator", "engineConfig.AfterCommitError = config.AfterCommitError", "engineConfig.AuditPrincipal = config.AuditPrincipal", "engineConfig.ReportScopedQuery = config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "engineConfig.SnapshotActor = config.SnapshotActor", "Golem generation digest:"} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("source missing %q:\n%s", fragment, source)
+		}
+	}
+	for _, forbidden := range []string{"DB *sqlx.DB", "Provider golem.Provider", "GolemRuntimeTestOpenRaw"} {
+		if strings.Contains(source, forbidden) {
+			t.Errorf("source contains forbidden legacy runtime surface %q:\n%s", forbidden, source)
 		}
 	}
 	if strings.Contains(source, "func init(") {
@@ -498,7 +503,7 @@ func GolemGeneratedDescriptors() golem.PackageDescriptors { return golem.Generat
 func compileRegistry(t *testing.T, handwritten map[string]string, generatedPath string, generated []byte) {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
 	writeRegistryTestFile(t, filepath.Join(root, "go.mod"), module)
 	for path, source := range handwritten {
 		writeRegistryTestFile(t, filepath.Join(root, path), source)

@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func TestP7InvalidForeignOrForgedEventOptionsTouchHubZeroTimes(t *testing.T) {
@@ -170,7 +170,7 @@ func TestP7RevocationSuppressesNextEventAndGrantPermitsNext(t *testing.T) {
 	fixture.publish(t, fixture.notice(t, golem.EventUpdated, 1810, "visible", false))
 	select {
 	case observation := <-fixture.suppressed:
-		if observation.Kind() != events.ObservationSuppression {
+		if observation.Operation() != observe.OperationSubscriptionSuppression {
 			t.Fatalf("revocation observation=%#v", observation)
 		}
 	case <-time.After(2 * time.Second):

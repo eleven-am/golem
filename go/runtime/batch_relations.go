@@ -12,6 +12,7 @@ import (
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 // MaxBatchLoaderKeys is an execution-owned memory/statement-complexity guard.
@@ -48,8 +49,15 @@ func executeToOneBatch[P, A any](ctx context.Context, app *App[P, A], executor *
 	return executeRelationBatch(ctx, app, executor, operation, parent, relation, endpoint, child, parents)
 }
 
-func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, child readplan.Plan, parents []executedRow) ([][]executedRow, error) {
-	attached := make([][]executedRow, len(parents))
+func executeRelationBatch[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, parent readplan.Plan, relation readplan.Relation, endpoint schema.RelationEndpoint, child readplan.Plan, parents []executedRow) (attached [][]executedRow, resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, app, executor, golem.ModelID(child.ModelID()), observe.KindRelationLoad, observe.OperationRelationLoad)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(int64(len(attached)))
+		}
+		finishObservation(observation, resultErr)
+	}()
+	attached = make([][]executedRow, len(parents))
 	for index := range attached {
 		attached[index] = make([]executedRow, 0)
 	}

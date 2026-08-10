@@ -405,7 +405,7 @@ func generatedName(prefix, kind, id string) physical.PhysicalName {
 
 func systemSchema() physical.SystemSchema {
 	return physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: "_golem"}, Objects: []physical.SystemObject{
-		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},
+		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: physical.MigrationLedgerFormatVersionV1, Name: "_golem_migrations"},
 		{ID: physical.MigrationLockObjectIDV1, Kind: physical.SystemMigrationLock, Version: 1, Name: "_golem_migration_lock"},
 		physical.OutboxSystemObjectV1(),
 		physical.OutboxDeliverySystemObjectV1(),

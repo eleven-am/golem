@@ -90,6 +90,26 @@ type RetentionResult struct {
 	Facts      int
 }
 
+// DepthSnapshot is an exact, transaction-time count of durable delivery rows
+// in the three operator-actionable backlog states.
+type DepthSnapshot struct {
+	Pending int64
+	Blocked int64
+	Retired int64
+}
+
+type ClaimSnapshot struct {
+	Leases []Lease
+	Depth  DepthSnapshot
+}
+
+// ClaimDepthCoordinator is implemented by released SQL providers. Keeping it
+// separate preserves small deterministic coordinator fakes while production
+// publisher paths require the transaction-coupled snapshot when available.
+type ClaimDepthCoordinator interface {
+	ClaimWithDepth(context.Context, ClaimOptions) (ClaimSnapshot, error)
+}
+
 // Coordinator is the sole mutable seam for _golem_outbox_delivery. Every
 // token-fenced transition returns changed=false for a stale lease rather than
 // allowing it to mutate a newly owned row.

@@ -186,7 +186,7 @@ func TestRefusedMutationDoesNotBeginTransactionOrIssueSQL(t *testing.T) {
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
 			t.Cleanup(func() { _ = database.Close() })
 			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				DB: database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 			}))
@@ -269,7 +269,7 @@ func TestScalarAndRelationCorrelationOverlapRefusesBeforeSQLAcrossProviders(t *t
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
 			t.Cleanup(func() { _ = database.Close() })
 			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				DB: database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 			}))
@@ -354,7 +354,7 @@ func TestDuplicateToOneRelationValuesRefuseBeforeSQLAcrossProviders(t *testing.T
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
 			t.Cleanup(func() { _ = database.Close() })
 			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				DB: database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 			}))
@@ -423,7 +423,7 @@ func TestTargetlessToManyDisconnectRefusesBeforeSQLAcrossProviders(t *testing.T)
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
 			t.Cleanup(func() { _ = database.Close() })
 			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				DB: database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 			}))
@@ -866,7 +866,7 @@ func reopenMutationResultWithUserWriteDenials(t testing.TB, fixture mutationResu
 		provider = golem.PostgreSQL
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 	}))
 	if err != nil {
@@ -957,7 +957,7 @@ func mutationResultFixtureWithUpdateProbe(t *testing.T, fixture mutationResultFi
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		MutationLimits: MutationLimits{MaxTouchedRows: 1}, ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
 	}))
@@ -1037,7 +1037,7 @@ func mutationResultFixtureWithDeleteProbe(t *testing.T, fixture mutationResultFi
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
 	}))
@@ -1076,7 +1076,7 @@ func mutationResultFixtureWithUserDeleteRelationPolicy(t *testing.T, fixture mut
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 	}))
 	if err != nil {
@@ -1107,7 +1107,7 @@ func mutationResultFixtureForSchema(t *testing.T, database *sqlx.DB, provider go
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: base.app.bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, provider), Bundle: schemaFixture.Bundle, Bindings: base.app.bindings, Descriptors: descriptors,
 		ResolvePrincipal: base.app.resolvePrincipal, SnapshotActor: base.app.snapshotActor,
 	}))
 	if err != nil {
@@ -1808,7 +1808,7 @@ func TestPostgreSQLUpsertSameSelectorMultiConnection(t *testing.T) {
 				database.SetMaxIdleConns(1)
 				t.Cleanup(func() { _ = database.Close() })
 				app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-					DB: database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+					Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 					Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
 					ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 				}))
@@ -1881,7 +1881,7 @@ func TestUpsertRetriesWholeEngineAttemptAndExhaustsAsConflict(t *testing.T) {
 				t.Fatal(err)
 			}
 			app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				DB: fixture.app.database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(fixture.app.database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 				Bindings: bindings, Descriptors: fixture.app.descriptors, MutationLimits: MutationLimits{MaxUpsertAttempts: 3},
 				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
 			}))

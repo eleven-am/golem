@@ -1143,7 +1143,7 @@ func reopenFinalGraphFixture(t testing.TB, fixture graphMutationFixture, policie
 		provider = golem.PostgreSQL
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
@@ -1175,7 +1175,7 @@ func reopenFinalRecursiveFixture(t testing.TB, fixture recursiveMutationFixture,
 		provider = golem.PostgreSQL
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},

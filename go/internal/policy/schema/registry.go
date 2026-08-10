@@ -293,17 +293,18 @@ func (registry *Registry) Capability(provider golem.Provider, id compilerir.Capa
 
 // Model is the minimum provider-neutral model fact used by the binder.
 type Model struct {
-	id            golem.ModelID
-	fields        []golem.FieldID
-	primaryKey    []golem.FieldID
-	identities    []Identity
-	equality      map[golem.FieldID]struct{}
-	maxTake       uint32
-	subscriptions bool
-	eventSchema   compilerir.Fingerprint
-	eventSnapshot []golem.FieldID
-	analytics     *compilerir.AggregationContractIR
-	scopedReads   bool
+	id              golem.ModelID
+	fields          []golem.FieldID
+	primaryKey      []golem.FieldID
+	identities      []Identity
+	equality        map[golem.FieldID]struct{}
+	maxTake         uint32
+	subscriptions   bool
+	eventSchema     compilerir.Fingerprint
+	eventSnapshot   []golem.FieldID
+	analytics       *compilerir.AggregationContractIR
+	scopedReads     bool
+	hookOwnedCreate []golem.FieldID
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
@@ -357,6 +358,13 @@ func (model Model) Analytics() (compilerir.AggregationContractIR, bool) {
 	return value, true
 }
 func (model Model) ScopedReadsEnabled() bool { return model.scopedReads }
+
+// GraphQLHookOwnedCreateFields returns the compiler-validated scalar fields
+// omitted from GraphQL create shapes and supplied by a model BeforeCreate
+// hook. The inventory is contract metadata, not database schema metadata.
+func (model Model) GraphQLHookOwnedCreateFields() []golem.FieldID {
+	return append([]golem.FieldID(nil), model.hookOwnedCreate...)
+}
 
 // EqualityIndexed reports the compiler-proven provider-neutral fact that an
 // equality lookup on this field is served by a leading key/index column.

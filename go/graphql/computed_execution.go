@@ -9,6 +9,8 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
+	"github.com/eleven-am/golem/go/internal/observeexec"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type computedExecution struct {
@@ -114,7 +116,12 @@ func (execution *computedExecution) resolve(ctx context.Context, _ compilerir.Mo
 			if err := ctx.Err(); err != nil {
 				return nil, err
 			}
-			value, err := binding.resolve(ctx, ComputedRequest{Parent: parent, Arguments: cloneComputedArguments(arguments)})
+			computedContext, observation := observeexec.BeginChild(ctx, parent.ModelID(), observe.KindGraphQL, observe.OperationGraphQLComputed, observe.PhaseFinish)
+			value, err := binding.resolve(computedContext, ComputedRequest{Parent: parent, Arguments: cloneComputedArguments(arguments)})
+			if observation != nil {
+				observation.SetAggregateCount(1)
+			}
+			finishGraphQLChild(observation, err)
 			if err != nil {
 				failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, err)
 				continue
@@ -143,7 +150,7 @@ func (execution *computedExecution) resolveBatch(ctx context.Context, slot selec
 		}
 		loader, err := graphqlextension.NewLoader[string, any](execution.scope, graphqlextension.LoaderConfig{
 			FieldID: slot.Computed.ExtensionID, MaxBatchSize: maximum, MaxPending: graphqlextension.DefaultMaxPending,
-		}, func(batchCtx context.Context, keys []graphqlextension.RequestKey[string]) (map[graphqlextension.RequestKey[string]]graphqlextension.BatchValue[any], error) {
+		}, func(batchCtx context.Context, keys []graphqlextension.RequestKey[string]) (result map[graphqlextension.RequestKey[string]]graphqlextension.BatchValue[any], resultErr error) {
 			parents := make([]ComputedBatchParent, len(keys))
 			for index, key := range keys {
 				parent, present := entry.parents[key]
@@ -152,6 +159,17 @@ func (execution *computedExecution) resolveBatch(ctx context.Context, slot selec
 				}
 				parents[index] = ComputedBatchParent{key: key.CacheKey, parent: parent}
 			}
+			model := golem.ModelID{}
+			if len(parents) != 0 {
+				model = parents[0].Parent().ModelID()
+			}
+			batchCtx, observation := observeexec.BeginChild(batchCtx, model, observe.KindGraphQL, observe.OperationGraphQLBatchedComputed, observe.PhaseFinish)
+			defer func() {
+				if observation != nil {
+					observation.SetAggregateCount(int64(len(keys)))
+				}
+				finishGraphQLChild(observation, resultErr)
+			}()
 			loaded, loadErr := binding.batch(batchCtx, parents, cloneComputedArguments(arguments))
 			if loadErr != nil {
 				return nil, loadErr

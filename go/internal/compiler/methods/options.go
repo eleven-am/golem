@@ -281,6 +281,25 @@ func (in *interpreter) evalGraphQL(call *ast.CallExpr) {
 				continue
 			}
 			patch.Hidden = true
+		case "GraphQLHookOwned":
+			if len(option.Args) == 0 {
+				in.errorAt("P8_GRAPHQL_HOOK_OWNED_ARITY", "GraphQLHookOwned requires at least one generated scalar field handle", option)
+				continue
+			}
+			seenFields := map[ir.FieldID]bool{}
+			for _, argument := range option.Args {
+				symbol, valid := in.resolveHandle(argument)
+				if !valid || symbol.Kind != "field" || symbol.ModelID != in.model.ID {
+					in.errorAt("P8_GRAPHQL_HOOK_OWNED_FIELD", "GraphQLHookOwned accepts only scalar field handles of this model", argument)
+					continue
+				}
+				if seenFields[symbol.FieldID] {
+					in.errorAt("P8_GRAPHQL_HOOK_OWNED_DUPLICATE", "GraphQLHookOwned lists a field more than once", argument)
+					continue
+				}
+				seenFields[symbol.FieldID] = true
+				patch.HookOwnedCreateFields = append(patch.HookOwnedCreateFields, symbol.FieldID)
+			}
 		default:
 			in.errorAt("P5_GRAPHQL_OPTION", "call is not a recognized GraphQL option constructor", expression)
 		}

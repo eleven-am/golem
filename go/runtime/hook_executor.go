@@ -11,6 +11,7 @@ import (
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBinding) golem.HookExecutor {
@@ -66,6 +67,7 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 				return fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: transformed upsert create branch is invalid")
 			}
 			next.create = *input
+			next.deferHookOwned = false
 		} else {
 			if input == nil || target == nil {
 				return fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: transformed upsert update branch is invalid")
@@ -145,7 +147,7 @@ func executeCallerHookUpsert[P, A any](ctx context.Context, caller *Caller[P, A]
 	runtimeValues := newMutationRuntimeValues()
 	prepared, err := prepareCallerRootUpsert(caller, rootUpsertPrepareRequest{
 		model: policyir.ModelID(request.ModelID()), target: target,
-		create: create, update: update, result: requirements, runtimeValues: runtimeValues,
+		create: create, update: update, result: requirements, runtimeValues: runtimeValues, deferHookOwned: true,
 	})
 	if err != nil {
 		return golem.RuntimeHookExecutorResult{}, publicMutationPreparationError(mutationir.Upsert, request.ModelID(), err)
@@ -301,7 +303,7 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 	return golem.RuntimeHookExecutorRows(row), nil
 }
 
-func executeCallerHookBatch[P, A any](ctx context.Context, caller *Caller[P, A], request golem.RuntimeHookExecutorRequest) (golem.RuntimeHookExecutorResult, error) {
+func executeCallerHookBatch[P, A any](ctx context.Context, caller *Caller[P, A], request golem.RuntimeHookExecutorRequest) (result golem.RuntimeHookExecutorResult, resultErr error) {
 	predicate, ok := request.Predicate()
 	if !ok {
 		return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: batch predicate is absent")
@@ -316,6 +318,13 @@ func executeCallerHookBatch[P, A any](ctx context.Context, caller *Caller[P, A],
 		}
 		input = &value
 	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, request.ModelID(), observe.KindMutation, mutationObservationOperation(operation))
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(result.Count())
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
 	beforeRequest := golem.RuntimeDeleteManyMutationHookRequest(request.ModelID(), predicate)
 	if operation == mutationir.UpdateMany {
 		beforeRequest = golem.RuntimeUpdateManyMutationHookRequest(request.ModelID(), predicate, *input)

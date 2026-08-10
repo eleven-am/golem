@@ -410,7 +410,7 @@ func openGraphMutationFixtureWithHooks(t testing.TB, database *sqlx.DB, provider
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: database, Provider: provider, Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, provider), Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
@@ -672,7 +672,7 @@ func openRecursiveMutationFixture(t testing.TB, database *sqlx.DB, provider gole
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, provider), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},
@@ -784,7 +784,7 @@ func openCompositeMutationFixture(t testing.TB, database *sqlx.DB, provider gole
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: database, Provider: provider, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, provider), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, graphMutationPrincipal) (graphMutationActor, error) {
 			return graphMutationActor{}, nil
 		},

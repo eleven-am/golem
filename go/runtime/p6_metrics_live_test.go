@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	providerapi "github.com/eleven-am/golem/go/provider"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 	"github.com/eleven-am/golem/go/runtime/testdata/p6metrics"
@@ -32,6 +33,7 @@ const (
 type p6MetricsHarness struct {
 	profile  p5ExtensionProviderProfile
 	database *sqlx.DB
+	handle   *providerapi.Database
 	trace    *p5ExtensionSQLTrace
 	app      *p6metrics.App[p6metrics.Principal]
 }
@@ -108,8 +110,8 @@ func newP6MetricsHarness(t *testing.T, profile p5ExtensionProviderProfile, limit
 	if err := apply(ctx, database, schema); err != nil {
 		t.Fatal(err)
 	}
-	app, err := p6metrics.Open(ctx, p6metrics.Config[p6metrics.Principal]{
-		DB: database, Provider: profile.provider, AnalyticsLimits: limits,
+	databaseHandle := p8AdoptTracedProviderHandle(database, profile)
+	app, err := p6metrics.Open(ctx, p6metrics.Config[p6metrics.Principal]{Database: databaseHandle, AnalyticsLimits: limits,
 		AuditPrincipal:    func(p6metrics.Principal) string { return "p6-metrics" },
 		ReportScopedQuery: func(context.Context, golem.ScopedAuditRecord) {},
 		ResolvePrincipal: func(_ context.Context, principal p6metrics.Principal) (p6metrics.Actor, error) {
@@ -119,7 +121,7 @@ func newP6MetricsHarness(t *testing.T, profile p5ExtensionProviderProfile, limit
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness := &p6MetricsHarness{profile: profile, database: database, trace: trace, app: app}
+	harness := &p6MetricsHarness{profile: profile, database: database, handle: databaseHandle, trace: trace, app: app}
 	harness.seed(t)
 	trace.reset()
 	return harness
@@ -972,7 +974,7 @@ func TestP6ContributionAndIntermediateOverflowReturnNoRows(t *testing.T) {
 			}
 
 			intermediateApp, err := p6metrics.Open(context.Background(), p6metrics.Config[p6metrics.Principal]{
-				DB: h.database, Provider: profile.provider,
+				Database:          h.handle,
 				AnalyticsLimits:   golemruntime.AnalyticsLimits{MaxContributionRows: 10, MaxIntermediateGroups: 2},
 				AuditPrincipal:    func(p6metrics.Principal) string { return "p6-metrics" },
 				ReportScopedQuery: func(context.Context, golem.ScopedAuditRecord) {},

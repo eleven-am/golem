@@ -18,6 +18,8 @@ import (
 	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/lexer"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -59,6 +61,8 @@ type Config[P any] struct {
 	ReportInternalError  func(context.Context, error)
 	ExecutableSchema     gqlgengraphql.ExecutableSchema
 	EventLimits          events.Limits
+	Observer             observe.Observer
+	Provider             golem.Provider
 	WebSocketInit        func(context.Context, json.RawMessage) (context.Context, error)
 }
 
@@ -223,10 +227,16 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 	if server == nil || ctx == nil {
 		return Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
 	}
+	var operationSpan *observeexec.Span
+	ctx, operationSpan = observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLRequest, observe.PhaseFinish)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			server.config.ReportInternalError(ctx, fmt.Errorf("GraphQL executor panic: %v\n%s", recovered, debug.Stack()))
 			response = Response{Errors: []Error{publicError("INTERNAL_SERVER_ERROR", "internal server error")}}
+		}
+		if operationSpan != nil {
+			outcome, reason := graphQLObservationResult(response)
+			observeexec.Finish(operationSpan, outcome, reason)
 		}
 	}()
 	preparedOperation, failure := server.prepareRequest(request, byteLimitsChecked)
@@ -236,6 +246,11 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 	if preparedOperation.Operation.Definition.Operation == ast.Subscription {
 		return Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_REQUIRED", "GraphQL subscriptions require graphql-transport-ws")}}
 	}
+	operation := observe.OperationGraphQLQuery
+	if preparedOperation.Operation.Definition.Operation == ast.Mutation {
+		operation = observe.OperationGraphQLMutation
+	}
+	operationSpan.SetOperation(operation)
 	select {
 	case server.concurrency <- struct{}{}:
 		defer func() { <-server.concurrency }()
@@ -247,6 +262,28 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 		return prepared
 	}
 	return server.executePrepared(ctx, request, preparedOperation.Operation.Document, preparedOperation.Operation.Definition, preparedOperation.Operation.Variables, prepared)
+}
+
+func graphQLObservationResult(response Response) (observe.Outcome, observe.Reason) {
+	if len(response.Errors) == 0 {
+		return observe.OutcomeSuccess, observe.ReasonNone
+	}
+	for _, failure := range response.Errors {
+		code, _ := failure.Extensions["code"].(string)
+		switch code {
+		case "INTERNAL_SERVER_ERROR":
+			return observe.OutcomeFailure, observe.ReasonProvider
+		case "UNAUTHENTICATED", "FORBIDDEN":
+			return observe.OutcomeRefused, observe.ReasonAuthorization
+		case "NOT_FOUND":
+			return observe.OutcomeRefused, observe.ReasonNotFound
+		case "CONFLICT":
+			return observe.OutcomeRefused, observe.ReasonConflict
+		case "QUERY_LIMIT_EXCEEDED", "INPUT_LIMIT_EXCEEDED":
+			return observe.OutcomeRefused, observe.ReasonLimit
+		}
+	}
+	return observe.OutcomeRefused, observe.ReasonInvalidInput
 }
 
 type preparedRequest struct{ Operation Operation }
@@ -392,6 +429,9 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 	var failure *golem.Error
 	if errors.As(err, &failure) {
 		return Error{Message: failure.Message, Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(failure.Code)}}
+	}
+	if code, ok := events.CodeOf(err); ok {
+		return Error{Message: string(code), Path: append([]any(nil), path...), Extensions: map[string]any{"code": string(code)}}
 	}
 	if report != nil && err != nil {
 		report(ctx, err)

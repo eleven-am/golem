@@ -20,7 +20,14 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 		return nil, CapabilityReport{}, fmt.Errorf("postgresql open: %w", err)
 	}
 	database := sqlx.NewDb(stdlib.OpenDB(*config), "pgx")
-	if err = database.PingContext(ctx); err != nil {
+	return provider.verifyOpenedDatabase(ctx, database)
+}
+
+// verifyOpenedDatabase owns every resource after the driver pool has been
+// allocated. It is intentionally private but separately testable so a removed
+// cleanup call is caught without exposing a provider injection API.
+func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
+	if err := database.PingContext(ctx); err != nil {
 		database.Close()
 		return nil, CapabilityReport{}, fmt.Errorf("postgresql ping: %w", err)
 	}
@@ -44,6 +51,10 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 	if !report.AnalyticsExact {
 		database.Close()
 		return nil, CapabilityReport{}, fmt.Errorf("postgresql analytical exact-arithmetic capability is missing")
+	}
+	if !report.SessionSettings {
+		database.Close()
+		return nil, CapabilityReport{}, fmt.Errorf("postgresql provider-owned session settings are unavailable")
 	}
 	return database, report, nil
 }
@@ -102,10 +113,15 @@ EXISTS (SELECT 1 FROM (VALUES (1)) AS parent(id) WHERE EXISTS (SELECT 1 FROM (VA
   AND (SELECT pg_catalog.round(pg_catalog.avg(value), 0)::text = '2' FROM (VALUES (1::numeric), (2::numeric)) AS positive_half(value))
   AND (SELECT pg_catalog.round(pg_catalog.avg(value), 0)::text = '-2' FROM (VALUES (-1::numeric), (-2::numeric)) AS negative_half(value))
 )`
-	statementWithAnalytics := statement + analytics
+	const session = `,
+current_setting('TimeZone') = 'UTC'
+  AND current_setting('DateStyle') = 'ISO, YMD'
+  AND current_setting('IntervalStyle') = 'iso_8601'
+  AND current_setting('standard_conforming_strings') = 'on'`
+	statementWithAnalytics := statement + analytics + session
 	var version int
 	var report CapabilityReport
-	if err := query.QueryRowxContext(ctx, statementWithAnalytics).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks, &report.BinaryText, &report.ASCIIInsensitive, &report.ExactJSON, &report.ScalarListJSON, &report.RelationCorrelation, &report.AnalyticsExact); err != nil {
+	if err := query.QueryRowxContext(ctx, statementWithAnalytics).Scan(&version, &report.JSONB, &report.GeneratedColumns, &report.AdvisoryLocks, &report.BinaryText, &report.ASCIIInsensitive, &report.ExactJSON, &report.ScalarListJSON, &report.RelationCorrelation, &report.AnalyticsExact, &report.SessionSettings); err != nil {
 		return CapabilityReport{}, fmt.Errorf("postgresql capability probe: %w", err)
 	}
 	report.Version = physical.Version{Major: uint32(version / 10000), Minor: uint32((version / 100) % 100), Patch: uint32(version % 100)}

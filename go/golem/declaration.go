@@ -155,6 +155,14 @@ func GraphQLRoots(_ GraphQLRootNames) GraphQLOption         { return GraphQLOpti
 func GraphQLPageSizes(_, _ int) GraphQLOption               { return GraphQLOption{} }
 func GraphQLHidden() GraphQLOption                          { return GraphQLOption{} }
 
+// GraphQLHookOwned omits the named scalar fields from GraphQL create inputs.
+// They remain ordinary typed programmatic create fields so a recognized
+// BeforeCreate hook can populate them with SetCreate before mutation planning.
+// When a named field participates in a canonical belongs-to key, the complete
+// non-null key must be hook-owned and that relation is omitted from create
+// inputs too.
+func GraphQLHookOwned[M any](_ ...Column[M]) GraphQLOption { return GraphQLOption{} }
+
 // Subscriptions opts one model into durable event capture, generated typed
 // events, and its GraphQL subscription root. It is a compile-time declaration;
 // models that omit it remain subscription-disabled.

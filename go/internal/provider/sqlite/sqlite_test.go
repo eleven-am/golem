@@ -241,11 +241,33 @@ func TestParserNormalizesFormattingAndRejectsNonGrammar(t *testing.T) {
 }
 
 func TestOpenRejectsCallerPragmaOverrides(t *testing.T) {
-	if _, _, err := New().Open(context.Background(), "file:test.db?_pragma=foreign_keys(0)"); err == nil {
-		t.Fatal("caller foreign_keys override accepted")
+	for _, dataSourceName := range []string{
+		":memory:",
+		"file:test.db?_pragma=foreign_keys(0)",
+		"file:test.db?_%70ragma=foreign%5fkeys(0)",
+		"file:test.db?_pragma=BUSY%5fTIMEOUT%3d1",
+		"file:test.db?_txlock=deferred",
+		"file:test.db?_%74xlock=exclusive",
+		"file:private?mode=memory",
+		"file:private?mo%64e=mem%6fry",
+		"file:?mode=memory&cache=shared",
+		"file://?mode=memory&cache=shared",
+		"file::memory:?cache=shared",
+		"file::memory:?mode=memory&cache=shared",
+		"file:shared?mode=memory&cache=shared#fragment",
+		"file:private?mode=memory&cache=private&cache=shared",
+	} {
+		if _, _, err := New().Open(context.Background(), dataSourceName); err == nil {
+			t.Fatalf("unsafe caller DSN %q accepted", dataSourceName)
+		}
 	}
-	if _, _, err := New().Open(context.Background(), ":memory:"); err == nil {
-		t.Fatal("private :memory: accepted with multi-connection pool")
+
+	configured, err := configureDataSourceName("file:shared?mo%64e=mem%6fry&ca%63he=sha%72ed")
+	if err != nil {
+		t.Fatalf("encoded named shared-memory DSN rejected: %v", err)
+	}
+	if !strings.HasSuffix(configured, "&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate") {
+		t.Fatalf("provider parameters are not canonical: %q", configured)
 	}
 }
 

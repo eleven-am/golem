@@ -3,6 +3,7 @@ package codegen
 import (
 	"bytes"
 	"context"
+	"errors"
 	goast "go/ast"
 	"go/parser"
 	"go/token"
@@ -11,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	gqlconfig "github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
@@ -77,6 +79,14 @@ func TestEmitIsDeterministicValidGoAndCarriesCallerOnlyServerAssembly(t *testing
 		if _, err := parser.ParseFile(token.NewFileSet(), first.Files[index].Filename, first.Files[index].Source, parser.AllErrors); err != nil {
 			t.Fatalf("generated gqlgen artifact %s is not valid Go: %v\n%s", first.Files[index].Filename, err, first.Files[index].Source)
 		}
+		if first.Files[index].Filename == ExecutableFilename {
+			if bytes.Contains(first.Files[index].Source, []byte("//go:embed")) || !bytes.Contains(first.Files[index].Source, []byte(`{Name: "../zz_golem_graphql.schema.graphqls", Input:`)) {
+				t.Fatalf("generated executable does not own an inline final-layout SDL source")
+			}
+		}
+		if first.Files[index].Filename == ExecutableFilename && (bytes.Contains(first.Files[index].Source, []byte("//go:embed")) || bytes.Contains(first.Files[index].Source, []byte("sourceData("))) {
+			t.Fatalf("generated executable depends on an unowned child SDL artifact:\n%s", first.Files[index].Source)
+		}
 	}
 	if first.Filename != GoFilename || len(first.Source) == 0 || first.SDLFingerprint == "" {
 		t.Fatalf("incomplete generated result: %#v", first)
@@ -94,6 +104,203 @@ func TestEmitIsDeterministicValidGoAndCarriesCallerOnlyServerAssembly(t *testing
 		if strings.Contains(source, forbidden) {
 			t.Errorf("generated translation adapter contains forbidden runtime behavior %q", forbidden)
 		}
+	}
+}
+
+func TestPinnedGQLGenRestoresWorkingDirectoryAfterSuccessAndFailure(t *testing.T) {
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(originalDirectory) })
+	moduleDirectory, err := filepath.Abs(filepath.Join(originalDirectory, "../../.."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	outside, err = filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(outside); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: filepath.Join(moduleDirectory, "internal/compiler/compile/testdata/social"), Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	document, err := graphqlschema.Build(*compiled.Compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = Emit(Request{
+		PackageName: "social", AppImportPath: compiled.Compilation.Model.Schema.PackagePath, ModuleDir: moduleDirectory,
+		SDL: document.SDL, ContractFingerprint: compiled.ContractFingerprint, Actor: compiled.Compilation.Model.Schema.Actor,
+		GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
+	})
+	if err != nil {
+		t.Fatalf("successful pinned generation: %v", err)
+	}
+	assertWorkingDirectory(t, outside)
+
+	failure := NewConfig()
+	failure.Exec.Filename = filepath.Join(outside, "failure", "exec.go")
+	failure.Model.Filename = filepath.Join(outside, "failure", "models.go")
+	failure.Resolver.Filename = filepath.Join(outside, "failure", "resolvers.go")
+	if err := runPinnedGQLGen(failure, moduleDirectory); err == nil {
+		t.Fatal("incomplete gqlgen configuration unexpectedly succeeded")
+	}
+	assertWorkingDirectory(t, outside)
+	for _, name := range []string{"generated.go", "models_gen.go"} {
+		if _, err := os.Stat(filepath.Join(moduleDirectory, name)); !os.IsNotExist(err) {
+			t.Fatalf("pinned generation leaked module-root artifact %s: %v", name, err)
+		}
+	}
+}
+
+func TestPrivatePinnedGQLGenRestoresProcessStateAfterSuccessErrorAndPanic(t *testing.T) {
+	originalDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalWorkspace, workspacePresent := os.LookupEnv("GOWORK")
+	originalFlags, flagsPresent := os.LookupEnv("GOFLAGS")
+	t.Cleanup(func() {
+		_ = os.Chdir(originalDirectory)
+		_ = restoreEnvironment("GOWORK", originalWorkspace, workspacePresent)
+		_ = restoreEnvironment("GOFLAGS", originalFlags, flagsPresent)
+	})
+	outside := t.TempDir()
+	outside, err = filepath.EvalSymlinks(outside)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := t.TempDir()
+	if err := os.Chdir(outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("GOWORK", "off"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Setenv("GOFLAGS", "-tags=p8_private_restore"); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name     string
+		generate func(*gqlconfig.Config) error
+		wantErr  bool
+	}{
+		{name: "success", generate: func(*gqlconfig.Config) error { return nil }},
+		{name: "error", generate: func(*gqlconfig.Config) error { return errors.New("expected") }, wantErr: true},
+		{name: "panic", generate: func(*gqlconfig.Config) error { panic("expected") }, wantErr: true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			err := runPinnedGQLGenPrivateWith(NewConfig(), private, test.generate)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("private generation error=%v wantErr=%t", err, test.wantErr)
+			}
+			assertWorkingDirectory(t, outside)
+			if got := os.Getenv("GOWORK"); got != "off" {
+				t.Fatalf("GOWORK=%q after private generation", got)
+			}
+			if got := os.Getenv("GOFLAGS"); got != "-tags=p8_private_restore" {
+				t.Fatalf("GOFLAGS=%q after private generation", got)
+			}
+		})
+	}
+}
+
+func TestPrivateGQLGenModuleSourceCoversVersionMainReplaceAndFork(t *testing.T) {
+	tests := []struct {
+		name, module string
+		resolved     moduleResolution
+		contains     []string
+	}{
+		{name: "versioned", module: "example.test/framework", resolved: moduleResolution{Path: "example.test/framework", Version: "v1.2.3"}, contains: []string{"example.test/framework v1.2.3"}},
+		{name: "workspace-main", module: "example.test/framework", resolved: moduleResolution{Path: "example.test/framework", Dir: "/tmp/framework"}, contains: []string{"example.test/framework v0.0.0", `replace example.test/framework => "/tmp/framework"`}},
+		{name: "local-replace", module: "example.test/framework", resolved: moduleResolution{Path: "example.test/framework", Version: "v0.0.0", Replace: &struct {
+			Path    string `json:"Path"`
+			Version string `json:"Version"`
+			Dir     string `json:"Dir"`
+		}{Dir: "/tmp/fork"}}, contains: []string{"example.test/framework v0.0.0", `replace example.test/framework => "/tmp/fork"`}},
+		{name: "module-replace", module: "example.test/framework", resolved: moduleResolution{Path: "example.test/framework", Version: "v1.0.0", Replace: &struct {
+			Path    string `json:"Path"`
+			Version string `json:"Version"`
+			Dir     string `json:"Dir"`
+		}{Path: "example.test/fork", Version: "v1.1.0"}}, contains: []string{"example.test/framework v1.0.0", "replace example.test/framework => example.test/fork v1.1.0"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source, err := privateGQLGenModuleSource(test.module, test.resolved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, want := range append(test.contains, "github.com/99designs/gqlgen "+GQLGenVersion, "github.com/vektah/gqlparser/v2 "+gqlParserVersion) {
+				if !strings.Contains(string(source), want) {
+					t.Fatalf("private module missing %q:\n%s", want, source)
+				}
+			}
+		})
+	}
+}
+
+func TestPrivateGQLGenResolutionUsesRequestWorkspaceEnvironment(t *testing.T) {
+	framework, err := filepath.Abs(filepath.Join("../../.."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	consumer := t.TempDir()
+	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte("module example.test/consumer\n\ngo 1.25.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspace := filepath.Join(t.TempDir(), "go.work")
+	work := "go 1.25.0\n\nuse (\n\t" + filepath.ToSlash(framework) + "\n\t" + filepath.ToSlash(consumer) + "\n)\n"
+	if err := os.WriteFile(workspace, []byte(work), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := resolveConsumerModule(consumer, []string{"GOWORK=" + workspace}, "github.com/eleven-am/golem/go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved.Version != "" || resolved.Dir == "" {
+		t.Fatalf("workspace main resolution=%+v", resolved)
+	}
+	private := t.TempDir()
+	request := Request{GolemImportPath: DefaultGolemImportPath, GraphQLImportPath: DefaultGraphQLImportPath, Env: []string{"GOWORK=" + workspace}}
+	if err := writePrivateGQLGenModule(private, request, consumer); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.ReadFile(filepath.Join(private, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(source), "replace github.com/eleven-am/golem/go => ") || !strings.Contains(string(source), filepath.ToSlash(resolved.Dir)) {
+		t.Fatalf("workspace resolution missing from private module:\n%s", source)
+	}
+}
+
+func TestGraphQLCodegenRejectsSplitFrameworkImportModules(t *testing.T) {
+	_, err := Emit(Request{
+		PackageName: "app", AppImportPath: "example.test/app", ModuleDir: t.TempDir(), SDL: "scalar String\ntype Query { ok: String }",
+		ContractFingerprint: "contract", Actor: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Actor"},
+		GolemImportPath: "example.test/one/golem", GraphQLImportPath: "example.test/two/graphql",
+		GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
+	})
+	if err == nil || !strings.Contains(err.Error(), "one module") {
+		t.Fatalf("split framework imports error=%v", err)
+	}
+}
+
+func assertWorkingDirectory(t *testing.T, want string) {
+	t.Helper()
+	got, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("working directory = %q, want %q", got, want)
 	}
 }
 
@@ -381,9 +588,24 @@ func TestEmitRejectsInvalidPackageSDLAndFingerprint(t *testing.T) {
 }
 
 func TestEmitDerivesPublicGraphQLImportFromConfiguredGolemModule(t *testing.T) {
+	fork := filepath.Join(t.TempDir(), "framework")
+	if err := os.MkdirAll(filepath.Join(fork, "graphql"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fork, "go.mod"), []byte("module example.test/golem\n\ngo 1.25.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(fork, "graphql", "graphql.go"), []byte("package graphql\ntype PreparedObject map[string]any\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	consumer := t.TempDir()
+	consumerModule := "module example.test/app\n\ngo 1.25.0\n\nrequire example.test/golem v0.0.0\nreplace example.test/golem => " + filepath.ToSlash(fork) + "\n"
+	if err := os.WriteFile(filepath.Join(consumer, "go.mod"), []byte(consumerModule), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	result, err := Emit(Request{
 		PackageName: "social", AppImportPath: "example.test/golem/app", Actor: ir.GoNamedTypeIR{PackagePath: "example.test/golem/app", Name: "Actor"}, SDL: "type Query { ok: Boolean }", ContractFingerprint: "digest",
-		GolemImportPath: "example.test/golem/golem", GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
+		ModuleDir: consumer, Env: []string{"GOWORK=off"}, GolemImportPath: "example.test/golem/golem", GenerationDigest: "generation", GeneratorVersion: "generator", TemplateABIVersion: "template",
 	})
 	if err != nil {
 		t.Fatal(err)

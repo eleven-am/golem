@@ -17,7 +17,7 @@ import (
 
 func TestFreshActiveExecutablePreservesComputedFailurePathsAndExactCustomResults(t *testing.T) {
 	root := t.TempDir()
-	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/activep5\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/activep5\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
 	writePipelineAcceptanceFile(t, root, "app/model.go", `package app
 
 import (
@@ -103,14 +103,12 @@ func NonNullMutationFailure(context.Context,*Caller[Principal],EmptyArgs)(string
 	if output, err := prepare.CombinedOutput(); err != nil {
 		t.Fatalf("prepare module: %v\n%s", err, output)
 	}
-	result, err := Build(context.Background(), Request{
+	reviewed := p8BuildWithReviewedSQLiteHistory(t, context.Background(), Request{
 		Compile:    compile.Config{Dir: filepath.Join(root, "app"), Pattern: ".", Root: "DefineSchema"},
 		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/activep5/app", PackageName: "app", Directory: filepath.Join(root, "app")},
 		Lowerers:   []physical.Lowerer{sqliteprovider.New()}, Env: []string{"GOWORK=off"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := reviewed.Result
 	var generatedSDL string
 	for _, artifact := range result.Prospective.Artifacts {
 		switch artifact.Kind {
@@ -126,9 +124,7 @@ func NonNullMutationFailure(context.Context,*Caller[Principal],EmptyArgs)(string
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqliteprovider.New().ApplyInitial(context.Background(), database, result.Providers[0].Schema); err != nil {
-		t.Fatal(err)
-	}
+	p8ApplyReviewedSQLiteHistory(t, context.Background(), database, reviewed.History)
 	if _, err := database.ExecContext(context.Background(), `INSERT INTO "users"("id","name","status") VALUES (?,?,?)`, 1, "alice", "active"); err != nil {
 		t.Fatal(err)
 	}
@@ -136,13 +132,13 @@ func NonNullMutationFailure(context.Context,*Caller[Principal],EmptyArgs)(string
 	writePipelineAcceptanceFile(t, root, "acceptance/active_test.go", fmt.Sprintf(`package acceptance_test
 import (
  "bytes"; "context"; "encoding/json"; "net/http"; "net/http/httptest"; "sync"; "testing"
- "example.test/activep5/app"; "github.com/eleven-am/golem/go/golem"; "github.com/jmoiron/sqlx"
+ "example.test/activep5/app"; providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 )
 type payload struct { Data map[string]any `+"`json:\"data\"`"+`; Errors []struct { Message string `+"`json:\"message\"`"+`; Path []any `+"`json:\"path\"`"+`; Extensions map[string]any `+"`json:\"extensions\"`"+` } `+"`json:\"errors\"`"+` }
 func request(t *testing.T, server *app.GraphQLServer, query string) payload { t.Helper(); body,_:=json.Marshal(map[string]any{"query":query}); recorder:=httptest.NewRecorder(); server.Handler().ServeHTTP(recorder,httptest.NewRequest(http.MethodPost,"/graphql",bytes.NewReader(body))); var value payload; if err:=json.Unmarshal(recorder.Body.Bytes(),&value); err!=nil { t.Fatalf("decode %%s: %%v",recorder.Body.String(),err) }; return value }
 func TestActive(t *testing.T) {
- db,err:=sqlx.Open("sqlite",%q); if err!=nil { t.Fatal(err) }
- application,err:=app.Open(context.Background(),app.Config[app.Principal]{DB:db,Provider:golem.SQLite,ResolvePrincipal:func(context.Context,app.Principal)(app.Principal,error){return app.Principal{ID:"p"},nil}}); if err!=nil {t.Fatal(err)}
+ db,err:=providersqlite.Open(context.Background(),providersqlite.Config{DataSourceName:%q}); if err!=nil { t.Fatal(err) }
+ application,err:=app.Open(context.Background(),app.Config[app.Principal]{Database:db,ResolvePrincipal:func(context.Context,app.Principal)(app.Principal,error){return app.Principal{ID:"p"},nil}}); if err!=nil {t.Fatal(err)}
  var mu sync.Mutex; reports:=0
  server,err:=application.GraphQL(app.GraphQLConfig[app.Principal]{PrincipalFromContext:func(context.Context)(app.Principal,bool){return app.Principal{ID:"p"},true},ReportInternalError:func(context.Context,error){mu.Lock();reports++;mu.Unlock()}}); if err!=nil {t.Fatal(err)}
  nullable:=request(t,server,`+"`query { users { name broken: nullableFailure } }`"+`); if len(nullable.Errors)!=1 || nullable.Errors[0].Extensions["code"]!="INTERNAL_SERVER_ERROR" || len(nullable.Errors[0].Path)!=3 || nullable.Errors[0].Path[0]!="users" || nullable.Errors[0].Path[1]!=float64(0) || nullable.Errors[0].Path[2]!="broken" { t.Fatalf("nullable=%%#v",nullable) }; users:=nullable.Data["users"].([]any); row:=users[0].(map[string]any); if row["name"]!="alice" || row["broken"]!=nil {t.Fatalf("nullable data=%%#v",nullable.Data)}
@@ -152,9 +148,9 @@ func TestActive(t *testing.T) {
 	 invalidStrictList:=request(t,server,`+"`query { users { name broken: invalidStrictList } }`"+`); if len(invalidStrictList.Errors)!=1 || len(invalidStrictList.Errors[0].Path)!=4 || invalidStrictList.Errors[0].Path[2]!="broken" || invalidStrictList.Errors[0].Path[3]!=float64(1) || invalidStrictList.Data!=nil {t.Fatalf("invalid strict list=%%#v",invalidStrictList)}
 	 invalidNullableStrictList:=request(t,server,`+"`query { users { name broken: invalidNullableStrictList } }`"+`); if len(invalidNullableStrictList.Errors)!=1 || len(invalidNullableStrictList.Errors[0].Path)!=4 || invalidNullableStrictList.Errors[0].Path[2]!="broken" || invalidNullableStrictList.Errors[0].Path[3]!=float64(1) {t.Fatalf("invalid nullable strict list=%%#v",invalidNullableStrictList)}; nullableStrictRow:=invalidNullableStrictList.Data["users"].([]any)[0].(map[string]any); if nullableStrictRow["name"]!="alice" || nullableStrictRow["broken"]!=nil {t.Fatalf("invalid nullable strict list data=%%#v",invalidNullableStrictList.Data)}
 	 nullableMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"2\", name: \"bob\", status: ACTIVE }) { id broken: nullableFailure } second: updateUser(where: { ID: \"2\" }, data: { name: { set: \"after\" } }) { name } }`"+`); if len(nullableMutation.Errors)!=1 || len(nullableMutation.Errors[0].Path)!=2 || nullableMutation.Errors[0].Path[0]!="first" || nullableMutation.Errors[0].Path[1]!="broken" || nullableMutation.Data["second"].(map[string]any)["name"]!="after" {t.Fatalf("nullable mutation=%%#v",nullableMutation)}
-	 nonNullMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"3\", name: \"committed\", status: ACTIVE }) { id broken: nonNullFailure } second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"must-not-run\" } }) { name } }`"+`); if len(nonNullMutation.Errors)!=1 || len(nonNullMutation.Errors[0].Path)!=2 || nonNullMutation.Errors[0].Path[0]!="first" || nonNullMutation.Errors[0].Path[1]!="broken" || nonNullMutation.Data!=nil {t.Fatalf("non-null mutation=%%#v",nonNullMutation)}; var original,committed string; if err:=db.Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if err:=db.Get(&committed,`+"`SELECT name FROM users WHERE id=3`"+`);err!=nil{t.Fatal(err)};if original!="alice"||committed!="committed"{t.Fatalf("mutation order original=%%q committed=%%q",original,committed)}
+	 nonNullMutation:=request(t,server,`+"`mutation { first: createUser(data: { id: \"3\", name: \"committed\", status: ACTIVE }) { id broken: nonNullFailure } second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"must-not-run\" } }) { name } }`"+`); if len(nonNullMutation.Errors)!=1 || len(nonNullMutation.Errors[0].Path)!=2 || nonNullMutation.Errors[0].Path[0]!="first" || nonNullMutation.Errors[0].Path[1]!="broken" || nonNullMutation.Data!=nil {t.Fatalf("non-null mutation=%%#v",nonNullMutation)}; var original,committed string; if err:=db.UnsafeSQLX().Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if err:=db.UnsafeSQLX().Get(&committed,`+"`SELECT name FROM users WHERE id=3`"+`);err!=nil{t.Fatal(err)};if original!="alice"||committed!="committed"{t.Fatalf("mutation order original=%%q committed=%%q",original,committed)}
 	 nullableCustom:=request(t,server,`+"`mutation { first: nullableMutationFailure second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"nullable-continued\" } }) { name } }`"+`); if len(nullableCustom.Errors)!=1 || nullableCustom.Data["first"]!=nil || nullableCustom.Data["second"].(map[string]any)["name"]!="nullable-continued" || app.NullableMutationCalls!=1 {t.Fatalf("nullable custom=%%#v calls=%%d",nullableCustom,app.NullableMutationCalls)}
-	 nonNullCustom:=request(t,server,`+"`mutation { first: nonNullMutationFailure second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"custom-must-not-run\" } }) { name } }`"+`); if len(nonNullCustom.Errors)!=1 || nonNullCustom.Data!=nil || app.NonNullMutationCalls!=1 {t.Fatalf("non-null custom=%%#v calls=%%d",nonNullCustom,app.NonNullMutationCalls)}; if err:=db.Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if original!="nullable-continued"{t.Fatalf("non-null custom executed later root: %%q",original)}
+	 nonNullCustom:=request(t,server,`+"`mutation { first: nonNullMutationFailure second: updateUser(where: { ID: \"1\" }, data: { name: { set: \"custom-must-not-run\" } }) { name } }`"+`); if len(nonNullCustom.Errors)!=1 || nonNullCustom.Data!=nil || app.NonNullMutationCalls!=1 {t.Fatalf("non-null custom=%%#v calls=%%d",nonNullCustom,app.NonNullMutationCalls)}; if err:=db.UnsafeSQLX().Get(&original,`+"`SELECT name FROM users WHERE id=1`"+`);err!=nil{t.Fatal(err)};if original!="nullable-continued"{t.Fatalf("non-null custom executed later root: %%q",original)}
 	 exact:=request(t,server,`+"`query { stringValues intValues bigValues decimalValues nestedValues statusValues echoStatus(status: ACTIVE) nullableValues nestedNullableValues maybeString jsonValue users { computedStatus } }`"+`); if len(exact.Errors)!=0 || exact.Data["bigValues"].([]any)[0]!="9007199254740993" || exact.Data["decimalValues"].([]any)[0]!="123.45" || exact.Data["echoStatus"]!="ACTIVE" || exact.Data["nullableValues"].([]any)[1]!=nil || exact.Data["maybeString"]!="maybe" || exact.Data["users"].([]any)[0].(map[string]any)["computedStatus"]!="ACTIVE" { t.Fatalf("exact=%%#v",exact) }
  forged:=request(t,server,`+"`query { invalidStatus }`"+`); if len(forged.Errors)!=1 || forged.Errors[0].Extensions["code"]!="INTERNAL_SERVER_ERROR" {t.Fatalf("forged=%%#v",forged)}
  custom:=request(t,server,`+"`query { failCustom }`"+`); if len(custom.Errors)!=1 || custom.Errors[0].Extensions["code"]!="INTERNAL_SERVER_ERROR" || len(custom.Errors[0].Path)!=1 || custom.Errors[0].Path[0]!="failCustom" {t.Fatalf("custom=%%#v",custom)}
@@ -163,7 +159,7 @@ func TestActive(t *testing.T) {
 	if err:=db.Close();err!=nil{t.Fatal(err)}; provider:=request(t,server,`+"`query { users { name } }`"+`); if len(provider.Errors)!=1 || provider.Errors[0].Extensions["code"]!="BAD_USER_INPUT" || len(provider.Errors[0].Path)!=1 || provider.Errors[0].Path[0]!="users" {t.Fatalf("provider=%%#v",provider)}
 	 mu.Lock(); defer mu.Unlock(); if reports!=13 {t.Fatalf("trusted reports=%%d want 13",reports)}
 }
-`, "file:"+databasePath+"?_pragma=foreign_keys(1)"))
+`, "file:"+databasePath))
 	command := exec.Command("go", "test", "-mod=mod", "./...")
 	command.Dir, command.Env = root, append(os.Environ(), "GOWORK=off")
 	if output, err := command.CombinedOutput(); err != nil {

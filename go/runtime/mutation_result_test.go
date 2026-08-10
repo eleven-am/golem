@@ -2,12 +2,16 @@ package runtime
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/jmoiron/sqlx"
@@ -259,10 +263,13 @@ func newMutationResultFixtureWithHooksAndDatabase(t *testing.T, limits MutationL
 	return newMutationResultFixtureWithHooksAndDatabaseMode(t, limits, hookFactory, afterCommitError, supplied, true)
 }
 
-func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor], afterCommitError func(context.Context, golem.AfterCommitFailure), supplied *sqlx.DB, initialize bool) mutationResultFixture {
+func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor], afterCommitError func(context.Context, golem.AfterCommitFailure), supplied *sqlx.DB, initialize bool, hookOwned ...bool) mutationResultFixture {
 	t.Helper()
 	ctx := context.Background()
 	schemaFixture := schematest.NewSubscribedIndexed(t)
+	if len(hookOwned) != 0 && hookOwned[0] {
+		schemaFixture = withMutationResultHookOwnedAuthor(t, schemaFixture)
+	}
 	provider := sqlite.New()
 	database := supplied
 	if database == nil {
@@ -330,7 +337,7 @@ func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits Mutat
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: database, Provider: golem.SQLite, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		MutationLimits:   limits,
 		AfterCommitError: afterCommitError,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
@@ -347,6 +354,55 @@ func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits Mutat
 		authorID: golem.GeneratedEqualField[mutationResultPost, golem.UUID](schemaFixture.AuthorID),
 		title:    postTitle, author: postAuthor, schema: schemaFixture,
 	}
+}
+
+func withMutationResultHookOwnedAuthor(t *testing.T, fixture schematest.Fixture) schematest.Fixture {
+	t.Helper()
+	contractDocument := fixture.Bundle.Contract()
+	var contract compilerir.ContractIR
+	if err := json.Unmarshal(contractDocument.Bytes(), &contract); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for index := range contract.Models {
+		if contract.Models[index].ModelID == compilerir.ModelID(fmt.Sprintf("%x", fixture.Post[:])) {
+			contract.Models[index].HookOwnedCreateFields = []compilerir.FieldID{compilerir.FieldID(fmt.Sprintf("%x", fixture.AuthorID[:]))}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("Post contract is absent")
+	}
+	payload, err := compilerir.CanonicalContract(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint, err := compilerir.ContractFingerprint(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := hex.DecodeString(string(fingerprint))
+	if err != nil || len(raw) != len(golem.SchemaDigest{}) {
+		t.Fatalf("contract fingerprint=%q error=%v", fingerprint, err)
+	}
+	var digest golem.SchemaDigest
+	copy(digest[:], raw)
+	contractDocument = golem.GeneratedSchemaDocument(contractDocument.FormatVersion(), contractDocument.CanonicalVersion(), digest, payload)
+	fixture.Bundle = golem.GeneratedSchemaBundle(
+		fixture.Bundle.GenerationDigest(), fixture.Bundle.GeneratorVersion(), fixture.Bundle.TemplateABIVersion(),
+		fixture.Bundle.Model(), contractDocument, fixture.Bundle.Providers()...,
+	)
+	registry, err := policyschema.New(fixture.Bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.Registry = registry
+	return fixture
+}
+
+func mutationResultHookOwnedFixture(t *testing.T, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor]) mutationResultFixture {
+	t.Helper()
+	return newMutationResultFixtureWithHooksAndDatabaseMode(t, limits, hookFactory, nil, nil, true, true)
 }
 
 func (fixture mutationResultFixture) createPost(id byte, author golem.UUID, title string) golem.CreateInput[mutationResultPost] {

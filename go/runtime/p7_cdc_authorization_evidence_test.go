@@ -8,6 +8,7 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	eventcdc "github.com/eleven-am/golem/go/internal/event/cdc"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type p7AuthorizationCDCAdapter struct{}
@@ -69,7 +70,7 @@ func TestP7CDCUsesSameFreshSubscriptionAuthorization(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("CDC event did not resolve a fresh principal")
 	}
-	if reason := receiveP7Suppression(t, fixture.suppressed); reason != events.SuppressionFiltered {
+	if reason := receiveP7Suppression(t, fixture.suppressed); reason != observe.ReasonFiltered {
 		t.Fatalf("denied CDC suppression=%q", reason)
 	}
 

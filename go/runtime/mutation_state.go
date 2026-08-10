@@ -11,6 +11,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
@@ -302,6 +303,7 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 		return err
 	}
 	for _, statement := range statements {
+		observeexec.RecordStatement(ctx)
 		if _, err := executor.ExecContext(ctx, statement.SQL(), statement.Args()...); err != nil {
 			return fmt.Errorf("P4_MUTATION_OUTBOX: insert facts: %w", err)
 		}
@@ -311,6 +313,7 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 		if err != nil {
 			return err
 		}
+		observeexec.RecordStatement(ctx)
 		if _, err := executor.ExecContext(ctx, delivery.SQL(), delivery.Args()...); err != nil {
 			return fmt.Errorf("P7_MUTATION_DELIVERY: insert causal state: %w", err)
 		}

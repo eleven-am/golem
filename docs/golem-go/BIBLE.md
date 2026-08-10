@@ -783,6 +783,27 @@ The matrix applies recursively to nested inputs. Hidden or write-only identities
 invalid overlaps, unknown configured fields, and empty generated input objects
 fail generation.
 
+#### 12.2.1 Hook-owned GraphQL create fields
+
+`golem.GraphQLHookOwned(Fields...)` removes trusted server-populated scalars
+from root create, upsert-create, and every recursive nested-create GraphQL input
+without removing their typed programmatic `CreateFieldCapability`. A recognized
+`BeforeCreate` hook is mandatory and can populate each field with
+`golem.SetCreate` before planning. The field must be writable for create and
+must not participate in an identity key.
+
+Hook ownership is valid for ordinary scalars such as generated slugs or tenant
+metadata. If an owned scalar participates in a canonical belongs-to key, the
+entire composite key must be owned, non-null, and unambiguous; the canonical
+relation is then omitted from create inputs too. Partial, nullable, or ambiguous
+relation ownership is a compiler error. Output/filter exposure is unchanged,
+and update exposure is governed independently by the normal field modes (for
+example, `immutable`). This is ContractIR-only metadata: it changes the contract
+fingerprint and GraphQL ABI, never ModelIR or the migration plan. If create or
+upsert is enabled, at least one client-owned create input position must remain;
+otherwise generation fails with `P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE` rather than
+silently deleting an authored root.
+
 ### 12.3 Conditional nullability
 
 When a visible scalar, enum, relation, or relation count can be conditionally
@@ -1179,6 +1200,11 @@ event facts, and policy trace, modulo transport encoding.
 
 A phase is not complete because types or interfaces exist. It is complete only
 when its named acceptance, mutation, provider, and failure tests pass.
+
+P8 implementation is controlled by [`p8/P8-PLAN.md`](./p8/P8-PLAN.md), its
+public production/release surface by
+[`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md), and its mandatory
+completion gates by [`p8/P8-EVIDENCE.md`](./p8/P8-EVIDENCE.md).
 
 ---
 

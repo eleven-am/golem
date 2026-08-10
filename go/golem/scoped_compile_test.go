@@ -77,7 +77,7 @@ func invalid(query g.ScopedQuery[Model]) { query.Exec(); query.DB(); query.Delet
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			directory := t.TempDir()
-			goMod := fmt.Sprintf("module example.test/p6scopedcompile\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", module)
+			goMod := fmt.Sprintf("module example.test/p6scopedcompile\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", module)
 			if err := os.WriteFile(filepath.Join(directory, "go.mod"), []byte(goMod), 0o644); err != nil {
 				t.Fatal(err)
 			}

@@ -41,57 +41,79 @@ func newEventCoordinator(database *sqlx.DB, namespace physical.PhysicalName) (ev
 }
 
 func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	snapshot, err := coordinator.ClaimWithDepth(ctx, options)
+	return snapshot.Leases, err
+}
+
+func (coordinator *eventCoordinator) ClaimWithDepth(ctx context.Context, options eventprovider.ClaimOptions) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
-		return nil, err
+		return eventprovider.ClaimSnapshot{}, err
 	}
 	tokens := make([]string, options.Groups)
 	for index := range tokens {
 		token, err := eventprovider.NewLeaseToken()
 		if err != nil {
-			return nil, err
+			return eventprovider.ClaimSnapshot{}, err
 		}
 		tokens[index] = token
 	}
 	transaction, err := coordinator.database.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: begin claim: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: begin claim: %w", err)
 	}
 	defer transaction.Rollback()
 	if err := coordinator.materializeMissing(ctx, transaction, options.Groups); err != nil {
-		return nil, err
+		return eventprovider.ClaimSnapshot{}, err
 	}
 	var causations []string
 	delivery := coordinator.deliveryTable()
 	query := `SELECT "causation_id" FROM ` + delivery + ` WHERE ("status"='pending' AND "available_at"<=clock_timestamp()) OR ("status"='leased' AND "lease_until"<=clock_timestamp()) ORDER BY "first_recorded_at","causation_id" FOR UPDATE SKIP LOCKED LIMIT $1`
 	if err := transaction.SelectContext(ctx, &causations, query, options.Groups); err != nil {
-		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: discover claimable groups: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: discover claimable groups: %w", err)
 	}
 	leases := make([]eventprovider.Lease, 0, len(causations))
 	for index, causation := range causations {
 		update := `UPDATE ` + delivery + ` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=$1,"lease_until"=clock_timestamp()+$2*interval '1 microsecond',"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=clock_timestamp() WHERE "causation_id"=$3 AND (("status"='pending' AND "available_at"<=clock_timestamp()) OR ("status"='leased' AND "lease_until"<=clock_timestamp()))`
 		result, updateErr := transaction.ExecContext(ctx, update, tokens[index], options.LeaseDuration.Microseconds(), causation)
 		if updateErr != nil {
-			return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: lease group: %w", updateErr)
+			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: lease group: %w", updateErr)
 		}
 		changed, _ := result.RowsAffected()
 		if changed != 1 {
-			return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: locked group lost claim eligibility")
+			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: locked group lost claim eligibility")
 		}
 		state, readErr := coordinator.readDelivery(ctx, transaction, causation)
 		if readErr != nil {
-			return nil, readErr
+			return eventprovider.ClaimSnapshot{}, readErr
 		}
 		facts, readErr := coordinator.readFacts(ctx, transaction, causation)
 		if readErr != nil {
-			return nil, readErr
+			return eventprovider.ClaimSnapshot{}, readErr
 		}
 		state.ImmutableFactRows = len(facts)
 		leases = append(leases, eventprovider.Lease{Delivery: state, Facts: facts})
 	}
-	if err := transaction.Commit(); err != nil {
-		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: commit claim: %w", err)
+	depth, err := coordinator.postgresqlDeliveryDepth(ctx, transaction)
+	if err != nil {
+		return eventprovider.ClaimSnapshot{}, err
 	}
-	return clonePostgreSQLLeases(leases), nil
+	if err := transaction.Commit(); err != nil {
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: commit claim: %w", err)
+	}
+	return eventprovider.ClaimSnapshot{Leases: clonePostgreSQLLeases(leases), Depth: depth}, nil
+}
+
+func (coordinator *eventCoordinator) postgresqlDeliveryDepth(ctx context.Context, queryer sqlx.QueryerContext) (eventprovider.DepthSnapshot, error) {
+	var row struct {
+		Pending int64 `db:"pending"`
+		Blocked int64 `db:"blocked"`
+		Retired int64 `db:"retired"`
+	}
+	query := `SELECT COUNT(*) FILTER (WHERE "status"='pending') AS "pending",COUNT(*) FILTER (WHERE "status"='blocked') AS "blocked",COUNT(*) FILTER (WHERE "status"='retired') AS "retired" FROM ` + coordinator.deliveryTable()
+	if err := sqlx.GetContext(ctx, queryer, &row, query); err != nil {
+		return eventprovider.DepthSnapshot{}, fmt.Errorf("P8_POSTGRESQL_OBSERVE: snapshot delivery depths: %w", err)
+	}
+	return eventprovider.DepthSnapshot{Pending: row.Pending, Blocked: row.Blocked, Retired: row.Retired}, nil
 }
 
 func (coordinator *eventCoordinator) Renew(ctx context.Context, causation, token string, duration time.Duration) (bool, error) {

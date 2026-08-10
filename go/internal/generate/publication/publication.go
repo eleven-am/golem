@@ -511,7 +511,7 @@ func readManifest(moduleDir, relative string) (*manifest.Manifest, []byte, error
 	if err != nil {
 		return nil, nil, err
 	}
-	value, err := manifest.Parse(encoded)
+	value, err := manifest.ParseHistorical(encoded)
 	if err != nil {
 		return nil, nil, err
 	}

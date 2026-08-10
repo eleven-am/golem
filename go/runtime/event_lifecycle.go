@@ -12,8 +12,10 @@ import (
 	eventcdc "github.com/eleven-am/golem/go/internal/event/cdc"
 	eventoutbox "github.com/eleven-am/golem/go/internal/event/outbox"
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type eventPublisherRunner interface {
@@ -164,7 +166,7 @@ type eventRunResult struct {
 
 // RunEventPublisher owns the durable outbox publisher and every configured CDC
 // adapter for the lifetime of ctx. Open performs no background work.
-func (app *App[P, A]) RunEventPublisher(ctx context.Context) error {
+func (app *App[P, A]) RunEventPublisher(ctx context.Context) (resultErr error) {
 	if app == nil || ctx == nil || app.eventPublisher == nil {
 		return events.Failure(events.CodeEventConfig)
 	}
@@ -172,6 +174,12 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) error {
 		events.Observe(app.eventObserver, ctx, golem.ModelID{}, "", events.ObservationLifecycleFailure, events.OutcomeFailure, "", 0, 0, 0, 0, 1)
 		return events.Failure(events.CodeEventPublisherRunning)
 	}
+	ctx, shutdownObservation := observeexec.Begin(ctx, app.observer, app.eventProvider, golem.ModelID{}, observe.KindShutdown, observe.OperationShutdownPublisher, observe.PhaseClose)
+	defer func() {
+		if shutdownObservation != nil {
+			finishObservation(shutdownObservation, resultErr)
+		}
+	}()
 	clearRunning := true
 	defer func() {
 		if clearRunning {
@@ -201,7 +209,9 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) error {
 		remaining := waitEventComponents(results, count, app.eventLimits.ShutdownGrace)
 		if remaining != 0 {
 			clearRunning = false
-			go clearEventRunningWhenDone(app, results, remaining)
+			deferredObservation := shutdownObservation
+			shutdownObservation = nil
+			go clearEventRunningWhenDone(app, results, remaining, deferredObservation, nil)
 		}
 		events.Observe(app.eventObserver, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 		return nil
@@ -209,19 +219,27 @@ func (app *App[P, A]) RunEventPublisher(ctx context.Context) error {
 		cancel()
 		remaining := count - 1
 		remaining = waitEventComponents(results, remaining, app.eventLimits.ShutdownGrace)
+		var runErr error
+		if result.cdc {
+			runErr = events.Failure(events.CodeCDCUnavailable)
+		} else {
+			runErr = events.Failure(events.CodeEventSourceClosed)
+		}
+		if ctx.Err() != nil {
+			runErr = nil
+		}
 		if remaining != 0 {
 			clearRunning = false
-			go clearEventRunningWhenDone(app, results, remaining)
+			deferredObservation := shutdownObservation
+			shutdownObservation = nil
+			go clearEventRunningWhenDone(app, results, remaining, deferredObservation, runErr)
 		}
 		if ctx.Err() != nil {
 			events.Observe(app.eventObserver, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 			return nil
 		}
 		events.Observe(app.eventObserver, ctx, golem.ModelID{}, "", events.ObservationLifecycleFailure, events.OutcomeFailure, "", 0, 0, 0, 0, 1)
-		if result.cdc {
-			return events.Failure(events.CodeCDCUnavailable)
-		}
-		return events.Failure(events.CodeEventSourceClosed)
+		return runErr
 	}
 }
 
@@ -255,10 +273,11 @@ func waitEventComponents(results <-chan eventRunResult, remaining int, grace tim
 	return 0
 }
 
-func clearEventRunningWhenDone[P, A any](app *App[P, A], results <-chan eventRunResult, remaining int) {
+func clearEventRunningWhenDone[P, A any](app *App[P, A], results <-chan eventRunResult, remaining int, observation *observeexec.Span, resultErr error) {
 	for remaining > 0 {
 		<-results
 		remaining--
 	}
 	app.eventRunning.Store(false)
+	finishObservation(observation, resultErr)
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/generate/pipeline"
 	"github.com/eleven-am/golem/go/internal/generate/publication"
 	"github.com/eleven-am/golem/go/internal/migration"
+	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/provider/postgresql"
@@ -24,6 +25,8 @@ import (
 )
 
 type approvalFlags []string
+
+const migrationOutputFormatVersion uint16 = 1
 
 func (values *approvalFlags) String() string { return strings.Join(*values, ",") }
 
@@ -36,14 +39,16 @@ func (values *approvalFlags) Set(value string) error {
 }
 
 type migrationNewOutput struct {
-	MigrationID migration.MigrationID `json:"migrationId"`
-	Providers   []ir.Provider         `json:"providers"`
-	Changed     []string              `json:"changed"`
+	FormatVersion uint16                `json:"formatVersion"`
+	MigrationID   migration.MigrationID `json:"migrationId"`
+	Providers     []ir.Provider         `json:"providers"`
+	Changed       []string              `json:"changed"`
 }
 
 type migrationApplyOutput struct {
-	Provider ir.Provider             `json:"provider"`
-	Applied  []migration.MigrationID `json:"applied"`
+	FormatVersion uint16                  `json:"formatVersion"`
+	Provider      ir.Provider             `json:"provider"`
+	Applied       []migration.MigrationID `json:"applied"`
 }
 
 func runMigration(ctx context.Context, directory string, args []string, stdout, stderr io.Writer) int {
@@ -126,7 +131,7 @@ func runMigrationNew(ctx context.Context, directory string, args []string, stdou
 		writeError(stderr, err)
 		return 1
 	}
-	if err := encodeJSON(stdout, migrationNewOutput{MigrationID: prepared.MigrationID, Providers: prepared.Providers, Changed: published.Changed}); err != nil {
+	if err := encodeJSON(stdout, migrationNewOutput{FormatVersion: migrationOutputFormatVersion, MigrationID: prepared.MigrationID, Providers: prepared.Providers, Changed: published.Changed}); err != nil {
 		writeError(stderr, err)
 		return 1
 	}
@@ -187,7 +192,7 @@ func runMigrationApply(ctx context.Context, directory string, args []string, std
 		writeError(stderr, err)
 		return 1
 	}
-	if err := encodeJSON(stdout, migrationApplyOutput{Provider: providerID, Applied: applied}); err != nil {
+	if err := encodeJSON(stdout, migrationApplyOutput{FormatVersion: migrationOutputFormatVersion, Provider: providerID, Applied: applied}); err != nil {
 		writeError(stderr, err)
 		return 1
 	}
@@ -303,6 +308,7 @@ func applyPending(
 	for currentLength < len(history.Manifest.Entries) {
 		attempted := history.Manifest.Entries[currentLength].ID
 		applyErr := apply(ctx, database, history.Manifest, history.Files)
+		migrationfailpoint.Reach(ctx, "during_final_verification")
 		current, readErr := read(ctx, database)
 		if readErr != nil {
 			return nil, fmt.Errorf("read database migration history after attempting %s: %w", attempted, readErr)

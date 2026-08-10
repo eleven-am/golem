@@ -19,21 +19,37 @@ import (
 )
 
 func TestFreshGeneratedGQLGenHTTPExactScalarAndRenamedEnumContract(t *testing.T) {
+	if strings.Contains(p5ScalarConsumerTest, "github.com/eleven-am/golem/go/internal/") {
+		t.Fatal("external exact-scalar consumer imports a Golem internal package")
+	}
 	root := t.TempDir()
-	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.test/scalarapp
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.com/scalarapp
 
-go 1.23
+go 1.25
 
-require github.com/eleven-am/golem/go v0.0.0
+require (
+	github.com/99designs/gqlgen v0.17.70
+	github.com/eleven-am/golem/go v0.0.0
+	github.com/vektah/gqlparser/v2 v2.5.23
+)
 
 replace github.com/eleven-am/golem/go => %s
 `, moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "tools.go", `//go:build tools
+
+package tools
+
+import (
+	_ "github.com/99designs/gqlgen/graphql"
+	_ "github.com/vektah/gqlparser/v2/ast"
+)
+`)
 	writePipelineAcceptanceFile(t, root, "actor/actor.go", "package actor\ntype Actor struct{}\n")
 	modelSource := strings.ReplaceAll(`package models
 
 import (
   "time"
-  "example.test/scalarapp/actor"
+  "example.com/scalarapp/actor"
   "github.com/eleven-am/golem/go/golem"
 )
 
@@ -66,6 +82,7 @@ type ScalarRecord struct {
   BooleanValue bool §db:"boolean_value"§
   IntValue int32 §db:"int_value"§
   StringValue string §db:"string_value"§
+  Labels golem.List[string] §db:"labels"§
   State Lifecycle §db:"state" golem:"graphql=lifecycle"§
 }
 
@@ -80,8 +97,8 @@ func (ScalarRecord) DefinePolicy(rules *golem.Rules[ScalarRecord], _ actor.Actor
 	writePipelineAcceptanceFile(t, root, "schema/schema.go", `package schema
 
 import (
-  "example.test/scalarapp/actor"
-  "example.test/scalarapp/models"
+  "example.com/scalarapp/actor"
+  "example.com/scalarapp/models"
   "github.com/eleven-am/golem/go/golem"
 )
 
@@ -102,15 +119,14 @@ func DefineSchema(schema *golem.Schema) {
 	}
 	request := Request{
 		Compile:    compile.Config{Dir: root, Pattern: "./schema", Root: "DefineSchema"},
-		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/scalarapp/app", PackageName: "app", Directory: filepath.Join(root, "app")},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.com/scalarapp/app", PackageName: "app", Directory: filepath.Join(root, "app")},
 		Lowerers:   []physical.Lowerer{sqliteprovider.New()},
 		Env:        []string{"GOWORK=off"},
 	}
-	first, err := Build(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
+	reviewed := p8BuildWithReviewedSQLiteHistory(t, context.Background(), request)
+	first := reviewed.Result
 	writeP5ScalarGeneratedArtifacts(t, root, first.Prospective.Artifacts)
+	request.ReviewedMigrations = []ReviewedMigration{reviewed.History}
 	second, err := Build(context.Background(), request)
 	if err != nil {
 		t.Fatalf("regenerate exact-scalar module: %v", err)
@@ -125,7 +141,7 @@ func DefineSchema(schema *golem.Schema) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqliteprovider.New().ApplyInitial(context.Background(), database, first.Providers[0].Schema); err != nil {
+	if err := sqliteprovider.New().ApplyMigration(context.Background(), database, reviewed.History.Manifest, reviewed.History.Files); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -133,8 +149,8 @@ func DefineSchema(schema *golem.Schema) {
 		t.Fatal(err)
 	}
 
-	consumerDSN := "file:" + databasePath + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"
-	writePipelineAcceptanceFile(t, root, "acceptance/scalar_http_test.go", fmt.Sprintf(p5ScalarConsumerTest, consumerDSN, consumerDSN))
+	consumerDSN := "file:" + databasePath
+	writePipelineAcceptanceFile(t, root, "acceptance/scalar_http_test.go", fmt.Sprintf(p5ScalarConsumerTest, consumerDSN))
 	command := exec.Command("go", "test", "-mod=mod", "-count=1", "./...")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOWORK=off")
@@ -182,67 +198,32 @@ const p5ScalarConsumerTest = `package acceptance_test
 
 import (
   "context"
-  "database/sql"
-  "database/sql/driver"
   "encoding/json"
+  "fmt"
   "io"
   "net/http"
   "net/http/httptest"
   "strings"
-  "sync"
   "testing"
 
-  "example.test/scalarapp/actor"
-  "example.test/scalarapp/app"
-  "github.com/eleven-am/golem/go/golem"
-  "github.com/jmoiron/sqlx"
+  "example.com/scalarapp/actor"
+  "example.com/scalarapp/app"
+  providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 )
 
-type sqlTrace struct { mu sync.Mutex; statements []string }
-func (t *sqlTrace) record(query string) { t.mu.Lock(); t.statements = append(t.statements, query); t.mu.Unlock() }
-func (t *sqlTrace) reset() { t.mu.Lock(); t.statements = nil; t.mu.Unlock() }
-func (t *sqlTrace) count() int { t.mu.Lock(); defer t.mu.Unlock(); return len(t.statements) }
-
-type driverConnector struct { driver driver.Driver; dsn string }
-func (c driverConnector) Connect(context.Context) (driver.Conn, error) { return c.driver.Open(c.dsn) }
-func (c driverConnector) Driver() driver.Driver { return c.driver }
-type traceConnector struct { base driver.Connector; trace *sqlTrace }
-func (c traceConnector) Connect(ctx context.Context) (driver.Conn, error) { value, err := c.base.Connect(ctx); if err != nil { return nil, err }; return &traceConn{Conn:value, trace:c.trace}, nil }
-func (c traceConnector) Driver() driver.Driver { return c.base.Driver() }
-type traceConn struct { driver.Conn; trace *sqlTrace }
-func (c *traceConn) Prepare(query string) (driver.Stmt, error) { value, err := c.Conn.Prepare(query); if err != nil { return nil, err }; return &traceStmt{Stmt:value, query:query, trace:c.trace}, nil }
-func (c *traceConn) PrepareContext(ctx context.Context, query string) (driver.Stmt, error) { if value, ok := c.Conn.(driver.ConnPrepareContext); ok { prepared, err := value.PrepareContext(ctx, query); if err != nil { return nil, err }; return &traceStmt{Stmt:prepared, query:query, trace:c.trace}, nil }; return c.Prepare(query) }
-func (c *traceConn) ExecContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Result, error) { value, ok := c.Conn.(driver.ExecerContext); if !ok { return nil, driver.ErrSkip }; c.trace.record(query); return value.ExecContext(ctx, query, args) }
-func (c *traceConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) { value, ok := c.Conn.(driver.QueryerContext); if !ok { return nil, driver.ErrSkip }; c.trace.record(query); return value.QueryContext(ctx, query, args) }
-func (c *traceConn) BeginTx(ctx context.Context, options driver.TxOptions) (driver.Tx, error) { if value, ok := c.Conn.(driver.ConnBeginTx); ok { return value.BeginTx(ctx, options) }; return c.Conn.Begin() }
-func (c *traceConn) Ping(ctx context.Context) error { if value, ok := c.Conn.(driver.Pinger); ok { return value.Ping(ctx) }; return nil }
-func (c *traceConn) ResetSession(ctx context.Context) error { if value, ok := c.Conn.(driver.SessionResetter); ok { return value.ResetSession(ctx) }; return nil }
-func (c *traceConn) IsValid() bool { if value, ok := c.Conn.(driver.Validator); ok { return value.IsValid() }; return true }
-func (c *traceConn) CheckNamedValue(value *driver.NamedValue) error { if checker, ok := c.Conn.(driver.NamedValueChecker); ok { return checker.CheckNamedValue(value) }; return driver.ErrSkip }
-type traceStmt struct { driver.Stmt; query string; trace *sqlTrace }
-func (s *traceStmt) Exec(args []driver.Value) (driver.Result, error) { s.trace.record(s.query); return s.Stmt.Exec(args) }
-func (s *traceStmt) Query(args []driver.Value) (driver.Rows, error) { s.trace.record(s.query); return s.Stmt.Query(args) }
-func (s *traceStmt) ExecContext(ctx context.Context, args []driver.NamedValue) (driver.Result, error) { value, ok := s.Stmt.(driver.StmtExecContext); if !ok { return nil, driver.ErrSkip }; s.trace.record(s.query); return value.ExecContext(ctx, args) }
-func (s *traceStmt) QueryContext(ctx context.Context, args []driver.NamedValue) (driver.Rows, error) { value, ok := s.Stmt.(driver.StmtQueryContext); if !ok { return nil, driver.ErrSkip }; s.trace.record(s.query); return value.QueryContext(ctx, args) }
-
 func TestGeneratedGQLGenHTTPExactScalarAndRenamedEnumContract(t *testing.T) {
-  bootstrap, err := sql.Open("sqlite", %q); if err != nil { t.Fatal(err) }
-  registered := bootstrap.Driver(); if err := bootstrap.Close(); err != nil { t.Fatal(err) }
-  trace := &sqlTrace{}
-  database := sqlx.NewDb(sql.OpenDB(traceConnector{base:driverConnector{driver:registered, dsn:%q}, trace:trace}), "sqlite")
-  database.SetMaxOpenConns(4); database.SetMaxIdleConns(4); t.Cleanup(func(){ _ = database.Close() })
-  application, err := app.Open(context.Background(), app.Config[string]{DB:database, Provider:golem.SQLite, ResolvePrincipal:func(context.Context,string)(actor.Actor,error){ return actor.Actor{},nil }})
+  database, err := providersqlite.Open(context.Background(), providersqlite.Config{DataSourceName:%q}); if err != nil { t.Fatal(err) }
+  t.Cleanup(func(){ _ = database.Close() })
+  application, err := app.Open(context.Background(), app.Config[string]{Database:database, ResolvePrincipal:func(context.Context,string)(actor.Actor,error){ return actor.Actor{},nil }})
   if err != nil { t.Fatal(err) }
   server, err := application.GraphQL(app.GraphQLConfig[string]{PrincipalFromContext:func(context.Context)(string,bool){ return "principal",true }, ReportInternalError:func(_ context.Context, err error){ t.Errorf("trusted GraphQL error: %%v",err) }})
   if err != nil { t.Fatal(err) }
   if server.Handler() == nil || !strings.Contains(server.SDL(), "scalar BigInt") || !strings.Contains(server.SDL(), "READY_PUBLIC") || strings.Contains(server.SDL(), "ready-wire") { t.Fatalf("generated gqlgen server/SDL incomplete") }
 
-  selection := "id bigValue decimalValue uuidValue dateValue timeValue dateTimeValue bytesValue jsonValue floatValue booleanValue intValue stringValue lifecycle"
+  selection := "id bigValue decimalValue uuidValue dateValue timeValue dateTimeValue bytesValue jsonValue floatValue booleanValue intValue stringValue labels lifecycle"
   createQuery := "mutation Create($data: ScalarRecordCreateInput!) { createScalarRecord(data: $data) { "+selection+" } }"
   values := exactValues()
-  trace.reset()
   created := request(t, server.Handler(), createQuery, map[string]any{"data":values})
-  if trace.count() == 0 { t.Fatal("accepted generated gqlgen mutation issued no SQLite SQL") }
   want := exactRecord()
   if got := object(t, object(t, created["data"], "data")["createScalarRecord"], "data.createScalarRecord"); !deepJSONEqual(got, want) { t.Fatalf("create wire result=%%s want=%%s", mustJSON(got), mustJSON(want)) }
   rawCreated := mustJSON(created)
@@ -254,13 +235,15 @@ func TestGeneratedGQLGenHTTPExactScalarAndRenamedEnumContract(t *testing.T) {
     "timeValue":map[string]any{"equals":"23:59:58.1234"}, "dateTimeValue":map[string]any{"equals":"2024-02-29T12:34:56.123456+02:00"},
     "bytesValue":map[string]any{"equals":"AAEC/w=="}, "jsonValue":map[string]any{"equals":json.RawMessage(` + "`" + `{"n":90071992547409931234567890,"nested":{"v":1.25}}` + "`" + `)},
     "floatValue":map[string]any{"equals":1.25}, "booleanValue":map[string]any{"equals":true}, "intValue":map[string]any{"equals":int32(2147483647)},
-    "stringValue":map[string]any{"equals":"hello"}, "lifecycle":map[string]any{"equals":"READY_PUBLIC"},
+    "stringValue":map[string]any{"equals":"hello"}, "labels":map[string]any{"hasEvery":[]string{"alpha","beta"},"has":"beta"}, "lifecycle":map[string]any{"equals":"READY_PUBLIC"},
   }
-  trace.reset()
   found := request(t, server.Handler(), "query Find($where: ScalarRecordWhereInput!) { scalarRecords(where: $where, take: 1) { "+selection+" } }", map[string]any{"where":where})
-  if trace.count() == 0 { t.Fatal("accepted generated gqlgen exact-scalar filter issued no SQLite SQL") }
   rows, ok := object(t, found["data"], "data")["scalarRecords"].([]any); if !ok || len(rows) != 1 { t.Fatalf("filtered rows=%%#v", found) }
   if got := object(t, rows[0], "data.scalarRecords[0]"); !deepJSONEqual(got, want) { t.Fatalf("read wire result=%%s want=%%s", mustJSON(got), mustJSON(want)) }
+
+  updated := request(t, server.Handler(), "mutation Update($where: ScalarRecordWhereUniqueInput!, $data: ScalarRecordUpdateInput!) { updateScalarRecord(where: $where, data: $data) { labels } }", map[string]any{"where":map[string]any{"ID":"00000000-0000-0000-0000-000000000001"},"data":map[string]any{"labels":map[string]any{"set":[]string{"gamma","delta"}}}})
+  if updated["data"] == nil { t.Fatalf("scalar-list update response=%%s", mustJSON(updated)) }
+  if got := object(t, object(t, updated["data"], "data")["updateScalarRecord"], "data.updateScalarRecord")["labels"]; !deepJSONEqual(got, []any{"gamma","delta"}) { t.Fatalf("updated scalar list=%%s", mustJSON(got)) }
 
   invalid := []struct{name, field string; value any}{
     {"bigint-leading-zero","bigValue","01"}, {"decimal-trailing-zero","decimalValue","1.230"},
@@ -268,11 +251,14 @@ func TestGeneratedGQLGenHTTPExactScalarAndRenamedEnumContract(t *testing.T) {
     {"time-overprecision","timeValue","23:59:58.1234000"}, {"datetime-overprecision","dateTimeValue","2024-02-29T10:34:56.1234567Z"},
     {"bytes-unpadded","bytesValue","AAEC/w"}, {"enum-wire-instead-of-graphql","lifecycle","ready-wire"},
   }
-  for _, test := range invalid { t.Run(test.name, func(t *testing.T){
-    candidate := exactValues(); candidate[test.field] = test.value
-    trace.reset(); response := request(t, server.Handler(), createQuery, map[string]any{"data":candidate})
-    if trace.count() != 0 { t.Fatalf("invalid input issued %%d SQL statements: %%s",trace.count(),mustJSON(response)) }
+  for index, test := range invalid { t.Run(test.name, func(t *testing.T){
+    candidate := exactValues(); candidate["id"] = fmt.Sprintf("00000000-0000-0000-0000-%%012d", index+2); candidate[test.field] = test.value
+    response := request(t, server.Handler(), createQuery, map[string]any{"data":candidate})
     errors, ok := response["errors"].([]any); if !ok || len(errors) == 0 { t.Fatalf("invalid input accepted: %%s",mustJSON(response)) }
+    first := object(t, errors[0], "errors[0]"); extensions := object(t, first["extensions"], "errors[0].extensions")
+    if extensions["code"] != "BAD_USER_INPUT" { t.Fatalf("invalid input classification=%%s",mustJSON(response)) }
+    var count int; if err := database.UnsafeSQLX().GetContext(context.Background(), &count, "SELECT COUNT(*) FROM scalar_records WHERE id = ?", candidate["id"]); err != nil { t.Fatal(err) }
+    if count != 0 { t.Fatalf("invalid input persisted %%d rows",count) }
   }) }
 }
 
@@ -281,7 +267,7 @@ func exactValues() map[string]any { return map[string]any{
   "uuidValue":"123e4567-e89b-12d3-a456-426614174000", "dateValue":"2024-02-29", "timeValue":"23:59:58.1234",
   "dateTimeValue":"2024-02-29T12:34:56.123456+02:00", "bytesValue":"AAEC/w==",
   "jsonValue":json.RawMessage(` + "`" + `{"n":90071992547409931234567890,"nested":{"v":1.25}}` + "`" + `), "floatValue":1.25,
-  "booleanValue":true, "intValue":int32(2147483647), "stringValue":"hello", "lifecycle":"READY_PUBLIC",
+  "booleanValue":true, "intValue":int32(2147483647), "stringValue":"hello", "labels":[]string{"alpha","beta"}, "lifecycle":"READY_PUBLIC",
 } }
 func exactRecord() map[string]any { value := exactValues(); value["dateTimeValue"] = "2024-02-29T10:34:56.123456Z"; var decoded any; if err := decodeJSON([]byte(` + "`" + `{"n":9007199254740993123456789e1,"nested":{"v":125e-2}}` + "`" + `), &decoded); err != nil { panic(err) }; value["jsonValue"] = decoded; return value }
 

@@ -18,6 +18,9 @@ const (
 	ObservationPublisherAck       ObservationKind = "publisher_ack"
 	ObservationPublisherRetry     ObservationKind = "publisher_retry"
 	ObservationPublisherBlock     ObservationKind = "publisher_block"
+	ObservationDepthPending       ObservationKind = "depth_pending"
+	ObservationDepthBlocked       ObservationKind = "depth_blocked"
+	ObservationDepthRetired       ObservationKind = "depth_retired"
 	ObservationRetention          ObservationKind = "retention"
 	ObservationTransportReceive   ObservationKind = "transport_receive"
 	ObservationTransportReconnect ObservationKind = "transport_reconnect"
@@ -92,6 +95,7 @@ func validObservationKind(kind ObservationKind) bool {
 	switch kind {
 	case ObservationPublisherClaim, ObservationPublisherAttempt, ObservationPublisherAck,
 		ObservationPublisherRetry, ObservationPublisherBlock, ObservationRetention,
+		ObservationDepthPending, ObservationDepthBlocked, ObservationDepthRetired,
 		ObservationTransportReceive, ObservationTransportReconnect, ObservationHubMembership,
 		ObservationEvaluation, ObservationDelivery, ObservationSuppression, ObservationOverflow,
 		ObservationCancellation, ObservationCDCReceive, ObservationCDCAck, ObservationLifecycleFailure:

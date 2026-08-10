@@ -672,7 +672,7 @@ func compileGenerated(t *testing.T, root string, handwritten map[string]string, 
 	t.Helper()
 	_, currentFile, _, _ := runtime.Caller(0)
 	golemRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "../../.."))
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", golemRoot)
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", golemRoot)
 	writeTestFile(t, filepath.Join(root, "go.mod"), module)
 	for name, source := range handwritten {
 		writeTestFile(t, filepath.Join(root, name), source)
@@ -694,7 +694,7 @@ func compileGeneratedFailure(t *testing.T, files []File, usage, want string) {
 	root := t.TempDir()
 	_, currentFile, _, _ := runtime.Caller(0)
 	golemRoot := filepath.Clean(filepath.Join(filepath.Dir(currentFile), "../../.."))
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", golemRoot)
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", golemRoot)
 	writeTestFile(t, filepath.Join(root, "go.mod"), module)
 	writeTestFile(t, filepath.Join(root, "models.go"), "package social\n\ntype User struct{}\ntype Post struct{}\n")
 	writeTestFile(t, filepath.Join(root, "usage.go"), "package social\n\nimport golem \"github.com/eleven-am/golem/go/golem\"\n\nvar _ = golem.All[Post]\n"+usage)

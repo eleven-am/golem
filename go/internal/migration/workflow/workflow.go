@@ -78,7 +78,7 @@ func PublishedProviders(moduleDir, root string) ([]ir.Provider, error) {
 	if err != nil {
 		return nil, err
 	}
-	value, err := codegenmanifest.Parse(encoded)
+	value, err := codegenmanifest.ParseHistorical(encoded)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +352,7 @@ func loadReviewedState(ctx context.Context, moduleDir, root string) (State, erro
 	if err != nil {
 		return State{}, err
 	}
-	publication, err := codegenmanifest.Parse(encoded)
+	publication, err := codegenmanifest.ParseHistorical(encoded)
 	if err != nil {
 		return State{}, err
 	}

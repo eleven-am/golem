@@ -26,24 +26,29 @@ func (*Provider) EventCoordinator(database *sqlx.DB) (eventprovider.Coordinator,
 }
 
 func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	snapshot, err := coordinator.ClaimWithDepth(ctx, options)
+	return snapshot.Leases, err
+}
+
+func (coordinator *eventCoordinator) ClaimWithDepth(ctx context.Context, options eventprovider.ClaimOptions) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
-		return nil, err
+		return eventprovider.ClaimSnapshot{}, err
 	}
 	tokens := make([]string, options.Groups)
 	for index := range tokens {
 		token, err := eventprovider.NewLeaseToken()
 		if err != nil {
-			return nil, err
+			return eventprovider.ClaimSnapshot{}, err
 		}
 		tokens[index] = token
 	}
 	connection, err := coordinator.database.Connx(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: reserve connection: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: reserve connection: %w", err)
 	}
 	defer connection.Close()
 	if _, err := connection.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
-		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: begin immediate claim: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: begin immediate claim: %w", err)
 	}
 	committed := false
 	defer func() {
@@ -52,43 +57,59 @@ func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventpro
 		}
 	}()
 	if err := sqliteMaterializeMissing(ctx, connection, options.Groups); err != nil {
-		return nil, err
+		return eventprovider.ClaimSnapshot{}, err
 	}
 	var now int64
 	if err := connection.GetContext(ctx, &now, "SELECT "+sqliteDatabaseMicros); err != nil {
-		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: read database time: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: read database time: %w", err)
 	}
 	var causations []string
 	if err := connection.SelectContext(ctx, &causations, `SELECT "causation_id" FROM "main"."_golem_outbox_delivery" WHERE ("status"='pending' AND "available_at"<=?) OR ("status"='leased' AND "lease_until"<=?) ORDER BY "first_recorded_at","causation_id" LIMIT ?`, now, now, options.Groups); err != nil {
-		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
 	}
 	leases := make([]eventprovider.Lease, 0, len(causations))
 	leaseUntil := now + options.LeaseDuration.Microseconds()
 	for index, causation := range causations {
 		result, updateErr := connection.ExecContext(ctx, `UPDATE "main"."_golem_outbox_delivery" SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=?,"lease_until"=?,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=? WHERE "causation_id"=? AND (("status"='pending' AND "available_at"<=?) OR ("status"='leased' AND "lease_until"<=?))`, tokens[index], leaseUntil, now, causation, now, now)
 		if updateErr != nil {
-			return nil, fmt.Errorf("P7_SQLITE_DELIVERY: lease group: %w", updateErr)
+			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: lease group: %w", updateErr)
 		}
 		changed, _ := result.RowsAffected()
 		if changed != 1 {
-			return nil, fmt.Errorf("P7_SQLITE_DELIVERY: immediate claim lost exclusive group ownership")
+			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: immediate claim lost exclusive group ownership")
 		}
 		delivery, readErr := sqliteReadDelivery(ctx, connection, causation)
 		if readErr != nil {
-			return nil, readErr
+			return eventprovider.ClaimSnapshot{}, readErr
 		}
 		facts, readErr := sqliteReadFacts(ctx, connection, causation)
 		if readErr != nil {
-			return nil, readErr
+			return eventprovider.ClaimSnapshot{}, readErr
 		}
 		delivery.ImmutableFactRows = len(facts)
 		leases = append(leases, eventprovider.Lease{Delivery: delivery, Facts: facts})
 	}
+	depth, err := sqliteDeliveryDepth(ctx, connection)
+	if err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
 	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
-		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: commit claim: %w", err)
+		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: commit claim: %w", err)
 	}
 	committed = true
-	return cloneLeases(leases), nil
+	return eventprovider.ClaimSnapshot{Leases: cloneLeases(leases), Depth: depth}, nil
+}
+
+func sqliteDeliveryDepth(ctx context.Context, queryer sqlx.QueryerContext) (eventprovider.DepthSnapshot, error) {
+	var row struct {
+		Pending int64 `db:"pending"`
+		Blocked int64 `db:"blocked"`
+		Retired int64 `db:"retired"`
+	}
+	if err := sqlx.GetContext(ctx, queryer, &row, `SELECT COALESCE(SUM(CASE WHEN "status"='pending' THEN 1 ELSE 0 END),0) AS "pending",COALESCE(SUM(CASE WHEN "status"='blocked' THEN 1 ELSE 0 END),0) AS "blocked",COALESCE(SUM(CASE WHEN "status"='retired' THEN 1 ELSE 0 END),0) AS "retired" FROM "main"."_golem_outbox_delivery"`); err != nil {
+		return eventprovider.DepthSnapshot{}, fmt.Errorf("P8_SQLITE_OBSERVE: snapshot delivery depths: %w", err)
+	}
+	return eventprovider.DepthSnapshot{Pending: row.Pending, Blocked: row.Blocked, Retired: row.Retired}, nil
 }
 
 func (coordinator *eventCoordinator) Renew(ctx context.Context, causation, token string, duration time.Duration) (bool, error) {

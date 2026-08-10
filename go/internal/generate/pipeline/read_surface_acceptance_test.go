@@ -20,7 +20,7 @@ func TestFreshP7SocialModuleGeneratesCompilesAndConstructsApp(t *testing.T) {
 	root := t.TempDir()
 	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.test/social
 
-go 1.23
+go 1.25
 
 require github.com/eleven-am/golem/go v0.0.0
 
@@ -144,15 +144,13 @@ func DefineSchema(schema *golem.Schema) {
 		t.Fatalf("prepare fresh module: %v\n%s", err, output)
 	}
 
-	result, err := Build(context.Background(), Request{
+	reviewed := p8BuildWithReviewedSQLiteHistory(t, context.Background(), Request{
 		Compile:    compile.Config{Dir: root, Pattern: "./schema", Root: "DefineSchema"},
 		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/social/app", PackageName: "app", Directory: filepath.Join(root, "app")},
 		Lowerers:   []physical.Lowerer{sqliteprovider.New()},
 		Env:        []string{"GOWORK=off"},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	result := reviewed.Result
 	for _, artifact := range result.Prospective.Artifacts {
 		if artifact.Kind != manifest.ArtifactModelGo && artifact.Kind != manifest.ArtifactEventGo && artifact.Kind != manifest.ArtifactBindingsGo && artifact.Kind != manifest.ArtifactRegistryGo && artifact.Kind != manifest.ArtifactGraphQLGo && artifact.Kind != manifest.ArtifactGraphQLSDL {
 			continue
@@ -167,10 +165,7 @@ func DefineSchema(schema *golem.Schema) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqliteprovider.New().ApplyInitial(context.Background(), database, result.Providers[0].Schema); err != nil {
-		_ = database.Close()
-		t.Fatal(err)
-	}
+	p8ApplyReviewedSQLiteHistory(t, context.Background(), database, reviewed.History)
 	for _, row := range [][2]string{
 		{"00000000-0000-0000-0000-000000000001", "alice"},
 		{"00000000-0000-0000-0000-000000000002", "bob"},
@@ -197,21 +192,19 @@ import (
 	"example.test/social/models"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
-	"github.com/jmoiron/sqlx"
 )
 
 func TestGeneratedCallerAndSystemReads(t *testing.T) {
 	ctx := context.Background()
-	database, err := sqlx.Open("sqlite", %q)
+	database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: %q})
 	if err != nil { t.Fatal(err) }
-	database.SetMaxOpenConns(4)
-	database.SetMaxIdleConns(4)
 	t.Cleanup(func() { _ = database.Close() })
 	eventTransport, err := events.NewMemoryTransport(events.MemoryLimits{})
 	if err != nil { t.Fatal(err) }
 	application, err := app.Open(ctx, app.Config[string]{
-		DB: database, Provider: golem.SQLite,
+		Database: database,
 		ReadLimits: golemruntime.ReadLimits{MaxTake: 2},
 		EventTransport: eventTransport,
 		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
@@ -262,7 +255,7 @@ func TestGeneratedCallerAndSystemReads(t *testing.T) {
 		t.Fatalf("GraphQL response code=%%d body=%%s", recorder.Code, body)
 	}
 }
-`, "file:"+databasePath+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate"))
+`, "file:"+databasePath))
 
 	command := exec.Command("go", "test", "-mod=mod", "./...")
 	command.Dir = root

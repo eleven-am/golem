@@ -1,13 +1,14 @@
 package golem
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 )
 
 // SchemaBundleFormatVersion versions the public, representation-opaque schema
 // bundle ABI emitted into the application package.
-const SchemaBundleFormatVersion uint16 = 1
+const SchemaBundleFormatVersion uint16 = 2
 
 // SchemaDigest is a fixed-width SHA-256 digest. Generated code uses array
 // literals so malformed or non-canonical textual fingerprints cannot enter the
@@ -73,10 +74,20 @@ type ProviderSchemaDocument struct {
 	provider          Provider
 	systemFingerprint SchemaDigest
 	schema            SchemaDocument
+	migration         MigrationManifestDocument
+	hasMigration      bool
 }
 
 func GeneratedProviderSchemaDocument(provider Provider, systemFingerprint SchemaDigest, schema SchemaDocument) ProviderSchemaDocument {
 	return ProviderSchemaDocument{provider: provider, systemFingerprint: systemFingerprint, schema: schema.clone()}
+}
+
+// GeneratedProviderSchemaDocumentWithMigration is the generated-code-only
+// composition point for one provider schema and its exact reviewed migration
+// history. Applications receive the resulting opaque value; migration
+// implementation types never cross the public package boundary.
+func GeneratedProviderSchemaDocumentWithMigration(provider Provider, systemFingerprint SchemaDigest, schema SchemaDocument, migration MigrationManifestDocument) ProviderSchemaDocument {
+	return ProviderSchemaDocument{provider: provider, systemFingerprint: systemFingerprint, schema: schema.clone(), migration: migration.clone(), hasMigration: true}
 }
 
 func (document ProviderSchemaDocument) Provider() Provider { return document.provider }
@@ -85,7 +96,62 @@ func (document ProviderSchemaDocument) SystemFingerprint() SchemaDigest {
 }
 func (document ProviderSchemaDocument) Schema() SchemaDocument { return document.schema.clone() }
 func (document ProviderSchemaDocument) clone() ProviderSchemaDocument {
+	if document.hasMigration {
+		return GeneratedProviderSchemaDocumentWithMigration(document.provider, document.systemFingerprint, document.schema, document.migration)
+	}
 	return GeneratedProviderSchemaDocument(document.provider, document.systemFingerprint, document.schema)
+}
+
+// MigrationManifestDocument is an immutable, representation-opaque reviewed
+// migration manifest embedded into generated applications. Its binding digest
+// prevents a manifest from another generation or provider being substituted
+// without detection during runtime preflight.
+type MigrationManifestDocument struct {
+	formatVersion    uint16
+	generationDigest SchemaDigest
+	provider         Provider
+	bindingDigest    SchemaDigest
+	payload          []byte
+}
+
+const migrationManifestDocumentFormatVersion uint16 = 1
+
+func GeneratedMigrationManifestDocument(generationDigest SchemaDigest, provider Provider, payload []byte) MigrationManifestDocument {
+	return MigrationManifestDocument{
+		formatVersion: migrationManifestDocumentFormatVersion, generationDigest: generationDigest,
+		provider: provider, bindingDigest: migrationManifestBinding(generationDigest, provider, payload),
+		payload: append([]byte(nil), payload...),
+	}
+}
+
+func (document MigrationManifestDocument) clone() MigrationManifestDocument {
+	return MigrationManifestDocument{
+		formatVersion: document.formatVersion, generationDigest: document.generationDigest,
+		provider: document.provider, bindingDigest: document.bindingDigest,
+		payload: append([]byte(nil), document.payload...),
+	}
+}
+
+func validateMigrationManifestDocument(document MigrationManifestDocument, generationDigest SchemaDigest, provider Provider) ([]byte, error) {
+	if document.formatVersion != migrationManifestDocumentFormatVersion || document.generationDigest == (SchemaDigest{}) || document.provider == "" ||
+		document.generationDigest != generationDigest || document.provider != provider ||
+		document.bindingDigest != migrationManifestBinding(document.generationDigest, document.provider, document.payload) {
+		return nil, fmt.Errorf("generated migration manifest identity is invalid")
+	}
+	return append([]byte(nil), document.payload...), nil
+}
+
+func migrationManifestBinding(generationDigest SchemaDigest, provider Provider, payload []byte) SchemaDigest {
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("golem-reviewed-migration-manifest-v1\x00"))
+	_, _ = hash.Write(generationDigest[:])
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write([]byte(provider))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(payload)
+	var result SchemaDigest
+	copy(result[:], hash.Sum(nil))
+	return result
 }
 
 // SchemaBundle is the immutable deployable schema registry embedded in the
@@ -126,4 +192,20 @@ func (bundle SchemaBundle) Providers() []ProviderSchemaDocument {
 		result[index] = provider.clone()
 	}
 	return result
+}
+
+// MigrationManifest returns the selected provider's generation-bound reviewed
+// manifest as copy-isolated canonical bytes. The document representation and
+// binding details remain private to the bundle.
+func (bundle SchemaBundle) MigrationManifest(provider Provider) ([]byte, error) {
+	for _, document := range bundle.providers {
+		if document.provider != provider {
+			continue
+		}
+		if !document.hasMigration {
+			return nil, fmt.Errorf("generated provider has no reviewed migration manifest")
+		}
+		return validateMigrationManifestDocument(document.migration, bundle.generationDigest, provider)
+	}
+	return nil, fmt.Errorf("generated provider is absent")
 }

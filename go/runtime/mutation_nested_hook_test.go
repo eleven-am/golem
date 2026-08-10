@@ -1143,7 +1143,7 @@ func openMutationResultPostgresAppWithLimits(t *testing.T, ctx context.Context, 
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: database, Provider: golem.PostgreSQL, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		MutationLimits: limits,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil

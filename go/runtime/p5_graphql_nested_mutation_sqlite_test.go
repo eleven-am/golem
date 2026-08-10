@@ -268,7 +268,7 @@ func p5ReopenSocialMutation(t testing.TB, fixture socialMutationFixture, denied 
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: fixture.app.database, Provider: golem.SQLite, Bundle: fixture.schema.Bundle,
+		Database: p8RuntimeTestDatabase(fixture.app.database, golem.SQLite), Bundle: fixture.schema.Bundle,
 		Bindings: bindings, Descriptors: fixture.app.descriptors, MutationLimits: limits,
 		ResolvePrincipal: fixture.app.resolvePrincipal,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},

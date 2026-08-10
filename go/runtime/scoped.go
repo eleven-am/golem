@@ -12,15 +12,18 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	scoped "github.com/eleven-am/golem/go/internal/scoped"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func CallerScoped[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], query golem.ScopedQuery[M]) ([]golem.ScopedRow, error) {
 	frozen, err := golem.RuntimeFreezeScopedQuery(query)
 	if err != nil {
+		failure := scopedError(descriptor.Metadata().ModelID(), err)
 		if caller != nil && caller.app != nil {
 			reportScoped(ctx, caller.app, golem.FrozenScopedQuery{}, caller.auditID, caller.execution, false, "", time.Now(), 0, golem.ScopedOutcomeRefused)
+			observeScopedInputRefusal(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), failure)
 		}
-		return nil, scopedError(descriptor.Metadata().ModelID(), err)
+		return nil, failure
 	}
 	if caller == nil || caller.app == nil || caller.policies == nil || caller.executor == nil {
 		return nil, scopedError(descriptor.Metadata().ModelID(), fmt.Errorf("caller execution unavailable"))
@@ -35,8 +38,10 @@ func SystemScoped[P, A, M any](ctx context.Context, system System[P, A], descrip
 	}
 	execution := system.app.nextExecution.Add(1)
 	if err != nil {
+		failure := scopedError(descriptor.Metadata().ModelID(), err)
 		reportScoped(ctx, system.app, golem.FrozenScopedQuery{}, "", execution, true, "", time.Now(), 0, golem.ScopedOutcomeRefused)
-		return nil, scopedError(descriptor.Metadata().ModelID(), err)
+		observeScopedInputRefusal(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), failure)
+		return nil, failure
 	}
 	return executeScoped(ctx, system.app, system.executor, nil, true, "", execution, descriptor.Metadata().ModelID(), frozen)
 }
@@ -53,13 +58,27 @@ func SystemTxScoped[P, A, M any](ctx context.Context, tx *SystemTx[P, A], descri
 	}
 	frozen, err := golem.RuntimeFreezeScopedQuery(query)
 	if err != nil {
+		failure := scopedError(descriptor.Metadata().ModelID(), err)
 		reportScoped(ctx, tx.system.app, golem.FrozenScopedQuery{}, "", tx.execution, true, "", time.Now(), 0, golem.ScopedOutcomeRefused)
-		return nil, scopedError(descriptor.Metadata().ModelID(), err)
+		observeScopedInputRefusal(ctx, tx.system.app, tx.system.executor, descriptor.Metadata().ModelID(), failure)
+		return nil, failure
 	}
 	return executeScoped(ctx, tx.system.app, tx.system.executor, nil, true, "", tx.execution, descriptor.Metadata().ModelID(), frozen)
 }
 
+func observeScopedInputRefusal[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, model golem.ModelID, failure error) {
+	_, observation := beginExecutionObservation(ctx, app, executor, model, observe.KindScopedRead, observe.OperationScopedRead)
+	finishObservation(observation, failure)
+}
+
 func executeScoped[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies scoped.PolicySet, system bool, auditID string, execution uint64, descriptor golem.ModelID, request golem.FrozenScopedQuery) (result []golem.ScopedRow, resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, app, executor, descriptor, observe.KindScopedRead, observe.OperationScopedRead)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(int64(len(result)))
+		}
+		finishObservation(observation, resultErr)
+	}()
 	started := time.Now()
 	statementSQL := ""
 	outcome := golem.ScopedOutcomeFailed

@@ -49,6 +49,7 @@ type CapabilityReport struct {
 	ScalarListJSON      bool
 	RelationCorrelation bool
 	AnalyticsExact      bool
+	SessionSettings     bool
 }
 
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {

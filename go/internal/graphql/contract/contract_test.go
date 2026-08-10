@@ -79,6 +79,83 @@ func TestGraphQLOnlyChangeDoesNotChangeModelFingerprint(t *testing.T) {
 	}
 }
 
+func TestGraphQLHookOwnedRequiresCompleteWritableRequiredRelationAndBeforeCreate(t *testing.T) {
+	postID := ir.ModelID("10000000000000000000000000000010")
+	userID := ir.ModelID("10000000000000000000000000000020")
+	postKey := ir.FieldID("10000000000000000000000000000011")
+	authorID := ir.FieldID("10000000000000000000000000000012")
+	authorTenant := ir.FieldID("10000000000000000000000000000013")
+	authorRelation := ir.FieldID("10000000000000000000000000000014")
+	relationID := ir.RelationID("10000000000000000000000000000015")
+	slug := ir.FieldID("10000000000000000000000000000016")
+	compilation := ir.CompilationIR{
+		Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{
+			{ID: postID, Fields: []ir.FieldIR{
+				{ID: postKey, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+				{ID: authorID, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+				{ID: authorTenant, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}},
+				{ID: authorRelation, Kind: ir.FieldRelation, Relation: &ir.RelationFieldIR{RelationID: relationID, Role: ir.RelationSource, Kind: ir.RelationBelongsTo}},
+				{ID: slug, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeString}}},
+			}, PrimaryKey: &ir.KeyIR{ID: "post-key", Kind: ir.KeyPrimary, Fields: []ir.FieldID{postKey}}},
+			{ID: userID},
+		}, Relations: []ir.RelationIR{{ID: relationID, SourceModel: postID, TargetModel: userID, SourceField: authorRelation, LocalFields: []ir.FieldID{authorID, authorTenant}, RemoteFields: []ir.FieldID{"user-id", "user-tenant"}}}},
+		Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{
+			{ModelID: postID, GraphQLName: "Post", Exposed: true, Fields: []ir.FieldContractIR{
+				{FieldID: postKey, GraphQLName: "id"}, {FieldID: authorID, GraphQLName: "authorID"},
+				{FieldID: authorTenant, GraphQLName: "authorTenant"}, {FieldID: authorRelation, GraphQLName: "author"},
+				{FieldID: slug, GraphQLName: "slug"},
+			}},
+			{ModelID: userID, GraphQLName: "User", Exposed: true},
+		}},
+	}
+	patch := ModelPatch{ModelID: postID, HookOwnedCreateFields: []ir.FieldID{authorID}}
+	diagnostics := Normalize(&compilation, []ModelPatch{patch})
+	if !hasDiagnostic(diagnostics, "P8_GRAPHQL_HOOK_OWNED_PARTIAL_COMPOSITE") {
+		t.Fatalf("partial composite diagnostics=%#v", diagnostics)
+	}
+	patch.HookOwnedCreateFields = []ir.FieldID{authorID, authorTenant, slug}
+	compilation.Contract.Models[0].HookOwnedCreateFields = nil
+	diagnostics = Normalize(&compilation, []ModelPatch{patch})
+	if len(diagnostics) != 0 {
+		t.Fatalf("complete ownership diagnostics=%#v", diagnostics)
+	}
+	if diagnostics := ValidateHookOwnedMethods(compilation); !hasDiagnostic(diagnostics, "P8_GRAPHQL_HOOK_OWNED_BEFORE_CREATE") {
+		t.Fatalf("missing hook diagnostics=%#v", diagnostics)
+	}
+	modelCopy := postID
+	compilation.Contract.Methods = []ir.AttachedMethodIR{{ModelID: &modelCopy, Name: "BeforeCreate", Kind: "hook"}}
+	if diagnostics := ValidateHookOwnedMethods(compilation); len(diagnostics) != 0 {
+		t.Fatalf("recognized hook diagnostics=%#v", diagnostics)
+	}
+
+	invalid := compilation
+	invalid.Model.Models = append([]ir.ModelDeclIR(nil), compilation.Model.Models...)
+	invalid.Model.Models[0].Fields = append([]ir.FieldIR(nil), compilation.Model.Models[0].Fields...)
+	nullableAuthorID := *invalid.Model.Models[0].Fields[1].Scalar
+	nullableAuthorID.Nullable = true
+	invalid.Model.Models[0].Fields[1].Scalar = &nullableAuthorID
+	if diagnostics := validateHookOwnedShape(invalid.Model, invalid.Contract.Models[0], ir.SourceSpan{}); !hasDiagnostic(diagnostics, "P8_GRAPHQL_HOOK_OWNED_REQUIRED") {
+		t.Fatalf("nullable ownership diagnostics=%#v", diagnostics)
+	}
+	invalid = compilation
+	invalid.Model.Models = append([]ir.ModelDeclIR(nil), compilation.Model.Models...)
+	key := *invalid.Model.Models[0].PrimaryKey
+	key.Fields = append(key.Fields, authorID)
+	invalid.Model.Models[0].PrimaryKey = &key
+	if diagnostics := validateHookOwnedShape(invalid.Model, invalid.Contract.Models[0], ir.SourceSpan{}); !hasDiagnostic(diagnostics, "P8_GRAPHQL_HOOK_OWNED_IDENTITY") {
+		t.Fatalf("identity ownership diagnostics=%#v", diagnostics)
+	}
+}
+
+func hasDiagnostic(values []ir.Diagnostic, code string) bool {
+	for _, value := range values {
+		if value.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
 func TestP7ContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *testing.T) {
 	id := ir.FieldID("10000000000000000000000000000001")
 	title := ir.FieldID("10000000000000000000000000000002")

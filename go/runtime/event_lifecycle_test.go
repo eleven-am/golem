@@ -137,10 +137,10 @@ func (crossProcessWithoutBinding) TransportCapabilities() events.TransportCapabi
 func TestP7CrossProcessTransportWithoutRuntimeBindingIsRejected(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	_, err := validateEventConfiguration(Config[p7EventPrincipal, p7EventActor]{
-		Provider: fixture.app.eventProvider, Descriptors: fixture.app.descriptors,
+		Descriptors:   fixture.app.descriptors,
 		EventRegistry: fixture.app.eventRegistry, EventFactories: fixture.app.eventFactories,
 		EventTransport: crossProcessWithoutBinding{}, ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
-	}, fixture.app.registry)
+	}, fixture.app.registry, fixture.app.eventProvider)
 	if err == nil {
 		t.Fatal("cross-process transport without runtime binding was accepted")
 	}

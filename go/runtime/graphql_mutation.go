@@ -6,6 +6,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 // CallerMutationModelAdapter is the generated, model-specific bridge required
@@ -125,35 +126,48 @@ func executeCallerFrozenMutation[P, A, M any](ctx context.Context, caller *Calle
 		}
 		return rowResult(executeCallerRootScalar(ctx, caller, descriptor, mutationir.Delete, nil, &target, projection))
 	case golem.RuntimeMutationUpdateMany, golem.RuntimeMutationDeleteMany:
-		where, ok := request.Where()
-		if !ok {
-			return golem.RuntimeMutationResult{}, frozenMutationShape(model)
-		}
-		operation := mutationir.DeleteMany
-		hookRequest := golem.RuntimeDeleteManyMutationHookRequest(model, where)
-		if request.Operation() == golem.RuntimeMutationUpdateMany {
-			operation = mutationir.UpdateMany
-			input, inputOK := request.Input()
-			if !inputOK {
-				return golem.RuntimeMutationResult{}, frozenMutationShape(model)
-			}
-			hookRequest = golem.RuntimeUpdateManyMutationHookRequest(model, where, input)
-		}
-		program, err := prepareCallerFrozenBatchHooks(ctx, caller, model, hookRequest)
-		if err != nil {
-			return golem.RuntimeMutationResult{}, publicBatchPreparationError(operation, model, err)
-		}
-		hooks := callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
-		}}
-		count, err := executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
-		if err != nil {
-			return golem.RuntimeMutationResult{}, err
-		}
-		return golem.RuntimeMutationCountResult(count)
+		return executeCallerFrozenBatchMutation(ctx, caller, model, request)
 	default:
 		return golem.RuntimeMutationResult{}, frozenMutationShape(model)
 	}
+}
+
+func executeCallerFrozenBatchMutation[P, A any](ctx context.Context, caller *Caller[P, A], model golem.ModelID, request golem.RuntimeMutationRequest) (result golem.RuntimeMutationResult, resultErr error) {
+	operation := mutationir.DeleteMany
+	if request.Operation() == golem.RuntimeMutationUpdateMany {
+		operation = mutationir.UpdateMany
+	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, model, observe.KindMutation, mutationObservationOperation(operation))
+	defer func() {
+		if count, ok := result.Count(); ok && observation != nil {
+			observation.SetAggregateCount(count)
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
+	where, ok := request.Where()
+	if !ok {
+		return golem.RuntimeMutationResult{}, frozenMutationShape(model)
+	}
+	hookRequest := golem.RuntimeDeleteManyMutationHookRequest(model, where)
+	if operation == mutationir.UpdateMany {
+		input, inputOK := request.Input()
+		if !inputOK {
+			return golem.RuntimeMutationResult{}, frozenMutationShape(model)
+		}
+		hookRequest = golem.RuntimeUpdateManyMutationHookRequest(model, where, input)
+	}
+	program, err := prepareCallerFrozenBatchHooks(ctx, caller, model, hookRequest)
+	if err != nil {
+		return golem.RuntimeMutationResult{}, publicBatchPreparationError(operation, model, err)
+	}
+	hooks := callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding)
+	}}
+	count, err := executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
+	if err != nil {
+		return golem.RuntimeMutationResult{}, err
+	}
+	return golem.RuntimeMutationCountResult(count)
 }
 
 func prepareCallerFrozenMutationProjection[P, A any](caller *Caller[P, A], model golem.ModelID, frozen golem.FrozenReadRequest) (scalarMutationProjection, error) {

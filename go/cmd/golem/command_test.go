@@ -50,14 +50,14 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "4f02790d69bc3d5792c746c5649a4d7ced096068ae32aa05c6bf873eaaf17b67"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "599e4d8874ccd652b6aee8e756520eb5a21b50bbf8909e5e9923bedc143707a0"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 3 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
+	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 4 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
 	}
 	for _, entry := range output.PolicyOperators {
@@ -159,6 +159,7 @@ func TestSingleProviderAndDefaultSchemaPattern(t *testing.T) {
 	if len(inspected.Providers) != 1 || inspected.Providers[0].Provider.Provider != ir.SQLite {
 		t.Fatalf("single-provider inspect lowered %#v", inspected.Providers)
 	}
+	createInitialReviewedMigration(t, module)
 	stdout.Reset()
 	stderr.Reset()
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
@@ -225,6 +226,37 @@ func TestMigrationNewIncrementalApplyAndAlreadyCurrent(t *testing.T) {
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("generation after reviewed migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
+	var reviewedGeneration generateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &reviewedGeneration); err != nil || reviewedGeneration.GenerationDigest == "" {
+		t.Fatalf("reviewed generation output=%#v err=%v", reviewedGeneration, err)
+	}
+	generatedManifestBytes, err := os.ReadFile(filepath.Join(module, filepath.FromSlash(manifest.DefaultPath)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	generatedManifest, err := manifest.Parse(generatedManifestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.FormatVersion != 2 {
+		t.Fatalf("generated manifest format constant = %d", manifest.FormatVersion)
+	}
+	if generatedManifest.FormatVersion != manifest.FormatVersion || len(generatedManifest.ProviderFingerprints) != 1 || generatedManifest.ProviderFingerprints[0].MigrationFingerprint == "" {
+		t.Fatalf("generated manifest did not bind reviewed history: %#v", generatedManifest.ProviderFingerprints)
+	}
+	registrySource, err := os.ReadFile(filepath.Join(module, "app", "zz_golem_registry.gen.go"))
+	if err != nil || !bytes.Contains(registrySource, []byte("GeneratedProviderSchemaDocumentWithMigration")) {
+		t.Fatalf("generated registry did not embed reviewed history: err=%v", err)
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("repeat reviewed generation code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var repeatedReviewedGeneration generateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &repeatedReviewedGeneration); err != nil || repeatedReviewedGeneration.GenerationDigest != reviewedGeneration.GenerationDigest || len(repeatedReviewedGeneration.Changed) != 0 {
+		t.Fatalf("reviewed generation digest is unstable: first=%#v repeated=%#v err=%v", reviewedGeneration, repeatedReviewedGeneration, err)
+	}
 
 	concurrentDatabase := filepath.Join(t.TempDir(), "concurrent.db")
 	type commandResult struct {
@@ -285,13 +317,9 @@ func TestMigrationNewIncrementalApplyAndAlreadyCurrent(t *testing.T) {
 
 func TestMigrationHistoryTamperFailsBeforeDatabaseWorkAndCheckReadsHistory(t *testing.T) {
 	module := writeSingleProviderModule(t)
+	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
-		t.Fatal(stderr.String())
-	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	stdout.Reset()
@@ -462,6 +490,7 @@ func TestInspectIgnoresPriorRegistryLocation(t *testing.T) {
 	if code := run(context.Background(), module, []string{"inspect"}, &before, &stderr); code != 0 {
 		t.Fatalf("inspect before generation code=%d stderr=%s", code, stderr.String())
 	}
+	createInitialReviewedMigration(t, module)
 	stderr.Reset()
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./application"}, &bytes.Buffer{}, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stderr=%s", code, stderr.String())
@@ -477,6 +506,7 @@ func TestInspectIgnoresPriorRegistryLocation(t *testing.T) {
 
 func TestGenerateMovesRegistryBetweenGeneratedOnlyPackages(t *testing.T) {
 	module := writeSocialModule(t, false)
+	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./first"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("first generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -500,6 +530,8 @@ func TestGenerateMovesRegistryBetweenGeneratedOnlyPackages(t *testing.T) {
 
 func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
 	module := writeSocialModule(t, false)
+	createInitialReviewedMigration(t, module)
+	migrationBefore := treeSnapshot(t, filepath.Join(module, "migrations"))
 	args := []string{"generate", "--schema", ".", "--app-out", "./app"}
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), module, args, &stdout, &stderr); code != 0 {
@@ -548,8 +580,8 @@ func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &repeated); err != nil || repeated.GenerationDigest != generated.GenerationDigest || len(repeated.Changed) != 0 || len(repeated.Stale) != 0 {
 		t.Fatalf("repeat generation = %#v, %v", repeated, err)
 	}
-	if matches, _ := filepath.Glob(filepath.Join(module, "migrations", "*")); len(matches) != 0 {
-		t.Fatalf("ordinary generation touched migration history: %v", matches)
+	if migrationAfter := treeSnapshot(t, filepath.Join(module, "migrations")); !reflect.DeepEqual(migrationBefore, migrationAfter) {
+		t.Fatal("ordinary generation changed reviewed migration history")
 	}
 }
 
@@ -568,6 +600,7 @@ func TestDiagnosticsAndFailedCheckDoNotPublishPartialOutput(t *testing.T) {
 	})
 	t.Run("stale check", func(t *testing.T) {
 		module := writeSocialModule(t, false)
+		createInitialReviewedMigration(t, module)
 		var stdout, stderr bytes.Buffer
 		generateArgs := []string{"generate", "--schema", ".", "--app-out", "./app"}
 		if code := run(context.Background(), module, generateArgs, &stdout, &stderr); code != 0 {
@@ -605,7 +638,7 @@ func TestInspectDoesNotBypassProviderExtensionFailure(t *testing.T) {
 
 func TestCheckRecoversInterruptedPublicationBeforeOutputValidation(t *testing.T) {
 	module := t.TempDir()
-	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/recovery\n\ngo 1.23.0\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte("module example.test/recovery\n\ngo 1.25.0\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	build := func(body string) manifest.Result {
@@ -657,16 +690,11 @@ func TestCheckRecoversInterruptedPublicationBeforeOutputValidation(t *testing.T)
 
 func TestCheckRoutesRecoveryForAnotherPublicationOwner(t *testing.T) {
 	module := writeSingleProviderModule(t)
+	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
 	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
-	stdout.Reset()
-	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
-		t.Fatalf("migration new code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-
 	other, err := manifest.Build(manifest.Request{
 		ModelFingerprint:    ir.Fingerprint(strings.Repeat("a", 64)),
 		ContractFingerprint: ir.Fingerprint(strings.Repeat("b", 64)),
@@ -711,7 +739,7 @@ func writeSocialModule(t *testing.T, invalidBinding bool) string {
 	directory := t.TempDir()
 	repository := commandModuleRoot(t)
 	files := map[string]string{
-		"go.mod": "module example.test/social\n\ngo 1.23.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
+		"go.mod": "module example.test/social\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(repository) + "\n",
 	}
 	actorType := "Actor"
 	if invalidBinding {
@@ -770,6 +798,14 @@ func writeSingleProviderModule(t *testing.T) string {
 		t.Fatal(err)
 	}
 	return directory
+}
+
+func createInitialReviewedMigration(t *testing.T, module string) {
+	t.Helper()
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("initial reviewed migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
 }
 
 func artifactContents(t *testing.T, module string, value manifest.Manifest) map[string]string {

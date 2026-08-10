@@ -1,0 +1,110 @@
+{
+  "formatVersion": 1,
+  "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+  "contractFingerprint": "38ddc31ce6116da13233ccb7459d0ebe1d241052eb98fc541f90ce7f26b00a30",
+  "providerFingerprints": [
+    {
+      "provider": "postgresql",
+      "fingerprint": "54ecdc0f8a3cd65eb8f4822c2c1bf110d518fdef2b6c836b0d857d2f66c20735",
+      "systemFingerprint": "f79c9b02093303ec68b920a182618939090abc76e596b67697ed1549f20c18b0"
+    },
+    {
+      "provider": "sqlite",
+      "fingerprint": "6a7051942b878854ea2ce02df2aa6f61811410a3904884c2b0fd806b6a948df1",
+      "systemFingerprint": "9fdb2f09f5111c397e21c62e75168a6edc9c826a1b0dce0d1a2a24b1dd56dbf1"
+    }
+  ],
+  "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+  "generatorVersion": "golem-p1-migration-v1",
+  "templateAbiVersion": "p2-go-abi-v4",
+  "artifacts": [
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/models/0001_initial.after.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "3b0f6194f5a44852997aa0f633a7c43ed68f1f9ab2478a9252f836396a762b58",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/models/0001_initial.before.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "69a22ca69b22b9fe854f41799b3bcdda3ab776f9e2f5c377e90ddd08348d4354",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/postgresql/0001_initial.after.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "78bd5c527e2075be26699331cd9604c215f60233b93f9dfc5f9613970570853a",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/postgresql/0001_initial.before.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "26b293bbeb7360cc4533a7cc4494e6472301d6e7bfb7969756612ac959002b60",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/postgresql/0001_initial.sql",
+      "kind": "migration_sql",
+      "contentSha256": "3b1395efd5df7c4a33fcae301357847bf29521c251e59a6a46f70d6a1c347eec",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/postgresql/manifest.json",
+      "kind": "migration_manifest",
+      "contentSha256": "ae8ad698baee5132f16e4fbdd6f8ed7a1afe6e10ae166f4e34002a35353eea0a",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1"
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/sqlite/0001_initial.after.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "45f861856f120d49287cd2f6ce6d156efc459f9be69db2aea349a42496ca9f66",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/sqlite/0001_initial.before.snapshot.json",
+      "kind": "migration_snapshot",
+      "contentSha256": "e97a1fe22dd3ad198cfb0a6547ca3e63588162af571f64b3a976c4b8b9e85e77",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/sqlite/0001_initial.sql",
+      "kind": "migration_sql",
+      "contentSha256": "a6f590982cb7dbed05832d26377226f435bacaf064231d91ba0fa84c770f9f3c",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1",
+      "immutable": true
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event/migrations/sqlite/manifest.json",
+      "kind": "migration_manifest",
+      "contentSha256": "437d4a5ad50824ab71e7407d180992236ca9db76f011159e4d72d58f7d830b35",
+      "modelFingerprint": "2e64bb8cc0b4913ff0f9b41c827333ccf8e7da0c3a81eb7dfc95636082dde831",
+      "generationDigest": "44e95087744094daad009b87203beacebf792833321c473712b996fd99084311",
+      "generatorVersion": "golem-p1-migration-v1"
+    }
+  ]
+}

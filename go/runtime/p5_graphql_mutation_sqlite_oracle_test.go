@@ -352,7 +352,7 @@ func newP5MutationHarness(t *testing.T, counters *p5MutationHookCounters, vetoAf
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: database, Provider: golem.SQLite, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil

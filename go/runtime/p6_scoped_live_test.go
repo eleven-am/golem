@@ -163,7 +163,7 @@ func TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *tes
 func TestP6ScopedAuditStartupRequirements(t *testing.T) {
 	h := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	_, err := p5social.Open(context.Background(), p5social.Config[p5social.Principal]{
-		DB: h.database, Provider: golem.SQLite,
+		Database:         h.handle,
 		ResolvePrincipal: func(context.Context, p5social.Principal) (p5social.Actor, error) { return p5social.Actor{}, nil },
 	})
 	if err == nil || !strings.Contains(err.Error(), "AuditPrincipal") {

@@ -213,6 +213,37 @@ func TestGraphQLNamesAndSelectorsAffectOnlyContractFingerprint(t *testing.T) {
 	}
 }
 
+func TestGraphQLHookOwnedFieldsAreCanonicalContractOnlyMetadata(t *testing.T) {
+	model := validModelFixture()
+	modelBefore, _ := ModelFingerprint(model)
+	left := ContractIR{FormatVersion: ContractFormatVersion, Models: []ModelContractIR{{
+		ModelID: "model", HookOwnedCreateFields: []FieldID{"slug", "tenant", "slug"},
+	}}}
+	right := ContractIR{FormatVersion: ContractFormatVersion, Models: []ModelContractIR{{
+		ModelID: "model", HookOwnedCreateFields: []FieldID{"tenant", "slug"},
+	}}}
+	leftContract, err := ContractFingerprint(left)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rightContract, err := ContractFingerprint(right)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leftContract != rightContract {
+		t.Fatalf("hook-owned field inventory was not sorted and deduplicated: %s != %s", leftContract, rightContract)
+	}
+	empty := ContractIR{FormatVersion: ContractFormatVersion, Models: []ModelContractIR{{ModelID: "model"}}}
+	emptyContract, _ := ContractFingerprint(empty)
+	if leftContract == emptyContract {
+		t.Fatal("hook-owned fields did not affect ContractFingerprint")
+	}
+	modelAfter, _ := ModelFingerprint(model)
+	if modelBefore != modelAfter {
+		t.Fatal("hook-owned contract metadata changed ModelFingerprint")
+	}
+}
+
 func TestP7EventSchemaFingerprintCanonicalLogicalShape(t *testing.T) {
 	id := FieldID("00000000000000000000000000000001")
 	title := FieldID("00000000000000000000000000000002")

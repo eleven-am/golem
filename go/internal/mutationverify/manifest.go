@@ -100,7 +100,7 @@ func Catalog() []Mutation {
 			Label: "LEFT_POLICY_IN_WHERE", Summary: "place scoped left-target policy in WHERE",
 			Patches: []Patch{
 				{Path: "internal/scoped/scoped.go", Before: "\tfromText := dialect.Table(rootPhysical) + \" AS \" + dialect.Quote(aliases[0])\n", After: "\tfromText := dialect.Table(rootPhysical) + \" AS \" + dialect.Quote(aliases[0])\n\tleftPolicies := []string{}\n"},
-				{Path: "internal/scoped/scoped.go", Before: "\t\tconditions = append(conditions, policy)\n\t\tkeyword := \" INNER JOIN \"\n\t\tif join.Kind == golem.ScopedLeftJoin {\n\t\t\tkeyword = \" LEFT JOIN \"\n\t\t}\n", After: "\t\tkeyword := \" INNER JOIN \"\n\t\tif join.Kind == golem.ScopedLeftJoin {\n\t\t\tkeyword = \" LEFT JOIN \"\n\t\t\tleftPolicies = append(leftPolicies, policy)\n\t\t} else {\n\t\t\tconditions = append(conditions, policy)\n\t\t}\n"},
+				{Path: "internal/scoped/scoped.go", Before: "\t\tconditions = append(conditions, \"(\"+policy+\")\")\n\t\tkeyword := \" INNER JOIN \"\n\t\tif join.Kind == golem.ScopedLeftJoin {\n\t\t\tkeyword = \" LEFT JOIN \"\n\t\t}\n", After: "\t\tkeyword := \" INNER JOIN \"\n\t\tif join.Kind == golem.ScopedLeftJoin {\n\t\t\tkeyword = \" LEFT JOIN \"\n\t\t\tleftPolicies = append(leftPolicies, \"(\"+policy+\")\")\n\t\t} else {\n\t\t\tconditions = append(conditions, \"(\"+policy+\")\")\n\t\t}\n"},
 				{Path: "internal/scoped/scoped.go", Before: "\twhere := []string{rootPolicy}\n", After: "\twhere := append([]string{rootPolicy}, leftPolicies...)\n"},
 			},
 			Tests: runtimeProvider("TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable"),

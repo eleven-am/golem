@@ -387,7 +387,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			fmt.Fprintf(&scalarEnum, "  %s\n", fc.GraphQLName)
 			readScalarCount++
 		}
-		if writableCreate && !relationCreateFields[field.ID] {
+		if writableCreate && !relationCreateFields[field.ID] && !hookOwnedCreateField(view.contract, field.ID) {
 			required := field.Scalar != nil && !field.Scalar.Nullable && field.Scalar.Default == nil
 			fmt.Fprintf(&create, "  %s: %s%s\n", fc.GraphQLName, base, bang(required))
 			createCount++
@@ -510,7 +510,10 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 			enabled[operation] = true
 		}
 		name, roots, limit := view.contract.GraphQLName, view.contract.Roots, view.contract.Limits.DefaultPageSize
-		hasCreate, hasUpdate, hasUpdateMany := modelInputCapabilities(view.model, view.contract)
+		hasCreate, hasUpdate, hasUpdateMany := modelInputCapabilities(view.model, view.contract, view.relations)
+		if (enabled[ir.OperationCreate] || enabled[ir.OperationUpsert]) && !hasCreate {
+			return "", "", "", fmt.Errorf("P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE: model %s enables create or upsert but its GraphQL create input has no client-owned fields", name)
+		}
 		if enabled[ir.OperationFindOne] {
 			fmt.Fprintf(&query, "  %s(where: %sWhereUniqueInput!): %s\n", roots.FindOne, name, name)
 			queryCount++
@@ -931,7 +934,7 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 			updateType = "Nullable" + updateType
 		}
 		required := !field.Scalar.Nullable && field.Scalar.Default == nil
-		if !relationCreateFields[field.ID] {
+		if !relationCreateFields[field.ID] && !hookOwnedCreateField(contract, field.ID) {
 			fmt.Fprintf(&create, "  %s: %s%s\n", fc.GraphQLName, base, bang(required))
 			hasCreate = true
 		}
@@ -1019,7 +1022,7 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 		if err != nil {
 			continue
 		}
-		targetCreate, targetUpdate, targetUpdateMany := modelInputCapabilitiesWithout(targetModel, target, nestedNames.excluded)
+		targetCreate, targetUpdate, targetUpdateMany := modelInputCapabilitiesWithout(targetModel, target, nestedNames.excluded, view.relations)
 		prefix := view.contract.GraphQLName + exported(fc.GraphQLName)
 		if capabilities.many {
 			if capabilities.create {
@@ -1131,6 +1134,9 @@ func relationMutationCapabilitiesFor(field ir.FieldIR, model ir.ModelDeclIR, con
 		many:    field.Relation.Kind == ir.RelationHasMany,
 		inverse: field.Relation.Role == ir.RelationInverse,
 	}
+	if hookOwnedCreateRelation(field, model, contract, relations) {
+		result.create = false
+	}
 	if result.many {
 		return result, nil
 	}
@@ -1173,11 +1179,11 @@ func relationMutationCapabilitiesFor(field ir.FieldIR, model ir.ModelDeclIR, con
 	return result, nil
 }
 
-func modelInputCapabilities(model ir.ModelDeclIR, contract ir.ModelContractIR) (create, update, updateMany bool) {
-	return modelInputCapabilitiesWithout(model, contract, nil)
+func modelInputCapabilities(model ir.ModelDeclIR, contract ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR) (create, update, updateMany bool) {
+	return modelInputCapabilitiesWithout(model, contract, nil, relations)
 }
 
-func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContractIR, excluded []ir.FieldID) (create, update, updateMany bool) {
+func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContractIR, excluded []ir.FieldID, relations map[ir.RelationID]ir.RelationIR) (create, update, updateMany bool) {
 	for _, field := range model.Fields {
 		if containsFieldID(excluded, field.ID) {
 			continue
@@ -1190,20 +1196,44 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			if field.Scalar.DatabaseReadOnly || field.Scalar.Generation != nil {
 				continue
 			}
-			create = true
+			if !hookOwnedCreateField(contract, field.ID) {
+				create = true
+			}
 			if !hasMode(fc.Modes, ir.ModeImmutable) {
 				update, updateMany = true, true
 			}
 			continue
 		}
 		if field.Relation != nil {
-			create = true
+			if !hookOwnedCreateRelation(field, model, contract, relations) {
+				create = true
+			}
 			if !hasMode(fc.Modes, ir.ModeImmutable) {
 				update = true
 			}
 		}
 	}
 	return create, update, updateMany
+}
+
+func hookOwnedCreateField(contract ir.ModelContractIR, field ir.FieldID) bool {
+	return containsFieldID(contract.HookOwnedCreateFields, field)
+}
+
+func hookOwnedCreateRelation(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR) bool {
+	if field.Relation == nil || field.Relation.Role != ir.RelationSource || field.Relation.Kind != ir.RelationBelongsTo {
+		return false
+	}
+	relation, ok := relations[field.Relation.RelationID]
+	if !ok || relation.SourceModel != model.ID || relation.SourceField != field.ID || len(relation.LocalFields) == 0 {
+		return false
+	}
+	for _, local := range relation.LocalFields {
+		if !hookOwnedCreateField(contract, local) {
+			return false
+		}
+	}
+	return true
 }
 
 func containsFieldID(values []ir.FieldID, id ir.FieldID) bool {

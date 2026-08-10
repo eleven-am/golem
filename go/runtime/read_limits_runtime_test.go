@@ -133,7 +133,7 @@ func openReadLimitApp(t *testing.T, ctx context.Context, database *sqlx.DB, fixt
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[testPrincipal, testActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ReadLimits: limits,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ReadLimits: limits,
 		ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil },
 	})
 	if err != nil {

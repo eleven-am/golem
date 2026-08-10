@@ -375,6 +375,14 @@ func TestP6ForgedUngroupableDimensionsAndFieldCountsFailInPlanning(t *testing.T)
 	}
 }
 
+func TestP8SQLiteMultiPolicyFragmentsUseDisjointNumberedPlaceholders(t *testing.T) {
+	join := rebase(`join_a=?1 AND join_b=?2`, 0, policyir.ProviderSQLite)
+	root := rebase(`root_a=?1 AND root_b=?2`, 2, policyir.ProviderSQLite)
+	if got, want := join+";"+root, `join_a=?1 AND join_b=?2;root_a=?3 AND root_b=?4`; got != want {
+		t.Fatalf("multi-fragment placeholders=%q want=%q", got, want)
+	}
+}
+
 func mustAnalyticsStringValue(t *testing.T, value string) policyir.Value {
 	t.Helper()
 	result, err := policyir.StringValue(value)

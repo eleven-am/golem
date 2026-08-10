@@ -87,6 +87,19 @@ func ChainHash(entry ManifestEntry) Digest {
 // VerifyManifest detects rewritten files, reordered/broken history, and stale
 // embedded snapshots. files contains reviewed bytes keyed by manifest path.
 func VerifyManifest(manifest Manifest, files map[string][]byte) error {
+	return verifyManifest(manifest, files, true)
+}
+
+// VerifyEmbeddedManifest validates the complete canonical history, including
+// snapshots, operations, ordering, checksums, and chain hashes, without
+// requiring immutable SQL file contents that are deliberately not embedded in
+// a generated application binary. Generation must first call VerifyManifest
+// with the reviewed files before constructing this runtime document.
+func VerifyEmbeddedManifest(manifest Manifest) error {
+	return verifyManifest(manifest, nil, false)
+}
+
+func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileContents bool) error {
 	if manifest.FormatVersion != ManifestFormatVersion {
 		return fmt.Errorf("unsupported migration manifest format %d", manifest.FormatVersion)
 	}
@@ -143,12 +156,14 @@ func VerifyManifest(manifest Manifest, files map[string][]byte) error {
 				return fmt.Errorf("migration %s duplicates file path %s", entry.ID, file.Path)
 			}
 			seenPaths[file.Path] = true
-			content, ok := files[file.Path]
-			if !ok {
-				return fmt.Errorf("migration %s file %s is missing", entry.ID, file.Path)
-			}
-			if Checksum(content) != file.SHA256 {
-				return fmt.Errorf("migration %s file %s was rewritten", entry.ID, file.Path)
+			if verifyFileContents {
+				content, ok := files[file.Path]
+				if !ok {
+					return fmt.Errorf("migration %s file %s is missing", entry.ID, file.Path)
+				}
+				if Checksum(content) != file.SHA256 {
+					return fmt.Errorf("migration %s file %s was rewritten", entry.ID, file.Path)
+				}
 			}
 		}
 		beforeSnapshot, beforeNormalizeErr := physical.Normalize(entry.BeforeSnapshot)
@@ -238,7 +253,7 @@ func VerifyManifest(manifest Manifest, files map[string][]byte) error {
 			}
 			seenPaths[companion.File.Path] = true
 			content, ok := files[companion.File.Path]
-			if !ok || Checksum(content) != companion.File.SHA256 || companion.Postcondition == "" {
+			if (verifyFileContents && (!ok || Checksum(content) != companion.File.SHA256)) || companion.Postcondition == "" {
 				return fmt.Errorf("migration %s manual companion is missing, rewritten, or lacks postcondition", entry.ID)
 			}
 		}

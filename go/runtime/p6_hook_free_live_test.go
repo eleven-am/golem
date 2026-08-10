@@ -136,7 +136,7 @@ func TestP6AnalyticsAndScopedNeverInvokeOrdinaryReadHooks(t *testing.T) {
 				t.Fatal(err)
 			}
 			app, err := golemruntime.Open(context.Background(), golemruntime.Config[p6metrics.Principal, p6metrics.Actor]{
-				DB: harness.database, Provider: profile.provider, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+				Database: harness.handle, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 				AuditPrincipal:    func(p6metrics.Principal) string { return "hook-oracle" },
 				ReportScopedQuery: func(context.Context, golem.ScopedAuditRecord) {},
 				ResolvePrincipal: func(_ context.Context, principal p6metrics.Principal) (p6metrics.Actor, error) {

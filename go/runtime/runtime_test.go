@@ -68,7 +68,7 @@ func TestOpenCreatesIsolatedCallerAndExplicitSystemExecutions(t *testing.T) {
 	}
 
 	app, err := Open(ctx, Config[testPrincipal, testActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 			return testActor{Allow: principal.Allow}, nil
 		},
@@ -152,7 +152,7 @@ func TestMutationPrincipalFailureCannotBecomeSystem(t *testing.T) {
 	})
 	bindingPackage := golem.GeneratedStampedPackageBindings(fixture.Bundle.GenerationDigest(), []golem.PolicyBinding[testActor]{allowUser, allowPost}, nil)
 	bindings, _ := golem.GeneratedApplicationBindings(fixture.Bundle.GenerationDigest(), bindingPackage)
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) {
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) {
 		return testActor{}, errors.New("invalid session")
 	}})
 	if err != nil {
@@ -204,7 +204,7 @@ func TestRootReadExecutionDecodesRowsAndAppliesPolicyBeforePaging(t *testing.T) 
 	})
 	bindingPackage := golem.GeneratedStampedPackageBindings(fixture.Bundle.GenerationDigest(), []golem.PolicyBinding[testActor]{userBinding, postBinding}, nil)
 	bindings, _ := golem.GeneratedApplicationBindings(fixture.Bundle.GenerationDigest(), bindingPackage)
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 		return testActor{Allow: principal.Allow}, nil
 	}})
 	if err != nil {
@@ -294,7 +294,7 @@ func TestRelationExecutionUsesAuthorizedBoundedChildPlans(t *testing.T) {
 	})
 	bindingPackage := golem.GeneratedStampedPackageBindings(fixture.Bundle.GenerationDigest(), []golem.PolicyBinding[testActor]{allowUser, allowPost}, nil)
 	bindings, _ := golem.GeneratedApplicationBindings(fixture.Bundle.GenerationDigest(), bindingPackage)
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,7 +416,7 @@ func TestRelationExecutionUsesAuthorizedBoundedChildPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	callerApp, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: callerBindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+	callerApp, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: callerBindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -499,7 +499,7 @@ func TestRelationCountExecutesTargetPolicyAndWhereInSQLAndStripsDependencies(t *
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -604,7 +604,7 @@ func TestConditionalMaskRelationHydrationIsPrivatePolicyScopedAndProjectionInvar
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[testPrincipal, testActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil },
 	})
 	if err != nil {
@@ -720,7 +720,7 @@ func TestCallerReadHooksCanNarrowRequestsAndObserveDetachedMaskedResults(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 		return testActor{Allow: principal.Allow}, nil
 	}})
 	if err != nil {

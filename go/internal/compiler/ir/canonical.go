@@ -533,6 +533,20 @@ func normalizeContract(contract *ContractIR) {
 				return model.Fields[fieldIndex].Modes[a] < model.Fields[fieldIndex].Modes[b]
 			})
 		}
+		sort.Slice(model.HookOwnedCreateFields, func(a, b int) bool {
+			return model.HookOwnedCreateFields[a] < model.HookOwnedCreateFields[b]
+		})
+		if len(model.HookOwnedCreateFields) > 1 {
+			write := 1
+			for read := 1; read < len(model.HookOwnedCreateFields); read++ {
+				if model.HookOwnedCreateFields[read] == model.HookOwnedCreateFields[write-1] {
+					continue
+				}
+				model.HookOwnedCreateFields[write] = model.HookOwnedCreateFields[read]
+				write++
+			}
+			model.HookOwnedCreateFields = model.HookOwnedCreateFields[:write]
+		}
 		sort.Slice(model.Selectors, func(a, b int) bool {
 			if model.Selectors[a].Name != model.Selectors[b].Name {
 				return model.Selectors[a].Name < model.Selectors[b].Name
@@ -612,6 +626,9 @@ func normalizeContract(contract *ContractIR) {
 		}
 		if model.Fields == nil {
 			model.Fields = []FieldContractIR{}
+		}
+		if model.HookOwnedCreateFields == nil {
+			model.HookOwnedCreateFields = []FieldID{}
 		}
 		if model.Selectors == nil {
 			model.Selectors = []SelectorContractIR{}

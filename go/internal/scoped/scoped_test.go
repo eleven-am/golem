@@ -41,7 +41,7 @@ func TestP6ScopedAuthorizedInnerAndLeftJoinOracle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			policies := policyMap{policyir.ModelID(fixture.Post): readPolicy(t, fixture.Post, true), policyir.ModelID(fixture.User): conditionalStringReadPolicy(t, fixture.User, fixture.UserName, "visible")}
+			policies := policyMap{policyir.ModelID(fixture.Post): readPolicy(t, fixture.Post, true), policyir.ModelID(fixture.User): alternativeStringReadPolicy(t, fixture.User, fixture.UserName, "visible", "also-visible")}
 			planned, err := Caller(frozen, fixture.Registry, policyir.PortableProviders(), policies, readplan.DefaultLimits())
 			if err != nil {
 				t.Fatal(err)
@@ -69,9 +69,30 @@ func TestP6ScopedAuthorizedInnerAndLeftJoinOracle(t *testing.T) {
 				if joinAt < 0 || whereAt < joinAt || !strings.Contains(sql[joinAt:whereAt], "name") {
 					t.Fatalf("%s target policy was not retained in ON before outer WHERE: %s", joinKind, sql)
 				}
+				assertJoinPolicyOrGrouped(t, sql[joinAt:whereAt])
 			}
 		})
 	}
+}
+
+func assertJoinPolicyOrGrouped(t *testing.T, joinSQL string) {
+	t.Helper()
+	depth := 0
+	for index := 0; index < len(joinSQL); index++ {
+		switch joinSQL[index] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+		}
+		if strings.HasPrefix(joinSQL[index:], " OR ") {
+			if depth < 2 {
+				t.Fatalf("joined OR policy escaped correlation operand at depth %d: %s", depth, joinSQL)
+			}
+			return
+		}
+	}
+	t.Fatalf("joined alternative policy has no OR: %s", joinSQL)
 }
 
 func TestP6ScopedJoinCorrelationKeysRequireDischargedClassification(t *testing.T) {
@@ -196,6 +217,53 @@ func conditionalStringReadPolicy(t *testing.T, model golem.ModelID, field golem.
 	return policy
 }
 
+func alternativeStringReadPolicy(t *testing.T, model golem.ModelID, field golem.FieldID, first, second string) policyir.Policy {
+	t.Helper()
+	typ, err := policyir.NewTypeRef(policyir.ValueString, false, 0, 0, policyir.EnumID{}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conditions := make([]policyir.Condition, 0, 2)
+	for _, raw := range []string{first, second} {
+		value, valueErr := policyir.StringValue(raw)
+		if valueErr != nil {
+			t.Fatal(valueErr)
+		}
+		operand, operandErr := policyir.OneOperand(value)
+		if operandErr != nil {
+			t.Fatal(operandErr)
+		}
+		requirements, requirementsErr := policyoperator.ValidateShape(policyir.OperatorEqual, policyoperator.Shape{
+			Node:      policyir.ConditionScalar,
+			FieldType: typ,
+			Operand:   operand,
+			Mode:      policyir.ComparisonSensitive,
+			Providers: policyir.PortableProviders(),
+		})
+		if requirementsErr != nil {
+			t.Fatal(requirementsErr)
+		}
+		condition, conditionErr := policyir.NewScalar(policyir.ModelID(model), policyir.FieldID(field), typ, policyir.OperatorEqual, policyir.ComparisonSensitive, operand, requirements)
+		if conditionErr != nil {
+			t.Fatal(conditionErr)
+		}
+		conditions = append(conditions, condition)
+	}
+	alternative, err := policyir.NewLogical(policyir.ModelID(model), policyir.LogicalOr, conditions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rule, err := policyir.NewModelRule(policyir.ActionRead, policyir.EffectGrant, policyir.ModelID(model), &alternative, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := policyir.NewPolicy(policyir.ModelID(model), []policyir.Rule{rule})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return policy
+}
+
 func TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	users := golem.GeneratedScope[scopedSQLUser](fixture.User)
@@ -260,6 +328,22 @@ func TestP6ScopedProviderSQLIsDeterministic(t *testing.T) {
 			second, err := Render(planned, fixture.Registry, provider, proof)
 			if err != nil || first.SQL() != second.SQL() {
 				t.Fatalf("nondeterministic scoped SQL: %v", err)
+			}
+		})
+	}
+}
+
+func TestP8ScopedRebasesNumberedPlaceholdersAcrossProviders(t *testing.T) {
+	for _, test := range []struct {
+		name, input, want string
+		provider          policyir.Provider
+	}{
+		{name: "sqlite", provider: policyir.ProviderSQLite, input: "x=?1 AND y=?12", want: "x=?4 AND y=?15"},
+		{name: "postgresql", provider: policyir.ProviderPostgreSQL, input: "x=$1 AND y=$12", want: "x=$4 AND y=$15"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := rebase(test.input, 3, test.provider); got != test.want {
+				t.Fatalf("rebase=%q want=%q", got, test.want)
 			}
 		})
 	}

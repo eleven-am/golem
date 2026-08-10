@@ -139,3 +139,10 @@ func TestP6ScopedAuditShapeExcludesValuesButIncludesSignedPaging(t *testing.T) {
 		t.Fatal("audit shape omitted skip value")
 	}
 }
+
+func TestP8ScopedAuditForUnfreezableInputDoesNotInventZeroModel(t *testing.T) {
+	record := RuntimeScopedAuditRecord(FrozenScopedQuery{}, "audit-user", 1, false, SQLite, "", 0, 0, ScopedOutcomeRefused)
+	if models := record.Models(); len(models) != 0 {
+		t.Fatalf("unfreezable scoped audit models=%v want empty", models)
+	}
+}

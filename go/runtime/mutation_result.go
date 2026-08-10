@@ -11,11 +11,13 @@ import (
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type scalarMutationProjection struct {
@@ -274,7 +276,7 @@ func executeCallerRootUpsert[P, A, M any](ctx context.Context, caller *Caller[P,
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, golem.ModelID(model), err)
 	}
-	prepared, err := prepareCallerRootUpsert(caller, rootUpsertPrepareRequest{model: model, target: target, create: create, update: update, result: requirements})
+	prepared, err := prepareCallerRootUpsert(caller, rootUpsertPrepareRequest{model: model, target: target, create: create, update: update, result: requirements, deferHookOwned: true})
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, golem.ModelID(model), err)
 	}
@@ -301,8 +303,10 @@ func executeSystemRootUpsert[P, A, M any](ctx context.Context, system System[P, 
 	return executePreparedRootUpsert[P, A](ctx, system.app, system.executor, descriptor, projection, prepared, nil, nil)
 }
 
-func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection) (golem.Row[M], error) {
+func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection) (result golem.Row[M], resultErr error) {
 	model := policyir.ModelID(descriptor.Metadata().ModelID())
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, golem.ModelID(model), observe.KindMutation, mutationObservationOperation(operation))
+	defer func() { finishDeferredObservation(observation, deferredObservation, resultErr) }()
 	runtimeValues := newMutationRuntimeValues()
 	requirements, err := projection.requirements(model)
 	if err != nil {
@@ -335,7 +339,9 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 		return prepareErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	hookContext, hookObservation := observeexec.BeginChild(hookContext, golem.ModelID(model), observe.KindHook, hookObservationOperation(hookRequest.Operation()), observe.PhaseBefore)
 	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
+	finishObservation(hookObservation, err)
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(operation, golem.ModelID(model), err)
 	}
@@ -394,8 +400,10 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	return publicMutationPreparationError(operation, model, err)
 }
 
-func executeSystemRootScalar[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection) (golem.Row[M], error) {
+func executeSystemRootScalar[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection) (result golem.Row[M], resultErr error) {
 	model := policyir.ModelID(descriptor.Metadata().ModelID())
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, system.app, system.executor, golem.ModelID(model), observe.KindMutation, mutationObservationOperation(operation))
+	defer func() { finishDeferredObservation(observation, deferredObservation, resultErr) }()
 	if input != nil && len(input.Relations()) != 0 {
 		row, err := executeSystemNestedScalar(ctx, system, descriptor, operation, input, target, projection)
 		if err != nil {

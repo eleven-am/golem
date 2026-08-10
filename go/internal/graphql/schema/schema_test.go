@@ -38,6 +38,113 @@ func TestSocialSDLIsDeterministicAndValid(t *testing.T) {
 	}
 }
 
+func TestGraphQLHookOwnedOmitsScalarAndCanonicalRelationFromEveryCreateShape(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	compilation := *compiled.Compilation
+	var postModel *compilerir.ModelDeclIR
+	var postContract *compilerir.ModelContractIR
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].GraphQLName == "Post" {
+			postContract = &compilation.Contract.Models[index]
+			break
+		}
+	}
+	if postContract == nil {
+		t.Fatal("Post contract is absent")
+	}
+	for index := range compilation.Model.Models {
+		if compilation.Model.Models[index].ID == postContract.ModelID {
+			postModel = &compilation.Model.Models[index]
+			break
+		}
+	}
+	if postModel == nil {
+		t.Fatal("Post model is absent")
+	}
+	var authorID, author compilerir.FieldID
+	for index := range postModel.Fields {
+		field := &postModel.Fields[index]
+		switch field.GoName {
+		case "AuthorID":
+			authorID = field.ID
+		case "Author":
+			author = field.ID
+		}
+	}
+	if authorID == "" || author == "" {
+		t.Fatal("Post author fields are absent")
+	}
+	postContract.HookOwnedCreateFields = []compilerir.FieldID{authorID}
+	for index := range postContract.Fields {
+		if postContract.Fields[index].FieldID == authorID || postContract.Fields[index].FieldID == author {
+			postContract.Fields[index].Modes = append(postContract.Fields[index].Modes, compilerir.ModeImmutable)
+		}
+	}
+	document, err := Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := gqlparser.LoadSchema(astSource(document.SDL))
+	if err != nil {
+		t.Fatalf("invalid hook-owned SDL: %v\n%s", err, document.SDL)
+	}
+	for name, definition := range parsed.Types {
+		if definition.Kind != ast.InputObject || !strings.HasPrefix(name, "PostCreate") {
+			continue
+		}
+		if definition.Fields.ForName("authorID") != nil || definition.Fields.ForName("author") != nil {
+			t.Fatalf("hook-owned author leaked into %s: %#v", name, definition.Fields)
+		}
+	}
+	postCreate := requireDefinition(t, parsed, "PostCreateInput")
+	if postCreate.Fields.ForName("authorID") != nil || postCreate.Fields.ForName("author") != nil {
+		t.Fatalf("PostCreateInput leaked hook-owned author: %#v", postCreate.Fields)
+	}
+	postOutput := requireDefinition(t, parsed, "Post")
+	postWhere := requireDefinition(t, parsed, "PostWhereInput")
+	if postOutput.Fields.ForName("authorID") == nil || postOutput.Fields.ForName("author") == nil || postWhere.Fields.ForName("authorID") == nil || postWhere.Fields.ForName("author") == nil {
+		t.Fatal("hook ownership changed normal output/filter exposure")
+	}
+	if update := parsed.Types["PostUpdateInput"]; update != nil && (update.Fields.ForName("authorID") != nil || update.Fields.ForName("author") != nil) {
+		t.Fatalf("immutable author leaked into PostUpdateInput: %#v", update.Fields)
+	}
+}
+
+func TestGraphQLHookOwnedRefusesAuthoredRootWithNoClientCreatePosition(t *testing.T) {
+	modelID := compilerir.ModelID("10000000000000000000000000000001")
+	fieldID := compilerir.FieldID("10000000000000000000000000000002")
+	model := compilerir.ModelDeclIR{ID: modelID, Fields: []compilerir.FieldIR{{
+		ID: fieldID, Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeString}},
+	}}}
+	contract := compilerir.ModelContractIR{
+		ModelID: modelID, GraphQLName: "Tenant", Exposed: true,
+		Fields:                []compilerir.FieldContractIR{{FieldID: fieldID, GraphQLName: "slug"}},
+		Operations:            []compilerir.Operation{compilerir.OperationFindOne, compilerir.OperationCreate},
+		Roots:                 compilerir.GraphQLRootNamesIR{FindOne: "tenant", Create: "createTenant"},
+		HookOwnedCreateFields: []compilerir.FieldID{fieldID},
+	}
+	view := modelView{model: model, contract: contract, fields: map[compilerir.FieldID]compilerir.FieldContractIR{fieldID: contract.Fields[0]}, relations: map[compilerir.RelationID]compilerir.RelationIR{}}
+	if _, _, _, err := renderRoots([]modelView{view}, nil); err == nil || !strings.Contains(err.Error(), "P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE") {
+		t.Fatalf("all-server-owned create root error = %v", err)
+	}
+
+	defaulted := *model.Fields[0].Scalar
+	defaulted.Default = &compilerir.DefaultIR{Kind: compilerir.DefaultLiteral}
+	model.Fields[0].Scalar = &defaulted
+	contract.HookOwnedCreateFields = nil
+	view = modelView{model: model, contract: contract, fields: map[compilerir.FieldID]compilerir.FieldContractIR{fieldID: contract.Fields[0]}, relations: map[compilerir.RelationID]compilerir.RelationIR{}}
+	_, mutation, _, err := renderRoots([]modelView{view}, nil)
+	if err != nil {
+		t.Fatalf("defaulted create position refused: %v", err)
+	}
+	if !strings.Contains(mutation, "createTenant(data: TenantCreateInput!)") {
+		t.Fatalf("defaulted create root missing: %s", mutation)
+	}
+}
+
 func TestP7SubscriptionSDLUsesClosedEventABI(t *testing.T) {
 	assertP7GeneratedGraphQLSubscriptionSDLGolden(t)
 }

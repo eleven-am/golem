@@ -91,7 +91,7 @@ func openTransactionFixture(t *testing.T) transactionFixture {
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[testPrincipal, testActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 			return testActor{Allow: principal.Allow}, nil
 		},

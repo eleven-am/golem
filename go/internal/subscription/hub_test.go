@@ -159,6 +159,52 @@ func TestP7StatefulSubscriptionRefusesShareableKeyBeforeSourceStart(t *testing.T
 	shutdown(t, hub)
 }
 
+func TestP8SubscriptionStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
+	for _, closeFirst := range []bool{false, true} {
+		name := "install-before-close"
+		if closeFirst {
+			name = "close-before-install"
+		}
+		t.Run(name, func(t *testing.T) {
+			item := &member[int]{id: 1, runID: 1, done: make(chan struct{}), queue: make(chan int, 1)}
+			hub := &ModelHub[int]{members: map[uint64]*member[int]{item.id: item}, runs: make(map[uint64]*hubRun[int])}
+			stream := &Stream[int]{hub: hub, id: item.id, member: item}
+			stops := 0
+			stop := func() bool {
+				stops++
+				return true
+			}
+			if closeFirst {
+				stream.closeWith(events.CodeSubscriptionCancelled)
+				stream.installStop(stop)
+			} else {
+				stream.installStop(stop)
+				stream.closeWith(events.CodeSubscriptionCancelled)
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if stops != 1 {
+				t.Fatalf("stop callback count=%d", stops)
+			}
+			select {
+			case <-item.done:
+			default:
+				t.Fatal("closed subscriber did not signal completion")
+			}
+			if _, present := hub.members[item.id]; present {
+				t.Fatal("closed subscriber remains registered")
+			}
+			stream.stopMu.Lock()
+			closed, retainedStop := stream.closed, stream.stop
+			stream.stopMu.Unlock()
+			if !closed || retainedStop != nil {
+				t.Fatalf("closed=%t retainedStop=%t", closed, retainedStop != nil)
+			}
+		})
+	}
+}
+
 func TestP7StateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) {
 	source := newFakeSource()
 	hub, err := NewModelHub(Config[golem.EventID]{

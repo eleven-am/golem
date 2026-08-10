@@ -17,7 +17,9 @@ type memoryStream struct {
 	id        uint64
 	filter    Subscription
 	queue     chan Notice
+	stopMu    sync.Mutex
 	stop      func() bool
+	closed    bool
 	once      sync.Once
 	err       ErrorCode
 }
@@ -50,7 +52,7 @@ func (transport *memoryTransport) Subscribe(ctx context.Context, subscription Su
 	stream := &memoryStream{transport: transport, id: transport.nextID, filter: subscription, queue: make(chan Notice, transport.buffer)}
 	transport.streams[stream.id] = stream
 	transport.mu.Unlock()
-	stream.stop = context.AfterFunc(ctx, func() { _ = stream.closeWith(CodeSubscriptionCancelled) })
+	stream.installStop(context.AfterFunc(ctx, func() { _ = stream.closeWith(CodeSubscriptionCancelled) }))
 	return stream, nil
 }
 
@@ -102,10 +104,33 @@ func (stream *memoryStream) Recv(ctx context.Context) (Notice, error) {
 
 func (stream *memoryStream) Close() error { return stream.closeWith(CodeEventSourceClosed) }
 
+func (stream *memoryStream) installStop(stop func() bool) {
+	if stop == nil {
+		return
+	}
+	stream.stopMu.Lock()
+	if stream.closed {
+		stream.stopMu.Unlock()
+		stop()
+		return
+	}
+	stream.stop = stop
+	stream.stopMu.Unlock()
+}
+
+func (stream *memoryStream) closeStop() func() bool {
+	stream.stopMu.Lock()
+	stream.closed = true
+	stop := stream.stop
+	stream.stop = nil
+	stream.stopMu.Unlock()
+	return stop
+}
+
 func (stream *memoryStream) closeWith(code ErrorCode) error {
 	stream.once.Do(func() {
-		if stream.stop != nil {
-			stream.stop()
+		if stop := stream.closeStop(); stop != nil {
+			stop()
 		}
 		stream.transport.mu.Lock()
 		delete(stream.transport.streams, stream.id)

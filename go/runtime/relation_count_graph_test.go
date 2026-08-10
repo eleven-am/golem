@@ -78,7 +78,7 @@ func openGraphApp(t *testing.T, ctx context.Context, database *sqlx.DB, provider
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[struct{}, graphActor]{DB: database, Provider: provider, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, struct{}) (graphActor, error) { return graphActor{}, nil }})
+	app, err := Open(ctx, Config[struct{}, graphActor]{Database: p8RuntimeTestDatabase(database, provider), Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, struct{}) (graphActor, error) { return graphActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -291,11 +291,12 @@ const (
 	// These IDs identify provider-neutral semantic system objects. Providers may
 	// render different namespaces and storage, but must not mint provider-specific
 	// identities.
-	MigrationLedgerObjectIDV1 ir.ObjectID = "cb3020cd708be72c384f431749769c98"
-	MigrationLockObjectIDV1   ir.ObjectID = "e28aeab0927ce864e8d65a1e1dc62fc9"
-	OutboxObjectIDV1          ir.ObjectID = "14b2d0b9de583fe675fa72de1d1c78c8"
-	OutboxDeliveryObjectIDV1  ir.ObjectID = "51aa5c96fd5d24e27e182ed85f7bcbf2"
-	UpsertGuardObjectIDV1     ir.ObjectID = "076704f0bfb30b5fed47137811a6dd18"
+	MigrationLedgerObjectIDV1      ir.ObjectID = "cb3020cd708be72c384f431749769c98"
+	MigrationLedgerFormatVersionV1 uint16      = 1
+	MigrationLockObjectIDV1        ir.ObjectID = "e28aeab0927ce864e8d65a1e1dc62fc9"
+	OutboxObjectIDV1               ir.ObjectID = "14b2d0b9de583fe675fa72de1d1c78c8"
+	OutboxDeliveryObjectIDV1       ir.ObjectID = "51aa5c96fd5d24e27e182ed85f7bcbf2"
+	UpsertGuardObjectIDV1          ir.ObjectID = "076704f0bfb30b5fed47137811a6dd18"
 )
 
 // OutboxSystemObjectV1 is the exact provider-neutral registry entry for the

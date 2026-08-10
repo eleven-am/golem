@@ -194,7 +194,7 @@ func newP5ReadProviderHarness(t *testing.T, profile p5ReadProviderProfile) *p5Re
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: profile.provider, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, profile.provider), Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {
@@ -252,7 +252,7 @@ func newP5ReadProviderHarness(t *testing.T, profile p5ReadProviderProfile) *p5Re
 		t.Fatal(err)
 	}
 	disclosureApp, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: profile.provider, Bundle: bundle, Bindings: disclosureBindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, profile.provider), Bundle: bundle, Bindings: disclosureBindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {

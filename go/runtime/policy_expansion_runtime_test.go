@@ -58,7 +58,7 @@ func TestRuntimeRecursivelyScopesRootRelationPolicyAndRejectsCyclesBeforeSQL(t *
 			t.Fatal(buildErr)
 		}
 		app, openErr := Open(ctx, Config[struct{}, expansionRuntimeActor]{
-			DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+			Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 			ResolvePrincipal: func(context.Context, struct{}) (expansionRuntimeActor, error) { return expansionRuntimeActor{}, nil },
 		})
 		if openErr != nil {

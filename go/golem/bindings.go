@@ -587,6 +587,19 @@ type RuntimeHookMetadata struct {
 	Phase     HookPhase
 }
 
+func invokeGeneratedHookSafely(invoke func() error) (err error) {
+	defer func() {
+		if recover() != nil {
+			// Panic payloads are arbitrary application data. Transactional/read
+			// hooks have no trusted panic-reporting callback, so collapse them to
+			// a fixed cause that the runtime wraps in its existing closed hook
+			// error category.
+			err = fmt.Errorf("generated hook panicked")
+		}
+	}()
+	return invoke()
+}
+
 func (bindings ApplicationBindings[A]) RuntimeHookInventory() []RuntimeHookMetadata {
 	result := make([]RuntimeHookMetadata, 0)
 	for _, pkg := range bindings.packages {
@@ -615,7 +628,7 @@ func RuntimeInvokeHooks[A any](ctx context.Context, bindings ApplicationBindings
 			if binding.invoke == nil {
 				return fmt.Errorf("generated hooks: matching hook is incomplete")
 			}
-			if err := binding.invoke(ctx, payload); err != nil {
+			if err := invokeGeneratedHookSafely(func() error { return binding.invoke(ctx, payload) }); err != nil {
 				return err
 			}
 		}
@@ -643,7 +656,11 @@ func RuntimeInvokeMutationBeforeHooks[A any](ctx context.Context, bindings Appli
 				return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: matching before hook has no mutation bridge")
 			}
 			var err error
-			current, err = binding.mutationBefore(ctx, current)
+			err = invokeGeneratedHookSafely(func() error {
+				var invokeErr error
+				current, invokeErr = binding.mutationBefore(ctx, current)
+				return invokeErr
+			})
 			if err != nil {
 				return RuntimeMutationHookRequest{}, err
 			}
@@ -670,7 +687,7 @@ func RuntimeInvokeMutationResultHooks[A any](ctx context.Context, bindings Appli
 			if binding.mutationResult == nil {
 				return fmt.Errorf("generated mutation hooks: matching result hook has no mutation bridge")
 			}
-			if err := binding.mutationResult(ctx, result); err != nil {
+			if err := invokeGeneratedHookSafely(func() error { return binding.mutationResult(ctx, result) }); err != nil {
 				return err
 			}
 		}
@@ -698,7 +715,11 @@ func RuntimeInvokeReadBeforeHooks[A any](ctx context.Context, bindings Applicati
 				return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: matching before hook has no read bridge")
 			}
 			var err error
-			current, err = binding.readBefore(ctx, current)
+			err = invokeGeneratedHookSafely(func() error {
+				var invokeErr error
+				current, invokeErr = binding.readBefore(ctx, current)
+				return invokeErr
+			})
 			if err != nil {
 				return RuntimeReadHookRequest{}, err
 			}
@@ -725,7 +746,7 @@ func RuntimeInvokeReadResultHooks[A any](ctx context.Context, bindings Applicati
 			if binding.readResult == nil {
 				return fmt.Errorf("generated read hooks: matching result hook has no read bridge")
 			}
-			if err := binding.readResult(ctx, result); err != nil {
+			if err := invokeGeneratedHookSafely(func() error { return binding.readResult(ctx, result) }); err != nil {
 				return err
 			}
 		}

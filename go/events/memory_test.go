@@ -227,6 +227,51 @@ func TestP7MemoryTransportCancellationClosesMembership(t *testing.T) {
 	}
 }
 
+func TestP8MemoryStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
+	for _, closeFirst := range []bool{false, true} {
+		name := "install-before-close"
+		if closeFirst {
+			name = "close-before-install"
+		}
+		t.Run(name, func(t *testing.T) {
+			transport := &memoryTransport{buffer: 1, streams: make(map[uint64]*memoryStream)}
+			stream := &memoryStream{transport: transport, id: 1, queue: make(chan Notice, 1)}
+			transport.streams[stream.id] = stream
+			stops := 0
+			stop := func() bool {
+				stops++
+				return true
+			}
+			if closeFirst {
+				if err := stream.closeWith(CodeSubscriptionCancelled); err != nil {
+					t.Fatal(err)
+				}
+				stream.installStop(stop)
+			} else {
+				stream.installStop(stop)
+				if err := stream.closeWith(CodeSubscriptionCancelled); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := stream.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if stops != 1 {
+				t.Fatalf("stop callback count=%d", stops)
+			}
+			if _, present := transport.streams[stream.id]; present {
+				t.Fatal("closed memory stream remains registered")
+			}
+			stream.stopMu.Lock()
+			closed, retainedStop := stream.closed, stream.stop
+			stream.stopMu.Unlock()
+			if !closed || retainedStop != nil {
+				t.Fatalf("closed=%t retainedStop=%t", closed, retainedStop != nil)
+			}
+		})
+	}
+}
+
 func TestP7LimitsRejectInsteadOfClamping(t *testing.T) {
 	if _, err := NormalizeLimits(Limits{SubscriberQueue: 4097}); errorCode(t, err) != CodeEventConfig {
 		t.Fatal("oversize subscriber queue accepted")

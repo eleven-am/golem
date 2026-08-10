@@ -407,9 +407,10 @@ func newP5ExtensionProviderFixture(t *testing.T, profile p5ExtensionProviderProf
 	if err := apply(ctx, database, schema); err != nil {
 		t.Fatal(err)
 	}
+	databaseHandle := p8AdoptTracedProviderHandle(database, profile)
 	resolutions := &atomic.Int64{}
 	application, err := p5extensions.Open(ctx, p5extensions.Config[p5extensions.Principal]{
-		DB: database, Provider: profile.provider,
+		Database: databaseHandle,
 		ResolvePrincipal: func(_ context.Context, principal p5extensions.Principal) (p5extensions.Actor, error) {
 			resolutions.Add(1)
 			if !principal.Valid {
@@ -501,9 +502,10 @@ func newP5ExtensionTracedProviderFixtureWithLimits(t *testing.T, profile p5Exten
 	if err := apply(ctx, database, schema); err != nil {
 		t.Fatal(err)
 	}
+	databaseHandle := p8AdoptTracedProviderHandle(database, profile)
 	resolutions := &atomic.Int64{}
 	application, err := p5extensions.Open(ctx, p5extensions.Config[p5extensions.Principal]{
-		DB: database, Provider: profile.provider,
+		Database: databaseHandle,
 		ResolvePrincipal: func(_ context.Context, principal p5extensions.Principal) (p5extensions.Actor, error) {
 			resolutions.Add(1)
 			if !principal.Valid {

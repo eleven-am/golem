@@ -1,5 +1,11 @@
 # Golem
 
+This README documents the released TypeScript/NestJS implementation. The Go
+implementation is a separate, unreleased module under [`go`](./go); its current
+capabilities, explicit non-claims, and release evidence are documented in
+[`docs/golem-go`](./docs/golem-go/README.md). A TypeScript package version or
+release note does not imply that a Go module version has been published.
+
 **Write your Prisma schema. The backend comes alive, and it defends itself.**
 
 Golem builds a complete GraphQL API from your Prisma schema at runtime. You write no resolvers, no DTOs, no services, and there are no generated classes to maintain. Every model gets queries with filtering and pagination, mutations with nested writes, and live subscriptions. If you connect an authorization adapter, a single set of CASL rules is enforced on every row, every column, and every relation hop, across every entry point.

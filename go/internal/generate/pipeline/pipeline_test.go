@@ -284,7 +284,7 @@ func TestGeneratedGraphQLArtifactsAreByteIdenticalAcrossShuffledInputAndRepeated
 	if !reflect.DeepEqual(modelPackageSpecs(first.Compilation, shuffledPackages), modelPackageSpecs(first.Compilation, compileFixture(t, firstRequest).Packages)) {
 		t.Fatal("package canonicalization depends on input order")
 	}
-	rebuilt, err := buildManifest(first.ModelFingerprint, first.ContractFingerprint, first.Providers, shuffledArtifacts, manifest.GeneratorVersion, manifest.TemplateABIVersion)
+	rebuilt, err := buildManifest(first.ModelFingerprint, first.ContractFingerprint, first.Providers, nil, shuffledArtifacts, manifest.GeneratorVersion, manifest.TemplateABIVersion)
 	if err != nil {
 		t.Fatal(err)
 	}

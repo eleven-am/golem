@@ -597,7 +597,7 @@ func relationRenameFixtureRaw() ir.RawDeclIR {
 
 func writeRenameSourceFixture(t *testing.T, directory, golemModule, modelName, table, fieldName, column, modelRename, fieldRename string) {
 	t.Helper()
-	goMod := fmt.Sprintf("module example.com/renamefixture\n\ngo 1.23.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", filepath.ToSlash(golemModule))
+	goMod := fmt.Sprintf("module example.com/renamefixture\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", filepath.ToSlash(golemModule))
 	modelRenameTag := ""
 	if modelRename != "" {
 		modelRenameTag = ";renameFrom=" + modelRename

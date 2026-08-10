@@ -1,9 +1,16 @@
 package sqlite
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -145,6 +152,235 @@ func TestP7SQLiteConcurrentWorkersClaimWholeCausationsExclusively(t *testing.T) 
 	}
 	if len(seen) != 4 {
 		t.Fatalf("claimed causations=%v", seen)
+	}
+}
+
+func TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized(t *testing.T) {
+	if databasePath := os.Getenv("GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE"); databasePath != "" {
+		p8SQLiteDepthSubprocessWorker(t, databasePath, os.Getenv("GOLEM_P8_DEPTH_WORKER_OUTPUT"), os.Getenv("GOLEM_P8_DEPTH_WORKER_MODE"), os.Getenv("GOLEM_P8_DEPTH_WORKER_CAUSATION"))
+		return
+	}
+	ctx := context.Background()
+	provider := New()
+	database := openEventDeliveryFixture(t, provider)
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	depthCoordinator, ok := coordinator.(eventprovider.ClaimDepthCoordinator)
+	if !ok {
+		t.Fatal("released SQLite coordinator has no transaction-coupled depth snapshot")
+	}
+	for index := 1; index <= 3; index++ {
+		insertDeliveryFact(t, database, deliveryUUID(700+index), deliveryUUID(800+index), 1, int64(index))
+	}
+	claimed, err := depthCoordinator.ClaimWithDepth(ctx, eventprovider.ClaimOptions{Groups: 3, LeaseDuration: time.Minute})
+	if err != nil || len(claimed.Leases) != 3 || claimed.Depth != (eventprovider.DepthSnapshot{}) {
+		t.Fatalf("initial claim=%#v error=%v", claimed, err)
+	}
+	if changed, err := coordinator.Retry(ctx, claimed.Leases[0].Delivery.CausationID, claimed.Leases[0].Delivery.LeaseToken, time.Hour, "depth-pending"); err != nil || !changed {
+		t.Fatalf("pending transition changed=%t error=%v", changed, err)
+	}
+	if changed, err := coordinator.Block(ctx, claimed.Leases[1].Delivery.CausationID, claimed.Leases[1].Delivery.LeaseToken, "depth-blocked"); err != nil || !changed {
+		t.Fatalf("blocked transition changed=%t error=%v", changed, err)
+	}
+	if changed, err := coordinator.Block(ctx, claimed.Leases[2].Delivery.CausationID, claimed.Leases[2].Delivery.LeaseToken, "depth-retired"); err != nil || !changed {
+		t.Fatalf("retire pre-block changed=%t error=%v", changed, err)
+	}
+	if changed, err := coordinator.Retire(ctx, claimed.Leases[2].Delivery.CausationID); err != nil || !changed {
+		t.Fatalf("retire changed=%t error=%v", changed, err)
+	}
+	snapshot, err := depthCoordinator.ClaimWithDepth(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Minute})
+	if err != nil || len(snapshot.Leases) != 0 || snapshot.Depth != (eventprovider.DepthSnapshot{Pending: 1, Blocked: 1, Retired: 1}) {
+		t.Fatalf("status snapshot=%#v error=%v", snapshot, err)
+	}
+
+	start := make(chan struct{})
+	results := make(chan eventprovider.ClaimSnapshot, 2)
+	errors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			other, err := provider.EventCoordinator(database)
+			if err != nil {
+				errors <- err
+				return
+			}
+			<-start
+			value, err := other.(eventprovider.ClaimDepthCoordinator).ClaimWithDepth(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Minute})
+			if err != nil {
+				errors <- err
+				return
+			}
+			results <- value
+		}()
+	}
+	close(start)
+	for range 2 {
+		select {
+		case err := <-errors:
+			t.Fatal(err)
+		case value := <-results:
+			if len(value.Leases) != 0 || value.Depth != snapshot.Depth {
+				t.Fatalf("concurrent serialized snapshot=%#v want depth=%#v", value, snapshot.Depth)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("concurrent depth snapshot deadlocked")
+		}
+	}
+	var databasePath string
+	if err := database.GetContext(ctx, &databasePath, `SELECT file FROM pragma_database_list WHERE name='main'`); err != nil || databasePath == "" {
+		t.Fatalf("resolve SQLite fixture path=%q err=%v", databasePath, err)
+	}
+	contentionCause := deliveryUUID(704)
+	insertDeliveryFact(t, database, contentionCause, deliveryUUID(804), 1, 4)
+	p8SQLiteMaterializeDelivery(t, database)
+	p8RunSQLiteDepthSubprocesses(t, databasePath, contentionCause, snapshot.Depth)
+	p8AssertSQLiteDeliveryConservation(t, database, map[string]int{"pending": 1, "blocked": 1, "retired": 1, "leased": 1})
+
+	crashCause := deliveryUUID(705)
+	insertDeliveryFact(t, database, crashCause, deliveryUUID(805), 1, 5)
+	p8SQLiteMaterializeDelivery(t, database)
+	p8RunSQLiteDepthCrash(t, databasePath, crashCause)
+	var rolledBack struct {
+		Status string         `db:"status"`
+		Token  sql.NullString `db:"lease_token"`
+	}
+	if err := database.GetContext(ctx, &rolledBack, `SELECT "status","lease_token" FROM "_golem_outbox_delivery" WHERE "causation_id"=?`, crashCause); err != nil || rolledBack.Status != "pending" || rolledBack.Token.Valid {
+		t.Fatalf("crashed SQLite claim persisted=%#v err=%v", rolledBack, err)
+	}
+	afterCrash, err := depthCoordinator.ClaimWithDepth(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Minute})
+	if err != nil || len(afterCrash.Leases) != 1 || afterCrash.Leases[0].Delivery.CausationID != crashCause || afterCrash.Depth != snapshot.Depth {
+		t.Fatalf("post-crash SQLite claim=%#v err=%v", afterCrash, err)
+	}
+	p8AssertSQLiteDeliveryConservation(t, database, map[string]int{"pending": 1, "blocked": 1, "retired": 1, "leased": 2})
+}
+
+type p8SQLiteDepthWorkerResult struct {
+	Depth      eventprovider.DepthSnapshot `json:"depth"`
+	Causations []string                    `json:"causations"`
+}
+
+func p8RunSQLiteDepthSubprocesses(t *testing.T, databasePath, wantCausation string, wantDepth eventprovider.DepthSnapshot) {
+	t.Helper()
+	type process struct {
+		command *exec.Cmd
+		output  string
+		log     *bytes.Buffer
+	}
+	processes := make([]process, 2)
+	outputDirectory := t.TempDir()
+	for index := range processes {
+		output := filepath.Join(outputDirectory, fmt.Sprintf("depth-%d.json", index))
+		command := exec.Command(os.Args[0], "-test.run=^TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
+		command.Env = append(os.Environ(), "GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE="+databasePath, "GOLEM_P8_DEPTH_WORKER_OUTPUT="+output, "GOLEM_P8_DEPTH_WORKER_MODE=claim")
+		log := &bytes.Buffer{}
+		command.Stdout = log
+		command.Stderr = log
+		if err := command.Start(); err != nil {
+			t.Fatal(err)
+		}
+		processes[index] = process{command: command, output: output, log: log}
+	}
+	claimed := make([]string, 0, 1)
+	for _, process := range processes {
+		if err := process.command.Wait(); err != nil {
+			t.Fatalf("SQLite depth subprocess failed: %v\n%s", err, process.log.String())
+		}
+		contents, err := os.ReadFile(process.output)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var result p8SQLiteDepthWorkerResult
+		if err := json.Unmarshal(contents, &result); err != nil || result.Depth != wantDepth {
+			t.Fatalf("SQLite subprocess result=%#v want depth=%#v decode=%v", result, wantDepth, err)
+		}
+		claimed = append(claimed, result.Causations...)
+	}
+	if len(claimed) != 1 || claimed[0] != wantCausation {
+		t.Fatalf("SQLite cross-process claims=%v want exactly %s", claimed, wantCausation)
+	}
+}
+
+func p8SQLiteDepthSubprocessWorker(t *testing.T, databasePath, output, mode, causation string) {
+	t.Helper()
+	provider := New()
+	database, _, err := provider.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if mode == "crash" {
+		connection, err := database.Connx(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := connection.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+			t.Fatal(err)
+		}
+		result, err := connection.ExecContext(context.Background(), `UPDATE "_golem_outbox_delivery" SET "status"='leased',"lease_token"='00000000-0000-4000-8000-000000009999',"lease_until"=`+sqliteDatabaseMicros+`+60000000 WHERE "causation_id"=? AND "status"='pending'`, causation)
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed, _ := result.RowsAffected()
+		if changed != 1 {
+			t.Fatalf("SQLite crash worker changed=%d", changed)
+		}
+		os.Exit(17)
+	}
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := coordinator.(eventprovider.ClaimDepthCoordinator).ClaimWithDepth(context.Background(), eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Minute})
+	if err != nil {
+		t.Fatalf("SQLite subprocess claim=%#v err=%v", snapshot, err)
+	}
+	result := p8SQLiteDepthWorkerResult{Depth: snapshot.Depth, Causations: make([]string, len(snapshot.Leases))}
+	for index := range snapshot.Leases {
+		result.Causations[index] = snapshot.Leases[index].Delivery.CausationID
+	}
+	contents, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func p8RunSQLiteDepthCrash(t *testing.T, databasePath, causation string) {
+	t.Helper()
+	command := exec.Command(os.Args[0], "-test.run=^TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
+	command.Env = append(os.Environ(), "GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE="+databasePath, "GOLEM_P8_DEPTH_WORKER_MODE=crash", "GOLEM_P8_DEPTH_WORKER_CAUSATION="+causation)
+	output, err := command.CombinedOutput()
+	var exitError *exec.ExitError
+	if !errors.As(err, &exitError) || exitError.ExitCode() != 17 {
+		t.Fatalf("SQLite crash worker exit=%v output=%s", err, output)
+	}
+}
+
+func p8SQLiteMaterializeDelivery(t *testing.T, database *sqlx.DB) {
+	t.Helper()
+	if err := sqliteMaterializeMissing(context.Background(), database, 1); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func p8AssertSQLiteDeliveryConservation(t *testing.T, database *sqlx.DB, want map[string]int) {
+	t.Helper()
+	var rows []struct {
+		Status string `db:"status"`
+		Count  int    `db:"count"`
+	}
+	if err := database.Select(&rows, `SELECT "status",COUNT(*) AS "count" FROM "_golem_outbox_delivery" GROUP BY "status"`); err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]int, len(rows))
+	for _, row := range rows {
+		got[row.Status] = row.Count
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SQLite delivery conservation=%v want=%v", got, want)
 	}
 }
 

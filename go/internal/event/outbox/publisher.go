@@ -153,7 +153,19 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 			return nil
 		}
-		leases, err := publisher.coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: publisher.limits.ClaimGroups, LeaseDuration: publisher.limits.LeaseDuration})
+		claimOptions := eventprovider.ClaimOptions{Groups: publisher.limits.ClaimGroups, LeaseDuration: publisher.limits.LeaseDuration}
+		var leases []eventprovider.Lease
+		var err error
+		if coordinator, ok := publisher.coordinator.(eventprovider.ClaimDepthCoordinator); ok {
+			var snapshot eventprovider.ClaimSnapshot
+			snapshot, err = coordinator.ClaimWithDepth(ctx, claimOptions)
+			leases = snapshot.Leases
+			if err == nil {
+				publisher.observeDepth(ctx, snapshot.Depth)
+			}
+		} else {
+			leases, err = publisher.coordinator.Claim(ctx, claimOptions)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
@@ -175,6 +187,12 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			return err
 		}
 	}
+}
+
+func (publisher *Publisher) observeDepth(ctx context.Context, depth eventprovider.DepthSnapshot) {
+	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthPending, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Pending)
+	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthBlocked, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Blocked)
+	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthRetired, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Retired)
 }
 
 func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovider.Lease) error {

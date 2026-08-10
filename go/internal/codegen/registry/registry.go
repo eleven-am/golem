@@ -9,11 +9,13 @@ import (
 	"go/format"
 	"go/token"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
@@ -45,6 +47,7 @@ type ProviderInput struct {
 	Schema            physical.PhysicalSchema
 	Fingerprint       ir.Fingerprint
 	SystemFingerprint ir.Fingerprint
+	MigrationManifest []byte
 }
 
 type File struct {
@@ -94,8 +97,11 @@ func Emit(request Request) (File, error) {
 	golemRuntime := imports.qualify(runtimePath, "golemruntime")
 	eventsPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/events"
 	eventsAlias := imports.qualify(eventsPath, "events")
+	observePath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/observe"
+	observeAlias := imports.qualify(observePath, "observe")
+	providerPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/provider"
+	providerAlias := imports.qualify(providerPath, "provider")
 	contextAlias := imports.qualify("context", "context")
-	sqlxAlias := imports.qualify("github.com/jmoiron/sqlx", "sqlx")
 	models := append([]ir.ModelDeclIR(nil), request.Schema.Model.Models...)
 	sort.Slice(models, func(i, j int) bool {
 		if models[i].Go.PackagePath != models[j].Go.PackagePath {
@@ -139,7 +145,11 @@ func Emit(request Request) (File, error) {
 	fmt.Fprintf(&source, "\t\t%s,\n", documentLiteral(golem, bundle.model))
 	fmt.Fprintf(&source, "\t\t%s,\n", documentLiteral(golem, bundle.contract))
 	for _, provider := range bundle.providers {
-		fmt.Fprintf(&source, "\t\t%s.GeneratedProviderSchemaDocument(%s, %s, %s),\n", golem, providerLiteral(golem, provider.provider), digestLiteral(golem, provider.systemFingerprint), documentLiteral(golem, provider.document))
+		if len(provider.migrationManifest) == 0 {
+			fmt.Fprintf(&source, "\t\t%s.GeneratedProviderSchemaDocument(%s, %s, %s),\n", golem, providerLiteral(golem, provider.provider), digestLiteral(golem, provider.systemFingerprint), documentLiteral(golem, provider.document))
+		} else {
+			fmt.Fprintf(&source, "\t\t%s.GeneratedProviderSchemaDocumentWithMigration(%s, %s, %s, %s.GeneratedMigrationManifestDocument(golemGeneratedGenerationDigest(), %s, []byte(%q))),\n", golem, providerLiteral(golem, provider.provider), digestLiteral(golem, provider.systemFingerprint), documentLiteral(golem, provider.document), golem, providerLiteral(golem, provider.provider), string(provider.migrationManifest))
+		}
 	}
 	source.WriteString("\t)\n}\n")
 	fmt.Fprintf(&source, "\nfunc GolemGeneratedApplicationDescriptors() (%s.ApplicationDescriptors, error) {\n", golem)
@@ -181,7 +191,7 @@ func Emit(request Request) (File, error) {
 		}
 		source.WriteString("\t)\n}\n")
 	}
-	emitRuntimeSurface(&source, actorType, contextAlias, sqlxAlias, golem, golemRuntime, eventsAlias, models, modelAliases, contractModels(request.Schema.Contract))
+	emitRuntimeSurface(&source, actorType, contextAlias, providerAlias, golem, golemRuntime, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract))
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -193,11 +203,11 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias, golemAlias, runtimeAlias, eventsAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR) {
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, providerAlias, golemAlias, runtimeAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR) {
 	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
-	fmt.Fprintf(source, "\tDB *%s.DB\n\tProvider %s.Provider\n", sqlxAlias, golemAlias)
+	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n", runtimeAlias, runtimeAlias, runtimeAlias)
-	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tEventObserver %s.Observer\n", eventsAlias, eventsAlias, eventsAlias)
+	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tObserver %s.Observer\n", eventsAlias, eventsAlias, observeAlias)
 	fmt.Fprintf(source, "\tCDCAdapters []%s.CDCAdapter\n\tReportEventOperator %s.OperatorAudit\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "\tHistoricalEventBundles []%s.SchemaBundle\n", golemAlias)
 	fmt.Fprintf(source, "\tAfterCommitError func(%s.Context, %s.AfterCommitFailure)\n", contextAlias, golemAlias)
@@ -206,7 +216,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 	fmt.Fprintf(source, "\tResolvePrincipal func(%s.Context, P) (%s, error)\n", contextAlias, actorType)
 	source.WriteString("\tSnapshotPrincipal func(P) (P, error)\n")
 	fmt.Fprintf(source, "\tSnapshotActor func(%s) (%s, error)\n}\n", actorType, actorType)
-	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s] }\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\ntype App[P any] struct { runtime *%s.App[P, %s]; observer %s.Observer; provider %s.Provider }\n", runtimeAlias, actorType, observeAlias, golemAlias)
 	fmt.Fprintf(source, "type Caller[P any] struct {\n\truntime *%s.Caller[P, %s]\n", runtimeAlias, actorType)
 	for _, model := range models {
 		fmt.Fprintf(source, "\t%s Caller%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
@@ -308,14 +318,22 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, sqlxAlias
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) DeleteMany(ctx %s.Context, where %s.Predicate[%s]) (int64, error) { return %s.SystemTxDeleteMany(ctx, client.runtime, %s, where) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
+	fmt.Fprintf(source, "\treturn golemOpen(ctx, config, %s.Config[P, %s]{Database: config.Database})\n}\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\nfunc golemOpen[P any](ctx %s.Context, config Config[P], engineConfig %s.Config[P, %s]) (*App[P], error) {\n", contextAlias, runtimeAlias, actorType)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
 	if hasSubscriptions(contracts) {
 		fmt.Fprintf(source, "\teventRegistry, err := GolemGeneratedApplicationEventRegistry()\n\tif err != nil { return nil, err }\n\teventFactories, err := GolemGeneratedApplicationEventFactories()\n\tif err != nil { return nil, err }\n")
 	} else {
 		fmt.Fprintf(source, "\teventRegistry := %s.EventRegistry{}\n\teventFactories := %s.EventFactoryRegistry{}\n", golemAlias, runtimeAlias)
 	}
-	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, %s.Config[P, %s]{DB: config.DB, Provider: config.Provider, Bundle: GolemGeneratedSchemaBundle(), Bindings: bindings, Descriptors: descriptors, ReadLimits: config.ReadLimits, MutationLimits: config.MutationLimits, AnalyticsLimits: config.AnalyticsLimits, EventRegistry: eventRegistry, EventFactories: eventFactories, EventLimits: config.EventLimits, EventTransport: config.EventTransport, EventObserver: config.EventObserver, CDCAdapters: config.CDCAdapters, ReportEventOperator: config.ReportEventOperator, HistoricalEventBundles: config.HistoricalEventBundles, AfterCommitError: config.AfterCommitError, AuditPrincipal: config.AuditPrincipal, ReportScopedQuery: config.ReportScopedQuery, ResolvePrincipal: config.ResolvePrincipal, SnapshotPrincipal: config.SnapshotPrincipal, SnapshotActor: config.SnapshotActor})\n", runtimeAlias, runtimeAlias, actorType)
-	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine}, nil\n}\n")
+	source.WriteString("\tengineConfig.Bundle = GolemGeneratedSchemaBundle()\n\tengineConfig.Bindings = bindings\n\tengineConfig.Descriptors = descriptors\n")
+	source.WriteString("\tengineConfig.ReadLimits = config.ReadLimits\n\tengineConfig.MutationLimits = config.MutationLimits\n\tengineConfig.AnalyticsLimits = config.AnalyticsLimits\n")
+	source.WriteString("\tengineConfig.EventRegistry = eventRegistry\n\tengineConfig.EventFactories = eventFactories\n\tengineConfig.EventLimits = config.EventLimits\n\tengineConfig.EventTransport = config.EventTransport\n\tengineConfig.Observer = config.Observer\n")
+	source.WriteString("\tengineConfig.CDCAdapters = config.CDCAdapters\n\tengineConfig.ReportEventOperator = config.ReportEventOperator\n\tengineConfig.HistoricalEventBundles = config.HistoricalEventBundles\n")
+	source.WriteString("\tengineConfig.AfterCommitError = config.AfterCommitError\n\tengineConfig.AuditPrincipal = config.AuditPrincipal\n\tengineConfig.ReportScopedQuery = config.ReportScopedQuery\n")
+	source.WriteString("\tengineConfig.ResolvePrincipal = config.ResolvePrincipal\n\tengineConfig.SnapshotPrincipal = config.SnapshotPrincipal\n\tengineConfig.SnapshotActor = config.SnapshotActor\n")
+	fmt.Fprintf(source, "\tengine, err := %s.Open(ctx, engineConfig)\n", runtimeAlias)
+	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine, observer: config.Observer, provider: config.Database.Provider()}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventCapabilities() %s.Capabilities { if app == nil { return %s.Capabilities{} }; return app.runtime.EventCapabilities() }\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventOperator() %s.Operator { if app == nil { return nil }; return app.runtime.EventOperator() }\n", eventsAlias)
@@ -418,6 +436,7 @@ type preparedProvider struct {
 	provider          ir.Provider
 	systemFingerprint [32]byte
 	document          preparedDocument
+	migrationManifest []byte
 }
 
 type preparedBundle struct {
@@ -520,7 +539,20 @@ func prepareSchemaBundle(request Request) (preparedBundle, error) {
 		if encodeErr != nil {
 			return preparedBundle{}, fmt.Errorf("registry codegen: encode provider %s bundle: %w", identity, encodeErr)
 		}
-		result.providers = append(result.providers, preparedProvider{provider: identity, systemFingerprint: systemFingerprint, document: preparedDocument{formatVersion: normalized.Version, canonicalVersion: normalized.CanonicalVersion, fingerprint: fingerprint, payload: payload}})
+		migrationBytes := append([]byte(nil), provider.MigrationManifest...)
+		if len(migrationBytes) != 0 {
+			manifest, migrationErr := migration.ParseManifest(migrationBytes)
+			if migrationErr != nil {
+				return preparedBundle{}, fmt.Errorf("registry codegen: decode provider %s migration manifest: %w", identity, migrationErr)
+			}
+			if migrationErr = migration.VerifyEmbeddedManifest(manifest); migrationErr != nil {
+				return preparedBundle{}, fmt.Errorf("registry codegen: verify provider %s migration manifest: %w", identity, migrationErr)
+			}
+			if len(manifest.Entries) == 0 || manifest.Provider.Provider != identity || !reflect.DeepEqual(manifest.Provider, normalized.Provider) || manifest.Entries[len(manifest.Entries)-1].AfterPhysical != migration.Digest(actual.String()) {
+				return preparedBundle{}, fmt.Errorf("registry codegen: provider %s migration manifest does not match its generated schema", identity)
+			}
+		}
+		result.providers = append(result.providers, preparedProvider{provider: identity, systemFingerprint: systemFingerprint, document: preparedDocument{formatVersion: normalized.Version, canonicalVersion: normalized.CanonicalVersion, fingerprint: fingerprint, payload: payload}, migrationManifest: migrationBytes})
 	}
 	if len(seen) != len(declared) {
 		var missing []string

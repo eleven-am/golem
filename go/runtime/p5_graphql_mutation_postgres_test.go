@@ -393,7 +393,7 @@ func p5ReopenPostgresSocialMutation(t *testing.T, fixture socialMutationFixture,
 		t.Fatal(err)
 	}
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[graphMutationPrincipal, graphMutationActor]{
-		DB: fixture.app.database, Provider: golem.PostgreSQL, Bundle: fixture.schema.Bundle,
+		Database: p8RuntimeTestDatabase(fixture.app.database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
 		Bindings: bindings, Descriptors: fixture.app.descriptors, MutationLimits: limits,
 		ResolvePrincipal: fixture.app.resolvePrincipal,
 		AfterCommitError: func(context.Context, golem.AfterCommitFailure) {},

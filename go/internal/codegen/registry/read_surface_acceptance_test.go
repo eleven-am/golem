@@ -12,6 +12,7 @@ import (
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
@@ -20,8 +21,10 @@ import (
 const readSurfaceGenerationDigest = "0000000000000000000000000000000000000000000000000000000000000001"
 
 type readSurfaceArtifacts struct {
-	files    map[string]string
-	registry []byte
+	files          map[string]string
+	registry       []byte
+	sqliteManifest migration.Manifest
+	sqliteFiles    map[string][]byte
 }
 
 func TestGeneratedMutationSurfaceEmitsEveryCallerAndSystemMethod(t *testing.T) {
@@ -124,12 +127,11 @@ func testGeneratedMutationAndTransactionSurfaceFromFreshModule(t *testing.T) {
 	artifacts := buildReadSurfaceArtifacts(t)
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "generated-read-surface.db")
-	fixture := schematest.New(t)
 	database, _, err := sqliteprovider.New().Open(ctx, "file:"+databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqliteprovider.New().ApplyInitial(ctx, database, fixture.SQLite); err != nil {
+	if err := sqliteprovider.New().ApplyMigration(ctx, database, artifacts.sqliteManifest, artifacts.sqliteFiles); err != nil {
 		_ = database.Close()
 		t.Fatal(err)
 	}
@@ -159,20 +161,17 @@ import (
 	"example.test/app/models"
 	"example.test/app/security"
 	"github.com/eleven-am/golem/go/golem"
+	providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
-	"github.com/jmoiron/sqlx"
 )
 
 func TestEveryGeneratedReadOperation(t *testing.T) {
 	ctx := context.Background()
-	database, err := sqlx.Open("sqlite", %q)
+	database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: %q})
 	if err != nil { t.Fatal(err) }
-	database.SetMaxOpenConns(4)
-	database.SetMaxIdleConns(4)
 	t.Cleanup(func() { _ = database.Close() })
 	application, err := generated.Open(ctx, generated.Config[string]{
-		DB: database,
-		Provider: golem.SQLite,
+		Database: database,
 		ReadLimits: golemruntime.ReadLimits{MaxTake: 2},
 		ResolvePrincipal: func(context.Context, string) (security.Actor, error) {
 			return security.Actor{Prefix: "a"}, nil
@@ -313,7 +312,7 @@ func TestEveryGeneratedReadOperation(t *testing.T) {
 			parseID("00000000-0000-0000-0000-000000000024"), "carl", "chris", models.Users.Name.Eq("carl"), models.Users.Name.Eq("chris"), 1)
 	}); err != nil { t.Fatal(err) }
 }
-`, "file:"+databasePath+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate")
+`, "file:"+databasePath)
 	runFreshReadSurfaceModule(t, files, false, nil)
 }
 
@@ -523,6 +522,8 @@ func buildReadSurfaceArtifacts(t *testing.T) readSurfaceArtifacts {
 		providerInput(t, fixture.SQLite),
 		providerInput(t, fixture.PostgreSQL),
 	}
+	sqliteManifest, sqliteFiles, sqliteManifestBytes := reviewedSQLiteReadSurfaceFixture(t, fixture.SQLite, modelFingerprint)
+	providers[0].MigrationManifest = sqliteManifestBytes
 	generatedRegistry, err := Emit(Request{
 		AppPackage:         modelcodegen.PackageSpec{ImportPath: "example.test/app/generated", PackageName: "generated"},
 		ModelPackages:      []modelcodegen.PackageSpec{{ImportPath: "example.test/app/models", PackageName: "models"}},
@@ -568,7 +569,68 @@ func GolemGeneratedBindings() golem.PackageBindings[security.Actor] {
 	for _, file := range generatedModels.Files {
 		files[filepath.Join("models", filepath.Base(file.Path))] = string(file.Source)
 	}
-	return readSurfaceArtifacts{files: files, registry: generatedRegistry.Source}
+	return readSurfaceArtifacts{files: files, registry: generatedRegistry.Source, sqliteManifest: sqliteManifest, sqliteFiles: sqliteFiles}
+}
+
+func reviewedSQLiteReadSurfaceFixture(t *testing.T, after physical.PhysicalSchema, afterModel ir.Fingerprint) (migration.Manifest, map[string][]byte, []byte) {
+	t.Helper()
+	after, err := physical.Normalize(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := physical.Normalize(physical.PhysicalSchema{
+		Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion,
+		Provider: after.Provider, Namespace: after.Namespace,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := migration.Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migration.ValidatePlan(plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	beforeFingerprint, err := physical.PhysicalFingerprint(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFingerprint, err := physical.PhysicalFingerprint(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowlist, err := physical.UnmanagedAllowlistFingerprint(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	risks := make([]migration.OperationRisk, len(plan.Operations))
+	for index, operation := range plan.Operations {
+		risks[index] = migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk}
+	}
+	entry := migration.ManifestEntry{
+		ID: "0001_initial", Operations: plan.Operations, Phases: plan.Phases, Risks: risks,
+		BeforeModel: migration.Checksum([]byte("empty read-surface fixture model")), AfterModel: migration.Digest(afterModel),
+		BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()),
+		BeforeSnapshot: before, AfterSnapshot: after, UnmanagedAllowlistDigest: migration.Digest(allowlist.String()),
+	}
+	script, err := sqliteprovider.New().RenderMigration(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{"sqlite/0001_initial.sql": []byte(script.SQL())}
+	entry.Files = []migration.FileChecksum{{Path: "sqlite/0001_initial.sql", SHA256: migration.Checksum(files["sqlite/0001_initial.sql"])}}
+	entry.ChainHash = migration.ChainHash(entry)
+	manifest := migration.Manifest{
+		FormatVersion: migration.ManifestFormatVersion, CanonicalVersion: migration.ManifestCanonicalVersion,
+		HashAlgorithm: "sha256", GeneratorVersion: "registry-read-surface-fixture-v1", Provider: after.Provider,
+		Entries: []migration.ManifestEntry{entry},
+	}
+	encoded, err := migration.EncodeManifest(manifest, files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return manifest, files, encoded
 }
 
 func providerInput(t *testing.T, schema physical.PhysicalSchema) ProviderInput {
@@ -587,7 +649,7 @@ func providerInput(t *testing.T, schema physical.PhysicalSchema) ProviderInput {
 func runFreshReadSurfaceModule(t *testing.T, files map[string]string, wantFailure bool, diagnostics []string) {
 	t.Helper()
 	root := t.TempDir()
-	module := fmt.Sprintf("module example.test/app\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
+	module := fmt.Sprintf("module example.test/app\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleDir(t))
 	writeRegistryTestFile(t, filepath.Join(root, "go.mod"), module)
 	for path, source := range files {
 		writeRegistryTestFile(t, filepath.Join(root, path), source)

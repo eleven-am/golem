@@ -9,7 +9,9 @@ import (
 	"sync/atomic"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -29,6 +31,8 @@ type executionBinding struct {
 	state        *mutationState
 	stateErr     error
 	mutation     executionMutationConfig
+	observation  *observeexec.Span
+	observer     observe.Observer
 }
 
 type executionMutationConfig struct {
@@ -65,7 +69,42 @@ func (binding *executionBinding) queryerFor(database *sqlx.DB) (sqlx.QueryerCont
 	if !binding.active.Load() {
 		return nil, fmt.Errorf("P4_RUNTIME_EXECUTOR: transaction execution has ended")
 	}
-	return binding.executor, nil
+	return observingQueryer{inner: binding.executor, transaction: binding.observation}, nil
+}
+
+type observingQueryer struct {
+	inner       sqlx.QueryerContext
+	transaction *observeexec.Span
+}
+
+func (queryer observingQueryer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	observeexec.RecordStatement(ctx, queryer.transaction)
+	return queryer.inner.QueryContext(ctx, query, args...)
+}
+
+func (queryer observingQueryer) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	observeexec.RecordStatement(ctx, queryer.transaction)
+	return queryer.inner.QueryxContext(ctx, query, args...)
+}
+
+func (queryer observingQueryer) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
+	observeexec.RecordStatement(ctx, queryer.transaction)
+	return queryer.inner.QueryRowxContext(ctx, query, args...)
+}
+
+func (queryer observingQueryer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	observeexec.RecordStatement(ctx, queryer.transaction)
+	execer, ok := queryer.inner.(sqlx.ExecerContext)
+	if !ok {
+		return nil, fmt.Errorf("P8_OBSERVE_EXECUTOR: query executor cannot execute statements")
+	}
+	return execer.ExecContext(ctx, query, args...)
+}
+
+func recordQueryerStatement(ctx context.Context, queryer sqlx.QueryerContext, additional ...*observeexec.Span) {
+	if _, alreadyObserved := queryer.(observingQueryer); !alreadyObserved {
+		observeexec.RecordStatement(ctx, additional...)
+	}
 }
 
 // transactionFor is the future mutation-kernel seam. Runtime mutation entry
@@ -195,11 +234,23 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, observation := beginObservation(ctx, caller.app, golem.ModelID{}, observe.KindTransaction, observe.OperationCallerTransaction)
+	deferredObserver := observeexec.NewDeferredObserver(caller.app.observer)
+	defer func() {
+		deferredObserver.Flush()
+		if recovered := recover(); recovered != nil {
+			observeexec.Finish(observation, observe.OutcomeFailure, observe.ReasonPanic)
+			panic(recovered)
+		}
+		finishObservation(observation, err)
+	}()
 	transaction, err := caller.app.database.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin caller transaction: %w", err)
 	}
 	binding := transactionExecution(caller.app.database, transaction)
+	binding.observation = observation
+	binding.observer = deferredObserver
 	if err := binding.enableMutation(mutationConfig(caller.app, caller.executor)); err != nil {
 		binding.close()
 		return rollbackTransaction(transaction, err)
@@ -228,11 +279,23 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	ctx, observation := beginObservation(ctx, system.app, golem.ModelID{}, observe.KindTransaction, observe.OperationSystemTransaction)
+	deferredObserver := observeexec.NewDeferredObserver(system.app.observer)
+	defer func() {
+		deferredObserver.Flush()
+		if recovered := recover(); recovered != nil {
+			observeexec.Finish(observation, observe.OutcomeFailure, observe.ReasonPanic)
+			panic(recovered)
+		}
+		finishObservation(observation, err)
+	}()
 	transaction, err := system.app.database.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin system transaction: %w", err)
 	}
 	binding := transactionExecution(system.app.database, transaction)
+	binding.observation = observation
+	binding.observer = deferredObserver
 	if err := binding.enableMutation(mutationConfig(system.app, system.executor)); err != nil {
 		binding.close()
 		return rollbackTransaction(transaction, err)

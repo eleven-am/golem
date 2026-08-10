@@ -261,6 +261,36 @@ func TestManifestRewriteStaleSnapshotAndChainHash(t *testing.T) {
 	}
 }
 
+func TestEmbeddedManifestVerificationDoesNotRequireReviewedFileBytes(t *testing.T) {
+	content := []byte("SELECT 1;")
+	snapshot := schema()
+	fingerprint, err := physical.PhysicalFingerprint(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := ManifestEntry{
+		ID: "001", Files: []FileChecksum{{Path: "001.sql", SHA256: Checksum(content)}},
+		BeforeModel: Checksum([]byte("model")), AfterModel: Checksum([]byte("model")),
+		BeforePhysical: Digest(fingerprint.String()), AfterPhysical: Digest(fingerprint.String()),
+		BeforeSnapshot: snapshot, AfterSnapshot: snapshot, UnmanagedAllowlistDigest: allowlistDigest(snapshot),
+	}
+	entry.ChainHash = ChainHash(entry)
+	manifest := testManifest(entry)
+	if err := VerifyManifest(manifest, map[string][]byte{"001.sql": content}); err != nil {
+		t.Fatal(err)
+	}
+	if err := VerifyEmbeddedManifest(manifest); err != nil {
+		t.Fatalf("embedded manifest rejected: %v", err)
+	}
+	tampered := manifest
+	tampered.Entries = append([]ManifestEntry(nil), manifest.Entries...)
+	tampered.Entries[0].Files = append([]FileChecksum(nil), manifest.Entries[0].Files...)
+	tampered.Entries[0].Files[0].SHA256 = Checksum([]byte("rewritten"))
+	if err := VerifyEmbeddedManifest(tampered); err == nil {
+		t.Fatal("rewritten embedded checksum was accepted")
+	}
+}
+
 func TestManifestRejectsUnsupportedSystemSchemaChange(t *testing.T) {
 	snapshot := schema()
 	snapshot.System = physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: "main"}, Objects: []physical.SystemObject{{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"}}}

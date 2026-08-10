@@ -10,6 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/gorilla/websocket"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -177,9 +180,11 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				continue
 			}
 			opCtx, opCancel := context.WithCancel(state.ctx)
+			opCtx, subscriptionObservation := observeexec.Begin(opCtx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
 			stopOperationLifecycle := context.AfterFunc(ctx, opCancel)
 			stream, subscribeErr := executor.Subscribe(opCtx, principal, prepared.Operation)
 			if subscribeErr != nil {
+				finishGraphQLChild(subscriptionObservation, subscribeErr)
 				stopOperationLifecycle()
 				opCancel()
 				state.operationError(message.ID, PresentError(opCtx, subscribeErr, nil, server.config.ReportInternalError))
@@ -189,10 +194,10 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream}
 			state.mu.Unlock()
 			state.ops.Add(1)
-			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context) {
+			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span) {
 				defer state.ops.Done()
-				state.runOperation(id, requestValue, prepared, stream, opCtx)
-			}(message.ID, requestValue, prepared, stream, opCtx)
+				state.runOperation(id, requestValue, prepared, stream, opCtx, observation)
+			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation)
 		case "complete":
 			state.stopOperation(message.ID)
 		}
@@ -222,22 +227,27 @@ func validWSSubscriptionRequest(prepared preparedRequest, failure *Response) boo
 	return failure == nil && prepared.Operation.Definition != nil && prepared.Operation.Definition.Operation == ast.Subscription
 }
 
-func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context) {
+func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span) {
+	var operationErr error
 	defer func() {
 		if recovered := recover(); recovered != nil {
+			operationErr = errors.New("GraphQL subscription operation panicked")
 			state.server.config.ReportInternalError(ctx, errors.New("GraphQL subscription operation panicked"))
 			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 		}
+		finishGraphQLChild(observation, operationErr)
 	}()
 	defer state.finishOperation(id)
 	for {
 		response, err := stream.Recv(ctx)
 		if err != nil {
+			operationErr = err
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				state.operationError(id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
 				return
 			}
 			if errors.Is(err, io.EOF) {
+				operationErr = nil
 				_ = state.write(wsMessage{ID: id, Type: "complete"})
 			}
 			return
@@ -248,10 +258,12 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		}
 		payload, err := json.Marshal(serialized)
 		if err != nil {
+			operationErr = err
 			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 			return
 		}
 		if err := state.write(wsMessage{ID: id, Type: "next", Payload: payload}); err != nil {
+			operationErr = err
 			return
 		}
 	}
@@ -394,13 +406,15 @@ func cloneRaw(value json.RawMessage) json.RawMessage {
 
 // Shutdown owns WebSocket subscriptions only. It never closes the application
 // event transport or publisher.
-func (server *Server[P]) Shutdown(ctx context.Context) error {
+func (server *Server[P]) Shutdown(ctx context.Context) (resultErr error) {
 	if server == nil {
 		return nil
 	}
 	if ctx == nil {
 		return errors.New("GraphQL shutdown context is required")
 	}
+	_, observation := observeexec.Begin(ctx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindShutdown, observe.OperationShutdownHTTP, observe.PhaseClose)
+	defer func() { finishGraphQLChild(observation, resultErr) }()
 	server.lifecycleMu.Lock()
 	if !server.shuttingDown {
 		server.shuttingDown = true

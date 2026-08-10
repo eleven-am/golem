@@ -1,0 +1,81 @@
+{
+  "Version": 1,
+  "CanonicalVersion": 1,
+  "Provider": {
+    "Provider": "postgresql",
+    "Driver": {
+      "Module": "github.com/jackc/pgx/v5/stdlib",
+      "Adapter": "sqlx"
+    },
+    "MinimumVersion": {
+      "Major": 15,
+      "Minor": 0,
+      "Patch": 0
+    },
+    "Capabilities": [
+      {
+        "ID": "analytics.exact-arithmetic.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.ascii-insensitive-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.binary-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.exact-json.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.relation-correlation.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.advanced_indexes",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.advisory_xact_lock",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.generated_columns",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.jsonb",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "scalar-list.json-array.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      }
+    ]
+  },
+  "Namespace": {
+    "Name": "public"
+  },
+  "Tables": [],
+  "Extensions": [],
+  "System": {
+    "Version": 0,
+    "Namespace": {
+      "Name": ""
+    },
+    "Objects": []
+  },
+  "Unmanaged": null
+}

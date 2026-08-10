@@ -15,6 +15,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
+	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/jmoiron/sqlx"
 )
@@ -119,17 +120,36 @@ func (provider *Provider) verifyReviewedSQL(manifest migration.Manifest, files m
 
 // ReadLedger returns the exact ordered SQLite migration chain.
 func (*Provider) ReadLedger(ctx context.Context, database *sqlx.DB) ([]migration.LedgerEntry, error) {
+	return new(Provider).ReadLedgerForSchema(ctx, database, physical.SystemSchema{Objects: []physical.SystemObject{{Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"}}})
+}
+
+// ReadLedgerForSchema reads the ledger object named by the selected generated
+// physical schema instead of assuming a hard-coded system object identity.
+func (*Provider) ReadLedgerForSchema(ctx context.Context, database *sqlx.DB, system physical.SystemSchema) ([]migration.LedgerEntry, error) {
 	if database == nil {
 		return nil, fmt.Errorf("sqlite ledger: database is nil")
 	}
-	exists, err := sqliteObjectExists(ctx, database, "table", "_golem_migrations")
+	name, err := sqliteLedgerName(system)
+	if err != nil {
+		return nil, err
+	}
+	exists, err := sqliteObjectExists(ctx, database, "table", string(name))
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return []migration.LedgerEntry{}, nil
 	}
-	return readLedger(ctx, database)
+	return readLedgerNamed(ctx, database, name)
+}
+
+func sqliteLedgerName(system physical.SystemSchema) (physical.PhysicalName, error) {
+	for _, object := range system.Objects {
+		if object.Kind == physical.SystemMigrationLedger && object.Version == 1 {
+			return object.Name, nil
+		}
+	}
+	return "", fmt.Errorf("sqlite migration ledger v1 is absent from the system schema")
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
@@ -587,8 +607,13 @@ type ledgerPhaseJSON struct {
 }
 
 func readLedger(ctx context.Context, database catalogQuerier) ([]migration.LedgerEntry, error) {
+	return readLedgerNamed(ctx, database, "_golem_migrations")
+}
+
+func readLedgerNamed(ctx context.Context, database catalogQuerier, name physical.PhysicalName) ([]migration.LedgerEntry, error) {
 	var rows []ledgerRow
-	if err := database.SelectContext(ctx, &rows, "SELECT migration_id,parent_chain_hash,chain_hash,file_checksums,before_physical_fingerprint,after_physical_fingerprint,phases,applied_at FROM _golem_migrations"); err != nil {
+	statement := "SELECT migration_id,parent_chain_hash,chain_hash,file_checksums,before_physical_fingerprint,after_physical_fingerprint,phases,applied_at FROM " + quote(name) + " ORDER BY migration_id"
+	if err := database.SelectContext(ctx, &rows, statement); err != nil {
 		return nil, fmt.Errorf("sqlite ledger read: %w", err)
 	}
 	byParent := map[migration.Digest]ledgerRow{}
@@ -753,6 +778,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		}
 	}()
 
+	migrationfailpoint.Reach(ctx, "before_first_phase")
 	transaction, err := connection.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("sqlite migration BEGIN IMMEDIATE: %w", err)
@@ -819,15 +845,18 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("sqlite migration final system fingerprint mismatch")
 	}
 
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writeTerminalLedger(ctx, transaction, manifest, len(ledger), entry); err != nil {
 		return err
 	}
 	if _, err := transaction.ExecContext(ctx, "DELETE FROM _golem_migration_lock WHERE lock_id = 1"); err != nil {
 		return fmt.Errorf("sqlite migration release lock: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_commit")
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("sqlite migration commit: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "after_phase_commit")
 	return nil
 }
 
@@ -864,6 +893,7 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 			resultErr = fmt.Errorf("sqlite initial migration restore foreign_keys: %w", restoreErr)
 		}
 	}()
+	migrationfailpoint.Reach(ctx, "before_first_phase")
 	transaction, err := connection.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration BEGIN IMMEDIATE: %w", err)
@@ -918,15 +948,18 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if gotSystem != wantSystem {
 		return fmt.Errorf("sqlite initial migration final system fingerprint mismatch")
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writeTerminalLedger(ctx, transaction, manifest, 0, entry); err != nil {
 		return err
 	}
 	if _, err := transaction.ExecContext(ctx, "DELETE FROM _golem_migration_lock WHERE lock_id = 1"); err != nil {
 		return fmt.Errorf("sqlite initial migration release lock: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_commit")
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("sqlite initial migration commit: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "after_phase_commit")
 	return nil
 }
 

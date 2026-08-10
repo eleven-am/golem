@@ -140,12 +140,35 @@ func GraphQLPlural(string) GraphQLOption
 func GraphQLRoots(GraphQLRootNames) GraphQLOption
 func GraphQLPageSizes(defaultSize, maximumSize int) GraphQLOption
 func GraphQLHidden() GraphQLOption
+func GraphQLHookOwned[M any](...Column[M]) GraphQLOption
 ```
 
 `GraphQLHidden` makes the model absent from GraphQL but does not remove it from
 ModelIR, migrations, generated Go clients, policies, relations, or P4 facts.
 Relations from exposed models to a hidden model must themselves be hidden or
 generation fails with the exact relation path.
+
+`GraphQLHookOwned` is a create-input ownership boundary for values supplied by a
+trusted model hook rather than by a GraphQL client. Each named scalar is omitted
+from root create, upsert-create, and every recursive nested-create input. The
+compiler requires the field to be writable by the programmatic create API,
+non-identity, and backed by a recognized `BeforeCreate` hook. The generated
+`CreateFieldCapability` remains available to typed callers and to
+`golem.SetCreate` inside that hook.
+
+A hook-owned scalar need not be a foreign key; generated slugs and tenant
+metadata are valid examples. If it participates in a canonical belongs-to key,
+the complete composite key must be hook-owned, non-null, and unambiguous, and
+the corresponding belongs-to relation is omitted from create inputs as well.
+Partial, nullable, or multiply-associated keys fail compilation. Output,
+filter, order, and update exposure remain controlled by the ordinary field
+modes; use `immutable` independently when the field or relation must not be
+updated. This declaration changes ContractIR, the contract fingerprint, and the
+GraphQL ABI only. It never changes ModelIR or creates a database migration. A
+model that enables create or upsert must retain at least one client-owned create
+input position; otherwise generation refuses it with
+`P8_GRAPHQL_HOOK_OWNED_EMPTY_CREATE` instead of silently removing the authored
+root.
 
 Model and field `graphql=` tags remain exact overrides. Without an override,
 models retain exported Go type spelling and fields use the frozen lower-camel

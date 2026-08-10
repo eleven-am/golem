@@ -14,6 +14,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
+	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/jmoiron/sqlx"
 )
@@ -41,17 +42,24 @@ func (provider *Provider) ApplyMigration(ctx context.Context, database *sqlx.DB,
 
 // ReadLedger returns the exact ordered PostgreSQL migration chain.
 func (*Provider) ReadLedger(ctx context.Context, database *sqlx.DB) ([]migration.LedgerEntry, error) {
+	return new(Provider).ReadLedgerForSchema(ctx, database, systemSchema())
+}
+
+// ReadLedgerForSchema reads the ledger identified by the selected generated
+// physical schema, including its exact namespace. Runtime startup must use this
+// path rather than assuming the provider's default namespace.
+func (*Provider) ReadLedgerForSchema(ctx context.Context, database *sqlx.DB, system physical.SystemSchema) ([]migration.LedgerEntry, error) {
 	if database == nil {
 		return nil, fmt.Errorf("postgresql ledger: database is nil")
 	}
-	exists, err := postgresqlLedgerExists(ctx, database, systemSchema())
+	exists, err := postgresqlLedgerExists(ctx, database, system)
 	if err != nil {
 		return nil, err
 	}
 	if !exists {
 		return []migration.LedgerEntry{}, nil
 	}
-	return readPostgreSQLLedger(ctx, database, systemSchema())
+	return readPostgreSQLLedger(ctx, database, system)
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
@@ -517,7 +525,7 @@ func readPostgreSQLLedger(ctx context.Context, query catalogQueryer, system phys
 	if err != nil {
 		return nil, err
 	}
-	statement := fmt.Sprintf("SELECT migration_id,parent_chain_hash,chain_hash,file_checksums,before_physical_fingerprint,after_physical_fingerprint,phases,applied_at FROM %s", qualified(system.Namespace.Name, ledgerName))
+	statement := fmt.Sprintf("SELECT migration_id,parent_chain_hash,chain_hash,file_checksums,before_physical_fingerprint,after_physical_fingerprint,phases,applied_at FROM %s ORDER BY migration_id", qualified(system.Namespace.Name, ledgerName))
 	rows, err := query.QueryxContext(ctx, statement)
 	if err != nil {
 		return nil, fmt.Errorf("postgresql ledger read: %w", err)
@@ -634,6 +642,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return err
 	}
+	migrationfailpoint.Reach(ctx, "before_first_phase")
 	transaction, err := database.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return fmt.Errorf("postgresql migration begin: %w", err)
@@ -691,12 +700,15 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := compareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("postgresql migration final fingerprint: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writePostgreSQLLedger(ctx, transaction, manifest, len(ledger), entry); err != nil {
 		return err
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_commit")
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("postgresql migration commit: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "after_phase_commit")
 	return nil
 }
 
@@ -776,12 +788,15 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err := compareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("postgresql initial migration final fingerprint: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writePostgreSQLLedger(ctx, transaction, manifest, 0, entry); err != nil {
 		return err
 	}
+	migrationfailpoint.Reach(ctx, "inside_transaction_before_commit")
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("postgresql initial migration commit: %w", err)
 	}
+	migrationfailpoint.Reach(ctx, "after_phase_commit")
 	return nil
 }
 

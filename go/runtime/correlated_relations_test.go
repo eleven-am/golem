@@ -63,7 +63,7 @@ func TestMutationMASK_ONE_STRATEGYIndexedCorrelatedSQLiteAgreesWithBatchAndCover
 	})
 	bindingPackage := golem.GeneratedStampedPackageBindings(fixture.Bundle.GenerationDigest(), []golem.PolicyBinding[testActor]{allowUser, limitedPost}, nil)
 	bindings, _ := golem.GeneratedApplicationBindings(fixture.Bundle.GenerationDigest(), bindingPackage)
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

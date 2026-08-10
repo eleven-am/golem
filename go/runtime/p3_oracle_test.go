@@ -94,7 +94,7 @@ func newOracleHarness(t *testing.T) oracleHarness {
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {

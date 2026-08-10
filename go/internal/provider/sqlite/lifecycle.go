@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 
@@ -22,9 +23,17 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 	if err != nil {
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
 	}
+	return provider.verifyOpenedDatabase(ctx, database)
+}
+
+// verifyOpenedDatabase owns every resource after sqlx has allocated the pool.
+// Keeping allocation cleanup in this separately testable step lets provider
+// evidence observe the real failed-probe path without adding a production or
+// public injection seam.
+func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
 	database.SetMaxOpenConns(4)
 	database.SetMaxIdleConns(4)
-	report, err := provider.probe(ctx, database)
+	report, err := provider.VerifyPool(ctx, database, 4)
 	if err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
@@ -33,24 +42,82 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 }
 
 func configureDataSourceName(dataSourceName string) (string, error) {
-	if dataSourceName == "" {
+	if strings.TrimSpace(dataSourceName) == "" {
 		return "", fmt.Errorf("sqlite open: data source name is empty")
 	}
-	lower := strings.ToLower(dataSourceName)
-	if (dataSourceName == ":memory:" || strings.Contains(lower, "mode=memory")) && !strings.Contains(lower, "cache=shared") {
+	if strings.Contains(dataSourceName, "#") {
+		return "", fmt.Errorf("sqlite open: data source name fragments are unsupported")
+	}
+	base, rawQuery, hasQuery := strings.Cut(dataSourceName, "?")
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", fmt.Errorf("sqlite open: data source name query is invalid")
+	}
+
+	normalized := make(map[string][]string, len(query))
+	for key, values := range query {
+		canonicalKey := strings.ToLower(strings.TrimSpace(key))
+		normalized[canonicalKey] = append(normalized[canonicalKey], values...)
+		if canonicalKey == "_txlock" {
+			return "", fmt.Errorf("sqlite open: transaction locking mode is provider-owned")
+		}
+		if canonicalKey != "_pragma" {
+			continue
+		}
+		for _, value := range values {
+			if providerOwnedPragma(value) {
+				return "", fmt.Errorf("sqlite open: foreign_keys and busy_timeout pragmas are provider-owned")
+			}
+		}
+	}
+
+	if dataSourceName == ":memory:" || strings.EqualFold(strings.TrimPrefix(base, "file:"), ":memory:") {
 		return "", fmt.Errorf("sqlite open: private in-memory databases are incompatible with the verified multi-connection pool; use a named file: DSN with mode=memory&cache=shared")
 	}
-	if strings.Contains(lower, "foreign_keys") || strings.Contains(lower, "busy_timeout") {
-		return "", fmt.Errorf("sqlite open: foreign_keys and busy_timeout pragmas are provider-owned")
+	modes, modePresent := normalizedQueryValue(normalized, "mode")
+	caches, cachePresent := normalizedQueryValue(normalized, "cache")
+	if modePresent && len(modes) != 1 {
+		return "", fmt.Errorf("sqlite open: duplicate or conflicting mode parameters are unsupported")
+	}
+	if cachePresent && len(caches) != 1 {
+		return "", fmt.Errorf("sqlite open: duplicate or conflicting cache parameters are unsupported")
+	}
+	if modePresent && modes[0] == "memory" {
+		name := strings.TrimPrefix(base, "file:")
+		if !strings.HasPrefix(base, "file:") || strings.Trim(name, "/") == "" || strings.EqualFold(name, ":memory:") || !cachePresent || caches[0] != "shared" {
+			return "", fmt.Errorf("sqlite open: private in-memory databases are incompatible with the verified multi-connection pool; use a named file: DSN with mode=memory&cache=shared")
+		}
 	}
 	separator := "?"
-	if strings.Contains(dataSourceName, "?") {
+	if hasQuery && rawQuery != "" {
 		separator = "&"
+	} else if hasQuery {
+		separator = ""
 	}
 	return dataSourceName + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate", nil
 }
 
-func (*Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport, error) {
+func normalizedQueryValue(query map[string][]string, key string) ([]string, bool) {
+	values, ok := query[key]
+	if !ok {
+		return nil, false
+	}
+	normalized := make([]string, len(values))
+	for index, value := range values {
+		normalized[index] = strings.ToLower(strings.TrimSpace(value))
+	}
+	return normalized, true
+}
+
+func providerOwnedPragma(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	if boundary := strings.IndexAny(value, "(= \t\r\n"); boundary >= 0 {
+		value = strings.TrimSpace(value[:boundary])
+	}
+	return value == "foreign_keys" || value == "busy_timeout"
+}
+
+func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport, error) {
 	if database == nil {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe: database is nil")
 	}
@@ -89,6 +156,62 @@ func (*Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport
 	}, nil
 }
 
+// VerifyPool proves every sealed pool slot while holding all slots at once.
+// A pre-existing borrower or acquisition wait invalidates startup because the
+// complete connection state could not be observed atomically.
+func (*Provider) VerifyPool(ctx context.Context, database *sqlx.DB, width int) (CapabilityReport, error) {
+	if database == nil || width < 1 || database.Stats().InUse != 0 {
+		return CapabilityReport{}, fmt.Errorf("sqlite pool verification requires an idle bounded database")
+	}
+	waitCount := database.Stats().WaitCount
+	connections := make([]*sqlx.Conn, 0, width)
+	defer func() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	}()
+	for index := 0; index < width; index++ {
+		connection, err := database.Connx(ctx)
+		if err != nil {
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification connection %d: %w", index, err)
+		}
+		connections = append(connections, connection)
+		if database.Stats().WaitCount != waitCount {
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed concurrent pool use")
+		}
+	}
+	if database.Stats().InUse != width {
+		return CapabilityReport{}, fmt.Errorf("sqlite pool verification did not exclusively hold every slot")
+	}
+	var combined CapabilityReport
+	for index, connection := range connections {
+		report, err := probeConnection(ctx, connection, strconv.Itoa(index+1))
+		if err != nil {
+			return CapabilityReport{}, err
+		}
+		if index == 0 {
+			combined = report
+			continue
+		}
+		if combined.Version != report.Version {
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed different server versions")
+		}
+		combined.ForeignKeys = combined.ForeignKeys && report.ForeignKeys
+		combined.JSON1 = combined.JSON1 && report.JSON1
+		combined.GeneratedColumns = combined.GeneratedColumns && report.GeneratedColumns
+		combined.PolicyBinaryText = combined.PolicyBinaryText && report.PolicyBinaryText
+		combined.PolicyASCIIText = combined.PolicyASCIIText && report.PolicyASCIIText
+		combined.PolicyExactJSON = combined.PolicyExactJSON && report.PolicyExactJSON
+		combined.PolicyScalarList = combined.PolicyScalarList && report.PolicyScalarList
+		combined.PolicyRelation = combined.PolicyRelation && report.PolicyRelation
+		combined.AnalyticsExact = combined.AnalyticsExact && report.AnalyticsExact
+	}
+	if database.Stats().WaitCount != waitCount {
+		return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed concurrent pool use")
+	}
+	return combined, nil
+}
+
 func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (CapabilityReport, error) {
 	var versionText string
 	if err := connection.GetContext(ctx, &versionText, "SELECT sqlite_version()"); err != nil {
@@ -107,6 +230,13 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 	}
 	if foreignKeys != 1 {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe %s pooled connection: PRAGMA foreign_keys=%d, want 1", label, foreignKeys)
+	}
+	var busyTimeout int
+	if err := connection.GetContext(ctx, &busyTimeout, "PRAGMA busy_timeout"); err != nil {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection busy_timeout: %w", label, err)
+	}
+	if busyTimeout != 5000 {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s pooled connection: PRAGMA busy_timeout=%d, want 5000", label, busyTimeout)
 	}
 	var jsonValid int
 	if err := connection.GetContext(ctx, &jsonValid, "SELECT json_valid('{\"golem\":1}')"); err != nil || jsonValid != 1 {
@@ -149,6 +279,28 @@ func (provider *Provider) PolicyCapabilityProof(ctx context.Context, database *s
 		return policysql.CapabilityProof{}, fmt.Errorf("sqlite policy capability proof: schema fingerprint is required")
 	}
 	report, err := provider.probe(ctx, database)
+	if err != nil {
+		return policysql.CapabilityProof{}, err
+	}
+	if !report.PolicyBinaryText || !report.PolicyASCIIText || !report.PolicyExactJSON || !report.PolicyScalarList || !report.PolicyRelation {
+		return policysql.CapabilityProof{}, fmt.Errorf("sqlite policy capability proof: incomplete runtime probe")
+	}
+	return policysql.NewCapabilityProof(policyir.ProviderSQLite, schemaFingerprint,
+		policyir.CapabilityBinaryText,
+		policyir.CapabilityASCIIInsensitiveText,
+		policyir.CapabilityExactJSON,
+		policyir.CapabilityScalarListJSON,
+		policyir.CapabilityRelationCorrelation,
+	)
+}
+
+// VerifiedPoolPolicyCapabilityProof binds a full sealed-pool verification to
+// the logical schema fingerprint consumed by the runtime policy compiler.
+func (provider *Provider) VerifiedPoolPolicyCapabilityProof(ctx context.Context, database *sqlx.DB, schemaFingerprint [32]byte, width int) (policysql.CapabilityProof, error) {
+	if schemaFingerprint == ([32]byte{}) {
+		return policysql.CapabilityProof{}, fmt.Errorf("sqlite policy capability proof: schema fingerprint is required")
+	}
+	report, err := provider.VerifyPool(ctx, database, width)
 	if err != nil {
 		return policysql.CapabilityProof{}, err
 	}

@@ -817,10 +817,14 @@ func (record ScopedAuditRecord) RowCount() int64                { return record.
 func (record ScopedAuditRecord) Outcome() ScopedOutcome         { return record.outcome }
 
 func RuntimeScopedAuditRecord(query FrozenScopedQuery, principal string, execution uint64, system bool, provider Provider, sqlText string, duration time.Duration, rows int64, outcome ScopedOutcome) ScopedAuditRecord {
-	models := []ModelID{query.root}
+	models := []ModelID{}
+	modelSeen := map[ModelID]bool{}
+	if query.root != (ModelID{}) {
+		models = append(models, query.root)
+		modelSeen[query.root] = true
+	}
 	relations := make([]RelationID, 0, len(query.joins))
 	joins := make([]ScopedJoinKind, 0, len(query.joins))
-	modelSeen := map[ModelID]bool{query.root: true}
 	fieldSeen := map[FieldID]bool{}
 	expressionSeen := map[ScopedExpressionKind]bool{}
 	for _, join := range query.joins {

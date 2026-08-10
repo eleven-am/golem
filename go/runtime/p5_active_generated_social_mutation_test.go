@@ -97,9 +97,9 @@ func newP5ActiveHarness(t *testing.T, profile p5ExtensionProviderProfile, limits
 	if err := apply(ctx, database, schema); err != nil {
 		t.Fatal(err)
 	}
+	databaseHandle := p8AdoptTracedProviderHandle(database, profile)
 
-	app, err := p5socialactive.Open(ctx, p5socialactive.Config[p5socialactive.Principal]{
-		DB: database, Provider: profile.provider, MutationLimits: limits,
+	app, err := p5socialactive.Open(ctx, p5socialactive.Config[p5socialactive.Principal]{Database: databaseHandle, MutationLimits: limits,
 		AfterCommitError: func(_ context.Context, failure golem.AfterCommitFailure) {
 			t.Errorf("unexpected after-commit hook failure: %v", failure)
 		},

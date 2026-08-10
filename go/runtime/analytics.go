@@ -12,6 +12,7 @@ import (
 	analytics "github.com/eleven-am/golem/go/internal/analytics"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func CallerAggregate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], request golem.AggregateRequest[M]) (golem.AggregateResult[M], error) {
@@ -144,10 +145,17 @@ func executeAnalytics[P, A any](ctx context.Context, app *App[P, A], executor *e
 	return executeAnalyticsWithMode(ctx, app, executor, policies, system, descriptor, request, true)
 }
 
-func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies analytics.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenAnalyticsRequest, enforceProgrammaticGroupLimit bool) ([][]golem.RuntimeAnalyticsCell, error) {
+func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies analytics.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenAnalyticsRequest, enforceProgrammaticGroupLimit bool) (result [][]golem.RuntimeAnalyticsCell, resultErr error) {
 	if ctx == nil || app == nil || executor == nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics execution unavailable", nil)
 	}
+	ctx, observation := beginExecutionObservation(ctx, app, executor, descriptor, observe.KindAnalytics, analyticsObservationOperation(request.Operation()))
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(int64(len(result)))
+		}
+		finishObservation(observation, resultErr)
+	}()
 	if descriptor != request.ModelID() {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "request model does not match generated client", nil)
 	}
@@ -203,7 +211,6 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 	}
 	defer rows.Close()
 	columns := statement.Columns()
-	var result [][]golem.RuntimeAnalyticsCell
 	var contributionRows, intermediateGroups int64
 	for rows.Next() {
 		raw := make([]any, statement.ScanColumnCount())

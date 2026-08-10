@@ -1,5 +1,11 @@
 # Golem for Go specifications
 
+For application authors, begin with the executable
+[`QUICKSTART.md`](./QUICKSTART.md), then use
+[`PRODUCTION.md`](./PRODUCTION.md) for authorization, hooks, custom operations,
+analytics, migrations, events, deployment, security, recovery, and upgrades.
+Both are honestly marked as unreleased while P8 evidence remains pending.
+
 Start with [`BIBLE.md`](./BIBLE.md). It is the controlling merged product,
 security, provider, authoring, and runtime specification.
 
@@ -43,13 +49,20 @@ exact generated Go/GraphQL surface, and completed evidence are
 
 P7 events, durable outbox publication, generated caller/GraphQL subscriptions,
 fresh per-event authorization, bounded fan-out, and the optional CDC boundary
-are fully planned and implementation is in progress. P7-A has established the
-closed subscription/event contract, event-schema-bound fact V2 foundation, and
-additive delivery-state system schema; P7-B, P7-C, and P7-D are active. The
-controlling architecture is
+are complete. The controlling architecture is
 [`p7/P7-PLAN.md`](./p7/P7-PLAN.md), the frozen source/transport/GraphQL contract
-is [`p7/PUBLIC-EVENT-ABI.md`](./p7/PUBLIC-EVENT-ABI.md), and every mandatory gate
-is honestly `PENDING` in [`p7/P7-EVIDENCE.md`](./p7/P7-EVIDENCE.md).
+is [`p7/PUBLIC-EVENT-ABI.md`](./p7/PUBLIC-EVENT-ABI.md), and the completed
+provider, crash, concurrency, race, fuzz, and mutation ledger is
+[`p7/P7-EVIDENCE.md`](./p7/P7-EVIDENCE.md).
+
+P8 is the final accepted roadmap phase. It hardens and releases the existing
+P1–P7 engine; it does not add a second application runtime or make federation a
+core requirement. Its controlling plan is
+[`p8/P8-PLAN.md`](./p8/P8-PLAN.md), the public provider, observability,
+diagnostic, compatibility, and release surface is
+[`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md), and all mandatory
+implementation and hosted-release gates are currently `PENDING` in
+[`p8/P8-EVIDENCE.md`](./p8/P8-EVIDENCE.md).
 
 The numbered documents are detailed supporting specifications and research:
 

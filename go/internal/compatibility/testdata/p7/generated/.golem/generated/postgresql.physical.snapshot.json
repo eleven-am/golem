@@ -1,0 +1,1675 @@
+{"_golemGenerated":"golem:p1:artifact:v1",
+  "kind": "physical_snapshot",
+  "formatVersion": 1,
+  "modelFingerprint": "f44ca8bc2cf3332b07cb3cacea4bd57e2915185fe731d31a2becc7027e7877a4",
+  "contractFingerprint": "2a34c255fcd3bf0453923d2a5aa4b254f4b6f7ee2dc3107bfabbf7ce31173599",
+  "provider": "postgresql",
+  "physicalFingerprint": "dfd3428de31c1634cff169263314e32f64f14d244caf497415ff0726af91fbd5",
+  "systemFingerprint": "f79c9b02093303ec68b920a182618939090abc76e596b67697ed1549f20c18b0",
+  "generationDigest": "4a6c4911b33a816a53ac8260d01829c72795454fbb32f0bab1f41272d49a4ccd",
+  "generatorVersion": "p1-v1",
+  "templateAbiVersion": "p2-go-abi-v4",
+  "payload": {
+    "Version": 1,
+    "CanonicalVersion": 1,
+    "Provider": {
+      "Provider": "postgresql",
+      "Driver": {
+        "Module": "github.com/jackc/pgx/v5/stdlib",
+        "Adapter": "sqlx"
+      },
+      "MinimumVersion": {
+        "Major": 15,
+        "Minor": 0,
+        "Patch": 0
+      },
+      "Capabilities": [
+        {
+          "ID": "analytics.exact-arithmetic.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.ascii-insensitive-text.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.binary-text.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.exact-json.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "policy.relation-correlation.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "postgresql.advanced_indexes",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "postgresql.advisory_xact_lock",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        },
+        {
+          "ID": "postgresql.generated_columns",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "postgresql.jsonb",
+          "Version": 1,
+          "Verification": "version_floor"
+        },
+        {
+          "ID": "scalar-list.json-array.v1",
+          "Version": 1,
+          "Verification": "runtime_probe"
+        }
+      ]
+    },
+    "Namespace": {
+      "Name": "public"
+    },
+    "Tables": [
+      {
+        "ID": "44fd15392bc4b640e2c16052a2caf18a",
+        "Name": "comments",
+        "Columns": [
+          {
+            "ID": "cbc828050c99e8f037e56ef6de44086e",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "bbaa1cb86de457c312bda656f6f837ac",
+            "Name": "post_id",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "c386e5bf84839c35ad1c98869cf2d69d",
+            "Name": "author_id",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "daa708d4fce359e5e53acdf0d1c0e9bc",
+            "Name": "parent_id",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": true,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f048b8eb17f2eef9c015cd7d1ebb550f",
+            "Name": "body",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f0b1faa3c502348d25418a1bef10772d",
+            "Name": "created_at",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "fbddaef54cadb9b63c9d1ea21bd224ad",
+          "Name": "pk_comments",
+          "Columns": [
+            "cbc828050c99e8f037e56ef6de44086e"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [
+          {
+            "ID": "5a2028d412e4a9f53ee0f0903fd3cccc",
+            "Name": "fk_comments_parent_id",
+            "Columns": [
+              "daa708d4fce359e5e53acdf0d1c0e9bc"
+            ],
+            "ReferencedTable": "44fd15392bc4b640e2c16052a2caf18a",
+            "ReferencedColumns": [
+              "cbc828050c99e8f037e56ef6de44086e"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "84d22d50fc17f34b9a1b6a2ae4b39ff7",
+            "Name": "fk_comments_post_id",
+            "Columns": [
+              "bbaa1cb86de457c312bda656f6f837ac"
+            ],
+            "ReferencedTable": "67550d0e58d0a77b353d2a57ee7f4e87",
+            "ReferencedColumns": [
+              "fa48310581408040d92d4f7dbab2fcd2"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "d2fad46dfb45e71b831dc26f11a5c84d",
+            "Name": "fk_comments_author_id",
+            "Columns": [
+              "c386e5bf84839c35ad1c98869cf2d69d"
+            ],
+            "ReferencedTable": "601cc87086a1e70a2a30d60cc9de99aa",
+            "ReferencedColumns": [
+              "afe1a0e054eb3506d48cd135e7d3479c"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [],
+        "Indexes": [
+          {
+            "ID": "8698415d13c5f7abea3ab9dc3e495576",
+            "Name": "idx_comments_post_parent",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "bbaa1cb86de457c312bda656f6f837ac",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "daa708d4fce359e5e53acdf0d1c0e9bc",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "14ae730da58ac4ef91fbb8a15230ec4f",
+        "Name": "friendships",
+        "Columns": [
+          {
+            "ID": "126579252ac37a6a8bb468014eabcd6f",
+            "Name": "user_id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b30eac7f64a4bccb2bca4fffbfc7a74d",
+            "Name": "friend_id",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "708e7ec66e6b716dc03e14c527f6c0bc",
+            "Name": "created_at",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "972bce576e322c5a5e44feebc392226e",
+          "Name": "pk_friendships",
+          "Columns": [
+            "126579252ac37a6a8bb468014eabcd6f",
+            "b30eac7f64a4bccb2bca4fffbfc7a74d"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [
+          {
+            "ID": "04105cb58d2177ede557e61e48512eb6",
+            "Name": "fk_friendships_user_id",
+            "Columns": [
+              "126579252ac37a6a8bb468014eabcd6f"
+            ],
+            "ReferencedTable": "601cc87086a1e70a2a30d60cc9de99aa",
+            "ReferencedColumns": [
+              "afe1a0e054eb3506d48cd135e7d3479c"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "29509e419ee3978e4b78607e9c530583",
+            "Name": "fk_friendships_friend_id",
+            "Columns": [
+              "b30eac7f64a4bccb2bca4fffbfc7a74d"
+            ],
+            "ReferencedTable": "601cc87086a1e70a2a30d60cc9de99aa",
+            "ReferencedColumns": [
+              "afe1a0e054eb3506d48cd135e7d3479c"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [],
+        "Indexes": [
+          {
+            "ID": "64aa74cc62295ec02f4e1835185cbcd7",
+            "Name": "idx_friendships_friend_user",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "b30eac7f64a4bccb2bca4fffbfc7a74d",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "126579252ac37a6a8bb468014eabcd6f",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "b817635ad4f5fbb2bc4da23471a4b3f0",
+        "Name": "post_tags",
+        "Columns": [
+          {
+            "ID": "0fcb9e7deb060f7fdbcfdc9f04790185",
+            "Name": "post_id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "8430259090f63ce08c9fd7cd805a4323",
+            "Name": "tag_name",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "0f19d367e3e3ca170f87fb421ccb2d89",
+          "Name": "pk_post_tags",
+          "Columns": [
+            "0fcb9e7deb060f7fdbcfdc9f04790185",
+            "8430259090f63ce08c9fd7cd805a4323"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [
+          {
+            "ID": "756b44d907c74e90e69cd5a812582af1",
+            "Name": "fk_post_tags_post_id",
+            "Columns": [
+              "0fcb9e7deb060f7fdbcfdc9f04790185"
+            ],
+            "ReferencedTable": "67550d0e58d0a77b353d2a57ee7f4e87",
+            "ReferencedColumns": [
+              "fa48310581408040d92d4f7dbab2fcd2"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "84c4285be39ee52dcf9ac4aa7dd3330e",
+            "Name": "fk_post_tags_tag_name",
+            "Columns": [
+              "8430259090f63ce08c9fd7cd805a4323"
+            ],
+            "ReferencedTable": "1c6386827cde453e30f565cd70257847",
+            "ReferencedColumns": [
+              "2c708d889f1b00ea4e2105b11a4265ea"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "noAction",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [
+          {
+            "ID": "fa82c8c112caef74b94f83892c4aa52c",
+            "Name": "ck_max_length_fa82c8c112ca",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "8430259090f63ce08c9fd7cd805a4323",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "64"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "67550d0e58d0a77b353d2a57ee7f4e87",
+        "Name": "posts",
+        "Columns": [
+          {
+            "ID": "fa48310581408040d92d4f7dbab2fcd2",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "dc554723235456b0aa7fa8cf60872977",
+            "Name": "author_id",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "ace55406816c348723f70914b59869e9",
+            "Name": "title",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "f27cf1058150e280247e369200c1db9e",
+            "Name": "body",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "a577f002121b9e3eb8c482f920467e7e",
+            "Name": "search",
+            "Ordinal": 4,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": {
+              "Kind": "stored",
+              "Expression": {
+                "Kind": "function",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": {
+                  "Identity": "golem.schema.function.lower.v1",
+                  "Kind": "function",
+                  "Version": 1,
+                  "Provider": "portable"
+                },
+                "Column": null,
+                "Literal": null,
+                "Operands": [
+                  {
+                    "Kind": "column",
+                    "Type": {
+                      "Kind": "postgresql.text",
+                      "Precision": 0,
+                      "Scale": 0,
+                      "Length": 0,
+                      "Symbol": null
+                    },
+                    "Nullable": false,
+                    "Symbol": null,
+                    "Column": "ace55406816c348723f70914b59869e9",
+                    "Literal": null,
+                    "Operands": []
+                  }
+                ]
+              }
+            },
+            "Collation": null,
+            "RequiredCapabilities": [
+              {
+                "Capability": "postgresql.generated_columns",
+                "Owner": {
+                  "Kind": "field",
+                  "ModelID": "67550d0e58d0a77b353d2a57ee7f4e87",
+                  "FieldID": "a577f002121b9e3eb8c482f920467e7e",
+                  "ObjectID": ""
+                }
+              }
+            ]
+          },
+          {
+            "ID": "b77fc1344f1490ecbc184f6d51984000",
+            "Name": "created_at",
+            "Ordinal": 5,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "b585002e0974af50a75038c492ef51d1",
+          "Name": "pk_posts",
+          "Columns": [
+            "fa48310581408040d92d4f7dbab2fcd2"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "65671d7ca3f5fedf09ffd73669a91861",
+            "Name": "uq_posts_author_title",
+            "Columns": [
+              "dc554723235456b0aa7fa8cf60872977",
+              "ace55406816c348723f70914b59869e9"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [
+          {
+            "ID": "2fc281bf1b121fd85aa25eb54f7e8406",
+            "Name": "fk_posts_author_id",
+            "Columns": [
+              "dc554723235456b0aa7fa8cf60872977"
+            ],
+            "ReferencedTable": "601cc87086a1e70a2a30d60cc9de99aa",
+            "ReferencedColumns": [
+              "afe1a0e054eb3506d48cd135e7d3479c"
+            ],
+            "OnUpdate": "noAction",
+            "OnDelete": "cascade",
+            "Deferrable": "notDeferrable",
+            "RequiredCapabilities": null
+          }
+        ],
+        "Checks": [
+          {
+            "ID": "aba60b903f0fd04a68752925438169ea",
+            "Name": "ck_max_length_aba60b903f0f",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "ace55406816c348723f70914b59869e9",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "160"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b23a1af9185d310cf553ab817e667e42",
+            "Name": "ck_posts_title",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.is-not-null.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "ace55406816c348723f70914b59869e9",
+                  "Literal": null,
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "bb2c56eec7ee1cabdbde46abe6d1ef69",
+            "Name": "ck_max_length_bb2c56eec7ee",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "a577f002121b9e3eb8c482f920467e7e",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "160"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [
+          {
+            "ID": "414e63901e0ecbd5411f0439fdd4e2a1",
+            "Name": "idx_posts_lower_title",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": null,
+                "Expression": {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.lower.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "ace55406816c348723f70914b59869e9",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                "Direction": "desc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.is-not-null.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "postgresql.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "ace55406816c348723f70914b59869e9",
+                  "Literal": null,
+                  "Operands": []
+                }
+              ]
+            },
+            "CreationMode": "transactional",
+            "RequiredCapabilities": [
+              {
+                "Capability": "postgresql.advanced_indexes",
+                "Owner": {
+                  "Kind": "index",
+                  "ModelID": "67550d0e58d0a77b353d2a57ee7f4e87",
+                  "FieldID": "",
+                  "ObjectID": "414e63901e0ecbd5411f0439fdd4e2a1"
+                }
+              }
+            ]
+          },
+          {
+            "ID": "90788f8a096f88f694777c5b13ce088f",
+            "Name": "idx_posts_author_created",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "dc554723235456b0aa7fa8cf60872977",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "b77fc1344f1490ecbc184f6d51984000",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "1c6386827cde453e30f565cd70257847",
+        "Name": "tags",
+        "Columns": [
+          {
+            "ID": "aa439f52a52cdd19c432ed801fd6e412",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "2c708d889f1b00ea4e2105b11a4265ea",
+            "Name": "name",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "c585ce2ed02c5ee84b3cf6e48b8b7332",
+          "Name": "pk_tags",
+          "Columns": [
+            "aa439f52a52cdd19c432ed801fd6e412"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "06c575e813b9bccef41a01c0a353cf57",
+            "Name": "uq_tags_name",
+            "Columns": [
+              "2c708d889f1b00ea4e2105b11a4265ea"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [],
+        "Checks": [
+          {
+            "ID": "9e7ec6a9df2a64f71647ef1856ce5dd9",
+            "Name": "ck_max_length_9e7ec6a9df2a",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "2c708d889f1b00ea4e2105b11a4265ea",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "64"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "601cc87086a1e70a2a30d60cc9de99aa",
+        "Name": "users",
+        "Columns": [
+          {
+            "ID": "afe1a0e054eb3506d48cd135e7d3479c",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "postgresql.uuid",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "5d7ba0c2379f03baaa12757a21a55fc6",
+            "Name": "handle",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "7bf4002a00a6dfd5bd8906ddf9af3999",
+            "Name": "email",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "postgresql.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "736c318493cb0cc3bde4ced7e08b736f",
+            "Name": "created_at",
+            "Ordinal": 3,
+            "Storage": {
+              "Kind": "postgresql.timestamptz",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 6,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "2701ed7b98a563f7aab3129f9b085035",
+          "Name": "pk_users",
+          "Columns": [
+            "afe1a0e054eb3506d48cd135e7d3479c"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [
+          {
+            "ID": "c7ab942ef623321f6c4bcc9043c7aae6",
+            "Name": "uq_users_handle",
+            "Columns": [
+              "5d7ba0c2379f03baaa12757a21a55fc6"
+            ],
+            "RequiredCapabilities": null
+          }
+        ],
+        "ForeignKeys": [],
+        "Checks": [
+          {
+            "ID": "3e45b69ed15f1d8b540a7e7b21f29405",
+            "Name": "ck_max_length_3e45b69ed15f",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "7bf4002a00a6dfd5bd8906ddf9af3999",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "255"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "b6b01e59e6db6d8625d375e66a019bcc",
+            "Name": "ck_max_length_b6b01e59e6db",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "postgresql.boolean",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "golem.schema.predicate.less-equal.v1",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "portable"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "function",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": {
+                    "Identity": "golem.schema.function.length.v1",
+                    "Kind": "function",
+                    "Version": 1,
+                    "Provider": "portable"
+                  },
+                  "Column": null,
+                  "Literal": null,
+                  "Operands": [
+                    {
+                      "Kind": "column",
+                      "Type": {
+                        "Kind": "postgresql.text",
+                        "Precision": 0,
+                        "Scale": 0,
+                        "Length": 0,
+                        "Symbol": null
+                      },
+                      "Nullable": false,
+                      "Symbol": null,
+                      "Column": "5d7ba0c2379f03baaa12757a21a55fc6",
+                      "Literal": null,
+                      "Operands": []
+                    }
+                  ]
+                },
+                {
+                  "Kind": "literal",
+                  "Type": {
+                    "Kind": "postgresql.bigint",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": null,
+                  "Literal": {
+                    "kind": "integer",
+                    "canonical": "40"
+                  },
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [
+          {
+            "ID": "bd8cd0594d2aebe6a46459845fe9b57d",
+            "Name": "idx_users_created",
+            "Unique": false,
+            "Method": "btree",
+            "Keys": [
+              {
+                "Column": "5d7ba0c2379f03baaa12757a21a55fc6",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              },
+              {
+                "Column": "736c318493cb0cc3bde4ced7e08b736f",
+                "Expression": null,
+                "Direction": "asc",
+                "Nulls": "default",
+                "Collation": null,
+                "OpClass": null
+              }
+            ],
+            "Include": null,
+            "Predicate": null,
+            "CreationMode": "transactional",
+            "RequiredCapabilities": null
+          }
+        ],
+        "RequiredCapabilities": null
+      }
+    ],
+    "Extensions": [],
+    "System": {
+      "Version": 1,
+      "Namespace": {
+        "Name": "_golem"
+      },
+      "Objects": [
+        {
+          "ID": "076704f0bfb30b5fed47137811a6dd18",
+          "Kind": "upsert_guard",
+          "Version": 1,
+          "Name": "_golem_upsert_guard",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "14b2d0b9de583fe675fa72de1d1c78c8",
+          "Kind": "outbox",
+          "Version": 1,
+          "Name": "_golem_outbox",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "51aa5c96fd5d24e27e182ed85f7bcbf2",
+          "Kind": "outbox_delivery",
+          "Version": 1,
+          "Name": "_golem_outbox_delivery",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "cb3020cd708be72c384f431749769c98",
+          "Kind": "migration_ledger",
+          "Version": 1,
+          "Name": "_golem_migrations",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "e28aeab0927ce864e8d65a1e1dc62fc9",
+          "Kind": "migration_lock",
+          "Version": 1,
+          "Name": "_golem_migration_lock",
+          "Attributes": [],
+          "RequiredCapabilities": null
+        }
+      ]
+    },
+    "Unmanaged": null
+  }
+}

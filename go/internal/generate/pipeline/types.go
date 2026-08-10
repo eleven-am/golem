@@ -12,6 +12,7 @@ import (
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
@@ -30,6 +31,20 @@ type Request struct {
 	GeneratorVersion   string
 	TemplateABIVersion string
 	Env                []string
+	// ReadOnlyDiagnostics skips only the prospective generated Go package load,
+	// whose alternate modfile is necessarily created inside the consumer module.
+	// Source compilation, binding discovery, lowering, and complete prospective
+	// artifact construction remain enabled for read-only compatibility checks.
+	ReadOnlyDiagnostics bool
+	// ReviewedMigrations are verified immutable histories embedded into the
+	// generated application. Production CLI generation supplies exactly one
+	// non-empty history for every declared provider.
+	ReviewedMigrations []ReviewedMigration
+}
+
+type ReviewedMigration struct {
+	Manifest migration.Manifest
+	Files    map[string][]byte
 }
 
 type ProviderResult struct {

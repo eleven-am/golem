@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -149,6 +151,18 @@ func TestGraphQLErrorPresenterMapsEveryCodeAndNeverLeaksTrustedCause(t *testing.
 	unknown := PresentError(context.Background(), errors.New("postgres password=secret"), []any{"viewer"}, func(context.Context, error) { reported++ })
 	if unknown.Extensions["code"] != "INTERNAL_SERVER_ERROR" || unknown.Message != "internal server error" || reported != 1 || strings.Contains(unknown.Message, "secret") {
 		t.Fatalf("unknown=%#v reported=%d", unknown, reported)
+	}
+	for _, code := range []events.ErrorCode{
+		events.CodeEventConfig, events.CodeEventCodec, events.CodeEventSourceClosed, events.CodeEventTransport,
+		events.CodeEventPublisherRunning, events.CodeEventPoison, events.CodeSubscriptionInvalid,
+		events.CodeSubscriptionOverflow, events.CodeSubscriptionRevalidation, events.CodeSubscriptionSourceClosed,
+		events.CodeSubscriptionCancelled, events.CodeCDCInvalid, events.CodeCDCUnavailable,
+	} {
+		reported := 0
+		presented := PresentError(context.Background(), fmt.Errorf("outer: %w", events.Failure(code)), []any{"events"}, func(context.Context, error) { reported++ })
+		if presented.Extensions["code"] != string(code) || presented.Message != string(code) || reported != 0 {
+			t.Fatalf("event code=%s presented=%#v reported=%d", code, presented, reported)
+		}
 	}
 }
 

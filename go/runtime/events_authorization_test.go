@@ -17,6 +17,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type p7EventPrincipal struct{ Subject string }
@@ -45,10 +46,10 @@ type p7SignalledTransport struct {
 	subscribed chan struct{}
 }
 
-type p7EventObserver struct{ suppressed chan events.Observation }
+type p7EventObserver struct{ suppressed chan observe.Observation }
 
-func (observer p7EventObserver) ObserveEvent(_ context.Context, observation events.Observation) {
-	if observation.Kind() == events.ObservationSuppression {
+func (observer p7EventObserver) ObserveGolem(_ context.Context, observation observe.Observation) {
+	if observation.Operation() == observe.OperationSubscriptionSuppression {
 		select {
 		case observer.suppressed <- observation:
 		default:
@@ -72,7 +73,7 @@ type p7EventRuntimeFixture struct {
 	title      golem.TextField[p7EventPost, string]
 	digest     golem.EventSchemaDigest
 	allow      *atomic.Bool
-	suppressed chan events.Observation
+	suppressed chan observe.Observation
 	resolved   chan bool
 	resolves   *atomic.Int64
 }
@@ -155,7 +156,7 @@ func TestP7SQLiteFreshSubscriptionAuthorizationDeleteAndDuplicateOracle(t *testi
 	for {
 		select {
 		case observation := <-fixture.suppressed:
-			if observation.SuppressionReason() == events.SuppressionDeleteFiltered {
+			if observation.Reason() == observe.ReasonFiltered {
 				goto deleteFiltered
 			}
 		case <-time.After(2 * time.Second):
@@ -243,22 +244,22 @@ func TestP7DeleteSuppressionDistinguishesDeniedFromUnverifiable(t *testing.T) {
 
 	fixture.allow.Store(false)
 	fixture.publish(t, fixture.notice(t, golem.EventDeleted, 700, "visible", false))
-	if reason := receiveP7Suppression(t, fixture.suppressed); reason != events.SuppressionUnauthorized {
+	if reason := receiveP7Suppression(t, fixture.suppressed); reason != observe.ReasonAuthorization {
 		t.Fatalf("denied delete suppression=%q", reason)
 	}
 
 	fixture.allow.Store(true)
 	fixture.publish(t, fixture.unverifiableDeleteNotice(t, 701, "visible"))
-	if reason := receiveP7Suppression(t, fixture.suppressed); reason != events.SuppressionDeletionUnverifiable {
+	if reason := receiveP7Suppression(t, fixture.suppressed); reason != observe.ReasonDeletionUnverifiable {
 		t.Fatalf("unverifiable delete suppression=%q", reason)
 	}
 }
 
-func receiveP7Suppression(t testing.TB, observations <-chan events.Observation) events.SuppressionReason {
+func receiveP7Suppression(t testing.TB, observations <-chan observe.Observation) observe.Reason {
 	t.Helper()
 	select {
 	case observation := <-observations:
-		return observation.SuppressionReason()
+		return observation.Reason()
 	case <-time.After(2 * time.Second):
 		t.Fatal("suppression observation was not received")
 		return ""
@@ -371,12 +372,12 @@ func newP7EventRuntimeFixture(t *testing.T) p7EventRuntimeFixture {
 		t.Fatal(err)
 	}
 	transport := &p7SignalledTransport{EventTransport: memory, subscribed: make(chan struct{})}
-	suppressed := make(chan events.Observation, 4)
+	suppressed := make(chan observe.Observation, 4)
 	resolved := make(chan bool, 16)
 	resolves := &atomic.Int64{}
 	app, err := Open(ctx, Config[p7EventPrincipal, p7EventActor]{
-		DB: database, Provider: golem.SQLite, Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
-		EventRegistry: eventRegistry, EventFactories: factories, EventTransport: transport, EventObserver: p7EventObserver{suppressed: suppressed},
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		EventRegistry: eventRegistry, EventFactories: factories, EventTransport: transport, Observer: p7EventObserver{suppressed: suppressed},
 		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 		ResolvePrincipal: func(context.Context, p7EventPrincipal) (p7EventActor, error) {
 			resolves.Add(1)

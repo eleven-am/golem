@@ -6,7 +6,7 @@ package ir
 const (
 	RawDeclFormatVersion  uint16 = 1
 	ModelFormatVersion    uint16 = 1
-	ContractFormatVersion uint16 = 4
+	ContractFormatVersion uint16 = 5
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.
 	CanonicalFormatVersion uint16 = 1
@@ -607,12 +607,15 @@ type ContractIR struct {
 }
 
 type ModelContractIR struct {
-	ModelID       ModelID              `json:"modelId"`
-	GraphQLName   string               `json:"graphqlName"`
-	GraphQLPlural string               `json:"graphqlPlural"`
-	Roots         GraphQLRootNamesIR   `json:"roots"`
-	Fields        []FieldContractIR    `json:"fields"`
-	Selectors     []SelectorContractIR `json:"selectors"`
+	ModelID       ModelID            `json:"modelId"`
+	GraphQLName   string             `json:"graphqlName"`
+	GraphQLPlural string             `json:"graphqlPlural"`
+	Roots         GraphQLRootNamesIR `json:"roots"`
+	Fields        []FieldContractIR  `json:"fields"`
+	// HookOwnedCreateFields are stable scalar identities omitted only from
+	// GraphQL create-shaped inputs and populated by BeforeCreate.
+	HookOwnedCreateFields []FieldID            `json:"hookOwnedCreateFields"`
+	Selectors             []SelectorContractIR `json:"selectors"`
 	// FieldModes is a bootstrap source-compatibility field. It is not serialized;
 	// normalized producers and consumers use Fields.
 	FieldModes    []FieldContractIR         `json:"-"`

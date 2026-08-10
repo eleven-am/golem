@@ -2,7 +2,6 @@ package analytics
 
 import (
 	"fmt"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -722,16 +721,33 @@ func termKey(term golem.FrozenAnalyticsTerm) string {
 	return golem.RuntimeAnalyticsTermKey(term)
 }
 
-var pgPlaceholder = regexp.MustCompile(`\$([0-9]+)`)
-
 func rebase(sql string, offset int, provider policyir.Provider) string {
-	if offset == 0 || provider != policyir.ProviderPostgreSQL {
+	if offset == 0 {
 		return sql
 	}
-	return pgPlaceholder.ReplaceAllStringFunc(sql, func(value string) string {
-		number, _ := strconv.Atoi(value[1:])
-		return "$" + strconv.Itoa(number+offset)
-	})
+	marker := byte('$')
+	if provider == policyir.ProviderSQLite {
+		marker = '?'
+	} else if provider != policyir.ProviderPostgreSQL {
+		return sql
+	}
+	var result strings.Builder
+	for index := 0; index < len(sql); {
+		if sql[index] != marker || index+1 >= len(sql) || sql[index+1] < '0' || sql[index+1] > '9' {
+			result.WriteByte(sql[index])
+			index++
+			continue
+		}
+		end := index + 1
+		for end < len(sql) && sql[end] >= '0' && sql[end] <= '9' {
+			end++
+		}
+		position, _ := strconv.Atoi(sql[index+1 : end])
+		result.WriteByte(marker)
+		result.WriteString(strconv.Itoa(position + offset))
+		index = end
+	}
+	return result.String()
 }
 func analyticsDialect(provider policyir.Provider) (policysql.Dialect, golem.Provider, error) {
 	switch provider {

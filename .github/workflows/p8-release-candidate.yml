@@ -1,0 +1,544 @@
+name: p8-release-candidate
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["go/v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: p8-release-candidate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: go
+    shell: bash
+
+env:
+  GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+  GOLEM_TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
+  GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable
+  GOLEM_P8_SOCIAL_POSTGRES_DSN: postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
+
+jobs:
+  workflow-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Audit hosted workflow and mutation resistance
+        run: go test -json -count=1 ./internal/workflowaudit | tee p8-workflow.events.jsonl
+      - name: Reject skipped workflow-audit evidence
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-workflow.events.jsonl
+          -profile workflow-audit -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set workflow-audit
+          -require-test github.com/eleven-am/golem/go/internal/workflowaudit:TestP8WorkflowContainsRequiredHostedGates
+          -output p8-workflow.audit.json
+      - name: Retain structured workflow evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-workflow-audit
+          path: go/p8-workflow.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  toolchain-suite:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.25.x", stable]
+    services:
+      postgres-c:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/go.sum
+      - name: Complete P0-P8 suite
+        run: go test -json -p=1 -count=1 -timeout=45m ./... | tee p8-toolchain.events.jsonl
+      - name: Reject failures and hidden skips
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-toolchain.events.jsonl
+          -profile toolchain-${{ matrix.go }} -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set toolchain
+          -require-test github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized
+          -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c
+          -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic
+          -output p8-toolchain.audit.json
+      - name: Retain structured toolchain evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-toolchain-${{ matrix.go }}
+          path: go/p8-toolchain.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  platform-compile:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14, windows-2022]
+        go: ["1.25.x", stable]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version: ${{ matrix.go }}
+          cache-dependency-path: go/go.sum
+      - name: Compile every package on declared platform
+        env:
+          GOLEM_P8_REQUIRE_POSTGRESQL: "0"
+          GOLEM_TEST_POSTGRES_DSN: ""
+          GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: ""
+        run: go test -json -run '^$' ./... | tee p8-platform.events.jsonl
+      - name: Audit compile events
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-platform.events.jsonl
+          -profile compile-${{ matrix.os }}-${{ matrix.go }} -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set platform-compile
+          -output p8-platform.audit.json
+      - name: Retain structured compile evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-compile-${{ matrix.os }}-${{ matrix.go }}
+          path: go/p8-platform.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  provider-matrix:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - postgres: "15"
+            image: postgres:15@sha256:6eb0add3b77c081df18aa518ce43df58fdcc40f2e6d868a6fd08038dc7acd425
+          - postgres: "16"
+            image: postgres:16@sha256:95206741a5b214807675e14165369d05b93a9cf692223b616d07cca227e74b0b
+          - postgres: "17"
+            image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+    services:
+      postgres-c:
+        image: ${{ matrix.image }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: ${{ matrix.image }}
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: SQLite and PostgreSQL C plus linguistic provider matrix
+        run: >-
+          go test -json -count=1 -timeout=45m
+          ./provider/... ./observe/... ./runtime ./graphql ./events
+          ./internal/provider/... ./internal/p8oracle/... |
+          tee p8-provider.events.jsonl
+      - name: Reject missing or skipped required profiles
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-provider.events.jsonl
+          -profile postgresql-${{ matrix.postgres }}-c+linguistic -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set provider
+          -require-test github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized
+          -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c
+          -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic
+          -output p8-provider.audit.json
+      - name: Retain structured provider evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-postgresql-${{ matrix.postgres }}-c-linguistic
+          path: go/p8-provider.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  hardening:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    services:
+      postgres-c:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Race and resource-leak matrix
+        run: go test -json -race -p=1 -count=1 -timeout=45m ./... | tee p8-race.events.jsonl
+      - name: Repeat matrix
+        run: go test -json -p=1 -count=2 -timeout=45m ./... | tee p8-repeat.events.jsonl
+      - name: Shuffle sensitive runtime surfaces
+        run: go test -json -shuffle=on -count=10 -timeout=45m ./provider/... ./observe/... ./runtime ./graphql ./events | tee p8-shuffle.events.jsonl
+      - name: Explicit goroutine queue and evaluation leak gate
+        run: go test -json -race -count=1 -run 'TestP8GoroutineQueueAndEvaluationHardBounds' ./internal/p8oracle/load | tee p8-leak.events.jsonl
+      - name: Audit hardening event corpus
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit
+          -events p8-race.events.jsonl -events p8-repeat.events.jsonl
+          -events p8-shuffle.events.jsonl -events p8-leak.events.jsonl
+          -profile hardening -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set hardening
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds
+          -output p8-hardening.audit.json
+      - name: Retain structured hardening evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-hardening
+          path: go/p8-hardening.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  fuzz:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/p8oracle/disclosure
+            fuzz: FuzzP8PublicInputNeverDisclosesProtectedCanary
+            profile: disclosure
+            identity: github.com/eleven-am/golem/go/internal/p8oracle/disclosure:FuzzP8PublicInputNeverDisclosesProtectedCanary
+          - package: ./cmd/golem
+            fuzz: FuzzP8DiagnosticEncodingIsClosedAndBounded
+            profile: diagnostics
+            identity: github.com/eleven-am/golem/go/cmd/golem:FuzzP8DiagnosticEncodingIsClosedAndBounded
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Fuzz closed public boundary
+        env:
+          GOLEM_P8_REQUIRE_POSTGRESQL: "0"
+        run: go test -json -run '^$' -fuzz '^${{ matrix.fuzz }}$' -fuzztime=60s ${{ matrix.package }} | tee p8-fuzz.events.jsonl
+      - name: Audit fuzz events
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-fuzz.events.jsonl
+          -profile fuzz-${{ matrix.profile }} -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set fuzz-${{ matrix.profile }}
+          -require-test ${{ matrix.identity }} -output p8-fuzz.audit.json
+      - name: Retain structured fuzz evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-fuzz-${{ matrix.profile }}
+          path: go/p8-fuzz.audit.json
+          retention-days: 14
+          if-no-files-found: error
+
+  mutation-crash:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    services:
+      postgres-c:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Kill complete P8 mutation manifest
+        run: go run ./internal/cmd/p8mutation -module . -timeout 15m > p8-mutation.jsonl
+      - name: Real subprocess crash and restart matrix
+        run: go run ./internal/cmd/p7crash -module . -timeout 45m > p8-crash.jsonl
+      - name: Complete P8 failure crash cancellation and shutdown evidence
+        run: go run ./internal/cmd/p8failure -module . -timeout 90m > p8-failure.json
+      - name: Retain structured mutation and crash evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-mutation-crash
+          path: |
+            go/p8-mutation.jsonl
+            go/p8-crash.jsonl
+            go/p8-failure.json
+          retention-days: 14
+          if-no-files-found: error
+
+  quality-docs-abi:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    services:
+      postgres-c:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports: ["55433:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+      postgres-linguistic:
+        image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Vet
+        run: go vet ./...
+      - name: Format and whitespace
+        run: |
+          test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
+          git diff --check
+      - name: Vulnerability scan
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          govulncheck ./...
+      - name: Docs examples public ABI and reproducible generation
+        run: >-
+          go test -json -count=1 -timeout=45m
+          -run '^(TestP8DocumentationCommandCorpus|TestP8EveryPublicSnippetTypeChecks|TestP8ExternalSocialApplicationGenerateCheckBuildAndRun|TestP8PublicGoAPIDiffGate|TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic)$'
+          ./cmd/golem ./examples/social/cmd/social ./internal/compatibility |
+          tee p8-quality.events.jsonl
+      - name: Complete documentation deployment and recovery evidence
+        run: go run ./internal/cmd/p8docs -module . -timeout 45m > p8-docs.json
+      - name: Complete compatibility and upgrade evidence
+        run: go run ./internal/cmd/p8compat -module . -timeout 45m > p8-compat.json
+      - name: Audit quality docs example and ABI events
+        if: always()
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -events p8-quality.events.jsonl
+          -profile quality-docs-abi -reject-skips
+          -inventory internal/workflowaudit/required-tests.json -inventory-set quality-docs-abi
+          -require-test github.com/eleven-am/golem/go/cmd/golem:TestP8DocumentationCommandCorpus
+          -require-test github.com/eleven-am/golem/go/cmd/golem:TestP8EveryPublicSnippetTypeChecks
+          -require-test github.com/eleven-am/golem/go/examples/social/cmd/social:TestP8ExternalSocialApplicationGenerateCheckBuildAndRun
+          -require-test github.com/eleven-am/golem/go/internal/compatibility:TestP8PublicGoAPIDiffGate
+          -require-test github.com/eleven-am/golem/go/cmd/golem:TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic
+          -output p8-quality.audit.json
+      - name: Retain structured quality evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-quality-docs-abi
+          path: |
+            go/p8-quality.audit.json
+            go/p8-docs.json
+            go/p8-compat.json
+          retention-days: 14
+          if-no-files-found: error
+
+  tag-release-candidate:
+    if: startsWith(github.ref, 'refs/tags/go/v')
+    environment: go-release
+    needs:
+      - workflow-audit
+      - toolchain-suite
+      - platform-compile
+      - provider-matrix
+      - hardening
+      - fuzz
+      - mutation-crash
+      - quality-docs-abi
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      GOLEM_RELEASE_ALLOWED_SIGNERS_B64: ${{ secrets.GOLEM_RELEASE_ALLOWED_SIGNERS_B64 }}
+      GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256: ${{ secrets.GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256 }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Materialize and verify protected release-owner trust
+        run: |
+          test -n "${GOLEM_RELEASE_ALLOWED_SIGNERS_B64}"
+          test "${#GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}" -eq 64
+          umask 077
+          printf '%s' "${GOLEM_RELEASE_ALLOWED_SIGNERS_B64}" | base64 --decode > "${RUNNER_TEMP}/p8-release-allowed-signers"
+          test -s "${RUNNER_TEMP}/p8-release-allowed-signers"
+          printf '%s  %s\n' "${GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}" "${RUNNER_TEMP}/p8-release-allowed-signers" | sha256sum --check --status
+      - name: Verify protected immutable tag ruleset and exact checkout
+        run: >-
+          go run ./internal/cmd/p8workflowaudit -verify-tag-protection
+          -repository "${GITHUB_REPOSITORY}" -ref "${GITHUB_REF}"
+          -sha "${GITHUB_SHA}" -checkout ..
+          -output "${RUNNER_TEMP}/p8-tag-protection.json"
+      - name: Verify exact signed nested-module tag and clean consumer
+        run: >-
+          go run ./internal/cmd/p8release -mode verify
+          -tag "${GITHUB_REF_NAME}" -module . -proxy direct
+          -allowed-signers "${RUNNER_TEMP}/p8-release-allowed-signers"
+          -allowed-signers-sha256 "${GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}"
+          > "${RUNNER_TEMP}/p8-release-verify.json"
+      - name: Build deterministic candidate archives SBOMs and provenance
+        run: >-
+          go run ./internal/cmd/p8release -mode build
+          -tag "${GITHUB_REF_NAME}" -module .
+          -allowed-signers "${RUNNER_TEMP}/p8-release-allowed-signers"
+          -allowed-signers-sha256 "${GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}"
+          -output "${RUNNER_TEMP}/p8-staged"
+          > "${RUNNER_TEMP}/p8-release-build.json"
+      - name: Publish once then prove immutable replacement bytes
+        run: |
+          go run ./internal/cmd/p8release -mode publish -tag "${GITHUB_REF_NAME}" -module . -allowed-signers "${RUNNER_TEMP}/p8-release-allowed-signers" -allowed-signers-sha256 "${GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}" -staged "${RUNNER_TEMP}/p8-staged" -releases "${RUNNER_TEMP}/p8-releases" > "${RUNNER_TEMP}/p8-release-publish.json"
+          go run ./internal/cmd/p8release -mode publish -tag "${GITHUB_REF_NAME}" -module . -allowed-signers "${RUNNER_TEMP}/p8-release-allowed-signers" -allowed-signers-sha256 "${GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256}" -staged "${RUNNER_TEMP}/p8-staged" -releases "${RUNNER_TEMP}/p8-releases" > "${RUNNER_TEMP}/p8-release-republish.json"
+      - name: Retain immutable candidate artifacts and inspection evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-go-${{ github.ref_name }}
+          path: |
+            ${{ runner.temp }}/p8-staged
+            ${{ runner.temp }}/p8-release-verify.json
+            ${{ runner.temp }}/p8-tag-protection.json
+            ${{ runner.temp }}/p8-release-build.json
+            ${{ runner.temp }}/p8-release-publish.json
+            ${{ runner.temp }}/p8-release-republish.json
+          retention-days: 14
+          if-no-files-found: error
+
+  candidate-evidence:
+    if: always()
+    needs:
+      - workflow-audit
+      - toolchain-suite
+      - platform-compile
+      - provider-matrix
+      - hardening
+      - fuzz
+      - mutation-crash
+      - quality-docs-abi
+      - tag-release-candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Refuse incomplete candidate evidence
+        run: |
+          test '${{ needs.workflow-audit.result }}' = success
+          test '${{ needs.toolchain-suite.result }}' = success
+          test '${{ needs.platform-compile.result }}' = success
+          test '${{ needs.provider-matrix.result }}' = success
+          test '${{ needs.hardening.result }}' = success
+          test '${{ needs.fuzz.result }}' = success
+          test '${{ needs.mutation-crash.result }}' = success
+          test '${{ needs.quality-docs-abi.result }}' = success
+          if [[ '${{ github.ref }}' == refs/tags/go/v* ]]; then
+            test '${{ needs.tag-release-candidate.result }}' = success
+          else
+            test '${{ needs.tag-release-candidate.result }}' = skipped
+          fi
+          printf '%s\n' '{"version":1,"workflow":"p8-release-candidate","status":"PASS"}' > p8-candidate-evidence.json
+      - name: Retain candidate aggregation evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: p8-candidate-evidence
+          path: go/p8-candidate-evidence.json
+          retention-days: 14
+          if-no-files-found: error

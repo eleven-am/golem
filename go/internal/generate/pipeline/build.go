@@ -2,11 +2,14 @@ package pipeline
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -20,7 +23,9 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlcodegen "github.com/eleven-am/golem/go/internal/graphql/codegen"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
+	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"golang.org/x/tools/go/packages"
 )
@@ -61,6 +66,9 @@ func build(ctx context.Context, request Request) (Result, error) {
 		return Result{}, diagnosticsError(discovered.Diagnostics)
 	}
 	compilation.Contract.Methods = mergeBindingMethods(compilation.Contract.Methods, discovered.Methods)
+	if diagnostics := graphqlcontract.ValidateHookOwnedMethods(compilation); len(diagnostics) != 0 {
+		return Result{}, diagnosticsError(diagnostics)
+	}
 	canonicalContract, err := canonicalContract(compilation.Contract)
 	if err != nil {
 		return Result{}, fmt.Errorf("canonicalize discovered contract: %w", err)
@@ -82,6 +90,10 @@ func build(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	migrationDocuments, err := reviewedMigrationDocuments(request.ReviewedMigrations, providers, modelFingerprint)
+	if err != nil {
+		return Result{}, err
+	}
 	generatorVersion := request.GeneratorVersion
 	if generatorVersion == "" {
 		generatorVersion = manifest.GeneratorVersion
@@ -92,13 +104,13 @@ func build(ctx context.Context, request Request) (Result, error) {
 	}
 
 	emit := func(digest string) ([]manifest.Artifact, error) {
-		return emitArtifacts(compiled, request, compilation, discovered.Entries, providers, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI)
+		return emitArtifacts(compiled, request, compilation, discovered.Entries, providers, migrationDocuments, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI)
 	}
 	provisionalArtifacts, err := emit(strings.Repeat("0", 64))
 	if err != nil {
 		return Result{}, err
 	}
-	provisional, err := buildManifest(modelFingerprint, contractFingerprint, providers, provisionalArtifacts, generatorVersion, templateABI)
+	provisional, err := buildManifest(modelFingerprint, contractFingerprint, providers, migrationDocuments, provisionalArtifacts, generatorVersion, templateABI)
 	if err != nil {
 		return Result{}, err
 	}
@@ -106,15 +118,17 @@ func build(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	prospective, err := buildManifest(modelFingerprint, contractFingerprint, providers, finalArtifacts, generatorVersion, templateABI)
+	prospective, err := buildManifest(modelFingerprint, contractFingerprint, providers, migrationDocuments, finalArtifacts, generatorVersion, templateABI)
 	if err != nil {
 		return Result{}, err
 	}
 	if prospective.GenerationDigest != provisional.GenerationDigest {
 		return Result{}, fmt.Errorf("generation digest changed after stamping final artifacts")
 	}
-	if err := compileProspective(ctx, compiled, request, prospective.Artifacts); err != nil {
-		return Result{}, err
+	if !request.ReadOnlyDiagnostics {
+		if err := compileProspective(ctx, compiled, request, prospective.Artifacts); err != nil {
+			return Result{}, err
+		}
 	}
 	return Result{
 		Prospective: prospective, Compilation: compilation, ModelFingerprint: modelFingerprint,
@@ -276,7 +290,7 @@ func normalizedProviderManifest(provider physical.ProviderManifest, namespace ph
 	return schema.Provider, nil
 }
 
-func emitArtifacts(compiled compile.Result, request Request, compilation ir.CompilationIR, entries []bindings.Entry, providers []ProviderResult, modelFingerprint, contractFingerprint ir.Fingerprint, digest, generatorVersion, templateABI string) ([]manifest.Artifact, error) {
+func emitArtifacts(compiled compile.Result, request Request, compilation ir.CompilationIR, entries []bindings.Entry, providers []ProviderResult, migrationDocuments map[ir.Provider][]byte, modelFingerprint, contractFingerprint ir.Fingerprint, digest, generatorVersion, templateABI string) ([]manifest.Artifact, error) {
 	stamp := &modelcodegen.FinalStamp{GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI}
 	models, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: compiled.Packages, GolemImportPath: request.GolemImportPath, FinalStamp: stamp})
 	if err != nil {
@@ -293,7 +307,7 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 	modelPackages := modelPackageSpecs(compilation, compiled.Packages)
 	providerInputs := make([]registry.ProviderInput, len(providers))
 	for index, provider := range providers {
-		providerInputs[index] = registry.ProviderInput{Schema: provider.Schema, Fingerprint: provider.Fingerprint, SystemFingerprint: provider.SystemFingerprint}
+		providerInputs[index] = registry.ProviderInput{Schema: provider.Schema, Fingerprint: provider.Fingerprint, SystemFingerprint: provider.SystemFingerprint, MigrationManifest: migrationDocuments[provider.Provider.Provider]}
 	}
 	application, err := registry.Emit(registry.Request{
 		AppPackage: request.AppPackage, ModelPackages: modelPackages, Actor: compilation.Model.Schema.Actor,
@@ -309,8 +323,8 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 	}
 	graphqlAdapter, err := graphqlcodegen.Emit(graphqlcodegen.Request{
 		PackageName: request.AppPackage.PackageName, AppImportPath: request.AppPackage.ImportPath,
-		ModuleDir: compiled.ModuleDir,
-		SDL:       graphqlDocument.SDL, ContractFingerprint: contractFingerprint, Actor: compilation.Model.Schema.Actor,
+		ModuleDir: compiled.ModuleDir, Env: request.Env,
+		SDL: graphqlDocument.SDL, ContractFingerprint: contractFingerprint, Actor: compilation.Model.Schema.Actor,
 		MutationModels: graphqlMutationModels(compilation), Compilation: &compilation, GolemImportPath: request.GolemImportPath,
 		GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI,
 	})
@@ -392,6 +406,40 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 		artifacts = append(artifacts, manifest.Artifact{Path: ".golem/generated/" + string(provider.Provider.Provider) + ".physical.snapshot.json", Kind: manifest.ArtifactProvider, Content: encoded, GeneratedHeader: metadataHeader})
 	}
 	return artifacts, nil
+}
+
+func reviewedMigrationDocuments(reviewed []ReviewedMigration, providers []ProviderResult, modelFingerprint ir.Fingerprint) (map[ir.Provider][]byte, error) {
+	result := make(map[ir.Provider][]byte, len(reviewed))
+	declared := make(map[ir.Provider]ProviderResult, len(providers))
+	for _, provider := range providers {
+		declared[provider.Provider.Provider] = provider
+	}
+	for index, history := range reviewed {
+		provider := history.Manifest.Provider.Provider
+		physicalProvider, ok := declared[provider]
+		if !ok || provider == "" {
+			return nil, fmt.Errorf("reviewed migration history %d targets undeclared provider %q", index, provider)
+		}
+		if _, duplicate := result[provider]; duplicate {
+			return nil, fmt.Errorf("reviewed migration history duplicates provider %s", provider)
+		}
+		if len(history.Manifest.Entries) == 0 {
+			return nil, fmt.Errorf("reviewed migration history for provider %s is empty", provider)
+		}
+		head := history.Manifest.Entries[len(history.Manifest.Entries)-1]
+		if head.AfterModel != migration.Digest(modelFingerprint) || head.AfterPhysical != migration.Digest(physicalProvider.Fingerprint) {
+			return nil, fmt.Errorf("reviewed migration history for provider %s does not match the generated model and physical schema", provider)
+		}
+		encoded, err := migration.EncodeManifest(history.Manifest, history.Files)
+		if err != nil {
+			return nil, fmt.Errorf("encode reviewed migration history for provider %s: %w", provider, err)
+		}
+		result[provider] = encoded
+	}
+	if len(reviewed) != 0 && len(result) != len(declared) {
+		return nil, fmt.Errorf("reviewed migration history must contain exactly one non-empty manifest for every declared provider")
+	}
+	return result, nil
 }
 
 const metadataHeader = `{"_golemGenerated":"golem:p1:artifact:v1",`
@@ -495,10 +543,14 @@ func moduleRelative(moduleDir, value string) (string, error) {
 	return filepath.ToSlash(relative), nil
 }
 
-func buildManifest(modelFingerprint, contractFingerprint ir.Fingerprint, providers []ProviderResult, artifacts []manifest.Artifact, generatorVersion, templateABI string) (manifest.Result, error) {
+func buildManifest(modelFingerprint, contractFingerprint ir.Fingerprint, providers []ProviderResult, migrationDocuments map[ir.Provider][]byte, artifacts []manifest.Artifact, generatorVersion, templateABI string) (manifest.Result, error) {
 	fingerprints := make([]manifest.ProviderFingerprint, len(providers))
 	for index, provider := range providers {
 		fingerprints[index] = manifest.ProviderFingerprint{Provider: provider.Provider.Provider, Fingerprint: provider.Fingerprint, SystemFingerprint: provider.SystemFingerprint}
+		if document := migrationDocuments[provider.Provider.Provider]; len(document) != 0 {
+			digest := sha256.Sum256(document)
+			fingerprints[index].MigrationFingerprint = ir.Fingerprint(hex.EncodeToString(digest[:]))
+		}
 	}
 	return manifest.Build(manifest.Request{ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint, ProviderFingerprints: fingerprints, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI, Artifacts: artifacts})
 }
@@ -567,12 +619,12 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 		environment = append(os.Environ(), environment...)
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule
-	modfile, cleanupModfile, err := prospectiveModfile(compiled.ModuleDir)
+	buildFlags, cleanupModfile, err := prospectivePackageBuildFlags(ctx, compiled.ModuleDir, environment)
 	if err != nil {
 		return err
 	}
 	defer cleanupModfile()
-	loaded, err := packages.Load(&packages.Config{Context: ctx, Dir: compiled.ModuleDir, Env: environment, Mode: mode, Overlay: overlay, BuildFlags: []string{"-mod=mod", "-modfile=" + modfile}}, orderedPatterns...)
+	loaded, err := packages.Load(&packages.Config{Context: ctx, Dir: compiled.ModuleDir, Env: environment, Mode: mode, Overlay: overlay, BuildFlags: buildFlags}, orderedPatterns...)
 	if err != nil {
 		return fmt.Errorf("prospective package load: %w", err)
 	}
@@ -618,6 +670,40 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 		return fmt.Errorf("prospective generated graph does not compile: %s", strings.Join(messages, "; "))
 	}
 	return nil
+}
+
+// prospectivePackageBuildFlags preserves the consumer module in both ordinary
+// module and workspace mode. Go rejects -modfile whenever a workspace is
+// active. In that mode every dependency needed by generated source must already
+// be declared by one of the workspace modules, so prospective compilation uses
+// readonly resolution and cannot rewrite the consumer module. Outside a
+// workspace the isolated alternate modfile retains the existing behavior that
+// may populate only temporary dependency sums.
+func prospectivePackageBuildFlags(ctx context.Context, moduleDir string, environment []string) ([]string, func(), error) {
+	workspace, err := activeGoWorkspace(ctx, moduleDir, environment)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if workspace {
+		return []string{"-mod=readonly"}, func() {}, nil
+	}
+	modfile, cleanup, err := prospectiveModfile(moduleDir)
+	if err != nil {
+		return nil, func() {}, err
+	}
+	return []string{"-mod=mod", "-modfile=" + modfile}, cleanup, nil
+}
+
+func activeGoWorkspace(ctx context.Context, moduleDir string, environment []string) (bool, error) {
+	command := exec.CommandContext(ctx, "go", "env", "GOWORK")
+	command.Dir = moduleDir
+	command.Env = environment
+	output, err := command.Output()
+	if err != nil {
+		return false, fmt.Errorf("resolve prospective Go workspace: %w", err)
+	}
+	value := strings.TrimSpace(string(output))
+	return value != "" && value != "off" && value != os.DevNull, nil
 }
 
 // prospectiveModfile gives go/packages an isolated dependency workspace. A

@@ -76,6 +76,16 @@ func TestBuildDigestDomains(t *testing.T) {
 	if systemResult.GenerationDigest == physicalResult.GenerationDigest {
 		t.Fatal("system-only fingerprint change did not alter GenerationDigest")
 	}
+	migrationHistory := system
+	migrationHistory.ProviderFingerprints = append([]ProviderFingerprint(nil), system.ProviderFingerprints...)
+	migrationHistory.ProviderFingerprints[0].MigrationFingerprint = ir.Fingerprint(strings.Repeat("4", 64))
+	migrationResult, err := Build(migrationHistory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrationResult.GenerationDigest == systemResult.GenerationDigest {
+		t.Fatal("reviewed migration manifest change did not alter GenerationDigest")
+	}
 }
 
 func TestBuildRejectsUnsafePathsDuplicatesAndMissingHeaders(t *testing.T) {
@@ -117,6 +127,17 @@ func TestParseRejectsTrailingAndInventoryTampering(t *testing.T) {
 	staleSystem := bytes.Replace(providerResult.Bytes, []byte(`"systemFingerprint": "`+strings.Repeat("2", 64)+`"`), []byte(`"systemFingerprint": "`+strings.Repeat("3", 64)+`"`), 1)
 	if _, err := Parse(staleSystem); err == nil || !strings.Contains(err.Error(), "GenerationDigest") {
 		t.Fatalf("stale system fingerprint error=%v", err)
+	}
+	migrationRequest := providerRequest
+	migrationRequest.ProviderFingerprints = append([]ProviderFingerprint(nil), providerRequest.ProviderFingerprints...)
+	migrationRequest.ProviderFingerprints[0].MigrationFingerprint = ir.Fingerprint(strings.Repeat("4", 64))
+	migrationBound, err := Build(migrationRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	staleMigration := bytes.Replace(migrationBound.Bytes, []byte(`"migrationFingerprint": "`+strings.Repeat("4", 64)+`"`), []byte(`"migrationFingerprint": "`+strings.Repeat("5", 64)+`"`), 1)
+	if _, err := Parse(staleMigration); err == nil || !strings.Contains(err.Error(), "GenerationDigest") {
+		t.Fatalf("stale migration fingerprint error=%v", err)
 	}
 }
 

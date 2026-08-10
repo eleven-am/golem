@@ -300,26 +300,40 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	type catalogIndex struct {
+		tableOID, indexOID                                                             int64
+		name, method, keyText, optionText, predicateText                               string
+		unique, valid, ready, nullsNotDistinct, nondefaultOpclass, nondefaultCollation bool
+		keyCount, total                                                                int
+	}
+	var catalogIndexes []catalogIndex
 	for rows.Next() {
-		var tableOID, indexOID int64
-		var name, method, keyText, optionText, predicateText string
-		var unique, valid, ready, nullsNotDistinct, nondefaultOpclass, nondefaultCollation bool
-		var keyCount, total int
-		if err := rows.Scan(&tableOID, &indexOID, &name, &unique, &method, &keyText, &optionText, &keyCount, &total, &valid, &ready, &nullsNotDistinct, &nondefaultOpclass, &nondefaultCollation, &predicateText); err != nil {
+		var item catalogIndex
+		if err := rows.Scan(&item.tableOID, &item.indexOID, &item.name, &item.unique, &item.method, &item.keyText, &item.optionText, &item.keyCount, &item.total, &item.valid, &item.ready, &item.nullsNotDistinct, &item.nondefaultOpclass, &item.nondefaultCollation, &item.predicateText); err != nil {
+			rows.Close()
 			return err
 		}
-		table := tables[tableOID]
+		catalogIndexes = append(catalogIndexes, item)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, item := range catalogIndexes {
+		table := tables[item.tableOID]
 		if table == nil {
 			continue
 		}
-		if err := validateCatalogIndexFacts(valid, ready, nullsNotDistinct, nondefaultOpclass, nondefaultCollation); err != nil {
-			return fmt.Errorf("postgresql index %s: %w", name, err)
+		if err := validateCatalogIndexFacts(item.valid, item.ready, item.nullsNotDistinct, item.nondefaultOpclass, item.nondefaultCollation); err != nil {
+			return fmt.Errorf("postgresql index %s: %w", item.name, err)
 		}
-		keys, options := parseCatalogNumbers(keyText), parseCatalogNumbers(optionText)
-		index := physical.PhysicalIndex{ID: indexID(expected[string(table.Name)], name, table.ID), Name: physical.PhysicalName(name), Unique: unique, Method: physical.IndexMethod(method), CreationMode: physical.IndexTransactional}
+		keys, options := parseCatalogNumbers(item.keyText), parseCatalogNumbers(item.optionText)
+		index := physical.PhysicalIndex{ID: indexID(expected[string(table.Name)], item.name, table.ID), Name: physical.PhysicalName(item.name), Unique: item.unique, Method: physical.IndexMethod(item.method), CreationMode: physical.IndexTransactional}
 		advanced := false
-		for position := 0; position < keyCount; position++ {
+		for position := 0; position < item.keyCount; position++ {
 			key := physical.IndexKey{Direction: ir.SortAsc, Nulls: ir.NullsDefault}
 			option := 0
 			if position < len(options) {
@@ -338,12 +352,12 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 				advanced = true
 			}
 			if position < len(keys) && keys[position] > 0 {
-				column := columns[tableOID][keys[position]]
+				column := columns[item.tableOID][keys[position]]
 				id := column.ID
 				key.Column = &id
 			} else {
 				var source string
-				if err := q.QueryRowxContext(ctx, `SELECT pg_catalog.pg_get_indexdef($1,$2,true)`, indexOID, position+1).Scan(&source); err != nil {
+				if err := q.QueryRowxContext(ctx, `SELECT pg_catalog.pg_get_indexdef($1,$2,true)`, item.indexOID, position+1).Scan(&source); err != nil {
 					return err
 				}
 				expression, err := parseCatalogExpression(source, *table)
@@ -358,13 +372,13 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 			}
 			index.Keys = append(index.Keys, key)
 		}
-		for position := keyCount; position < total && position < len(keys); position++ {
-			column := columns[tableOID][keys[position]]
+		for position := item.keyCount; position < item.total && position < len(keys); position++ {
+			column := columns[item.tableOID][keys[position]]
 			index.Include = append(index.Include, column.ID)
 			advanced = true
 		}
-		if predicateText != "" {
-			predicate, err := parseCatalogExpression(predicateText, *table)
+		if item.predicateText != "" {
+			predicate, err := parseCatalogExpression(item.predicateText, *table)
 			if err != nil {
 				return err
 			}
@@ -377,7 +391,7 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		}
 		table.Indexes = append(table.Indexes, index)
 	}
-	return rows.Err()
+	return nil
 }
 
 func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.SystemSchema) (physical.SystemSchema, error) {
@@ -388,16 +402,20 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	if err != nil {
 		return physical.SystemSchema{}, err
 	}
-	defer rows.Close()
 	var names []string
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
+			rows.Close()
 			return physical.SystemSchema{}, err
 		}
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
+		return physical.SystemSchema{}, err
+	}
+	if err := rows.Close(); err != nil {
 		return physical.SystemSchema{}, err
 	}
 	ledgerName := ""
@@ -425,7 +443,6 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	if err != nil {
 		return physical.SystemSchema{}, err
 	}
-	defer columnRows.Close()
 	type ledgerColumn struct {
 		name, storage, defaultExpression, identity, generated string
 		notNull                                               bool
@@ -434,9 +451,17 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	for columnRows.Next() {
 		var value ledgerColumn
 		if err := columnRows.Scan(&value.name, &value.storage, &value.notNull, &value.defaultExpression, &value.identity, &value.generated); err != nil {
+			columnRows.Close()
 			return physical.SystemSchema{}, err
 		}
 		actualColumns = append(actualColumns, value)
+	}
+	if err := columnRows.Err(); err != nil {
+		columnRows.Close()
+		return physical.SystemSchema{}, err
+	}
+	if err := columnRows.Close(); err != nil {
+		return physical.SystemSchema{}, err
 	}
 	wanted := []ledgerColumn{{name: "migration_id", storage: "text", notNull: true}, {name: "parent_chain_hash", storage: "text", notNull: true}, {name: "chain_hash", storage: "text", notNull: true}, {name: "file_checksums", storage: "jsonb", notNull: true}, {name: "before_physical_fingerprint", storage: "text", notNull: true}, {name: "after_physical_fingerprint", storage: "text", notNull: true}, {name: "phases", storage: "jsonb", notNull: true}, {name: "applied_at", storage: "timestamp(6) with time zone", notNull: true}}
 	if fmt.Sprint(actualColumns) != fmt.Sprint(wanted) {
@@ -446,18 +471,26 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	if err != nil {
 		return physical.SystemSchema{}, err
 	}
-	defer constraintRows.Close()
 	constraintCount := 0
 	for constraintRows.Next() {
 		var kind, keys string
 		var deferrable, validated bool
 		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+			constraintRows.Close()
 			return physical.SystemSchema{}, err
 		}
 		constraintCount++
 		if kind != "p" || keys != "{1}" || deferrable || !validated {
+			constraintRows.Close()
 			return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger constraint drift")
 		}
+	}
+	if err := constraintRows.Err(); err != nil {
+		constraintRows.Close()
+		return physical.SystemSchema{}, err
+	}
+	if err := constraintRows.Close(); err != nil {
+		return physical.SystemSchema{}, err
 	}
 	if constraintCount != 1 {
 		return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger constraint drift: got %d constraints", constraintCount)

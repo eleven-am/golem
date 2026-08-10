@@ -9,7 +9,9 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 type mutationHookFailure struct {
@@ -61,6 +63,15 @@ func mutationHookInventory[A any](bindings golem.ApplicationBindings[A], model g
 		}
 	}
 	return result
+}
+
+func hasBeforeCreateHook[A any](bindings golem.ApplicationBindings[A], model golem.ModelID) bool {
+	for _, hook := range bindings.RuntimeHookInventory() {
+		if hook.Model == model && hook.Operation == golem.HookCreate && hook.Phase == golem.HookBefore {
+			return true
+		}
+	}
+	return false
 }
 
 func mutationHookOperation(operation mutationir.Operation) (golem.HookOperation, bool) {
@@ -210,7 +221,9 @@ func scalarHookResult(registry *schema.Registry, program mutationsql.Program, ex
 	}
 }
 
-func invokeMutationResultHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], actor A, result golem.RuntimeMutationHookResult, phase golem.HookPhase) error {
+func invokeMutationResultHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], actor A, result golem.RuntimeMutationHookResult, phase golem.HookPhase) (resultErr error) {
+	ctx, observation := observeexec.BeginChild(ctx, result.ModelID(), observe.KindHook, hookObservationOperation(result.Operation()), hookObservationPhase(phase))
+	defer func() { finishObservation(observation, resultErr) }()
 	hookContext := golem.RuntimeContextWithActor(ctx, actor)
 	if err := golem.RuntimeInvokeMutationResultHooks(hookContext, bindings, result, phase); err != nil {
 		return &mutationHookFailure{operation: result.Operation(), phase: phase, cause: err}

@@ -362,7 +362,7 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 		}
 	}
 	fingerprint := [32]byte{9}
-	report := CapabilityReport{Version: physical.Version{Major: 15}, JSONB: true, BinaryText: true, ASCIIInsensitive: true, ExactJSON: true, ScalarListJSON: true, RelationCorrelation: true, AnalyticsExact: true}
+	report := CapabilityReport{Version: physical.Version{Major: 15}, JSONB: true, BinaryText: true, ASCIIInsensitive: true, ExactJSON: true, ScalarListJSON: true, RelationCorrelation: true, AnalyticsExact: true, SessionSettings: true}
 	proof, err := New().policyCapabilityProof(fingerprint, report)
 	if err != nil {
 		t.Fatal(err)

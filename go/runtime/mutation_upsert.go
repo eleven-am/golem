@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -14,7 +15,9 @@ import (
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -37,6 +40,40 @@ type rootUpsertPrepareRequest struct {
 	update        golem.FrozenMutationInput
 	result        mutationir.ImageRequirements
 	runtimeValues *mutationRuntimeValues
+	// deferHookOwned permits only ContractIR GraphQLHookOwned create fields to
+	// remain absent while the database-coordinated branch selector is built.
+	// The selected create branch clears it after BeforeCreate and replans, so a
+	// hook which omits a required field fails before executing SQL.
+	deferHookOwned bool
+}
+
+func missingRuntimeOwnedFields(input golem.FrozenMutationInput, candidates []golem.FieldID) []golem.FieldID {
+	authored := make(map[golem.FieldID]bool, len(input.Fields()))
+	for _, field := range input.Fields() {
+		authored[field.FieldID()] = true
+	}
+	result := make([]golem.FieldID, 0, len(candidates))
+	for _, field := range candidates {
+		if !authored[field] {
+			result = append(result, field)
+		}
+	}
+	return result
+}
+
+func mergeRuntimeOwnedFields(left, right []golem.FieldID) []golem.FieldID {
+	seen := make(map[golem.FieldID]bool, len(left)+len(right))
+	result := make([]golem.FieldID, 0, len(left)+len(right))
+	for _, values := range [][]golem.FieldID{left, right} {
+		for _, field := range values {
+			if !seen[field] {
+				seen[field] = true
+				result = append(result, field)
+			}
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return string(result[i][:]) < string(result[j][:]) })
+	return result
 }
 
 func prepareCallerRootUpsert[P, A any](caller *Caller[P, A], request rootUpsertPrepareRequest) (preparedRuntimeUpsert, error) {
@@ -64,6 +101,19 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	ownedFields, err := nestedRootSourceOwnedFields(request.create, app.registry)
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
+	}
+	if request.deferHookOwned {
+		model, present := app.registry.Model(golem.ModelID(request.model))
+		if !present {
+			return preparedRuntimeUpsert{}, fmt.Errorf("hook-owned upsert model is absent")
+		}
+		missing := missingRuntimeOwnedFields(request.create, model.GraphQLHookOwnedCreateFields())
+		if len(missing) != 0 {
+			if stance != mutationir.Caller || !hasBeforeCreateHook(app.bindings, golem.ModelID(request.model)) {
+				return preparedRuntimeUpsert{}, fmt.Errorf("hook-owned upsert preparation requires a caller BeforeCreate hook")
+			}
+			ownedFields = mergeRuntimeOwnedFields(ownedFields, missing)
+		}
 	}
 	boundCreate, _, err := mutationbind.CreateInputWithRuntimeOwnedFields(request.create, app.registry, ownedFields)
 	if err != nil {
@@ -277,7 +327,13 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			binding.close()
 			return nil, err
 		}
-		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(transaction, binding,
+		queryer, err := binding.queryerFor(backend.database)
+		if err != nil {
+			binding.close()
+			_ = transaction.Rollback()
+			return nil, err
+		}
+		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, binding,
 			func(ctx context.Context) error {
 				if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 					return err
@@ -315,7 +371,14 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			_ = connection.Close()
 			return nil, err
 		}
-		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(connection, binding,
+		queryer, err := binding.queryerFor(backend.database)
+		if err != nil {
+			binding.close()
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = connection.Close()
+			return nil, err
+		}
+		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, binding,
 			func(ctx context.Context) error {
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
 					return err
@@ -367,7 +430,14 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 		_ = scope.rollback()
 		return nil, err
 	}
-	return newSQLXUpsertAttempt(transaction, backend.binding,
+	queryer, err := backend.binding.queryerFor(backend.database)
+	if err != nil {
+		_, _ = transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+quoted)
+		_, _ = transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+quoted)
+		_ = scope.rollback()
+		return nil, err
+	}
+	return newSQLXUpsertAttempt(queryer, backend.binding,
 		func(ctx context.Context) error {
 			if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT "+quoted); err != nil {
 				return err
@@ -397,6 +467,7 @@ func newSQLXUpsertAttempt(queryer sqlx.QueryerContext, binding *executionBinding
 }
 
 func (attempt *sqlxUpsertAttempt) Query(ctx context.Context, statement mutationupsert.Statement) (uint32, error) {
+	recordQueryerStatement(ctx, attempt.queryer, attempt.binding.observation)
 	rows, err := attempt.queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
 		return 0, err
@@ -493,6 +564,7 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 					return fmt.Errorf("upsert create hook changed branch shape")
 				}
 				next.create = *input
+				next.deferHookOwned = false
 			} else {
 				if transformed.Operation() != golem.HookUpdate || input == nil || target == nil {
 					return fmt.Errorf("upsert update hook changed branch shape")
@@ -506,7 +578,9 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 			return err
 		}
 		hookContext := golem.RuntimeContextWithActor(ctx, executor.hooks.actor)
+		hookContext, hookObservation := observeexec.BeginChild(hookContext, request.ModelID(), observe.KindHook, hookObservationOperation(request.Operation()), observe.PhaseBefore)
 		transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, executor.hooks.bindings, request, validate)
+		finishObservation(hookObservation, err)
 		if err != nil {
 			return nil, &mutationHookFailure{operation: request.Operation(), phase: golem.HookBefore, cause: err}
 		}
@@ -608,10 +682,12 @@ func executeUpsertBranchProjection[P, A, M any](ctx context.Context, app *App[P,
 	return projected, nil
 }
 
-func executePreparedRootUpsert[P, A, M any](ctx context.Context, app *App[P, A], binding *executionBinding, descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, prepared preparedRuntimeUpsert, policies mutationplan.PolicySet, hooks *callerMutationHookExecution[A]) (golem.Row[M], error) {
+func executePreparedRootUpsert[P, A, M any](ctx context.Context, app *App[P, A], binding *executionBinding, descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, prepared preparedRuntimeUpsert, policies mutationplan.PolicySet, hooks *callerMutationHookExecution[A]) (row golem.Row[M], resultErr error) {
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, app, binding, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpsert)
+	defer func() { finishDeferredObservation(observation, deferredObservation, resultErr) }()
 	backend := sqlxUpsertBackend{database: app.database, provider: app.provider, binding: binding, mutation: mutationConfig(app, binding)}
 	executor := runtimeUpsertBranchExecutor[P, A, M]{app: app, descriptor: descriptor, projection: projection, prepared: prepared, binding: binding, policies: policies, hooks: hooks}
-	result, err := mutationupsert.Run(ctx, prepared.kernel, backend, func(context.Context) (mutationupsert.FrozenValues, error) {
+	kernelResult, err := mutationupsert.Run(ctx, prepared.kernel, backend, func(context.Context) (mutationupsert.FrozenValues, error) {
 		// Public inputs were frozen and bound exactly once before Prepare. Branch
 		// programs already own those immutable encoded values.
 		return mutationupsert.NewFrozenValues(nil), nil
@@ -619,7 +695,7 @@ func executePreparedRootUpsert[P, A, M any](ctx context.Context, app *App[P, A],
 	if err != nil {
 		return golem.Row[M]{}, publicRootUpsertError(descriptor.Metadata().ModelID(), err)
 	}
-	row, ok := result.Value().(golem.Row[M])
+	row, ok := kernelResult.Value().(golem.Row[M])
 	if !ok {
 		return golem.Row[M]{}, publicRootUpsertError(descriptor.Metadata().ModelID(), fmt.Errorf("upsert branch returned an invalid result"))
 	}

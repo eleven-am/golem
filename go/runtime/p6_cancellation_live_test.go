@@ -20,7 +20,7 @@ func TestP6AnalyticsCancelledContextReturnsNoResultAfterOneStatementAcrossProvid
 			harness := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			audits := &p5SocialAuditSink{}
 			app, err := p6metrics.Open(context.Background(), p6metrics.Config[p6metrics.Principal]{
-				DB: harness.database, Provider: profile.provider,
+				Database:          harness.handle,
 				AuditPrincipal:    func(p6metrics.Principal) string { return "p6-cancellation" },
 				ReportScopedQuery: audits.report,
 				ResolvePrincipal: func(_ context.Context, principal p6metrics.Principal) (p6metrics.Actor, error) {

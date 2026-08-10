@@ -1,0 +1,18 @@
+{
+  "formatVersion": 1,
+  "schema": {
+    "id": "",
+    "stableName": "",
+    "packagePath": "",
+    "rootFunction": "",
+    "actor": {
+      "packagePath": "",
+      "name": ""
+    }
+  },
+  "providers": [],
+  "enums": [],
+  "models": [],
+  "relations": [],
+  "extensions": []
+}

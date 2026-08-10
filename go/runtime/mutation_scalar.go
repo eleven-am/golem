@@ -378,7 +378,14 @@ func executeScalarProgramOnTransactionObserved(ctx context.Context, transaction 
 	if transaction == nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction is required", nil)
 	}
-	return executeScalarProgramOnQueryerObserved(ctx, transaction, binding, registry, model, provider, program, observer, verified)
+	if binding == nil || binding.transaction != transaction {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction binding is unavailable", nil)
+	}
+	queryer, err := binding.queryerFor(binding.database)
+	if err != nil {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction queryer is unavailable", err)
+	}
+	return executeScalarProgramOnQueryerObserved(ctx, queryer, binding, registry, model, provider, program, observer, verified)
 }
 
 // executeScalarProgramOnQueryer is the no-transaction-ownership core used by
@@ -560,6 +567,7 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "exact mutation decoder could not be built", err)
 	}
 
+	recordQueryerStatement(ctx, queryer)
 	rows, err := queryer.QueryxContext(ctx, statement.SQL(), arguments...)
 	if err != nil {
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProviderFailureKind(err), statement.Role(), statementIndex, "mutation statement failed", err)

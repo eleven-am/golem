@@ -72,7 +72,7 @@ func TestP3PostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: golem.PostgreSQL, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {
@@ -222,7 +222,7 @@ func postgresLiveSystemNameOrder(t *testing.T, dsn, label string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{DB: database, Provider: golem.PostgreSQL, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, oraclePrincipal) (oracleActor, error) { return oracleActor{}, nil }})
+	app, err := Open(ctx, Config[oraclePrincipal, oracleActor]{Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, oraclePrincipal) (oracleActor, error) { return oracleActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

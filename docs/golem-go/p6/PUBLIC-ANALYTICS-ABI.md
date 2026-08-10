@@ -1,6 +1,6 @@
 # P6 public analytics and scoped-read ABI
 
-Status: **controlling planned ABI; not implemented**
+Status: **implemented; controlling public ABI for completed P6**
 
 This document freezes the application-facing P6 surface. Names shown for a
 generated `social` model package and `socialapp` application package are exact

@@ -12,19 +12,28 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
 // CallerUpdateMany executes one bounded, exact-set authorized update. Planning,
 // policy classification, provider capability checks, and SQL rendering all
 // complete before transaction acquisition.
-func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
+func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpdateMany)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(count)
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
 	predicate, err := where.Freeze(descriptor)
 	if err != nil {
 		return 0, publicBatchPreparationError(mutationir.UpdateMany, descriptor.Metadata().ModelID(), err)
@@ -47,10 +56,17 @@ func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 }
 
-func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
+func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationDeleteMany)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(count)
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
 	predicate, err := where.Freeze(descriptor)
 	if err != nil {
 		return 0, publicBatchPreparationError(mutationir.DeleteMany, descriptor.Metadata().ModelID(), err)
@@ -69,10 +85,17 @@ func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 }
 
-func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
+func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpdateMany)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(count)
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
 	program, err := prepareBatchProgram(system.app, nil, mutationir.System, mutationir.UpdateMany, descriptor, where, &input)
 	if err != nil {
 		return 0, publicBatchPreparationError(mutationir.UpdateMany, descriptor.Metadata().ModelID(), err)
@@ -80,10 +103,17 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 	return executePublicBatch[P, A](ctx, system.app, system.executor, program, nil)
 }
 
-func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
+func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
+	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationDeleteMany)
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(count)
+		}
+		finishDeferredObservation(observation, deferredObservation, resultErr)
+	}()
 	program, err := prepareBatchProgram[P, A, M](system.app, nil, mutationir.System, mutationir.DeleteMany, descriptor, where, nil)
 	if err != nil {
 		return 0, publicBatchPreparationError(mutationir.DeleteMany, descriptor.Metadata().ModelID(), err)
@@ -157,7 +187,9 @@ func prepareCallerFrozenBatchHooks[P, A any](ctx context.Context, caller *Caller
 		return err
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	hookContext, hookObservation := observeexec.BeginChild(hookContext, model, observe.KindHook, hookObservationOperation(request.Operation()), observe.PhaseBefore)
 	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, request, validate)
+	finishObservation(hookObservation, err)
 	if err != nil {
 		return mutationbatch.Program{}, err
 	}
@@ -466,6 +498,7 @@ func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerCont
 	for index, binding := range bindings {
 		arguments[index] = binding.Value()
 	}
+	recordQueryerStatement(ctx, queryer)
 	rows, err := queryer.QueryxContext(ctx, statement.SQL(), arguments...)
 	if err != nil {
 		return nil, nil, err
@@ -561,8 +594,14 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 		if _, err := binding.transaction.ExecContext(ctx, "SAVEPOINT "+name); err != nil {
 			return batchExecutionScope{}, err
 		}
+		queryer, err := binding.queryerFor(database)
+		if err != nil {
+			_, _ = binding.transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+name)
+			_, _ = binding.transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+name)
+			return batchExecutionScope{}, err
+		}
 		return batchExecutionScope{
-			queryer: binding.transaction,
+			queryer: queryer,
 			execer:  binding.transaction,
 			binding: binding,
 			finish: func(ctx context.Context) error {
@@ -586,7 +625,13 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 			return batchExecutionScope{}, err
 		}
 		active := transactionExecution(database, transaction)
-		return batchExecutionScope{queryer: transaction, execer: transaction, binding: active, finish: func(context.Context) error {
+		queryer, err := active.queryerFor(database)
+		if err != nil {
+			active.close()
+			_ = transaction.Rollback()
+			return batchExecutionScope{}, err
+		}
+		return batchExecutionScope{queryer: queryer, execer: transaction, binding: active, finish: func(context.Context) error {
 			defer active.close()
 			return transaction.Commit()
 		}, abort: func() error {
@@ -606,8 +651,15 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 			return batchExecutionScope{}, err
 		}
 		active := scopedExecution(database, connection)
+		queryer, err := active.queryerFor(database)
+		if err != nil {
+			active.close()
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = connection.Close()
+			return batchExecutionScope{}, err
+		}
 		return batchExecutionScope{
-			queryer: connection,
+			queryer: queryer,
 			execer:  connection,
 			binding: active,
 			finish: func(ctx context.Context) error {

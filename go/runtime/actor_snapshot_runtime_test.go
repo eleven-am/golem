@@ -85,7 +85,7 @@ func TestForPrincipalSnapshotsMutableActorOnceForPoliciesHooksAndConcurrentReads
 
 	var snapshots atomic.Int64
 	app, err := Open(ctx, Config[*snapshotRuntimeActor, *snapshotRuntimeActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal *snapshotRuntimeActor) (*snapshotRuntimeActor, error) {
 			return principal, nil
 		},
@@ -163,7 +163,7 @@ func TestForPrincipalRejectsMutableActorWithoutSnapshotterAsUnauthenticated(t *t
 	})
 	bindingPackage := golem.GeneratedStampedPackageBindings(fixture.Bundle.GenerationDigest(), []golem.PolicyBinding[*snapshotRuntimeActor]{allowUser, allowPost}, nil)
 	bindings, _ := golem.GeneratedApplicationBindings(fixture.Bundle.GenerationDigest(), bindingPackage)
-	app, err := Open(ctx, Config[*snapshotRuntimeActor, *snapshotRuntimeActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, actor *snapshotRuntimeActor) (*snapshotRuntimeActor, error) { return actor, nil }})
+	app, err := Open(ctx, Config[*snapshotRuntimeActor, *snapshotRuntimeActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(_ context.Context, actor *snapshotRuntimeActor) (*snapshotRuntimeActor, error) { return actor, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

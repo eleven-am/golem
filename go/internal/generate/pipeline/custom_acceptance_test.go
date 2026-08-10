@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
@@ -17,7 +18,7 @@ import (
 
 func TestFreshGeneratedExecutableRunsMixedOrdinaryAndCustomDocument(t *testing.T) {
 	root := t.TempDir()
-	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/customapp\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf("module example.test/customapp\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot(t)))
 	writePipelineAcceptanceFile(t, root, "app/model.go", `package app
 
 import (
@@ -48,14 +49,29 @@ func Echo(_ context.Context, caller *Caller[Principal], args EchoArgs) (string, 
 	if output, err := tidy.CombinedOutput(); err != nil {
 		t.Fatalf("prepare module: %v\n%s", err, output)
 	}
-	result, err := Build(context.Background(), Request{
+	moduleBefore, err := os.ReadFile(filepath.Join(root, "go.mod"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sumsBefore, sumsBeforePresent := readOptionalFile(t, filepath.Join(root, "go.sum"))
+	treeBefore := snapshotConsumerTree(t, root)
+	reviewed := p8BuildWithReviewedSQLiteHistory(t, context.Background(), Request{
 		Compile:    compile.Config{Dir: filepath.Join(root, "app"), Pattern: ".", Root: "DefineSchema"},
 		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/customapp/app", PackageName: "app", Directory: filepath.Join(root, "app")},
 		Lowerers:   []physical.Lowerer{sqliteprovider.New()}, Env: []string{"GOWORK=off"},
 	})
+	moduleAfter, err := os.ReadFile(filepath.Join(root, "go.mod"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	sumsAfter, sumsAfterPresent := readOptionalFile(t, filepath.Join(root, "go.sum"))
+	if string(moduleAfter) != string(moduleBefore) || sumsAfterPresent != sumsBeforePresent || string(sumsAfter) != string(sumsBefore) {
+		t.Fatal("private gqlgen generation mutated consumer go.mod or go.sum")
+	}
+	if treeAfter := snapshotConsumerTree(t, root); !reflect.DeepEqual(treeAfter, treeBefore) {
+		t.Fatalf("private gqlgen generation mutated consumer tree\nbefore=%v\nafter=%v", treeBefore, treeAfter)
+	}
+	result := reviewed.Result
 	for _, artifact := range result.Prospective.Artifacts {
 		if artifact.Kind == manifest.ArtifactModelGo || artifact.Kind == manifest.ArtifactBindingsGo || artifact.Kind == manifest.ArtifactRegistryGo || artifact.Kind == manifest.ArtifactGraphQLGo || artifact.Kind == manifest.ArtifactGraphQLSDL {
 			writePipelineAcceptanceFile(t, root, artifact.Path, string(artifact.Content))
@@ -66,9 +82,7 @@ func Echo(_ context.Context, caller *Caller[Principal], args EchoArgs) (string, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := sqliteprovider.New().ApplyInitial(context.Background(), database, result.Providers[0].Schema); err != nil {
-		t.Fatal(err)
-	}
+	p8ApplyReviewedSQLiteHistory(t, context.Background(), database, reviewed.History)
 	if _, err := database.ExecContext(context.Background(), `INSERT INTO "users"("id","name") VALUES (?,?)`, 1, "alice"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,21 +90,61 @@ func Echo(_ context.Context, caller *Caller[Principal], args EchoArgs) (string, 
 	writePipelineAcceptanceFile(t, root, "acceptance/custom_test.go", fmt.Sprintf(`package acceptance_test
 import (
  "context"; "net/http"; "net/http/httptest"; "strings"; "testing"
- "example.test/customapp/app"; "github.com/eleven-am/golem/go/golem"; "github.com/jmoiron/sqlx"
+ "example.test/customapp/app"; providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 )
 func TestMixed(t *testing.T) {
- db, err := sqlx.Open("sqlite", %q); if err != nil { t.Fatal(err) }; defer db.Close()
- application, err := app.Open(context.Background(), app.Config[app.Principal]{DB: db, Provider: golem.SQLite, ResolvePrincipal: func(context.Context, app.Principal)(app.Principal,error){ return app.Principal{ID:"p"},nil }}); if err != nil { t.Fatal(err) }
+ db, err := providersqlite.Open(context.Background(), providersqlite.Config{DataSourceName:%q}); if err != nil { t.Fatal(err) }; defer db.Close()
+ application, err := app.Open(context.Background(), app.Config[app.Principal]{Database: db, ResolvePrincipal: func(context.Context, app.Principal)(app.Principal,error){ return app.Principal{ID:"p"},nil }}); if err != nil { t.Fatal(err) }
  server, err := application.GraphQL(app.GraphQLConfig[app.Principal]{PrincipalFromContext: func(context.Context)(app.Principal,bool){ return app.Principal{ID:"p"},true }, ReportInternalError: func(_ context.Context, err error){ t.Errorf("internal: %%v",err) }}); if err != nil { t.Fatal(err) }
  request := httptest.NewRequest(http.MethodPost, "/graphql", strings.NewReader(`+"`"+`{"query":"query { users { name greeting(prefix: \"hi:\") } echo(message: \"ok\") }"}`+"`"+`)); request.Header.Set("Content-Type","application/json")
  recorder := httptest.NewRecorder(); server.Handler().ServeHTTP(recorder, request); body := recorder.Body.String()
  if recorder.Code != 200 || !strings.Contains(body, `+"`"+`"name":"alice"`+"`"+`) || !strings.Contains(body, `+"`"+`"greeting":"hi:alice"`+"`"+`) || !strings.Contains(body, `+"`"+`"echo":"custom:ok"`+"`"+`) || strings.Contains(body, `+"`"+`"errors"`+"`"+`) { t.Fatalf("code=%%d body=%%s", recorder.Code, body) }
 }
-`, "file:"+databasePath+"?_pragma=foreign_keys(1)"))
+
+`, "file:"+databasePath))
 	command := exec.Command("go", "test", "-mod=mod", "./...")
 	command.Dir = root
 	command.Env = append(os.Environ(), "GOWORK=off")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("fresh custom consumer failed: %v\n%s", err, output)
 	}
+}
+
+func readOptionalFile(t *testing.T, path string) ([]byte, bool) {
+	t.Helper()
+	value, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, false
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value, true
+}
+
+func snapshotConsumerTree(t *testing.T, root string) map[string]string {
+	t.Helper()
+	result := map[string]string{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			result[relative+"/"] = "directory"
+			return nil
+		}
+		value, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		result[relative] = string(value)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return result
 }

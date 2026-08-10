@@ -15,6 +15,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func TestRootUpsertTruthfullyCreatesThenUpdatesWithProjection(t *testing.T) {
@@ -49,6 +50,89 @@ func TestRootUpsertTruthfullyCreatesThenUpdatesWithProjection(t *testing.T) {
 	var factCount int
 	if err := fixture.app.database.GetContext(ctx, &factCount, `SELECT COUNT(*) FROM "_golem_outbox"`); err != nil || factCount != 2 {
 		t.Fatalf("subscribed upsert facts=%d err=%v", factCount, err)
+	}
+}
+
+func TestP8HookOwnedRootUpsertDefersOnlySelectedCreateCompleteness(t *testing.T) {
+	ctx := context.Background()
+	var beforeCreate atomic.Int64
+	fixture := mutationResultHookOwnedFixture(t, MutationLimits{}, func(schema schematest.Fixture, _ golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor] {
+		author := golem.GeneratedEqualField[mutationResultPost, golem.UUID](schema.AuthorID)
+		capability := golem.GeneratedCreateFieldCapability(schema.Post, author)
+		return []golem.HookBinding[mutationResultActor]{
+			golem.GeneratedBeforeHookBinding[mutationResultActor, mutationResultPost, golem.CreateHookRequest[mutationResultPost]](schema.Post, golem.HookCreate, func(_ context.Context, request *golem.CreateHookRequest[mutationResultPost]) error {
+				beforeCreate.Add(1)
+				return golem.SetCreate(request, capability, golem.UUID{15: 1})
+			}),
+		}
+	})
+	caller := mustMutationResultCaller(t, fixture)
+	missingAuthor := func(id byte, title string) golem.CreateInput[mutationResultPost] {
+		return golem.GeneratedCreateInput[mutationResultPost](fixture.schema.Post,
+			golem.GeneratedCreateFieldValue(fixture.schema.Post, fixture.postID, golem.UUID{15: id}),
+			golem.GeneratedCreateFieldValue(fixture.schema.Post, fixture.title, title),
+		)
+	}
+	if _, err := CallerUpsert(ctx, caller, fixture.postDescriptor, fixture.target(73), missingAuthor(73, "hook-owned-create"), fixture.updateTitle("unused")); err != nil {
+		t.Fatal(err)
+	}
+	if beforeCreate.Load() != 1 {
+		t.Fatalf("create-branch BeforeCreate calls=%d want=1", beforeCreate.Load())
+	}
+	var author, title string
+	if err := fixture.app.database.QueryRowxContext(ctx, `SELECT "author_id","title" FROM "posts" WHERE "id"=?`, mutationResultUUIDText(73)).Scan(&author, &title); err != nil || author != mutationResultUUIDText(1) || title != "hook-owned-create" {
+		t.Fatalf("hook-owned create author/title=%q/%q error=%v", author, title, err)
+	}
+	if _, err := CallerUpsert(ctx, caller, fixture.postDescriptor, fixture.target(73), missingAuthor(73, "must-not-run"), fixture.updateTitle("update-branch")); err != nil {
+		t.Fatal(err)
+	}
+	if beforeCreate.Load() != 1 {
+		t.Fatalf("update branch invoked BeforeCreate; calls=%d", beforeCreate.Load())
+	}
+
+	var omitted atomic.Int64
+	omission := mutationResultHookOwnedFixture(t, MutationLimits{}, func(schema schematest.Fixture, _ golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor] {
+		return []golem.HookBinding[mutationResultActor]{
+			golem.GeneratedBeforeHookBinding[mutationResultActor, mutationResultPost, golem.CreateHookRequest[mutationResultPost]](schema.Post, golem.HookCreate, func(context.Context, *golem.CreateHookRequest[mutationResultPost]) error {
+				omitted.Add(1)
+				return nil
+			}),
+		}
+	})
+	omissionCollector := &p8ObservationCollector{}
+	omission.app.observer = omissionCollector
+	omissionCaller := mustMutationResultCaller(t, omission)
+	_, err := CallerUpsert(ctx, omissionCaller, omission.postDescriptor, omission.target(74),
+		golem.GeneratedCreateInput[mutationResultPost](omission.schema.Post,
+			golem.GeneratedCreateFieldValue(omission.schema.Post, omission.postID, golem.UUID{15: 74}),
+			golem.GeneratedCreateFieldValue(omission.schema.Post, omission.title, "omitted")),
+		omission.updateTitle("unused"))
+	var public *golem.Error
+	if !errors.As(err, &public) || public.Code != golem.CodeBadUserInput || omitted.Load() != 1 {
+		t.Fatalf("omitting hook error=%v calls=%d", err, omitted.Load())
+	}
+	if values := omissionCollector.matching(observe.KindMutation, observe.OperationMutationUpsert); len(values) != 1 || values[0].statements != 2 {
+		t.Fatalf("omitting hook observations=%+v want two database-coordination statements", values)
+	}
+	var count int
+	if err := omission.app.database.GetContext(ctx, &count, `SELECT COUNT(*) FROM "posts" WHERE "id"=?`, mutationResultUUIDText(74)); err != nil || count != 0 {
+		t.Fatalf("omitting hook rows=%d error=%v", count, err)
+	}
+
+	ordinary := newMutationResultFixture(t)
+	ordinaryCollector := &p8ObservationCollector{}
+	ordinary.app.observer = ordinaryCollector
+	ordinaryCaller := mustMutationResultCaller(t, ordinary)
+	_, err = CallerUpsert(ctx, ordinaryCaller, ordinary.postDescriptor, ordinary.target(75),
+		golem.GeneratedCreateInput[mutationResultPost](ordinary.schema.Post,
+			golem.GeneratedCreateFieldValue(ordinary.schema.Post, ordinary.postID, golem.UUID{15: 75}),
+			golem.GeneratedCreateFieldValue(ordinary.schema.Post, ordinary.title, "not-hook-owned")),
+		ordinary.updateTitle("unused"))
+	if !errors.As(err, &public) || public.Code != golem.CodeBadUserInput {
+		t.Fatalf("ordinary missing required field error=%v", err)
+	}
+	if values := ordinaryCollector.matching(observe.KindMutation, observe.OperationMutationUpsert); len(values) != 0 {
+		t.Fatalf("ordinary missing required field reached execution=%+v", values)
 	}
 }
 
@@ -432,7 +516,7 @@ func TestUpsertHiddenExistingNeverFallsThroughToUnauthorizedUpdate(t *testing.T)
 			provider = golem.PostgreSQL
 		}
 		app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-			DB: fixture.app.database, Provider: provider, Bundle: fixture.schema.Bundle,
+			Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle,
 			Bindings: bindings, Descriptors: fixture.app.descriptors,
 			ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 				return mutationResultActor{}, nil

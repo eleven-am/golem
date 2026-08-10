@@ -59,6 +59,9 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	if graphql.Operations == nil || len(*graphql.Operations) != 5 || (*graphql.Operations)[4] != ir.OperationGroupBy {
 		t.Fatalf("GraphQL operations = %#v", graphql.Operations)
 	}
+	if !reflect.DeepEqual(graphql.HookOwnedCreateFields, []ir.FieldID{"12000000000000000000000000000000"}) {
+		t.Fatalf("GraphQL hook-owned fields = %#v", graphql.HookOwnedCreateFields)
+	}
 	user := result.Advanced[0]
 	if user.ModelID != userID {
 		t.Fatalf("last advanced model = %s, want user", user.ModelID)

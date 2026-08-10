@@ -22,7 +22,7 @@ import (
 const GQLGenVersion = "v0.17.70"
 
 const (
-	GraphQLABIVersion        = "p7-graphql-abi-v3"
+	GraphQLABIVersion        = "p8-graphql-abi-v4"
 	GoFilename               = "zz_golem_graphql.gen.go"
 	SDLFilename              = "zz_golem_graphql.schema.graphqls"
 	DefaultGolemImportPath   = "github.com/eleven-am/golem/go/golem"
@@ -38,6 +38,7 @@ type Request struct {
 	PackageName         string
 	AppImportPath       string
 	ModuleDir           string
+	Env                 []string
 	SDL                 string
 	ContractFingerprint ir.Fingerprint
 	Actor               ir.GoNamedTypeIR
@@ -81,6 +82,11 @@ func Emit(request Request) (Result, error) {
 		if request.GolemImportPath != DefaultGolemImportPath {
 			request.GraphQLImportPath = strings.TrimSuffix(request.GolemImportPath, "/golem") + "/graphql"
 		}
+	}
+	golemModulePath, golemSuffix := strings.CutSuffix(request.GolemImportPath, "/golem")
+	graphqlModulePath, graphqlSuffix := strings.CutSuffix(request.GraphQLImportPath, "/graphql")
+	if !golemSuffix || !graphqlSuffix || golemModulePath == "" || golemModulePath != graphqlModulePath {
+		return Result{}, fmt.Errorf("GraphQL codegen requires golem and graphql imports from one module")
 	}
 	if request.RuntimeImportPath == "" {
 		request.RuntimeImportPath = strings.TrimSuffix(request.GolemImportPath, "/golem") + "/runtime"
@@ -322,7 +328,7 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\tserver, err := golemgraphql.NewServer(golemGeneratedGraphQLSDL, golemgraphql.Config[P]{\n")
 	body.WriteString("\t\tPrincipalFromContext: config.PrincipalFromContext, Limits: config.Limits, Introspection: config.Introspection, WebSocketInit: config.WebSocketInit, EventLimits: app.runtime.EventLimits(),\n")
-	body.WriteString("\t\tContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable,\n")
+	body.WriteString("\t\tContractFingerprint: bundle.Contract().Fingerprint(), ReportInternalError: config.ReportInternalError, ExecutableSchema: golemGeneratedExecutable, Observer: app.observer, Provider: app.provider,\n")
 	body.WriteString("\t}, executor)\n")
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\treturn &GraphQLServer{handler: server.Handler(), sdl: server.SDL(), contractFingerprint: server.ContractFingerprint(), shutdown: server.Shutdown}, nil\n")

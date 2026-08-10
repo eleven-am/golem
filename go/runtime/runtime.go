@@ -14,6 +14,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -29,6 +30,8 @@ import (
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	"github.com/eleven-am/golem/go/internal/subscription"
+	"github.com/eleven-am/golem/go/observe"
+	providerapi "github.com/eleven-am/golem/go/provider"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -36,8 +39,7 @@ import (
 // application's authenticated principal type; A is the actor type consumed by
 // model policy methods.
 type Config[P, A any] struct {
-	DB                     *sqlx.DB
-	Provider               golem.Provider
+	Database               *providerapi.Database
 	Bundle                 golem.SchemaBundle
 	Bindings               golem.ApplicationBindings[A]
 	Descriptors            golem.ApplicationDescriptors
@@ -48,7 +50,7 @@ type Config[P, A any] struct {
 	EventFactories         EventFactoryRegistry
 	EventLimits            events.Limits
 	EventTransport         events.EventTransport
-	EventObserver          events.Observer
+	Observer               observe.Observer
 	CDCAdapters            []events.CDCAdapter
 	ReportEventOperator    events.OperatorAudit
 	HistoricalEventBundles []golem.SchemaBundle
@@ -66,6 +68,7 @@ type Config[P, A any] struct {
 // App contains immutable process-wide metadata only. No actor, policy set,
 // loader, request context, or decoded row is retained here.
 type App[P, A any] struct {
+	databaseHandle    *providerapi.Database
 	database          *sqlx.DB
 	provider          policyir.Provider
 	registry          *schema.Registry
@@ -83,6 +86,7 @@ type App[P, A any] struct {
 	eventLimits       events.Limits
 	eventTransport    events.EventTransport
 	eventObserver     events.Observer
+	observer          observe.Observer
 	eventSchemas      *eventSchemaHistory
 	eventProvider     golem.Provider
 	eventPublisher    eventPublisherRunner
@@ -141,9 +145,52 @@ func (prepared PreparedRead) IsSystem() bool { return prepared.system }
 
 // Open validates the complete generated artifact graph, fingerprints, provider
 // selection, and live provider capabilities before publishing an App.
-func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error) {
-	if ctx == nil || config.DB == nil {
+func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A], resultErr error) {
+	if ctx == nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: context and database are required")
+	}
+	databaseHandle := config.Database
+	if databaseHandle == nil {
+		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: context and database are required")
+	}
+	database := databaseHandle.UnsafeSQLX()
+	if database == nil {
+		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: database handle is zero or closed")
+	}
+	pool := databaseHandle.Pool()
+	if pool.MaximumOpen() < 1 || pool.MaximumIdle() < 1 || pool.MaximumIdle() > pool.MaximumOpen() {
+		return nil, fmt.Errorf("P8_RUNTIME_DATABASE: verified database pool configuration is invalid")
+	}
+	// UnsafeSQLX callers may have changed these knobs since provider.Open.
+	// Restore the sealed profile before the runtime capability reproof.
+	database.SetMaxOpenConns(pool.MaximumOpen())
+	database.SetMaxIdleConns(pool.MaximumIdle())
+	database.SetConnMaxLifetime(pool.ConnectionMaximumLifetime())
+	database.SetConnMaxIdleTime(pool.ConnectionMaximumIdleTime())
+	if database.Stats().MaxOpenConnections != pool.MaximumOpen() {
+		return nil, fmt.Errorf("P8_RUNTIME_DATABASE: database pool profile could not be restored")
+	}
+	if database.Stats().InUse != 0 {
+		return nil, fmt.Errorf("P8_RUNTIME_DATABASE: database pool must be idle during application startup")
+	}
+	providerIdentity := databaseHandle.Provider()
+	ctx, openObservation := observeexec.Begin(ctx, config.Observer, providerIdentity, golem.ModelID{}, observe.KindRuntime, observe.OperationRuntimeOpen, observe.PhaseOpen)
+	openReason := observe.ReasonInvalidInput
+	defer func() {
+		if resultErr == nil {
+			observeexec.Finish(openObservation, observe.OutcomeSuccess, observe.ReasonNone)
+			return
+		}
+		observeexec.Finish(openObservation, observe.OutcomeRefused, openReason)
+	}()
+	if databaseHandle.Capabilities().Provider() != providerIdentity {
+		openReason = observe.ReasonCapability
+		return nil, fmt.Errorf("P3_RUNTIME_PROVIDER: database handle capabilities do not match its provider")
+	}
+	provider, ok := internalProvider(providerIdentity)
+	if !ok {
+		openReason = observe.ReasonProvider
+		return nil, fmt.Errorf("P3_RUNTIME_PROVIDER: unsupported database provider %q", providerIdentity)
 	}
 	if config.ResolvePrincipal == nil {
 		return nil, fmt.Errorf("P3_RUNTIME_CONFIG: principal resolver is required")
@@ -171,16 +218,12 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err != nil {
 		return nil, err
 	}
-	eventLimits, err := validateEventConfiguration(config, registry)
+	eventLimits, err := validateEventConfiguration(config, registry, providerIdentity)
 	if err != nil {
 		return nil, err
 	}
 	if config.Bindings.GenerationDigest() != registry.GenerationDigest() || config.Descriptors.GenerationDigest() != registry.GenerationDigest() {
 		return nil, fmt.Errorf("P3_RUNTIME_GENERATION: bindings, descriptors, and schema differ")
-	}
-	provider, ok := internalProvider(config.Provider)
-	if !ok {
-		return nil, fmt.Errorf("P3_RUNTIME_PROVIDER: unsupported provider %q", config.Provider)
 	}
 	providers, err := providerSet(registry)
 	if err != nil || !providers.Contains(provider) {
@@ -192,25 +235,40 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (*App[P, A], error
 	if err := validateAfterCommitHandler(config.Bindings, config.AfterCommitError); err != nil {
 		return nil, err
 	}
-	expected, err := selectedPhysicalSchema(config.Bundle, config.Provider)
+	expected, err := selectedPhysicalSchema(config.Bundle, providerIdentity)
 	if err != nil {
-		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: %w", err)
+		return nil, fmt.Errorf("P3_RUNTIME_SCHEMA: generated physical schema is invalid")
 	}
-	if err := verifyPhysical(ctx, config.DB, provider, expected); err != nil {
-		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: %w", err)
-	}
-	proof, err := proveCapabilities(ctx, config.DB, provider, [32]byte(registry.ModelFingerprint()))
+	migrationStartup, err := prepareReviewedMigrationStartup(databaseHandle, config.Bundle, providerIdentity, expected)
 	if err != nil {
-		return nil, fmt.Errorf("P3_RUNTIME_CAPABILITY: %w", err)
+		openReason = observe.ReasonMigrationHistory
+		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: reviewed migration state is invalid")
 	}
-	app := &App[P, A]{database: config.DB, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, eventObserver: config.EventObserver, eventSchemas: eventSchemas, eventProvider: config.Provider, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}
+	migrationContext, migrationObservation := observeexec.BeginChild(ctx, golem.ModelID{}, observe.KindMigration, observe.OperationMigrationInspect, observe.PhaseVerify)
+	if err := verifyReviewedMigrationLedger(migrationContext, database, providerIdentity, expected.System, migrationStartup); err != nil {
+		observeexec.Finish(migrationObservation, observe.OutcomeRefused, observe.ReasonMigrationHistory)
+		openReason = observe.ReasonMigrationHistory
+		return nil, fmt.Errorf("P8_RUNTIME_MIGRATION: live migration state is incompatible")
+	}
+	observeexec.Finish(migrationObservation, observe.OutcomeSuccess, observe.ReasonNone)
+	openReason = observe.ReasonCapability
+	proof, err := proveCapabilities(ctx, database, provider, [32]byte(registry.ModelFingerprint()), pool.MaximumOpen())
+	if err != nil {
+		return nil, fmt.Errorf("P3_RUNTIME_CAPABILITY: database capabilities are incompatible")
+	}
+	if err := verifyPhysical(ctx, database, provider, expected); err != nil {
+		openReason = observe.ReasonSchemaDrift
+		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
+	}
+	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery}
+	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err
 	}
 	return app, nil
 }
 
-func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry) (events.Limits, error) {
+func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry, providerIdentity golem.Provider) (events.Limits, error) {
 	limits, err := events.NormalizeLimits(config.EventLimits)
 	if err != nil {
 		return events.Limits{}, err
@@ -265,7 +323,7 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport requires runtime binding")
 		}
 	}
-	if _, err := events.ValidateCDCAdapters(config.Provider, config.CDCAdapters); err != nil {
+	if _, err := events.ValidateCDCAdapters(providerIdentity, config.CDCAdapters); err != nil {
 		return events.Limits{}, err
 	}
 	return limits, nil
@@ -409,13 +467,15 @@ func (caller *Caller[P, A]) ExecuteFrozenRead(ctx context.Context, request golem
 	return CallerExecuteFrozenRead(ctx, caller, request)
 }
 
-func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) ([]golem.RuntimeModelRow, error) {
+func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) (result []golem.RuntimeModelRow, resultErr error) {
 	if app == nil || ctx == nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "read", prepared.ModelID(), golem.FieldID{}, "read execution is unavailable", nil)
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	ctx, observation := beginExecutionObservation(ctx, app, prepared.executor, prepared.ModelID(), observe.KindRead, readObservationOperation(prepared.Operation()))
+	defer func() { finishObservation(observation, resultErr) }()
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
@@ -433,13 +493,15 @@ func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared 
 
 // CallerFindMany is the generic execution primitive used by generated model
 // clients. Application code normally calls caller.Posts.FindMany instead.
-func CallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
+func CallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (resultRows []golem.Row[M], resultErr error) {
 	if caller == nil || caller.app == nil {
 		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "findMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindMany)
+	defer func() { finishObservation(observation, resultErr) }()
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookRequest := golem.RuntimeFindManyHookRequest(options)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
 		return nil, err
 	}
 	options = hookRequest.Options()
@@ -456,13 +518,15 @@ func CallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], desc
 		return nil, err
 	}
 	result := golem.RuntimeFindManyHookResult(rows)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookAfter, result); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookAfter, result); err != nil {
 		return nil, err
 	}
 	return rows, nil
 }
 
-func SystemFindMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
+func SystemFindMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (resultRows []golem.Row[M], resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindMany)
+	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindMany(descriptor, options...)
 	if err != nil {
 		return nil, err
@@ -474,13 +538,15 @@ func SystemFindMany[P, A, M any](ctx context.Context, system System[P, A], descr
 	return executeRows(ctx, system.app, prepared, descriptor)
 }
 
-func CallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
+func CallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultFound bool, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return golem.Row[M]{}, false, golem.RuntimeReadError(golem.CodeUnauthenticated, "findFirst", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindFirst)
+	defer func() { finishObservation(observation, resultErr) }()
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookRequest := golem.RuntimeFindFirstHookRequest(options)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookBefore, hookRequest); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookBefore, hookRequest); err != nil {
 		return golem.Row[M]{}, false, err
 	}
 	options = hookRequest.Options()
@@ -502,13 +568,15 @@ func CallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], des
 		row = rows[0]
 	}
 	result := golem.RuntimeFindFirstHookResult(row, found)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookAfter, result); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookAfter, result); err != nil {
 		return golem.Row[M]{}, false, err
 	}
 	return row, found, nil
 }
 
-func SystemFindFirst[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
+func SystemFindFirst[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultFound bool, resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindFirst)
+	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindFirst(descriptor, options...)
 	if err != nil {
 		return golem.Row[M]{}, false, err
@@ -524,13 +592,15 @@ func SystemFindFirst[P, A, M any](ctx context.Context, system System[P, A], desc
 	return rows[0], true, nil
 }
 
-func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
+func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
 	if caller == nil || caller.app == nil {
 		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
+	defer func() { finishObservation(observation, resultErr) }()
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookRequest := golem.RuntimeFindOneHookRequest(selector, options)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookBefore, hookRequest); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookBefore, hookRequest); err != nil {
 		return golem.Row[M]{}, err
 	}
 	selector, options = hookRequest.Selector(), hookRequest.Options()
@@ -554,13 +624,15 @@ func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	}
 	row := rows[0]
 	result := golem.RuntimeFindOneHookResult(row)
-	if err := invokeReadHook(hookContext, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, result); err != nil {
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, result); err != nil {
 		return golem.Row[M]{}, err
 	}
 	return row, nil
 }
 
-func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
+func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
+	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindUnique(descriptor, selector, options...)
 	if err != nil {
 		return golem.Row[M]{}, err
@@ -582,7 +654,12 @@ func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], des
 	return rows[0], nil
 }
 
-func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
+func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {
+	if caller == nil || caller.app == nil {
+		return 0, golem.RuntimeReadError(golem.CodeUnauthenticated, "count", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+	}
+	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadCount)
+	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeCount(descriptor, options...)
 	if err != nil {
 		return 0, err
@@ -594,7 +671,9 @@ func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descrip
 	return executeCount(ctx, caller.app, prepared)
 }
 
-func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
+func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {
+	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadCount)
+	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeCount(descriptor, options...)
 	if err != nil {
 		return 0, err
@@ -613,7 +692,13 @@ func invokeReadHook[A any](ctx context.Context, bindings golem.ApplicationBindin
 	return nil
 }
 
-func executeRows[P, A, M any](ctx context.Context, app *App[P, A], prepared PreparedRead, descriptor golem.ModelDescriptor[M]) ([]golem.Row[M], error) {
+func invokeReadHookObserved[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, bindings golem.ApplicationBindings[A], model golem.ModelID, readOperation golem.ReadOperation, hookOperation golem.HookOperation, phase golem.HookPhase, payload any) (resultErr error) {
+	ctx, observation := beginExecutionObservationPhase(ctx, app, executor, model, observe.KindHook, hookObservationOperation(hookOperation), hookObservationPhase(phase))
+	defer func() { finishObservation(observation, resultErr) }()
+	return invokeReadHook(ctx, bindings, model, readOperation, hookOperation, phase, payload)
+}
+
+func executeRows[P, A, M any](ctx context.Context, app *App[P, A], prepared PreparedRead, descriptor golem.ModelDescriptor[M]) (result []golem.Row[M], resultErr error) {
 	if app == nil || ctx == nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "read", prepared.ModelID(), golem.FieldID{}, "read execution is unavailable", nil)
 	}
@@ -628,7 +713,7 @@ func executeRows[P, A, M any](ctx context.Context, app *App[P, A], prepared Prep
 	if err != nil {
 		return nil, err
 	}
-	result := make([]golem.Row[M], len(executed))
+	result = make([]golem.Row[M], len(executed))
 	for index, item := range executed {
 		result[index], err = golem.RuntimeTypedReadRow(descriptor, item.row)
 		if err != nil {
@@ -1025,7 +1110,7 @@ func relationCorrelation[P, A any](app *App[P, A], child readplan.Plan, endpoint
 	return result, false, err
 }
 
-func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) (int64, error) {
+func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) (result int64, resultErr error) {
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return 0, publicPlanError(prepared, err)
@@ -1034,15 +1119,14 @@ func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared Prepar
 	if err != nil {
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count plan could not be rendered", err)
 	}
-	var count int64
 	queryer, err := prepared.executor.queryerFor(app.database)
 	if err != nil {
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
 	}
-	if err := sqlx.GetContext(ctx, queryer, &count, statement.SQL(), statement.Args()...); err != nil {
+	if err := sqlx.GetContext(ctx, queryer, &result, statement.SQL(), statement.Args()...); err != nil {
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
 	}
-	return count, nil
+	return result, nil
 }
 
 func preparePlan(prepared PreparedRead, registry *schema.Registry, limits readplan.Limits) (readplan.Plan, error) {
@@ -1128,12 +1212,19 @@ func providerSet(registry *schema.Registry) (policyir.ProviderSet, error) {
 	return policyir.NewProviderSet(values...)
 }
 
-func proveCapabilities(ctx context.Context, database *sqlx.DB, provider policyir.Provider, fingerprint [32]byte) (policysql.CapabilityProof, error) {
+func proveCapabilities(ctx context.Context, database *sqlx.DB, provider policyir.Provider, fingerprint [32]byte, poolWidth ...int) (policysql.CapabilityProof, error) {
+	width := database.Stats().MaxOpenConnections
+	if width < 1 {
+		width = 2
+	}
+	if len(poolWidth) != 0 {
+		width = poolWidth[0]
+	}
 	switch provider {
 	case policyir.ProviderSQLite:
-		return sqliteprovider.New().PolicyCapabilityProof(ctx, database, fingerprint)
+		return sqliteprovider.New().VerifiedPoolPolicyCapabilityProof(ctx, database, fingerprint, width)
 	case policyir.ProviderPostgreSQL:
-		return postgresprovider.New().PolicyCapabilityProof(ctx, database, fingerprint)
+		return postgresprovider.New().VerifiedPoolPolicyCapabilityProof(ctx, database, fingerprint, width)
 	default:
 		return policysql.CapabilityProof{}, fmt.Errorf("unknown provider %d", provider)
 	}

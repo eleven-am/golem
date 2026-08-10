@@ -92,7 +92,7 @@ func TestBatchChunkMagnitudeAndPerParentPagingSQLite(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+	app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -242,7 +242,7 @@ func TestBatchChunkMagnitudePostgreSQLProfiles(t *testing.T) {
 			})
 			bindingPackage := golem.GeneratedStampedPackageBindings(bundle.GenerationDigest(), []golem.PolicyBinding[testActor]{allowUser, allowPost}, nil)
 			bindings, _ := golem.GeneratedApplicationBindings(bundle.GenerationDigest(), bindingPackage)
-			app, err := Open(ctx, Config[testPrincipal, testActor]{DB: database, Provider: golem.PostgreSQL, Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
+			app, err := Open(ctx, Config[testPrincipal, testActor]{Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: bundle, Bindings: bindings, Descriptors: descriptors, ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil }})
 			if err != nil {
 				t.Fatal(err)
 			}

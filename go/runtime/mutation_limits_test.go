@@ -62,7 +62,7 @@ func TestMutationLimitsExactBoundariesAndOpenValidation(t *testing.T) {
 		fixture := profile.fixture
 		for index, limits := range invalid {
 			_, err := Open(context.Background(), Config[mutationResultPrincipal, mutationResultActor]{
-				DB: fixture.app.database, Provider: profile.provider, Bundle: fixture.schema.Bundle,
+				Database: p8RuntimeTestDatabase(fixture.app.database, profile.provider), Bundle: fixture.schema.Bundle,
 				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors, MutationLimits: limits,
 				ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 					return mutationResultActor{}, nil

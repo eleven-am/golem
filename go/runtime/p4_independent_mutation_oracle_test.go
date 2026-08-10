@@ -418,7 +418,7 @@ func runInvisibleMissingMutationOracle(t *testing.T, profile mutationProviderAcc
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: fixture.app.database, Provider: profile.provider, Bundle: fixture.schema.Bundle,
+		Database: p8RuntimeTestDatabase(fixture.app.database, profile.provider), Bundle: fixture.schema.Bundle,
 		Bindings: bindings, Descriptors: fixture.app.descriptors,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
@@ -444,6 +444,10 @@ func runInvisibleMissingMutationOracle(t *testing.T, profile mutationProviderAcc
 }
 
 func newPostgreSQLMutationOracleFixture(t *testing.T, dsn, profile string) (mutationResultFixture, string, string) {
+	return newPostgreSQLMutationOracleFixtureFromBase(t, dsn, profile, newMutationResultFixture(t))
+}
+
+func newPostgreSQLMutationOracleFixtureFromBase(t *testing.T, dsn, profile string, base mutationResultFixture) (mutationResultFixture, string, string) {
 	t.Helper()
 	sequence := p4OracleNamespaceSequence.Add(1)
 	applicationNamespace := fmt.Sprintf("golem_p4_oracle_%s_%d_%d", profile, os.Getpid(), sequence)
@@ -467,9 +471,8 @@ func newPostgreSQLMutationOracleFixture(t *testing.T, dsn, profile string) (muta
 			t.Fatal(err)
 		}
 	}
-	base := newMutationResultFixture(t)
 	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-		DB: database, Provider: golem.PostgreSQL, Bundle: schemaFixture.Bundle,
+		Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: schemaFixture.Bundle,
 		Bindings: base.app.bindings, Descriptors: base.app.descriptors,
 		ResolvePrincipal: base.app.resolvePrincipal, SnapshotActor: base.app.snapshotActor,
 	}))

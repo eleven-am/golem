@@ -2,6 +2,7 @@ package schema
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -16,6 +17,18 @@ import (
 // New validates and decodes a bundle exactly once, then publishes an immutable
 // runtime registry. No partially built registry escapes on failure.
 func New(bundle golem.SchemaBundle) (*Registry, error) {
+	return newRegistry(bundle, false)
+}
+
+// NewHistorical accepts only explicitly supported historical document
+// versions after verifying their original canonical bytes and fingerprint.
+// Active generated applications continue to use New and exact current
+// versions; compatibility is never inferred from permissive JSON decoding.
+func NewHistorical(bundle golem.SchemaBundle) (*Registry, error) {
+	return newRegistry(bundle, true)
+}
+
+func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) {
 	if bundle.FormatVersion() != golem.SchemaBundleFormatVersion {
 		return nil, fail(CodeBundle, "formatVersion", "got %d, want %d", bundle.FormatVersion(), golem.SchemaBundleFormatVersion)
 	}
@@ -32,7 +45,7 @@ func New(bundle golem.SchemaBundle) (*Registry, error) {
 		return nil, err
 	}
 	contractDocument := bundle.Contract()
-	contract, err := decodeContract(contractDocument)
+	contract, err := decodeContract(contractDocument, historical)
 	if err != nil {
 		return nil, err
 	}
@@ -86,7 +99,10 @@ func decodeModel(document golem.SchemaDocument) (compilerir.ModelIR, error) {
 	return model, nil
 }
 
-func decodeContract(document golem.SchemaDocument) (compilerir.ContractIR, error) {
+func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.ContractIR, error) {
+	if historical && document.FormatVersion() == 4 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
+		return decodeHistoricalContractV4(document)
+	}
 	if document.FormatVersion() != uint32(compilerir.ContractFormatVersion) || document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
 		return compilerir.ContractIR{}, fail(CodeDocument, "contract", "unsupported format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
 	}
@@ -109,6 +125,87 @@ func decodeContract(document golem.SchemaDocument) (compilerir.ContractIR, error
 		return contract, fail(CodeFingerprint, "contract", "fingerprint mismatch")
 	}
 	return contract, nil
+}
+
+type historicalContractV4 struct {
+	FormatVersion     uint16                                 `json:"formatVersion"`
+	GraphQLABIVersion uint16                                 `json:"graphqlAbiVersion"`
+	Models            []historicalModelContractV4            `json:"models"`
+	Enums             []compilerir.EnumContractIR            `json:"enums"`
+	Methods           []compilerir.AttachedMethodIR          `json:"methods"`
+	CustomOperations  []compilerir.CustomOperationContractIR `json:"customOperations"`
+}
+
+type historicalModelContractV4 struct {
+	ModelID       compilerir.ModelID                   `json:"modelId"`
+	GraphQLName   string                               `json:"graphqlName"`
+	GraphQLPlural string                               `json:"graphqlPlural"`
+	Roots         compilerir.GraphQLRootNamesIR        `json:"roots"`
+	Fields        []compilerir.FieldContractIR         `json:"fields"`
+	Selectors     []compilerir.SelectorContractIR      `json:"selectors"`
+	Operations    []compilerir.Operation               `json:"operations"`
+	Subscriptions bool                                 `json:"subscriptions"`
+	Event         *compilerir.EventContractIR          `json:"event,omitempty"`
+	Aggregation   *compilerir.AggregationContractIR    `json:"aggregation,omitempty"`
+	ScopedReads   bool                                 `json:"scopedReads"`
+	Limits        compilerir.LimitContractIR           `json:"limits"`
+	Computed      []compilerir.ComputedFieldContractIR `json:"computed"`
+	Exposed       bool                                 `json:"exposed"`
+}
+
+func decodeHistoricalContractV4(document golem.SchemaDocument) (compilerir.ContractIR, error) {
+	var legacy historicalContractV4
+	if err := decodeCanonicalJSON(document.Bytes(), &legacy); err != nil {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+	}
+	if legacy.FormatVersion != 4 {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "historical format version changed during decode")
+	}
+	if legacy.GraphQLABIVersion != 3 {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "historical GraphQL ABI version %d is unsupported", legacy.GraphQLABIVersion)
+	}
+	current := contractV4ToCurrent(legacy)
+	canonicalCurrent, err := compilerir.CanonicalContract(current)
+	if err != nil {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+	}
+	var normalized compilerir.ContractIR
+	if err := json.Unmarshal(canonicalCurrent, &normalized); err != nil {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+	}
+	canonicalLegacy, err := json.Marshal(contractCurrentToV4(normalized))
+	if err != nil {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+	}
+	if !bytes.Equal(canonicalLegacy, document.Bytes()) {
+		return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "document is not canonical")
+	}
+	hash := sha256.New()
+	_, _ = hash.Write([]byte("golem:contract-fingerprint:v1"))
+	_, _ = hash.Write([]byte{0})
+	_, _ = hash.Write(canonicalLegacy)
+	if fmt.Sprintf("%x", hash.Sum(nil)) != document.Fingerprint().String() {
+		return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "fingerprint mismatch")
+	}
+	return normalized, nil
+}
+
+func contractV4ToCurrent(input historicalContractV4) compilerir.ContractIR {
+	result := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, GraphQLABIVersion: input.GraphQLABIVersion, Enums: input.Enums, Methods: input.Methods, CustomOperations: input.CustomOperations}
+	result.Models = make([]compilerir.ModelContractIR, len(input.Models))
+	for index, model := range input.Models {
+		result.Models[index] = compilerir.ModelContractIR{ModelID: model.ModelID, GraphQLName: model.GraphQLName, GraphQLPlural: model.GraphQLPlural, Roots: model.Roots, Fields: model.Fields, HookOwnedCreateFields: []compilerir.FieldID{}, Selectors: model.Selectors, Operations: model.Operations, Subscriptions: model.Subscriptions, Event: model.Event, Aggregation: model.Aggregation, ScopedReads: model.ScopedReads, Limits: model.Limits, Computed: model.Computed, Exposed: model.Exposed}
+	}
+	return result
+}
+
+func contractCurrentToV4(input compilerir.ContractIR) historicalContractV4 {
+	result := historicalContractV4{FormatVersion: 4, GraphQLABIVersion: input.GraphQLABIVersion, Enums: input.Enums, Methods: input.Methods, CustomOperations: input.CustomOperations}
+	result.Models = make([]historicalModelContractV4, len(input.Models))
+	for index, model := range input.Models {
+		result.Models[index] = historicalModelContractV4{ModelID: model.ModelID, GraphQLName: model.GraphQLName, GraphQLPlural: model.GraphQLPlural, Roots: model.Roots, Fields: model.Fields, Selectors: model.Selectors, Operations: model.Operations, Subscriptions: model.Subscriptions, Event: model.Event, Aggregation: model.Aggregation, ScopedReads: model.ScopedReads, Limits: model.Limits, Computed: model.Computed, Exposed: model.Exposed}
+	}
+	return result
 }
 
 func decodeCanonicalJSON(payload []byte, target any) error {
@@ -467,6 +564,14 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 			return fail(CodeContract, path+".event", "subscription-disabled model cannot carry event metadata")
 		}
 		fact.scopedReads = model.ScopedReads
+		fact.hookOwnedCreate = make([]golem.FieldID, len(model.HookOwnedCreateFields))
+		for index, field := range model.HookOwnedCreateFields {
+			value, err := fieldID(field)
+			if err != nil {
+				return fail(CodeContract, path+".hookOwnedCreateFields", "%v", err)
+			}
+			fact.hookOwnedCreate[index] = value
+		}
 		if model.Aggregation != nil {
 			value := *model.Aggregation
 			value.Dimensions = append([]compilerir.FieldID(nil), value.Dimensions...)

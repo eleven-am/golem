@@ -80,7 +80,7 @@ func TestP5GeneratedExtensionFixtureBuildsFromCleanSourceThenRepeatsIdentically(
 	if err != nil {
 		t.Fatal(err)
 	}
-	goMod := fmt.Sprintf("module example.test/p5extensions\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot)
+	goMod := fmt.Sprintf("module example.test/p5extensions\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot)
 	if err := os.WriteFile(filepath.Join(cleanDir, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -235,7 +235,7 @@ func TestFreshP6SocialModuleGeneratesCompilesAndConstructsApp(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	goMod := fmt.Sprintf("module example.test/p6social\n\ngo 1.23\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot)
+	goMod := fmt.Sprintf("module example.test/p6social\n\ngo 1.25\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => %s\n", moduleRoot)
 	if err := os.WriteFile(filepath.Join(directory, "go.mod"), []byte(goMod), 0o644); err != nil {
 		t.Fatal(err)
 	}

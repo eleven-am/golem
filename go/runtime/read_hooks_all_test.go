@@ -111,7 +111,7 @@ func TestFindOneAndFindFirstHooksReplaceObserveVetoAndSystemBypasses(t *testing.
 		t.Fatal(err)
 	}
 	app, err := Open(ctx, Config[testPrincipal, testActor]{
-		DB: database, Provider: golem.SQLite, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, testPrincipal) (testActor, error) { return testActor{}, nil },
 	})
 	if err != nil {

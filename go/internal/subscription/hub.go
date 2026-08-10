@@ -85,7 +85,9 @@ type Stream[T any] struct {
 	hub    *ModelHub[T]
 	id     uint64
 	member *member[T]
+	stopMu sync.Mutex
 	stop   func() bool
+	closed bool
 	once   sync.Once
 }
 
@@ -151,7 +153,7 @@ func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state 
 		hub.launchRun(run)
 	}
 	stream := &Stream[T]{hub: hub, id: item.id, member: item}
-	stream.stop = context.AfterFunc(ctx, func() { stream.closeWith(events.CodeSubscriptionCancelled) })
+	stream.installStop(context.AfterFunc(ctx, func() { stream.closeWith(events.CodeSubscriptionCancelled) }))
 	events.Observe(hub.config.Observer, ctx, hub.config.Model, "", events.ObservationHubMembership, events.OutcomeSuccess, "", 0, 0, hub.limits.SubscriberQueue, 0, 1)
 	return stream, nil
 }
@@ -476,11 +478,35 @@ func (stream *Stream[T]) Close() error {
 	stream.closeWith(events.CodeSubscriptionCancelled)
 	return nil
 }
+
+func (stream *Stream[T]) installStop(stop func() bool) {
+	if stop == nil {
+		return
+	}
+	stream.stopMu.Lock()
+	if stream.closed {
+		stream.stopMu.Unlock()
+		stop()
+		return
+	}
+	stream.stop = stop
+	stream.stopMu.Unlock()
+}
+
+func (stream *Stream[T]) closeStop() func() bool {
+	stream.stopMu.Lock()
+	stream.closed = true
+	stop := stream.stop
+	stream.stop = nil
+	stream.stopMu.Unlock()
+	return stop
+}
+
 func (stream *Stream[T]) closeWith(code events.ErrorCode) {
 	remove := false
 	stream.once.Do(func() {
-		if stream.stop != nil {
-			stream.stop()
+		if stop := stream.closeStop(); stop != nil {
+			stop()
 		}
 		remove = true
 	})

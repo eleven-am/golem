@@ -20,6 +20,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	providerapi "github.com/eleven-am/golem/go/provider"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 	"github.com/jackc/pgx/v5"
@@ -39,6 +40,7 @@ type p5SocialPrincipalKey struct{}
 type p5SocialGeneratedHarness struct {
 	profile     p5ExtensionProviderProfile
 	database    *sqlx.DB
+	handle      *providerapi.Database
 	trace       *p5ExtensionSQLTrace
 	server      *p5social.GraphQLServer
 	app         *p5social.App[p5social.Principal]
@@ -146,10 +148,11 @@ func newP5SocialGeneratedHarnessWithAnalyticsLimits(t *testing.T, profile p5Exte
 	if err := apply(ctx, database, schema); err != nil {
 		t.Fatal(err)
 	}
+	databaseHandle := p8AdoptTracedProviderHandle(database, profile)
 	resolutions := &atomic.Int64{}
 	audits := &p5SocialAuditSink{}
 	app, err := p5social.Open(ctx, p5social.Config[p5social.Principal]{
-		DB: database, Provider: profile.provider,
+		Database:          databaseHandle,
 		AnalyticsLimits:   analyticsLimits,
 		AuditPrincipal:    func(principal p5social.Principal) string { return principal.UserID.String() },
 		ReportScopedQuery: audits.report,
@@ -175,7 +178,7 @@ func newP5SocialGeneratedHarnessWithAnalyticsLimits(t *testing.T, profile p5Exte
 	if err != nil {
 		t.Fatal(err)
 	}
-	harness := &p5SocialGeneratedHarness{profile: profile, database: database, trace: trace, server: server, app: app, resolutions: resolutions, audits: audits}
+	harness := &p5SocialGeneratedHarness{profile: profile, database: database, handle: databaseHandle, trace: trace, server: server, app: app, resolutions: resolutions, audits: audits}
 	harness.seed(t)
 	trace.reset()
 	p5social.ResetPolicyProbe()

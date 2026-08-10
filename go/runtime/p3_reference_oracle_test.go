@@ -210,7 +210,7 @@ func assertIndependentReferenceAgreement(t *testing.T, database *sqlx.DB, provid
 		t.Fatal(err)
 	}
 	application, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: provider, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, provider), Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {

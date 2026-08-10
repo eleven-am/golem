@@ -18,11 +18,13 @@ import (
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -934,7 +936,12 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 			_ = scope.rollback()
 			return nil, err
 		}
-		return &systemNestedTransaction[P, A]{app: boundary.app, binding: boundary.source, queryer: boundary.source.transaction, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
+		queryer, err := boundary.source.queryerFor(boundary.app.database)
+		if err != nil {
+			_ = rollbackNestedSavepoint(context.Background(), boundary.source.transaction, name, scope, state)
+			return nil, err
+		}
+		return &systemNestedTransaction[P, A]{app: boundary.app, binding: boundary.source, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
 			commit: func(ctx context.Context) error {
 				_, err := boundary.source.transaction.ExecContext(ctx, "RELEASE SAVEPOINT "+name)
 				if err == nil {
@@ -961,7 +968,14 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 			_ = connection.Close()
 			return nil, err
 		}
-		return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: connection, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
+		queryer, err := binding.queryerFor(boundary.app.database)
+		if err != nil {
+			binding.close()
+			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = connection.Close()
+			return nil, err
+		}
+		return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
 			commit: func(ctx context.Context) error {
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
 					return err
@@ -987,7 +1001,13 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 		_ = transaction.Rollback()
 		return nil, err
 	}
-	return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: transaction, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
+	queryer, err := binding.queryerFor(boundary.app.database)
+	if err != nil {
+		binding.close()
+		_ = transaction.Rollback()
+		return nil, err
+	}
+	return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
 		commit: func(ctx context.Context) error {
 			if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 				return err
@@ -1871,6 +1891,7 @@ func (transaction *systemNestedTransaction[P, A]) acquireNestedSelectorGuard(ctx
 }
 
 func executeNestedGuardStatement(ctx context.Context, queryer sqlx.QueryerContext, statement mutationupsert.Statement) error {
+	recordQueryerStatement(ctx, queryer)
 	rows, err := queryer.QueryxContext(ctx, statement.SQL(), statement.Args()...)
 	if err != nil {
 		return err
@@ -1893,11 +1914,16 @@ func executeNestedGuardStatement(ctx context.Context, queryer sqlx.QueryerContex
 	return nil
 }
 
-func (transaction *systemNestedTransaction[P, A]) ApplyNested(ctx context.Context, request mutationnested.ApplyRequest) (mutationnested.ApplyResult, error) {
+func (transaction *systemNestedTransaction[P, A]) ApplyNested(ctx context.Context, request mutationnested.ApplyRequest) (result mutationnested.ApplyResult, resultErr error) {
 	if err := transaction.ensureGraphFactOrder(); err != nil {
 		return mutationnested.ApplyResult{}, err
 	}
 	node, work := request.Node(), request.Work()
+	var observation *observeexec.Span
+	if node.Ordinal() != 0 && node.Operation() != mutationir.BranchProbe {
+		ctx, observation = observeexec.BeginChild(ctx, golem.ModelID(node.ModelID()), observe.KindMutation, mutationObservationOperation(node.Operation()), observe.PhaseFinish)
+		defer func() { finishObservation(observation, resultErr) }()
+	}
 	switch node.Operation() {
 	case mutationir.BranchProbe:
 		row, ok := work.ResolvedRelationRow()
@@ -2403,6 +2429,7 @@ func (transaction *systemNestedTransaction[P, A]) FinalizeNested(ctx context.Con
 		if err != nil {
 			return err
 		}
+		recordQueryerStatement(ctx, transaction.queryer, transaction.binding.observation)
 		rows, err := transaction.queryer.QueryxContext(ctx, verification.SQL(), verification.Args()...)
 		if err != nil {
 			return fmt.Errorf("P4_RUNTIME_NESTED_POLICY: verify completed create graph: %w", err)

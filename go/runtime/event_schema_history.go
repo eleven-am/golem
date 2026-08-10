@@ -41,7 +41,7 @@ func newEventSchemaHistory(active *schema.Registry, historical []golem.SchemaBun
 		result.activeSchemas[model.ID()] = golem.EventSchemaDigest(digest)
 	}
 	for index, bundle := range historical {
-		registry, err := schema.New(bundle)
+		registry, err := schema.NewHistorical(bundle)
 		if err != nil {
 			return nil, fmt.Errorf("GOLEM_EVENT_CONFIG: historical event bundle %d: %w", index, err)
 		}

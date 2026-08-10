@@ -13,7 +13,7 @@ import (
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 )
 
-const ABIVersion uint16 = 3
+const ABIVersion uint16 = 4
 
 const (
 	DefaultPageSize    uint32 = 50
@@ -35,15 +35,16 @@ var ordinaryOperations = []ir.Operation{
 // one GolemModel declaration. Nil members mean that the author did not override
 // the normalized convention.
 type ModelPatch struct {
-	ModelID       ir.ModelID
-	Operations    *[]ir.Operation
-	Plural        *string
-	Roots         *ir.GraphQLRootNamesIR
-	DefaultPage   *uint32
-	MaximumPage   *uint32
-	Hidden        bool
-	Subscriptions *bool
-	Span          ir.SourceSpan
+	ModelID               ir.ModelID
+	Operations            *[]ir.Operation
+	Plural                *string
+	Roots                 *ir.GraphQLRootNamesIR
+	DefaultPage           *uint32
+	MaximumPage           *uint32
+	Hidden                bool
+	HookOwnedCreateFields []ir.FieldID
+	Subscriptions         *bool
+	Span                  ir.SourceSpan
 }
 
 func Operations() []ir.Operation { return append([]ir.Operation(nil), ordinaryOperations...) }
@@ -171,11 +172,13 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 				model.Exposed = false
 				model.Operations = []ir.Operation{}
 			}
+			model.HookOwnedCreateFields = append([]ir.FieldID(nil), patch.HookOwnedCreateFields...)
 			if patch.Subscriptions != nil {
 				model.Subscriptions = *patch.Subscriptions
 			}
 		}
 		diagnostics = append(diagnostics, normalizeEventContract(compilation.Model, model, patch.Span)...)
+		diagnostics = append(diagnostics, validateHookOwnedShape(compilation.Model, *model, patch.Span)...)
 		diagnostics = append(diagnostics, validateModel(*model, patch.Span)...)
 	}
 	diagnostics = append(diagnostics, validateEnums(compilation.Contract.Enums)...)
@@ -186,6 +189,128 @@ func Normalize(compilation *ir.CompilationIR, patches []ModelPatch) []ir.Diagnos
 	diagnostics = append(diagnostics, graphqlextension.Normalize(compilation, nil, nil)...)
 	ir.SortDiagnostics(diagnostics)
 	return diagnostics
+}
+
+// ValidateHookOwnedMethods closes the portion of GraphQLHookOwned validation
+// that depends on typed binding discovery. It must run after recognized model
+// hooks have been merged into ContractIR and before fingerprinting/codegen.
+func ValidateHookOwnedMethods(compilation ir.CompilationIR) []ir.Diagnostic {
+	beforeCreate := map[ir.ModelID]bool{}
+	for _, method := range compilation.Contract.Methods {
+		if method.ModelID != nil && method.Kind == "hook" && method.Name == "BeforeCreate" {
+			beforeCreate[*method.ModelID] = true
+		}
+	}
+	var diagnostics []ir.Diagnostic
+	for _, model := range compilation.Contract.Models {
+		if len(model.HookOwnedCreateFields) != 0 && !beforeCreate[model.ModelID] {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_BEFORE_CREATE", fmt.Sprintf("model %s declares GraphQLHookOwned without a recognized BeforeCreate hook", model.ModelID), ir.SourceSpan{}))
+		}
+	}
+	ir.SortDiagnostics(diagnostics)
+	return diagnostics
+}
+
+func validateHookOwnedShape(logical ir.ModelIR, contract ir.ModelContractIR, span ir.SourceSpan) []ir.Diagnostic {
+	if len(contract.HookOwnedCreateFields) == 0 {
+		return nil
+	}
+	var model *ir.ModelDeclIR
+	for index := range logical.Models {
+		if logical.Models[index].ID == contract.ModelID {
+			model = &logical.Models[index]
+			break
+		}
+	}
+	if model == nil {
+		return []ir.Diagnostic{ir.NewError("P8_GRAPHQL_HOOK_OWNED_MODEL", fmt.Sprintf("hook-owned model %s is absent", contract.ModelID), span)}
+	}
+	fields := make(map[ir.FieldID]ir.FieldIR, len(model.Fields))
+	for _, field := range model.Fields {
+		fields[field.ID] = field
+	}
+	identity := map[ir.FieldID]bool{}
+	if model.PrimaryKey != nil {
+		for _, field := range model.PrimaryKey.Fields {
+			identity[field] = true
+		}
+	}
+	for _, key := range model.Uniques {
+		for _, field := range key.Fields {
+			identity[field] = true
+		}
+	}
+	owned := map[ir.FieldID]bool{}
+	var diagnostics []ir.Diagnostic
+	for _, fieldID := range contract.HookOwnedCreateFields {
+		if owned[fieldID] {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_DUPLICATE", fmt.Sprintf("model %s repeats hook-owned field %s", model.ID, fieldID), span))
+			continue
+		}
+		owned[fieldID] = true
+		field, ok := fields[fieldID]
+		if !ok || field.Scalar == nil {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_FIELD", fmt.Sprintf("model %s hook-owned field %s is not a scalar", model.ID, fieldID), span))
+			continue
+		}
+		if field.Scalar.DatabaseReadOnly || field.Scalar.Generation != nil {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_WRITABLE", fmt.Sprintf("model %s hook-owned field %s is not programmatic-create writable", model.ID, fieldID), span))
+		}
+		if identity[fieldID] {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_IDENTITY", fmt.Sprintf("model %s hook-owned field %s participates in an identity key", model.ID, fieldID), span))
+		}
+	}
+	validatedRelations := map[ir.RelationID]bool{}
+	for fieldID := range owned {
+		var matches []ir.RelationIR
+		for _, relation := range logical.Relations {
+			if relation.SourceModel == model.ID && containsField(relation.LocalFields, fieldID) {
+				matches = append(matches, relation)
+			}
+		}
+		if len(matches) == 0 {
+			// Hook-owned scalars do not have to back a relation. Generated slugs,
+			// tenant metadata, and similar trusted values are valid uses.
+			continue
+		}
+		if len(matches) > 1 {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_RELATION", fmt.Sprintf("model %s hook-owned field %s participates in more than one source relation", model.ID, fieldID), span))
+			continue
+		}
+		relation := matches[0]
+		if validatedRelations[relation.ID] {
+			continue
+		}
+		validatedRelations[relation.ID] = true
+		relationField, ok := fields[relation.SourceField]
+		if !ok || relationField.Relation == nil || relationField.Relation.Role != ir.RelationSource || relationField.Relation.Kind != ir.RelationBelongsTo {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_BELONGS_TO", fmt.Sprintf("model %s hook-owned relation %s is not its canonical belongs-to field", model.ID, relation.ID), span))
+		}
+		if len(relation.LocalFields) == 0 {
+			diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_RELATION_KEY", fmt.Sprintf("model %s hook-owned relation %s has no local key", model.ID, relation.ID), span))
+			continue
+		}
+		for _, localID := range relation.LocalFields {
+			local, exists := fields[localID]
+			if !owned[localID] {
+				diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_PARTIAL_COMPOSITE", fmt.Sprintf("model %s hook-owned relation %s does not own complete local key; field %s is missing", model.ID, relation.ID, localID), span))
+			}
+			if !exists || local.Scalar == nil || local.Scalar.Nullable {
+				diagnostics = append(diagnostics, ir.NewError("P8_GRAPHQL_HOOK_OWNED_REQUIRED", fmt.Sprintf("model %s hook-owned relation %s local field %s must be non-null", model.ID, relation.ID, localID), span))
+			}
+		}
+	}
+	ir.SortDiagnostics(diagnostics)
+	return diagnostics
+}
+
+func containsField(values []ir.FieldID, field ir.FieldID) bool {
+	for _, value := range values {
+		if value == field {
+			return true
+		}
+	}
+	return false
 }
 
 var eventMetadataFields = []string{

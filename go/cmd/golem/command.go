@@ -33,11 +33,16 @@ import (
 )
 
 const usage = `usage:
+  golem version [--json]
+  golem doctor --provider <sqlite|postgresql> --dsn <explicit> [--schema <pattern>] [--root <name>] [--migrations <path>] [--json]
   golem inspect  [--schema <pattern>] [--root <name>] [--manifest <path>]
   golem generate --app-out <directory> [--schema <pattern>] [--root <name>] [--manifest <path>] [--migrations <path>]
   golem check    --app-out <directory> [--schema <pattern>] [--root <name>] [--manifest <path>] [--migrations <path>]
   golem migration new --name <slug> [--schema <pattern>] [--root <name>] [--migrations <path>] [--approve <operation-id> ...]
   golem migration apply --provider <sqlite|postgresql> --dsn <explicit> [--migrations <path>]`
+
+const generationOutputFormatVersion uint16 = 1
+const buildDiagnosticsOutputFormatVersion uint16 = 1
 
 type commonOptions struct {
 	schemaPattern string
@@ -81,10 +86,16 @@ type inspectOperator struct {
 }
 
 type generateOutput struct {
+	FormatVersion    uint16   `json:"formatVersion"`
 	GenerationDigest string   `json:"generationDigest"`
 	Changed          []string `json:"changed"`
 	Stale            []string `json:"stale"`
 	Checked          bool     `json:"checked,omitempty"`
+}
+
+type buildDiagnosticsOutput struct {
+	FormatVersion uint16          `json:"formatVersion"`
+	Diagnostics   []ir.Diagnostic `json:"diagnostics"`
 }
 
 func run(ctx context.Context, directory string, args []string, stdout, stderr io.Writer) int {
@@ -93,6 +104,10 @@ func run(ctx context.Context, directory string, args []string, stdout, stderr io
 		return 2
 	}
 	switch args[0] {
+	case "version":
+		return runVersion(args[1:], stdout, stderr)
+	case "doctor":
+		return runDoctor(ctx, directory, args[1:], stdout, stderr)
 	case "inspect":
 		return runInspect(ctx, directory, args[1:], stdout, stderr)
 	case "generate":
@@ -248,21 +263,28 @@ func runGeneration(ctx context.Context, directory string, args []string, stdout,
 		writeError(stderr, statErr)
 		return 1
 	}
-	if exists {
-		providers, providerErr := migrationProviders(result.Providers)
-		if providerErr != nil {
-			writeError(stderr, providerErr)
-			return 1
-		}
-		state, loadErr := workflow.Load(ctx, module.directory, migrationRoot, providers)
-		if loadErr != nil {
-			writeError(stderr, loadErr)
-			return 1
-		}
-		if verifyErr := verifyGenerationHistory(result, state); verifyErr != nil {
-			writeError(stderr, verifyErr)
-			return 1
-		}
+	if !exists {
+		writeError(stderr, errors.New("generated applications require a reviewed non-empty migration history for every declared provider; create the initial migration before generating"))
+		return 1
+	}
+	providers, providerErr := migrationProviders(result.Providers)
+	if providerErr != nil {
+		writeError(stderr, providerErr)
+		return 1
+	}
+	state, loadErr := workflow.Load(ctx, module.directory, migrationRoot, providers)
+	if loadErr != nil {
+		writeError(stderr, loadErr)
+		return 1
+	}
+	if verifyErr := verifyGenerationHistory(result, state); verifyErr != nil {
+		writeError(stderr, verifyErr)
+		return 1
+	}
+	request.ReviewedMigrations = reviewedPipelineMigrations(state, result.Providers)
+	result, err = pipeline.Build(ctx, request)
+	if err != nil {
+		return writeBuildFailure(stdout, stderr, err)
 	}
 	published, err := publication.Apply(ctx, publication.Request{
 		ModuleDir: result.ModuleDir, ManifestPath: *manifestPath,
@@ -272,11 +294,20 @@ func runGeneration(ctx context.Context, directory string, args []string, stdout,
 		writeError(stderr, err)
 		return 1
 	}
-	if err := encodeJSON(stdout, generateOutput{GenerationDigest: result.Prospective.GenerationDigest, Changed: published.Changed, Stale: published.Stale, Checked: published.Checked}); err != nil {
+	if err := encodeJSON(stdout, generateOutput{FormatVersion: generationOutputFormatVersion, GenerationDigest: result.Prospective.GenerationDigest, Changed: published.Changed, Stale: published.Stale, Checked: published.Checked}); err != nil {
 		writeError(stderr, err)
 		return 1
 	}
 	return 0
+}
+
+func reviewedPipelineMigrations(state workflow.State, providers []pipeline.ProviderResult) []pipeline.ReviewedMigration {
+	result := make([]pipeline.ReviewedMigration, 0, len(providers))
+	for _, provider := range providers {
+		history := state.Histories[provider.Provider.Provider]
+		result = append(result, pipeline.ReviewedMigration{Manifest: history.Manifest, Files: history.Files})
+	}
+	return result
 }
 
 func verifyGenerationHistory(result pipeline.Result, state workflow.State) error {
@@ -329,9 +360,10 @@ func pipelineRequest(directory string, options commonOptions, app modelcodegen.P
 func writeBuildFailure(stdout, stderr io.Writer, err error) int {
 	var diagnostics *pipeline.DiagnosticsError
 	if errors.As(err, &diagnostics) {
-		if encodeErr := encodeJSON(stdout, struct {
-			Diagnostics []ir.Diagnostic `json:"diagnostics"`
-		}{Diagnostics: diagnostics.Diagnostics}); encodeErr != nil {
+		if encodeErr := encodeJSON(stdout, buildDiagnosticsOutput{
+			FormatVersion: buildDiagnosticsOutputFormatVersion,
+			Diagnostics:   diagnostics.Diagnostics,
+		}); encodeErr != nil {
 			writeError(stderr, encodeErr)
 		}
 		return 1
@@ -449,7 +481,7 @@ func readPreviousManifest(moduleDir, value string) (*manifest.Manifest, error) {
 	if err != nil {
 		return nil, err
 	}
-	parsed, err := manifest.Parse(content)
+	parsed, err := manifest.ParseHistorical(content)
 	if err != nil {
 		return nil, err
 	}

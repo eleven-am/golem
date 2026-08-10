@@ -89,7 +89,7 @@ func newP5PostgresGraphQLHarness(t *testing.T, dsn, profile string, indexed bool
 		t.Fatal(err)
 	}
 	application, err := Open(ctx, Config[oraclePrincipal, oracleActor]{
-		DB: database, Provider: golem.PostgreSQL, Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
+		Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(_ context.Context, principal oraclePrincipal) (oracleActor, error) { return principal, nil },
 	})
 	if err != nil {

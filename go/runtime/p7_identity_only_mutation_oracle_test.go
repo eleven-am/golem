@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/observe"
 )
 
 func TestP7IdentityOnlyEventStillReauthorizes(t *testing.T) {
@@ -53,7 +53,7 @@ func TestP7IdentityOnlyEventStillReauthorizes(t *testing.T) {
 	}
 	select {
 	case observation := <-fixture.suppressed:
-		if observation.Kind() != events.ObservationSuppression {
+		if observation.Operation() != observe.OperationSubscriptionSuppression {
 			t.Fatalf("identity-only suppression=%#v", observation)
 		}
 	case <-time.After(2 * time.Second):

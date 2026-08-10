@@ -59,7 +59,7 @@ func TestUpdateFieldAuthorizationUsesExactPersistedDiff(t *testing.T) {
 			t.Fatal(err)
 		}
 		app, err := Open(ctx, Config[exactDiffPrincipal, exactDiffActor]{
-			DB: database, Provider: provider, Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
+			Database: p8RuntimeTestDatabase(database, provider), Bundle: fixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 			ResolvePrincipal: func(context.Context, exactDiffPrincipal) (exactDiffActor, error) { return exactDiffActor{}, nil },
 		})
 		if err != nil {
