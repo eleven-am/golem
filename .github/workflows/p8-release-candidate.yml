@@ -422,11 +422,20 @@ jobs:
           go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
           govulncheck ./...
       - name: Docs examples public ABI and reproducible generation
-        run: >-
-          go test -json -count=1 -timeout=45m
-          -run '^(TestP8DocumentationCommandCorpus|TestP8EveryPublicSnippetTypeChecks|TestP8ExternalSocialApplicationGenerateCheckBuildAndRun|TestP8PublicGoAPIDiffGate|TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic)$'
-          ./cmd/golem ./examples/social/cmd/social ./internal/compatibility |
-          tee p8-quality.events.jsonl
+        run: |
+          quality_workspace="$(mktemp -d "${RUNNER_TEMP}/p8-quality-work.XXXXXX")"
+          trap 'rm -rf -- "${quality_workspace}"' EXIT
+          (
+            cd "${quality_workspace}"
+            go work init "${GITHUB_WORKSPACE}/go" "${GITHUB_WORKSPACE}/go/examples/social"
+            go work edit -replace github.com/eleven-am/golem/go@v0.0.0="${GITHUB_WORKSPACE}/go"
+          )
+          go test -json -count=1 -timeout=45m \
+            -run '^(TestP8DocumentationCommandCorpus|TestP8EveryPublicSnippetTypeChecks|TestP8PublicGoAPIDiffGate|TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic)$' \
+            ./cmd/golem ./internal/compatibility | tee p8-quality-root.events.jsonl
+          GOWORK="${quality_workspace}/go.work" go test -json -count=1 -timeout=45m \
+            -run '^TestP8ExternalSocialApplicationGenerateCheckBuildAndRun$' \
+            github.com/eleven-am/golem/go/examples/social/cmd/social | tee p8-quality-social.events.jsonl
       - name: Complete documentation deployment and recovery evidence
         run: go run ./internal/cmd/p8docs -module . -timeout 45m > p8-docs.json
       - name: Complete compatibility and upgrade evidence
@@ -434,7 +443,8 @@ jobs:
       - name: Audit quality docs example and ABI events
         if: always()
         run: >-
-          go run ./internal/cmd/p8workflowaudit -events p8-quality.events.jsonl
+          go run ./internal/cmd/p8workflowaudit
+          -events p8-quality-root.events.jsonl -events p8-quality-social.events.jsonl
           -profile quality-docs-abi -reject-skips
           -inventory internal/workflowaudit/required-tests.json -inventory-set quality-docs-abi
           -require-test github.com/eleven-am/golem/go/cmd/golem:TestP8DocumentationCommandCorpus

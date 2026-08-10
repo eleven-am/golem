@@ -44,6 +44,7 @@ func TestP8WorkflowAuditKillsRequiredProfileSkipAndSupplyChainMutations(t *testi
 		{"platform-compile-rejects-no-test-packages", `-profile compile-${{ matrix.os }}-${{ matrix.go }}`, `-profile compile-${{ matrix.os }}-${{ matrix.go }} -reject-skips`, "P8_WORKFLOW_PLATFORM_COMPILE_SKIP_POLICY"},
 		{"hosted-fuzz-unbounded", `GOMAXPROCS: "2"`, `HOSTED_MAXPROCS_REMOVED: "2"`, "P8_WORKFLOW_FUZZ_BOUNDARY_UNBOUNDED"},
 		{"external-fuzz-wrapper-reentered", `-run '^FuzzP8PublicInputNeverDisclosesProtectedCanary$'`, `-run '^$'`, "P8_WORKFLOW_FUZZ_BOUNDARY_UNBOUNDED"},
+		{"external-example-workspace-removed", `go work edit -replace github.com/eleven-am/golem/go@v0.0.0=`, `go work edit -replace github.com/eleven-am/golem/go@v0.0.0-removed=`, "P8_WORKFLOW_EXAMPLE_WORKSPACE_MISSING"},
 		{"required-provider-job-skips", `postgres: "15"`, `postgres: "14"`, "P8_WORKFLOW_POSTGRES_15_MISSING"},
 		{"skip-detector-removed", "-reject-skips", "-accept-skips", "P8_WORKFLOW_SKIP_DETECTOR_MISSING"},
 		{"moving-action", "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683", "actions/checkout@v4", "P8_WORKFLOW_MUTABLE_ACTION"},

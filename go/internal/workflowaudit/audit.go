@@ -123,6 +123,7 @@ func AuditWorkflow(contents []byte) []Violation {
 		{"P8_WORKFLOW_VULN_MISSING", "govulncheck ./..."},
 		{"P8_WORKFLOW_DOCS_MISSING", "TestP8DocumentationCommandCorpus"},
 		{"P8_WORKFLOW_EXAMPLE_MISSING", "TestP8ExternalSocialApplicationGenerateCheckBuildAndRun"},
+		{"P8_WORKFLOW_EXAMPLE_WORKSPACE_MISSING", "go work edit -replace github.com/eleven-am/golem/go@v0.0.0="},
 		{"P8_WORKFLOW_PUBLIC_ABI_MISSING", "TestP8PublicGoAPIDiffGate"},
 		{"P8_WORKFLOW_REPRODUCIBLE_GENERATION_MISSING", "TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic"},
 		{"P8_WORKFLOW_SIGNED_TAG_TRIGGER_MISSING", `tags: ["go/v*.*.*"]`},
