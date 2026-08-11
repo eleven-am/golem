@@ -9152,6 +9152,324 @@
       ]
     },
     {
+      "path": "github.com/eleven-am/golem/go/golemtest",
+      "declarations": [
+        {
+          "name": "Access",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "AccessAlways",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=1",
+          "methods": []
+        },
+        {
+          "name": "AccessConditional",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=2",
+          "methods": []
+        },
+        {
+          "name": "AccessNever",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=3",
+          "methods": []
+        },
+        {
+          "name": "CodeOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(err error) (github.com/eleven-am/golem/go/golemtest.ErrorCode, bool)",
+          "methods": []
+        },
+        {
+          "name": "Constraint",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:CanonicalBytesfunc() []byte",
+            "pointer:Constantfunc() (value bool, constant bool)",
+            "pointer:Viewfunc() github.com/eleven-am/golem/go/golem.FrozenPredicateView",
+            "value:CanonicalBytesfunc() []byte",
+            "value:Constantfunc() (value bool, constant bool)",
+            "value:Viewfunc() github.com/eleven-am/golem/go/golem.FrozenPredicateView"
+          ]
+        },
+        {
+          "name": "DependencyEntry",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Childrenfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "pointer:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "pointer:Kindfunc() github.com/eleven-am/golem/go/golemtest.DependencyKind",
+            "pointer:TargetModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)",
+            "value:Childrenfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "value:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "value:Kindfunc() github.com/eleven-am/golem/go/golemtest.DependencyKind",
+            "value:TargetModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)"
+          ]
+        },
+        {
+          "name": "DependencyKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "DependencyRelation",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.DependencyKind=2",
+          "methods": []
+        },
+        {
+          "name": "DependencyScalar",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.DependencyKind=1",
+          "methods": []
+        },
+        {
+          "name": "DependencyTree",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Entriesfunc() []github.com/eleven-am/golem/go/golemtest.DependencyEntry",
+            "pointer:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "value:Entriesfunc() []github.com/eleven-am/golem/go/golemtest.DependencyEntry",
+            "value:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID"
+          ]
+        },
+        {
+          "name": "Equivalent",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](constraint github.com/eleven-am/golem/go/golemtest.Constraint[M], expected github.com/eleven-am/golem/go/golem.Predicate[M]) (bool, error)",
+          "methods": []
+        },
+        {
+          "name": "ErrorCode",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "ErrorGenerationMismatch",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"GENERATION_MISMATCH\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorInvalidInput",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"INVALID_INPUT\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorPolicyAnalysis",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"POLICY_ANALYSIS_FAILED\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorPolicyFactory",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"POLICY_FACTORY_FAILED\"",
+          "methods": []
+        },
+        {
+          "name": "FieldClassification",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Accessfunc() github.com/eleven-am/golem/go/golemtest.Access",
+            "pointer:Conditionfunc() (github.com/eleven-am/golem/go/golemtest.Constraint[M], bool)",
+            "pointer:Dependenciesfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "pointer:DischargedByConstraintfunc() bool",
+            "pointer:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "pointer:RequiredFieldsfunc() []github.com/eleven-am/golem/go/golem.FieldID",
+            "value:Accessfunc() github.com/eleven-am/golem/go/golemtest.Access",
+            "value:Conditionfunc() (github.com/eleven-am/golem/go/golemtest.Constraint[M], bool)",
+            "value:Dependenciesfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "value:DischargedByConstraintfunc() bool",
+            "value:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "value:RequiredFieldsfunc() []github.com/eleven-am/golem/go/golem.FieldID"
+          ]
+        },
+        {
+          "name": "Implies",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](constraint github.com/eleven-am/golem/go/golemtest.Constraint[M], expected github.com/eleven-am/golem/go/golem.Predicate[M]) (bool, error)",
+          "methods": []
+        },
+        {
+          "name": "Kit",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[A any]struct{}",
+          "methods": [
+            "pointer:ForActorfunc(actor A) (github.com/eleven-am/golem/go/golemtest.PolicySet, error)"
+          ]
+        },
+        {
+          "name": "Model",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](policies github.com/eleven-am/golem/go/golemtest.PolicySet, descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M]) (github.com/eleven-am/golem/go/golemtest.ModelPolicy[M], error)",
+          "methods": []
+        },
+        {
+          "name": "ModelPolicy",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:ClassifyReadFieldsWithReachfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, reach github.com/eleven-am/golem/go/golem.Predicate[M], fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "pointer:ClassifyReadFieldsfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "pointer:RowConstraintfunc(action github.com/eleven-am/golem/go/golem.FrozenAction) (github.com/eleven-am/golem/go/golemtest.Constraint[M], error)",
+            "value:ClassifyReadFieldsWithReachfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, reach github.com/eleven-am/golem/go/golem.Predicate[M], fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "value:ClassifyReadFieldsfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "value:RowConstraintfunc(action github.com/eleven-am/golem/go/golem.FrozenAction) (github.com/eleven-am/golem/go/golemtest.Constraint[M], error)"
+          ]
+        },
+        {
+          "name": "New",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[A any](bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A], descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors, bundle github.com/eleven-am/golem/go/golem.SchemaBundle) (*github.com/eleven-am/golem/go/golemtest.Kit[A], error)",
+          "methods": []
+        },
+        {
+          "name": "PolicySet",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": null
+        },
+        {
+          "name": "ReadPlan",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Fieldfunc(field github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.FieldClassification[M], bool)",
+            "pointer:Fieldsfunc() []github.com/eleven-am/golem/go/golemtest.FieldClassification[M]",
+            "pointer:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "pointer:SelectingActionfunc() github.com/eleven-am/golem/go/golem.FrozenAction",
+            "pointer:UseKindfunc() github.com/eleven-am/golem/go/golemtest.UseKind",
+            "value:Fieldfunc(field github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.FieldClassification[M], bool)",
+            "value:Fieldsfunc() []github.com/eleven-am/golem/go/golemtest.FieldClassification[M]",
+            "value:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "value:SelectingActionfunc() github.com/eleven-am/golem/go/golem.FrozenAction",
+            "value:UseKindfunc() github.com/eleven-am/golem/go/golemtest.UseKind"
+          ]
+        },
+        {
+          "name": "UseAggregateMeasure",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=7",
+          "methods": []
+        },
+        {
+          "name": "UseAggregateOrder",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=10",
+          "methods": []
+        },
+        {
+          "name": "UseComputedDependency",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=11",
+          "methods": []
+        },
+        {
+          "name": "UseCursor",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=5",
+          "methods": []
+        },
+        {
+          "name": "UseDistinct",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=6",
+          "methods": []
+        },
+        {
+          "name": "UseFilter",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=2",
+          "methods": []
+        },
+        {
+          "name": "UseGroupDimension",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=8",
+          "methods": []
+        },
+        {
+          "name": "UseHaving",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=9",
+          "methods": []
+        },
+        {
+          "name": "UseKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "UseOrder",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=4",
+          "methods": []
+        },
+        {
+          "name": "UseProjection",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=1",
+          "methods": []
+        },
+        {
+          "name": "UseSelector",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=3",
+          "methods": []
+        }
+      ]
+    },
+    {
       "path": "github.com/eleven-am/golem/go/graphql",
       "declarations": [
         {

@@ -1,6 +1,9 @@
 # Golem for Go roadmap
 
-Status: **post-P8 product direction; not a claim of shipped functionality**.
+Status: **post-P8 product direction; not a claim of released functionality**.
+An entry marked *implemented* has landed in the module and carries its own
+acceptance evidence; it is still not a release claim, because the Go module as a
+whole remains unreleased. Every other entry is direction only.
 
 The completed P0–P8 plans remain the controlling record for the first Go
 release. This document records deliberately accepted follow-up direction so a
@@ -57,17 +60,28 @@ Provider portability means the same model, policy, query, mutation, event, and
 error contracts. It does not claim that a local file database and a client/
 server database have identical operational scaling or failover topologies.
 
-## Public policy testing kit
+## Public policy testing kit — implemented
 
-Golem will expose a small public `golemtest` package for database-free,
-actor-specific policy inspection. It will return the effective row constraint,
+Golem exposes a small public `golemtest` package for database-free,
+actor-specific policy inspection. It returns the effective row constraint,
 read-field classification, discharge proof, and relation dependency tree by
-adapting the existing production policy kernel. It will not introduce a second
+adapting the existing production policy kernel. It does not introduce a second
 policy evaluator, mock relation database, auth/session framework, string-based
 field authority, or runtime bypass.
 
-The complete implementation and acceptance contract is
-[`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md).
+The ten mandatory acceptance gates named in the contract exist and pass,
+including the external generated-application gate, which builds a clean
+`example.com` consumer with `GOWORK=off` and public packages only and requires
+the kit's static answers to agree with a real generated `Caller` on SQLite,
+PostgreSQL C collation, and PostgreSQL linguistic collation. The package's
+public surface is part of the frozen public Go API inventory. Implemented here
+means landed and evidenced, not released: the Go module as a whole is still
+unreleased and its P8 hosted-release gates remain pending.
+
+The complete implementation and acceptance contract, including its recorded
+limitations, is [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md). Application
+usage is documented in [`QUICKSTART.md`](./QUICKSTART.md) and
+[`PRODUCTION.md`](./PRODUCTION.md).
 
 ## SQLite WAL and reviewed PostgreSQL data evolution
 

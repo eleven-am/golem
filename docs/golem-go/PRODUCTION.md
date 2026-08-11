@@ -57,6 +57,105 @@ does not explain whether a null came from storage or policy.
 schema validation, transactions, facts, invalidation, limits, and provider
 verification and belong only in trusted application infrastructure.
 
+## Policy testing
+
+`github.com/eleven-am/golem/go/golemtest` lets an application assert the policy
+it already authored for one actor without opening a database or starting an
+application. It answers two static questions with the same policy kernel the
+runtime uses: the resolved row constraint for an action, and the readability of
+requested result fields for a statement reach. It is an inspection and proof
+kit, not a second authorization engine: it cannot mutate or bypass policy,
+cannot manufacture a model, field, or relation identity, and cannot decide
+whether a synthetic row is visible.
+
+`golemtest.New` takes the three generated artifacts of one generation —
+`GolemGeneratedApplicationBindings`, `GolemGeneratedApplicationDescriptors`, and
+`GolemGeneratedSchemaBundle` — and requires all three to carry the same non-zero
+generation digest. It opens no database, starts no goroutine, invokes no hook,
+and runs no policy factory. `Kit.ForActor` invokes every generated policy factory
+exactly once per call, keeps no cross-call cache, discards the actor once the
+policies are frozen, and converts a policy-factory panic into a closed error.
+`golemtest.Model` narrows one actor's policy set to one typed model and rejects a
+descriptor that is not the one registered in that kit.
+
+`ModelPolicy.RowConstraint` returns the production resolver's own answer for
+read, create, update, or delete. `Constraint.Constant` reports a constraint that
+collapsed to "every row" or "refused". `Constraint.View` walks the resolved
+expression as the same closed predicate view a frozen rule exposes, and
+`Constraint.CanonicalBytes` is stable diagnostic evidence only. `Equivalent` and
+`Implies` prove statements about a constraint through the production implication
+kernel after production's own normalization; `Equivalent` is implication in both
+directions and is deliberately not a comparison of canonical text. Both freeze
+the expected predicate against the model descriptor the constraint retains, and
+both report a kernel refusal as an error rather than as a false answer, so a
+`false` result means "not proved" rather than "disproved".
+
+`ModelPolicy.ClassifyReadFields` classifies requested fields as always,
+conditionally, or never readable for the reach of a selecting action.
+Classification is a read question: the selecting action only chooses which
+action's row constraint defines the statement's reach, while fields are always
+judged through the read policy, exactly as the runtime does when it returns rows
+from a read or from a mutation. The caller's first-seen field order is preserved
+and later duplicates are dropped. A conditional field carries the exact condition
+the runtime masks it by, the scalar fields the condition needs, and the relation
+hydration tree the runtime privately fetches to decide it; a relation entry keeps
+its target model even when its own subtree is empty.
+`ClassifyReadFieldsWithReach` adds the narrower caller predicate production
+would combine with the actor's row policy, refuses a predicate that would widen
+that policy, and reports through `DischargedByConstraint` when the narrowed
+reach already proves a field's condition so the runtime can return it unmasked.
+
+```go
+package docsnippet
+
+import (
+	"testing"
+
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/golemtest"
+	"github.com/eleven-am/golem/go/examples/social/social"
+)
+
+func assertOwnedReachDischargesBody(t *testing.T, posts golemtest.ModelPolicy[social.Post], alice golem.UUID) {
+	plan, err := posts.ClassifyReadFieldsWithReach(
+		golemtest.UseProjection,
+		golem.FrozenActionRead,
+		social.Posts.AuthorID.Eq(alice),
+		social.Posts.Body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := plan.Field(social.Posts.Body)
+	if !ok || body.Access() != golemtest.AccessConditional || !body.DischargedByConstraint() {
+		t.Fatalf("Body access=%v discharged=%v present=%v", body.Access(), body.DischargedByConstraint(), ok)
+	}
+}
+```
+
+Errors are closed and classifiable with `golemtest.CodeOf` as invalid input,
+generation mismatch, policy-factory failure, or policy-analysis refusal, and the
+classification survives ordinary `%w` wrapping. Error text is not an ABI and
+never carries the actor, a token, session, email, tenant, database, or row
+value, a panic payload, a raw predicate operand, or an internal type name. Stable
+`golem.ModelID` and `golem.FieldID` values may be reported. No exported signature
+in the package names a type from an internal package.
+
+What a passing assertion proves has limits worth stating. The kit answers the
+static policy question; it does not execute SQL, so provider collation, null and
+missing-target semantics at execution time, and relation hydration remain
+integration concerns of the generated caller. Two behaviours in particular differ
+from the naive reading of a static answer. A relation hop inside a *field
+condition* is decided at runtime only over target rows the actor may read, so a
+condition that names an invisible target row is false for that row even though
+the kit's condition text does not mention the target model's own read policy.
+And an explicit relation projection that omits a field some condition depends on
+makes the runtime refuse the statement rather than guess. Both are properties of
+the runtime, not of the kit, and both are covered by the kit's external
+generated-application evidence.
+[`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md) records the full contract and
+its recorded limitations.
+
 ## Hooks
 
 Hooks are model methods discovered and bound by generation. Read hooks may

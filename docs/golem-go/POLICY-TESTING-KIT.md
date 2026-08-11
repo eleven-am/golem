@@ -1,6 +1,8 @@
 # Public policy testing kit implementation contract
 
-Status: **accepted implementation contract; not shipped**.
+Status: **implemented**. All ten mandatory gates in §9 exist and pass,
+including the external generated-application gate. §13 records the boundaries
+found while implementing them.
 
 Audience: the engineer implementing the next Go roadmap slice and the reviewer
 deciding whether that implementation is complete. This document is deliberately
@@ -489,13 +491,13 @@ example `Comment.ReplyTo` is the source side and `Comment.Replies` the inverse,
 on the same model with the same identity. Keying by RelationID alone rejects
 every self-relation.
 
-**Gate 10 carries two mechanical caveats.** With `GOWORK=off` and no module
-proxy, an in-tree consumer requires `replace` directives; a genuinely
-replace-free consumer needs the `file://` proxy machinery in
-`internal/release`. Separately, `./golemtest` is absent from the pattern list in
-`internal/compatibility/corpus_test.go`, which is why the public Go API diff
-gate passes without it. Adding it, as §11 requires, means regenerating
-`public-go-api.json` and `PublicGoAPICorpusSHA256`.
+**Gate 10 carried two mechanical caveats, both now settled.** With `GOWORK=off`
+and no module proxy, an in-tree consumer requires a `replace` directive; a
+genuinely replace-free consumer needs the `file://` proxy machinery in
+`internal/release`. Separately, `./golemtest` was absent from the pattern list in
+`internal/compatibility/corpus_test.go`, which is why the public Go API diff gate
+passed without it; it has since been added and the corpus regenerated. Both
+outcomes are recorded below.
 
 **The delegation table in `source_inventory_test.go` is package-scoped, not
 symbol-scoped.** A row requires that the package import the delegate, not that
@@ -539,5 +541,73 @@ Go API corpus as `additive` and required regenerating
 `internal/compatibility/testdata/public-go-api.json`,
 `PublicGoAPICorpusSHA256`, `compatibility/manifest.json`, and
 `TrustedManifestSHA256`. The generated-ABI and GraphQL corpora are unchanged.
-`./golemtest` remains absent from the corpus pattern list, so the kit's own
-public surface is still outside the frozen inventory.
+`./golemtest` has since been added to the corpus pattern list as well, so the
+kit's own public surface is now inside the frozen inventory.
+
+**Gate 10 uses its own generated fixture application, not `examples/social`.**
+The consumer module is generated from a schema authored for this contract:
+`Article` carries an owner key, a public flag, an always-required title, an
+owner-conditional field, a to-one relation-conditional field, a to-many
+quantifier-conditional field, and a denied field, with `Author` and `Comment`
+as relation targets. `examples/social` was not used because §9's fixture
+requires a denied field, a missing relation target, and an invisible relation
+target that the example's authored policy does not declare, and changing that
+policy is outside this contract.
+
+**Gate 10's oracle is the database evaluating a kit-certified predicate, never a
+second provider.** For each answer the kit gives, the gate first proves through
+`Equivalent` that the answer is a named typed predicate, then evaluates that
+predicate through the generated `System` client — which is policy-free, so the
+provider decides the row set — and then requires the authorized `Caller` to
+return exactly those rows, and to expose a conditional field on exactly those
+rows and mask it elsewhere. A never-readable field must be refused by the
+`Caller` and accepted by `System`, so the refusal is provably the policy rather
+than the schema. Every provider repeats the whole comparison against the one
+static answer, so three providers agreeing with each other is never sufficient
+for the gate to pass.
+
+**An `AccessAlways` field and a non-constant read row constraint cannot coexist
+on one model.** `resolve.chainForRow` includes field-scoped grants and
+short-circuits on the first unconditional grant it reaches, so the unconditional
+field grant that makes a field always readable also makes that model's row
+constraint the `true` constant. A field with no field rule is therefore
+`AccessConditional` with the model read condition, discharged by the statement
+reach, rather than `AccessAlways`. Gate 10's fixture consequently places §9's
+always-readable field on the model whose read grant is unconditional and its
+row-filtered evidence on another model. This is a property of the resolver, not
+of `golemtest`; changing it would change what a field grant means for row reach.
+
+**A relation hop inside a field condition is decided only over target rows the
+actor may read.** The kit reports the authored condition, which does not mention
+the target model's own read policy, but the runtime refuses to decide the
+condition from a target row the actor cannot read: gate 10's article whose
+author is verified but unlisted has its conditional field masked. The gate
+therefore composes its runtime expectation from two kit answers — the field
+condition and the target model's read row constraint, each proved by
+`Equivalent` — rather than from the field condition alone. Verified here for a
+to-one hop; gate 10's to-many target is unconditionally readable, so the
+composition rule for a quantifier over a row-filtered target is not evidenced.
+
+**An explicit relation projection that omits a condition dependency is refused,
+not guessed.** Selecting `Article.Author` with only the target's identity while
+a field condition reads another target field makes the runtime return
+`P3_RUNTIME_MASK … P2_EVAL_MISSING`. The kit's `Dependencies` tree names exactly
+the fields that must remain reachable, so this is a statement-shape requirement
+rather than a disagreement, but it means a caller cannot narrow a relation
+projection below the hydration a conditional field needs.
+
+**Gate 10's consumer is not replace-free.** It declares
+`replace github.com/eleven-am/golem/go => <module root>` and asserts that this
+is its only replacement. With `GOWORK=off` and no module proxy there is no other
+way for an in-tree consumer to resolve an unpublished module; a genuinely
+replace-free consumer needs the `file://` proxy machinery in `internal/release`.
+The consumer is otherwise clean: it is a fresh `example.com` module, its schema
+is generated by the public CLI, and every Go file in it — handwritten and
+generated — is proved to import no `/internal/` package.
+
+**`./golemtest` is now inside the frozen public Go API corpus.** Adding it, as
+§11 requires, changed the pattern list in `internal/compatibility/corpus_test.go`
+and `internal/compatibility/cmd/freeze/main.go` and required regenerating
+`internal/compatibility/testdata/public-go-api.json`, `PublicGoAPICorpusSHA256`,
+`compatibility/manifest.json`, and `TrustedManifestSHA256`. The change is purely
+additive; the generated-ABI and GraphQL corpora are byte-identical.

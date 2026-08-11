@@ -29,8 +29,8 @@ func main() {
 	public, err := compatibility.BuildAPIInventory(ctx, compatibility.APIRequest{
 		Directory: root,
 		Patterns: []string{
-			"./embedding", "./events", "./golem", "./graphql", "./observe", "./provider",
-			"./provider/postgresql", "./provider/sqlite", "./runtime",
+			"./embedding", "./events", "./golem", "./golemtest", "./graphql", "./observe",
+			"./provider", "./provider/postgresql", "./provider/sqlite", "./runtime",
 		},
 	})
 	if err != nil {
