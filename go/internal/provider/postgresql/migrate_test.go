@@ -250,7 +250,7 @@ func TestPlanIncrementalRefusesUnregisteredCastAndRequiredAdd(t *testing.T) {
 		posts.Columns = append(posts.Columns, physical.PhysicalColumn{ID: ir.FieldID(id(901)), Name: "required", Ordinal: uint32(len(posts.Columns)), Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: false, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
 		after = normalizePostgreSQLMigrationSchema(t, after)
 		entry := reviewedPostgreSQLEntry(t, "required", base, after, nil)
-		if _, err := provider.PlanIncremental(entry); err == nil || !strings.Contains(err.Error(), "no reviewed default") {
+		if _, err := provider.PlanIncremental(entry); err == nil || !strings.Contains(err.Error(), "has no reviewed companion") {
 			t.Fatalf("error=%v; want required-add refusal", err)
 		}
 	})
@@ -441,7 +441,7 @@ func reviewedPostgreSQLEntry(t *testing.T, migrationID migration.MigrationID, be
 	}
 	for _, operation := range plan.Operations {
 		entry.Risks = append(entry.Risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-		if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+		if migration.RequiresApproval(operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}

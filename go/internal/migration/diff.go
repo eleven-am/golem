@@ -263,11 +263,19 @@ func (b *diffBuilder) columns(left, right physical.PhysicalTable) error {
 		z, has := cur[id]
 		switch {
 		case !had:
-			risk := RiskSafe
 			if !z.Nullable && z.Default.Kind == physical.DefaultNone {
-				risk = RiskManual
+				if z.Generated == nil {
+					if err := b.requiredColumnBackfill(z); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := b.add(AddColumn, 30, string(id), nil, z, RiskManual); err != nil {
+					return err
+				}
+				continue
 			}
-			if err := b.add(AddColumn, 30, string(id), nil, z, risk); err != nil {
+			if err := b.add(AddColumn, 30, string(id), nil, z, RiskSafe); err != nil {
 				return err
 			}
 		case !has:
@@ -281,7 +289,11 @@ func (b *diffBuilder) columns(left, right physical.PhysicalTable) error {
 				}
 			}
 			if !reflect.DeepEqual(a.Storage, z.Storage) {
-				if err := b.add(AlterColumnType, 45, string(id), a.Storage, z.Storage, RiskDataLoss); err != nil {
+				risk := RiskDataLoss
+				if SafeWidening(b.after.Provider.Provider, a.Storage, z.Storage) {
+					risk = RiskRewrite
+				}
+				if err := b.add(AlterColumnType, 45, string(id), a.Storage, z.Storage, risk); err != nil {
 					return err
 				}
 			}
@@ -619,6 +631,15 @@ func (b *diffBuilder) dependencies() {
 			addDep(op, CreateTable, string(tableID))
 			addDep(op, RenameTable, string(tableID))
 		}
+		if op.Kind == BackfillColumn {
+			addDep(op, AddColumn, op.ObjectID)
+		}
+		if op.Kind == ValidateConstraint {
+			addDep(op, BackfillColumn, op.ObjectID)
+		}
+		if op.Kind == AlterColumnNullability {
+			addDep(op, ValidateConstraint, op.ObjectID)
+		}
 		for add, drop := range map[OperationKind]OperationKind{AddPrimaryKey: DropPrimaryKey, AddUnique: DropUnique, AddForeignKey: DropForeignKey, AddCheck: DropCheck, CreateIndex: DropIndex} {
 			if op.Kind == add {
 				addDep(op, drop, op.ObjectID)
@@ -630,6 +651,18 @@ func (b *diffBuilder) dependencies() {
 					addDep(op, AddColumn, string(field))
 					addDep(op, AlterColumnType, string(field))
 					addDep(op, AlterColumnNullability, string(field))
+				}
+			}
+		}
+		if op.Kind == DropPrimaryKey || op.Kind == DropUnique {
+			if owner, ok := tables[tableID]; ok {
+				columns := referencedFields(owner, op.ObjectID)
+				for _, table := range tables {
+					for _, fk := range table.ForeignKeys {
+						if fk.ReferencedTable == owner.ID && reflect.DeepEqual(fk.ReferencedColumns, columns) {
+							addDep(op, DropForeignKey, string(fk.ID))
+						}
+					}
 				}
 			}
 		}

@@ -115,7 +115,7 @@ func ValidatePlan(plan Plan, approvals []Approval) error {
 			return fmt.Errorf("autocommit operation %s lacks resume metadata", operation.ID)
 		}
 		approval, exists := approved[operation.ID]
-		required := operation.Risk == RiskDataLoss || operation.Risk == RiskManual
+		required := RequiresApproval(operation)
 		if required && (!exists || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After) {
 			return fmt.Errorf("operation %s requires exact object-scoped approval", operation.ID)
 		}
@@ -161,6 +161,24 @@ func ValidatePlan(plan Plan, approvals []Approval) error {
 		return fmt.Errorf("phases do not cover plan or final fingerprint")
 	}
 	return nil
+}
+
+// RequiresApproval reports whether an operation may appear in reviewed history
+// only together with an exact object-scoped approval binding its ID, risk, and
+// before/after content digests.
+//
+// Data-loss and manual risk always require one. AlterColumnType and
+// BackfillColumn additionally require one at every risk classification: the
+// approval digest pair is the only artifact binding a human review to the
+// exact typed before/after metadata of a type change, or to the exact target
+// of a reviewed backfill, so a value-preserving widening or a reviewed
+// backfill must never become an unreviewed automatic operation.
+func RequiresApproval(operation Operation) bool {
+	switch operation.Kind {
+	case AlterColumnType, BackfillColumn:
+		return true
+	}
+	return operation.Risk == RiskDataLoss || operation.Risk == RiskManual
 }
 
 func validateOperationDigests(operation Operation) error {

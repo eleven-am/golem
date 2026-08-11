@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
@@ -24,10 +25,39 @@ import (
 // reviewed migration entry. SQL is exposed for review, never accepted as input.
 type IncrementalPlan struct {
 	MigrationID migration.MigrationID
-	script      Script
+	steps       []incrementalStep
 }
 
-func (plan IncrementalPlan) SQL() string { return plan.script.SQL() }
+type incrementalStep struct {
+	statement     string
+	backfill      migration.OperationID
+	postcondition *nullPostcondition
+}
+
+type nullPostcondition struct {
+	operation migration.OperationID
+	namespace physical.PhysicalName
+	table     physical.PhysicalName
+	column    physical.PhysicalName
+}
+
+// SQL renders the reviewed artifact. Companion seams appear as deterministic
+// comments: their bytes live in the separately checksummed companion file and
+// are never copied into, or accepted from, this artifact.
+func (plan IncrementalPlan) SQL() string {
+	var builder strings.Builder
+	for _, step := range plan.steps {
+		switch {
+		case step.backfill != "":
+			builder.WriteString("-- golem reviewed backfill companion " + string(step.backfill) + "\n")
+		case step.postcondition != nil:
+			builder.WriteString("-- golem generated postcondition " + string(step.postcondition.operation) + "\n")
+		default:
+			builder.WriteString(step.statement + ";\n")
+		}
+	}
+	return builder.String()
+}
 
 // PlanIncremental lowers an already reviewed semantic migration entry. It does
 // not invent casts, transforms, rebuilds, manual SQL, or autocommit phases.
@@ -78,8 +108,8 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err := migration.ValidatePlan(semantic, entry.Approvals); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s invalid reviewed plan: %w", entry.ID, err)
 	}
-	if len(entry.Manual) != 0 {
-		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s manual companions are unsupported by the automatic runner", entry.ID)
+	if err := validatePostgreSQLCompanions(entry, semantic.Operations); err != nil {
+		return IncrementalPlan{}, err
 	}
 	before, err := physical.Normalize(entry.BeforeSnapshot)
 	if err != nil {
@@ -99,7 +129,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s requires unsupported transaction or transform semantics", entry.ID, operation.ID)
 		}
 		switch operation.Kind {
-		case migration.AlterColumnType, migration.BackfillColumn, migration.RebuildTable, migration.ValidateConstraint, migration.ManualStep, migration.CreateNamespace, migration.BootstrapSystemSchema:
+		case migration.RebuildTable, migration.ManualStep, migration.CreateNamespace, migration.BootstrapSystemSchema:
 			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s kind %s is outside the automatic transactional baseline", entry.ID, operation.ID, operation.Kind)
 		}
 	}
@@ -117,16 +147,73 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	for _, extension := range before.Extensions {
 		beforeExtensions[extension.ID] = extension
 	}
-	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions}
+	backfilled := map[ir.FieldID]bool{}
+	for _, operation := range semantic.Operations {
+		if operation.Kind == migration.BackfillColumn {
+			backfilled[ir.FieldID(operation.ObjectID)] = true
+		}
+	}
+	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled}
 	plan := IncrementalPlan{MigrationID: entry.ID}
 	for _, operation := range semantic.Operations {
+		if operation.Kind == migration.BackfillColumn {
+			plan.steps = append(plan.steps, incrementalStep{backfill: operation.ID})
+			continue
+		}
+		if operation.Kind == migration.ValidateConstraint {
+			condition, conditionErr := postgresqlNullPostcondition(after, afterTables, owners, operation)
+			if conditionErr != nil {
+				return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s: %w", entry.ID, operation.ID, conditionErr)
+			}
+			plan.steps = append(plan.steps, incrementalStep{postcondition: &condition})
+			continue
+		}
 		statements, renderErr := renderer.incrementalOperation(operation, owners, beforeTables, afterTables)
 		if renderErr != nil {
 			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s: %w", entry.ID, operation.ID, renderErr)
 		}
-		plan.script.statements = append(plan.script.statements, statements...)
+		for _, statement := range statements {
+			plan.steps = append(plan.steps, incrementalStep{statement: statement})
+		}
 	}
 	return plan, nil
+}
+
+func validatePostgreSQLCompanions(entry migration.ManifestEntry, operations []migration.Operation) error {
+	byID := make(map[migration.OperationID]migration.Operation, len(operations))
+	for _, operation := range operations {
+		byID[operation.ID] = operation
+	}
+	bound := map[migration.OperationID]bool{}
+	for _, companion := range entry.Manual {
+		operation, exists := byID[companion.OperationID]
+		if !exists || operation.Kind != migration.BackfillColumn || bound[companion.OperationID] {
+			return fmt.Errorf("postgresql migration %s companion %s does not bind exactly one reviewed backfill", entry.ID, companion.OperationID)
+		}
+		owner, resolved := migration.BackfillOwner(entry.AfterSnapshot, ir.FieldID(operation.ObjectID))
+		if !resolved || companion.Postcondition != migration.BackfillPostcondition(owner, ir.FieldID(operation.ObjectID)) {
+			return fmt.Errorf("postgresql migration %s companion %s lacks the generated no-NULL postcondition", entry.ID, companion.OperationID)
+		}
+		bound[companion.OperationID] = true
+	}
+	for _, operation := range operations {
+		if operation.Kind == migration.BackfillColumn && !bound[operation.ID] {
+			return fmt.Errorf("postgresql migration %s backfill %s has no reviewed companion", entry.ID, operation.ID)
+		}
+	}
+	return nil
+}
+
+func postgresqlNullPostcondition(schema physical.PhysicalSchema, tables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operation migration.Operation) (nullPostcondition, error) {
+	table, exists := tables[owners[operation.ID]]
+	if !exists {
+		return nullPostcondition{}, fmt.Errorf("postcondition target table is absent")
+	}
+	column, ok := postgresqlColumn(table, ir.FieldID(operation.ObjectID))
+	if !ok {
+		return nullPostcondition{}, fmt.Errorf("postcondition target column is absent")
+	}
+	return nullPostcondition{operation: operation.ID, namespace: schema.Namespace.Name, table: table.Name, column: column.Name}, nil
 }
 
 func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners map[migration.OperationID]ir.ModelID, beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable) ([]string, error) {
@@ -208,7 +295,10 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			return nil, fmt.Errorf("add column target is absent")
 		}
 		if column.Generated == nil && !column.Nullable && column.Default.Kind == physical.DefaultNone {
-			return nil, fmt.Errorf("required field %s has no reviewed default or generated value", column.ID)
+			if !r.backfilled[column.ID] {
+				return nil, fmt.Errorf("required field %s has no reviewed default or generated value", column.ID)
+			}
+			column.Nullable = true
 		}
 		rendered, err := r.column(after, column)
 		return oneStatement(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", qualified(r.schema.Namespace.Name, after.Name), rendered), err)
@@ -219,6 +309,26 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			return nil, fmt.Errorf("rename column target is absent")
 		}
 		return []string{fmt.Sprintf("ALTER TABLE %s RENAME COLUMN %s TO %s", qualified(r.schema.Namespace.Name, after.Name), quote(old.Name), quote(current.Name))}, nil
+	case migration.AlterColumnType:
+		old, oldOK := postgresqlColumn(before, ir.FieldID(operation.ObjectID))
+		current, currentOK := postgresqlColumn(after, ir.FieldID(operation.ObjectID))
+		if !oldOK || !currentOK || !hasAfter {
+			return nil, fmt.Errorf("%s target is absent", migration.AlterColumnType)
+		}
+		if !migration.SafeWidening(ir.PostgreSQL, old.Storage, current.Storage) {
+			return nil, fmt.Errorf("%s for field %s is outside the closed value-preserving widening allowlist", migration.AlterColumnType, operation.ObjectID)
+		}
+		if operation.Risk != migration.RiskRewrite {
+			return nil, fmt.Errorf("%s for field %s is not classified %s", migration.AlterColumnType, operation.ObjectID, migration.RiskRewrite)
+		}
+		if current.Generated != nil || old.Generated != nil || current.Collation != nil || old.Collation != nil {
+			return nil, fmt.Errorf("%s for field %s changes a generated or collated column", migration.AlterColumnType, operation.ObjectID)
+		}
+		storage, err := renderStorage(current.Storage)
+		if err != nil {
+			return nil, err
+		}
+		return []string{fmt.Sprintf("ALTER TABLE %s ALTER COLUMN %s TYPE %s USING %s::%s", qualified(r.schema.Namespace.Name, after.Name), quote(current.Name), storage, quote(current.Name), storage)}, nil
 	case migration.AlterColumnNullability:
 		column, ok := postgresqlColumn(after, ir.FieldID(operation.ObjectID))
 		if !ok {
@@ -724,10 +834,8 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := compareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
 		return fmt.Errorf("postgresql migration starting fingerprint: %w", err)
 	}
-	for index, statement := range plan.script.statements {
-		if _, err := transaction.ExecContext(ctx, statement); err != nil {
-			return fmt.Errorf("postgresql migration statement %d: %w", index, err)
-		}
+	if err := executePostgreSQLIncrementalPlan(ctx, transaction, entry, files, plan); err != nil {
+		return err
 	}
 	actualAfter, err := provider.introspectQuery(ctx, transaction, entry.AfterSnapshot)
 	if err != nil {
@@ -745,6 +853,97 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("postgresql migration commit: %w", err)
 	}
 	migrationfailpoint.Reach(ctx, "after_phase_commit")
+	return nil
+}
+
+const reviewedBackfillMaximumBytes = 1 << 20
+
+func executePostgreSQLIncrementalPlan(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, files map[string][]byte, plan IncrementalPlan) error {
+	statements := 0
+	for _, step := range plan.steps {
+		switch {
+		case step.backfill != "":
+			if err := executeReviewedPostgreSQLBackfill(ctx, transaction, entry, files, step.backfill); err != nil {
+				return err
+			}
+		case step.postcondition != nil:
+			if err := verifyPostgreSQLNullPostcondition(ctx, transaction, entry, *step.postcondition); err != nil {
+				return err
+			}
+		default:
+			if _, err := transaction.ExecContext(ctx, step.statement); err != nil {
+				return fmt.Errorf("postgresql migration statement %d: %w", statements, err)
+			}
+			statements++
+		}
+	}
+	return nil
+}
+
+func executeReviewedPostgreSQLBackfill(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, files map[string][]byte, operationID migration.OperationID) error {
+	var companion *migration.ManualCompanion
+	for index := range entry.Manual {
+		if entry.Manual[index].OperationID == operationID {
+			companion = &entry.Manual[index]
+			break
+		}
+	}
+	if companion == nil {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s has no companion", entry.ID, operationID)
+	}
+	content, exists := files[companion.File.Path]
+	if !exists || migration.Checksum(content) != companion.File.SHA256 {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s artifact is missing or rewritten", entry.ID, operationID)
+	}
+	if err := validateReviewedBackfillArtifact(content); err != nil {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s artifact: %w", entry.ID, operationID, err)
+	}
+	prepared, err := transaction.PrepareContext(ctx, string(content))
+	if err != nil {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s is not exactly one preparable statement", entry.ID, operationID)
+	}
+	defer prepared.Close()
+	if _, err := prepared.ExecContext(ctx); err != nil {
+		return fmt.Errorf("postgresql migration %s reviewed backfill %s failed", entry.ID, operationID)
+	}
+	return nil
+}
+
+func validateReviewedBackfillArtifact(content []byte) error {
+	if len(content) == 0 || len(content) > reviewedBackfillMaximumBytes {
+		return fmt.Errorf("reviewed SQL must be between 1 byte and 1 MiB")
+	}
+	if !utf8.Valid(content) {
+		return fmt.Errorf("reviewed SQL must be UTF-8")
+	}
+	if bytes.ContainsRune(content, '\r') || bytes.ContainsRune(content, 0) {
+		return fmt.Errorf("reviewed SQL must use LF endings and contain no NUL")
+	}
+	if content[len(content)-1] != '\n' || bytes.HasSuffix(content, []byte("\n\n")) {
+		return fmt.Errorf("reviewed SQL must end with exactly one final newline")
+	}
+	for _, marker := range []string{"{{", "}}", "${", "%s", "%d", "%v", "%q"} {
+		if bytes.Contains(content, []byte(marker)) {
+			return fmt.Errorf("reviewed SQL contains a template or interpolation marker")
+		}
+	}
+	for index := 0; index+1 < len(content); index++ {
+		if content[index] == '$' && content[index+1] >= '0' && content[index+1] <= '9' {
+			return fmt.Errorf("reviewed SQL must be zero-parameter")
+		}
+	}
+	return nil
+}
+
+func verifyPostgreSQLNullPostcondition(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, condition nullPostcondition) error {
+	statement := fmt.Sprintf("SELECT count(*) FROM %s WHERE %s IS NULL", qualified(condition.namespace, condition.table), quote(condition.column))
+	var remaining int64
+	if err := transaction.QueryRowxContext(ctx, statement).Scan(&remaining); err != nil {
+		return fmt.Errorf("postgresql migration %s postcondition %s could not be evaluated", entry.ID, condition.operation)
+	}
+	if remaining != 0 {
+		return fmt.Errorf("postgresql migration %s postcondition %s failed: %d rows remain unset", entry.ID, condition.operation, remaining)
+	}
 	return nil
 }
 

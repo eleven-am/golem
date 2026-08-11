@@ -115,6 +115,7 @@ type ddlRenderer struct {
 	schema           physical.PhysicalSchema
 	tables           map[ir.ModelID]physical.PhysicalTable
 	beforeExtensions map[ir.ExtensionID]physical.Extension
+	backfilled       map[ir.FieldID]bool
 }
 
 func (r ddlRenderer) table(table physical.PhysicalTable) (string, error) {

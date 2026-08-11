@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
@@ -386,13 +387,13 @@ func validateEntrySemantics(entry ManifestEntry) error {
 			return err
 		}
 		operation, exists := operations[approval.OperationID]
-		if !exists || approvals[approval.OperationID] || (operation.Risk != RiskDataLoss && operation.Risk != RiskManual) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
+		if !exists || approvals[approval.OperationID] || !RequiresApproval(operation) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
 			return fmt.Errorf("approval for %s is not exact and object-scoped", approval.OperationID)
 		}
 		approvals[approval.OperationID] = true
 	}
 	for operationID, operation := range operations {
-		required := operation.Risk == RiskDataLoss || operation.Risk == RiskManual
+		required := RequiresApproval(operation)
 		if approvals[operationID] != required {
 			return fmt.Errorf("operation %s approval inventory is inconsistent with risk %s", operationID, operation.Risk)
 		}
@@ -400,17 +401,40 @@ func validateEntrySemantics(entry ManifestEntry) error {
 	manual := map[OperationID]bool{}
 	for _, companion := range entry.Manual {
 		operation, exists := operations[companion.OperationID]
-		if !exists || operation.Kind != ManualStep || manual[companion.OperationID] {
+		if !exists || !RequiresManualCompanion(operation) || manual[companion.OperationID] {
 			return fmt.Errorf("manual companion for %s does not map exactly to one manual operation", companion.OperationID)
+		}
+		if operation.Kind == BackfillColumn {
+			owner, resolved := BackfillOwner(entry.AfterSnapshot, ir.FieldID(operation.ObjectID))
+			if !resolved || companion.Postcondition != BackfillPostcondition(owner, ir.FieldID(operation.ObjectID)) {
+				return fmt.Errorf("backfill companion for %s does not carry the generated no-NULL postcondition", companion.OperationID)
+			}
 		}
 		manual[companion.OperationID] = true
 	}
 	for operationID, operation := range operations {
-		if (operation.Kind == ManualStep) != manual[operationID] {
+		if RequiresManualCompanion(operation) != manual[operationID] {
 			return fmt.Errorf("manual operation %s companion inventory is inconsistent", operationID)
+		}
+		if operation.Kind != BackfillColumn {
+			continue
+		}
+		for _, required := range []OperationKind{AddColumn, ValidateConstraint, AlterColumnNullability} {
+			if !hasOperation(operations, required, operation.ObjectID) {
+				return fmt.Errorf("backfill %s lacks its %s companion operation", operationID, required)
+			}
 		}
 	}
 	return nil
+}
+
+func hasOperation(operations map[OperationID]Operation, kind OperationKind, objectID string) bool {
+	for _, operation := range operations {
+		if operation.Kind == kind && operation.ObjectID == objectID {
+			return true
+		}
+	}
+	return false
 }
 
 func validRisk(risk Risk) bool {

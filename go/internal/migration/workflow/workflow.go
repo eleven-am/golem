@@ -189,7 +189,7 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		var risks []migration.OperationRisk
 		for _, operation := range plan.Operations {
 			risks = append(risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-			if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+			if migration.RequiresApproval(operation) {
 				if !approved[operation.ID] {
 					return NewResult{}, fmt.Errorf("provider %s operation %s risk %s requires --approve %s", providerID, operation.ID, operation.Risk, operation.ID)
 				}
