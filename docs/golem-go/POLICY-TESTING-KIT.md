@@ -89,6 +89,7 @@ type Kit[A any] struct { /* opaque */ }
 func New[A any](
     bindings golem.ApplicationBindings[A],
     descriptors golem.ApplicationDescriptors,
+    bundle golem.SchemaBundle,
 ) (*Kit[A], error)
 
 type PolicySet struct { /* opaque; contains no original actor instance */ }
@@ -251,9 +252,10 @@ bridge needed by `golemtest`.
 
 `New` must:
 
-1. require non-zero, equal generation digests on bindings and descriptors;
+1. require non-zero, equal generation digests on bindings, descriptors, and the
+   schema bundle;
 2. construct the same validated schema registry used by production from the
-   supplied descriptors;
+   supplied schema bundle, through the same constructor production uses;
 3. reject duplicate, missing, foreign-generation, zero-ID, or malformed model,
    field, and relation metadata before any policy factory runs;
 4. retain immutable copies only; and
@@ -439,7 +441,13 @@ and a complete policy-testing section to `PRODUCTION.md`. It must also update:
 - the public Go API inventory and digest;
 - the compatibility manifest/trust digest if that inventory is release-bound;
 - package documentation for `golemtest` and the single `golem.FieldIdentity`
-  bridge; and
+  bridge. Godoc on an exported symbol of a public package is documentation for
+  an external consumer, not internal commentary: it is what `go doc` and
+  pkg.go.dev render, and it is the only description an application author gets
+  of an API they cannot read the source of. It is therefore required here, and
+  the repository ban on explanatory comments does not reach it. That ban still
+  applies in full to unexported symbols, function bodies, and test files, where
+  a comment describes logic rather than a contract; and
 - the roadmap status from unshipped to implemented only after the mandatory
   evidence passes.
 
@@ -454,3 +462,46 @@ dependencies, and prove constraint equivalence without a database—and the same
 answers are independently shown to agree with real SQLite and PostgreSQL Caller
 behavior. Anything less is a convenient rule viewer, not a trustworthy public
 policy testing kit.
+
+## 13. Recorded limitations
+
+Found while implementing the construction spine. Each is a boundary of the
+current design rather than a defect, recorded so a later reader can tell it was
+decided rather than missed.
+
+**Cross-generation rejection in `Model` is metadata-based, not digest-based.**
+`golem.ModelDescriptor[M]` carries no generation stamp, so `Model` enforces kit
+membership plus full metadata equality against the registered model. This is
+sufficient while no two generations produce a byte-identical model, which the
+fixtures confirm, but it is not a hard guarantee. Making it one requires a
+generation stamp on `ModelDescriptor`, which changes a generated artifact and
+the public ABI.
+
+**"Retain immutable copies only" (§5.4) is met by construction, not by
+copying.** `ApplicationDescriptors.Models()` clones. `ApplicationBindings`
+exposes no accessor for its packages or factories, so it cannot be deep-copied
+from outside `golem`; it is unreachable rather than duplicated. The property
+holds; the mechanism differs from the wording.
+
+**A relation is keyed by (RelationID, Role), never by RelationID alone.** A
+self-referencing model shares one RelationID across both roles — in the social
+example `Comment.ReplyTo` is the source side and `Comment.Replies` the inverse,
+on the same model with the same identity. Keying by RelationID alone rejects
+every self-relation.
+
+**Gate 10 carries two mechanical caveats.** With `GOWORK=off` and no module
+proxy, an in-tree consumer requires `replace` directives; a genuinely
+replace-free consumer needs the `file://` proxy machinery in
+`internal/release`. Separately, `./golemtest` is absent from the pattern list in
+`internal/compatibility/corpus_test.go`, which is why the public Go API diff
+gate passes without it. Adding it, as §11 requires, means regenerating
+`public-go-api.json` and `PublicGoAPICorpusSHA256`.
+
+**The delegation table in `source_inventory_test.go` is package-scoped, not
+symbol-scoped.** A row requires that the package import the delegate, not that
+the named symbol use it. So a row whose delegate is already imported for another
+symbol is satisfied trivially — `View` and `CanonicalBytes` both name
+`internal/policy/bind`, and removing `View`'s delegation alone does not fail the
+guard. The rows still bite for a symbol whose delegate is otherwise unimported,
+which is why the Phase 3 entries are declared before their symbols exist. What
+actually pins a symbol's delegation is its own behavioural gate.
