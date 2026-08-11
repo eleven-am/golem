@@ -5,7 +5,7 @@ import "strings"
 // TrustedManifestSHA256 is compiled separately from compatibility/manifest.json.
 // Release tooling and tests must use this trust root rather than a digest read
 // from, or recomputed and accepted alongside, the artifact itself.
-const TrustedManifestSHA256 = "1c0fe59945f16d15dd99f3bd992b3de172721cc2ab721209485040a78e0c32f5"
+const TrustedManifestSHA256 = "d530aa48e814326e00b598d306e133d9557d16c14104b4b5e502de6f92606e46"
 
 func DevelopmentManifest() Manifest {
 	return Manifest{

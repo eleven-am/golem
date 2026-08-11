@@ -216,6 +216,37 @@ func TestPolicyTestKitFactoryPanicAndErrorsAreClosedAndRedacted(t *testing.T) {
 		}
 	})
 
+	t.Run("ClassificationErrorsAreClosedAndRedacted", func(t *testing.T) {
+		kit := socialKit(t)
+		policies, err := kit.ForActor(p5social.Actor{AllowedTag: "alpha"})
+		if err != nil {
+			t.Fatalf("ForActor: %v", err)
+		}
+		tags, err := Model(policies, p5social.GolemGeneratedTagDescriptor)
+		if err != nil {
+			t.Fatalf("Model: %v", err)
+		}
+
+		_, reachErr := tags.ClassifyReadFieldsWithReach(UseProjection, golem.FrozenActionRead, golem.All[p5social.Tag](), p5social.Tags.ID)
+		assertRedacted(t, reachErr, "widening reach")
+		if code, ok := CodeOf(reachErr); !ok || code != ErrorPolicyAnalysis {
+			t.Fatalf("widening reach classified %s ok=%v, want %s", code, ok, ErrorPolicyAnalysis)
+		}
+
+		_, handleErr := tags.ClassifyReadFields(UseProjection, golem.FrozenActionRead, golem.GeneratedToOne[p5social.Tag, p5social.Post](golem.FieldID{}, golem.RelationID{}))
+		assertRedacted(t, handleErr, "zero field handle")
+		if code, ok := CodeOf(handleErr); !ok || code != ErrorInvalidInput {
+			t.Fatalf("zero field handle classified %s ok=%v, want %s", code, ok, ErrorInvalidInput)
+		}
+
+		foreign := golem.GeneratedToOne[p5social.Tag, p5social.Post](golem.FieldID{0x5a, 0x5b, 0x5c}, golem.RelationID{0x01})
+		_, foreignErr := tags.ClassifyReadFields(UseProjection, golem.FrozenActionRead, foreign)
+		assertRedacted(t, foreignErr, "foreign field handle")
+		if code, ok := CodeOf(foreignErr); !ok || code != ErrorGenerationMismatch {
+			t.Fatalf("foreign field handle classified %s ok=%v, want %s", code, ok, ErrorGenerationMismatch)
+		}
+	})
+
 	t.Run("ErrorTextIsTheClosedCodeVocabulary", func(t *testing.T) {
 		kit := syntheticKit(t, everyModel(func(syntheticActor) (golem.FrozenPolicy, error) {
 			panic("gamma-panic-payload")

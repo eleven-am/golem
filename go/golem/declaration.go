@@ -288,6 +288,32 @@ type Field[M any] interface {
 	fieldIdentity() FieldID
 }
 
+// FieldIdentity reports the stable generated identity of a sealed field handle.
+//
+// It is the single read-only bridge that lets a separate package name a field
+// the application already declared. It is not a constructor: it cannot mint an
+// identity, look one up by name, reach a field of another model, or grant any
+// read, write, or policy capability. The only handles it can answer for are the
+// generated ones the application itself exposes.
+//
+// The second result is false for a nil, zero, or otherwise malformed handle,
+// and the returned identity is then the zero FieldID.
+func FieldIdentity[M any](field Field[M]) (identity FieldID, ok bool) {
+	defer func() {
+		if recover() != nil {
+			identity, ok = FieldID{}, false
+		}
+	}()
+	if field == nil {
+		return FieldID{}, false
+	}
+	value := field.fieldIdentity()
+	if value == (FieldID{}) {
+		return FieldID{}, false
+	}
+	return value, true
+}
+
 type Column[M any] interface {
 	Field[M]
 	columnModel(M)

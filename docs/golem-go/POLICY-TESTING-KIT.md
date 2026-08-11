@@ -505,3 +505,39 @@ symbol is satisfied trivially — `View` and `CanonicalBytes` both name
 guard. The rows still bite for a symbol whose delegate is otherwise unimported,
 which is why the Phase 3 entries are declared before their symbols exist. What
 actually pins a symbol's delegation is its own behavioural gate.
+
+**A kit-versus-runtime comparison cannot, on its own, kill a mutation in the
+shared kernel.** `golemtest` and the runtime read planner both call
+`internal/policy/classify` and `internal/policy/dependency`. A mutant inside
+either package moves both answers together, so a gate that only checks the two
+against each other still passes. Gates 3 and 5 therefore assert two things: that
+the kit's answer is the runtime's answer, and — absolutely — that the answer is
+the one the fixture policy declares (a named field is conditional, its condition
+is provably the authored predicate, a denied field is refused by the planner, a
+relation dependency retains its hop and its target subtree). The relative half
+is what makes the gate names true; the absolute half is what makes them
+mutation-resistant.
+
+**Classification uses the resolved row constraint; the runtime read planner uses
+the relation-expanded one.** §4.1 fixes the no-reach form as "the resolved row
+constraint for `selectingAction`", which is `resolve.RowConstraint`.
+`internal/read/plan` additionally closes every relation hop in that constraint
+over the target model's own read constraint before using it as statement reach.
+`Access` and `Condition` are unaffected — the field condition itself is never
+expanded — but `DischargedByConstraint` can differ for an actor whose read row
+constraint contains a relation predicate, in either direction (an existential
+hop narrows, a null hop widens). Gate 3 asserts canonical equality of the two
+reaches as an explicit premise, so a fixture that ever violates it fails loudly
+instead of comparing two different questions. Making the kit agree
+unconditionally would mean either exporting the read planner's expander into the
+policy kernel or restating §4.1 in terms of it; both are contract changes.
+
+**`golem.FieldIdentity` is additive but not free.** §4.1's field-taking
+signatures are the only way to reach a `FieldID` from outside package `golem`,
+so §4.3's bridge became required in Phase 3. Adding it reclassified the public
+Go API corpus as `additive` and required regenerating
+`internal/compatibility/testdata/public-go-api.json`,
+`PublicGoAPICorpusSHA256`, `compatibility/manifest.json`, and
+`TrustedManifestSHA256`. The generated-ABI and GraphQL corpora are unchanged.
+`./golemtest` remains absent from the corpus pattern list, so the kit's own
+public surface is still outside the frozen inventory.

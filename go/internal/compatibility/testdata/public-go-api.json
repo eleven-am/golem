@@ -2017,6 +2017,13 @@
           "methods": null
         },
         {
+          "name": "FieldIdentity",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](field github.com/eleven-am/golem/go/golem.Field[M]) (identity github.com/eleven-am/golem/go/golem.FieldID, ok bool)",
+          "methods": []
+        },
+        {
           "name": "FindFirstHookRequest",
           "kind": "type",
           "typeKind": "struct",
