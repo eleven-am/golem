@@ -24,8 +24,5 @@ migrations, events, and operational limits.
 - [Safe query-plan visibility](./SAFE-QUERY-PLAN-VISIBILITY.md)
 - [SQLite WAL and reviewed data evolution](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md)
 
-The [Bible](./BIBLE.md) records the consolidated security and semantic design.
-The numbered chapters contain detailed operator, policy-resolution,
-classification, statement-shape, and runtime reference material. Future product
-direction is tracked in [ROADMAP.md](./ROADMAP.md); it is not a claim of shipped
-functionality.
+Future product direction is tracked in [ROADMAP.md](./ROADMAP.md); it is not a
+claim of shipped functionality.

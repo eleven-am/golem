@@ -4,8 +4,8 @@ Status: **frozen contract; implementation and verification complete**
 
 This document fixes the source-level surface P7 must implement. Names and
 signatures shown here are normative unless a later committed contract change
-updates this document, the Bible conflict table, generated goldens, and the
-evidence ledger together.
+updates this document, the compatibility manifest, and generated goldens
+together.
 
 ## 1. Model declaration
 

@@ -2,8 +2,7 @@
 
 Status: controlling command contract for the P1 migration-history owner.
 
-This document fixes the migration-history command surface. It is subordinate to
-[`P1-CONTRACT.md`](P1-CONTRACT.md).
+This document fixes the migration-history command surface.
 
 ## Commands
 

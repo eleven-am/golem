@@ -1,12 +1,10 @@
 # P1 schema authoring and normalized logical IR
 
-Status: **Wave 0 decisive proposal**<br>
+Status: **controlling schema authoring contract**<br>
 Scope: P1 model discovery, schema authoring, normalized logical model IR, and
 the contract consumed by descriptor and physical-schema generation<br>
-Authority: subordinate to [`../BIBLE.md`](../BIBLE.md)
-
-This document freezes the boundary between application Go source and every P1
-consumer. It is intentionally more exact than the examples in the Bible. The
+This document freezes the boundary between application Go source and every
+compiler consumer. The
 compiler, provider lowerers, migration planner, descriptor generator, and later
 policy/runtime phases must consume this boundary rather than rediscovering model
 facts independently.
@@ -122,8 +120,8 @@ before opening traffic.
 > **OWNER APPROVAL REQUIRED — provider-restricted roots.** This proposal permits
 > `providers=postgresql` for an application that deliberately uses a typed
 > PostgreSQL-only storage extension. The alternative is to require every
-> application schema to compile for both providers, which would ban the
-> provider-specific capabilities explicitly contemplated by the Bible. The
+> application schema to compile for both providers, which would ban supported
+> provider-specific capabilities. The
 > recommendation is to approve provider-restricted application schemas while
 > retaining dual-provider implementation and conformance as a Golem release gate.
 
@@ -213,7 +211,7 @@ index   = physical_name(column_name, column_name, ...)
 ```
 
 Column references in common tags use the declared `db` column spelling. This
-preserves the Bible's existing examples. The parser immediately resolves them to
+preserves the accepted authoring examples. The parser immediately resolves them to
 stable `FieldID`s; no downstream component retains those strings as references.
 
 Common indexes are non-unique B-tree indexes with ascending keys, no include
@@ -470,7 +468,7 @@ ID     string     `db:"id" golem:"pk;default=uuid"`
 
 `uuid` is application-generated because stock SQLite has no portable database
 UUID function. On `UUID` it produces the logical UUID value; on `String` it
-produces the canonical lowercase textual form required by the Bible's baseline
+produces the canonical lowercase textual form required by the public contract's
 models. A String with this default remains logically String and does not acquire
 UUID comparison or validation semantics for arbitrary subsequently written
 values. The default still makes the create input optional; P4 must inject it
