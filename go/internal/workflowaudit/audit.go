@@ -127,6 +127,24 @@ func AuditWorkflow(contents []byte) []Violation {
 				}
 			}
 		}
+		for _, boundary := range []struct {
+			job, missing string
+			steps        []string
+		}{
+			{job: "provider-matrix", missing: "P8_WORKFLOW_PROVIDER_PGVECTOR_BOUNDARY_MISSING", steps: []string{"SQLite and PostgreSQL C plus linguistic provider matrix"}},
+			{job: "hardening", missing: "P8_WORKFLOW_HARDENING_PGVECTOR_BOUNDARY_MISSING", steps: []string{"Race and resource-leak matrix", "Repeat matrix", "Shuffle sensitive runtime surfaces"}},
+		} {
+			job := mappingValue(jobs, boundary.job)
+			if !jobHasPGVectorBoundary(job) {
+				violations = append(violations, Violation{Code: boundary.missing})
+			}
+			for _, step := range boundary.steps {
+				if !strings.Contains(namedStepCommand(job, step), "-p=1") {
+					violations = append(violations, Violation{Code: "P8_WORKFLOW_NESTED_ORACLE_SERIALIZATION_MISSING_" + strings.ToUpper(strings.ReplaceAll(boundary.job, "-", "_"))})
+					break
+				}
+			}
+		}
 	}
 	walk(root, func(node *yaml.Node) {
 		if node.Kind == yaml.ScalarNode && strings.Contains(node.Value, "@") && strings.Contains(node.Value, "/") && strings.HasPrefix(node.Value, "actions/") && !immutableAction.MatchString(node.Value) {
@@ -280,6 +298,33 @@ func jobHasMutationExecutionStep(job *yaml.Node) bool {
 		}
 	}
 	return found
+}
+
+const pgVectorImage = "pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38"
+const pgVectorDSN = "postgresql://postgres@127.0.0.1:55434/golem?sslmode=disable"
+
+func jobHasPGVectorBoundary(job *yaml.Node) bool {
+	if job == nil || scalar(mappingValue(mappingValue(job, "env"), "GOLEM_REQUIRE_PGVECTOR")) != "1" || scalar(mappingValue(mappingValue(job, "env"), "GOLEM_TEST_PGVECTOR_DSN")) != pgVectorDSN {
+		return false
+	}
+	service := mappingValue(mappingValue(job, "services"), "pgvector")
+	if service == nil || scalar(mappingValue(service, "image")) != pgVectorImage {
+		return false
+	}
+	return sameStrings(sequenceScalars(mappingValue(service, "ports")), []string{"55434:5432"})
+}
+
+func namedStepCommand(job *yaml.Node, name string) string {
+	steps := mappingValue(job, "steps")
+	if steps == nil || steps.Kind != yaml.SequenceNode {
+		return ""
+	}
+	for _, step := range steps.Content {
+		if scalar(mappingValue(step, "name")) == name {
+			return scalar(mappingValue(step, "run"))
+		}
+	}
+	return ""
 }
 
 const liveNATSImage = "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"

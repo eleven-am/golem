@@ -223,6 +223,72 @@ func TestP8LiveNATSInventoryDeletionAndRenameAreDetected(t *testing.T) {
 	}
 }
 
+func TestP8ProviderAndHardeningPGVectorAndNestedOracleSerializationAreExact(t *testing.T) {
+	original := string(readHostedWorkflow(t))
+	for _, mutation := range []struct {
+		name, job, next, before, after, want string
+	}{
+		{
+			name: "provider-pgvector-mode-removed", job: "provider-matrix", next: "hardening",
+			before: `GOLEM_REQUIRE_PGVECTOR: "1"`, after: `GOLEM_REQUIRE_PGVECTOR: "0"`,
+			want: "P8_WORKFLOW_PROVIDER_PGVECTOR_BOUNDARY_MISSING",
+		},
+		{
+			name: "provider-pgvector-port-changed", job: "provider-matrix", next: "hardening",
+			before: `ports: ["55434:5432"]`, after: `ports: ["55435:5432"]`,
+			want: "P8_WORKFLOW_PROVIDER_PGVECTOR_BOUNDARY_MISSING",
+		},
+		{
+			name: "provider-nested-oracle-parallelized", job: "provider-matrix", next: "hardening",
+			before: `go test -json -p=1 -count=1 -timeout=45m`, after: `go test -json -count=1 -timeout=45m`,
+			want: "P8_WORKFLOW_NESTED_ORACLE_SERIALIZATION_MISSING_PROVIDER_MATRIX",
+		},
+		{
+			name: "hardening-pgvector-dsn-removed", job: "hardening", next: "fuzz",
+			before: `GOLEM_TEST_PGVECTOR_DSN: ` + pgVectorDSN, after: `GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres@127.0.0.1:55435/golem?sslmode=disable`,
+			want: "P8_WORKFLOW_HARDENING_PGVECTOR_BOUNDARY_MISSING",
+		},
+		{
+			name: "hardening-pgvector-image-relabelled", job: "hardening", next: "fuzz",
+			before: `image: ` + pgVectorImage, after: `image: pgvector/pgvector@sha256:0000000000000000000000000000000000000000000000000000000000000000`,
+			want: "P8_WORKFLOW_HARDENING_PGVECTOR_BOUNDARY_MISSING",
+		},
+		{
+			name: "hardening-shuffle-nested-oracle-parallelized", job: "hardening", next: "fuzz",
+			before: `go test -json -p=1 -shuffle=on`, after: `go test -json -shuffle=on`,
+			want: "P8_WORKFLOW_NESTED_ORACLE_SERIALIZATION_MISSING_HARDENING",
+		},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			mutant := mutateWorkflowJob(t, original, mutation.job, mutation.next, mutation.before, mutation.after)
+			if codes := violationCodes(AuditWorkflow([]byte(mutant))); !contains(codes, mutation.want) {
+				t.Fatalf("provider/hardening boundary mutation survived: violations=%v want=%s", codes, mutation.want)
+			}
+		})
+	}
+}
+
+func mutateWorkflowJob(t *testing.T, original, job, next, before, after string) string {
+	t.Helper()
+	startMarker := "\n  " + job + ":\n"
+	nextMarker := "\n  " + next + ":\n"
+	start := strings.Index(original, startMarker)
+	if start < 0 {
+		t.Fatalf("workflow job %s is absent", job)
+	}
+	endOffset := strings.Index(original[start+len(startMarker):], nextMarker)
+	if endOffset < 0 {
+		t.Fatalf("workflow successor %s is absent", next)
+	}
+	end := start + len(startMarker) + endOffset
+	section := original[start:end]
+	mutated := strings.Replace(section, before, after, 1)
+	if mutated == section {
+		t.Fatalf("workflow mutation target %q is absent from %s", before, job)
+	}
+	return original[:start] + mutated + original[end:]
+}
+
 func TestP8WorkflowAuditKillsRequiredProfileSkipAndSupplyChainMutations(t *testing.T) {
 	original := string(readHostedWorkflow(t))
 	mutations := []struct {

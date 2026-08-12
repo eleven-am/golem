@@ -186,6 +186,9 @@ jobs:
   provider-matrix:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    env:
+      GOLEM_REQUIRE_PGVECTOR: "1"
+      GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres@127.0.0.1:55434/golem?sslmode=disable
     strategy:
       fail-fast: false
       matrix:
@@ -197,6 +200,15 @@ jobs:
           - postgres: "17"
             image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
     services:
+      pgvector:
+        image: pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+        ports: ["55434:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
       postgres-c:
         image: ${{ matrix.image }}
         env:
@@ -232,7 +244,7 @@ jobs:
           fi
       - name: SQLite and PostgreSQL C plus linguistic provider matrix
         run: >-
-          go test -json -count=1 -timeout=45m
+          go test -json -p=1 -count=1 -timeout=45m
           ./provider/... ./observe/... ./runtime ./graphql ./events
           ./internal/provider/... ./internal/p8oracle/... |
           tee p8-provider.events.jsonl
@@ -274,7 +286,19 @@ jobs:
   hardening:
     runs-on: ubuntu-24.04
     timeout-minutes: 180
+    env:
+      GOLEM_REQUIRE_PGVECTOR: "1"
+      GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres@127.0.0.1:55434/golem?sslmode=disable
     services:
+      pgvector:
+        image: pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_DB: golem
+        ports: ["55434:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 10s
+          --health-timeout 5s --health-retries 12
       postgres-c:
         image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
         env:
@@ -313,7 +337,7 @@ jobs:
       - name: Repeat matrix
         run: go test -json -p=1 -count=2 -timeout=45m ./... | tee p8-repeat.events.jsonl
       - name: Shuffle sensitive runtime surfaces
-        run: go test -json -shuffle=on -count=10 -timeout=45m ./provider/... ./observe/... ./runtime ./graphql ./events | tee p8-shuffle.events.jsonl
+        run: go test -json -p=1 -shuffle=on -count=10 -timeout=45m ./provider/... ./observe/... ./runtime ./graphql ./events | tee p8-shuffle.events.jsonl
       - name: Explicit goroutine queue and evaluation leak gate
         run: go test -json -race -count=1 -run 'TestP8GoroutineQueueAndEvaluationHardBounds' ./internal/p8oracle/load | tee p8-leak.events.jsonl
       - name: Audit hardening event corpus
