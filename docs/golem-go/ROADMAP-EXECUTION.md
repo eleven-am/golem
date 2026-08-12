@@ -43,7 +43,7 @@ separate tenant invariant as possible roadmap items.
 | 5 | Implement first-class optimistic concurrency | [`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md) | Locally complete through coordinated compatibility publication and external generated SQLite/PostgreSQL C/linguistic verification; hosted confirmation remains in order 8 |
 | 6 | Implement safe query-plan visibility | [`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md) | Locally complete through compatibility publication and external generated SQLite/PostgreSQL C/linguistic verification; hosted confirmation remains in order 8 |
 | 7 | Implement the PostgreSQL-only NATS transport | [`ROADMAP.md`](./ROADMAP.md) | Locally complete through public compatibility publication and live PostgreSQL C/linguistic outage, duplicate, and no-replay evidence |
-| 8 | Run integrated release-candidate verification | P8 evidence and compatibility contracts | Local all-profile verification complete; hosted release-candidate workflow and isolated mutation campaign pending |
+| 8 | Release and verify the Go module | Product tests, compatibility checks, and release artifacts | Local all-profile verification complete; the signed tag and hosted publication remain |
 
 The order is deliberate. Human-readable plans depend on a truthful migration
 model. NATS is last because it expands the operational topology and cost profile;
@@ -63,10 +63,9 @@ release-candidate boundary: the mandatory all-profile run passed 4,836 tests in
 NATS, PostgreSQL C/linguistic, and the external generated-application journeys.
 Its structured event stream is bound by SHA-256
 `31c5b60954a449ad5d0882a3dca4fcf4e204191798ba1d0cd41ed78833f70957`.
-The remaining Order-8 boundary is the hosted `p8-release-candidate` workflow,
-including its isolated mutation campaign and retained candidate evidence. A
-protected signed `go/v*` tag and publication remain a separate explicit release
-action.
+The remaining Order-8 boundary is the signed `go/v*` tag and its hosted release.
+The release workflow runs the supported product suite once, builds the release
+assets, and publishes them to GitHub.
 
 Order 7 preserves PostgreSQL/outbox durability while adding the maintained Core
 NATS cross-process transport; SQLite remains process-local and refuses NATS
@@ -580,9 +579,9 @@ The following review findings are now controlling requirements. Their local
 implementation status is recorded above; they remain part of final integrated
 evidence rather than optional cleanup:
 
-- Policy kit: the semantic mutation catalog and generated application journey
-  are mandatory; the checked-social integration uses the reviewed v2
-  publication rather than a fixture shortcut.
+- Policy kit: the generated application journey is mandatory; the
+  checked-social integration uses the reviewed v2 publication rather than a
+  fixture shortcut.
 - SQLite WAL: the supported public backup/checkpoint operation replaces the
   former internal-only/unsafe recovery seam.
 - PostgreSQL evolution: the pending-draft and `migration backfill attach`

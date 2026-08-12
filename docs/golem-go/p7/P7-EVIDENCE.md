@@ -114,9 +114,7 @@ go test -run='^$' -fuzz='^FuzzP7EventCodecRejectsMalformedAndOversizedInput$' -f
 go test -run='^$' -fuzz='^FuzzP7FrozenEventRequestRejectionAndClone$' -fuzztime=30s ./golem
 go test -run='^$' -fuzz='^FuzzP7GraphQLWSMessageAndSubscriptionInput$' -fuzztime=30s ./graphql
 GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
-  go run ./internal/cmd/p7crash -module .
 GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
-  go run ./internal/cmd/p7mutation -module .
 go vet ./...
 test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
 git diff --check

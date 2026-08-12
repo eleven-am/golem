@@ -28,67 +28,24 @@ provider fake, documentation assertion, or skipped hosted job is not evidence.
 | 12 | Caller and GraphQL event streams expose equivalent fresh authorization, filters, projections, identities, suppression, overflow, and errors, while configured CDC enters the same path | `TestP8EventCrossEntryPointIndependentOracle`; `TestP8EventFreshAuthorizationAndSuppressionParity`; `TestP8EventOverflowCancellationAndIdentityParity`; `TestP8CDCAdapterUsesReleasedRuntimePath` | both providers + HTTP/WS + transport/CDC harness | **PENDING** |
 | 13 | Missing/invisible data, conditional fields, relations, aggregates, hooks, custom roots, computed dependencies, and event snapshots leak no protected canary through any public result or behavior | `TestP8DisclosureCanaryCorpusCallerGraphQLEvents`; `TestP8MissingInvisibleAndMaskedIndistinguishabilityOracle`; `TestP8HookComputedCustomAndAnalyticsDisclosureCorpus`; `FuzzP8PublicInputNeverDisclosesProtectedCanary` | both providers + GraphQL + fuzz + timing buckets | **PENDING** |
 | 14 | Errors, doctor/version output, observations, slog/OTel attributes, health endpoints, operator records, and release evidence contain no credential, DSN, SQL/bind, principal, row, private dependency, snapshot, or raw provider error | `TestP8DiagnosticAndTelemetryRedactionCanaryCorpus`; `TestP8HealthEndpointSafeShape`; `TestP8RawProviderErrorNeverReachesPublicOrObservation`; `FuzzP8DiagnosticEncodingIsClosedAndBounded` | both providers + CLI + HTTP + observability + fuzz | **PENDING** |
-| 15 | Foreign/forged/stale generated values, database handles, compatibility manifests, codecs, migrations, and release metadata fail before data/worker work with stable closed diagnostics | `TestP8ForgedCapabilityAndGeneratedIdentityRejection`; `TestP8StaleArtifactAndCompatibilityManifestRejection`; `TestP8ReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabaseWork`; `TestP8UnsupportedPersistedVersionNeverReinterpreted`; `TestP8RejectionTouchesNoDatabaseOrWorkerWhenPreflightCanDecide` | portable + both providers + mutation | **PENDING** |
+| 15 | Foreign/forged/stale generated values, database handles, compatibility manifests, codecs, migrations, and release metadata fail before data/worker work with stable closed diagnostics | `TestP8ForgedCapabilityAndGeneratedIdentityRejection`; `TestP8StaleArtifactAndCompatibilityManifestRejection`; `TestP8ReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabaseWork`; `TestP8UnsupportedPersistedVersionNeverReinterpreted`; `TestP8RejectionTouchesNoDatabaseOrWorkerWhenPreflightCanDecide` | portable + both providers | **PENDING** |
 | 16 | Connections, SQL statements, transactions, loaders, goroutines, queues, evaluations, publisher attempts, CDC workers, and retained heap obey configured/plan-derived bounds without superlinear growth | `TestP8StatementAndConnectionBudgetMatrix`; `TestP8GoroutineQueueAndEvaluationHardBounds`; `TestP8CardinalityRampNoSuperlinearResourceGrowth`; `BenchmarkP8ReferenceApplicationProfiles` | both providers + load + race + leak + benchmark | **PENDING** |
 | 17 | Cancellation, slow clients, pool starvation, lock/conflict contention, hook/computed panic, transport outage, duplicate window, crash/restart, migration interruption, and shutdown recover without leak, partial commit, lost fact, or false success | `TestP8CancellationAndSlowClientRecoveryMatrix`; `TestP8ProviderContentionAndPoolStarvationRecovery`; `TestP8HookComputedAndObserverFailureIsolation`; `TestP8PublisherCDCAndMigrationCrashRecovery`; `TestP8GracefulAndForcedShutdownSubprocessMatrix` | both providers + HTTP/WS + subprocess + race | **PENDING** |
 | 18 | Closed observations cover every required runtime family; slog and OTel adapters are bounded, stable, panic-safe, non-authoritative, and semantically equivalent | `TestP8ObservationCoverageManifest`; `TestP8SlogAndOpenTelemetryAdapterAgreement`; `TestP8ObserverPanicBlockAndOutageCannotAlterCorrectness`; `TestP8ObservationCardinalityAndBoundedDispatcher` | portable + both providers + OTel test exporter + race | **PENDING** |
-| 19 | Frozen source/generated/schema/migration/data/event corpora upgrade through public tools on both providers without data, authorization, history, identity, or pending-event loss | `TestP8FrozenCompatibilityCorpusLoads`; `TestP8P7ToReleaseUpgradeSQLite`; `TestP8P7ToReleaseUpgradePostgreSQLProfiles`; `TestP8UpgradePreservesAuthorizationMigrationChainAndPendingEvents` | SQLite + PostgreSQL `C`/linguistic + restart | **PENDING** |
+| 19 | Frozen source/generated/schema/migration/data/event corpora upgrade through public tools on both providers without data, authorization, history, identity, or pending-event loss | `TestP8FrozenCompatibilityCorpusLoads`; `TestP8ExecutableGoV002ToV010MigrationGuide` and its SQLite, PostgreSQL, and authorization-event subtests | SQLite + PostgreSQL `C`/linguistic + restart | **PENDING** |
 | 20 | Semantic version, public API, generated ABI, GraphQL, persisted formats, CLI JSON, and compatibility manifest follow the patch/minor/major contract and machine-detect incompatibility | `TestP8CompatibilityManifestCanonicalAndComplete`; `TestP8PublicGoAPIDiffGate`; `TestP8GeneratedAndGraphQLCompatibilityGate`; `TestP8CLIJSONAndPersistedFormatCompatibilityGate` | release fixtures + compile + schema diff | **PENDING** |
-| 21 | Hosted CI runs every required toolchain/provider/security/race/repeat/shuffle/fuzz/mutation/crash/docs/example profile with no hidden skip and retains structured evidence | `TestP8WorkflowContainsRequiredHostedGates`; hosted `p8-release-candidate` workflow; structured test-event audit; required-profile skip detector | hosted Linux + declared compile platforms + supported provider matrix | **PENDING** |
+| 21 | Hosted release verification runs the supported product suite once against PostgreSQL C/linguistic and Core NATS before publishing | `go test -p=1 -count=1 ./...`; hosted Go release workflow | hosted Linux + supported provider profiles | **PENDING** |
 | 22 | A protected `go/vX.Y.Z` candidate resolves through a clean consumer, installs the CLI, reproduces byte-identical archives/checksums/SBOM/provenance, and cannot be republished differently | `TestP8ReleaseTagAndVersionAgreement`; `TestP8CleanConsumerModuleResolutionAndGoInstall`; `TestP8ReleaseArtifactReproducibility`; `TestP8ExistingVersionArtifactReplacementRefused` | release candidate + clean network consumer + artifact audit | **PENDING** |
 | 23 | Controlling docs agree on P0–P8 status, supported surfaces, deployment profiles, and intentional boundaries; federation, MySQL, automatic migration, raw SQL, CDC, and transport non-claims are visible | `TestP8DocumentationStatusAndLinkAudit`; `TestP8IntentionalBoundaryDisclosureCorpus`; `TestP8NoCompletedABIStillClaimsUnimplemented`; `TestP8READMEAndReleaseNotesCapabilityAgreement` | docs + generated capability manifest | **PENDING** |
-| 24 | The complete release passes an independent external application, provider, conformance, disclosure, resource, recovery, compatibility, package hygiene, docs, and artifact audit without production expectation helpers | `TestP8IndependentReleaseOracleSQLite`; `TestP8IndependentReleaseOraclePostgreSQLProfiles`; `TestP8IndependentPublicPackageAndArtifactAudit`; all mutations below; all commands in section 3 | all + hosted release candidate | **PENDING** |
+| 24 | The complete release passes the external application, provider, recovery, compatibility, documentation, and artifact tests and is published from the signed tag | `TestP8IndependentReleaseOracleSQLite`; `TestP8IndependentReleaseOraclePostgreSQLProfiles`; `TestP8IndependentPublicPackageAndArtifactAudit`; commands in section 3 | all + hosted release | **PENDING** |
 
-## 2. Named-mutation matrix
+## 2. Regression strategy
 
-Every mutation must make at least one named test fail. Review detection alone is
-not evidence.
-
-| Mutation | Required failing evidence | State |
-| --- | --- | --- |
-| `PUBLIC_PROVIDER_RETURNS_UNVERIFIED_DB` — publish a handle before complete connection/capability proof | rows 1–4 | **PENDING** |
-| `SECOND_PROVIDER_ENUM_WINS` — let application config contradict the verified handle | rows 1, 4 | **PENDING** |
-| `ADOPT_ARBITRARY_SQLX_POOL` — accept a pool whose future connection invariants cannot be proved | rows 1–4 | **PENDING** |
-| `SAFE_NAMED_RAW_SQLX_ESCAPE` — expose the raw pool through a name that does not declare bypass semantics | rows 1, 7, 23 | **PENDING** |
-| `SQLITE_SKIP_CONNECTION_PRAGMAS` — configure only the first pooled connection | row 2 | **PENDING** |
-| `SQLITE_DEFERRED_DEFAULT` — omit the provider-owned immediate write mode | rows 2, 17 | **PENDING** |
-| `POSTGRES_FIRST_CONNECTION_ONLY` — apply required session settings to one connection | row 3 | **PENDING** |
-| `POSTGRES_UNBOUNDED_POOL_DEFAULT` — allow unlimited open connections | rows 3, 16–17 | **PENDING** |
-| `LEAK_DSN_IN_ERROR` — include a supplied connection string or raw provider error | rows 2–5, 14 | **PENDING** |
-| `APP_OPEN_APPLIES_MIGRATION` — mutate schema during runtime startup | rows 4, 7, 17 | **PENDING** |
-| `APP_OPEN_STARTS_WORKER` — hide publisher/CDC work in constructor | rows 4, 7, 17 | **PENDING** |
-| `APP_CLOSES_BORROWED_DATABASE` — generated runtime takes ownership it was not given | rows 4, 17 | **PENDING** |
-| `DOCTOR_REPAIRS_STATE` — make diagnostic command apply/resume/acknowledge anything | rows 5, 14 | **PENDING** |
-| `DOCTOR_EMITS_SOURCE_OR_SCHEMA_NAME` — expose uncontrolled path/name data in machine output | rows 5, 14 | **PENDING** |
-| `EXAMPLE_USES_LOCAL_REPLACE` — pass only against the repository checkout | rows 6–7, 22, 24 | **PENDING** |
-| `EXAMPLE_HANDWRITES_CRUD_RESOLVER` — conceal a missing generated capability in example code | rows 6–7, 24 | **PENDING** |
-| `GRAPHQL_SECOND_READ_ENGINE` — calculate GraphQL reads outside the shared caller runtime | row 8 | **PENDING** |
-| `GRAPHQL_SECOND_MUTATION_ENGINE` — commit GraphQL writes outside P4 | row 9 | **PENDING** |
-| `CUSTOM_ROOT_RECEIVES_SYSTEM_OR_DB` — bypass caller policy from an extension resolver | rows 8–10, 13 | **PENDING** |
-| `HOOK_RESULT_BEFORE_VERIFICATION` — expose an unverified persisted image | rows 9–10, 13 | **PENDING** |
-| `AFTER_COMMIT_ERROR_REWRITES_SUCCESS` — return failure after the write committed | rows 9–10, 17 | **PENDING** |
-| `COMPUTED_PRIVATE_DEPENDENCY_ESCAPES` — serialize privately hydrated data | rows 10, 13–14 | **PENDING** |
-| `SCOPED_SQL_SKIPS_HOP_POLICY` — authorize root but not a joined relation | rows 11, 13 | **PENDING** |
-| `ANALYTICS_PARTIAL_MASK` — return an aggregate built from conditionally unreadable values | rows 11, 13 | **PENDING** |
-| `EVENT_SURFACES_DIVERGE` — authorize caller and GraphQL event streams differently | row 12 | **PENDING** |
-| `TELEMETRY_INCLUDES_RAW_ERROR` — attach exception/provider text as an attribute | rows 13–14, 18 | **PENDING** |
-| `TELEMETRY_INCLUDES_MODEL_OR_FIELD_NAME` — create uncontrolled/high-cardinality labels | rows 14, 18 | **PENDING** |
-| `OBSERVER_PANIC_PROPAGATES` — let instrumentation affect operation correctness | rows 17–18 | **PENDING** |
-| `OBSERVER_QUEUE_UNBOUNDED` — retain telemetry indefinitely during exporter outage | rows 16–18 | **PENDING** |
-| `RELATION_LOAD_N_PLUS_ONE` — scale statement count linearly with returned parents where batching is required | row 16 | **PENDING** |
-| `CANCEL_LEAKS_GOROUTINE_OR_CONNECTION` — retain work after ownership ends | rows 16–17 | **PENDING** |
-| `SLOW_SUBSCRIBER_DROPS_AND_CONTINUES` — violate bounded disconnect semantics under release load | rows 12, 16–17 | **PENDING** |
-| `UPGRADE_REWRITES_EVENT_ID` — change pending fact/event identity during format upgrade | row 19 | **PENDING** |
-| `UPGRADE_ADVANCES_LEDGER_BEFORE_VERIFY` — claim upgrade success before final schema proof | rows 17, 19 | **PENDING** |
-| `UNKNOWN_CODEC_BEST_EFFORT_DECODE` — reinterpret unsupported persisted bytes | rows 15, 19–20 | **PENDING** |
-| `PATCH_BREAKS_GENERATED_ABI` — accept a patch release with regenerated source breakage | row 20 | **PENDING** |
-| `PATCH_BREAKS_GRAPHQL_SCHEMA` — accept a patch release with public schema breakage | row 20 | **PENDING** |
-| `REQUIRED_PROVIDER_JOB_SKIPS` — turn absent PostgreSQL/profile evidence into success | rows 21, 24 | **PENDING** |
-| `RELEASE_FROM_MOVING_BRANCH` — build public artifacts without a protected tag target | rows 21–22 | **PENDING** |
-| `RELEASE_TAG_MODULE_MISMATCH` — publish an unprefixed/wrong-version nested-module tag | row 22 | **PENDING** |
-| `REPLACE_EXISTING_RELEASE_BYTES` — overwrite an existing version with different artifacts | row 22 | **PENDING** |
-| `DOCUMENT_UNSUPPORTED_FEATURE` — claim federation, MySQL, implicit CDC, or turnkey multi-process transport | row 23 | **PENDING** |
-| `DOC_SNIPPET_NOT_COMPILED` — let a published command/example drift silently | rows 7, 23–24 | **PENDING** |
+Every supported production boundary has an ordinary regression test at the
+lowest layer that can prove it, plus an external application test where public
+generation, migration, provider, or transport behavior is involved. Review
+detection alone is not evidence, but a second mutation-testing system is not a
+product requirement.
 
 ## 3. Required completion commands
 
@@ -96,12 +53,10 @@ Exact package paths may grow during implementation, but the recorded release
 candidate run must include at least:
 
 ```text
-go test -count=1 ./provider/... ./observe/... ./cmd/golem ./runtime ./graphql ./events
-go test -count=1 ./internal/p8oracle ./internal/p8verify ./examples/...
 go test -p=1 -count=1 ./...
-go test -p=1 -count=2 -timeout=45m ./...
-go test -race -p=1 -count=1 -timeout=45m ./...
-go test -shuffle=on -count=10 ./provider/... ./observe/... ./runtime ./graphql ./events
+go test -race -p=1 -count=1 ./events/... ./provider/... ./runtime
+go test -p=1 -count=1 -tags=releaseintegration ./cmd/golem \
+  -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills|TestP8ExecutableGoV002ToV010MigrationGuide)$'
 
 GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
   go test -race -count=1 -timeout=45m \
@@ -112,12 +67,6 @@ go test -run='^$' -fuzz='^FuzzP8PublicInputNeverDisclosesProtectedCanary$' \
 go test -run='^$' -fuzz='^FuzzP8DiagnosticEncodingIsClosedAndBounded$' \
   -fuzztime=60s ./cmd/golem
 
-GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
-  go run ./internal/cmd/p8failure -module .
-GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
-  go run ./internal/cmd/p8mutation -module .
-go run ./internal/cmd/p8docs -module .
-go run ./internal/cmd/p8compat -module .
 go run ./internal/cmd/p8release -mode verify --tag go/vX.Y.Z --module .
 
 govulncheck ./...

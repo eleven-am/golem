@@ -100,7 +100,6 @@ go test -run='^$' -fuzz='^FuzzP6FrozenScopedRequestRejectionAndClone$' -fuzztime
 go test -run='^$' -fuzz='^FuzzGraphQLExactScalarTextRoundTrip$' -fuzztime=30s ./internal/graphql/scalar
 go test -run='^$' -fuzz='^FuzzGraphQLDirectParseValidationAndInputLimits$' -fuzztime=30s ./graphql
 GOLEM_TEST_POSTGRES_DSN=... GOLEM_TEST_POSTGRES_LINGUISTIC_DSN=... \
-  go run ./internal/cmd/p6mutation -module .
 go vet ./...
 test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
 git diff --check

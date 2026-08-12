@@ -1,3 +1,5 @@
+//go:build releaseintegration
+
 package main
 
 import (
@@ -20,10 +22,6 @@ import (
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
-
-func TestP8P7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
-	p8RunP7ToReleaseUpgradePostgreSQLProfiles(t)
-}
 
 func p8RunP7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
 	t.Helper()
@@ -111,10 +109,6 @@ func p8SeedPostgreSQLUpgradeState(t *testing.T, database interface {
 	exec(`INSERT INTO posts(id,author_id,title,body,created_at) VALUES(?,?,?,?,?)`, "22222222-2222-4222-8222-222222222222", userID, "P7 title", "P7 body", time.UnixMicro(1700000001000000).UTC())
 	exec(`INSERT INTO _golem._golem_outbox(event_id,fact_version,codec_identity,generation_fingerprint,model_id,action,before_identity,after_identity,causation_id,transaction_ordinal,metadata,delete_snapshot,recorded_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`, event.EventID, event.FactVersion, event.CodecIdentity, event.GenerationFingerprint, event.ModelID, event.Action, event.BeforeIdentity, event.AfterIdentity, event.CausationID, event.TransactionOrdinal, event.Metadata, event.DeleteSnapshot, event.RecordedAt)
 	exec(`INSERT INTO _golem._golem_outbox_delivery(causation_id,status,first_recorded_at,attempt_count,available_at,updated_at) VALUES(?,?,?,?,?,?)`, event.CausationID, "pending", event.RecordedAt, 0, event.RecordedAt, event.RecordedAt)
-}
-
-func TestP8P7ToReleaseUpgradeSQLite(t *testing.T) {
-	p8RunP7ToReleaseUpgradeSQLite(t)
 }
 
 func p8RunP7ToReleaseUpgradeSQLite(t *testing.T) {

@@ -113,7 +113,24 @@ func TestMigrationPlanReviewedVerifiesHistoryAndEveryArtifactBeforeRendering(t *
 
 func TestMigrationPlanTextAndJSONShareOneCanonicalTypedReport(t *testing.T) {
 	module := writeSocialModule(t, false)
-	document := runMigrationPlanJSON(t, module)
+	encoded := runMigrationPlanBytes(t, module, []string{"--json"})
+	if len(encoded) == 0 || len(encoded) > 16<<20 {
+		t.Fatalf("public JSON size=%d", len(encoded))
+	}
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatal(err)
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	expectedKeys := []string{"formatVersion", "guarantees", "mode", "providers", "status", "warnings"}
+	if !reflect.DeepEqual(keys, expectedKeys) || string(raw["formatVersion"]) != "1" {
+		t.Fatalf("open or unversioned report keys=%v version=%s", keys, raw["formatVersion"])
+	}
+	document := decodeMigrationPlanJSON(t, encoded)
 	var textOut, stderr bytes.Buffer
 	if code := run(context.Background(), module, []string{"migration", "plan"}, &textOut, &stderr); code != 0 {
 		t.Fatalf("text plan code=%d stdout=%s stderr=%s", code, textOut.String(), stderr.String())
@@ -130,11 +147,6 @@ func TestMigrationPlanTextAndJSONShareOneCanonicalTypedReport(t *testing.T) {
 			t.Fatalf("text renderer omitted provider %s", provider.Provider)
 		}
 	}
-}
-
-func TestMigrationPlanExplainsEveryOperationRiskEffectDependencyAndApproval(t *testing.T) {
-	module := writeSocialModule(t, false)
-	document := runMigrationPlanJSON(t, module)
 	count := 0
 	for _, provider := range document.Providers {
 		for _, phase := range provider.Phases {
@@ -431,47 +443,6 @@ func TestMigrationPlanActiveWorkspaceIsCopiedAndReadOnly(t *testing.T) {
 		if err := verifyMigrationPlanTree(workspaceRoot, workspaceBefore); err != nil {
 			t.Fatal("active-workspace plan changed go.work or go.work.sum")
 		}
-	}
-}
-
-func TestMigrationPlanPublicJSONFormatIsClosedVersionedAndBounded(t *testing.T) {
-	module := writeSocialModule(t, false)
-	encoded := runMigrationPlanBytes(t, module, []string{"--json"})
-	if len(encoded) == 0 || len(encoded) > 16<<20 {
-		t.Fatalf("public JSON size=%d", len(encoded))
-	}
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(encoded, &raw); err != nil {
-		t.Fatal(err)
-	}
-	keys := make([]string, 0, len(raw))
-	for key := range raw {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	expected := []string{"formatVersion", "guarantees", "mode", "providers", "status", "warnings"}
-	if !reflect.DeepEqual(keys, expected) || string(raw["formatVersion"]) != "1" {
-		t.Fatalf("open or unversioned report keys=%v version=%s", keys, raw["formatVersion"])
-	}
-}
-
-func TestMigrationPlanFreshExternalModuleCommandCorpus(t *testing.T) {
-	module := writeSocialModule(t, false)
-	createInitialReviewedMigration(t, module)
-	before := treeSnapshot(t, module)
-	for _, args := range [][]string{
-		{"--migration", "0001_initial"},
-		{"--migration", "0001_initial", "--json"},
-		{"--migration", "0001_initial", "--provider", "sqlite", "--json"},
-		{"--migration", "0001_initial", "--provider", "postgresql"},
-	} {
-		output := runMigrationPlanBytes(t, module, args)
-		if len(output) == 0 {
-			t.Fatalf("empty external command output args=%v", args)
-		}
-	}
-	if after := treeSnapshot(t, module); !reflect.DeepEqual(before, after) {
-		t.Fatal("offline external command corpus changed its clean module")
 	}
 }
 

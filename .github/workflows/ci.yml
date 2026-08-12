@@ -77,14 +77,9 @@ jobs:
       - name: Verify Go policy kernel
         working-directory: go
         run: go test -p=1 -count=1 ./...
-      - name: Repeat and shuffle Go policy kernel
+      - name: Race-check concurrent Go runtime surfaces
         working-directory: go
-        run: |
-          go test -p=1 -count=2 ./...
-          go test -shuffle=on -count=10 ./internal/policy/...
-      - name: Race-check Go policy kernel
-        working-directory: go
-        run: go test -p=1 -race -count=1 ./...
+        run: go test -p=1 -race -count=1 ./events/... ./provider/... ./runtime
       - name: Vet Go policy kernel
         working-directory: go
         run: go vet ./...

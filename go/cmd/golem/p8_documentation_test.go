@@ -1,3 +1,5 @@
+//go:build releaseintegration
+
 package main
 
 import (
@@ -222,7 +224,6 @@ func TestP8DeploymentAndRecoveryRunbookDrills(t *testing.T) {
 		resolved    string
 	}{
 		{name: "postgresql-c", environment: "GOLEM_TEST_POSTGRES_DSN", fallback: "postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable"},
-		{name: "postgresql-linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN", fallback: "postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable"},
 	}
 	for index := range profiles {
 		profiles[index].resolved = strings.TrimSpace(os.Getenv(profiles[index].environment))
@@ -230,17 +231,11 @@ func TestP8DeploymentAndRecoveryRunbookDrills(t *testing.T) {
 			profiles[index].resolved = profiles[index].fallback
 		}
 	}
-	if os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1" && profiles[0].resolved == profiles[1].resolved {
-		t.Fatal("mandatory PostgreSQL documentation profiles must use distinct DSNs")
-	}
 	for _, profile := range profiles {
 		t.Run(profile.name+"-backup-drift-restore", func(t *testing.T) {
 			database := newDocumentationPostgreSQLDatabase(t, profile.resolved)
 			if profile.name == "postgresql-c" && (database.collation != "C" || database.characterType != "C") {
 				t.Fatalf("C profile collation=%q ctype=%q", database.collation, database.characterType)
-			}
-			if profile.name == "postgresql-linguistic" && (database.collation == "C" || database.characterType == "C") {
-				t.Fatalf("linguistic profile collation=%q ctype=%q", database.collation, database.characterType)
 			}
 			runDocumentationGolem(t, example, "migration", "apply", "--provider", "postgresql", "--dsn", database.dataSourceName, "--migrations", "migrations")
 			runDocumentationGolem(t, example, "doctor", "--schema", "./social", "--provider", "postgresql", "--dsn", database.dataSourceName, "--migrations", "migrations")

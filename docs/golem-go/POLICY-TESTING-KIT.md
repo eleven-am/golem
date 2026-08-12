@@ -432,9 +432,9 @@ agreement alone is not sufficient evidence.
 Run the public package and external gates under `-race`. Provider-required
 evidence must fail rather than skip when mandatory PostgreSQL mode is enabled.
 
-## 10. Mutation resistance
+## 10. Regression coverage
 
-At minimum, the exact gates above must kill mutants that:
+The exact gates above must directly reject implementations that:
 
 - drop a deny rule during resolution;
 - change conditional access to always;
@@ -445,15 +445,9 @@ At minimum, the exact gates above must kill mutants that:
 - accept a descriptor/field from another generation; or
 - expose a policy-factory panic payload.
 
-A compile failure is invalid mutation evidence. Each mutant must compile, the
-baseline must pass, and the semantic gate must fail.
-
-The executable catalog is `internal/p8mutation/catalog_policy_testing_kit.go`.
-It contains separate generation mutants for model descriptors and field or
-relation handles, because killing one boundary does not prove the other. Run
-the catalog through `internal/cmd/p8mutation`; its structured result must be
-`KILLED` for every `POLICY_KIT_*` label before changing this document's status
-to implemented.
+These are ordinary, maintained regression tests. They run with the rest of the
+product suite and exercise the public policy-testing API; there is no separate
+mutation runner or evidence format to maintain.
 
 ## 11. Documentation and compatibility work
 

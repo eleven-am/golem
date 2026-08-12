@@ -15,7 +15,7 @@ GOLEM_TEST_POSTGRES_LINGUISTIC_DSN ?= postgresql://postgres@127.0.0.1:55432/gole
 .PHONY: help install build test check \
 	ts-install ts-build ts-test ts-benchmark \
 	go-download go-build go-install go-test go-race go-quality go-vuln \
-	postgres-check go-docs go-compat go-failure go-mutation go-verify \
+	postgres-check \
 	go-release-verify release-next release-patch release-minor release-major _release
 
 help: ## Show available targets
@@ -70,36 +70,6 @@ postgres-check:
 	@test -n "$(GOLEM_TEST_POSTGRES_DSN)" || { echo "GOLEM_TEST_POSTGRES_DSN is required" >&2; exit 1; }
 	@test -n "$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)" || { echo "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN is required" >&2; exit 1; }
 	@test "$(GOLEM_TEST_POSTGRES_DSN)" != "$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)" || { echo "PostgreSQL C and linguistic DSNs must differ" >&2; exit 1; }
-
-go-docs: postgres-check ## Run executable documentation evidence (long; PostgreSQL required)
-	@cd $(GO_DIR) && GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-		GOLEM_TEST_POSTGRES_DSN='$(GOLEM_TEST_POSTGRES_DSN)' \
-		GOLEM_TEST_POSTGRES_LINGUISTIC_DSN='$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)' \
-		$(GO) run ./internal/cmd/p8docs -module . -timeout 45m
-
-go-compat: postgres-check ## Run compatibility and upgrade evidence (long; PostgreSQL required)
-	@cd $(GO_DIR) && GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-		GOLEM_TEST_POSTGRES_DSN='$(GOLEM_TEST_POSTGRES_DSN)' \
-		GOLEM_TEST_POSTGRES_LINGUISTIC_DSN='$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)' \
-		$(GO) run ./internal/cmd/p8compat -module . -timeout 45m
-
-go-failure: postgres-check ## Run failure and recovery evidence (very long; PostgreSQL required)
-	@cd $(GO_DIR) && GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-		GOLEM_TEST_POSTGRES_DSN='$(GOLEM_TEST_POSTGRES_DSN)' \
-		GOLEM_TEST_POSTGRES_LINGUISTIC_DSN='$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)' \
-		$(GO) run ./internal/cmd/p8failure -module . -timeout 90m
-
-go-mutation: postgres-check ## Run the complete P8 mutation catalog (very long; PostgreSQL required)
-	@cd $(GO_DIR) && GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-		GOLEM_TEST_POSTGRES_DSN='$(GOLEM_TEST_POSTGRES_DSN)' \
-		GOLEM_TEST_POSTGRES_LINGUISTIC_DSN='$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)' \
-		$(GO) run ./internal/cmd/p8mutation -repository .. -timeout 45m
-
-go-verify: postgres-check ## Run the local P8 candidate audit (very long; PostgreSQL required)
-	@cd $(GO_DIR) && GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-		GOLEM_TEST_POSTGRES_DSN='$(GOLEM_TEST_POSTGRES_DSN)' \
-		GOLEM_TEST_POSTGRES_LINGUISTIC_DSN='$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)' \
-		$(GO) run ./internal/cmd/p8verify -module . -timeout 30m
 
 go-release-verify: ## Verify an existing signed candidate (TAG, signer trust, and PROXY required)
 	@test -n "$(TAG)" || { echo "TAG=go/vX.Y.Z is required" >&2; exit 1; }

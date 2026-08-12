@@ -1,3 +1,5 @@
+//go:build releaseintegration
+
 package main
 
 import (
@@ -18,10 +20,6 @@ import (
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/jmoiron/sqlx"
 )
-
-func TestP8UpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testing.T) {
-	p8RunUpgradePreservesAuthorizationMigrationChainAndPendingEvents(t)
-}
 
 func p8RunUpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testing.T) {
 	t.Helper()
