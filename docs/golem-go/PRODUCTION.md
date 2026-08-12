@@ -1,10 +1,8 @@
 # Golem for Go production guide
 
-Status: **unreleased P8 working documentation**. This guide describes the
-implemented P1–P7 behavior and the production contract P8 is proving. A feature
-whose P8 evidence is still pending is not release evidence merely because it is
-described here. The mandatory state is tracked in
-[`p8/P8-EVIDENCE.md`](./p8/P8-EVIDENCE.md).
+This guide describes the supported production contract. Published module tags,
+the compatibility manifest, and the release workflow—not historical planning
+documents—determine release status.
 
 ## Product boundary
 

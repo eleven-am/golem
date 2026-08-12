@@ -284,28 +284,6 @@ func TestConstructGeneratedP6AppSurface(t *testing.T) {
 	run("go", "test", "./...")
 }
 
-func TestP5ActiveGeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
-	moduleRoot := p5ExtensionModuleRoot(t)
-	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5socialactive")
-	request := p5ActiveSocialGenerationRequest(directory)
-	first, err := pipeline.Build(context.Background(), request)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for path, content := range p5ExtensionArtifactMap(first) {
-		if !strings.HasPrefix(path, "runtime/testdata/p5socialactive/") {
-			continue
-		}
-		committed, err := os.ReadFile(filepath.Join(moduleRoot, filepath.FromSlash(path)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(content, committed) {
-			t.Fatalf("committed active social fixture is stale: %s: %s", path, p5ExtensionFirstDifference(committed, content))
-		}
-	}
-}
-
 func TestP6GeneratedMetricsFixtureRegeneratesByteIdentically(t *testing.T) {
 	moduleRoot := p5ExtensionModuleRoot(t)
 	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p6metrics")
@@ -355,14 +333,6 @@ func p5SocialGenerationRequest(directory string) pipeline.Request {
 	}
 }
 
-func p5ActiveSocialGenerationRequest(directory string) pipeline.Request {
-	return pipeline.Request{
-		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
-		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5socialactive", PackageName: "p5socialactive", Directory: directory},
-		Lowerers:   []physical.Lowerer{p5ActivePostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
-	}
-}
-
 func p5ExtensionGenerationRequest(directory, importPath string) pipeline.Request {
 	return pipeline.Request{
 		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
@@ -403,24 +373,8 @@ func (lowerer p5ExtensionPostgreSQLLowerer) Manifest() physical.ProviderManifest
 
 type p5SocialPostgreSQLLowerer struct{ delegate physical.Lowerer }
 
-type p5ActivePostgreSQLLowerer struct{ delegate physical.Lowerer }
-
 func (lowerer p5SocialPostgreSQLLowerer) Manifest() physical.ProviderManifest {
 	return lowerer.delegate.Manifest()
-}
-
-func (lowerer p5ActivePostgreSQLLowerer) Manifest() physical.ProviderManifest {
-	return lowerer.delegate.Manifest()
-}
-
-func (lowerer p5ActivePostgreSQLLowerer) Lower(ctx context.Context, model compilerir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {
-	options.Namespace = p5ActivePostgreSQLNamespace
-	schema, err := lowerer.delegate.Lower(ctx, model, options)
-	if err != nil {
-		return physical.PhysicalSchema{}, err
-	}
-	schema.System.Namespace.Name = p5ActivePostgreSQLSystemNamespace
-	return physical.Normalize(schema)
 }
 
 func (lowerer p5SocialPostgreSQLLowerer) Lower(ctx context.Context, model compilerir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {

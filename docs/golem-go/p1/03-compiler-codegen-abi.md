@@ -996,8 +996,7 @@ workflow.
 - all invalid fixtures below emit their pinned diagnostic codes;
 - composite identity is present in every P1 descriptor/metadata projection;
 - mismatch and stale-generator checks pass; and
-- the exact first slice from Phase 0 `STATUS.md` migrates and verifies on both
-  providers.
+- the minimal social fixture migrates and verifies on both providers.
 
 ---
 

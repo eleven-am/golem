@@ -1198,13 +1198,9 @@ event facts, and policy trace, modulo transport encoding.
 | P7 — events | Transactional outbox, publisher, per-row events, subscriptions, fresh authorization, bounded fan-out, codecs, and optional CDC adapters pass failure and isolation tests. |
 | P8 — hardening | Cross-entry-point conformance, red-team disclosure tests, load/failure recovery, observability, compatibility docs, release automation, and production examples are complete. |
 
-A phase is not complete because types or interfaces exist. It is complete only
-when its named acceptance, mutation, provider, and failure tests pass.
-
-P8 implementation is controlled by [`p8/P8-PLAN.md`](./p8/P8-PLAN.md), its
-public production/release surface by
-[`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md), and its mandatory
-completion gates by [`p8/P8-EVIDENCE.md`](./p8/P8-EVIDENCE.md).
+The supported production and release surface is defined by
+[`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md), the compatibility
+manifest, and the published module release.
 
 ---
 

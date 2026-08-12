@@ -1,6 +1,6 @@
 # P5 public GraphQL ABI
 
-Status: **controlling ABI; implemented and verified by P5-EVIDENCE.md**
+Status: **controlling public ABI**
 
 This document freezes the generated GraphQL schema patterns and the ordinary Go
 server integration. Names shown for a generated social application are exact

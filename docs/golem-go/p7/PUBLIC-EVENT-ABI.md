@@ -336,8 +336,9 @@ type Limits struct {
 }
 ```
 
-Zero fields use the defaults in `P7-PLAN.md`; invalid, negative, contradictory,
-or above-hard-maximum values fail `Open` before worker or server registration.
+Zero fields use the documented library defaults; invalid, negative,
+contradictory, or above-hard-maximum values fail `Open` before worker or server
+registration.
 
 ### 4.2 Publisher lifecycle
 

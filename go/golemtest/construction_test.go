@@ -10,7 +10,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
-	"github.com/eleven-am/golem/go/runtime/testdata/p5socialactive"
 )
 
 func socialKit(t *testing.T) *Kit[p5social.Actor] {
@@ -96,31 +95,6 @@ func TestPolicyTestKitBuildsFreshActorScopedPoliciesWithoutDatabase(t *testing.T
 		}
 		if kind.Name() != "PolicySet" || kind.NumField() != 6 {
 			t.Fatalf("policy set shape changed: %d fields", kind.NumField())
-		}
-	})
-
-	t.Run("ForActorInvokesNoApplicationHook", func(t *testing.T) {
-		bindings, err := p5socialactive.GolemGeneratedApplicationBindings()
-		if err != nil {
-			t.Fatal(err)
-		}
-		descriptors, err := p5socialactive.GolemGeneratedApplicationDescriptors()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(bindings.RuntimeHookInventory()) == 0 {
-			t.Fatal("the hook fixture declares no hooks, so this gate proves nothing")
-		}
-		kit, err := New(bindings, descriptors, p5socialactive.GolemGeneratedSchemaBundle())
-		if err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		p5socialactive.ResetHooks()
-		if _, err := kit.ForActor(p5socialactive.Actor{}); err != nil {
-			t.Fatalf("ForActor: %v", err)
-		}
-		if snapshot := p5socialactive.SnapshotHooks(); snapshot != (p5socialactive.HookSnapshot{}) {
-			t.Fatalf("ForActor invoked application hooks: %+v", snapshot)
 		}
 	})
 

@@ -1,6 +1,0 @@
-[
-  {"fields":{"id":"p1","authorId":"u1","title":"private owner","published":false}},
-  {"fields":{"id":"p2","authorId":"u2","title":"public other","published":true}},
-  {"fields":{"id":"p3","authorId":"u2","title":"private other","published":false}},
-  {"fields":{"id":"p4","authorId":"u1","title":"public owner","published":true}}
-]

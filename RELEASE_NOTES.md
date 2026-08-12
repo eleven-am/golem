@@ -1,11 +1,10 @@
 # Release notes — 0.6.1
 
 These are the release notes for the TypeScript/NestJS packages. They do not
-announce a Go module release. Golem for Go remains unreleased while its P8
-ledger is pending; follow its [quickstart](./docs/golem-go/QUICKSTART.md),
-[production boundaries](./docs/golem-go/PRODUCTION.md), and
-[mandatory evidence ledger](./docs/golem-go/p8/P8-EVIDENCE.md) for current
-status. In particular, the Go implementation does not claim MySQL, federation,
+announce a Go module release. For Go module status, follow its
+[quickstart](./docs/golem-go/QUICKSTART.md), [production
+boundaries](./docs/golem-go/PRODUCTION.md), and published `go/v*` releases. In
+particular, the Go implementation does not claim MySQL, federation,
 automatic production migration, raw SQL through authorized surfaces, built-in
 multi-process event transport or vendor CDC drivers, or observation of external
 writes without a conformant CDC adapter.

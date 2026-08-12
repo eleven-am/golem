@@ -18,7 +18,7 @@ import (
 
 const activeGeneratedFixtureUpdateEnvironment = "GOLEM_UPDATE_ACTIVE_GENERATED_FIXTURES"
 
-var activeGeneratedFixtureNames = []string{"p5extensions", "p5social", "p5socialactive", "p6metrics"}
+var activeGeneratedFixtureNames = []string{"p5extensions", "p5social", "p6metrics"}
 
 var activeGeneratedFixtureFiles = []string{
 	"golemgqlgen/zz_golem_graphql_exec.gen.go",
@@ -117,8 +117,6 @@ func activeGeneratedFixtureGenerationRequest(moduleRoot, fixture string) (pipeli
 		return p5ExtensionGenerationRequest(directory, "github.com/eleven-am/golem/go/runtime/testdata/p5extensions"), nil
 	case "p5social":
 		return p5SocialGenerationRequest(directory), nil
-	case "p5socialactive":
-		return p5ActiveSocialGenerationRequest(directory), nil
 	case "p6metrics":
 		return p6MetricsGenerationRequest(directory), nil
 	default:

@@ -1,14 +1,14 @@
 # P2 portable operator ABI
 
-Status: **historical accepted P2-A typed baseline; the current complete authoring
-surface is `PUBLIC-ABI.md`, and implementation status is `STATUS.md`**
+Status: **historical accepted typed baseline; the current complete authoring
+surface is `PUBLIC-ABI.md`**
 
 Scope: typed policy predicates, row grants, in-memory evaluation, and SQL lowering
 Authority: subordinate only to [`../BIBLE.md`](../BIBLE.md); this file owns the
 P2-A public operator ABI. Supporting operator research is non-controlling where it
 conflicts with this file. The complete P2 scope, including the Bible-required rule
 surface and advanced accepted operators, is controlled by
-[`P2-PLAN.md`](./P2-PLAN.md) and its linked P2-B contracts.
+[`PUBLIC-ABI.md`](./PUBLIC-ABI.md) and its linked contracts.
 
 This file freezes the already implemented baseline so later work does not mutate
 its method meanings. Its explicit deferrals are deferrals from P2-A, not permission

@@ -1,12 +1,11 @@
 # P2 internal policy IR and freeze/bind contract
 
 Status: **controlling design; the closed IR and all P2 consumers through SQL
-compilation and execution-scoped policy construction are implemented, certified,
-and runtime-agreement promoted as recorded in [`STATUS.md`](./STATUS.md)**
+compilation and execution-scoped policy construction are implemented**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 2, 4,
-7–8, and 20–21. [`P2-PLAN.md`](./P2-PLAN.md) owns delivery order and
-[`OPERATOR-ABI.md`](./OPERATOR-ABI.md) owns public authoring spelling. The
+7–8, and 20–21. [`OPERATOR-ABI.md`](./OPERATOR-ABI.md) owns public authoring
+spelling. The
 detailed operator, policy-resolution, and classification chapters own their
 expanded algorithms after the Bible's conflict resolutions.
 
@@ -953,7 +952,7 @@ generated ABI.
 
 ## 11. Explicit rejection of Phase 0 production shapes
 
-`go/phase0` remains an oracle and fixture only. Production P2 MUST NOT copy these
+The retired Phase 0 prototype was an oracle only. Production code MUST NOT copy its
 shapes:
 
 | Phase 0 shape | Production rejection |

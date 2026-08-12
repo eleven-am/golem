@@ -611,10 +611,8 @@ These are source conflicts, not implementation discretion:
     than a policy predicate. Resolution: P3 owns the original mutation; P2 must
     still prove its oracle loader uses exact codecs. P2 completion must not claim
     the future P3 projection test already exists.
-14. **One versus two PostgreSQL environments.** P2-PLAN names one DSN, while the
-    detailed collation oracle requires `C` and linguistic defaults. Resolution:
-    P2 completion CI provisions both; a local developer may run one profile, but
-    release/P2-complete status requires both.
+14. **PostgreSQL collation coverage.** Release verification provisions both `C`
+    and linguistic defaults; local development may run one profile.
 15. **Canonical JSON is a logical contract but current checks are weaker.** P1
     says SQLite stores canonical JSON, while its generated checks currently prove
     valid JSON/array shape rather than canonical object order, numeric spelling,
