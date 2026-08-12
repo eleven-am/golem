@@ -2,10 +2,8 @@
 
 Status: controlling command contract for the P1 migration-history owner.
 
-This document fixes the command surface left open by
-[`03-compiler-codegen-abi.md`](03-compiler-codegen-abi.md#141-migration-history-command-set--migration-owner).
-It is subordinate to [`P1-CONTRACT.md`](P1-CONTRACT.md) and
-[`02-provider-schema-and-migrations.md`](02-provider-schema-and-migrations.md).
+This document fixes the migration-history command surface. It is subordinate to
+[`P1-CONTRACT.md`](P1-CONTRACT.md).
 
 ## Commands
 

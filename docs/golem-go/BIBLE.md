@@ -33,11 +33,11 @@ The authority order is:
 
 1. this Bible;
 2. executable acceptance and mutation tests required by this Bible;
-3. an accepted phase contract such as `p1/P1-CONTRACT.md`, within that phase;
+3. the consolidated compiler and public ABI contracts for that surface;
 4. the detailed algorithms in `01-operators.md` through
    `05-surface-and-runtime.md`, after applying the resolutions in section 23;
 5. provider-specific implementation notes;
-6. historical Phase 0 and TypeScript compatibility documents; and
+6. TypeScript compatibility documents; and
 7. the existing TypeScript implementation as evidence, not as infallible truth.
 
 The detailed chapters remain the expanded specification for their subjects:

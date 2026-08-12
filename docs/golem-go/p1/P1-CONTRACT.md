@@ -5,16 +5,10 @@ Scope: model declaration, compiler ABI, logical and physical schema IR,
 generation, migrations, and P1 verification<br>
 Authority: subordinate only to [`../BIBLE.md`](../BIBLE.md)
 
-This document reconciles the three independently authored Wave 0 contracts:
-
-- [`01-schema-authoring-and-logical-ir.md`](./01-schema-authoring-and-logical-ir.md);
-- [`02-provider-schema-and-migrations.md`](./02-provider-schema-and-migrations.md);
-- [`03-compiler-codegen-abi.md`](./03-compiler-codegen-abi.md).
-
-Those documents remain the detailed specifications for their subjects. This
-contract resolves their disagreements. If a supporting P1 document conflicts
-with this file, this file wins. If this file conflicts with the Bible, the Bible
-wins.
+This document is the consolidated compiler, schema, provider, generation, and
+migration contract. The public authoring details live in
+[`01-schema-authoring-and-logical-ir.md`](./01-schema-authoring-and-logical-ir.md).
+If this file conflicts with the Bible, the Bible wins.
 
 ---
 
@@ -467,8 +461,8 @@ global values do not contain cyclic Go pointers.
 P1 freezes only the type-level shells required to compile and discover attached
 methods.
 
-- P2's frozen public predicate/operator ABI is
-  [`../p2/OPERATOR-ABI.md`](../p2/OPERATOR-ABI.md). It may refine handle
+- P2's public predicate/operator ABI is
+  [`../p2/PUBLIC-ABI.md`](../p2/PUBLIC-ABI.md). It may refine handle
   decomposition before descriptor Gate 3, but may not remove typed model
   ownership or introduce string field identities.
 - P3/P4 own the fields and semantics of operation request/result shells. P1 owns

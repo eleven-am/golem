@@ -5,9 +5,7 @@ generated handle families are implemented for SQLite and PostgreSQL**
 
 Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 6–8,
 20, and 21. The detailed operator and policy-resolution chapters apply after
-the resolutions recorded here. [`OPERATOR-ABI.md`](./OPERATOR-ABI.md) remains
-the accepted P2-A baseline; this document records the complete authoring cells
-implemented after that baseline.
+the resolutions recorded here.
 
 ## 1. Scope and fixed outcomes
 
