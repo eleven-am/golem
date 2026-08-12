@@ -12,6 +12,14 @@
         "github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized",
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c",
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/c",
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
+        "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication",
+        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic",
         "github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticSQLiteApplicationOwnsEmbeddingLifecycle",
         "github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle"
       ],
@@ -27,13 +35,25 @@
       "required": [
         "github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized",
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c",
-        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic"
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/c",
+        "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic"
       ],
       "allowedSkips": []
     },
     "hardening": {
       "required": [
-        "github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds"
+        "github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds",
+        "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication",
+        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c",
+        "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic"
       ],
       "allowedSkips": [
         "github.com/eleven-am/golem/go/cmd/golem:TestP8MigrationInterruptionProcess"

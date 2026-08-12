@@ -23,6 +23,8 @@ import (
 //	smallint            -> bigint
 //	integer             -> bigint
 //	real                -> double precision
+//	varchar(n)          -> varchar(m)            where m >= n
+//	varchar(n)          -> text
 //	numeric(p,s)        -> numeric(p2,s)          where p2 >= p
 //	time(p)             -> time(p2)               where p2 >= p
 //	timestamptz(p)      -> timestamptz(p2)        where p2 >= p
@@ -44,6 +46,11 @@ func SafeWidening(provider ir.Provider, before, after physical.StorageType) bool
 		return unparameterizedPair(before, after) && after.Kind == physical.StoragePostgreSQLBigInt
 	case physical.StoragePostgreSQLReal:
 		return unparameterizedPair(before, after) && after.Kind == physical.StoragePostgreSQLDouble
+	case physical.StoragePostgreSQLVarchar:
+		if before.Precision != 0 || before.Scale != 0 || before.Length == 0 || after.Precision != 0 || after.Scale != 0 {
+			return false
+		}
+		return after.Kind == physical.StoragePostgreSQLText && after.Length == 0 || after.Kind == physical.StoragePostgreSQLVarchar && after.Length >= before.Length
 	case physical.StoragePostgreSQLNumeric:
 		if after.Kind != physical.StoragePostgreSQLNumeric || before.Length != 0 || after.Length != 0 {
 			return false
@@ -63,6 +70,18 @@ func SafeWidening(provider ir.Provider, before, after physical.StorageType) bool
 	default:
 		return false
 	}
+}
+
+// PostgreSQLAutomaticTypeTransition is the one closed storage-level execution
+// predicate shared by planning and provider rendering. allowV1FormatEdge is
+// supplied only after the migration planner has proved the exact registered
+// text+length-check representation for the owning field; it admits no other
+// text conversion.
+func PostgreSQLAutomaticTypeTransition(before, after physical.StorageType, allowV1FormatEdge bool) bool {
+	if SafeWidening(ir.PostgreSQL, before, after) {
+		return true
+	}
+	return allowV1FormatEdge && before.Kind == physical.StoragePostgreSQLText && before.Precision == 0 && before.Scale == 0 && before.Length == 0 && before.Symbol == nil && after.Kind == physical.StoragePostgreSQLVarchar && after.Precision == 0 && after.Scale == 0 && after.Length > 0 && after.Symbol == nil
 }
 
 const maximumTemporalPrecision = 6

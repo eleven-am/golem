@@ -21,6 +21,7 @@ defaults:
 
 env:
   GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+  GOLEM_P8_REQUIRE_NATS: "1"
   GOLEM_TEST_POSTGRES_DSN: postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
   GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable
   GOLEM_P8_SOCIAL_POSTGRES_DSN: postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
@@ -97,6 +98,13 @@ jobs:
         with:
           go-version: ${{ matrix.go }}
           cache-dependency-path: go/go.sum
+      - name: Materialize pinned Core NATS image
+        run: |
+          docker image pull nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541
+          docker image inspect nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541 --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -Fx 'nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541'
+          if docker container inspect golem-p8-order7-nats >/dev/null 2>&1; then
+            exit 1
+          fi
       - name: Complete P0-P8 suite
         env:
           GOLEM_REQUIRE_PGVECTOR: "1"
@@ -113,6 +121,10 @@ jobs:
           -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic
           -require-test github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticSQLiteApplicationOwnsEmbeddingLifecycle
           -require-test github.com/eleven-am/golem/go/internal/generate/pipeline:TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic
           -output p8-toolchain.audit.json
       - name: Retain structured toolchain evidence
         if: always()
@@ -122,6 +134,18 @@ jobs:
           path: go/p8-toolchain.audit.json
           retention-days: 14
           if-no-files-found: error
+      - name: Clean test-owned Core NATS container
+        if: always()
+        run: |
+          # GitHub-hosted jobs are isolated; the harness exclusively creates this
+          # fixed name with this owner label and pinned image. Refuse any other shape.
+          if details="$(docker container inspect golem-p8-order7-nats --format '{{index .Config.Labels "golem.p8.owner"}}|{{.Config.Image}}' 2>/dev/null)"; then
+            owner="${details%%|*}"
+            image="${details#*|}"
+            test -n "${owner}"
+            test "${image}" = "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+            docker container rm --force golem-p8-order7-nats
+          fi
 
   platform-compile:
     runs-on: ${{ matrix.os }}
@@ -199,6 +223,13 @@ jobs:
         with:
           go-version: "1.25.12"
           cache-dependency-path: go/go.sum
+      - name: Materialize pinned Core NATS image
+        run: |
+          docker image pull nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541
+          docker image inspect nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541 --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -Fx 'nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541'
+          if docker container inspect golem-p8-order7-nats >/dev/null 2>&1; then
+            exit 1
+          fi
       - name: SQLite and PostgreSQL C plus linguistic provider matrix
         run: >-
           go test -json -count=1 -timeout=45m
@@ -214,6 +245,10 @@ jobs:
           -require-test github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized
           -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c
           -require-test github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic
           -output p8-provider.audit.json
       - name: Retain structured provider evidence
         if: always()
@@ -223,6 +258,18 @@ jobs:
           path: go/p8-provider.audit.json
           retention-days: 14
           if-no-files-found: error
+      - name: Clean test-owned Core NATS container
+        if: always()
+        run: |
+          # GitHub-hosted jobs are isolated; the harness exclusively creates this
+          # fixed name with this owner label and pinned image. Refuse any other shape.
+          if details="$(docker container inspect golem-p8-order7-nats --format '{{index .Config.Labels "golem.p8.owner"}}|{{.Config.Image}}' 2>/dev/null)"; then
+            owner="${details%%|*}"
+            image="${details#*|}"
+            test -n "${owner}"
+            test "${image}" = "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+            docker container rm --force golem-p8-order7-nats
+          fi
 
   hardening:
     runs-on: ubuntu-24.04
@@ -254,6 +301,13 @@ jobs:
         with:
           go-version: "1.25.12"
           cache-dependency-path: go/go.sum
+      - name: Materialize pinned Core NATS image
+        run: |
+          docker image pull nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541
+          docker image inspect nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541 --format '{{range .RepoDigests}}{{println .}}{{end}}' | grep -Fx 'nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541'
+          if docker container inspect golem-p8-order7-nats >/dev/null 2>&1; then
+            exit 1
+          fi
       - name: Race and resource-leak matrix
         run: go test -json -race -p=1 -count=1 -timeout=45m ./... | tee p8-race.events.jsonl
       - name: Repeat matrix
@@ -271,6 +325,10 @@ jobs:
           -profile hardening -reject-skips
           -inventory internal/workflowaudit/required-tests.json -inventory-set hardening
           -require-test github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c
+          -require-test github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic
           -output p8-hardening.audit.json
       - name: Retain structured hardening evidence
         if: always()
@@ -280,6 +338,18 @@ jobs:
           path: go/p8-hardening.audit.json
           retention-days: 14
           if-no-files-found: error
+      - name: Clean test-owned Core NATS container
+        if: always()
+        run: |
+          # GitHub-hosted jobs are isolated; the harness exclusively creates this
+          # fixed name with this owner label and pinned image. Refuse any other shape.
+          if details="$(docker container inspect golem-p8-order7-nats --format '{{index .Config.Labels "golem.p8.owner"}}|{{.Config.Image}}' 2>/dev/null)"; then
+            owner="${details%%|*}"
+            image="${details#*|}"
+            test -n "${owner}"
+            test "${image}" = "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+            docker container rm --force golem-p8-order7-nats
+          fi
 
   fuzz:
     runs-on: ubuntu-24.04
@@ -349,7 +419,7 @@ jobs:
 
   mutation-crash:
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: 360
     services:
       postgres-c:
         image: postgres:17@sha256:7958605b474b3d264a969cb3a123d6aa00ad1e1fe9da8a69984dabb704d93317
@@ -379,6 +449,10 @@ jobs:
           cache-dependency-path: go/go.sum
       - name: Kill complete P8 mutation manifest
         run: go run ./internal/cmd/p8mutation -module . -timeout 15m > p8-mutation.jsonl
+      - name: Kill isolated P8 mutation catalogs
+        env:
+          GOLEM_RUN_P8_ISOLATED_MUTATIONS: "1"
+        run: go test -json -count=1 -timeout=210m ./internal/p8mutation | tee p8-isolated-mutation.events.jsonl
       - name: Real subprocess crash and restart matrix
         run: go run ./internal/cmd/p7crash -module . -timeout 45m > p8-crash.jsonl
       - name: Complete P8 failure crash cancellation and shutdown evidence
@@ -390,6 +464,7 @@ jobs:
           name: p8-mutation-crash
           path: |
             go/p8-mutation.jsonl
+            go/p8-isolated-mutation.events.jsonl
             go/p8-crash.jsonl
             go/p8-failure.json
           retention-days: 14

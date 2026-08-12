@@ -154,9 +154,10 @@ A generated GraphQL semantic root is not yet part of the frozen GraphQL ABI.
 
 `application.RefreshSemanticIndexes(ctx)` explicitly reconciles every semantic
 index. A similarity query fixes its authorized candidate rows first and, when
-that set is non-empty, refreshes before ranking. A denied read, rejected read
-hook, or empty authorized set performs no embedding-provider work. Correctness
-does not depend on an application-maintained worker.
+that set is non-empty, refreshes only the selected model/index before ranking.
+An unrelated embedding space cannot add work to or fail that query. A denied
+read, rejected read hook, or empty authorized set performs no embedding-provider
+work. Correctness does not depend on an application-maintained worker.
 
 Refresh scans all current source rows, materializes their canonical documents,
 and computes stable source hashes. It embeds only missing or stale records,

@@ -61,6 +61,16 @@ func TestIndexedToManyRendersAuthorizedCorrelatedJSONAcrossProviders(t *testing.
 		if len(statement.CorrelatedColumns()) != 1 {
 			t.Fatalf("provider %d correlated columns=%d", provider, len(statement.CorrelatedColumns()))
 		}
+		correlatedFacts := statement.PlanMap().MatchingAliasFacts("golem_cr0")
+		if len(correlatedFacts) != 1 {
+			t.Fatalf("provider %d correlated access facts=%#v", provider, correlatedFacts)
+		}
+		assertPlanAliasFact(t, correlatedFacts[0], "golem_cr0", policyir.ModelID(fixture.Post), policyir.RelationID(fixture.Authorship), nil, PlanAliasCorrelatedRelation)
+		for _, omitted := range []string{"golem_cd0", "golem_cf0", "golem_cg0", "golem_rel0", "golem_payload"} {
+			if facts := statement.PlanMap().MatchingAliasFacts(omitted); len(facts) != 0 {
+				t.Fatalf("provider %d correlated derived/projection alias %q retained facts %#v", provider, omitted, facts)
+			}
+		}
 		for _, fragment := range []string{"COALESCE", "golem_payload", "golem_rel0", "author_id", "ORDER BY"} {
 			if !strings.Contains(statement.SQL(), fragment) {
 				t.Errorf("provider %d SQL lacks %q: %s", provider, fragment, statement.SQL())

@@ -111,6 +111,9 @@ func validateRequest(request RootRequest) error {
 	} else if request.Retry != mutationir.NoRetry && request.Retry != mutationir.CallerTransactionNoReplay {
 		return fail(CodeRequest, request, policyir.FieldID{}, "retry class is invalid for operation", nil)
 	}
+	if request.ConcurrencyPrecheck && (request.Stance != mutationir.Caller || request.Operation != mutationir.Update) {
+		return fail(CodeRequest, request, policyir.FieldID{}, "concurrency precheck inventory is valid only for caller update", nil)
+	}
 
 	wantTarget := request.Operation == mutationir.Update || request.Operation == mutationir.Delete || request.Operation == mutationir.Upsert
 	wantPredicate := request.Operation == mutationir.UpdateMany || request.Operation == mutationir.DeleteMany
@@ -204,6 +207,9 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 	node.Identity = identityBehavior(request, operation, scalar)
 	fields := scalarFields(scalar)
 	authoredFields := authoredScalarFields(scalar)
+	if request.ConcurrencyPrecheck && operation == mutationir.Update {
+		authoredFields = mergeFields(authoredFields, concurrencyHookMutableFields(request))
+	}
 	if operation == mutationir.Create {
 		authoredFields = mergeFields(authoredFields, request.AuthorizedRuntimeFields)
 	}
@@ -282,6 +288,38 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 	}
 	node.Before, node.After = before, after
 	return node, nil
+}
+
+func concurrencyHookMutableFields(request RootRequest) []policyir.FieldID {
+	model, ok := request.Registry.Model(golem.ModelID(request.Model))
+	if !ok {
+		return nil
+	}
+	concurrency, concurrencyEnabled := model.OptimisticConcurrency()
+	result := make([]policyir.FieldID, 0, len(model.Fields()))
+	for _, publicField := range model.Fields() {
+		if concurrencyEnabled && publicField == concurrency {
+			continue
+		}
+		field, ok := request.Registry.Field(model.ID(), publicField)
+		if !ok || field.Kind() == compilerir.FieldRelation || field.Updated() || field.DatabaseReadOnly() {
+			continue
+		}
+		if _, generated := field.Generation(); generated {
+			continue
+		}
+		writable := true
+		for _, mode := range field.Modes() {
+			if mode == compilerir.ModeHidden || mode == compilerir.ModeReadOnly || mode == compilerir.ModeImmutable {
+				writable = false
+				break
+			}
+		}
+		if writable {
+			result = append(result, policyir.FieldID(publicField))
+		}
+	}
+	return result
 }
 
 func selectExisting(request RootRequest, policy policyir.Policy, action policyir.Action) (*mutationir.SelectionRequirement, []policyir.FieldID, error) {
@@ -567,6 +605,9 @@ func imagesFor(request RootRequest, node mutationir.NodeInput, row policyir.Cond
 	before.addFields(primary...)
 	after.addFields(primary...)
 	needsHookSnapshot := false
+	if request.ConcurrencyPrecheck && node.Operation == mutationir.Update {
+		needsHookSnapshot = true
+	}
 	for _, hook := range node.Hooks {
 		if hook.Phase() == mutationir.TransactionAfterHook || hook.Phase() == mutationir.AfterCommitHook {
 			needsHookSnapshot = true

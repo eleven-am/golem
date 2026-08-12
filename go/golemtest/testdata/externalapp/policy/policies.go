@@ -29,3 +29,13 @@ func (Article) DefinePolicy(rules *golem.Rules[Article], actor Actor) {
 	rules.CanReadFields(visible.And(Articles.Author.Is(Authors.Verified.Eq(true))), Articles.Notes)
 	rules.CanReadFields(visible.And(Articles.Comments.Some(Comments.Approved.Eq(true))), Articles.Summary)
 }
+
+func (RaceNote) DefinePolicy(rules *golem.Rules[RaceNote], actor Actor) {
+	if !actor.Authenticated {
+		return
+	}
+	everything := golem.All[RaceNote]()
+	rules.CanRead(everything)
+	rules.CanCreate(everything)
+	rules.CanUpdate(everything)
+}

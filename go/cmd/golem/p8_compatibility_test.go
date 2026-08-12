@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -13,6 +14,7 @@ import (
 	eventcodec "github.com/eleven-am/golem/go/internal/event/codec"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	"github.com/eleven-am/golem/go/internal/migration"
+	migrationexplain "github.com/eleven-am/golem/go/internal/migration/explain"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
@@ -29,6 +31,7 @@ func TestP8EveryMachineJSONDocumentCarriesExactFormatVersion(t *testing.T) {
 		{name: "inspect", want: 2, value: inspectOutput{FormatVersion: 2}},
 		{name: "migration-apply", want: migrationOutputFormatVersion, value: migrationApplyOutput{FormatVersion: migrationOutputFormatVersion, Applied: []migration.MigrationID{}}},
 		{name: "migration-new", want: migrationOutputFormatVersion, value: migrationNewOutput{FormatVersion: migrationOutputFormatVersion, Providers: []compilerir.Provider{}, Changed: []string{}}},
+		{name: "migration-plan", want: 1, value: migrationexplain.JSONCompatibilitySource()},
 		{name: "version", want: diagnosticsFormatVersion, value: currentVersion()},
 	}
 	for _, test := range tests {
@@ -49,8 +52,8 @@ func TestP8EveryMachineJSONDocumentCarriesExactFormatVersion(t *testing.T) {
 }
 
 const (
-	p8CLIJSONCorpusSHA256   = "3a9d2a922b5784438145fd116a00b2aee46eb9ed73e97784ba60c577172ed137"
-	p8PersistedCorpusSHA256 = "f94fc11e06734e93e347e9e1b83aaf7511a8f1d8d8e119a4e80e64ef433102af"
+	p8CLIJSONCorpusSHA256   = "a1228e10ba31fba966029245a85964bc0e49db85e55ac28774ea39a7ee5221df"
+	p8PersistedCorpusSHA256 = "b63e73e98aad59a15aa34931143e550961015c110e39703102ca0668fa5fd62c"
 )
 
 func TestP8CLIJSONAndPersistedFormatCompatibilityGate(t *testing.T) {
@@ -59,8 +62,8 @@ func TestP8CLIJSONAndPersistedFormatCompatibilityGate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compatibility.Digest(cliBytes) != p8CLIJSONCorpusSHA256 {
-		t.Fatal("CLI JSON compatibility inventory changed")
+	if actual := compatibility.Digest(cliBytes); actual != p8CLIJSONCorpusSHA256 {
+		t.Fatalf("CLI JSON compatibility inventory changed: got %s\n%s", actual, cliBytes)
 	}
 	parsedCLI, err := compatibility.ParseCLIInventory(cliBytes)
 	if err != nil || compatibility.CompareCLI(parsedCLI, cli) != compatibility.LayerUnchanged {
@@ -90,10 +93,19 @@ func currentCLICompatibilityInventory(t *testing.T) compatibility.CLIInventory {
 		{Name: "inspect", FormatVersion: 2, Value: inspectOutput{}},
 		{Name: "migration-apply", FormatVersion: migrationOutputFormatVersion, Value: migrationApplyOutput{}},
 		{Name: "migration-new", FormatVersion: migrationOutputFormatVersion, Value: migrationNewOutput{}},
+		{Name: "migration-plan", FormatVersion: migrationexplain.JSONCompatibilitySource().FormatVersion, Value: migrationexplain.JSONCompatibilitySource()},
 		{Name: "version", FormatVersion: diagnosticsFormatVersion, Value: versionOutput{}},
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	names := make([]string, len(value.Documents))
+	for index := range value.Documents {
+		names[index] = value.Documents[index].Name
+	}
+	wantNames := []string{"build-diagnostics", "doctor", "generate-check", "inspect", "migration-apply", "migration-new", "migration-plan", "version"}
+	if !slices.Equal(names, wantNames) {
+		t.Fatalf("machine JSON compatibility document names=%v; want exact %v", names, wantNames)
 	}
 	return value
 }
@@ -102,18 +114,18 @@ func currentPersistedCompatibilityInventory() compatibility.PersistedInventory {
 	numeric := func(value uint64) string { return strconv.FormatUint(value, 10) }
 	return compatibility.PersistedInventory{FormatVersion: compatibility.PersistedInventoryFormatVersion, Formats: []compatibility.PersistedFormat{
 		{Name: "canonical-ir", Current: numeric(uint64(compilerir.CanonicalFormatVersion)), Historical: []string{numeric(uint64(compilerir.CanonicalFormatVersion))}},
-		{Name: "contract-ir", Current: numeric(uint64(compilerir.ContractFormatVersion)), Historical: []string{"4", numeric(uint64(compilerir.ContractFormatVersion))}},
+		{Name: "contract-ir", Current: numeric(uint64(compilerir.ContractFormatVersion)), Historical: []string{"4", "5", numeric(uint64(compilerir.ContractFormatVersion))}},
 		{Name: "event-codec", Current: eventcodec.CodecIdentity, Historical: []string{eventcodec.CodecIdentity}},
 		{Name: "event-schema", Current: numeric(uint64(compilerir.EventSchemaFormatVersion)), Historical: []string{numeric(uint64(compilerir.EventSchemaFormatVersion))}},
 		{Name: "fact-codec", Current: mutationfact.CodecIdentityV2, Historical: []string{mutationfact.CodecIdentityV1, mutationfact.CodecIdentityV2}},
 		{Name: "generated-manifest", Current: numeric(uint64(manifest.FormatVersion)), Historical: []string{"1", numeric(uint64(manifest.FormatVersion))}},
-		{Name: "graphql-abi", Current: numeric(uint64(graphqlcontract.ABIVersion)), Historical: []string{numeric(uint64(graphqlcontract.ABIVersion))}},
+		{Name: "graphql-abi", Current: numeric(uint64(graphqlcontract.ABIVersion)), Historical: []string{"4", numeric(uint64(graphqlcontract.ABIVersion))}},
 		{Name: "migration-canonical", Current: numeric(uint64(migration.ManifestCanonicalVersion)), Historical: []string{numeric(uint64(migration.ManifestCanonicalVersion))}},
 		{Name: "migration-ledger", Current: numeric(uint64(physical.MigrationLedgerFormatVersionV1)), Historical: []string{numeric(uint64(physical.MigrationLedgerFormatVersionV1))}},
 		{Name: "migration-manifest", Current: numeric(uint64(migration.ManifestFormatVersion)), Historical: []string{numeric(uint64(migration.ManifestFormatVersion))}},
-		{Name: "model-ir", Current: numeric(uint64(compilerir.ModelFormatVersion)), Historical: []string{numeric(uint64(compilerir.ModelFormatVersion))}},
-		{Name: "physical-canonical", Current: numeric(uint64(physical.CanonicalFormatVersion)), Historical: []string{numeric(uint64(physical.CanonicalFormatVersion))}},
-		{Name: "physical-schema", Current: numeric(uint64(physical.SchemaFormatVersion)), Historical: []string{numeric(uint64(physical.SchemaFormatVersion))}},
+		{Name: "model-ir", Current: numeric(uint64(compilerir.ModelFormatVersion)), Historical: []string{"1", numeric(uint64(compilerir.ModelFormatVersion))}},
+		{Name: "physical-canonical", Current: numeric(uint64(physical.CanonicalFormatVersion)), Historical: []string{"1", "2", numeric(uint64(physical.CanonicalFormatVersion))}},
+		{Name: "physical-schema", Current: numeric(uint64(physical.SchemaFormatVersion)), Historical: []string{"1", "2", numeric(uint64(physical.SchemaFormatVersion))}},
 		{Name: "schema-bundle", Current: numeric(uint64(golem.SchemaBundleFormatVersion)), Historical: []string{numeric(uint64(golem.SchemaBundleFormatVersion))}},
 	}}
 }

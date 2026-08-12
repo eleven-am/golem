@@ -9,10 +9,11 @@ type Patch struct {
 }
 
 type Gate struct {
-	Directory string
-	Package   string
-	Test      string
-	Required  []string
+	Directory        string
+	Package          string
+	Test             string
+	Required         []string
+	WorkspaceModules []string
 }
 
 type Mutation struct {

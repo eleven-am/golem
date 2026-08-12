@@ -40,12 +40,66 @@ func (err *Error) Unwrap() error { return err.Cause }
 // Fragment is an immutable predicate and its positional arguments. SQL is
 // produced only by the shared walker and a closed provider dialect.
 type Fragment struct {
-	text string
-	args []any
+	text                  string
+	args                  []any
+	policyRelationAliases []PolicyRelationAliasFact
 }
 
 func (fragment Fragment) SQL() string { return fragment.text }
 func (fragment Fragment) Args() []any { return cloneArgs(fragment.args) }
+
+// PolicyRelationAliasFact is one renderer-owned policy traversal identity.
+// It deliberately retains no SQL, predicate, bind, actor, table, column, or
+// provider object name. The opaque alias can only be compared with a provider
+// plan alias; it cannot be extracted and reused as an identifier.
+type PolicyRelationAliasFact struct {
+	alias      rendererAlias
+	modelID    ir.ModelID
+	relationID ir.RelationID
+}
+
+type rendererAlias struct{ value string }
+
+// PolicyAliasAllocator is a single-render ownership token. The ordinary SQL
+// renderer shares one allocator across every independently compiled policy
+// fragment in a statement so aliases remain globally unique even across
+// nested scopes. It exposes no counter or allocated identifier.
+type PolicyAliasAllocator struct {
+	next uint64
+}
+
+func NewPolicyAliasAllocator() *PolicyAliasAllocator {
+	return &PolicyAliasAllocator{next: 1}
+}
+
+func (allocator *PolicyAliasAllocator) allocate() string {
+	if allocator == nil || allocator.next == 0 {
+		return ""
+	}
+	alias := fmt.Sprintf("golem_p%d", allocator.next)
+	allocator.next++
+	return alias
+}
+
+func newPolicyRelationAliasFact(alias string, model ir.ModelID, relation ir.RelationID) PolicyRelationAliasFact {
+	return PolicyRelationAliasFact{alias: rendererAlias{value: alias}, modelID: model, relationID: relation}
+}
+
+// Matches compares an untrusted provider alias with the exact renderer-owned
+// token. Zero or incomplete facts never match.
+func (fact PolicyRelationAliasFact) Matches(candidate string) bool {
+	return fact.alias.value != "" && fact.modelID != (ir.ModelID{}) && fact.relationID != (ir.RelationID{}) && candidate == fact.alias.value
+}
+
+func (fact PolicyRelationAliasFact) ModelID() ir.ModelID       { return fact.modelID }
+func (fact PolicyRelationAliasFact) RelationID() ir.RelationID { return fact.relationID }
+
+// PolicyRelationAliases returns allocation-ordered, caller-owned facts for
+// aliases allocated by this policy fragment. The outer renderer owns and
+// registers the root alias separately.
+func (fragment Fragment) PolicyRelationAliases() []PolicyRelationAliasFact {
+	return append([]PolicyRelationAliasFact(nil), fragment.policyRelationAliases...)
+}
 
 func cloneArgs(values []any) []any {
 	result := make([]any, len(values))

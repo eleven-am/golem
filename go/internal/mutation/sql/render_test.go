@@ -93,6 +93,91 @@ func TestUpdateRendersActionConstraintLockAtomicOperationsAndPostcondition(t *te
 	}
 }
 
+func TestPostconditionDisjunctionRemainsGroupedUnderPrimaryIdentity(t *testing.T) {
+	fixture := schematest.New(t)
+	model := policyir.ModelID(fixture.Post)
+	truth, err := policyir.NewConstant(model, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	falsehood, err := policyir.NewConstant(model, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disjunction, err := policyir.NewLogical(model, policyir.LogicalOr, []policyir.Condition{truth, falsehood})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := target(t, fixture, uuidValue(72), nil)
+	selection, err := mutationir.NewSelectionRequirement(policyir.ActionUpdate, truth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	image, err := mutationir.NewImageRequirements(model, []policyir.FieldID{policyir.FieldID(fixture.PostID), policyir.FieldID(fixture.PostTitle)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := setString(t, fixture, fixture.PostTitle, "grouped")
+	graph, err := mutationir.NewGraph(mutationir.NodeInput{Operation: mutationir.Update, Model: model, Target: &target, ScalarOperations: []mutationir.ScalarOperation{operation}, Before: image, After: image, Selection: &selection, RowPostcondition: &disjunction, Identity: mutationir.IdentityUnchanged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	program, err := Render(plan(t, graph, image), fixture.Registry, policyir.ProviderSQLite, testProof(t, fixture, policyir.ProviderSQLite))
+	if err != nil {
+		t.Fatal(err)
+	}
+	statements := program.Statements()
+	if len(statements) != 3 || statements[2].Role() != VerifyPostcondition {
+		t.Fatalf("statement roles=%#v", statements)
+	}
+	sql := statements[2].SQL()
+	if !strings.Contains(sql, `WHERE "golem_m0"."id" = ?1 AND ((TRUE) OR (FALSE))`) {
+		t.Fatalf("postcondition disjunction escaped primary identity grouping: %s", sql)
+	}
+}
+
+func TestVersionedOptimisticConcurrencySQLIsExactCAS(t *testing.T) {
+	fixture := schematest.NewOptimisticConcurrency(t)
+	id := uuidValue(73)
+	text, _ := policyir.StringValue("versioned")
+	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
+		provider := provider
+		t.Run(string(provider), func(t *testing.T) {
+			titleType := testType(t, fixture, fixture.Post, fixture.PostTitle, provider)
+			setTitle, err := mutationir.NewSet(policyir.FieldID(fixture.PostTitle), titleType, text)
+			if err != nil {
+				t.Fatal(err)
+			}
+			plan := updatePlan(t, fixture, id, []mutationir.ScalarOperation{setTitle}, true)
+			if _, err := Render(plan, fixture.Registry, provider, testProof(t, fixture, provider)); err == nil {
+				t.Fatal("ordinary renderer accepted an existing-row versioned mutation")
+			}
+			program, err := RenderVersioned(plan, fixture.Registry, provider, testProof(t, fixture, provider))
+			if err != nil {
+				t.Fatal(err)
+			}
+			field, enabled := program.OptimisticConcurrency()
+			statements := program.Statements()
+			if !enabled || field != policyir.FieldID(fixture.PostBigInt) || !program.RequiresConcurrencyPrecheck() || len(statements) < 2 {
+				t.Fatalf("versioned program field=%x enabled=%t precheck=%t statements=%d", field, enabled, program.RequiresConcurrencyPrecheck(), len(statements))
+			}
+			apply := statements[1]
+			if !strings.Contains(apply.SQL(), `"big_int" = ("big_int" + 1)`) || !strings.Contains(apply.SQL(), `"big_int" < 9223372036854775807`) {
+				t.Fatalf("versioned update SQL=%s", apply.SQL())
+			}
+			foundObservedBinding := false
+			for _, binding := range apply.Bindings() {
+				if source, boundField, ok := binding.PriorResult(); ok && source == 0 && boundField == policyir.FieldID(fixture.PostBigInt) {
+					foundObservedBinding = true
+				}
+			}
+			if !foundObservedBinding {
+				t.Fatalf("versioned update does not bind the locked observed token: %#v", apply.Bindings())
+			}
+		})
+	}
+}
+
 func TestIdentityChangingScalarUpdateRendersBeforeAndAfterIdentityDataflow(t *testing.T) {
 	fixture := schematest.New(t)
 	oldID, newID := uuidValue(70), uuidValue(71)

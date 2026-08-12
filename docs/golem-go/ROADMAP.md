@@ -13,18 +13,18 @@ quietly expanding the core.
 ## Official cross-process event transport: NATS
 
 Golem will provide one maintained NATS client adapter for the existing public
-`events.EventTransport` contract. The NATS server is external deployment
-infrastructure; Golem will not embed, start, configure, or administer a NATS
-server.
+`events.EventTransport` contract on the PostgreSQL deployment profile. The
+NATS server is external deployment infrastructure; Golem will not embed,
+start, configure, or administer a NATS server.
 
-The adapter remains provider-neutral. An application may configure it with
-either SQLite or PostgreSQL. Golem's database outbox remains the durable source
-of accepted event facts, publication remains at least once, and consumers use
-the stable event identity for deduplication. The initial adapter is for live
-cross-process fan-out. Golem does not expose or own client cursors, retained
-consumer history, or a subscription replay API. An application that needs
-durable replay configures that behavior in its broker or consumer outside
-Golem. Golem also does not administer JetStream.
+The adapter is deliberately unavailable when the application database provider
+is SQLite. Golem's PostgreSQL outbox remains the durable source of accepted
+event facts, publication remains at least once, and consumers use the stable
+event identity for deduplication. The initial adapter is for live cross-process
+fan-out. Golem does not expose or own client cursors, retained consumer history,
+or a subscription replay API. An application that needs durable replay
+configures that behavior in its broker or consumer outside Golem. Golem also
+does not administer JetStream.
 
 The adapter must preserve the existing transport boundaries:
 
@@ -43,11 +43,10 @@ does not turn separate SQLite files into one database.
 ### SQLite
 
 SQLite remains the first-class **single-node** profile: one Golem application
-node, one authoritative SQLite database, and many concurrent users/requests.
-The NATS adapter may publish to external consumers from that node, but it does
-not create a supported horizontally scaled or high-availability SQLite
-topology. Multiple machines with independent SQLite files are separate
-databases even when they share a NATS subject.
+node, one authoritative SQLite database, many concurrent users/requests, and
+the embedded process-local event transport. The maintained NATS adapter is not
+available on this profile. Multiple machines with independent SQLite files are
+separate databases; a broker cannot make them one authoritative application.
 
 ### PostgreSQL
 
@@ -57,10 +56,13 @@ for cross-process event fan-out. The database, not NATS, is the shared source of
 model, migration, semantic-index, session, and outbox truth.
 
 Provider portability means the same model, policy, query, mutation, event, and
-error contracts. It does not claim that a local file database and a client/
-server database have identical operational scaling or failover topologies.
+error contracts. It does not claim identical transport availability, scaling,
+or failover topology between a local file database and a client/server
+database. Configuring the maintained NATS adapter with SQLite must fail
+explicitly rather than silently falling back or pretending the topology is
+supported.
 
-## Public policy testing kit — implemented
+## Public policy testing kit — implementation in progress
 
 Golem exposes a small public `golemtest` package for database-free,
 actor-specific policy inspection. It returns the effective row constraint,
@@ -69,14 +71,11 @@ adapting the existing production policy kernel. It does not introduce a second
 policy evaluator, mock relation database, auth/session framework, string-based
 field authority, or runtime bypass.
 
-The ten mandatory acceptance gates named in the contract exist and pass,
-including the external generated-application gate, which builds a clean
-`example.com` consumer with `GOWORK=off` and public packages only and requires
-the kit's static answers to agree with a real generated `Caller` on SQLite,
-PostgreSQL C collation, and PostgreSQL linguistic collation. The package's
-public surface is part of the frozen public Go API inventory. Implemented here
-means landed and evidenced, not released: the Go module as a whole is still
-unreleased and its P8 hosted-release gates remain pending.
+The ten mandatory acceptance gates named in the contract exist. The remaining
+completion boundary is executable mutation evidence plus the final generated
+application and compatibility rerun after the concurrent physical-format
+transition settles. Until that evidence is green, this roadmap does not call
+the kit implemented.
 
 The complete implementation and acceptance contract, including its recorded
 limitations, is [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md). Application

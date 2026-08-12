@@ -42,7 +42,12 @@ func TestP8CompatibilityManifestCanonicalAndComplete(t *testing.T) {
 	if err != nil || CompareObservation(observation, observation) != LayerUnchanged {
 		t.Fatalf("checked observation ABI is not semantically comparable: %v", err)
 	}
-	if parsed.HistoricalDecode.ContractIR[0] != 4 || parsed.HistoricalDecode.ContractIR[1] != 5 || !reflect.DeepEqual(parsed.HistoricalDecode.GeneratedManifests, []uint16{1, 2}) {
+	if !reflect.DeepEqual(parsed.HistoricalDecode.ModelIR, []uint16{1, 2}) ||
+		!reflect.DeepEqual(parsed.HistoricalDecode.ContractIR, []uint16{4, 5, 6}) ||
+		!reflect.DeepEqual(parsed.HistoricalDecode.PhysicalSchema, []uint16{1, 2, 3}) ||
+		!reflect.DeepEqual(parsed.HistoricalDecode.PhysicalCanonical, []uint16{1, 2, 3}) ||
+		!reflect.DeepEqual(parsed.HistoricalDecode.GraphQL, []uint16{4, 5}) ||
+		!reflect.DeepEqual(parsed.HistoricalDecode.GeneratedManifests, []uint16{1, 2}) {
 		t.Fatal("manifest omits an executable historical decoder")
 	}
 	if bytes.Contains(encoded, []byte(root)) || bytes.Contains(encoded, []byte("postgresql://")) || bytes.Contains(encoded, []byte("file:")) {
@@ -51,7 +56,10 @@ func TestP8CompatibilityManifestCanonicalAndComplete(t *testing.T) {
 
 	unknown := append([]byte(nil), encoded[:len(encoded)-2]...)
 	unknown = append(unknown, []byte(",\n  \"foreign\": true\n}\n")...)
-	duplicate := bytes.Replace(encoded, []byte("{\n  \"formatVersion\": 1,"), []byte("{\n  \"formatVersion\": 1,\n  \"formatVersion\": 1,"), 1)
+	duplicate := bytes.Replace(encoded, []byte("{\n  \"formatVersion\": 2,"), []byte("{\n  \"formatVersion\": 2,\n  \"formatVersion\": 2,"), 1)
+	if bytes.Equal(duplicate, encoded) {
+		t.Fatal("duplicate-key hostile mutation did not change the active manifest bytes")
+	}
 	var document map[string]any
 	if err := json.Unmarshal(encoded, &document); err != nil {
 		t.Fatal(err)

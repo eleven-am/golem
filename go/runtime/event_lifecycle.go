@@ -80,9 +80,14 @@ func (app *App[P, A]) initializeEventRuntime(adapters []events.CDCAdapter, audit
 		return events.Failure(events.CodeEventConfig)
 	}
 	sort.Strings(names)
-	reportedTransport := events.CapabilitiesOf(app.eventTransport)
-	transportCapabilities, err := events.NewTransportCapabilities(reportedTransport.Identity(), reportedTransport.Scope(), reportedTransport.Durable())
+	transportCapabilities, err := validateEventTransportTopology(app.eventProvider, app.eventTransport)
 	if err != nil {
+		return events.Failure(events.CodeEventConfig)
+	}
+	if !events.AvailabilityOf(app.eventTransport) {
+		return events.Failure(events.CodeEventConfig)
+	}
+	if err := validateEventTransportPayloadLimit(transportCapabilities, app.eventTransport, app.eventLimits.MaxEncodedEventBytes); err != nil {
 		return events.Failure(events.CodeEventConfig)
 	}
 	bindable, bindableOK := app.eventTransport.(events.RuntimeBindableTransport)
@@ -139,11 +144,12 @@ func (app *App[P, A]) EventCapabilities() events.Capabilities {
 	if app == nil {
 		return events.Capabilities{}
 	}
-	return events.RuntimeCapabilities(
+	return events.RuntimeCapabilitiesWithTransportAvailability(
 		app.eventProvider,
 		[]string{"golem.fact.v1", "golem.fact.v2"},
 		[]string{"golem.event.v1"},
 		app.eventTransportABI,
+		events.AvailabilityOf(app.eventTransport),
 		app.eventPublisher != nil,
 		app.eventRunning.Load(),
 		app.eventModels,

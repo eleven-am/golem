@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -56,6 +57,296 @@ func TestPlanIncrementalRendersReviewedPostgreSQLBaseline(t *testing.T) {
 	if strings.Contains(strings.ToLower(sql), "search_path") {
 		t.Fatalf("migration SQL depends on search_path:\n%s", sql)
 	}
+}
+
+func TestPlanIncrementalInitializesEveryConcurrencyValueToExactlyOne(t *testing.T) {
+	provider := New()
+	before, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := normalizePostgreSQLMigrationSchema(t, before)
+	field := ir.FieldID(id(60))
+	for index := range after.Tables {
+		if after.Tables[index].Name != "posts" {
+			continue
+		}
+		after.Tables[index].Columns = append(after.Tables[index].Columns, physical.PhysicalColumn{ID: field, Name: "version", Ordinal: uint32(len(after.Tables[index].Columns)), Storage: physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+		value := field
+		after.Tables[index].OptimisticConcurrency = &value
+	}
+	after = normalizePostgreSQLMigrationSchema(t, after)
+	entry := reviewedPostgreSQLEntry(t, "002_concurrency", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	update := `UPDATE "reviewed"."posts" SET "version" = 1`
+	if !strings.Contains(sql, update) || strings.Contains(sql, update+" WHERE") {
+		t.Fatalf("concurrency initialization must overwrite every existing row exactly once:\n%s", sql)
+	}
+	if strings.Contains(sql, `ADD COLUMN "version" bigint DEFAULT`) || strings.Contains(sql, `ADD COLUMN "version" bigint NOT NULL`) {
+		t.Fatalf("staged concurrency ADD COLUMN invented a DB default or premature NOT NULL:\n%s", sql)
+	}
+	found := false
+	for _, step := range plan.steps {
+		if step.postcondition == nil {
+			continue
+		}
+		found = true
+		if step.postcondition.kind != postconditionConcurrencyExactlyOne {
+			t.Fatalf("postcondition kind=%d, want typed exact-one invariant", step.postcondition.kind)
+		}
+		predicate, predicateErr := step.postcondition.predicate()
+		if predicateErr != nil || predicate != `"version" IS DISTINCT FROM 1` {
+			t.Fatalf("exact-one predicate=%q error=%v", predicate, predicateErr)
+		}
+	}
+	if !found {
+		t.Fatal("concurrency plan omitted generated exact-one postcondition")
+	}
+}
+
+func TestHistoricalV1ReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
+	readSnapshot := func(name string) physical.PhysicalSchema {
+		t.Helper()
+		raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial." + name + ".snapshot.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema physical.PhysicalSchema
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		return schema
+	}
+	before := readSnapshot("before")
+	after := readSnapshot("after")
+	after.Extensions = append(after.Extensions, physical.Extension{
+		ID:       ir.ExtensionID(id(996)),
+		Provider: ir.PostgreSQL,
+		Kind:     "historical.metadata",
+		Version:  1,
+		Owner:    physical.ObjectRef{Kind: ir.ObjectModel, ModelID: after.Tables[0].ID},
+	})
+	before, err := physical.NormalizeHistoricalV1(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err = physical.NormalizeHistoricalV1(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := migration.DiffHistorical(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFingerprint, err := physical.HistoricalPhysicalFingerprint(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFingerprint, err := physical.HistoricalPhysicalFingerprint(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := migration.ManifestEntry{
+		ID: "0001_initial", Operations: plan.Operations, Phases: plan.Phases,
+		BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()),
+		BeforeSnapshot: before, AfterSnapshot: after,
+	}
+	script, err := New().RenderMigration(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script.SQL() != string(want) {
+		t.Fatal("historical v1 extension metadata changed retained PostgreSQL DDL")
+	}
+	if strings.Contains(script.SQL(), "CREATE EXTENSION") || strings.Contains(script.SQL(), "_vec") {
+		t.Fatal("historical v1 renderer invented current semantic-extension DDL")
+	}
+
+	for name, mutate := range map[string]func(*migration.ManifestEntry){
+		"before fingerprint": func(value *migration.ManifestEntry) { value.BeforePhysical = migration.Digest(strings.Repeat("0", 64)) },
+		"after fingerprint":  func(value *migration.ManifestEntry) { value.AfterPhysical = migration.Digest(strings.Repeat("f", 64)) },
+		"provider": func(value *migration.ManifestEntry) {
+			value.AfterSnapshot.Provider.Provider = ir.SQLite
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := entry
+			mutate(&forged)
+			if _, err := New().RenderMigration(forged); err == nil {
+				t.Fatal("forged sealed typed fact was accepted")
+			}
+		})
+	}
+}
+
+func TestHistoricalV1PostgreSQLIncrementalRunnerRetainsClosedBaseline(t *testing.T) {
+	raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial.after.snapshot.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var base physical.PhysicalSchema
+	if err := json.Unmarshal(raw, &base); err != nil {
+		t.Fatal(err)
+	}
+	base, err = physical.NormalizeHistoricalV1(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := func(value physical.PhysicalSchema) physical.PhysicalSchema {
+		t.Helper()
+		encoded, marshalErr := json.Marshal(value)
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		var result physical.PhysicalSchema
+		if unmarshalErr := json.Unmarshal(encoded, &result); unmarshalErr != nil {
+			t.Fatal(unmarshalErr)
+		}
+		return result
+	}
+	seal := func(before, after physical.PhysicalSchema) migration.ManifestEntry {
+		t.Helper()
+		before, err = physical.NormalizeHistoricalV1(before)
+		if err != nil {
+			t.Fatal(err)
+		}
+		after, err = physical.NormalizeHistoricalV1(after)
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan, diffErr := migration.DiffHistorical(before, after)
+		if diffErr != nil {
+			t.Fatal(diffErr)
+		}
+		beforeFingerprint, _ := physical.HistoricalPhysicalFingerprint(before)
+		afterFingerprint, _ := physical.HistoricalPhysicalFingerprint(after)
+		entry := migration.ManifestEntry{ID: "0002_historical", Operations: plan.Operations, Phases: plan.Phases, BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()), BeforeSnapshot: before, AfterSnapshot: after}
+		for _, operation := range plan.Operations {
+			if migration.RequiresApproval(operation) {
+				entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
+			}
+		}
+		return entry
+	}
+
+	t.Run("rename remains executable", func(t *testing.T) {
+		after := clone(base)
+		after.Tables[0].Name += "_v2"
+		script, err := New().RenderMigration(seal(base, after))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(script.SQL(), " RENAME TO ") {
+			t.Fatalf("retained rename SQL=%q", script.SQL())
+		}
+	})
+	t.Run("v1 extensions remain outside runner", func(t *testing.T) {
+		before, after := clone(base), clone(base)
+		extension := physical.Extension{ID: ir.ExtensionID(id(997)), Provider: ir.PostgreSQL, Kind: "historical.metadata", Version: 1, Owner: physical.ObjectRef{Kind: ir.ObjectModel, ModelID: before.Tables[0].ID}}
+		before.Extensions, after.Extensions = []physical.Extension{extension}, []physical.Extension{extension}
+		after.Tables[0].Name += "_v2"
+		if _, err := New().RenderMigration(seal(before, after)); err == nil || !strings.Contains(err.Error(), "outside the retained v1") {
+			t.Fatalf("v1 extension runner error=%v", err)
+		}
+	})
+	t.Run("v1 type rewrite remains refused", func(t *testing.T) {
+		after := clone(base)
+		changed := false
+		for tableIndex := range after.Tables {
+			for columnIndex := range after.Tables[tableIndex].Columns {
+				column := &after.Tables[tableIndex].Columns[columnIndex]
+				if column.Name == "body" {
+					column.Storage = physical.StorageType{Kind: physical.StoragePostgreSQLBytea}
+					changed = true
+				}
+			}
+		}
+		if !changed {
+			t.Fatal("fixture body field absent")
+		}
+		if _, err := New().RenderMigration(seal(base, after)); err == nil || !strings.Contains(err.Error(), "retained v1 automatic") {
+			t.Fatalf("v1 type runner error=%v", err)
+		}
+	})
+	t.Run("v1 required add remains refused", func(t *testing.T) {
+		after := clone(base)
+		after.Tables[0].Columns = append(after.Tables[0].Columns, physical.PhysicalColumn{ID: ir.FieldID(id(998)), Name: "required_new", Ordinal: uint32(len(after.Tables[0].Columns)), Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+		if _, err := New().RenderMigration(seal(base, after)); err == nil || !strings.Contains(err.Error(), "no reviewed default") {
+			t.Fatalf("v1 required add runner error=%v", err)
+		}
+	})
+}
+
+func TestHistoricalV1ToV3PostgreSQLRendererRetainsExactV1RepresentationLeg(t *testing.T) {
+	entry := socialMigrationEntry(t, "postgresql", "0003_physical_v2")
+	if !reviewedPostgreSQLV1RepresentationTransition(entry.BeforeSnapshot, entry.AfterSnapshot) {
+		t.Fatal("exact reviewed v1-to-v2 representation transition was refused")
+	}
+	v3 := entry.AfterSnapshot
+	v3.Version, v3.CanonicalVersion = 3, 3
+	v3, err := physical.NormalizeHistoricalV3(v3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reviewedPostgreSQLV1RepresentationTransition(entry.BeforeSnapshot, v3) {
+		t.Fatal("exact reviewed v1-to-v3 representation composition was refused")
+	}
+	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, v3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	composed := migration.ManifestEntry{
+		ID: "0003_direct_physical_v3", BeforePhysical: plan.BeforeFingerprint, AfterPhysical: plan.AfterFingerprint,
+		BeforeSnapshot: entry.BeforeSnapshot, AfterSnapshot: v3, Operations: plan.Operations, Phases: plan.Phases,
+	}
+	for _, operation := range plan.Operations {
+		if migration.RequiresApproval(operation) {
+			composed.Approvals = append(composed.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
+		}
+	}
+	script, err := New().RenderMigration(composed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(script.SQL(), "TYPE character varying") || !strings.Contains(script.SQL(), "DROP CONSTRAINT") {
+		t.Fatalf("direct v1-to-v3 renderer omitted exact representation leg:\n%s", script.SQL())
+	}
+
+	for _, pair := range []struct{ before, after uint32 }{{1, 1}, {2, 3}, {1, 4}, {2, 2}, {3, 3}} {
+		before, after := entry.BeforeSnapshot, v3
+		before.Version, before.CanonicalVersion = pair.before, pair.before
+		after.Version, after.CanonicalVersion = pair.after, pair.after
+		if reviewedPostgreSQLV1RepresentationTransition(before, after) {
+			t.Fatalf("unreviewed representation transition %d/%d -> %d/%d accepted", pair.before, pair.before, pair.after, pair.after)
+		}
+	}
+}
+
+func socialMigrationEntry(t *testing.T, provider, id string) migration.ManifestEntry {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "examples", "social", "migrations", provider, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest migration.Manifest
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range manifest.Entries {
+		if entry.ID == migration.MigrationID(id) {
+			return entry
+		}
+	}
+	t.Fatalf("social migration %s/%s is absent", provider, id)
+	return migration.ManifestEntry{}
 }
 
 func TestPlanIncrementalCreatesSemanticPgvectorStorage(t *testing.T) {

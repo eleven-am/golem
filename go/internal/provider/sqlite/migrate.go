@@ -24,9 +24,10 @@ import (
 // ColumnCopy is one explicit, identity-preserving leg of a SQLite rebuild.
 // Generated and newly defaulted columns are intentionally absent.
 type ColumnCopy struct {
-	FieldID     ir.FieldID
-	Source      physical.PhysicalName
-	Destination physical.PhysicalName
+	FieldID               ir.FieldID
+	Source                physical.PhysicalName
+	Destination           physical.PhysicalName
+	InitializeConcurrency bool
 }
 
 // TableRebuild is the reviewed semantic description lowered to SQLite's
@@ -66,6 +67,39 @@ func (provider *Provider) PlanIncremental(entry migration.ManifestEntry) (Increm
 	return provider.planIncremental(entry)
 }
 
+func reviewedInitial(entry migration.ManifestEntry) (reviewedInitialSnapshot, error) {
+	plan, err := reviewedEntryPlan(entry)
+	if err != nil {
+		return reviewedInitialSnapshot{}, err
+	}
+	if !plan.Initial {
+		return reviewedInitialSnapshot{}, fmt.Errorf("reviewed initial snapshot lacks the exact sealed operation graph")
+	}
+	return reviewedInitialSnapshot{schema: entry.AfterSnapshot}, nil
+}
+
+func reviewedEntryPlan(entry migration.ManifestEntry) (migration.Plan, error) {
+	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
+	if err != nil {
+		return migration.Plan{}, err
+	}
+	if plan.Provider != entry.AfterSnapshot.Provider.Provider ||
+		plan.BeforeFingerprint != entry.BeforePhysical ||
+		plan.AfterFingerprint != entry.AfterPhysical ||
+		!reflect.DeepEqual(plan.Operations, entry.Operations) ||
+		!reflect.DeepEqual(plan.Phases, entry.Phases) {
+		return migration.Plan{}, fmt.Errorf("reviewed migration snapshot lacks the exact sealed typed plan")
+	}
+	return plan, nil
+}
+
+func reviewedEntrySnapshots(entry migration.ManifestEntry) (reviewedSnapshot, reviewedSnapshot, error) {
+	if _, err := reviewedEntryPlan(entry); err != nil {
+		return reviewedSnapshot{}, reviewedSnapshot{}, err
+	}
+	return reviewedSnapshot{schema: entry.BeforeSnapshot}, reviewedSnapshot{schema: entry.AfterSnapshot}, nil
+}
+
 // ApplyMigration verifies immutable history and applies exactly the next
 // reviewed entry. A call never skips, rewrites, or batches ledger entries.
 func (provider *Provider) ApplyMigration(ctx context.Context, database *sqlx.DB, manifest migration.Manifest, files map[string][]byte) error {
@@ -76,12 +110,16 @@ func (provider *Provider) ApplyMigration(ctx context.Context, database *sqlx.DB,
 // ApplyMigration independently reconstructs the same private plan from the
 // checksummed snapshots; reviewed SQL is never accepted as executable input.
 func (provider *Provider) RenderMigration(entry migration.ManifestEntry) (Script, error) {
-	semantic, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := reviewedEntryPlan(entry)
 	if err != nil {
 		return Script{}, err
 	}
 	if semantic.Initial {
-		return provider.renderInitial(entry.AfterSnapshot)
+		reviewed, reviewErr := reviewedInitial(entry)
+		if reviewErr != nil {
+			return Script{}, reviewErr
+		}
+		return provider.renderReviewedInitialSnapshot(reviewed)
 	}
 	plan, err := provider.planIncremental(entry)
 	if err != nil {
@@ -154,7 +192,7 @@ func sqliteLedgerName(system physical.SystemSchema) (physical.PhysicalName, erro
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
-	semantic, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
 	if err != nil {
 		return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic diff: %w", entry.ID, err)
 	}
@@ -174,7 +212,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		}
 	}
 	for _, operation := range semantic.Operations {
-		if operation.Transform != nil || operation.Kind == migration.BackfillColumn || operation.Kind == migration.ManualStep || operation.Kind == migration.ValidateConstraint {
+		if operation.Transform != nil || operation.Kind == migration.BackfillColumn || operation.Kind == migration.ManualStep || operation.Kind == migration.ValidateConstraint && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) || operation.Kind == migration.InitializeConcurrencyColumn && !sqliteConcurrencyOperation(entry.AfterSnapshot, operation) {
 			return IncrementalPlan{}, fmt.Errorf("sqlite migration %s operation %s requires an unsupported transform or manual step", entry.ID, operation.ID)
 		}
 	}
@@ -366,6 +404,21 @@ func directSQLiteOperation(operation migration.Operation, before, after physical
 	return false
 }
 
+func sqliteConcurrencyOperation(schema physical.PhysicalSchema, operation migration.Operation) bool {
+	if operation.Kind != migration.InitializeConcurrencyColumn && operation.Kind != migration.ValidateConstraint {
+		return false
+	}
+	field := ir.FieldID(operation.ObjectID)
+	for _, table := range schema.Tables {
+		if table.OptimisticConcurrency == nil || *table.OptimisticConcurrency != field {
+			continue
+		}
+		column, exists := findColumnByID(table, field)
+		return exists && !column.Nullable && column.Storage == (physical.StorageType{Kind: physical.StorageSQLiteInteger}) && column.Default.Kind == physical.DefaultNone && column.Generated == nil && column.Collation == nil
+	}
+	return false
+}
+
 func buildTableRebuild(before, after physical.PhysicalTable, fingerprint migration.Digest) (TableRebuild, error) {
 	oldColumns := map[ir.FieldID]physical.PhysicalColumn{}
 	for _, column := range before.Columns {
@@ -375,6 +428,10 @@ func buildTableRebuild(before, after physical.PhysicalTable, fingerprint migrati
 	for _, column := range after.Columns {
 		old, exists := oldColumns[column.ID]
 		if !exists {
+			if after.OptimisticConcurrency != nil && *after.OptimisticConcurrency == column.ID && column.Generated == nil && !column.Nullable && column.Default.Kind == physical.DefaultNone {
+				rebuild.Columns = append(rebuild.Columns, ColumnCopy{FieldID: column.ID, Destination: column.Name, InitializeConcurrency: true})
+				continue
+			}
 			if column.Generated == nil && !column.Nullable && column.Default.Kind == physical.DefaultNone {
 				return TableRebuild{}, fmt.Errorf("table %s adds required field %s without a reviewed default/backfill", after.ID, column.ID)
 			}
@@ -438,7 +495,11 @@ func renderRebuild(before, after physical.PhysicalTable, tables map[ir.ModelID]p
 	sources := make([]string, len(rebuild.Columns))
 	for index, column := range rebuild.Columns {
 		destinations[index] = quote(column.Destination)
-		sources[index] = quote(column.Source)
+		if column.InitializeConcurrency {
+			sources[index] = "1"
+		} else {
+			sources[index] = quote(column.Source)
+		}
 	}
 	statements := []string{
 		create,
@@ -554,7 +615,7 @@ func operationOwners(before, after physical.PhysicalSchema) (map[migration.Opera
 			return nil, err
 		}
 	}
-	plan, err := migration.Diff(before, after)
+	plan, err := migration.DiffReviewed(before, after)
 	if err != nil {
 		return nil, err
 	}
@@ -789,6 +850,10 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("sqlite migration has no unapplied reviewed entry")
 	}
 	entry := manifest.Entries[len(ledger)]
+	beforeReviewed, afterReviewed, err := reviewedEntrySnapshots(entry)
+	if err != nil {
+		return err
+	}
 	plan, err := provider.planIncremental(entry)
 	if err != nil {
 		return err
@@ -835,11 +900,11 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if !reflect.DeepEqual(ledger, lockedLedger) {
 		return fmt.Errorf("sqlite migration ledger changed before lock acquisition")
 	}
-	actualBefore, err := provider.introspectCatalog(ctx, transaction, entry.BeforeSnapshot)
+	actualBefore, err := provider.introspectReviewedCatalog(ctx, transaction, beforeReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite migration starting introspection: %w", err)
 	}
-	beforeFingerprint, err := physical.PhysicalFingerprint(actualBefore)
+	beforeFingerprint, err := physical.HistoricalPhysicalFingerprint(actualBefore)
 	if err != nil || migration.Digest(beforeFingerprint.String()) != entry.BeforePhysical {
 		return fmt.Errorf("sqlite migration starting physical fingerprint mismatch")
 	}
@@ -871,16 +936,16 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := verifyForeignKeys(ctx, transaction); err != nil {
 		return err
 	}
-	actualAfter, err := provider.introspectCatalog(ctx, transaction, entry.AfterSnapshot)
+	actualAfter, err := provider.introspectReviewedCatalog(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite migration final introspection: %w", err)
 	}
-	afterFingerprint, err := physical.PhysicalFingerprint(actualAfter)
+	afterFingerprint, err := physical.HistoricalPhysicalFingerprint(actualAfter)
 	if err != nil || migration.Digest(afterFingerprint.String()) != entry.AfterPhysical {
 		return fmt.Errorf("sqlite migration final physical fingerprint mismatch")
 	}
-	wantSystem, _ := physical.SystemFingerprint(entry.AfterSnapshot.Provider, entry.AfterSnapshot.System)
-	gotSystem, _ := physical.SystemFingerprint(actualAfter.Provider, actualAfter.System)
+	wantSystem, _ := physical.HistoricalSystemFingerprint(entry.AfterSnapshot)
+	gotSystem, _ := physical.HistoricalSystemFingerprint(actualAfter)
 	if gotSystem != wantSystem {
 		return fmt.Errorf("sqlite migration final system fingerprint mismatch")
 	}
@@ -902,14 +967,18 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 
 func (provider *Provider) applyBootstrapMigration(ctx context.Context, connection *sqlx.Conn, manifest migration.Manifest) (resultErr error) {
 	entry := manifest.Entries[0]
-	semantic, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := reviewedEntryPlan(entry)
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration %s semantic diff: %w", entry.ID, err)
 	}
 	if !semantic.Initial || semantic.Provider != ir.SQLite || !reflect.DeepEqual(semantic.Operations, entry.Operations) || !reflect.DeepEqual(semantic.Phases, entry.Phases) {
 		return fmt.Errorf("sqlite initial migration %s lacks the exact reviewed bootstrap plan", entry.ID)
 	}
-	script, err := provider.renderInitial(entry.AfterSnapshot)
+	reviewed, err := reviewedInitial(entry)
+	if err != nil {
+		return err
+	}
+	script, err := provider.renderReviewedInitialSnapshot(reviewed)
 	if err != nil {
 		return err
 	}
@@ -956,11 +1025,15 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 		}
 		return fmt.Errorf("sqlite initial migration requires a truly blank managed namespace; found %s %s", existing[0].Type, existing[0].Name)
 	}
-	actualBefore, err := provider.introspectCatalog(ctx, transaction, entry.BeforeSnapshot)
+	beforeReviewed, afterReviewed, err := reviewedEntrySnapshots(entry)
+	if err != nil {
+		return err
+	}
+	actualBefore, err := provider.introspectReviewedCatalog(ctx, transaction, beforeReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration starting introspection: %w", err)
 	}
-	beforeFingerprint, _ := physical.PhysicalFingerprint(actualBefore)
+	beforeFingerprint, _ := physical.HistoricalPhysicalFingerprint(actualBefore)
 	if migration.Digest(beforeFingerprint.String()) != entry.BeforePhysical {
 		return fmt.Errorf("sqlite initial migration starting physical fingerprint mismatch")
 	}
@@ -975,16 +1048,16 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err := verifyForeignKeys(ctx, transaction); err != nil {
 		return err
 	}
-	actualAfter, err := provider.introspectCatalog(ctx, transaction, entry.AfterSnapshot)
+	actualAfter, err := provider.introspectReviewedCatalog(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration final introspection: %w", err)
 	}
-	afterFingerprint, _ := physical.PhysicalFingerprint(actualAfter)
+	afterFingerprint, _ := physical.HistoricalPhysicalFingerprint(actualAfter)
 	if migration.Digest(afterFingerprint.String()) != entry.AfterPhysical {
 		return fmt.Errorf("sqlite initial migration final physical fingerprint mismatch")
 	}
-	wantSystem, _ := physical.SystemFingerprint(entry.AfterSnapshot.Provider, entry.AfterSnapshot.System)
-	gotSystem, _ := physical.SystemFingerprint(actualAfter.Provider, actualAfter.System)
+	wantSystem, _ := physical.HistoricalSystemFingerprint(entry.AfterSnapshot)
+	gotSystem, _ := physical.HistoricalSystemFingerprint(actualAfter)
 	if gotSystem != wantSystem {
 		return fmt.Errorf("sqlite initial migration final system fingerprint mismatch")
 	}

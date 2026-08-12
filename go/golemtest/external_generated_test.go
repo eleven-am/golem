@@ -27,6 +27,8 @@ require (
 `
 
 const externalApplicationGate = "TestExternalGeneratedApplicationPolicyKitMatchesCallerBehaviour"
+const externalQueryPlanApplicationGate = "TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted"
+const externalOptimisticConcurrencyApplicationGate = "TestExternalGeneratedApplicationOptimisticConcurrencyRaces"
 
 var externalDatabasePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
@@ -45,6 +47,19 @@ func externalProfiles() []externalProfile {
 }
 
 func TestPolicyTestKitExternalGeneratedApplicationCompilesAndRuns(t *testing.T) {
+	runExternalGeneratedApplication(t, externalApplicationGate)
+}
+
+func TestQueryPlanSQLiteAndPostgreSQLExternalGeneratedApplication(t *testing.T) {
+	runExternalGeneratedApplication(t, externalQueryPlanApplicationGate)
+}
+
+func TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication(t *testing.T) {
+	runExternalGeneratedApplication(t, externalOptimisticConcurrencyApplicationGate)
+}
+
+func runExternalGeneratedApplication(t *testing.T, gate string) {
+	t.Helper()
 	if testing.Short() {
 		t.Skip("external generated application build")
 	}
@@ -84,7 +99,7 @@ func TestPolicyTestKitExternalGeneratedApplicationCompilesAndRuns(t *testing.T) 
 		t.Fatalf("mandatory PostgreSQL evidence resolved %d of %d profiles", profiles, len(externalProfiles()))
 	}
 
-	runExternalCommand(t, consumer, environment, "go", "test", "./gate", "-race", "-count=1", "-run", "^"+externalApplicationGate+"$", "-v")
+	runExternalCommand(t, consumer, environment, "go", "test", "./gate", "-race", "-count=1", "-run", "^"+gate+"$", "-v")
 }
 
 func externalApplicationConsumer(t *testing.T, moduleRoot string) string {
@@ -95,7 +110,14 @@ func externalApplicationConsumer(t *testing.T, moduleRoot string) string {
 	}
 	consumer := filepath.Join(root, "consumer")
 	source := filepath.Join(packageDirectory(t), "testdata", "externalapp")
-	entries := []string{"tools.go", filepath.Join("policy", "schema.go"), filepath.Join("policy", "policies.go"), filepath.Join("gate", "gate_test.go")}
+	entries := []string{
+		"tools.go",
+		filepath.Join("policy", "schema.go"),
+		filepath.Join("policy", "policies.go"),
+		filepath.Join("gate", "gate_test.go"),
+		filepath.Join("gate", "queryplan_test.go"),
+		filepath.Join("gate", "optimistic_concurrency_test.go"),
+	}
 	for _, entry := range entries {
 		content, readErr := os.ReadFile(filepath.Join(source, entry))
 		if readErr != nil {

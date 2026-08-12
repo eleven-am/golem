@@ -1,8 +1,11 @@
 # Public policy testing kit implementation contract
 
-Status: **implemented**. All ten mandatory gates in §9 exist and pass,
-including the external generated-application gate. §13 records the boundaries
-found while implementing them.
+Status: **locally complete; integrated release evidence pending**. All ten
+mandatory gates in §9 exist, and every §10 executable mutant has been observed
+with a passing baseline and a failing semantic gate. The checked-social reviewed
+physical-v2 publication is complete, and its external generated-application gate
+passes under `-race` with SQLite and both mandatory PostgreSQL profiles. The
+repository-wide release evidence remains serialized with the later ABI freeze.
 
 Audience: the engineer implementing the next Go roadmap slice and the reviewer
 deciding whether that implementation is complete. This document is deliberately
@@ -235,20 +238,24 @@ Every slice/accessor returns a copy. Relation entries retain the target model
 even when the child tree is empty because relation presence and empty
 quantifiers still require the relation itself to be known.
 
-### 4.3 One narrow `golem` bridge
+### 4.3 Narrow generated-identity bridges
 
 `golem.Field[M]` is correctly sealed with unexported identity methods, so a
-separate public package cannot currently extract its stable ID. Add exactly one
-read-only helper in package `golem`:
+separate public package needs read-only access to both its stable ID and the
+generation that minted it:
 
 ```go
 func FieldIdentity[M any](field Field[M]) (FieldID, bool)
+func FieldGenerationDigest[M any](field Field[M]) (SchemaDigest, bool)
+func (descriptor ModelDescriptor[M]) GenerationDigest() SchemaDigest
 ```
 
-It returns `false` for nil/zero/malformed handles. It must not expose a
-constructor, reflection escape, name lookup, or any write/runtime capability.
-The public inventory test must prove this is the only new authority-bearing
-bridge needed by `golemtest`.
+The field helpers return `false` for nil, zero, malformed, or unstamped handles.
+They must not expose a constructor, reflection escape, name lookup, or any
+write/runtime capability. Final generated model, scalar-field, and relation
+handles carry the compiler's final generation digest. Provisional bootstrap
+handles remain unstamped and therefore cannot cross the `golemtest` authority
+boundary.
 
 ## 5. Required construction semantics
 
@@ -276,9 +283,11 @@ bridge needed by `golemtest`.
 5. recover a policy-factory panic at this public testing boundary, discard the
    panic payload, and return a closed error.
 
-`Model` must require the typed descriptor's complete metadata/model identity to
-match the descriptor registered in the same kit. It must reject a descriptor
-from another generated app even if its Go model type happens to match.
+`Model` must require the typed descriptor's generation digest and complete
+metadata/model identity to match the descriptor registered in the same kit.
+Every field and relation handle accepted by classification must carry that same
+digest. Byte-identical metadata from another generation is foreign and must be
+rejected even when its Go model type and stable IDs happen to match.
 
 ## 6. Semantic source of truth
 
@@ -349,7 +358,11 @@ func TestAlicePostPolicy(t *testing.T) {
     descriptors, err := social.GolemGeneratedApplicationDescriptors()
     if err != nil { t.Fatal(err) }
 
-    kit, err := golemtest.New(bindings, descriptors)
+    kit, err := golemtest.New(
+        bindings,
+        descriptors,
+        social.GolemGeneratedSchemaBundle(),
+    )
     if err != nil { t.Fatal(err) }
     policies, err := kit.ForActor(social.Actor{
         UserID: aliceID,
@@ -435,6 +448,13 @@ At minimum, the exact gates above must kill mutants that:
 A compile failure is invalid mutation evidence. Each mutant must compile, the
 baseline must pass, and the semantic gate must fail.
 
+The executable catalog is `internal/p8mutation/catalog_policy_testing_kit.go`.
+It contains separate generation mutants for model descriptors and field or
+relation handles, because killing one boundary does not prove the other. Run
+the catalog through `internal/cmd/p8mutation`; its structured result must be
+`KILLED` for every `POLICY_KIT_*` label before changing this document's status
+to implemented.
+
 ## 11. Documentation and compatibility work
 
 Implementation must add a short application-author section to `QUICKSTART.md`
@@ -442,8 +462,8 @@ and a complete policy-testing section to `PRODUCTION.md`. It must also update:
 
 - the public Go API inventory and digest;
 - the compatibility manifest/trust digest if that inventory is release-bound;
-- package documentation for `golemtest` and the single `golem.FieldIdentity`
-  bridge. Godoc on an exported symbol of a public package is documentation for
+- package documentation for `golemtest` and the narrow generated-identity
+  bridges in §4.3. Godoc on an exported symbol of a public package is documentation for
   an external consumer, not internal commentary: it is what `go doc` and
   pkg.go.dev render, and it is the only description an application author gets
   of an API they cannot read the source of. It is therefore required here, and
@@ -471,13 +491,14 @@ Found while implementing the construction spine. Each is a boundary of the
 current design rather than a defect, recorded so a later reader can tell it was
 decided rather than missed.
 
-**Cross-generation rejection in `Model` is metadata-based, not digest-based.**
-`golem.ModelDescriptor[M]` carries no generation stamp, so `Model` enforces kit
-membership plus full metadata equality against the registered model. This is
-sufficient while no two generations produce a byte-identical model, which the
-fixtures confirm, but it is not a hard guarantee. Making it one requires a
-generation stamp on `ModelDescriptor`, which changes a generated artifact and
-the public ABI.
+**Cross-generation rejection is generation-bound.** Final code generation
+stamps each model descriptor, scalar field, and relation handle with the same
+immutable schema digest used by application bindings, descriptors, and the
+schema bundle. `Model` and field classification require exact digest equality
+before comparing stable metadata. The older metadata-only path is covered by a
+byte-identical foreign-generation regression and by separate descriptor and
+field mutation records. Unstamped provisional or hand-built compatibility
+handles are deliberately refused at this boundary.
 
 **"Retain immutable copies only" (§5.4) is met by construction, not by
 copying.** `ApplicationDescriptors.Models()` clones. `ApplicationBindings`
@@ -534,10 +555,10 @@ instead of comparing two different questions. Making the kit agree
 unconditionally would mean either exporting the read planner's expander into the
 policy kernel or restating §4.1 in terms of it; both are contract changes.
 
-**`golem.FieldIdentity` is additive but not free.** §4.1's field-taking
-signatures are the only way to reach a `FieldID` from outside package `golem`,
-so §4.3's bridge became required in Phase 3. Adding it reclassified the public
-Go API corpus as `additive` and required regenerating
+**The generated-identity bridges are additive but not free.** §4.1's
+field-taking signatures are the only way to reach a `FieldID` and its generation
+from outside package `golem`, so §4.3's bridges are required. Adding them
+reclassifies the public Go API corpus as `additive` and requires regenerating
 `internal/compatibility/testdata/public-go-api.json`,
 `PublicGoAPICorpusSHA256`, `compatibility/manifest.json`, and
 `TrustedManifestSHA256`. The generated-ABI and GraphQL corpora are unchanged.

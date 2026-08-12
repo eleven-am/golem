@@ -142,7 +142,7 @@ func TestP8StaleArtifactAndCompatibilityManifestRejection(t *testing.T) {
 			compatibility.ReasonUntrustedDigest,
 		)
 
-		unsupported := bytes.Replace(encoded, []byte(`"formatVersion": 1`), []byte(`"formatVersion": 2`), 1)
+		unsupported := bytes.Replace(encoded, []byte(`"formatVersion": 2`), []byte(`"formatVersion": 3`), 1)
 		if bytes.Equal(unsupported, encoded) {
 			t.Fatal("checked compatibility manifest has no format version")
 		}
@@ -153,7 +153,10 @@ func TestP8StaleArtifactAndCompatibilityManifestRejection(t *testing.T) {
 			compatibility.ReasonUnsupportedFormat,
 		)
 
-		duplicate := bytes.Replace(encoded, []byte("{\n  \"formatVersion\": 1,"), []byte("{\n  \"formatVersion\": 1,\n  \"formatVersion\": 1,"), 1)
+		duplicate := bytes.Replace(encoded, []byte("{\n  \"formatVersion\": 2,"), []byte("{\n  \"formatVersion\": 2,\n  \"formatVersion\": 2,"), 1)
+		if bytes.Equal(duplicate, encoded) {
+			t.Fatal("duplicate-key hostile mutation did not change the active manifest bytes")
+		}
 		assertRejectedBeforeWork(
 			"duplicate self-digested artifact",
 			duplicate,

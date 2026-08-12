@@ -65,6 +65,21 @@ func (manager *Manager) RefreshAll(ctx context.Context) error {
 	if manager == nil || ctx == nil {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: context and manager are required")
 	}
+	return manager.refreshIndexes(ctx, manager.indexes)
+}
+
+func (manager *Manager) Refresh(ctx context.Context, model ir.ModelID, name string) error {
+	if manager == nil || ctx == nil || model == "" || name == "" {
+		return fmt.Errorf("P9_SEMANTIC_RUNTIME: context, manager, model, and index are required")
+	}
+	selected, ok := manager.index(model, name)
+	if !ok {
+		return fmt.Errorf("P9_SEMANTIC_SCHEMA: semantic index is absent")
+	}
+	return manager.refreshIndexes(ctx, []Index{selected})
+}
+
+func (manager *Manager) refreshIndexes(ctx context.Context, indexes []Index) error {
 	// Refresh serializes provider work, but arbitrary observer code must never be
 	// invoked while that lock is held. Buffer closed records and flush only after
 	// releasing it so observer re-entry cannot deadlock semantic refresh.
@@ -72,7 +87,7 @@ func (manager *Manager) RefreshAll(ctx context.Context) error {
 	err := func() error {
 		manager.mu.Lock()
 		defer manager.mu.Unlock()
-		for _, index := range manager.indexes {
+		for _, index := range indexes {
 			model := semanticObservationModel(index.Descriptor.ModelID)
 			refreshContext, refreshSpan := observeexec.Begin(ctx, deferred, golem.Provider(manager.provider), model, observe.KindSemantic, observe.OperationSemanticRefresh, observe.PhaseFinish)
 			refreshErr := manager.refresh(refreshContext, index, refreshSpan)
@@ -85,6 +100,15 @@ func (manager *Manager) RefreshAll(ctx context.Context) error {
 	}()
 	deferred.Flush()
 	return err
+}
+
+func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
+	for _, index := range manager.indexes {
+		if index.Descriptor.ModelID == model && index.Descriptor.Name == name {
+			return index, true
+		}
+	}
+	return Index{}, false
 }
 
 func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidateKeys []string, take int) (result []Rank, resultErr error) {
@@ -100,14 +124,8 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if len(candidateKeys) == 0 {
 		return []Rank{}, nil
 	}
-	var selected *Index
-	for position := range manager.indexes {
-		if manager.indexes[position].Descriptor.ModelID == model && manager.indexes[position].Descriptor.Name == name {
-			selected = &manager.indexes[position]
-			break
-		}
-	}
-	if selected == nil {
+	selected, ok := manager.index(model, name)
+	if !ok {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
 	}
 	input, err := embedding.NewInput("query", query)
@@ -144,7 +162,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 			arguments = append(arguments, key)
 		}
 		arguments = append(arguments, take)
-		statement := "SELECT record_key,vec_distance_cosine(embedding,?) AS distance FROM " + manager.hidden(*selected, "_vec") + " WHERE record_key IN (" + strings.Join(placeholders, ",") + ") ORDER BY distance,record_key LIMIT ?"
+		statement := "SELECT record_key,vec_distance_cosine(embedding,?) AS distance FROM " + manager.hidden(selected, "_vec") + " WHERE record_key IN (" + strings.Join(placeholders, ",") + ") ORDER BY distance,record_key LIMIT ?"
 		observeexec.RecordStatement(ctx)
 		rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
 		if err != nil {
@@ -155,7 +173,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 		return result, err
 	}
 	vector, _ := manager.vectorValue(vectors[0])
-	return manager.queryPostgreSQL(ctx, *selected, vector, unique, take)
+	return manager.queryPostgreSQL(ctx, selected, vector, unique, take)
 }
 
 func decodeRanks(rows *sqlx.Rows, capacity int) ([]Rank, error) {

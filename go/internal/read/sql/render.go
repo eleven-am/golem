@@ -67,6 +67,7 @@ type Statement struct {
 	columns    []Column
 	counts     []CountColumn
 	correlated []CorrelatedColumn
+	planMap    PlanMap
 	count      bool
 	reverse    bool
 }
@@ -80,6 +81,7 @@ func (statement Statement) CountColumns() []CountColumn {
 func (statement Statement) CorrelatedColumns() []CorrelatedColumn {
 	return append([]CorrelatedColumn(nil), statement.correlated...)
 }
+func (statement Statement) PlanMap() PlanMap    { return statement.planMap.clone() }
 func (statement Statement) IsCount() bool       { return statement.count }
 func (statement Statement) ReverseResult() bool { return statement.reverse }
 
@@ -97,10 +99,15 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 		return Statement{}, fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "physical model is absent", nil)
 	}
 	rootAlias := physical.PhysicalName("golem_r0")
-	fragment, err := policysql.Compile(policysql.Request{Condition: plan.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: rootAlias})
+	var planMap planMapBuilder
+	policyAliases := policysql.NewPolicyAliasAllocator()
+	readAliases := &readPlanAliasAllocator{}
+	planMap.add(string(rootAlias), plan.ModelID(), policyir.RelationID{}, nil, PlanAliasPhysicalAccess)
+	fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: plan.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: rootAlias}, policyAliases)
 	if err != nil {
 		return Statement{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "authorized predicate did not render", err)
 	}
+	planMap.mergePolicy(fragment.PolicyRelationAliases())
 	rootArgs := fragment.Args()
 	if plan.Operation() == readir.Count {
 		if err := enforceStatementParameterLimitWith(plan.ModelID(), rootArgs, plan.Limits().MaxStatementParameters); err != nil {
@@ -110,7 +117,7 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 		if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 			return Statement{}, err
 		}
-		return Statement{text: text, args: rootArgs, count: true}, nil
+		return Statement{text: text, args: rootArgs, planMap: planMap.freeze(), count: true}, nil
 	}
 
 	fields := plan.Fields()
@@ -131,13 +138,19 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 		selectRoot[index] = column + " AS " + dialect.Quote(physical.PhysicalName(alias))
 		columns[index] = Column{field: field.FieldID(), alias: alias, public: field.Public()}
 	}
-	renderedCounts, err := renderRelationCounts(plan, registry, provider, capabilities, dialect, rootAlias)
+	renderedCounts, err := renderRelationCounts(plan, registry, provider, capabilities, dialect, rootAlias, policyAliases, readAliases)
 	if err != nil {
 		return Statement{}, err
 	}
-	renderedRelations, err := renderCorrelatedRelations(plan, registry, provider, capabilities, dialect, rootAlias)
+	for _, count := range renderedCounts {
+		planMap.merge(count.planMap)
+	}
+	renderedRelations, err := renderCorrelatedRelations(plan, registry, provider, capabilities, dialect, rootAlias, policyAliases, readAliases)
 	if err != nil {
 		return Statement{}, err
+	}
+	for _, relation := range renderedRelations {
+		planMap.merge(relation.planMap)
 	}
 
 	orders := plan.OrderBy()
@@ -154,12 +167,13 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	rootWhere := fragment.SQL()
 	var cursorArgs []any
 	if cursor, present := plan.Cursor(); present {
-		cursorPrefix, cursorJoin, boundary, values, cursorErr := renderCursor(plan, cursor, registry, provider, capabilities, dialect, model, rootAlias, physicalColumns, orders, reverse)
+		cursorPrefix, cursorJoin, boundary, values, cursorPlanMap, cursorErr := renderCursor(plan, cursor, registry, provider, capabilities, dialect, model, rootAlias, physicalColumns, orders, reverse, policyir.RelationID{}, PlanAliasPhysicalAccess, policyAliases)
 		if cursorErr != nil {
 			return Statement{}, cursorErr
 		}
 		prefix = cursorPrefix
 		cursorArgs = values
+		planMap.merge(cursorPlanMap)
 		from += cursorJoin
 		rootWhere = "(" + rootWhere + ") AND (" + boundary + ")"
 	}
@@ -261,16 +275,17 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 		return Statement{}, err
 	}
-	return Statement{text: text, args: cloneArgs(args), columns: columns, counts: countColumns, correlated: correlatedColumns, reverse: reverse}, nil
+	return Statement{text: text, args: cloneArgs(args), columns: columns, counts: countColumns, correlated: correlatedColumns, planMap: planMap.freeze(), reverse: reverse}, nil
 }
 
 type renderedRelationCount struct {
 	expression string
 	column     CountColumn
 	args       []any
+	planMap    PlanMap
 }
 
-func renderRelationCounts(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, dialect policysql.Dialect, rootAlias physical.PhysicalName) ([]renderedRelationCount, error) {
+func renderRelationCounts(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, dialect policysql.Dialect, rootAlias physical.PhysicalName, policyAliases *policysql.PolicyAliasAllocator, readAliases *readPlanAliasAllocator) ([]renderedRelationCount, error) {
 	counts := plan.RelationCounts()
 	result := make([]renderedRelationCount, len(counts))
 	resolver := policysql.SchemaResolver(registry)
@@ -287,11 +302,14 @@ func renderRelationCounts(plan readplan.Plan, registry *schema.Registry, provide
 		if !ok {
 			return nil, fail(CodeSchema, plan.ModelID(), count.FieldID(), "relation count target model is absent", nil)
 		}
-		childAlias := physical.PhysicalName(fmt.Sprintf("golem_rc%d", index))
-		fragment, err := policysql.Compile(policysql.Request{Condition: child.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: childAlias})
+		childAlias := physical.PhysicalName(readAliases.relationCount())
+		var planMap planMapBuilder
+		planMap.add(string(childAlias), child.ModelID(), count.RelationID(), nil, PlanAliasCorrelatedRelation)
+		fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: child.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: childAlias}, policyAliases)
 		if err != nil {
 			return nil, fail(CodeRender, plan.ModelID(), count.FieldID(), "authorized relation-count predicate did not render", err)
 		}
+		planMap.mergePolicy(fragment.PolicyRelationAliases())
 		correlations := make([]string, len(endpoint.Correlation()))
 		for pairIndex, pair := range endpoint.Correlation() {
 			parentField, parentOK := resolver.Field(provider, plan.ModelID(), policyir.FieldID(pair.ParentFieldID()))
@@ -309,36 +327,40 @@ func renderRelationCounts(plan readplan.Plan, registry *schema.Registry, provide
 			expression: "(SELECT COUNT(*) FROM " + dialect.Table(childModel) + " AS " + dialect.Quote(childAlias) + " WHERE (" + fragment.SQL() + ") AND (" + strings.Join(correlations, " AND ") + ")) AS " + dialect.Quote(physical.PhysicalName(alias)),
 			column:     CountColumn{relation: count.RelationID(), alias: alias, occurrence: count.OccurrenceID()},
 			args:       fragment.Args(),
+			planMap:    planMap.freeze(),
 		}
 	}
 	return result, nil
 }
 
-func renderCursor(plan readplan.Plan, cursor readir.Cursor, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, dialect policysql.Dialect, model policysql.Model, rootAlias physical.PhysicalName, physicalColumns map[policyir.FieldID]string, orders []readir.Order, reverse bool) (string, string, string, []any, error) {
+func renderCursor(plan readplan.Plan, cursor readir.Cursor, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, dialect policysql.Dialect, model policysql.Model, rootAlias physical.PhysicalName, physicalColumns map[policyir.FieldID]string, orders []readir.Order, reverse bool, relation policyir.RelationID, role PlanAliasRole, policyAliases *policysql.PolicyAliasAllocator) (string, string, string, []any, PlanMap, error) {
 	if len(orders) == 0 {
-		return "", "", "", nil, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor requires a deterministic order", nil)
+		return "", "", "", nil, PlanMap{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor requires a deterministic order", nil)
 	}
 	condition, err := policyir.NewLogical(plan.ModelID(), policyir.LogicalAnd, []policyir.Condition{plan.CursorAnchor(), cursor.Predicate()})
 	if err != nil {
-		return "", "", "", nil, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor lookup predicate is invalid", err)
+		return "", "", "", nil, PlanMap{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor lookup predicate is invalid", err)
 	}
 	condition, err = normalize.Condition(condition)
 	if err != nil {
-		return "", "", "", nil, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor lookup predicate did not normalize", err)
+		return "", "", "", nil, PlanMap{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor lookup predicate did not normalize", err)
 	}
 	resolver := policysql.SchemaResolver(registry)
 	cursorTableAlias := physical.PhysicalName("golem_cp0")
-	fragment, err := policysql.Compile(policysql.Request{Condition: condition, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: cursorTableAlias})
+	var planMap planMapBuilder
+	planMap.add(string(cursorTableAlias), plan.ModelID(), relation, orderFieldIDs(orders), role)
+	fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: condition, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: cursorTableAlias}, policyAliases)
 	if err != nil {
-		return "", "", "", nil, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "authorized cursor lookup did not render", err)
+		return "", "", "", nil, PlanMap{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "authorized cursor lookup did not render", err)
 	}
+	planMap.mergePolicy(fragment.PolicyRelationAliases())
 	cteName := physical.PhysicalName("golem_cursor0")
 	selects := make([]string, len(orders))
 	cursorColumns := make([]string, len(orders))
 	for index, order := range orders {
 		resolved, ok := resolver.Field(provider, plan.ModelID(), order.FieldID())
 		if !ok {
-			return "", "", "", nil, fail(CodeSchema, plan.ModelID(), order.FieldID(), "cursor order field is absent", nil)
+			return "", "", "", nil, PlanMap{}, fail(CodeSchema, plan.ModelID(), order.FieldID(), "cursor order field is absent", nil)
 		}
 		alias := physical.PhysicalName(fmt.Sprintf("golem_o%d", index))
 		selects[index] = dialect.Quote(cursorTableAlias) + "." + dialect.Quote(resolved.Column) + " AS " + dialect.Quote(alias)
@@ -348,10 +370,18 @@ func renderCursor(plan readplan.Plan, cursor readir.Cursor, registry *schema.Reg
 	join := " CROSS JOIN " + dialect.Quote(cteName)
 	boundary := cursorBoundary(orders, physicalColumns, cursorColumns, provider, logicalTypesByField(plan.Fields()), reverse)
 	if boundary == "" {
-		return "", "", "", nil, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor boundary is empty", nil)
+		return "", "", "", nil, PlanMap{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "cursor boundary is empty", nil)
 	}
 	_ = rootAlias
-	return prefix, join, boundary, fragment.Args(), nil
+	return prefix, join, boundary, fragment.Args(), planMap.freeze(), nil
+}
+
+func orderFieldIDs(orders []readir.Order) []policyir.FieldID {
+	fields := make([]policyir.FieldID, len(orders))
+	for index, order := range orders {
+		fields[index] = order.FieldID()
+	}
+	return fields
 }
 
 func cursorBoundary(orders []readir.Order, roots map[policyir.FieldID]string, cursors []string, provider policyir.Provider, logicalTypes map[policyir.FieldID]compilerir.LogicalTypeIR, reverse bool) string {

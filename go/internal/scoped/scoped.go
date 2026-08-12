@@ -533,6 +533,7 @@ type Statement struct {
 	sql                   string
 	args                  []any
 	columns               []Column
+	planMap               ScopedPlanMap
 	guardColumns          bool
 	guardRowColumn        bool
 	maxContributionRows   int
@@ -549,6 +550,9 @@ type RenderOptions struct {
 func (statement Statement) SQL() string       { return statement.sql }
 func (statement Statement) Args() []any       { return append([]any(nil), statement.args...) }
 func (statement Statement) Columns() []Column { return append([]Column(nil), statement.columns...) }
+func (statement Statement) PlanMap() ScopedPlanMap {
+	return statement.planMap.clone()
+}
 func (statement Statement) ScanColumnCount() int {
 	if statement.guardColumns {
 		count := len(statement.columns) + 2
@@ -588,14 +592,34 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	}
 	resolver := policysql.SchemaResolver(registry)
 	aliases := map[uint32]physical.PhysicalName{0: "golem_s0"}
-	for _, join := range plan.request.Joins() {
-		aliases[join.Occurrence] = physical.PhysicalName(fmt.Sprintf("golem_s%d", join.Occurrence))
+	var planMap scopedPlanMapBuilder
+	rootOccurrence, present := plan.occurrences[0]
+	if !present {
+		return Statement{}, fmt.Errorf("P6_SCOPED_PLAN_MAP: root occurrence is absent")
 	}
+	if err := planMap.add(string(aliases[0]), policyir.ModelID(rootOccurrence.model), policyir.RelationID{}, scopedAuthorizedPlanFieldIDs(rootOccurrence.authorized), ScopedPlanAliasPhysicalAccess); err != nil {
+		return Statement{}, err
+	}
+	for _, join := range plan.request.Joins() {
+		alias := physical.PhysicalName(fmt.Sprintf("golem_s%d", join.Occurrence))
+		aliases[join.Occurrence] = alias
+		item, ok := plan.occurrences[join.Occurrence]
+		if !ok {
+			return Statement{}, fmt.Errorf("P6_SCOPED_PLAN_MAP: join occurrence is absent")
+		}
+		if err := planMap.add(string(alias), policyir.ModelID(item.model), policyir.RelationID(join.Relation), scopedAuthorizedPlanFieldIDs(item.authorized), ScopedPlanAliasPhysicalAccess); err != nil {
+			return Statement{}, err
+		}
+	}
+	policyAliases := policysql.NewPolicyAliasAllocator()
 	args := []any{}
 	compilePolicy := func(item occurrence, alias physical.PhysicalName) (string, error) {
-		fragment, compileErr := policysql.Compile(policysql.Request{Condition: item.authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias})
+		fragment, compileErr := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: item.authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias}, policyAliases)
 		if compileErr != nil {
 			return "", compileErr
+		}
+		if mergeErr := planMap.mergePolicy(fragment.PolicyRelationAliases()); mergeErr != nil {
+			return "", mergeErr
 		}
 		value := rebase(fragment.SQL(), len(args), provider)
 		args = append(args, fragment.Args()...)
@@ -607,7 +631,7 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	contributionProjectionNames := []string{}
 	contributionColumns := map[string]physical.PhysicalName{}
 	sourceExpression := func(value golem.FrozenScopedExpression) (string, error) {
-		return renderExpression(value, plan, registry, provider, external, dialect, capabilities, aliases, &args)
+		return renderExpression(value, plan, registry, provider, external, dialect, capabilities, aliases, &args, policyAliases, &planMap)
 	}
 	expression := func(value golem.FrozenScopedExpression) (string, error) {
 		if useContributionCTE && value.Kind != golem.ScopedExpressionCountAll {
@@ -615,7 +639,7 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 			aliasName, present := contributionColumns[baseKey]
 			field := plan.occurrences[value.Occurrence].fields[value.Field]
 			if !present {
-				column, descriptor, renderErr := renderScopedRawColumn(value, plan, registry, provider, external, dialect, capabilities, aliases, &args)
+				column, descriptor, renderErr := renderScopedRawColumn(value, plan, registry, provider, external, dialect, capabilities, aliases, &args, policyAliases, &planMap)
 				if renderErr != nil {
 					return "", renderErr
 				}
@@ -1054,7 +1078,7 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	if contributionCTE != "" && groupedCTE == "" && !guardRowColumn {
 		text = "WITH " + dialect.Quote(contributionAlias) + " AS MATERIALIZED (" + contributionCTE + ") " + text
 	}
-	return Statement{sql: text, args: args, columns: columns, guardColumns: guardColumns, guardRowColumn: guardRowColumn, maxContributionRows: limits.MaxContributionRows, maxIntermediateGroups: limits.MaxIntermediateGroups, maxResultRows: limits.MaxResultRows}, nil
+	return Statement{sql: text, args: args, columns: columns, planMap: planMap.freeze(), guardColumns: guardColumns, guardRowColumn: guardRowColumn, maxContributionRows: limits.MaxContributionRows, maxIntermediateGroups: limits.MaxIntermediateGroups, maxResultRows: limits.MaxResultRows}, nil
 }
 
 func scopedSelectionsAggregate(values []golem.FrozenScopedExpression) bool {
@@ -1080,18 +1104,18 @@ func scopedOrderOperand(value string, expression golem.FrozenScopedExpression, p
 	return "(" + value + " COLLATE " + sqliteprovider.AnalyticsNumericCollation + ")"
 }
 
-func renderExpression(value golem.FrozenScopedExpression, plan Plan, registry *schema.Registry, provider policyir.Provider, external golem.Provider, dialect policysql.Dialect, capabilities policysql.CapabilityProof, aliases map[uint32]physical.PhysicalName, args *[]any) (string, error) {
+func renderExpression(value golem.FrozenScopedExpression, plan Plan, registry *schema.Registry, provider policyir.Provider, external golem.Provider, dialect policysql.Dialect, capabilities policysql.CapabilityProof, aliases map[uint32]physical.PhysicalName, args *[]any, policyAliases *policysql.PolicyAliasAllocator, planMap *scopedPlanMapBuilder) (string, error) {
 	if value.Kind == golem.ScopedExpressionCountAll {
 		return "COUNT(*)", nil
 	}
-	column, field, err := renderScopedRawColumn(value, plan, registry, provider, external, dialect, capabilities, aliases, args)
+	column, field, err := renderScopedRawColumn(value, plan, registry, provider, external, dialect, capabilities, aliases, args, policyAliases, planMap)
 	if err != nil {
 		return "", err
 	}
 	return renderScopedExpressionFromColumn(value, field, column, provider)
 }
 
-func renderScopedRawColumn(value golem.FrozenScopedExpression, plan Plan, registry *schema.Registry, provider policyir.Provider, external golem.Provider, dialect policysql.Dialect, capabilities policysql.CapabilityProof, aliases map[uint32]physical.PhysicalName, args *[]any) (string, schema.Field, error) {
+func renderScopedRawColumn(value golem.FrozenScopedExpression, plan Plan, registry *schema.Registry, provider policyir.Provider, external golem.Provider, dialect policysql.Dialect, capabilities policysql.CapabilityProof, aliases map[uint32]physical.PhysicalName, args *[]any, policyAliases *policysql.PolicyAliasAllocator, planMap *scopedPlanMapBuilder) (string, schema.Field, error) {
 	item, present := plan.occurrences[value.Occurrence]
 	if !present {
 		return "", schema.Field{}, fmt.Errorf("P6_SCOPED_SQL_EXPRESSION: occurrence absent")
@@ -1108,8 +1132,11 @@ func renderScopedRawColumn(value golem.FrozenScopedExpression, plan Plan, regist
 	if classified, ok := item.classified[value.Field]; ok {
 		if mask, masked := classified.Mask(); masked && !classified.DischargedByConstraint() {
 			resolver := policysql.SchemaResolver(registry)
-			fragment, err := policysql.Compile(policysql.Request{Condition: mask, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: aliases[value.Occurrence]})
+			fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: mask, Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: aliases[value.Occurrence]}, policyAliases)
 			if err != nil {
+				return "", schema.Field{}, err
+			}
+			if err := planMap.mergePolicy(fragment.PolicyRelationAliases()); err != nil {
 				return "", schema.Field{}, err
 			}
 			maskSQL := rebase(fragment.SQL(), len(*args), provider)

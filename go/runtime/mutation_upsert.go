@@ -45,6 +45,10 @@ type rootUpsertPrepareRequest struct {
 	// The selected create branch clears it after BeforeCreate and replans, so a
 	// hook which omits a required field fails before executing SQL.
 	deferHookOwned bool
+	// concurrencyAbsent selects the expectation-aware create-only branch. The
+	// ordinary update renderer is intentionally not available for a versioned
+	// model; the authorized/private probes decide whether create may run.
+	concurrencyAbsent bool
 }
 
 func missingRuntimeOwnedFields(input golem.FrozenMutationInput, candidates []golem.FieldID) []golem.FieldID {
@@ -134,6 +138,11 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
+	if request.concurrencyAbsent {
+		if err := validateAbsentCreateMatchesTarget(boundTarget.Target(), boundCreate.Operations()); err != nil {
+			return preparedRuntimeUpsert{}, err
+		}
+	}
 	bounds, err := mutationir.NewStatementBounds(uint32(app.mutationLimits.statementParameters), uint32(app.mutationLimits.touchedRows))
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
@@ -175,9 +184,12 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
-	update, err := renderUpsertBranch(plan, kernel.UpdateBranch(), app)
-	if err != nil {
-		return preparedRuntimeUpsert{}, err
+	var update mutationsql.Program
+	if !request.concurrencyAbsent {
+		update, err = renderUpsertBranch(plan, kernel.UpdateBranch(), app)
+		if err != nil {
+			return preparedRuntimeUpsert{}, err
+		}
 	}
 	var createNested, updateNested *mutationnested.Result
 	var createNestedPolicy, updateNestedPolicy error
@@ -206,6 +218,23 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 		}
 	}
 	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, request: request}, nil
+}
+
+func validateAbsentCreateMatchesTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
+	created := make(map[policyir.FieldID]policyir.Value, len(operations))
+	for _, operation := range operations {
+		value, present := operation.Value()
+		if operation.Kind() == mutationir.ScalarSet && present {
+			created[operation.FieldID()] = value
+		}
+	}
+	for _, selector := range target.Values() {
+		value, present := created[selector.FieldID()]
+		if !present || !equalMutationPhysicalValue(value, selector.Value()) {
+			return fmt.Errorf("expect-absent create input does not match the guarded unique selector")
+		}
+	}
+	return nil
 }
 
 func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, app *App[P, A]) (mutationsql.Program, error) {
@@ -310,7 +339,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, backend.binding, func(context.Context) error { return nil }, func() error { return nil })), nil
 	}
 	if backend.binding.transaction != nil {
-		return backend.beginSavepoint(ctx, requirement)
+		return backend.beginSavepoint(ctx, requirement, ordinal)
 	}
 	switch backend.provider {
 	case policyir.ProviderPostgreSQL:
@@ -407,7 +436,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 	}
 }
 
-func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement mutationsql.TransactionRequirement) (mutationupsert.Attempt, error) {
+func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement mutationsql.TransactionRequirement, ordinal uint32) (mutationupsert.Attempt, error) {
 	if backend.provider == policyir.ProviderPostgreSQL && requirement != mutationsql.PostgreSQLTransaction || backend.provider == policyir.ProviderSQLite && requirement != mutationsql.SQLiteImmediateTransaction {
 		return nil, fmt.Errorf("upsert savepoint has the wrong provider requirement")
 	}
@@ -437,7 +466,7 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 		_ = scope.rollback()
 		return nil, err
 	}
-	return newSQLXUpsertAttempt(queryer, backend.binding,
+	return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, backend.binding,
 		func(ctx context.Context) error {
 			if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT "+quoted); err != nil {
 				return err
@@ -450,7 +479,7 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 			scopeErr := scope.rollback()
 			return errors.Join(rollbackErr, releaseErr, scopeErr)
 		},
-	), nil
+	)), nil
 }
 
 type sqlxUpsertAttempt struct {

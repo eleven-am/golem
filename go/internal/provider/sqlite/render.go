@@ -18,6 +18,33 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 	if err != nil {
 		return Script{}, err
 	}
+	return renderNormalizedInitial(normalized)
+}
+
+type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }
+
+func (*Provider) renderReviewedInitialSnapshot(reviewed reviewedInitialSnapshot) (Script, error) {
+	schema := reviewed.schema
+	var normalized physical.PhysicalSchema
+	var err error
+	if schema.Version == 1 && schema.CanonicalVersion == 1 {
+		normalized, err = physical.NormalizeHistoricalV1(schema)
+		if err == nil {
+			// Released v1 extensions were metadata only. Semantic-index storage
+			// DDL belongs to the current physical format and cannot be invented
+			// while replaying immutable v1 history.
+			normalized.Extensions = nil
+		}
+	} else {
+		normalized, err = physical.Normalize(schema)
+	}
+	if err != nil {
+		return Script{}, err
+	}
+	return renderNormalizedInitial(normalized)
+}
+
+func renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error) {
 	if normalized.Provider.Provider != ir.SQLite {
 		return Script{}, fmt.Errorf("sqlite render: physical provider is %s", normalized.Provider.Provider)
 	}

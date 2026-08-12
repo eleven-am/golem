@@ -17,6 +17,15 @@ import (
 
 var immutableAction = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+@[0-9a-f]{40}$`)
 
+var externalOptimisticConcurrencyWorkflowEnvironment = []struct {
+	key, value, missing string
+}{
+	{"GOLEM_P8_REQUIRE_POSTGRESQL", "1", "P8_WORKFLOW_REQUIRED_PROVIDER_MODE_MISSING"},
+	{"GOLEM_P8_REQUIRE_NATS", "1", "P8_WORKFLOW_REQUIRED_NATS_MODE_MISSING"},
+	{"GOLEM_TEST_POSTGRES_DSN", "postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable", "P8_WORKFLOW_POSTGRES_C_DSN_MISSING"},
+	{"GOLEM_TEST_POSTGRES_LINGUISTIC_DSN", "postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable", "P8_WORKFLOW_POSTGRES_LINGUISTIC_DSN_MISSING"},
+}
+
 type Violation struct {
 	Code string
 }
@@ -44,6 +53,12 @@ func AuditWorkflow(contents []byte) []Violation {
 	concurrency := mappingValue(root, "concurrency")
 	if concurrency == nil || scalar(mappingValue(concurrency, "cancel-in-progress")) != "true" || mappingValue(concurrency, "group") == nil {
 		violations = append(violations, Violation{Code: "P8_WORKFLOW_CONCURRENCY_MISSING"})
+	}
+	rootEnvironment := mappingValue(root, "env")
+	for _, required := range externalOptimisticConcurrencyWorkflowEnvironment {
+		if scalar(mappingValue(rootEnvironment, required.key)) != required.value {
+			violations = append(violations, Violation{Code: required.missing})
+		}
 	}
 	jobs := mappingValue(root, "jobs")
 	requiredJobs := []string{"workflow-audit", "toolchain-suite", "platform-compile", "provider-matrix", "hardening", "fuzz", "mutation-crash", "quality-docs-abi", "tag-release-candidate", "candidate-evidence"}
@@ -78,6 +93,40 @@ func AuditWorkflow(contents []byte) []Violation {
 		if !jobContains(fuzzJob, "GOMAXPROCS") || !jobContains(fuzzJob, "GOFLAGS") || !jobContains(fuzzJob, `-run '^FuzzP8PublicInputNeverDisclosesProtectedCanary$'`) {
 			violations = append(violations, Violation{Code: "P8_WORKFLOW_FUZZ_BOUNDARY_UNBOUNDED"})
 		}
+		mutationJob := mappingValue(jobs, "mutation-crash")
+		if scalar(mappingValue(mutationJob, "timeout-minutes")) != "360" ||
+			!jobHasMutationExecutionStep(mutationJob) ||
+			!jobContains(mutationJob, "go/p8-isolated-mutation.events.jsonl") {
+			violations = append(violations, Violation{Code: "P8_WORKFLOW_ISOLATED_MUTATION_BOUNDARY_MISSING"})
+		}
+		for _, jobName := range []string{"toolchain-suite", "hardening"} {
+			job := mappingValue(jobs, jobName)
+			for _, required := range externalOptimisticConcurrencyWorkflowEnvironment {
+				if jobDefinesEnvironment(job, required.key) {
+					violations = append(violations, Violation{Code: "P8_WORKFLOW_EXTERNAL_OC_ENV_OVERRIDE"})
+				}
+			}
+		}
+		for jobName, boundary := range map[string][3]string{
+			"toolchain-suite": {"Complete P0-P8 suite", "Retain structured toolchain evidence", "./..."},
+			"provider-matrix": {"SQLite and PostgreSQL C plus linguistic provider matrix", "Retain structured provider evidence", "./internal/p8oracle/..."},
+			"hardening":       {"Race and resource-leak matrix", "Retain structured hardening evidence", "./..."},
+		} {
+			job := mappingValue(jobs, jobName)
+			if !jobHasLiveNATSBoundary(job, boundary[0], boundary[1], boundary[2]) {
+				violations = append(violations, Violation{Code: "P8_WORKFLOW_LIVE_NATS_BOUNDARY_MISSING_" + strings.ToUpper(strings.ReplaceAll(jobName, "-", "_"))})
+			}
+			for _, identity := range externalNATSWorkflowIdentities {
+				if !jobContains(job, "-require-test "+identity) {
+					violations = append(violations, Violation{Code: "P8_WORKFLOW_LIVE_NATS_IDENTITY_MISSING_" + strings.ToUpper(strings.ReplaceAll(jobName, "-", "_"))})
+				}
+			}
+			for _, required := range externalOptimisticConcurrencyWorkflowEnvironment {
+				if jobDefinesEnvironment(job, required.key) {
+					violations = append(violations, Violation{Code: "P8_WORKFLOW_LIVE_NATS_ENV_OVERRIDE"})
+				}
+			}
+		}
 	}
 	walk(root, func(node *yaml.Node) {
 		if node.Kind == yaml.ScalarNode && strings.Contains(node.Value, "@") && strings.Contains(node.Value, "/") && strings.HasPrefix(node.Value, "actions/") && !immutableAction.MatchString(node.Value) {
@@ -106,7 +155,6 @@ func AuditWorkflow(contents []byte) []Violation {
 		{"P8_WORKFLOW_POSTGRES_17_MISSING", `postgres: "17"`},
 		{"P8_WORKFLOW_POSTGRES_C_MISSING", "POSTGRES_INITDB_ARGS: --locale=C"},
 		{"P8_WORKFLOW_POSTGRES_LINGUISTIC_MISSING", "POSTGRES_INITDB_ARGS: --locale=en_US.utf8"},
-		{"P8_WORKFLOW_REQUIRED_PROVIDER_MODE_MISSING", "GOLEM_P8_REQUIRE_POSTGRESQL: \"1\""},
 		{"P8_WORKFLOW_PGVECTOR_IMAGE_MISSING", "pgvector/pgvector@sha256:7ae6051efd0e60444282c27c7e141af07f322ce033300e727a49c3dd11075e38"},
 		{"P8_WORKFLOW_PGVECTOR_REQUIRED_MODE_MISSING", "GOLEM_REQUIRE_PGVECTOR: \"1\""},
 		{"P8_WORKFLOW_PGVECTOR_DSN_MISSING", "GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres@127.0.0.1:55434/golem?sslmode=disable"},
@@ -120,6 +168,8 @@ func AuditWorkflow(contents []byte) []Violation {
 		{"P8_WORKFLOW_SHUFFLE_MISSING", "-shuffle=on"},
 		{"P8_WORKFLOW_FUZZ_MISSING", "-fuzztime=60s"},
 		{"P8_WORKFLOW_MUTATION_MISSING", "./internal/cmd/p8mutation"},
+		{"P8_WORKFLOW_ISOLATED_MUTATION_MODE_MISSING", "GOLEM_RUN_P8_ISOLATED_MUTATIONS: \"1\""},
+		{"P8_WORKFLOW_ISOLATED_MUTATION_GATE_MISSING", "go test -json -count=1 -timeout=210m ./internal/p8mutation"},
 		{"P8_WORKFLOW_CRASH_MISSING", "./internal/cmd/p7crash"},
 		{"P8_WORKFLOW_FAILURE_COMPLETION_MISSING", "./internal/cmd/p8failure"},
 		{"P8_WORKFLOW_DOCS_COMPLETION_MISSING", "./internal/cmd/p8docs"},
@@ -189,6 +239,95 @@ func jobContains(job *yaml.Node, value string) bool {
 	return found
 }
 
+func jobDefinesEnvironment(job *yaml.Node, key string) bool {
+	found := false
+	walk(job, func(node *yaml.Node) {
+		if node.Kind != yaml.MappingNode {
+			return
+		}
+		environment := mappingValue(node, "env")
+		if environment != nil && mappingValue(environment, key) != nil {
+			found = true
+		}
+	})
+	return found
+}
+
+func jobHasEnvironmentValue(job *yaml.Node, key, value string) bool {
+	found := false
+	walk(job, func(node *yaml.Node) {
+		if node.Kind == yaml.MappingNode && scalar(mappingValue(node, key)) == value {
+			found = true
+		}
+	})
+	return found
+}
+
+func jobHasMutationExecutionStep(job *yaml.Node) bool {
+	steps := mappingValue(job, "steps")
+	if steps == nil || steps.Kind != yaml.SequenceNode {
+		return false
+	}
+	found := false
+	for _, step := range steps.Content {
+		command := scalar(mappingValue(step, "run"))
+		if strings.Contains(command, "go test -json -count=1 -timeout=210m ./internal/p8mutation") &&
+			scalar(mappingValue(mappingValue(step, "env"), "GOLEM_RUN_P8_ISOLATED_MUTATIONS")) == "1" {
+			if found {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+const liveNATSImage = "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+const liveNATSRepoDigest = "nats@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+const liveNATSContainerName = "golem-p8-order7-nats"
+const liveNATSAbsenceCheck = "if docker container inspect golem-p8-order7-nats >/dev/null 2>&1; then\n  exit 1\nfi"
+const liveNATSAbsenceWorkflow = "if docker container inspect golem-p8-order7-nats >/dev/null 2>&1; then\n            exit 1\n          fi"
+
+func jobHasLiveNATSBoundary(job *yaml.Node, firstEvidence, lastEvidence, executionFragment string) bool {
+	if job == nil {
+		return false
+	}
+	steps := mappingValue(job, "steps")
+	if steps == nil || steps.Kind != yaml.SequenceNode {
+		return false
+	}
+	pull, first, last, cleanup := -1, -1, -1, -1
+	for index, step := range steps.Content {
+		name := scalar(mappingValue(step, "name"))
+		switch name {
+		case "Materialize pinned Core NATS image":
+			command := scalar(mappingValue(step, "run"))
+			absence := strings.Index(command, liveNATSAbsenceCheck)
+			imagePull := strings.Index(command, "docker image pull "+liveNATSImage)
+			digestCheck := strings.Index(command, "grep -Fx '"+liveNATSRepoDigest+"'")
+			if imagePull >= 0 && digestCheck > imagePull && absence > digestCheck {
+				pull = index
+			}
+		case firstEvidence:
+			if strings.Contains(scalar(mappingValue(step, "run")), executionFragment) {
+				first = index
+			}
+		case lastEvidence:
+			last = index
+		case "Clean test-owned Core NATS container":
+			command := scalar(mappingValue(step, "run"))
+			inspect := strings.Index(command, "docker container inspect "+liveNATSContainerName)
+			owner := strings.Index(command, `test -n "${owner}"`)
+			image := strings.Index(command, `test "${image}" = "`+liveNATSImage+`"`)
+			remove := strings.Index(command, "docker container rm --force "+liveNATSContainerName)
+			if scalar(mappingValue(step, "if")) == "always()" && strings.Contains(command, `{{index .Config.Labels "golem.p8.owner"}}|{{.Config.Image}}`) && inspect >= 0 && owner > inspect && image > owner && remove > image {
+				cleanup = index
+			}
+		}
+	}
+	return pull >= 0 && pull < first && first <= last && last < cleanup
+}
+
 func sequenceScalars(node *yaml.Node) []string {
 	if node == nil || node.Kind != yaml.SequenceNode {
 		return nil
@@ -237,19 +376,55 @@ type RequiredTestInventory struct {
 	Sets    map[string]RequiredTestSet `json:"sets"`
 }
 
+const externalOptimisticConcurrencyWorkflowIdentity = "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication"
+const executableMigrationGuideWorkflowIdentity = "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide"
+const externalNATSOutageCWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c"
+const externalNATSOutageLinguisticWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic"
+const externalNATSDuplicateCWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c"
+const externalNATSDuplicateLinguisticWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-linguistic"
+
+var externalNATSWorkflowIdentities = []string{
+	externalNATSOutageCWorkflowIdentity,
+	externalNATSOutageLinguisticWorkflowIdentity,
+	externalNATSDuplicateCWorkflowIdentity,
+	externalNATSDuplicateLinguisticWorkflowIdentity,
+}
+
 var canonicalRequiredTests = map[string][]string{
 	"workflow-audit": {"github.com/eleven-am/golem/go/internal/workflowaudit:TestP8WorkflowContainsRequiredHostedGates"},
 	"toolchain": {
 		"github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized",
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c",
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
+		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/c",
+		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
+		externalOptimisticConcurrencyWorkflowIdentity,
+		executableMigrationGuideWorkflowIdentity,
+		externalNATSOutageCWorkflowIdentity,
+		externalNATSOutageLinguisticWorkflowIdentity,
+		externalNATSDuplicateCWorkflowIdentity,
+		externalNATSDuplicateLinguisticWorkflowIdentity,
 	},
 	"provider": {
 		"github.com/eleven-am/golem/go/internal/provider/sqlite:TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized",
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/c",
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
+		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/c",
+		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
+		externalNATSOutageCWorkflowIdentity,
+		externalNATSOutageLinguisticWorkflowIdentity,
+		externalNATSDuplicateCWorkflowIdentity,
+		externalNATSDuplicateLinguisticWorkflowIdentity,
 	},
-	"hardening":        {"github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds"},
+	"hardening": {
+		"github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds",
+		externalOptimisticConcurrencyWorkflowIdentity,
+		executableMigrationGuideWorkflowIdentity,
+		externalNATSOutageCWorkflowIdentity,
+		externalNATSOutageLinguisticWorkflowIdentity,
+		externalNATSDuplicateCWorkflowIdentity,
+		externalNATSDuplicateLinguisticWorkflowIdentity,
+	},
 	"fuzz-disclosure":  {"github.com/eleven-am/golem/go/internal/p8oracle/disclosure:FuzzP8PublicInputNeverDisclosesProtectedCanary"},
 	"fuzz-diagnostics": {"github.com/eleven-am/golem/go/cmd/golem:FuzzP8DiagnosticEncodingIsClosedAndBounded"},
 	"mutation-crash": {

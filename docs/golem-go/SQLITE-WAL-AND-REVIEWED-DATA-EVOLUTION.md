@@ -1,6 +1,9 @@
 # SQLite WAL and reviewed PostgreSQL data evolution
 
-Status: **accepted implementation contract; not shipped**.
+Status: **implemented locally through public SQLite checkpoint, frozen-v1
+reviewed evolution, native PostgreSQL widening, reviewed backfill attach/apply,
+report-before-publication, and checked-social reviewed physical-v2 publication;
+integrated release evidence pending**.
 
 Audience: the engineer implementing this database-hardening slice and the
 reviewer deciding whether it is complete. This file covers exactly three
@@ -143,8 +146,10 @@ The supported backup contract is:
 
 1. stop application writes and the event/semantic workers;
 2. close the Golem provider handle;
-3. perform a bounded `PRAGMA wal_checkpoint(TRUNCATE)` through an owned
-   maintenance connection, requiring zero busy frames;
+3. call `provider/sqlite.CheckpointForBackup(ctx, database)` with that exact
+   closed verified handle; the operation performs a bounded
+   `PRAGMA wal_checkpoint(TRUNCATE)` through one owned maintenance connection
+   and requires zero busy frames;
 4. close that connection; and
 5. copy the database only after verifying no non-empty `-wal` state remains,
    or use SQLite's supported backup API.
@@ -153,6 +158,14 @@ A failed/busy checkpoint must fail the backup operation. It must not delete or
 truncate sidecars directly. Open/Close should not run an unbounded checkpoint
 behind the application's back; explicit recovery/backup code owns the strict
 checkpoint boundary.
+
+The supported checkpoint is intentionally handle-based rather than DSN-based.
+The sealed handle retains the verified SQLite identity after close; callers
+cannot nominate a different file or use `UnsafeSQLX` as a parallel maintenance
+path. A nil, open, non-SQLite, unverified, or busy handle fails with the stable
+redacted provider maintenance code. The handle and maintenance connection are
+both process-local, so this remains a single-node contract: operators must stop
+other processes before beginning the checkpoint.
 
 ## 3. Safe PostgreSQL type widening
 
@@ -213,7 +226,13 @@ For an allowlisted widening, the PostgreSQL plan must:
 1. retain the same stable model and field identities;
 2. emit one `AlterColumnType` operation with exact before/after typed metadata;
 3. assign the conservative risk and require matching reviewed approval;
-4. drop dependent foreign keys/indexes only where PostgreSQL requires it;
+4. detach dependent foreign keys/indexes and stored generated columns only
+   where PostgreSQL requires it; a generated column is recreated from its
+   exact typed after-definition, its dependent objects are dropped before it
+   and restored after it, and derived-value recreation is `RiskRewrite` rather
+   than owner-row data loss; PostgreSQL generated expressions may reference
+   ordinary source columns only, so generated-to-generated dependencies fail
+   closed during physical validation rather than entering this graph;
 5. execute the typed `ALTER TABLE ... ALTER COLUMN ... TYPE ...` using quoted
    identifiers and an explicit value-preserving `USING` cast when required;
 6. restore dependencies in deterministic order;
@@ -397,6 +416,9 @@ no connection/goroutine survives close.
 The value-preservation corpus must cover every allowlisted edge and old-domain
 boundary values, including negative integers, infinities/NaN where supported,
 maximum-length text, decimal extremes, and maximum old temporal precision.
+At least one widened source must feed a stored generated column with its own
+dependent index/constraint so the typed detach/recreate DAG is exercised on
+the minimum PostgreSQL version and both collation profiles.
 
 ### 5.3 Reviewed backfills
 

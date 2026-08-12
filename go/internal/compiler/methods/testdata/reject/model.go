@@ -16,6 +16,10 @@ func hiddenHelper() g.ModelOption[User] {
 
 func (User) GolemModel() g.ModelSpec[User] {
 	return g.DefineModel(
+		g.OptimisticConcurrency(g.GeneratedOrderedField[User, int64](g.FieldID{})),
+		g.OptimisticConcurrency(Users.ID),
+		g.OptimisticConcurrency(Users.ID),
+		g.ForProvider(g.PostgreSQL, g.OptimisticConcurrency(Users.ID)),
 		hiddenHelper(),
 		g.ForProvider(g.Provider("postgresql"),
 			g.Index[User]("idx_users_id").Keys(g.IndexColumn(Users.ID)),

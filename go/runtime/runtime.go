@@ -296,6 +296,15 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 	if err != nil {
 		return events.Limits{}, err
 	}
+	if config.EventTransport != nil {
+		capabilities, topologyErr := validateEventTransportTopology(providerIdentity, config.EventTransport)
+		if topologyErr != nil {
+			return events.Limits{}, topologyErr
+		}
+		if err := validateEventTransportPayloadLimit(capabilities, config.EventTransport, limits.MaxEncodedEventBytes); err != nil {
+			return events.Limits{}, err
+		}
+	}
 	subscribed := make(map[golem.ModelID]bool)
 	for _, descriptor := range config.Descriptors.Models() {
 		model, ok := registry.Model(descriptor.ModelID())
@@ -337,19 +346,45 @@ func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.
 	if config.ReportEventOperator == nil {
 		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: ReportEventOperator is required for subscription-enabled models")
 	}
-	capabilities := events.CapabilitiesOf(config.EventTransport)
-	if _, err := events.NewTransportCapabilities(capabilities.Identity(), capabilities.Scope(), capabilities.Durable()); err != nil {
-		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event transport capabilities are invalid")
-	}
-	if capabilities.Scope() == events.TransportScopeCrossProcess {
-		if _, ok := config.EventTransport.(events.RuntimeBindableTransport); !ok {
-			return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport requires runtime binding")
-		}
+	if !events.AvailabilityOf(config.EventTransport) {
+		return events.Limits{}, fmt.Errorf("GOLEM_EVENT_CONFIG: required event transport is unavailable")
 	}
 	if _, err := events.ValidateCDCAdapters(providerIdentity, config.CDCAdapters); err != nil {
 		return events.Limits{}, err
 	}
 	return limits, nil
+}
+
+func validateEventTransportPayloadLimit(capabilities events.TransportCapabilities, transport events.EventTransport, required int) error {
+	if capabilities.Scope() != events.TransportScopeCrossProcess {
+		return nil
+	}
+	limit, ok := events.PayloadLimitOf(transport)
+	if !ok {
+		return fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport must report a positive encoded payload limit")
+	}
+	if limit < required {
+		return fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport payload limit is below MaxEncodedEventBytes")
+	}
+	return nil
+}
+
+func validateEventTransportTopology(providerIdentity golem.Provider, transport events.EventTransport) (events.TransportCapabilities, error) {
+	capabilities := events.CapabilitiesOf(transport)
+	validated, err := events.NewTransportCapabilities(capabilities.Identity(), capabilities.Scope(), capabilities.Durable())
+	if err != nil {
+		return events.TransportCapabilities{}, fmt.Errorf("GOLEM_EVENT_CONFIG: event transport capabilities are invalid")
+	}
+	if validated.Scope() != events.TransportScopeCrossProcess {
+		return validated, nil
+	}
+	if providerIdentity != golem.PostgreSQL {
+		return events.TransportCapabilities{}, fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport requires PostgreSQL")
+	}
+	if _, ok := transport.(events.RuntimeBindableTransport); !ok {
+		return events.TransportCapabilities{}, fmt.Errorf("GOLEM_EVENT_CONFIG: cross-process event transport requires runtime binding")
+	}
+	return validated, nil
 }
 
 func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], handler func(context.Context, golem.AfterCommitFailure)) error {
@@ -522,25 +557,16 @@ func CallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], desc
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindMany)
 	defer func() { finishObservation(observation, resultErr) }()
-	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	hookRequest := golem.RuntimeFindManyHookRequest(options)
-	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
-		return nil, err
-	}
-	options = hookRequest.Options()
-	frozen, err := golem.FreezeFindMany(descriptor, options...)
+	prepared, err := prepareCallerFindMany(ctx, caller, descriptor, options)
 	if err != nil {
 		return nil, err
 	}
-	prepared, err := caller.Prepare(frozen)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := executeRows(ctx, caller.app, prepared, descriptor)
+	rows, err := executePreparedRows(ctx, caller.app, prepared, descriptor)
 	if err != nil {
 		return nil, err
 	}
 	result := golem.RuntimeFindManyHookResult(rows)
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookAfter, result); err != nil {
 		return nil, err
 	}
@@ -567,21 +593,11 @@ func CallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], des
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindFirst)
 	defer func() { finishObservation(observation, resultErr) }()
-	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	hookRequest := golem.RuntimeFindFirstHookRequest(options)
-	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookBefore, hookRequest); err != nil {
-		return golem.Row[M]{}, false, err
-	}
-	options = hookRequest.Options()
-	frozen, err := golem.FreezeFindFirst(descriptor, options...)
+	prepared, err := prepareCallerFindFirst(ctx, caller, descriptor, options)
 	if err != nil {
 		return golem.Row[M]{}, false, err
 	}
-	prepared, err := caller.Prepare(frozen)
-	if err != nil {
-		return golem.Row[M]{}, false, err
-	}
-	rows, err := executeRows(ctx, caller.app, prepared, descriptor)
+	rows, err := executePreparedRows(ctx, caller.app, prepared, descriptor)
 	if err != nil {
 		return golem.Row[M]{}, false, err
 	}
@@ -590,6 +606,7 @@ func CallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], des
 	if found {
 		row = rows[0]
 	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	result := golem.RuntimeFindFirstHookResult(row, found)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookAfter, result); err != nil {
 		return golem.Row[M]{}, false, err
@@ -621,31 +638,22 @@ func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
-	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	hookRequest := golem.RuntimeFindOneHookRequest(selector, options)
-	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookBefore, hookRequest); err != nil {
-		return golem.Row[M]{}, err
-	}
-	selector, options = hookRequest.Selector(), hookRequest.Options()
-	frozen, err := golem.FreezeFindUnique(descriptor, selector, options...)
+	prepared, err := prepareCallerFindUnique(ctx, caller, descriptor, selector, options)
 	if err != nil {
 		return golem.Row[M]{}, err
 	}
-	prepared, err := caller.Prepare(frozen)
-	if err != nil {
-		return golem.Row[M]{}, err
-	}
-	rows, err := executeRows(ctx, caller.app, prepared, descriptor)
+	rows, err := executePreparedRows(ctx, caller.app, prepared, descriptor)
 	if err != nil {
 		return golem.Row[M]{}, err
 	}
 	if len(rows) == 0 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", frozen.ModelID(), golem.FieldID{}, "record not found", nil)
+		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "record not found", nil)
 	}
 	if len(rows) != 1 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", frozen.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
+		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
 	}
 	row := rows[0]
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	result := golem.RuntimeFindOneHookResult(row)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, result); err != nil {
 		return golem.Row[M]{}, err
@@ -683,15 +691,11 @@ func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descrip
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadCount)
 	defer func() { finishObservation(observation, resultErr) }()
-	frozen, err := golem.FreezeCount(descriptor, options...)
+	prepared, err := prepareCallerCount(caller, descriptor, options)
 	if err != nil {
 		return 0, err
 	}
-	prepared, err := caller.Prepare(frozen)
-	if err != nil {
-		return 0, err
-	}
-	return executeCount(ctx, caller.app, prepared)
+	return executePreparedCount(ctx, caller.app, prepared)
 }
 
 func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {
@@ -706,6 +710,95 @@ func SystemCount[P, A, M any](ctx context.Context, system System[P, A], descript
 		return 0, err
 	}
 	return executeCount(ctx, system.app, prepared)
+}
+
+// preparedReadStatement is the single authorized render boundary shared by a
+// production Caller read and its explicit query-plan explanation. It retains
+// typed authority and the exact rendered statement, but is never public.
+type preparedReadStatement struct {
+	prepared  PreparedRead
+	plan      readplan.Plan
+	statement readsql.Statement
+}
+
+func prepareCallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
+	if _, err := golem.FreezeFindMany(descriptor, options...); err != nil {
+		return preparedReadStatement{}, err
+	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	hookRequest := golem.RuntimeFindManyHookRequest(options)
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
+		return preparedReadStatement{}, err
+	}
+	frozen, err := golem.FreezeFindMany(descriptor, hookRequest.Options()...)
+	if err != nil {
+		return preparedReadStatement{}, err
+	}
+	return prepareCallerReadStatement(caller, frozen)
+}
+
+func prepareCallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
+	if _, err := golem.FreezeFindFirst(descriptor, options...); err != nil {
+		return preparedReadStatement{}, err
+	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	hookRequest := golem.RuntimeFindFirstHookRequest(options)
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindFirst, golem.HookFindFirst, golem.HookBefore, hookRequest); err != nil {
+		return preparedReadStatement{}, err
+	}
+	frozen, err := golem.FreezeFindFirst(descriptor, hookRequest.Options()...)
+	if err != nil {
+		return preparedReadStatement{}, err
+	}
+	return prepareCallerReadStatement(caller, frozen)
+}
+
+func prepareCallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
+	if _, err := golem.FreezeFindUnique(descriptor, selector, options...); err != nil {
+		return preparedReadStatement{}, err
+	}
+	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
+	hookRequest := golem.RuntimeFindOneHookRequest(selector, options)
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookBefore, hookRequest); err != nil {
+		return preparedReadStatement{}, err
+	}
+	frozen, err := golem.FreezeFindUnique(descriptor, hookRequest.Selector(), hookRequest.Options()...)
+	if err != nil {
+		return preparedReadStatement{}, err
+	}
+	return prepareCallerReadStatement(caller, frozen)
+}
+
+func prepareCallerCount[P, A, M any](caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
+	frozen, err := golem.FreezeCount(descriptor, options...)
+	if err != nil {
+		return preparedReadStatement{}, err
+	}
+	return prepareCallerReadStatement(caller, frozen)
+}
+
+func prepareCallerReadStatement[P, A any](caller *Caller[P, A], frozen golem.FrozenReadRequest) (preparedReadStatement, error) {
+	prepared, err := caller.Prepare(frozen)
+	if err != nil {
+		return preparedReadStatement{}, err
+	}
+	return prepareReadStatement(caller.app, prepared)
+}
+
+func prepareReadStatement[P, A any](app *App[P, A], prepared PreparedRead) (preparedReadStatement, error) {
+	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	if err != nil {
+		return preparedReadStatement{}, publicPlanError(prepared, err)
+	}
+	statement, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
+	if err != nil {
+		message := "read plan could not be rendered"
+		if prepared.Operation() == golem.ReadCount {
+			message = "count plan could not be rendered"
+		}
+		return preparedReadStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, message, err)
+	}
+	return preparedReadStatement{prepared: prepared, plan: planned, statement: statement}, nil
 }
 
 func invokeReadHook[A any](ctx context.Context, bindings golem.ApplicationBindings[A], model golem.ModelID, readOperation golem.ReadOperation, hookOperation golem.HookOperation, phase golem.HookPhase, payload any) error {
@@ -728,11 +821,15 @@ func executeRows[P, A, M any](ctx context.Context, app *App[P, A], prepared Prep
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	statement, err := prepareReadStatement(app, prepared)
 	if err != nil {
-		return nil, publicPlanError(prepared, err)
+		return nil, err
 	}
-	executed, err := executePlan(ctx, app, prepared.executor, prepared.Operation(), planned)
+	return executePreparedRows(ctx, app, statement, descriptor)
+}
+
+func executePreparedRows[P, A, M any](ctx context.Context, app *App[P, A], prepared preparedReadStatement, descriptor golem.ModelDescriptor[M]) (result []golem.Row[M], resultErr error) {
+	executed, err := executeRenderedPlan(ctx, app, prepared.prepared.executor, prepared.prepared.Operation(), prepared.plan, prepared.statement)
 	if err != nil {
 		return nil, err
 	}
@@ -774,6 +871,10 @@ func executePlan[P, A any](ctx context.Context, app *App[P, A], executor *execut
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read plan could not be rendered", err)
 	}
+	return executeRenderedPlan(ctx, app, executor, operation, planned, statement)
+}
+
+func executeRenderedPlan[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, operation golem.ReadOperation, planned readplan.Plan, statement readsql.Statement) ([]executedRow, error) {
 	decoder, err := readdecode.New(planned, app.registry, app.provider)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read decoder could not be built", err)
@@ -1134,20 +1235,20 @@ func relationCorrelation[P, A any](app *App[P, A], child readplan.Plan, endpoint
 }
 
 func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared PreparedRead) (result int64, resultErr error) {
-	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
+	statement, err := prepareReadStatement(app, prepared)
 	if err != nil {
-		return 0, publicPlanError(prepared, err)
+		return 0, err
 	}
-	statement, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
+	return executePreparedCount(ctx, app, statement)
+}
+
+func executePreparedCount[P, A any](ctx context.Context, app *App[P, A], prepared preparedReadStatement) (result int64, resultErr error) {
+	queryer, err := prepared.prepared.executor.queryerFor(app.database)
 	if err != nil {
-		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count plan could not be rendered", err)
+		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
 	}
-	queryer, err := prepared.executor.queryerFor(app.database)
-	if err != nil {
-		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
-	}
-	if err := sqlx.GetContext(ctx, queryer, &result, statement.SQL(), statement.Args()...); err != nil {
-		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
+	if err := sqlx.GetContext(ctx, queryer, &result, prepared.statement.SQL(), prepared.statement.Args()...); err != nil {
+		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution failed", err)
 	}
 	return result, nil
 }

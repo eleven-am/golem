@@ -24,17 +24,96 @@ func CanonicalEncode(schema PhysicalSchema) ([]byte, error) {
 // the owning whole schema because a detached FK or expression cannot prove
 // cross-object references independently.
 func CanonicalFragment(value any) ([]byte, error) {
+	return CanonicalFragmentVersion(value, CanonicalFormatVersion)
+}
+
+// CanonicalFragmentVersion exists solely so immutable v1 and v2 migration
+// histories can reproduce their original operation digests. New authoring
+// must call CanonicalFragment.
+func CanonicalFragmentVersion(value any, version uint32) ([]byte, error) {
 	if value == nil {
 		return nil, fmt.Errorf("physical canonical fragment: nil root")
 	}
-	return canonicalValue(value)
+	if version == 2 && CanonicalFormatVersion != 2 {
+		return HistoricalV2CanonicalFragment(value)
+	}
+	if version != CanonicalFormatVersion && version != 1 {
+		return nil, fmt.Errorf("physical canonical fragment version %d is unsupported", version)
+	}
+	return canonicalValueVersion(value, version)
+}
+
+// HistoricalV1CanonicalFragment reproduces the released v1 fragment encoding
+// for the retained v1 migration planner only.
+func HistoricalV1CanonicalFragment(value any) ([]byte, error) {
+	if value == nil {
+		return nil, fmt.Errorf("historical physical v1 canonical fragment: nil root")
+	}
+	return canonicalValueVersion(value, 1)
+}
+
+// HistoricalV2CanonicalFragment reproduces the immutable v2 fragment algebra.
+func HistoricalV2CanonicalFragment(value any) ([]byte, error) {
+	if value == nil {
+		return nil, fmt.Errorf("historical physical v2 canonical fragment: nil root")
+	}
+	if err := validateHistoricalV2SchemaShape(); err != nil {
+		return nil, err
+	}
+	if err := validateHistoricalV2ClosedValues(reflect.ValueOf(value)); err != nil {
+		return nil, fmt.Errorf("historical physical v2 canonical fragment: %w", err)
+	}
+	return canonicalValueVersion(value, 2)
+}
+
+// CanonicalEncodeHistoricalV2 validates, normalizes, and encodes only a
+// frozen v2 physical snapshot. Current-only fields must be zero.
+func CanonicalEncodeHistoricalV2(schema PhysicalSchema) ([]byte, error) {
+	normalized, err := NormalizeHistoricalV2(schema)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalValueVersion(normalized, 2)
+}
+
+// HistoricalV3CanonicalFragment reproduces the released v3 fragment algebra
+// through the frozen v3 projection even while v3 is also the current format.
+func HistoricalV3CanonicalFragment(value any) ([]byte, error) {
+	if value == nil {
+		return nil, fmt.Errorf("historical physical v3 canonical fragment: nil root")
+	}
+	if err := validateHistoricalV3SchemaShape(); err != nil {
+		return nil, err
+	}
+	if err := validateHistoricalV3ClosedValues(reflect.ValueOf(value)); err != nil {
+		return nil, fmt.Errorf("historical physical v3 canonical fragment: %w", err)
+	}
+	return canonicalHistoricalValueVersion(value, 3, historicalV3StructFields)
+}
+
+// CanonicalEncodeHistoricalV3 validates, normalizes, and encodes only the
+// independently frozen v3 physical snapshot.
+func CanonicalEncodeHistoricalV3(schema PhysicalSchema) ([]byte, error) {
+	normalized, err := NormalizeHistoricalV3(schema)
+	if err != nil {
+		return nil, err
+	}
+	return canonicalHistoricalValueVersion(normalized, 3, historicalV3StructFields)
 }
 
 func canonicalValue(value any) ([]byte, error) {
+	return canonicalValueVersion(value, CanonicalFormatVersion)
+}
+
+func canonicalValueVersion(value any, version uint32) ([]byte, error) {
+	return canonicalHistoricalValueVersion(value, version, nil)
+}
+
+func canonicalHistoricalValueVersion(value any, version uint32, projection map[string][]string) ([]byte, error) {
 	var buffer bytes.Buffer
 	writeBytes(&buffer, canonicalMagic)
-	writeUint(&buffer, uint64(CanonicalFormatVersion))
-	encoder := binaryEncoder{buffer: &buffer}
+	writeUint(&buffer, uint64(version))
+	encoder := binaryEncoder{buffer: &buffer, canonicalVersion: version, frozenProjection: projection}
 	if err := encoder.value(reflect.ValueOf(value)); err != nil {
 		return nil, err
 	}
@@ -42,7 +121,9 @@ func canonicalValue(value any) ([]byte, error) {
 }
 
 type binaryEncoder struct {
-	buffer *bytes.Buffer
+	buffer           *bytes.Buffer
+	canonicalVersion uint32
+	frozenProjection map[string][]string
 }
 
 func (e binaryEncoder) value(value reflect.Value) error {
@@ -69,14 +150,38 @@ func (e binaryEncoder) value(value reflect.Value) error {
 	case reflect.Struct:
 		e.buffer.WriteByte('s')
 		writeString(e.buffer, value.Type().Name())
-		writeUint(e.buffer, uint64(value.NumField()))
-		for index := 0; index < value.NumField(); index++ {
-			field := value.Type().Field(index)
+		fields := make([]string, value.NumField())
+		for index := range fields {
+			fields[index] = value.Type().Field(index).Name
+		}
+		if e.frozenProjection != nil && value.Type().Name() != "" {
+			frozen, ok := e.frozenProjection[value.Type().Name()]
+			if !ok {
+				return fmt.Errorf("physical canonical v%d encoding: struct %s is outside the frozen schema", e.canonicalVersion, value.Type().Name())
+			}
+			fields = frozen
+		} else if (e.canonicalVersion == 1 || e.canonicalVersion == 2) && value.Type().Name() != "" {
+			projection := historicalV1StructFields
+			if e.canonicalVersion == 2 {
+				projection = historicalV2StructFields
+			}
+			frozen, ok := projection[value.Type().Name()]
+			if !ok {
+				return fmt.Errorf("physical canonical v1 encoding: struct %s is outside the frozen schema", value.Type().Name())
+			}
+			fields = frozen
+		}
+		writeUint(e.buffer, uint64(len(fields)))
+		for _, fieldName := range fields {
+			field, ok := value.Type().FieldByName(fieldName)
+			if !ok {
+				return fmt.Errorf("physical canonical v1 encoding: retained field %s.%s is absent", value.Type().Name(), fieldName)
+			}
 			if !field.IsExported() {
 				return fmt.Errorf("physical canonical encoding: unexported field %s.%s", value.Type().Name(), field.Name)
 			}
 			writeString(e.buffer, field.Name)
-			if err := e.value(value.Field(index)); err != nil {
+			if err := e.value(value.FieldByIndex(field.Index)); err != nil {
 				return err
 			}
 		}

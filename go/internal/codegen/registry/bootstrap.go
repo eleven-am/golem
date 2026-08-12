@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -20,7 +21,15 @@ type ShellRequest struct {
 	AppPackage      modelcodegen.PackageSpec
 	Actor           ir.GoNamedTypeIR
 	Model           ir.ModelIR
+	Contract        ir.ContractIR
 	GolemImportPath string
+	// DeclarationDiscovery selects the deliberately permissive mutation
+	// signatures used by the first typed source pass. Optimistic-concurrency
+	// ownership is itself discovered by that pass, so the pre-discovery ModelIR
+	// cannot yet choose between the classic and versioned final ABIs. This shell
+	// is never published; generation subsequently type-checks the exact final
+	// registry in the prospective artifact graph.
+	DeclarationDiscovery bool
 }
 
 // EmitShell produces the deterministic caller-only registry bootstrap used by
@@ -46,6 +55,12 @@ func EmitShell(request ShellRequest) (File, error) {
 	imports := newImports(request.AppPackage.ImportPath)
 	golemAlias := imports.qualify(request.GolemImportPath, "golem")
 	contextAlias := imports.qualify("context", "context")
+	queryplanAlias := ""
+	if len(models) != 0 {
+		queryplanPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/queryplan"
+		queryplanAlias = imports.qualify(queryplanPath, "queryplan")
+	}
+	contracts := contractModels(request.Contract)
 	aliases := make(map[string]string)
 	for _, model := range models {
 		if model.Go.PackagePath == "" || !token.IsIdentifier(model.Go.Name) {
@@ -69,8 +84,9 @@ func EmitShell(request ShellRequest) (File, error) {
 	}
 	source.WriteString("}\n")
 	for _, model := range models {
-		emitShellClient(&source, "Caller", model, aliases[model.Go.PackagePath], contextAlias, golemAlias)
-		emitShellClient(&source, "CallerTx", model, aliases[model.Go.PackagePath], contextAlias, golemAlias)
+		contract := contracts[model.ID]
+		emitShellClient(&source, "Caller", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
+		emitShellClient(&source, "CallerTx", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
 	}
 	fmt.Fprintf(&source, "\nfunc (caller *Caller[P]) Transaction(_ %s.Context, _ func(*CallerTx[P]) error) error { return nil }\n", contextAlias)
 	formatted, err := format.Source(source.Bytes())
@@ -84,7 +100,8 @@ func EmitShell(request ShellRequest) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitShellClient(source *bytes.Buffer, prefix string, model ir.ModelDeclIR, alias, contextAlias, golemAlias string) {
+func emitShellClient(source *bytes.Buffer, prefix string, model ir.ModelDeclIR, alias, contextAlias, golemAlias, queryplanAlias string, contract ir.ModelContractIR, declarationDiscovery bool) {
+	versioned := model.OptimisticConcurrency != nil
 	modelType := model.Go.Name
 	createInput := model.Go.Name + "CreateInput"
 	updateInput := model.Go.Name + "UpdateInput"
@@ -101,12 +118,50 @@ func emitShellClient(source *bytes.Buffer, prefix string, model ir.ModelDeclIR, 
 	fmt.Fprintf(source, "func (%s[P]) FindFirst(_ %s.Context, _ ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { var row %s.Row[%s]; return row, false, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) FindUnique(_ %s.Context, _ %s.UniqueSelectorValue[%s], _ ...%s.ReadOption[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) Count(_ %s.Context, _ ...%s.ReadOption[%s]) (int64, error) { return 0, nil }\n", client, contextAlias, golemAlias, modelType)
+	if prefix == "Caller" {
+		emitShellQueryPlanClientMethods(source, client, modelType, contextAlias, golemAlias, queryplanAlias, declarationDiscovery || contractHasRelationDimensions(contract), declarationDiscovery || contract.ScopedReads)
+	}
 	fmt.Fprintf(source, "func (%s[P]) Aggregate(_ %s.Context, _ %s.AggregateRequest[%s]) (%s.AggregateResult[%s], error) { var result %s.AggregateResult[%s]; return result, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) GroupBy(_ %s.Context, _ %s.GroupRequest[%s]) ([]%s.GroupRow[%s], error) { return nil, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType)
+	if declarationDiscovery || contractHasRelationDimensions(contract) {
+		fmt.Fprintf(source, "func (%s[P]) RelationGroupBy(_ %s.Context, _ %s.RelationGroupRequest[%s]) ([]%s.RelationGroupRow[%s], error) { return nil, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType)
+	}
+	if declarationDiscovery || contract.ScopedReads {
+		fmt.Fprintf(source, "func (%s[P]) Scoped(_ %s.Context, _ %s.ScopedQuery[%s]) ([]%s.ScopedRow, error) { return nil, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias)
+	}
 	fmt.Fprintf(source, "func (%s[P]) Create(_ %s.Context, _ %s, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, createInput, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+	if declarationDiscovery {
+		fmt.Fprintf(source, "func (%s[P]) Update(_ %s.Context, _ %s.MutationTarget[%s], _ ...any) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		fmt.Fprintf(source, "func (%s[P]) Upsert(_ %s.Context, _ %s.MutationTarget[%s], _ ...any) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		fmt.Fprintf(source, "func (%s[P]) Delete(_ %s.Context, _ %s.MutationTarget[%s], _ ...any) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		fmt.Fprintf(source, "func (%s[P]) UpdateMany(_ %s.Context, _ %s.Predicate[%s], _ %s) (int64, error) { return 0, nil }\n", client, contextAlias, golemAlias, modelType, updateManyInput)
+		fmt.Fprintf(source, "func (%s[P]) DeleteMany(_ %s.Context, _ %s.Predicate[%s]) (int64, error) { return 0, nil }\n", client, contextAlias, golemAlias, modelType)
+		return
+	}
+	if versioned {
+		fmt.Fprintf(source, "func (%s[P]) Update(_ %s.Context, _ %s.MutationTarget[%s], _ %s.ExistingVersion, _ %s, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, updateInput, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		fmt.Fprintf(source, "func (%s[P]) Upsert(_ %s.Context, _ %s.MutationTarget[%s], _ %s.ConcurrencyExpectation, _ %s, _ %s, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		fmt.Fprintf(source, "func (%s[P]) Delete(_ %s.Context, _ %s.MutationTarget[%s], _ %s.ExistingVersion, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
+		return
+	}
 	fmt.Fprintf(source, "func (%s[P]) Update(_ %s.Context, _ %s.MutationTarget[%s], _ %s, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, updateInput, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) Upsert(_ %s.Context, _ %s.MutationTarget[%s], _ %s, _ %s, _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, createInput, updateInput, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) Delete(_ %s.Context, _ %s.MutationTarget[%s], _ ...%s.Projection[%s]) (%s.Row[%s], error) { var row %s.Row[%s]; return row, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType)
 	fmt.Fprintf(source, "func (%s[P]) UpdateMany(_ %s.Context, _ %s.Predicate[%s], _ %s) (int64, error) { return 0, nil }\n", client, contextAlias, golemAlias, modelType, updateManyInput)
 	fmt.Fprintf(source, "func (%s[P]) DeleteMany(_ %s.Context, _ %s.Predicate[%s]) (int64, error) { return 0, nil }\n", client, contextAlias, golemAlias, modelType)
+}
+
+func emitShellQueryPlanClientMethods(source *bytes.Buffer, client, modelType, contextAlias, golemAlias, queryplanAlias string, relation, scoped bool) {
+	fmt.Fprintf(source, "func (%s[P]) ExplainFindMany(_ %s.Context, _ ...%s.ReadOption[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	fmt.Fprintf(source, "func (%s[P]) ExplainFindFirst(_ %s.Context, _ ...%s.ReadOption[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	fmt.Fprintf(source, "func (%s[P]) ExplainFindUnique(_ %s.Context, _ %s.UniqueSelectorValue[%s], _ ...%s.ReadOption[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	fmt.Fprintf(source, "func (%s[P]) ExplainCount(_ %s.Context, _ ...%s.ReadOption[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	fmt.Fprintf(source, "func (%s[P]) ExplainAggregate(_ %s.Context, _ %s.AggregateRequest[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	fmt.Fprintf(source, "func (%s[P]) ExplainGroupBy(_ %s.Context, _ %s.GroupRequest[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	if relation {
+		fmt.Fprintf(source, "func (%s[P]) ExplainRelationGroupBy(_ %s.Context, _ %s.RelationGroupRequest[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	}
+	if scoped {
+		fmt.Fprintf(source, "func (%s[P]) ExplainScoped(_ %s.Context, _ %s.ScopedQuery[%s]) (%s.Report, error) { return %s.Report{}, nil }\n", client, contextAlias, golemAlias, modelType, queryplanAlias, queryplanAlias)
+	}
 }

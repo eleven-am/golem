@@ -6,6 +6,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
@@ -134,6 +135,9 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 }
 
 func executeCallerHookUpsert[P, A any](ctx context.Context, caller *Caller[P, A], request golem.RuntimeHookExecutorRequest) (golem.RuntimeHookExecutorResult, error) {
+	if err := refuseLegacyVersionedMutation(caller.app.registry, request.ModelID(), "upsert"); err != nil {
+		return golem.RuntimeHookExecutorResult{}, err
+	}
 	target, targetOK := request.Target()
 	create, createOK := request.Input()
 	update, updateOK := request.UpdateInput()
@@ -221,6 +225,11 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 	case golem.RuntimeHookExecutorDeleteOperation:
 		operation = mutationir.Delete
 	}
+	if operation != mutationir.Create {
+		if err := refuseLegacyVersionedMutation(caller.app.registry, request.ModelID(), string(mutationObservationOperation(operation))); err != nil {
+			return golem.RuntimeHookExecutorResult{}, err
+		}
+	}
 	input, inputOK := request.Input()
 	target, targetOK := request.Target()
 	var inputPointer *golem.FrozenMutationInput
@@ -231,9 +240,20 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 	if targetOK {
 		targetPointer = &target
 	}
+	if operation == mutationir.Create && inputPointer != nil && len(inputPointer.Relations()) == 0 {
+		if _, err := mutationbind.CreateInput(*inputPointer, caller.app.registry); err != nil {
+			return golem.RuntimeHookExecutorResult{}, err
+		}
+	}
 	requirements, err := completeHookImageRequirements(caller.app, request.ModelID())
 	if err != nil {
 		return golem.RuntimeHookExecutorResult{}, err
+	}
+	runtimeValues := newMutationRuntimeValues()
+	if inputPointer != nil && len(inputPointer.Relations()) != 0 {
+		if _, err := prepareNestedGraph(caller.app, caller.policies, mutationir.Caller, operation, inputPointer, targetPointer, requirements, runtimeValues); err != nil {
+			return golem.RuntimeHookExecutorResult{}, err
+		}
 	}
 	beforeRequest, err := scalarBeforeHookRequest(operation, request.ModelID(), inputPointer, targetPointer)
 	if err != nil {
@@ -242,7 +262,6 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 	var program mutationsql.Program
 	var finalInput *golem.FrozenMutationInput
 	var finalTarget *golem.FrozenMutationTarget
-	runtimeValues := newMutationRuntimeValues()
 	validate := func(transformed golem.RuntimeMutationHookRequest) error {
 		transformedInput, transformedTarget, err := scalarRequestParts(transformed)
 		if err != nil {
@@ -304,6 +323,13 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 }
 
 func executeCallerHookBatch[P, A any](ctx context.Context, caller *Caller[P, A], request golem.RuntimeHookExecutorRequest) (result golem.RuntimeHookExecutorResult, resultErr error) {
+	operationName := "deleteMany"
+	if request.Operation() == golem.RuntimeHookExecutorUpdateManyOperation {
+		operationName = "updateMany"
+	}
+	if err := refuseLegacyVersionedMutation(caller.app.registry, request.ModelID(), operationName); err != nil {
+		return golem.RuntimeHookExecutorResult{}, err
+	}
 	predicate, ok := request.Predicate()
 	if !ok {
 		return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: batch predicate is absent")

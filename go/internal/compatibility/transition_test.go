@@ -38,12 +38,42 @@ func TestCompatibilitySemanticVersionContract(t *testing.T) {
 	major := publishedCompatibilityFixture("v2.0.0", '5')
 	major.Digests.PublicGoAPI = strings.Repeat("c", 64)
 	major.RequiredActions = []string{"migration-guide.execute"}
+	major.MigrationGuide = testMigrationGuideAuthority("go/v1.2.3", 2, '6')
 	transition, err = CompareRelease(base, major, LayerAssessments{
 		PublicGoAPI: LayerBreaking, GeneratedGoABI: LayerUnchanged, GraphQLABI: LayerUnchanged,
 		CLIJSON: LayerUnchanged, Observation: LayerUnchanged,
 	})
 	if err != nil || transition != (Transition{Actual: ReleaseMajor, Required: ReleaseMajor}) {
 		t.Fatalf("major transition=%#v err=%v", transition, err)
+	}
+}
+
+func TestGeneratedGoBreakingTransitionRequiresMajorAndMigrationGuide(t *testing.T) {
+	base := publishedCompatibilityFixture("v0.0.2", '1')
+	layers := allLayers(LayerUnchanged)
+	layers.GeneratedGoABI = LayerBreaking
+
+	minor := publishedCompatibilityFixture("v0.1.0", '2')
+	minor.Digests.GeneratedGoABI = strings.Repeat("a", 64)
+	minor.RequiredActions = []string{"regenerate.generated"}
+	transition, err := CompareRelease(base, minor, layers)
+	if err == nil || transition.Actual != ReleaseMinor || transition.Required != ReleaseMajor {
+		t.Fatalf("breaking generated minor transition=%#v err=%v", transition, err)
+	}
+
+	major := publishedCompatibilityFixture("v1.0.0", '3')
+	major.Digests.GeneratedGoABI = strings.Repeat("b", 64)
+	major.RequiredActions = []string{"regenerate.generated"}
+	transition, err = CompareRelease(base, major, layers)
+	if err == nil || transition.Actual != ReleaseMajor || transition.Required != ReleaseMajor {
+		t.Fatalf("breaking generated major without guide transition=%#v err=%v", transition, err)
+	}
+
+	major.RequiredActions = []string{"migration-guide.execute", "regenerate.generated"}
+	major.MigrationGuide = testMigrationGuideAuthority("go/v0.0.2", 1, '7')
+	transition, err = CompareRelease(base, major, layers)
+	if err != nil || transition != (Transition{Actual: ReleaseMajor, Required: ReleaseMajor}) {
+		t.Fatalf("reviewed breaking generated transition=%#v err=%v", transition, err)
 	}
 }
 
@@ -68,9 +98,14 @@ func TestCompatibilityTransitionsRequireActionsAndHistoricalDecoders(t *testing.
 	codec.Versions.FactCodecs = []string{"golem.fact.v2", "golem.fact.v3"}
 	codec.HistoricalDecode.FactCodecs = []string{"golem.fact.v2", "golem.fact.v3"}
 	codec.RequiredActions = []string{"migration-guide.execute"}
+	codec.MigrationGuide = testMigrationGuideAuthority("go/v1.2.3", 2, '8')
 	if transition, err := CompareRelease(base, codec, allLayers(LayerUnchanged)); err == nil || transition.Required != ReleaseMajor {
 		t.Fatalf("dropped historical fact codec transition=%#v err=%v", transition, err)
 	}
+}
+
+func testMigrationGuideAuthority(fromTag string, toMajor uint16, digest byte) *MigrationGuideAuthority {
+	return &MigrationGuideAuthority{Path: "compatibility/migration-guide.json", SHA256: strings.Repeat(string(digest), 64), FromTag: fromTag, ToMajor: toMajor}
 }
 
 func TestCompatibilityProviderAndDeploymentProfilesRemainDistinct(t *testing.T) {

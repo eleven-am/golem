@@ -136,6 +136,18 @@ func (runner Runner) runGate(ctx context.Context, sandbox string, mutation Mutat
 	// sandbox so the baseline and mutant share it and normal sandbox cleanup
 	// removes it after the result is recorded.
 	command.Env = mutationGoEnvironment(os.Environ(), runner.Env, sandbox)
+	if len(mutation.Gate.WorkspaceModules) != 0 {
+		workspace := filepath.Join(sandbox, "go.work")
+		contents := "go 1.25.0\n\nuse (\n\t./go\n\t./go/examples/social\n)\n\nreplace github.com/eleven-am/golem/go v0.0.0 => ./go\n"
+		if err := os.WriteFile(workspace, []byte(contents), 0o600); err != nil {
+			return gateOutcome{}, err
+		}
+		canonicalWorkspace, err := filepath.EvalSymlinks(workspace)
+		if err != nil {
+			return gateOutcome{}, err
+		}
+		command.Env = replaceEnvironmentValue(command.Env, "GOWORK", canonicalWorkspace)
+	}
 	output, commandErr := command.CombinedOutput()
 	outcome := gateOutcome{digest: outputDigest(output)}
 	if testContext.Err() != nil {
@@ -205,7 +217,7 @@ func ValidatePatchSites(repository string, values []Mutation) error {
 }
 
 func validateMutation(mutation Mutation) error {
-	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`).MatchString(mutation.Label) || mutation.Summary == "" || len(mutation.Patches) == 0 || mutation.Gate.Directory != "go" || mutation.Gate.Package == "" || mutation.Gate.Test == "" || mutation.Timeout <= 0 {
+	if !regexp.MustCompile(`^[A-Z][A-Z0-9_]+$`).MatchString(mutation.Label) || mutation.Summary == "" || len(mutation.Patches) == 0 || !validGateWorkspace(mutation.Gate) || mutation.Gate.Package == "" || mutation.Gate.Test == "" || mutation.Timeout <= 0 {
 		return fmt.Errorf("P8_MUTATION_MANIFEST_INVALID")
 	}
 	for _, patch := range mutation.Patches {
@@ -215,6 +227,28 @@ func validateMutation(mutation Mutation) error {
 		}
 	}
 	return nil
+}
+
+func validGateWorkspace(gate Gate) bool {
+	if gate.Directory == "go" {
+		return len(gate.WorkspaceModules) == 0
+	}
+	return gate.Directory == "go/examples/social" &&
+		len(gate.WorkspaceModules) == 2 &&
+		gate.WorkspaceModules[0] == "go" &&
+		gate.WorkspaceModules[1] == "go/examples/social"
+}
+
+func replaceEnvironmentValue(environment []string, name, value string) []string {
+	prefix := name + "="
+	result := append([]string(nil), environment...)
+	for index := range result {
+		if strings.HasPrefix(result[index], prefix) {
+			result[index] = prefix + value
+			return result
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func applyPatch(root string, patch Patch) error {

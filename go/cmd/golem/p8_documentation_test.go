@@ -95,9 +95,24 @@ func TestP8QuickstartFromEmptyDirectory(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(example, "go.mod")); err != nil {
 		t.Fatalf("documented journey removed the consumer module: %v", err)
 	}
+	prepareQuickstartPostgreSQLDatabase(t, executionExample)
 	if output := runDocumentationGo(t, workspace, executionExample, "test", "./..."); output != "" {
 		t.Log(output)
 	}
+}
+
+func prepareQuickstartPostgreSQLDatabase(t *testing.T, example string) {
+	t.Helper()
+	baseDataSourceName := strings.TrimSpace(os.Getenv("GOLEM_P8_SOCIAL_POSTGRES_DSN"))
+	if baseDataSourceName == "" {
+		return
+	}
+	database := newDocumentationPostgreSQLDatabase(t, baseDataSourceName)
+	if database.dataSourceName == baseDataSourceName {
+		t.Fatal("quickstart PostgreSQL fixture reused its administrative database")
+	}
+	runDocumentationGolem(t, example, "migration", "apply", "--provider", "postgresql", "--dsn", database.dataSourceName, "--migrations", "migrations")
+	t.Setenv("GOLEM_P8_SOCIAL_POSTGRES_DSN", database.dataSourceName)
 }
 
 func TestP8EveryPublicSnippetTypeChecks(t *testing.T) {
@@ -387,15 +402,15 @@ func runDocumentationRecoveryFixture(t *testing.T, directory, binary, providerNa
 
 func checkpointDocumentationSQLite(t *testing.T, dataSourceName, databasePath string) {
 	t.Helper()
-	database, err := providersqlite.Open(context.Background(), providersqlite.Config{DataSourceName: dataSourceName})
+	ctx := context.Background()
+	database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: dataSourceName})
 	if err != nil {
 		t.Fatal("open SQLite recovery target for checkpoint")
 	}
-	if _, err := database.UnsafeSQLX().ExecContext(context.Background(), "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		_ = database.Close()
+	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Close(); err != nil {
+	if err := providersqlite.CheckpointForBackup(ctx, database); err != nil {
 		t.Fatal(err)
 	}
 	for _, suffix := range []string{"-wal", "-shm"} {

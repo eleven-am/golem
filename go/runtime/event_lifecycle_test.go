@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -133,6 +134,10 @@ func (crossProcessWithoutBinding) TransportCapabilities() events.TransportCapabi
 	capabilities, _ := events.NewTransportCapabilities("test.cross-process.v1", events.TransportScopeCrossProcess, true)
 	return capabilities
 }
+func (crossProcessWithoutBinding) MaxEncodedEventBytes() int {
+	return events.MaximumLimits().MaxEncodedEventBytes
+}
+func (crossProcessWithoutBinding) TransportAvailable() bool { return true }
 
 func TestP7CrossProcessTransportWithoutRuntimeBindingIsRejected(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
@@ -140,9 +145,9 @@ func TestP7CrossProcessTransportWithoutRuntimeBindingIsRejected(t *testing.T) {
 		Descriptors:   fixture.app.descriptors,
 		EventRegistry: fixture.app.eventRegistry, EventFactories: fixture.app.eventFactories,
 		EventTransport: crossProcessWithoutBinding{}, ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
-	}, fixture.app.registry, fixture.app.eventProvider)
-	if err == nil {
-		t.Fatal("cross-process transport without runtime binding was accepted")
+	}, fixture.app.registry, golem.PostgreSQL)
+	if err == nil || !strings.Contains(err.Error(), "cross-process event transport requires runtime binding") {
+		t.Fatalf("cross-process transport without runtime binding error = %v", err)
 	}
 }
 
@@ -155,6 +160,9 @@ type lifecycleBindableTransport struct {
 func (transport *lifecycleBindableTransport) TransportCapabilities() events.TransportCapabilities {
 	capabilities, _ := events.NewTransportCapabilities("test.bound-cross-process.v1", events.TransportScopeCrossProcess, true)
 	return capabilities
+}
+func (transport *lifecycleBindableTransport) MaxEncodedEventBytes() int {
+	return events.MaximumLimits().MaxEncodedEventBytes
 }
 func (transport *lifecycleBindableTransport) BindEventRuntime(binding events.RuntimeBinding) error {
 	if binding == nil {
@@ -176,7 +184,7 @@ func TestP7EventRuntimeBindsCrossProcessTransportExactlyOnce(t *testing.T) {
 		database: fixture.app.database, registry: fixture.app.registry,
 		eventRegistry: fixture.app.eventRegistry, eventSchemas: fixture.app.eventSchemas,
 		eventLimits: events.DefaultLimits(), eventTransport: transport,
-		eventProvider: golem.SQLite,
+		eventProvider: golem.PostgreSQL,
 	}
 	if err := app.initializeEventRuntime(nil, func(context.Context, events.OperatorAuditRecord) {}); err != nil {
 		t.Fatal(err)

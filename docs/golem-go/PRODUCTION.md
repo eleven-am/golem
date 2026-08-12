@@ -283,8 +283,10 @@ build application and CLI from one version
   -> rehearse provider backup and restore
   -> golem migration apply
   -> golem doctor
-  -> start application and require readiness
+  -> start application
   -> start explicitly owned publisher/CDC workers
+  -> require database, publisher, and transport readiness
+  -> admit traffic
 ```
 
 `App.Open` never migrates. Keep migration snapshots, manifests, SQL, generated
@@ -302,8 +304,35 @@ runtime never grows an unbounded queue.
 
 The core memory transport is process-local. It is appropriate for one process,
 not multi-process fan-out or durability. Multiple PostgreSQL application
-processes require an externally supplied transport that passes Golem's transport
-conformance suite.
+processes use the maintained `github.com/eleven-am/golem/go/events/nats`
+adapter. SQLite always uses the process-local memory transport; selecting NATS
+with SQLite is a configuration error.
+
+The maintained adapter uses Core NATS, not JetStream. PostgreSQL and its outbox
+remain the durable source of truth. Core NATS does not replay, and delivery
+remains at least once: reconnects and explicit republishes can deliver the same stable
+event ID more than once. Subjects are exactly
+`<prefix>.g1.<event-schema-digest>.<model-id>`, routed by
+`EventSchemaDigest and ModelID`. The generation digest is authenticated inside
+the notice and is not a routing component. `SubjectPrefix is required and must
+be unique to the authoritative database within the NATS account`; use a
+deployment/database identity, not a shared default.
+
+The social host selects the adapter with `GOLEM_EVENT_TRANSPORT=nats`, reads the
+closed URL list from `GOLEM_NATS_URLS`, and requires the unique prefix in
+`GOLEM_NATS_SUBJECT_PREFIX`. The broker and adapter payload authorities must
+agree. The reviewed Core NATS server configuration contains:
+
+```yaml
+max_payload: 2097152
+```
+
+The adapter refuses startup or reconnect when the broker ceiling is smaller
+than its configured event limit. A terminal disconnect makes readiness fail;
+a reconnect restores transport availability only after the ceiling is proved
+again. Shutdown must stop HTTP admission, shut down GraphQL, cancel and wait for
+the publisher, close the transport, and then close the database. A failed or
+timed-out ownership barrier does not close a downstream dependency still in use.
 
 Writes made outside Golem are invisible unless a conformant CDC adapter is
 configured. Core supplies the CDC interface and conformance harness, not vendor
@@ -319,6 +348,7 @@ caller-overridden provider pragmas are refused. The verified provider owns the
 driver, foreign-key and busy-timeout settings, immediate transaction locking,
 pool width, functions, and capability probes. Run exactly one application
 process against the file unless a separately tested topology says otherwise.
+Do not configure NATS for SQLite.
 
 ### PostgreSQL single process
 
@@ -328,16 +358,17 @@ cleanup. Caller DSN `options` and direct provider-session overrides are refused.
 
 ### PostgreSQL multiple processes
 
-Use a conformant cross-process event transport. Add a conformant CDC adapter
-only if external SQL writers must appear in subscriptions. Read/mutation SQL
-semantics remain portable; event reach depends on explicitly installed
-infrastructure capabilities.
+Use the maintained Core NATS transport with a database-unique subject prefix
+and a broker payload ceiling at least as large as the configured event limit.
+Add a conformant CDC adapter only if external SQL writers must appear in
+subscriptions. Read/mutation SQL semantics remain portable; event reach depends
+on explicitly installed infrastructure capabilities.
 
 ## Health, observability, and secrets
 
 Liveness reports process health only. Readiness fails closed for a closed
 database, schema or migration mismatch, incompatible generated artifacts, or a
-required unavailable event transport. Neither endpoint returns provider,
+stopped publisher or required unavailable event transport. Neither endpoint returns provider,
 schema, backlog, principal, capability, or raw error detail.
 
 P8's unified `observe` API and maintained slog/OpenTelemetry adapters are not
@@ -387,12 +418,48 @@ same snapshot byte for byte, run `doctor`, then start the explicit publisher and
 prove that the restored pending fact reaches the transport and becomes
 delivered.
 
-For SQLite, stop every application/worker owner, checkpoint and close the
-verified database, prove there is no nonempty WAL sidecar, and only then copy
-the database file. Copying the main file while a writer or WAL remains active
-is not a supported backup. For PostgreSQL, use a version-compatible logical or
+For SQLite, stop every application/worker owner, close the verified database,
+call the supported `provider/sqlite.CheckpointForBackup` operation with that
+exact closed handle, prove there is no nonempty WAL sidecar, and only then copy
+the database file. A busy checkpoint fails the backup; recovery code must never
+delete or truncate `-wal` or `-shm` files itself. Copying the main file while a
+writer or WAL remains active is not a supported backup. For PostgreSQL, use a
+version-compatible logical or
 physical backup tool against a disposable rehearsal database and restore into a
 new database; never test recovery by mutating the shared source database.
+
+The SQLite maintenance boundary is explicit:
+
+```go
+package docsnippet
+
+import (
+    "context"
+
+    providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
+)
+
+func prepareSQLiteBackup(ctx context.Context, dsn string) error {
+    database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: dsn})
+    if err != nil {
+        return err
+    }
+    // Stop every application, event, and semantic owner before closing this handle.
+    if err := database.Close(); err != nil {
+        return err
+    }
+    if err := providersqlite.CheckpointForBackup(ctx, database); err != nil {
+        return err
+    }
+    // The application may now verify that no nonempty -wal remains and copy the
+    // main database file with its platform's ordinary file-copy facilities.
+    return nil
+}
+```
+
+The operation is deliberately not available through `UnsafeSQLX`: callers
+cannot accidentally checkpoint a different path than the sealed handle's
+verified database identity, and an open handle is always refused.
 
 The checked-in example provides a public-only deterministic rehearsal canary:
 

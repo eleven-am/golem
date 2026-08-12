@@ -10,6 +10,7 @@ import (
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
@@ -44,14 +45,15 @@ type RelationOptionDeclaration struct {
 }
 
 type Result struct {
-	Advanced        []keyindex.AdvancedModelDeclarations
-	RelationOptions []RelationOptionDeclaration
-	GraphQLModels   []graphqlcontract.ModelPatch
-	GraphQLComputed []graphqlextension.ComputedDeclaration
-	GraphQLCustom   []graphqlextension.CustomOperationDeclaration
-	AnalyticsModels []analyticscontract.ModelPatch
-	Extensions      []ir.ProviderExtensionIR
-	Diagnostics     []ir.Diagnostic
+	Advanced              []keyindex.AdvancedModelDeclarations
+	RelationOptions       []RelationOptionDeclaration
+	OptimisticConcurrency []compilerconcurrency.Declaration
+	GraphQLModels         []graphqlcontract.ModelPatch
+	GraphQLComputed       []graphqlextension.ComputedDeclaration
+	GraphQLCustom         []graphqlextension.CustomOperationDeclaration
+	AnalyticsModels       []analyticscontract.ModelPatch
+	Extensions            []ir.ProviderExtensionIR
+	Diagnostics           []ir.Diagnostic
 }
 
 // Interpret loads every registered model and schema package with the fresh

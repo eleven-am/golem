@@ -62,6 +62,7 @@
     {"symbol":"OperationShutdownPublisher","source":"runtime/event_lifecycle.go"},
     {"symbol":"OperationSemanticRefresh","source":"internal/semantic/runtime/manager.go"},
     {"symbol":"OperationSemanticProvider","source":"internal/semantic/runtime/manager.go"},
-    {"symbol":"OperationSemanticRank","source":"internal/semantic/runtime/manager.go"}
+    {"symbol":"OperationSemanticRank","source":"internal/semantic/runtime/manager.go"},
+    {"symbol":"OperationQueryPlanExplain","source":"runtime/queryplan.go"}
   ]
 }

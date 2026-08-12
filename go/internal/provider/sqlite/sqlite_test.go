@@ -158,6 +158,60 @@ func TestLowerRenderApplyIntrospectRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLowerProjectsOnlyDeclaredOptimisticConcurrencyField(t *testing.T) {
+	model := socialModelIR()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalar(field, "Version", "version", 8, ir.LogicalTypeIR{Kind: ir.TypeInt64}, false, nil))
+	model.Models[1].OptimisticConcurrency = &field
+	schema, err := New().Lower(context.Background(), model, physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := findTable(schema, "posts")
+	if table.OptimisticConcurrency == nil || *table.OptimisticConcurrency != field {
+		t.Fatalf("physical concurrency = %v; want %s", table.OptimisticConcurrency, field)
+	}
+	column := findColumn(table, "version")
+	if column.Storage != (physical.StorageType{Kind: physical.StorageSQLiteInteger}) || column.Nullable || column.Default.Kind != physical.DefaultNone {
+		t.Fatalf("concurrency column = %#v", column)
+	}
+	model.Models[1].OptimisticConcurrency = nil
+	schema, err = New().Lower(context.Background(), model, physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table := findTable(schema, "posts"); table.OptimisticConcurrency != nil {
+		t.Fatalf("undeclared version-like field was inferred: %v", table.OptimisticConcurrency)
+	}
+}
+
+func TestLowerRejectsLogicalInt32OptimisticConcurrencyDespiteSQLiteIntegerStorage(t *testing.T) {
+	model := socialModelIR()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalar(field, "Version", "version", 8, ir.LogicalTypeIR{Kind: ir.TypeInt32}, false, nil))
+	model.Models[1].OptimisticConcurrency = &field
+	if _, err := New().Lower(context.Background(), model, physical.LowerOptions{}); err == nil || !strings.Contains(err.Error(), "logical type int64") {
+		t.Fatalf("SQLite lower accepted logical int32 concurrency field: %v", err)
+	}
+}
+
+func TestPublicSQLiteRenderInitialRefusesHistoricalV1(t *testing.T) {
+	schema, err := New().Lower(context.Background(), socialModelIR(), physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.Version, schema.CanonicalVersion = 1, 1
+	if _, err := New().RenderInitial(schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public RenderInitial accepted historical v1: %v", err)
+	}
+	if _, err := New().Introspect(context.Background(), nil, schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public Introspect did not refuse historical v1 before database work: %v", err)
+	}
+	if err := New().ApplyInitial(context.Background(), nil, schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public ApplyInitial did not refuse historical v1 before database work: %v", err)
+	}
+}
+
 func hasSystemObject(system physical.SystemSchema, kind physical.SystemObjectKind) bool {
 	for _, object := range system.Objects {
 		if object.Kind == kind {

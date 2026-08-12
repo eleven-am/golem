@@ -22,6 +22,10 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
+type refusingWriter struct{}
+
+func (refusingWriter) Write([]byte) (int, error) { return 0, errors.New("refused") }
+
 func TestUsageErrorsExitTwoWithoutOutput(t *testing.T) {
 	for _, arguments := range [][]string{nil, {"unknown"}, {"generate", "--schema", "."}} {
 		var stdout, stderr bytes.Buffer
@@ -50,14 +54,14 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 	// A compact golden pins the complete normalized JSON byte stream while the
 	// structural assertions below explain the contract it represents.
 	sum := sha256.Sum256(first.Bytes())
-	if got, want := hex.EncodeToString(sum[:]), "ed9e99a736b702b3c0cb470a8b0642f31698e88717012278aecb3a61b98c75f3"; got != want {
+	if got, want := hex.EncodeToString(sum[:]), "e839014da7e9b7fc4eef5bbf33e416112b812331f3cc77573e93a03a5223bda2"; got != want {
 		t.Fatalf("inspect golden digest = %s; want %s", got, want)
 	}
 	var output inspectOutput
 	if err := json.Unmarshal(first.Bytes(), &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 4 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
+	if output.FormatVersion != 2 || output.Contract.FormatVersion != ir.ContractFormatVersion || output.Contract.GraphQLABIVersion != 5 || len(output.Model.Models) != 6 || len(output.Model.Relations) != 8 || len(output.Contract.Models) != 6 || len(output.Contract.Methods) != 6 || len(output.Providers) != 2 || len(output.Policies) != 6 || len(output.PolicyOperators) != 41 {
 		t.Fatalf("inspect output is incomplete: %#v", output)
 	}
 	for _, entry := range output.PolicyOperators {
@@ -312,6 +316,99 @@ func TestMigrationNewIncrementalApplyAndAlreadyCurrent(t *testing.T) {
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &applied); err != nil || len(applied.Applied) != 0 {
 		t.Fatalf("already-current apply output=%#v err=%v", applied, err)
+	}
+}
+
+func TestMigrationBackfillAttachReadFailureRedactsAbsolutePath(t *testing.T) {
+	module := writeSocialModule(t, false)
+	const canary = "GOLEM_PRIVATE_BACKFILL_PATH_CANARY"
+	missing := filepath.Join(t.TempDir(), canary, "reviewed.sql")
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), module, []string{
+		"migration", "backfill", "attach",
+		"--migration", "0002_required_slug",
+		"--field", "Post.Slug",
+		"--file", missing,
+	}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code=%d stdout=%q stderr=%q", code, stdout.String(), stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Fatalf("failure wrote stdout %q", stdout.String())
+	}
+	if got := stderr.String(); !strings.Contains(got, "reviewed backfill file could not be read") || strings.Contains(got, canary) || strings.Contains(got, missing) {
+		t.Fatalf("redaction failure stderr=%q", got)
+	}
+}
+
+func TestMigrationBackfillAttachRendersReviewedTypedPlanBeforePublishing(t *testing.T) {
+	module := writeSocialModule(t, false)
+	schemaPath := filepath.Join(module, "schema.go")
+	content, err := os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content, []byte("golem.Providers(schema, golem.SQLite, golem.PostgreSQL)"), []byte("golem.Providers(schema, golem.PostgreSQL)"), 1)
+	if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	createInitialReviewedMigration(t, module)
+
+	content, err = os.ReadFile(schemaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content = bytes.Replace(content,
+		[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`"),
+		[]byte("ID int64 `db:\"id\" golem:\"id=social.User.ID;pk\"`\n\tSlug string `db:\"slug\" golem:\"id=social.User.Slug\"`"), 1)
+	if err := os.WriteFile(schemaPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), module, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("pending migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	var pending migrationNewOutput
+	if err := json.Unmarshal(stdout.Bytes(), &pending); err != nil || !pending.Pending || pending.MigrationID != "0002_required_slug" {
+		t.Fatalf("pending output=%#v err=%v", pending, err)
+	}
+	reviewedPath := filepath.Join(module, "reviewed.sql")
+	if err := os.WriteFile(reviewedPath, []byte("UPDATE \"public\".\"users\" SET \"slug\" = 'unknown' WHERE \"slug\" IS NULL;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	attachArgs := []string{
+		"migration", "backfill", "attach", "--migration", "0002_required_slug",
+		"--field", "User.Slug", "--file", reviewedPath,
+	}
+	beforeOutputFailure := treeSnapshot(t, module)
+	stderr.Reset()
+	if code := run(context.Background(), module, attachArgs, refusingWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "migration plan output could not be written") {
+		t.Fatalf("refused report output code=%d stderr=%s", code, stderr.String())
+	}
+	if afterOutputFailure := treeSnapshot(t, module); !reflect.DeepEqual(afterOutputFailure, beforeOutputFailure) {
+		t.Fatal("attach published or removed its draft after report output failed")
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if code := run(context.Background(), module, attachArgs, &stdout, &stderr); code != 0 {
+		t.Fatalf("attach code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
+	}
+	if got := stdout.String(); !strings.Contains(got, "Migration plan: reviewed") || !strings.Contains(got, "reviewed backfill") || !strings.Contains(got, "manual data transform") {
+		t.Fatalf("attach omitted typed reviewed plan:\n%s", got)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("attach stderr=%s", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(module, "migrations", ".golem-pending-backfill.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending draft remains after publication: %v", err)
+	}
+	manifestBytes, err := os.ReadFile(filepath.Join(module, "migrations", "postgresql", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var history migration.Manifest
+	if err := json.Unmarshal(manifestBytes, &history); err != nil || len(history.Entries) != 2 || history.Entries[1].ID != "0002_required_slug" {
+		t.Fatalf("published history=%#v err=%v", history.Entries, err)
 	}
 }
 

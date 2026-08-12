@@ -32,6 +32,7 @@ type BatchStatement struct {
 
 func (statement BatchStatement) SQL() string          { return statement.statement.SQL() }
 func (statement BatchStatement) Args() []any          { return statement.statement.Args() }
+func (statement BatchStatement) PlanMap() PlanMap     { return statement.statement.PlanMap() }
 func (statement BatchStatement) ReverseBuckets() bool { return statement.statement.ReverseResult() }
 func (statement BatchStatement) CorrelationFields() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), statement.keys...)
@@ -61,6 +62,7 @@ type batchContext struct {
 	provider     policyir.Provider
 	registry     *schema.Registry
 	capabilities policysql.CapabilityProof
+	planMap      PlanMap
 }
 
 // BatchKeyCapacity returns the exact per-statement tuple capacity after
@@ -292,7 +294,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	for index, field := range context.fields {
 		columns[index] = Column{field: field.FieldID(), alias: fmt.Sprintf("golem_c%d", index), public: field.Public()}
 	}
-	return BatchStatement{statement: Statement{text: text, args: args, columns: columns, counts: countColumns, reverse: context.reverse}, keys: context.keyIDs, extraKeys: extraKeys}, nil
+	return BatchStatement{statement: Statement{text: text, args: args, columns: columns, counts: countColumns, planMap: context.planMap.clone(), reverse: context.reverse}, keys: context.keyIDs, extraKeys: extraKeys}, nil
 }
 
 func prepareBatchContext(plan readplan.Plan, endpoint schema.RelationEndpoint, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (batchContext, error) {
@@ -312,13 +314,21 @@ func prepareBatchContext(plan readplan.Plan, endpoint schema.RelationEndpoint, r
 		return batchContext{}, fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "batch target model is absent", nil)
 	}
 	alias := physical.PhysicalName("golem_br0")
-	fragment, err := policysql.Compile(policysql.Request{Condition: plan.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias})
+	var planMap planMapBuilder
+	policyAliases := policysql.NewPolicyAliasAllocator()
+	readAliases := &readPlanAliasAllocator{}
+	planMap.add(string(alias), plan.ModelID(), policyir.RelationID(endpoint.RelationID()), endpointChildFieldIDs(endpoint), PlanAliasPhysicalAccess)
+	fragment, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: plan.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias}, policyAliases)
 	if err != nil {
 		return batchContext{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "authorized batch predicate did not render", err)
 	}
-	renderedCounts, err := renderRelationCounts(plan, registry, provider, capabilities, dialect, alias)
+	planMap.mergePolicy(fragment.PolicyRelationAliases())
+	renderedCounts, err := renderRelationCounts(plan, registry, provider, capabilities, dialect, alias, policyAliases, readAliases)
 	if err != nil {
 		return batchContext{}, err
+	}
+	for _, count := range renderedCounts {
+		planMap.merge(count.planMap)
 	}
 	countArgs := make([]any, 0)
 	for _, count := range renderedCounts {
@@ -346,11 +356,12 @@ func prepareBatchContext(plan readplan.Plan, endpoint schema.RelationEndpoint, r
 	whereSQL := fragment.SQL()
 	var cursorArgs []any
 	if cursor, present := plan.Cursor(); present {
-		cursorPrefix, cursorJoin, boundary, values, cursorErr := renderCursor(plan, cursor, registry, provider, capabilities, dialect, model, alias, physicalColumns, plan.OrderBy(), reverse)
+		cursorPrefix, cursorJoin, boundary, values, cursorPlanMap, cursorErr := renderCursor(plan, cursor, registry, provider, capabilities, dialect, model, alias, physicalColumns, plan.OrderBy(), reverse, policyir.RelationID(endpoint.RelationID()), PlanAliasPhysicalAccess, policyAliases)
 		if cursorErr != nil {
 			return batchContext{}, cursorErr
 		}
 		prefix, cursorArgs = cursorPrefix, values
+		planMap.merge(cursorPlanMap)
 		from += cursorJoin
 		whereSQL = "(" + whereSQL + ") AND (" + boundary + ")"
 	}
@@ -368,7 +379,16 @@ func prepareBatchContext(plan readplan.Plan, endpoint schema.RelationEndpoint, r
 		}
 		keyFields[index], keyIDs[index] = resolved, id
 	}
-	return batchContext{dialect: dialect, resolver: resolver, model: model, alias: alias, fields: fields, physical: physicalColumns, keyFields: keyFields, keyIDs: keyIDs, whereSQL: whereSQL, whereArgs: fragment.Args(), counts: renderedCounts, countArgs: countArgs, prefix: prefix, from: from, cursorArgs: cursorArgs, orderSQL: rootOrder, reverse: reverse, provider: provider, registry: registry, capabilities: capabilities}, nil
+	return batchContext{dialect: dialect, resolver: resolver, model: model, alias: alias, fields: fields, physical: physicalColumns, keyFields: keyFields, keyIDs: keyIDs, whereSQL: whereSQL, whereArgs: fragment.Args(), counts: renderedCounts, countArgs: countArgs, prefix: prefix, from: from, cursorArgs: cursorArgs, orderSQL: rootOrder, reverse: reverse, provider: provider, registry: registry, capabilities: capabilities, planMap: planMap.freeze()}, nil
+}
+
+func endpointChildFieldIDs(endpoint schema.RelationEndpoint) []policyir.FieldID {
+	pairs := endpoint.Correlation()
+	fields := make([]policyir.FieldID, len(pairs))
+	for index, pair := range pairs {
+		fields[index] = policyir.FieldID(pair.ChildFieldID())
+	}
+	return fields
 }
 
 func encodeBatchValue(dialect policysql.Dialect, resolver policysql.Resolver, typ policyir.TypeRef, value policyir.Value) (any, error) {

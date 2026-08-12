@@ -19,6 +19,9 @@ import (
 )
 
 func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {
+	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
+		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: %w", err)
+	}
 	namespace := options.Namespace
 	if namespace == "" {
 		namespace = "main"
@@ -108,6 +111,10 @@ type lowerState struct {
 
 func (state *lowerState) lowerTable(model ir.ModelDeclIR) (physical.PhysicalTable, error) {
 	table := physical.PhysicalTable{ID: model.ID, Name: physical.PhysicalName(model.Table.PhysicalName)}
+	if model.OptimisticConcurrency != nil {
+		field := *model.OptimisticConcurrency
+		table.OptimisticConcurrency = &field
+	}
 	fieldMap := make(map[ir.FieldID]physical.PhysicalColumn)
 	fields := append([]ir.FieldIR(nil), model.Fields...)
 	sort.SliceStable(fields, func(i, j int) bool {

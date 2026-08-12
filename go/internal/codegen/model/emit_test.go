@@ -136,7 +136,7 @@ func TestScalarHandleMappingIsExactForEveryLogicalFamily(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			gotInit, err := fieldInitializer(field, ir.ModelID(id(2)), models, enums, nil, imports)
+			gotInit, err := fieldInitializer(field, ir.ModelID(id(2)), models, enums, nil, imports, "")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -475,6 +475,12 @@ func TestFinalDescriptorAccessorCarriesGenerationDigest(t *testing.T) {
 	source := string(result.Files[0].Source)
 	if !strings.Contains(source, "golem.GeneratedStampedPackageDescriptors(golem.SchemaDigest{0xaa") {
 		t.Fatalf("final descriptor accessor lacks fixed-width generation stamp:\n%s", source)
+	}
+	if !strings.Contains(source, "golem.GeneratedStampedModelDescriptor[Post](golem.SchemaDigest{0xaa") {
+		t.Fatalf("final model descriptor lacks its immutable generation stamp:\n%s", source)
+	}
+	if !strings.Contains(source, "golem.GeneratedStampedModeTextField[Post, string](golem.SchemaDigest{0xaa") || !strings.Contains(source, "golem.GeneratedStampedToOne[Post, User](golem.SchemaDigest{0xaa") {
+		t.Fatalf("final scalar or relation field lacks its immutable generation stamp:\n%s", source)
 	}
 }
 

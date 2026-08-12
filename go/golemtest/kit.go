@@ -253,6 +253,9 @@ func Model[M any](policies PolicySet, descriptor golem.ModelDescriptor[M]) (Mode
 	if id == (golem.ModelID{}) {
 		return ModelPolicy[M]{}, fail(ErrorInvalidInput, "model descriptor carries a zero model identity")
 	}
+	if descriptor.GenerationDigest() == (golem.SchemaDigest{}) || descriptor.GenerationDigest() != policies.generation {
+		return ModelPolicy[M]{}, failModel(ErrorGenerationMismatch, "model descriptor does not carry this policy set's generation", id)
+	}
 
 	registered, known := policies.models[id]
 	if !known {

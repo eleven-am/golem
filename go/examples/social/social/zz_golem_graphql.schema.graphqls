@@ -1061,6 +1061,53 @@ input CommentUpdateManyWithWhereWithoutAuthorInput { where: CommentWhereInput! d
 
 input CommentUpsertWithWhereWithoutAuthorInput { where: CommentWhereUniqueInput! create: CommentCreateWithoutAuthorInput! update: CommentUpdateWithoutAuthorInput! }
 
+type VersionedNote {
+  id: UUID
+  body: String
+  version: BigInt
+}
+
+input VersionedNoteWhereInput {
+  all: Boolean
+  AND: [VersionedNoteWhereInput!]
+  OR: [VersionedNoteWhereInput!]
+  NOT: [VersionedNoteWhereInput!]
+  id: UUIDFilter
+  body: StringFilter
+  version: BigIntFilter
+}
+
+input VersionedNoteOrderByInput {
+  id: SortOrder
+  body: SortOrder
+  version: SortOrder
+}
+
+enum VersionedNoteScalarField {
+  id
+  body
+  version
+}
+
+input VersionedNoteWhereUniqueInput @oneOf {
+  ID: UUID
+}
+
+input VersionedNoteCreateInput {
+  id: UUID
+  body: String!
+}
+
+input VersionedNoteUpdateInput {
+  id: UUIDUpdateOperationsInput
+  body: StringUpdateOperationsInput
+}
+
+input VersionedNoteConcurrencyExpectationInput {
+  version: BigInt
+  absent: Boolean
+}
+
 input CommentCreateWithoutAuthorInput {
   id: UUID
   body: String!
@@ -1333,6 +1380,8 @@ type Query {
   tags(where: TagWhereInput, orderBy: [TagOrderByInput!], cursor: TagWhereUniqueInput, distinct: [TagScalarField!], skip: Int, take: Int = 50): [Tag!]!
   user(where: UserWhereUniqueInput!): User
   users(where: UserWhereInput, orderBy: [UserOrderByInput!], cursor: UserWhereUniqueInput, distinct: [UserScalarField!], skip: Int, take: Int = 25): [User!]!
+  versionedNote(where: VersionedNoteWhereUniqueInput!): VersionedNote
+  versionedNotes(where: VersionedNoteWhereInput, orderBy: [VersionedNoteOrderByInput!], cursor: VersionedNoteWhereUniqueInput, distinct: [VersionedNoteScalarField!], skip: Int, take: Int = 50): [VersionedNote!]!
   searchPosts(take: Int!, where: PostWhereInput!): [Post!]!
 }
 
@@ -1367,6 +1416,10 @@ type Mutation {
   deleteUser(where: UserWhereUniqueInput!): User!
   updateManyUsers(where: UserWhereInput!, data: UserUpdateManyInput!): BatchPayload!
   deleteManyUsers(where: UserWhereInput!): BatchPayload!
+  createVersionedNote(data: VersionedNoteCreateInput!): VersionedNote!
+  updateVersionedNote(where: VersionedNoteWhereUniqueInput!, expectedVersion: BigInt!, data: VersionedNoteUpdateInput!): VersionedNote!
+  upsertVersionedNote(where: VersionedNoteWhereUniqueInput!, expectation: VersionedNoteConcurrencyExpectationInput!, create: VersionedNoteCreateInput!, update: VersionedNoteUpdateInput!): VersionedNote!
+  deleteVersionedNote(where: VersionedNoteWhereUniqueInput!, expectedVersion: BigInt!): VersionedNote!
   publishPost(fail: Boolean!, postID: UUID!): BigInt!
 }
 

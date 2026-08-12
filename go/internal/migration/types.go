@@ -17,37 +17,38 @@ type OperationID string
 type OperationKind string
 
 const (
-	BootstrapSystemSchema   OperationKind = "bootstrapSystemSchema"
-	AddSystemObject         OperationKind = "addSystemObject"
-	CreateNamespace         OperationKind = "createNamespace"
-	CreateTable             OperationKind = "createTable"
-	RenameTable             OperationKind = "renameTable"
-	DropTable               OperationKind = "dropTable"
-	AddColumn               OperationKind = "addColumn"
-	RenameColumn            OperationKind = "renameColumn"
-	AlterColumnType         OperationKind = "alterColumnType"
-	AlterColumnNullability  OperationKind = "alterColumnNullability"
-	SetColumnDefault        OperationKind = "setColumnDefault"
-	DropColumnDefault       OperationKind = "dropColumnDefault"
-	DropColumn              OperationKind = "dropColumn"
-	AddPrimaryKey           OperationKind = "addPrimaryKey"
-	DropPrimaryKey          OperationKind = "dropPrimaryKey"
-	AddUnique               OperationKind = "addUnique"
-	DropUnique              OperationKind = "dropUnique"
-	AddForeignKey           OperationKind = "addForeignKey"
-	DropForeignKey          OperationKind = "dropForeignKey"
-	AddCheck                OperationKind = "addCheck"
-	DropCheck               OperationKind = "dropCheck"
-	CreateIndex             OperationKind = "createIndex"
-	DropIndex               OperationKind = "dropIndex"
-	RenameIndex             OperationKind = "renameIndex"
-	CreateProviderExtension OperationKind = "createProviderExtension"
-	DropProviderExtension   OperationKind = "dropProviderExtension"
-	BackfillColumn          OperationKind = "backfillColumn"
-	RebuildTable            OperationKind = "rebuildTable"
-	ValidateConstraint      OperationKind = "validateConstraint"
-	ManualStep              OperationKind = "manualStep"
-	RecordSchemaVersion     OperationKind = "recordSchemaVersion"
+	BootstrapSystemSchema       OperationKind = "bootstrapSystemSchema"
+	AddSystemObject             OperationKind = "addSystemObject"
+	CreateNamespace             OperationKind = "createNamespace"
+	CreateTable                 OperationKind = "createTable"
+	RenameTable                 OperationKind = "renameTable"
+	DropTable                   OperationKind = "dropTable"
+	AddColumn                   OperationKind = "addColumn"
+	RenameColumn                OperationKind = "renameColumn"
+	AlterColumnType             OperationKind = "alterColumnType"
+	AlterColumnNullability      OperationKind = "alterColumnNullability"
+	SetColumnDefault            OperationKind = "setColumnDefault"
+	DropColumnDefault           OperationKind = "dropColumnDefault"
+	DropColumn                  OperationKind = "dropColumn"
+	AddPrimaryKey               OperationKind = "addPrimaryKey"
+	DropPrimaryKey              OperationKind = "dropPrimaryKey"
+	AddUnique                   OperationKind = "addUnique"
+	DropUnique                  OperationKind = "dropUnique"
+	AddForeignKey               OperationKind = "addForeignKey"
+	DropForeignKey              OperationKind = "dropForeignKey"
+	AddCheck                    OperationKind = "addCheck"
+	DropCheck                   OperationKind = "dropCheck"
+	CreateIndex                 OperationKind = "createIndex"
+	DropIndex                   OperationKind = "dropIndex"
+	RenameIndex                 OperationKind = "renameIndex"
+	CreateProviderExtension     OperationKind = "createProviderExtension"
+	DropProviderExtension       OperationKind = "dropProviderExtension"
+	BackfillColumn              OperationKind = "backfillColumn"
+	InitializeConcurrencyColumn OperationKind = "initializeConcurrencyColumn"
+	RebuildTable                OperationKind = "rebuildTable"
+	ValidateConstraint          OperationKind = "validateConstraint"
+	ManualStep                  OperationKind = "manualStep"
+	RecordSchemaVersion         OperationKind = "recordSchemaVersion"
 )
 
 type Risk string
@@ -108,6 +109,34 @@ type Plan struct {
 	AfterFingerprint  Digest      `json:"afterFingerprint"`
 	Operations        []Operation `json:"operations"`
 	Phases            []Phase     `json:"phases"`
+	snapshotFacts     *PlanSnapshotFacts
+}
+
+// PlanSnapshotFacts is the detached, non-persisted typed evidence owned by a
+// plan created by Diff or DiffReviewed. It is deliberately opaque to callers:
+// accessors return fresh normalized copies so report adapters cannot mutate the
+// facts that bind an operation graph to its before/after schemas.
+type PlanSnapshotFacts struct {
+	before physical.PhysicalSchema
+	after  physical.PhysicalSchema
+}
+
+// SnapshotFacts returns the typed evidence attached by the sole migration diff
+// owner. Hand-authored Plan values have no such evidence and cannot be
+// explained as prospective plans.
+func (plan Plan) SnapshotFacts() (PlanSnapshotFacts, bool) {
+	if plan.snapshotFacts == nil {
+		return PlanSnapshotFacts{}, false
+	}
+	return PlanSnapshotFacts{before: clonePlanSnapshot(plan.snapshotFacts.before), after: clonePlanSnapshot(plan.snapshotFacts.after)}, true
+}
+
+func (facts PlanSnapshotFacts) Before() physical.PhysicalSchema {
+	return clonePlanSnapshot(facts.before)
+}
+
+func (facts PlanSnapshotFacts) After() physical.PhysicalSchema {
+	return clonePlanSnapshot(facts.after)
 }
 
 type Approval struct {

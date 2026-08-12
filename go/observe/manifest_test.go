@@ -149,6 +149,7 @@ func TestP8ObservationCoverageManifest(t *testing.T) {
 		{"test", "./internal/p8oracle/mutation", "-run", `^TestP8`, "-count=1", "-v"},
 		{"test", "./internal/p8oracle/analytics", "-run", `^TestP8`, "-count=1", "-v"},
 		{"test", "./internal/p8oracle/event", "-run", `^TestP8`, "-count=1", "-v"},
+		{"test", "./golemtest", "-run", `^TestQueryPlanSQLiteAndPostgreSQLExternalGeneratedApplication$`, "-count=1", "-v"},
 		{"test", "./internal/generate/pipeline", "-run", `^TestFreshGeneratedSemantic(SQLiteApplicationOwnsEmbeddingLifecycle|PostgreSQLApplicationOwnsPGVectorLifecycle)$`, "-count=1", "-v"},
 	}
 	for _, arguments := range commands {

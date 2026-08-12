@@ -298,6 +298,12 @@ func TestProspectiveCompileFailureAborts(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "prospective generated graph does not compile") || !reflect.DeepEqual(result, Result{}) {
 		t.Fatalf("result=%#v error=%v", result, err)
 	}
+	request.ReadOnlyDiagnostics = true
+	request.ProspectiveModfileDir = t.TempDir()
+	result, err = Build(context.Background(), request)
+	if err == nil || !strings.Contains(err.Error(), "prospective generated graph does not compile") || !reflect.DeepEqual(result, Result{}) {
+		t.Fatalf("read-only exact prospective compile result=%#v error=%v", result, err)
+	}
 }
 
 func TestProspectiveExcludesOnlyHeaderVerifiedStaleManifestFiles(t *testing.T) {

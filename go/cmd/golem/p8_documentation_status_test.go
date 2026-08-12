@@ -179,6 +179,44 @@ func TestP8IntentionalBoundaryDisclosureCorpus(t *testing.T) {
 	}
 }
 
+func TestOrder7NATSDeploymentDocumentationIsExact(t *testing.T) {
+	_, repositoryRoot := p8DocumentationRoots(t)
+	production := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "PRODUCTION.md"))
+	productionABI := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "PUBLIC-PRODUCTION-ABI.md"))
+
+	for name, document := range map[string]string{"production": production, "public ABI": productionABI} {
+		p8RequireDocumentText(t, name, document,
+			"github.com/eleven-am/golem/go/events/nats",
+			"GOLEM_EVENT_TRANSPORT=nats",
+			"GOLEM_NATS_URLS",
+			"GOLEM_NATS_SUBJECT_PREFIX",
+			"max_payload: 2097152",
+			"<prefix>.g1.<event-schema-digest>.<model-id>",
+			"Core NATS does not replay",
+			"delivery remains at least once",
+			"start explicitly owned publisher/CDC workers\n  -> require database, publisher, and transport readiness\n  -> admit traffic",
+			"stop HTTP admission, shut down GraphQL, cancel and wait for the publisher, close the transport, and then close the database",
+		)
+	}
+	p8RequireDocumentText(t, "production", production,
+		"SQLite always uses the process-local memory transport",
+		"The maintained adapter uses Core NATS, not JetStream",
+		"SubjectPrefix is required and must be unique to the authoritative database within the NATS account",
+		"EventSchemaDigest and ModelID",
+		"The generation digest is authenticated inside the notice and is not a routing component",
+		"The adapter refuses startup or reconnect when the broker ceiling is smaller than its configured event limit",
+		"A terminal disconnect makes readiness fail; a reconnect restores transport availability only after the ceiling is proved again",
+		"A failed or timed-out ownership barrier does not close a downstream dependency still in use",
+		"CDC/broker credentials as secrets",
+		"not command history, source, migration files, health output, logs, traces, or metrics",
+	)
+	p8RequireDocumentText(t, "public ABI", productionABI,
+		"SQLite plus NATS is refused before any broker dial",
+		"Core NATS does not replay and is not durable",
+		"every initial connection or reconnect must prove the broker payload ceiling before availability can become true",
+	)
+}
+
 func TestP8NoCompletedABIStillClaimsUnimplemented(t *testing.T) {
 	moduleRoot, repositoryRoot := p8DocumentationRoots(t)
 	productionABI := p8ReadDocument(t, filepath.Join(repositoryRoot, "docs", "golem-go", "p8", "PUBLIC-PRODUCTION-ABI.md"))

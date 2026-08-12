@@ -33,11 +33,19 @@ type catalogQuerier interface {
 	SelectContext(context.Context, any, string, ...any) error
 }
 
+// reviewedSnapshot can only be constructed from a sealed migration entry.
+// Bare historical schemas cannot cross the active provider boundary.
+type reviewedSnapshot struct{ schema physical.PhysicalSchema }
+
 func (provider *Provider) introspect(ctx context.Context, database *sqlx.DB, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
+	normalized, err := physical.Normalize(expected)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
 	if _, err := provider.probe(ctx, database); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return provider.introspectCatalog(ctx, database, expected)
+	return provider.introspectCatalog(ctx, database, normalized)
 }
 
 func (provider *Provider) introspectCatalog(ctx context.Context, database catalogQuerier, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
@@ -45,6 +53,18 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
+	return provider.introspectNormalizedCatalog(ctx, database, normalized)
+}
+
+func (provider *Provider) introspectReviewedCatalog(ctx context.Context, database catalogQuerier, reviewed reviewedSnapshot) (physical.PhysicalSchema, error) {
+	normalized, err := physical.NormalizeHistorical(reviewed.schema)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	return provider.introspectNormalizedCatalog(ctx, database, normalized)
+}
+
+func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, database catalogQuerier, normalized physical.PhysicalSchema) (physical.PhysicalSchema, error) {
 	var rows []schemaRow
 	if err := database.SelectContext(ctx, &rows, "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','index','view','trigger') ORDER BY type,name"); err != nil {
 		return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect schema: %w", err)
@@ -90,30 +110,32 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 			expectedObjects["index\x00"+string(index.Name)] = statement
 		}
 	}
-	for _, extension := range normalized.Extensions {
-		statements, renderErr := renderSemanticExtension(extension)
-		if renderErr != nil {
-			return physical.PhysicalSchema{}, renderErr
-		}
-		descriptor, decodeErr := semanticstorage.Decode(extension)
-		if decodeErr != nil {
-			return physical.PhysicalSchema{}, decodeErr
-		}
-		stateName := string(descriptor.Storage) + "_state"
-		vectorName := string(descriptor.Storage) + "_vec"
-		expectedObjects["table\x00"+stateName] = statements[0]
-		vectorKey := "table\x00" + vectorName
-		vector, exists := actual[vectorKey]
-		if !exists || strings.TrimSpace(vector.SQL) != statements[1] {
-			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)
-		}
-		delete(actual, vectorKey)
-		for _, suffix := range []string{"_chunks", "_info", "_rowids", "_vector_chunks00"} {
-			key := "table\x00" + vectorName + suffix
-			if _, exists := actual[key]; !exists {
-				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector shadow table %s%s", vectorName, suffix)
+	if normalized.Version != 1 || normalized.CanonicalVersion != 1 {
+		for _, extension := range normalized.Extensions {
+			statements, renderErr := renderSemanticExtension(extension)
+			if renderErr != nil {
+				return physical.PhysicalSchema{}, renderErr
 			}
-			delete(actual, key)
+			descriptor, decodeErr := semanticstorage.Decode(extension)
+			if decodeErr != nil {
+				return physical.PhysicalSchema{}, decodeErr
+			}
+			stateName := string(descriptor.Storage) + "_state"
+			vectorName := string(descriptor.Storage) + "_vec"
+			expectedObjects["table\x00"+stateName] = statements[0]
+			vectorKey := "table\x00" + vectorName
+			vector, exists := actual[vectorKey]
+			if !exists || strings.TrimSpace(vector.SQL) != statements[1] {
+				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)
+			}
+			delete(actual, vectorKey)
+			for _, suffix := range []string{"_chunks", "_info", "_rowids", "_vector_chunks00"} {
+				key := "table\x00" + vectorName + suffix
+				if _, exists := actual[key]; !exists {
+					return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector shadow table %s%s", vectorName, suffix)
+				}
+				delete(actual, key)
+			}
 		}
 	}
 	for _, unmanaged := range normalized.Unmanaged {

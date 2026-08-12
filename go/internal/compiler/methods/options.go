@@ -6,6 +6,8 @@ import (
 	"regexp"
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
+	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
@@ -137,6 +139,8 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		return
 	}
 	switch in.callOperation(call) {
+	case "OptimisticConcurrency":
+		in.evalOptimisticConcurrency(call, scope)
 	case "ForProvider":
 		if len(call.Args) < 2 {
 			in.errorAt("P1_METHOD_PROVIDER_ARITY", "ForProvider requires a provider and at least one option", call)
@@ -216,6 +220,27 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		in.errorAt("P1_METHOD_OPTION_CALL", "call is not a recognized golem model-option constructor", expression)
 	}
+}
+
+func (in *interpreter) evalOptimisticConcurrency(call *ast.CallExpr, scope ir.ProviderScope) {
+	if scope != ir.ProviderScopePortable {
+		in.errorAt("P1_CONCURRENCY_PROVIDER_SCOPE", "OptimisticConcurrency is portable and cannot be provider-scoped", call)
+		return
+	}
+	if len(call.Args) != 1 {
+		in.errorAt("P1_CONCURRENCY_ARITY", "OptimisticConcurrency requires exactly one generated int64 scalar field handle", call)
+		return
+	}
+	if in.concurrency != nil {
+		in.errorAt("P1_CONCURRENCY_DUPLICATE", "OptimisticConcurrency may be declared only once for a model", call)
+		return
+	}
+	symbol, valid := in.resolveHandle(call.Args[0])
+	if !valid || symbol.Kind != modelcodegen.SymbolField || symbol.FieldID == "" {
+		in.errorAt("P1_CONCURRENCY_FIELD", "OptimisticConcurrency requires a generated scalar field handle of this model", call.Args[0])
+		return
+	}
+	in.concurrency = &compilerconcurrency.Declaration{ModelID: in.model.ID, FieldID: symbol.FieldID, Span: in.span(call)}
 }
 
 func (in *interpreter) evalSemanticIndex(call *ast.CallExpr) {

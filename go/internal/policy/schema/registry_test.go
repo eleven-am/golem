@@ -124,6 +124,91 @@ func TestNilRegistryIdentityMembershipFailsClosed(t *testing.T) {
 	}
 }
 
+func TestRegistryOptimisticConcurrencyRequiresExactThreeWayAgreement(t *testing.T) {
+	bundle, ids, token := concurrencyTestBundle(t)
+	registry, err := New(bundle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, ok := registry.Model(ids.post)
+	got, enabled := model.OptimisticConcurrency()
+	if !ok || !enabled || got != token {
+		t.Fatalf("optimistic concurrency = %x enabled=%v model=%v", got, enabled, ok)
+	}
+	copyModel := model
+	copyModel.optimisticConcurrency = nil
+	got, enabled = registryModelConcurrency(t, registry, ids.post)
+	if !enabled || got != token {
+		t.Fatal("model accessor mutation escaped into registry")
+	}
+
+	var contract compilerir.ContractIR
+	if err := decodeCanonicalJSON(bundle.Contract().Bytes(), &contract); err != nil {
+		t.Fatal(err)
+	}
+	contract.Models[1].OptimisticConcurrency = nil
+	contractBytes, err := compilerir.CanonicalContract(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractFingerprint, err := compilerir.ContractFingerprint(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forgedContract := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(contractFingerprint)), contractBytes)
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), forgedContract, bundle.Providers()...)); err == nil || !strings.Contains(err.Error(), "ModelIR and ContractIR") {
+		t.Fatalf("contract omission error = %v", err)
+	}
+
+	providers := bundle.Providers()
+	decoded, err := physical.CanonicalDecode(providers[0].Schema().Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := range decoded.Tables {
+		if decoded.Tables[index].ID == compilerir.ModelID(testID(2)) {
+			decoded.Tables[index].OptimisticConcurrency = nil
+		}
+	}
+	providers[0] = providerDocument(t, providers[0].Provider(), decoded)
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)); err == nil || !strings.Contains(err.Error(), "ModelIR and physical") {
+		t.Fatalf("physical omission error = %v", err)
+	}
+
+	var invalidModes compilerir.ContractIR
+	if err := decodeCanonicalJSON(bundle.Contract().Bytes(), &invalidModes); err != nil {
+		t.Fatal(err)
+	}
+	for modelIndex := range invalidModes.Models {
+		for fieldIndex := range invalidModes.Models[modelIndex].Fields {
+			if invalidModes.Models[modelIndex].Fields[fieldIndex].FieldID == compilerir.FieldID(testID(25)) {
+				invalidModes.Models[modelIndex].Fields[fieldIndex].Modes = []compilerir.FieldMode{compilerir.ModeReadOnly}
+			}
+		}
+	}
+	invalidModeBytes, err := compilerir.CanonicalContract(invalidModes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidModeFingerprint, err := compilerir.ContractFingerprint(invalidModes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidModeDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(invalidModeFingerprint)), invalidModeBytes)
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), invalidModeDocument, bundle.Providers()...)); err == nil || !strings.Contains(err.Error(), "exact ordinary visible contract mode") {
+		t.Fatalf("non-visible concurrency contract mode error = %v", err)
+	}
+}
+
+func registryModelConcurrency(t *testing.T, registry *Registry, model golem.ModelID) (golem.FieldID, bool) {
+	t.Helper()
+	fact, ok := registry.Model(model)
+	if !ok {
+		t.Fatal("model absent")
+	}
+	return fact.OptimisticConcurrency()
+}
+
 func TestRegistryRejectsMalformedOrMismatchedBundleFacts(t *testing.T) {
 	bundle, _ := testBundle(t)
 	modelDocument := bundle.Model()
@@ -344,6 +429,75 @@ func testBundle(t *testing.T) (golem.SchemaBundle, testIDs) {
 	return bundle, testIDs{user: mustModelID(t, userID), post: mustModelID(t, postID), userID: mustFieldID(t, userKey), postID: mustFieldID(t, postKey), author: mustFieldID(t, author), price: mustFieldID(t, price), authorRelationField: mustFieldID(t, authorRelation), postsRelationField: mustFieldID(t, postsRelation), relation: mustRelationID(t, relationID)}
 }
 
+func concurrencyTestBundle(t *testing.T) (golem.SchemaBundle, testIDs, golem.FieldID) {
+	t.Helper()
+	base, ids := testBundle(t)
+	field := compilerir.FieldID(testID(25))
+	var model compilerir.ModelIR
+	if err := decodeCanonicalJSON(base.Model().Bytes(), &model); err != nil {
+		t.Fatal(err)
+	}
+	model.Models[1].Fields = append(model.Models[1].Fields, logicalScalar(field, "Version", "version", compilerir.LogicalTypeIR{Kind: compilerir.TypeInt64}, false))
+	model.Models[1].OptimisticConcurrency = &field
+	modelBytes, err := compilerir.CanonicalModel(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelFingerprint, err := compilerir.ModelFingerprint(model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ModelFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(modelFingerprint)), modelBytes)
+
+	var contract compilerir.ContractIR
+	if err := decodeCanonicalJSON(base.Contract().Bytes(), &contract); err != nil {
+		t.Fatal(err)
+	}
+	contract.Models[1].Fields = append(contract.Models[1].Fields, compilerir.FieldContractIR{FieldID: field, Modes: []compilerir.FieldMode{compilerir.ModeVisible}})
+	contract.Models[1].OptimisticConcurrency = &field
+	eventSchema, err := compilerir.BuildEventSchemaShape(model.Models[1], model.Enums, []compilerir.FieldID{compilerir.FieldID(testID(24)), compilerir.FieldID(testID(22)), compilerir.FieldID(testID(21)), field})
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventFingerprint, err := compilerir.EventSchemaFingerprint(eventSchema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contract.Models[1].Event.Schema = eventSchema
+	contract.Models[1].Event.SchemaFingerprint = eventFingerprint
+	contractBytes, err := compilerir.CanonicalContract(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractFingerprint, err := compilerir.ContractFingerprint(contract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contractDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(contractFingerprint)), contractBytes)
+
+	providers := base.Providers()
+	for index, document := range providers {
+		schema, decodeErr := physical.CanonicalDecode(document.Schema().Bytes())
+		if decodeErr != nil {
+			t.Fatal(decodeErr)
+		}
+		for tableIndex := range schema.Tables {
+			if schema.Tables[tableIndex].ID != compilerir.ModelID(testID(2)) {
+				continue
+			}
+			storage := physical.StorageType{Kind: physical.StorageSQLiteInteger}
+			if schema.Provider.Provider == compilerir.PostgreSQL {
+				storage = physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}
+			}
+			schema.Tables[tableIndex].Columns = append(schema.Tables[tableIndex].Columns, physical.PhysicalColumn{ID: field, Name: "version", Ordinal: uint32(len(schema.Tables[tableIndex].Columns)), Storage: storage, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+			value := field
+			schema.Tables[tableIndex].OptimisticConcurrency = &value
+		}
+		providers[index] = providerDocument(t, document.Provider(), schema)
+	}
+	return golem.GeneratedSchemaBundle(base.GenerationDigest(), base.GeneratorVersion(), base.TemplateABIVersion(), modelDocument, contractDocument, providers...), ids, mustFieldID(t, field)
+}
+
 func uint16Pointer(value uint16) *uint16 { return &value }
 
 func logicalScalar(id compilerir.FieldID, name, column string, typ compilerir.LogicalTypeIR, nullable bool) compilerir.FieldIR {
@@ -357,7 +511,7 @@ func logicalRelation(id compilerir.FieldID, name string, relation compilerir.Rel
 func physicalSchema(provider compilerir.Provider, user, post compilerir.ModelID, userID, postID, author, price compilerir.FieldID) physical.PhysicalSchema {
 	manifest, namespace := physical.PostgreSQLManifest(), physical.PhysicalName("public")
 	uuidStorage := physical.StoragePostgreSQLUUID
-	stringType := physical.StorageType{Kind: physical.StoragePostgreSQLText}
+	stringType := physical.StorageType{Kind: physical.StoragePostgreSQLVarchar, Length: 128}
 	priceType := physical.StorageType{Kind: physical.StoragePostgreSQLNumeric, Precision: 18, Scale: 4}
 	if provider == compilerir.SQLite {
 		manifest, namespace = physical.SQLiteManifest(), "main"

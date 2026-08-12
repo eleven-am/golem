@@ -78,7 +78,7 @@ func TestEmitShellMatchesFinalCallerABI(t *testing.T) {
 	if gotExports := registryTopLevelExports(t, shell.Source); fmt.Sprint(gotExports) != fmt.Sprint(wantExports) {
 		t.Fatalf("registry bootstrap exposed unexpected top-level declarations\ngot:  %v\nwant: %v\n\n%s", gotExports, wantExports, shell.Source)
 	}
-	assertRegistryShellClosed(t, shell.Source, []string{"context", modelcodegen.DefaultGolemImportPath})
+	assertRegistryShellClosed(t, shell.Source, []string{"context", modelcodegen.DefaultGolemImportPath, strings.TrimSuffix(modelcodegen.DefaultGolemImportPath, "/golem") + "/queryplan"})
 	for _, forbidden := range []string{"System", "App", "Config", "sqlx", "database/sql", "golemruntime", " runtime ", " DB ", " Tx "} {
 		if bytes.Contains(shell.Source, []byte(forbidden)) {
 			t.Fatalf("registry bootstrap leaked forbidden capability %q:\n%s", forbidden, shell.Source)

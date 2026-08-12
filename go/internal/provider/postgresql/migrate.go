@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
@@ -31,14 +30,33 @@ type IncrementalPlan struct {
 type incrementalStep struct {
 	statement     string
 	backfill      migration.OperationID
-	postcondition *nullPostcondition
+	postcondition *generatedPostcondition
 }
 
-type nullPostcondition struct {
+type generatedPostconditionKind uint8
+
+const (
+	postconditionNoNulls generatedPostconditionKind = iota + 1
+	postconditionConcurrencyExactlyOne
+)
+
+type generatedPostcondition struct {
 	operation migration.OperationID
 	namespace physical.PhysicalName
 	table     physical.PhysicalName
 	column    physical.PhysicalName
+	kind      generatedPostconditionKind
+}
+
+func (condition generatedPostcondition) predicate() (string, error) {
+	switch condition.kind {
+	case postconditionNoNulls:
+		return quote(condition.column) + " IS NULL", nil
+	case postconditionConcurrencyExactlyOne:
+		return quote(condition.column) + " IS DISTINCT FROM 1", nil
+	default:
+		return "", fmt.Errorf("unknown generated invariant kind")
+	}
 }
 
 // SQL renders the reviewed artifact. Companion seams appear as deterministic
@@ -65,10 +83,66 @@ func (provider *Provider) PlanIncremental(entry migration.ManifestEntry) (Increm
 	return provider.planIncremental(entry)
 }
 
+func reviewedInitial(entry migration.ManifestEntry) (reviewedInitialSnapshot, error) {
+	plan, err := reviewedEntryPlan(entry)
+	if err != nil {
+		return reviewedInitialSnapshot{}, err
+	}
+	if !plan.Initial {
+		return reviewedInitialSnapshot{}, fmt.Errorf("reviewed initial snapshot lacks the exact sealed operation graph")
+	}
+	return reviewedInitialSnapshot{schema: entry.AfterSnapshot}, nil
+}
+
+func reviewedEntryPlan(entry migration.ManifestEntry) (migration.Plan, error) {
+	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
+	if err != nil {
+		return migration.Plan{}, err
+	}
+	provider := entry.AfterSnapshot.Provider.Provider
+	if plan.Provider != provider ||
+		plan.BeforeFingerprint != entry.BeforePhysical ||
+		plan.AfterFingerprint != entry.AfterPhysical ||
+		!reflect.DeepEqual(plan.Operations, entry.Operations) ||
+		!reflect.DeepEqual(plan.Phases, entry.Phases) {
+		return migration.Plan{}, fmt.Errorf("reviewed migration snapshot lacks the exact sealed typed plan")
+	}
+	return plan, nil
+}
+
+func reviewedEntrySnapshots(entry migration.ManifestEntry) (reviewedSnapshot, reviewedSnapshot, error) {
+	if _, err := reviewedEntryPlan(entry); err != nil {
+		return reviewedSnapshot{}, reviewedSnapshot{}, err
+	}
+	return reviewedSnapshot{schema: entry.BeforeSnapshot}, reviewedSnapshot{schema: entry.AfterSnapshot}, nil
+}
+
 // ApplyMigration verifies immutable history and applies exactly the next
 // reviewed entry. It never skips or batches ledger entries.
 func (provider *Provider) ApplyMigration(ctx context.Context, database *sqlx.DB, manifest migration.Manifest, files map[string][]byte) error {
 	return provider.applyMigration(ctx, database, manifest, files)
+}
+
+// RenderMigration returns the exact provider DDL reviewed for one sealed typed
+// entry. Historical snapshots are reachable only through this entry-bound
+// seam; the public RenderInitial surface remains current-format-only.
+func (provider *Provider) RenderMigration(entry migration.ManifestEntry) (Script, error) {
+	semantic, err := reviewedEntryPlan(entry)
+	if err != nil {
+		return Script{}, err
+	}
+	if semantic.Initial {
+		reviewed, reviewErr := reviewedInitial(entry)
+		if reviewErr != nil {
+			return Script{}, reviewErr
+		}
+		return provider.renderReviewedInitialSnapshot(reviewed)
+	}
+	plan, err := provider.planIncremental(entry)
+	if err != nil {
+		return Script{}, err
+	}
+	return Script{raw: plan.SQL()}, nil
 }
 
 // ReadLedger returns the exact ordered PostgreSQL migration chain.
@@ -94,7 +168,7 @@ func (*Provider) ReadLedgerForSchema(ctx context.Context, database *sqlx.DB, sys
 }
 
 func (provider *Provider) planIncremental(entry migration.ManifestEntry) (IncrementalPlan, error) {
-	semantic, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
 	if err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s semantic diff: %w", entry.ID, err)
 	}
@@ -108,15 +182,23 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err := migration.ValidatePlan(semantic, entry.Approvals); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s invalid reviewed plan: %w", entry.ID, err)
 	}
-	if err := validatePostgreSQLCompanions(entry, semantic.Operations); err != nil {
-		return IncrementalPlan{}, err
-	}
-	before, err := physical.Normalize(entry.BeforeSnapshot)
+	before, err := physical.NormalizeHistorical(entry.BeforeSnapshot)
 	if err != nil {
 		return IncrementalPlan{}, err
 	}
-	after, err := physical.Normalize(entry.AfterSnapshot)
+	after, err := physical.NormalizeHistorical(entry.AfterSnapshot)
 	if err != nil {
+		return IncrementalPlan{}, err
+	}
+	historicalV1 := before.Version == 1 && before.CanonicalVersion == 1 && after.Version == 1 && after.CanonicalVersion == 1
+	if historicalV1 {
+		if len(entry.Manual) != 0 {
+			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s manual companions are unsupported by the retained v1 runner", entry.ID)
+		}
+		if len(before.Extensions) != 0 || len(after.Extensions) != 0 {
+			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s provider extensions are outside the retained v1 transactional baseline", entry.ID)
+		}
+	} else if err := validatePostgreSQLCompanions(entry, semantic.Operations); err != nil {
 		return IncrementalPlan{}, err
 	}
 	for _, phase := range semantic.Phases {
@@ -132,6 +214,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		case migration.RebuildTable, migration.ManualStep, migration.CreateNamespace, migration.BootstrapSystemSchema:
 			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s kind %s is outside the automatic transactional baseline", entry.ID, operation.ID, operation.Kind)
 		}
+		if historicalV1 && (operation.Kind == migration.AlterColumnType || operation.Kind == migration.BackfillColumn || operation.Kind == migration.ValidateConstraint) {
+			return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s kind %s is outside the retained v1 automatic transactional baseline", entry.ID, operation.ID, operation.Kind)
+		}
 	}
 
 	beforeTables := postgresqlTableMap(before.Tables)
@@ -140,7 +225,11 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err != nil {
 		return IncrementalPlan{}, err
 	}
-	if err := validatePostgreSQLColumnOrder(beforeTables, afterTables, owners, semantic.Operations); err != nil {
+	validateOrder := validatePostgreSQLColumnOrder
+	if historicalV1 {
+		validateOrder = validateHistoricalV1PostgreSQLColumnOrder
+	}
+	if err := validateOrder(beforeTables, afterTables, owners, semantic.Operations); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s: %w", entry.ID, err)
 	}
 	beforeExtensions := make(map[ir.ExtensionID]physical.Extension, len(before.Extensions))
@@ -149,11 +238,11 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 	backfilled := map[ir.FieldID]bool{}
 	for _, operation := range semantic.Operations {
-		if operation.Kind == migration.BackfillColumn {
+		if operation.Kind == migration.BackfillColumn || operation.Kind == migration.InitializeConcurrencyColumn {
 			backfilled[ir.FieldID(operation.ObjectID)] = true
 		}
 	}
-	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled}
+	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled, formatUpgrade: reviewedPostgreSQLV1RepresentationTransition(before, after)}
 	plan := IncrementalPlan{MigrationID: entry.ID}
 	for _, operation := range semantic.Operations {
 		if operation.Kind == migration.BackfillColumn {
@@ -161,9 +250,12 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			continue
 		}
 		if operation.Kind == migration.ValidateConstraint {
-			condition, conditionErr := postgresqlNullPostcondition(after, afterTables, owners, operation)
+			condition, conditionErr := postgresqlGeneratedPostcondition(after, afterTables, owners, operation)
 			if conditionErr != nil {
 				return IncrementalPlan{}, fmt.Errorf("postgresql migration %s operation %s: %w", entry.ID, operation.ID, conditionErr)
+			}
+			if postgresqlConcurrencyOperation(after, operation) {
+				condition.kind = postconditionConcurrencyExactlyOne
 			}
 			plan.steps = append(plan.steps, incrementalStep{postcondition: &condition})
 			continue
@@ -177,6 +269,54 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		}
 	}
 	return plan, nil
+}
+
+// reviewedPostgreSQLV1RepresentationTransition identifies only the retained
+// transitions whose operation graph may contain the frozen physical-v1
+// text-plus-length-check to physical-v2 varchar representation change. The
+// operation renderer still requires the exact text-to-varchar pair and the
+// frozen migration graph/digests; this does not broaden SafeWidening.
+func reviewedPostgreSQLV1RepresentationTransition(before, after physical.PhysicalSchema) bool {
+	if before.Version != 1 || before.CanonicalVersion != 1 {
+		return false
+	}
+	return after.Version == 2 && after.CanonicalVersion == 2 || after.Version == 3 && after.CanonicalVersion == 3
+}
+
+// validateHistoricalV1PostgreSQLColumnOrder is the exact go/v0.0.1 column
+// ordering proof. Current generated-column detach/recreate semantics must not
+// reinterpret a released v1 incremental entry.
+func validateHistoricalV1PostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operations []migration.Operation) error {
+	for tableID, before := range beforeTables {
+		after, exists := afterTables[tableID]
+		if !exists {
+			continue
+		}
+		retained := map[ir.FieldID]bool{}
+		for _, column := range after.Columns {
+			retained[column.ID] = true
+		}
+		actual := make([]ir.FieldID, 0, len(after.Columns))
+		for _, column := range before.Columns {
+			if retained[column.ID] {
+				actual = append(actual, column.ID)
+			}
+		}
+		for _, operation := range operations {
+			if operation.Kind == migration.AddColumn && owners[operation.ID] == tableID {
+				actual = append(actual, ir.FieldID(operation.ObjectID))
+			}
+		}
+		if len(actual) != len(after.Columns) {
+			return fmt.Errorf("table %s final column inventory cannot be represented by ALTER TABLE", tableID)
+		}
+		for index := range actual {
+			if actual[index] != after.Columns[index].ID {
+				return fmt.Errorf("table %s final column order requires a table rebuild", tableID)
+			}
+		}
+	}
+	return nil
 }
 
 func validatePostgreSQLCompanions(entry migration.ManifestEntry, operations []migration.Operation) error {
@@ -204,16 +344,28 @@ func validatePostgreSQLCompanions(entry migration.ManifestEntry, operations []mi
 	return nil
 }
 
-func postgresqlNullPostcondition(schema physical.PhysicalSchema, tables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operation migration.Operation) (nullPostcondition, error) {
+func postgresqlGeneratedPostcondition(schema physical.PhysicalSchema, tables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operation migration.Operation) (generatedPostcondition, error) {
 	table, exists := tables[owners[operation.ID]]
 	if !exists {
-		return nullPostcondition{}, fmt.Errorf("postcondition target table is absent")
+		return generatedPostcondition{}, fmt.Errorf("postcondition target table is absent")
 	}
 	column, ok := postgresqlColumn(table, ir.FieldID(operation.ObjectID))
 	if !ok {
-		return nullPostcondition{}, fmt.Errorf("postcondition target column is absent")
+		return generatedPostcondition{}, fmt.Errorf("postcondition target column is absent")
 	}
-	return nullPostcondition{operation: operation.ID, namespace: schema.Namespace.Name, table: table.Name, column: column.Name}, nil
+	return generatedPostcondition{operation: operation.ID, namespace: schema.Namespace.Name, table: table.Name, column: column.Name, kind: postconditionNoNulls}, nil
+}
+
+func postgresqlConcurrencyOperation(schema physical.PhysicalSchema, operation migration.Operation) bool {
+	field := ir.FieldID(operation.ObjectID)
+	for _, table := range schema.Tables {
+		if table.OptimisticConcurrency == nil || *table.OptimisticConcurrency != field {
+			continue
+		}
+		column, exists := postgresqlColumn(table, field)
+		return exists && !column.Nullable && column.Storage == (physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}) && column.Default.Kind == physical.DefaultNone && column.Generated == nil && column.Collation == nil
+	}
+	return false
 }
 
 func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners map[migration.OperationID]ir.ModelID, beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable) ([]string, error) {
@@ -302,6 +454,12 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		}
 		rendered, err := r.column(after, column)
 		return oneStatement(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", qualified(r.schema.Namespace.Name, after.Name), rendered), err)
+	case migration.InitializeConcurrencyColumn:
+		column, ok := postgresqlColumn(after, ir.FieldID(operation.ObjectID))
+		if !ok || !hasAfter || after.OptimisticConcurrency == nil || *after.OptimisticConcurrency != column.ID || column.Default.Kind != physical.DefaultNone {
+			return nil, fmt.Errorf("initialize concurrency target is not the exact runtime-owned field")
+		}
+		return []string{fmt.Sprintf("UPDATE %s SET %s = 1", qualified(r.schema.Namespace.Name, after.Name), quote(column.Name))}, nil
 	case migration.RenameColumn:
 		old, oldOK := postgresqlColumn(before, ir.FieldID(operation.ObjectID))
 		current, currentOK := postgresqlColumn(after, ir.FieldID(operation.ObjectID))
@@ -315,14 +473,18 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		if !oldOK || !currentOK || !hasAfter {
 			return nil, fmt.Errorf("%s target is absent", migration.AlterColumnType)
 		}
-		if !migration.SafeWidening(ir.PostgreSQL, old.Storage, current.Storage) {
+		formatRepresentation := r.formatUpgrade && old.Storage.Kind == physical.StoragePostgreSQLText && current.Storage.Kind == physical.StoragePostgreSQLVarchar
+		if !migration.PostgreSQLAutomaticTypeTransition(old.Storage, current.Storage, formatRepresentation) {
 			return nil, fmt.Errorf("%s for field %s is outside the closed value-preserving widening allowlist", migration.AlterColumnType, operation.ObjectID)
 		}
 		if operation.Risk != migration.RiskRewrite {
 			return nil, fmt.Errorf("%s for field %s is not classified %s", migration.AlterColumnType, operation.ObjectID, migration.RiskRewrite)
 		}
-		if current.Generated != nil || old.Generated != nil || current.Collation != nil || old.Collation != nil {
-			return nil, fmt.Errorf("%s for field %s changes a generated or collated column", migration.AlterColumnType, operation.ObjectID)
+		if current.Generated != nil || old.Generated != nil {
+			return nil, fmt.Errorf("%s for generated field %s requires the reviewed detach/recreate DAG", migration.AlterColumnType, operation.ObjectID)
+		}
+		if !formatRepresentation && (current.Collation != nil || old.Collation != nil) {
+			return nil, fmt.Errorf("%s for field %s changes a collated column", migration.AlterColumnType, operation.ObjectID)
 		}
 		storage, err := renderStorage(current.Storage)
 		if err != nil {
@@ -461,9 +623,25 @@ func validatePostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]phys
 		if !exists {
 			continue
 		}
+		dropped, added := map[ir.FieldID]bool{}, map[ir.FieldID]bool{}
+		for _, operation := range operations {
+			if owners[operation.ID] != tableID {
+				continue
+			}
+			switch operation.Kind {
+			case migration.DropColumn:
+				dropped[ir.FieldID(operation.ObjectID)] = true
+			case migration.AddColumn:
+				added[ir.FieldID(operation.ObjectID)] = true
+			}
+		}
+		recreated := map[ir.FieldID]bool{}
+		for field := range dropped {
+			recreated[field] = added[field]
+		}
 		retained := map[ir.FieldID]bool{}
 		for _, column := range after.Columns {
-			retained[column.ID] = true
+			retained[column.ID] = !recreated[column.ID]
 		}
 		actual := make([]ir.FieldID, 0, len(after.Columns))
 		for _, column := range before.Columns {
@@ -479,10 +657,30 @@ func validatePostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]phys
 		if len(actual) != len(after.Columns) {
 			return fmt.Errorf("table %s final column inventory cannot be represented by ALTER TABLE", tableID)
 		}
-		for index := range actual {
-			if actual[index] != after.Columns[index].ID {
-				return fmt.Errorf("table %s final column order requires a table rebuild", tableID)
+		if len(recreated) == 0 {
+			for index := range actual {
+				if actual[index] != after.Columns[index].ID {
+					return fmt.Errorf("table %s final column order requires a table rebuild", tableID)
+				}
 			}
+			continue
+		}
+		// A reviewed stored-generated recreation may move only derived columns
+		// physically to the tail. Their logical ordinal remains the authored
+		// schema ordinal; every source/owner column must retain relative order.
+		var actualOwners, expectedOwners []ir.FieldID
+		for _, field := range actual {
+			if !recreated[field] {
+				actualOwners = append(actualOwners, field)
+			}
+		}
+		for _, column := range after.Columns {
+			if !recreated[column.ID] {
+				expectedOwners = append(expectedOwners, column.ID)
+			}
+		}
+		if !reflect.DeepEqual(actualOwners, expectedOwners) {
+			return fmt.Errorf("table %s owner column order requires a table rebuild", tableID)
 		}
 	}
 	return nil
@@ -784,7 +982,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if _, err := probeCapabilities(ctx, database); err != nil {
 		return err
 	}
-	lockSchema, err := physical.Normalize(manifest.Entries[0].AfterSnapshot)
+	lockSchema, err := physical.NormalizeHistorical(manifest.Entries[0].AfterSnapshot)
 	if err != nil {
 		return err
 	}
@@ -820,6 +1018,10 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("postgresql migration has no unapplied reviewed entry")
 	}
 	entry := manifest.Entries[len(ledger)]
+	beforeReviewed, afterReviewed, err := reviewedEntrySnapshots(entry)
+	if err != nil {
+		return err
+	}
 	plan, err := provider.planIncremental(entry)
 	if err != nil {
 		return err
@@ -827,7 +1029,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := verifyPostgreSQLMigrationArtifact(entry, files, plan.SQL()); err != nil {
 		return err
 	}
-	actualBefore, err := provider.introspectQuery(ctx, transaction, entry.BeforeSnapshot)
+	actualBefore, err := provider.introspectReviewedQuery(ctx, transaction, beforeReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql migration starting introspection: %w", err)
 	}
@@ -837,7 +1039,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := executePostgreSQLIncrementalPlan(ctx, transaction, entry, files, plan); err != nil {
 		return err
 	}
-	actualAfter, err := provider.introspectQuery(ctx, transaction, entry.AfterSnapshot)
+	actualAfter, err := provider.introspectReviewedQuery(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql migration final introspection: %w", err)
 	}
@@ -856,8 +1058,6 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	return nil
 }
 
-const reviewedBackfillMaximumBytes = 1 << 20
-
 func executePostgreSQLIncrementalPlan(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, files map[string][]byte, plan IncrementalPlan) error {
 	statements := 0
 	for _, step := range plan.steps {
@@ -867,7 +1067,7 @@ func executePostgreSQLIncrementalPlan(ctx context.Context, transaction *sqlx.Tx,
 				return err
 			}
 		case step.postcondition != nil:
-			if err := verifyPostgreSQLNullPostcondition(ctx, transaction, entry, *step.postcondition); err != nil {
+			if err := verifyPostgreSQLGeneratedPostcondition(ctx, transaction, entry, *step.postcondition); err != nil {
 				return err
 			}
 		default:
@@ -895,7 +1095,7 @@ func executeReviewedPostgreSQLBackfill(ctx context.Context, transaction *sqlx.Tx
 	if !exists || migration.Checksum(content) != companion.File.SHA256 {
 		return fmt.Errorf("postgresql migration %s reviewed backfill %s artifact is missing or rewritten", entry.ID, operationID)
 	}
-	if err := validateReviewedBackfillArtifact(content); err != nil {
+	if err := migration.ValidateReviewedBackfillArtifact(content); err != nil {
 		return fmt.Errorf("postgresql migration %s reviewed backfill %s artifact: %w", entry.ID, operationID, err)
 	}
 	prepared, err := transaction.PrepareContext(ctx, string(content))
@@ -909,40 +1109,18 @@ func executeReviewedPostgreSQLBackfill(ctx context.Context, transaction *sqlx.Tx
 	return nil
 }
 
-func validateReviewedBackfillArtifact(content []byte) error {
-	if len(content) == 0 || len(content) > reviewedBackfillMaximumBytes {
-		return fmt.Errorf("reviewed SQL must be between 1 byte and 1 MiB")
+func verifyPostgreSQLGeneratedPostcondition(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, condition generatedPostcondition) error {
+	predicate, err := condition.predicate()
+	if err != nil {
+		return fmt.Errorf("postgresql migration %s postcondition %s has unknown generated invariant kind", entry.ID, condition.operation)
 	}
-	if !utf8.Valid(content) {
-		return fmt.Errorf("reviewed SQL must be UTF-8")
-	}
-	if bytes.ContainsRune(content, '\r') || bytes.ContainsRune(content, 0) {
-		return fmt.Errorf("reviewed SQL must use LF endings and contain no NUL")
-	}
-	if content[len(content)-1] != '\n' || bytes.HasSuffix(content, []byte("\n\n")) {
-		return fmt.Errorf("reviewed SQL must end with exactly one final newline")
-	}
-	for _, marker := range []string{"{{", "}}", "${", "%s", "%d", "%v", "%q"} {
-		if bytes.Contains(content, []byte(marker)) {
-			return fmt.Errorf("reviewed SQL contains a template or interpolation marker")
-		}
-	}
-	for index := 0; index+1 < len(content); index++ {
-		if content[index] == '$' && content[index+1] >= '0' && content[index+1] <= '9' {
-			return fmt.Errorf("reviewed SQL must be zero-parameter")
-		}
-	}
-	return nil
-}
-
-func verifyPostgreSQLNullPostcondition(ctx context.Context, transaction *sqlx.Tx, entry migration.ManifestEntry, condition nullPostcondition) error {
-	statement := fmt.Sprintf("SELECT count(*) FROM %s WHERE %s IS NULL", qualified(condition.namespace, condition.table), quote(condition.column))
+	statement := fmt.Sprintf("SELECT count(*) FROM %s WHERE %s", qualified(condition.namespace, condition.table), predicate)
 	var remaining int64
 	if err := transaction.QueryRowxContext(ctx, statement).Scan(&remaining); err != nil {
 		return fmt.Errorf("postgresql migration %s postcondition %s could not be evaluated", entry.ID, condition.operation)
 	}
 	if remaining != 0 {
-		return fmt.Errorf("postgresql migration %s postcondition %s failed: %d rows remain unset", entry.ID, condition.operation, remaining)
+		return fmt.Errorf("postgresql migration %s postcondition %s failed: %d rows violate the generated invariant", entry.ID, condition.operation, remaining)
 	}
 	return nil
 }
@@ -969,7 +1147,7 @@ func samePostgreSQLProviderManifest(left, right physical.ProviderManifest) bool 
 
 func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *sqlx.Tx, manifest migration.Manifest, files map[string][]byte) error {
 	entry := manifest.Entries[0]
-	semantic, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+	semantic, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration %s semantic diff: %w", entry.ID, err)
 	}
@@ -987,11 +1165,15 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 			return fmt.Errorf("postgresql initial migration %s operation %s is outside the automatic transactional baseline", entry.ID, operation.ID)
 		}
 	}
-	after, err := physical.Normalize(entry.AfterSnapshot)
+	after, err := physical.NormalizeHistorical(entry.AfterSnapshot)
 	if err != nil {
 		return err
 	}
-	script, err := provider.renderInitial(after)
+	reviewed, err := reviewedInitial(entry)
+	if err != nil {
+		return err
+	}
+	script, err := provider.renderReviewedInitialSnapshot(reviewed)
 	if err != nil {
 		return err
 	}
@@ -1004,7 +1186,11 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err := requireBlankNamespace(ctx, transaction, after.System.Namespace.Name, nil); err != nil {
 		return err
 	}
-	actualBefore, err := provider.introspectQuery(ctx, transaction, entry.BeforeSnapshot)
+	beforeReviewed, afterReviewed, err := reviewedEntrySnapshots(entry)
+	if err != nil {
+		return err
+	}
+	actualBefore, err := provider.introspectReviewedQuery(ctx, transaction, beforeReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration starting introspection: %w", err)
 	}
@@ -1016,7 +1202,7 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 			return fmt.Errorf("postgresql initial migration statement %d: %w", index, err)
 		}
 	}
-	actualAfter, err := provider.introspectQuery(ctx, transaction, entry.AfterSnapshot)
+	actualAfter, err := provider.introspectReviewedQuery(ctx, transaction, afterReviewed)
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration final introspection: %w", err)
 	}

@@ -22,8 +22,8 @@ func expectCode(t *testing.T, err error, want ErrorCode, context string) {
 	}
 }
 
-func rebuildTagDescriptor(metadata golem.ModelMetadata, id golem.ModelID) golem.ModelDescriptor[p5social.Tag] {
-	return golem.GeneratedModelDescriptor[p5social.Tag](id, golem.GeneratedDescriptorShape(
+func rebuildTagDescriptor(metadata golem.ModelMetadata, id golem.ModelID, generation golem.SchemaDigest) golem.ModelDescriptor[p5social.Tag] {
+	return golem.GeneratedStampedModelDescriptor[p5social.Tag](generation, id, golem.GeneratedDescriptorShape(
 		metadata.ScanFields(),
 		metadata.WriteFields(),
 		metadata.Identities(),
@@ -100,6 +100,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 	}
 
 	tagMetadata := p5social.GolemGeneratedTagDescriptor.Metadata()
+	socialGeneration := socialBindings.GenerationDigest()
 
 	t.Run("ModelRejectsADescriptorFromAnotherApplication", func(t *testing.T) {
 		_, err := Model(policies, p6metrics.GolemGeneratedCategoryDescriptor)
@@ -108,7 +109,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 
 	t.Run("ModelRejectsAForeignModelIdentityWithAMatchingGoType", func(t *testing.T) {
 		foreign := golem.ModelID{0x77, 0x66, 0x55, 0x44, 0x33, 0x22, 0x11, 0x00, 0x0f, 0x0e, 0x0d, 0x0c, 0x0b, 0x0a, 0x09, 0x08}
-		_, err := Model(policies, rebuildTagDescriptor(tagMetadata, foreign))
+		_, err := Model(policies, rebuildTagDescriptor(tagMetadata, foreign, socialGeneration))
 		expectCode(t, err, ErrorGenerationMismatch, "foreign model identity with a matching Go model type")
 	})
 
@@ -118,7 +119,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 			t.Fatal("the fixture model declares no scan fields")
 		}
 		scan[len(scan)-1] = golem.FieldID{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
-		tampered := golem.GeneratedModelDescriptor[p5social.Tag](tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
+		tampered := golem.GeneratedStampedModelDescriptor[p5social.Tag](socialGeneration, tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
 			scan, tagMetadata.WriteFields(), tagMetadata.Identities(), tagMetadata.Relations(),
 		))
 		_, err := Model(policies, tampered)
@@ -136,7 +137,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 			identities[0].Kind(),
 			identities[0].Fields()...,
 		)
-		tampered := golem.GeneratedModelDescriptor[p5social.Tag](tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
+		tampered := golem.GeneratedStampedModelDescriptor[p5social.Tag](socialGeneration, tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
 			tagMetadata.ScanFields(), tagMetadata.WriteFields(), identities, tagMetadata.Relations(),
 		))
 		_, err := Model(policies, tampered)
@@ -156,7 +157,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 			relations[0].Role(),
 			relations[0].Cardinality(),
 		)
-		tampered := golem.GeneratedModelDescriptor[p5social.Tag](tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
+		tampered := golem.GeneratedStampedModelDescriptor[p5social.Tag](socialGeneration, tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
 			tagMetadata.ScanFields(), tagMetadata.WriteFields(), tagMetadata.Identities(), relations,
 		))
 		_, err := Model(policies, tampered)
@@ -168,7 +169,7 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 		if len(scan) < 2 {
 			t.Fatal("the fixture model declares too few scan fields")
 		}
-		tampered := golem.GeneratedModelDescriptor[p5social.Tag](tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
+		tampered := golem.GeneratedStampedModelDescriptor[p5social.Tag](socialGeneration, tagMetadata.ModelID(), golem.GeneratedDescriptorShape(
 			scan[:len(scan)-1], tagMetadata.WriteFields(), tagMetadata.Identities(), tagMetadata.Relations(),
 		))
 		_, err := Model(policies, tampered)
@@ -179,8 +180,49 @@ func TestPolicyTestKitRejectsForeignGenerationModelAndFieldHandles(t *testing.T)
 		if _, err := Model(policies, p5social.GolemGeneratedTagDescriptor); err != nil {
 			t.Fatalf("registered descriptor was rejected: %v", err)
 		}
-		if _, err := Model(policies, rebuildTagDescriptor(tagMetadata, tagMetadata.ModelID())); err != nil {
+		if _, err := Model(policies, rebuildTagDescriptor(tagMetadata, tagMetadata.ModelID(), socialGeneration)); err != nil {
 			t.Fatalf("faithfully rebuilt descriptor was rejected: %v", err)
+		}
+	})
+
+	t.Run("ModelRejectsByteIdenticalMetadataFromAnotherGeneration", func(t *testing.T) {
+		foreign := rebuildTagDescriptor(tagMetadata, tagMetadata.ModelID(), foreignGeneration())
+		_, err := Model(policies, foreign)
+		expectCode(t, err, ErrorGenerationMismatch, "byte-identical descriptor carrying a foreign generation")
+	})
+
+	t.Run("FieldAndRelationHandlesRequireTheExactGeneration", func(t *testing.T) {
+		tags, err := Model(policies, p5social.GolemGeneratedTagDescriptor)
+		if err != nil {
+			t.Fatal(err)
+		}
+		nameID, ok := golem.FieldIdentity(p5social.Tags.Name)
+		if !ok {
+			t.Fatal("generated tag name has no identity")
+		}
+		foreignName := golem.GeneratedStampedTextField[p5social.Tag, string](foreignGeneration(), nameID)
+		if _, err := tags.ClassifyReadFields(UseProjection, golem.FrozenActionRead, foreignName); err == nil {
+			t.Fatal("classification accepted a byte-identical scalar field from another generation")
+		} else {
+			expectCode(t, err, ErrorGenerationMismatch, "foreign-generation scalar field")
+		}
+
+		postTagModel := p5social.GolemGeneratedPostTagDescriptor.Metadata().ModelID()
+		var relation golem.RelationMetadata
+		for _, candidate := range tagMetadata.Relations() {
+			if candidate.TargetModelID() == postTagModel {
+				relation = candidate
+				break
+			}
+		}
+		if relation.FieldID() == (golem.FieldID{}) {
+			t.Fatal("tag fixture has no post-tag relation")
+		}
+		foreignRelation := golem.GeneratedStampedToMany[p5social.Tag, p5social.PostTag](foreignGeneration(), relation.FieldID(), relation.RelationID(), relation.TargetModelID())
+		if _, err := tags.ClassifyReadFields(UseProjection, golem.FrozenActionRead, foreignRelation); err == nil {
+			t.Fatal("classification accepted a byte-identical relation field from another generation")
+		} else {
+			expectCode(t, err, ErrorGenerationMismatch, "foreign-generation relation field")
 		}
 	})
 

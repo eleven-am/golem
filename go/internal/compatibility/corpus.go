@@ -3,7 +3,20 @@ package compatibility
 // Frozen corpus digests are compiled independently from testdata. Changing a
 // corpus file and its expectation is an explicit compatibility review.
 const (
-	PublicGoAPICorpusSHA256    = "52d7310afcf57870a401868f8ee2a56a7fd0b8543d34748f73b5590829880b2f"
-	GeneratedGoABICorpusSHA256 = "c4a84cc2732a0031679b172b967c860388f24215f9c66bb40ed2e2e2d945e14f"
-	GraphQLABICorpusSHA256     = "66756b950116b082ed803fe0c17c7f53628425090b8278c84fe5cd4f3615e2c6"
+	PublicGoAPICorpusSHA256    = "8d0ba09168a461cb54190a8c94e217fc85b3134f988ae552bafaa291e42737d8"
+	GeneratedGoABICorpusSHA256 = "1b3143c256180cccfcadac36a1477e05ba8062078b82f7327b67763acace6b2b"
+	GraphQLABICorpusSHA256     = "b307c48c82966aee3bb4643ce239fc5dc6a620edfcd9cb29e2d15132b7bfc4ce"
 )
+
+func publicGoAPIPatterns() []string {
+	return []string{
+		"./embedding", "./events", "./events/nats", "./golem", "./golemtest", "./graphql", "./observe",
+		"./provider", "./provider/postgresql", "./provider/sqlite", "./queryplan", "./runtime",
+	}
+}
+
+// PublicGoAPIPatterns exposes the compatibility diff inventory to the explicit
+// corpus freeze command without maintaining a second package list.
+func PublicGoAPIPatterns() []string {
+	return publicGoAPIPatterns()
+}

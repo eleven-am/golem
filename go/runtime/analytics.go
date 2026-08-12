@@ -145,25 +145,20 @@ func executeAnalytics[P, A any](ctx context.Context, app *App[P, A], executor *e
 	return executeAnalyticsWithMode(ctx, app, executor, policies, system, descriptor, request, true)
 }
 
-func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies analytics.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenAnalyticsRequest, enforceProgrammaticGroupLimit bool) (result [][]golem.RuntimeAnalyticsCell, resultErr error) {
-	if ctx == nil || app == nil || executor == nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics execution unavailable", nil)
-	}
-	ctx, observation := beginExecutionObservation(ctx, app, executor, descriptor, observe.KindAnalytics, analyticsObservationOperation(request.Operation()))
-	defer func() {
-		if observation != nil {
-			observation.SetAggregateCount(int64(len(result)))
-		}
-		finishObservation(observation, resultErr)
-	}()
+type preparedAnalyticsStatement struct {
+	plan      analytics.Plan
+	statement analytics.Statement
+}
+
+func prepareAnalyticsStatement[P, A any](app *App[P, A], policies analytics.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenAnalyticsRequest, enforceProgrammaticGroupLimit bool) (preparedAnalyticsStatement, error) {
 	if descriptor != request.ModelID() {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "request model does not match generated client", nil)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "request model does not match generated client", nil)
 	}
 	if len(request.Measures()) > app.analyticsLimits.MaxMeasures || len(request.Dimensions()) > app.analyticsLimits.MaxDimensions {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics shape limit exceeded", nil)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics shape limit exceeded", nil)
 	}
 	if take, present := request.Take(); enforceProgrammaticGroupLimit && present && (take > app.analyticsLimits.MaxProgrammaticGroups || take < -app.analyticsLimits.MaxProgrammaticGroups) {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "programmatic group limit exceeded", nil)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "programmatic group limit exceeded", nil)
 	}
 	var planned analytics.Plan
 	var err error
@@ -175,12 +170,12 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 	if err != nil {
 		var fieldFailure *analytics.FieldAuthorizationError
 		if errors.As(err, &fieldFailure) {
-			return nil, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, fieldFailure.FieldID(), fmt.Sprintf("analytics field %q is not permitted", fieldFailure.LogicalName()), err)
+			return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, fieldFailure.FieldID(), fmt.Sprintf("analytics field %q is not permitted", fieldFailure.LogicalName()), err)
 		}
-		return nil, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, golem.FieldID{}, "analytics request is not permitted", err)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeForbidden, "analytics", descriptor, golem.FieldID{}, "analytics request is not permitted", err)
 	}
 	if depth := len(planned.RelationPath()); depth > app.analyticsLimits.MaxRelationDepth {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics relation depth limit exceeded", nil)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics relation depth limit exceeded", nil)
 	}
 	maxResultRows := 0
 	if enforceProgrammaticGroupLimit {
@@ -192,8 +187,27 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 		MaxResultRows:         maxResultRows,
 	})
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics statement could not be rendered", err)
+		return preparedAnalyticsStatement{}, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics statement could not be rendered", err)
 	}
+	return preparedAnalyticsStatement{plan: planned, statement: statement}, nil
+}
+
+func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies analytics.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenAnalyticsRequest, enforceProgrammaticGroupLimit bool) (result [][]golem.RuntimeAnalyticsCell, resultErr error) {
+	if ctx == nil || app == nil || executor == nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, golem.FieldID{}, "analytics execution unavailable", nil)
+	}
+	ctx, observation := beginExecutionObservation(ctx, app, executor, descriptor, observe.KindAnalytics, analyticsObservationOperation(request.Operation()))
+	defer func() {
+		if observation != nil {
+			observation.SetAggregateCount(int64(len(result)))
+		}
+		finishObservation(observation, resultErr)
+	}()
+	prepared, err := prepareAnalyticsStatement(app, policies, system, descriptor, request, enforceProgrammaticGroupLimit)
+	if err != nil {
+		return nil, err
+	}
+	statement := prepared.statement
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {
 		return nil, err
@@ -250,7 +264,7 @@ func executeAnalyticsWithMode[P, A any](ctx context.Context, app *App[P, A], exe
 				cells[i] = golem.RuntimeNullAnalyticsCell(key)
 				continue
 			}
-			field, _ := planned.Field(column.Term.Field)
+			field, _ := prepared.plan.Field(column.Term.Field)
 			value, decodeErr := decodeAnalyticsValue(raw[i], column.Term, field.LogicalType(), app.provider)
 			if decodeErr != nil {
 				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "analytics", descriptor, column.Term.Field, "analytics result decode failed", decodeErr)

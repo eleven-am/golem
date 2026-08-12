@@ -99,7 +99,14 @@ func prepareCallerScalarProgram[P, A any](caller *Caller[P, A], request scalarMu
 	if caller == nil || caller.app == nil || caller.policies == nil {
 		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "caller mutation preparation is unavailable", nil)
 	}
-	return prepareScalarProgram(request, mutationir.Caller, caller.app, caller.policies)
+	return prepareScalarProgram(request, mutationir.Caller, caller.app, caller.policies, false)
+}
+
+func prepareCallerVersionedScalarProgram[P, A any](caller *Caller[P, A], request scalarMutationPrepareRequest) (mutationsql.Program, error) {
+	if caller == nil || caller.app == nil || caller.policies == nil {
+		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "caller versioned mutation preparation is unavailable", nil)
+	}
+	return prepareScalarProgram(request, mutationir.Caller, caller.app, caller.policies, true)
 }
 
 // prepareSystemScalarProgram uses the same binder, planner, and renderer but
@@ -109,10 +116,17 @@ func prepareSystemScalarProgram[P, A any](system System[P, A], request scalarMut
 	if system.app == nil {
 		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "system mutation preparation is unavailable", nil)
 	}
-	return prepareScalarProgram(request, mutationir.System, system.app, nil)
+	return prepareScalarProgram(request, mutationir.System, system.app, nil, false)
 }
 
-func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance mutationir.Stance, app *App[P, A], policies mutationplan.PolicySet) (mutationsql.Program, error) {
+func prepareSystemVersionedScalarProgram[P, A any](system System[P, A], request scalarMutationPrepareRequest) (mutationsql.Program, error) {
+	if system.app == nil {
+		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "system versioned mutation preparation is unavailable", nil)
+	}
+	return prepareScalarProgram(request, mutationir.System, system.app, nil, true)
+}
+
+func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance mutationir.Stance, app *App[P, A], policies mutationplan.PolicySet, versioned bool) (mutationsql.Program, error) {
 	if app == nil || request.model == (policyir.ModelID{}) || request.result.ModelID() != request.model {
 		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "mutation model or result requirements are invalid", nil)
 	}
@@ -128,6 +142,7 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 		Registry: app.registry, Policies: policies, Result: request.result,
 		Retry: mutationir.NoRetry, Bounds: bounds,
 	}
+	planning.ConcurrencyPrecheck = versioned && stance == mutationir.Caller && request.operation == mutationir.Update
 	if stance == mutationir.Caller {
 		planning.Hooks = mutationHookInventory(app.bindings, golem.ModelID(request.model))
 		if request.forceHookSnapshot {
@@ -205,7 +220,12 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 	if err != nil {
 		return mutationsql.Program{}, err
 	}
-	program, err := mutationsql.Render(planned, app.registry, app.provider, app.capabilities)
+	var program mutationsql.Program
+	if versioned {
+		program, err = mutationsql.RenderVersioned(planned, app.registry, app.provider, app.capabilities)
+	} else {
+		program, err = mutationsql.Render(planned, app.registry, app.provider, app.capabilities)
+	}
 	if err != nil {
 		return mutationsql.Program{}, err
 	}
@@ -397,6 +417,18 @@ func executeScalarProgramOnQueryer(ctx context.Context, queryer sqlx.QueryerCont
 }
 
 func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
+	return executeScalarProgramOnQueryerObservedMode(ctx, queryer, binding, registry, model, provider, program, observer, verified, false)
+}
+
+// executeVersionedScalarProgramOnQueryerObserved is reachable only after the
+// CAS kernel has locked the authorized pre-image and validated the closed
+// expectation. Keeping this as a separate private call makes a program's own
+// observed version insufficient authority to execute it.
+func executeVersionedScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
+	return executeScalarProgramOnQueryerObservedMode(ctx, queryer, binding, registry, model, provider, program, observer, verified, true)
+}
+
+func executeScalarProgramOnQueryerObservedMode(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver, concurrencyPrechecked bool) (execution scalarMutationExecution, executionErr error) {
 	defer func() {
 		if executionErr == nil || binding == nil || !binding.mutation.enabled {
 			return
@@ -408,12 +440,100 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 	if queryer == nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction queryer is required", nil)
 	}
+	if program.RequiresConcurrencyPrecheck() && !concurrencyPrechecked {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "optimistic-concurrency program lacks a validated expectation", nil)
+	}
+	if concurrencyPrechecked && !program.RequiresConcurrencyPrecheck() {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "concurrency precheck capability was supplied to an ordinary program", nil)
+	}
 	statements := program.Statements()
 	result := scalarMutationExecution{operation: program.Operation(), statements: make([]scalarMutationStatementResult, 0, len(statements))}
 	for index, statement := range statements {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return scalarMutationExecution{}, contextErr
 		}
+		arguments, err := scalarMutationArguments(program.Operation(), uint32(index), statement, result.statements)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		result.statements = append(result.statements, row)
+		if observer != nil {
+			if err := observer(ctx, binding, uint32(index), result); err != nil {
+				return scalarMutationExecution{}, err
+			}
+		}
+	}
+	if err := verifyScalarMutationIdentity(program, result.statements); err != nil {
+		return scalarMutationExecution{}, err
+	}
+	if err := verifyScalarMutationFieldAuthorizations(registry, program, result.statements); err != nil {
+		return scalarMutationExecution{}, err
+	}
+	if verified != nil {
+		if err := verified(ctx, binding, program, result); err != nil {
+			return scalarMutationExecution{}, err
+		}
+	}
+	if binding != nil && binding.mutation.enabled {
+		state, err := binding.mutationState()
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		if err := state.touch(1); err != nil {
+			state.poison(err)
+			return scalarMutationExecution{}, err
+		}
+		if requirement := program.FactRequirement(); requirement.Enabled() {
+			before, after, err := scalarMutationFactImages(registry, model, program, result)
+			if err != nil {
+				state.poison(err)
+				return scalarMutationExecution{}, err
+			}
+			if _, err := state.buildFact(registry, requirement, before, after, time.Now()); err != nil {
+				state.poison(err)
+				return scalarMutationExecution{}, err
+			}
+		}
+	}
+	return result, nil
+}
+
+// executeVersionedScalarProgramAfterPrecheck consumes the one already locked,
+// expectation-validated pre-image as statement zero and executes only the CAS
+// remainder. Re-selecting after the before hook would both add work and mask an
+// incomplete original authorization snapshot.
+func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, preimage scalarMutationStatementResult, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
+	defer func() {
+		if executionErr == nil || binding == nil || !binding.mutation.enabled {
+			return
+		}
+		if state, err := binding.mutationState(); err == nil {
+			state.poison(executionErr)
+		}
+	}()
+	if queryer == nil || !program.RequiresConcurrencyPrecheck() || preimage.role != mutationsql.SelectPreImage {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "validated concurrency pre-image is required", nil)
+	}
+	statements := program.Statements()
+	if len(statements) < 2 || statements[0].Role() != mutationsql.SelectPreImage {
+		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvariant, 0, 0, "concurrency program has no apply remainder", nil)
+	}
+	result := scalarMutationExecution{operation: program.Operation(), statements: make([]scalarMutationStatementResult, 1, len(statements))}
+	result.statements[0] = preimage.clone()
+	if observer != nil {
+		if err := observer(ctx, binding, 0, result); err != nil {
+			return scalarMutationExecution{}, err
+		}
+	}
+	for index := 1; index < len(statements); index++ {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return scalarMutationExecution{}, contextErr
+		}
+		statement := statements[index]
 		arguments, err := scalarMutationArguments(program.Operation(), uint32(index), statement, result.statements)
 		if err != nil {
 			return scalarMutationExecution{}, err

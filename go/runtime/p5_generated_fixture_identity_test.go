@@ -130,11 +130,7 @@ func TestP5GeneratedExtensionFixtureBuildsFromCleanSourceThenRepeatsIdentically(
 func TestP5GeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
 	moduleRoot := p5ExtensionModuleRoot(t)
 	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5social")
-	request := pipeline.Request{
-		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
-		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5social", PackageName: "p5social", Directory: directory},
-		Lowerers:   []physical.Lowerer{p5SocialPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
-	}
+	request := p5SocialGenerationRequest(directory)
 	first, err := pipeline.Build(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -166,12 +162,8 @@ func TestP5GeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
 func TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat(t *testing.T) {
 	moduleRoot := p5ExtensionModuleRoot(t)
 	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5social")
-	request := pipeline.Request{
-		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
-		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5social", PackageName: "p5social", Directory: directory},
-		Lowerers:   []physical.Lowerer{p5SocialPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
-		Env:        append([]string(nil), os.Environ()...),
-	}
+	request := p5SocialGenerationRequest(directory)
+	request.Env = append([]string(nil), os.Environ()...)
 	first, err := pipeline.Build(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -295,11 +287,7 @@ func TestConstructGeneratedP6AppSurface(t *testing.T) {
 func TestP5ActiveGeneratedSocialFixtureRegeneratesByteIdentically(t *testing.T) {
 	moduleRoot := p5ExtensionModuleRoot(t)
 	directory := filepath.Join(moduleRoot, "runtime", "testdata", "p5socialactive")
-	request := pipeline.Request{
-		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
-		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5socialactive", PackageName: "p5socialactive", Directory: directory},
-		Lowerers:   []physical.Lowerer{p5ActivePostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
-	}
+	request := p5ActiveSocialGenerationRequest(directory)
 	first, err := pipeline.Build(context.Background(), request)
 	if err != nil {
 		t.Fatal(err)
@@ -356,6 +344,22 @@ func p6MetricsGenerationRequest(directory string) pipeline.Request {
 		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
 		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p6metrics", PackageName: "p6metrics", Directory: directory},
 		Lowerers:   []physical.Lowerer{p6MetricsPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
+	}
+}
+
+func p5SocialGenerationRequest(directory string) pipeline.Request {
+	return pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5social", PackageName: "p5social", Directory: directory},
+		Lowerers:   []physical.Lowerer{p5SocialPostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
+	}
+}
+
+func p5ActiveSocialGenerationRequest(directory string) pipeline.Request {
+	return pipeline.Request{
+		Compile:    compile.Config{Dir: directory, Pattern: ".", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "github.com/eleven-am/golem/go/runtime/testdata/p5socialactive", PackageName: "p5socialactive", Directory: directory},
+		Lowerers:   []physical.Lowerer{p5ActivePostgreSQLLowerer{delegate: postgresprovider.New()}, sqliteprovider.New()},
 	}
 }
 

@@ -166,6 +166,70 @@ func (provider *deterministicProvider) correlationKeys() []string {
 	return append([]string(nil), provider.keys...)
 }
 
+func TestManagerSelectedRefreshNeverTouchesUnrelatedIndex(t *testing.T) {
+	ctx := context.Background()
+	database, err := sqlitevec.Open("file:" + t.TempDir() + "/selected.db?_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	db := sqlx.NewDb(database, "sqlite3")
+	if _, err := db.Exec(`
+CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
+CREATE TABLE "other" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
+CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT;
+CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+CREATE TABLE "_golem_semantic_semantic-other-unrelated_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT;
+CREATE VIRTUAL TABLE "_golem_semantic_semantic-other-unrelated_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+INSERT INTO "posts" (id,title) VALUES ('a','alpha');
+INSERT INTO "other" (id,title) VALUES ('b','beta');`); err != nil {
+		t.Fatal(err)
+	}
+
+	schema := semanticSchema(t, 3)
+	schema.Namespace = physical.Namespace{Name: "main"}
+	schema.Tables = []physical.PhysicalTable{
+		{
+			ID: "post", Name: "posts",
+			Columns: []physical.PhysicalColumn{
+				{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+				{ID: "title", Name: "title", Ordinal: 1, Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			},
+			PrimaryKey: &physical.PhysicalKey{ID: "post-primary", Name: "pk_posts", Columns: []ir.FieldID{"id"}},
+		},
+		{
+			ID: "other", Name: "other",
+			Columns: []physical.PhysicalColumn{
+				{ID: "other-id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+				{ID: "other-title", Name: "title", Ordinal: 1, Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			},
+			PrimaryKey: &physical.PhysicalKey{ID: "other-primary", Name: "pk_other", Columns: []ir.FieldID{"other-id"}},
+		},
+	}
+	specification, _ := embedding.NewSpecification("test", "model", "v1", 3, 8)
+	selected := &deterministicProvider{specification: specification}
+	unrelated := &deterministicProvider{specification: specification, panicEmbed: true}
+	manager := &Manager{
+		database: db, provider: ir.SQLite, schema: schema,
+		indexes: []Index{
+			{
+				Descriptor: semanticstorage.Descriptor{ModelID: "post", Name: "related", Storage: "_golem_semantic_semantic-post-related", Fields: []ir.FieldID{"title"}},
+				Provider:   selected, Specification: specification,
+			},
+			{
+				Descriptor: semanticstorage.Descriptor{ModelID: "other", Name: "unrelated", Storage: "_golem_semantic_semantic-other-unrelated", Fields: []ir.FieldID{"other-title"}},
+				Provider:   unrelated, Specification: specification,
+			},
+		},
+	}
+	if err := manager.Refresh(ctx, "post", "related"); err != nil {
+		t.Fatal(err)
+	}
+	if selected.calls() != 1 || unrelated.calls() != 0 {
+		t.Fatalf("selected calls=%d unrelated calls=%d", selected.calls(), unrelated.calls())
+	}
+}
+
 func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testing.T) {
 	ctx := context.Background()
 	database, err := sqlitevec.Open("file:" + t.TempDir() + "/semantic.db?_pragma=foreign_keys(1)&_txlock=immediate")

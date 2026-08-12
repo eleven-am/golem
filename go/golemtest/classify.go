@@ -176,6 +176,7 @@ func (value FieldClassification[M]) DischargedByConstraint() bool { return value
 // model, one use position, and one statement reach. It preserves the caller's
 // first-seen field order and drops duplicates after their first occurrence.
 type ReadPlan[M any] struct {
+	generation      golem.SchemaDigest
 	model           golem.ModelID
 	use             UseKind
 	selectingAction golem.FrozenAction
@@ -207,6 +208,10 @@ func (plan ReadPlan[M]) Fields() []FieldClassification[M] {
 func (plan ReadPlan[M]) Field(field golem.Field[M]) (FieldClassification[M], bool) {
 	identity, valid := golem.FieldIdentity(field)
 	if !valid {
+		return FieldClassification[M]{}, false
+	}
+	generation, stamped := golem.FieldGenerationDigest(field)
+	if !stamped || generation != plan.generation {
 		return FieldClassification[M]{}, false
 	}
 	for _, classification := range plan.fields {
@@ -275,6 +280,10 @@ func (policy ModelPolicy[M]) classifyFields(use UseKind, selectingAction golem.F
 		if !valid {
 			return ReadPlan[M]{}, failModel(ErrorInvalidInput, "a requested field is not a usable generated field handle", policy.model)
 		}
+		generation, stamped := golem.FieldGenerationDigest(field)
+		if !stamped || generation != policy.generation {
+			return ReadPlan[M]{}, failField(ErrorGenerationMismatch, "a requested field does not carry this model policy's generation", policy.model, identity)
+		}
 		if !policy.registry.HasField(policy.model, identity) {
 			return ReadPlan[M]{}, failField(ErrorGenerationMismatch, "a requested field is not declared by this model in this generation", policy.model, identity)
 		}
@@ -306,7 +315,7 @@ func (policy ModelPolicy[M]) classifyFields(use UseKind, selectingAction golem.F
 		}
 		adapted = append(adapted, value)
 	}
-	return ReadPlan[M]{model: policy.model, use: use, selectingAction: selectingAction, fields: adapted}, nil
+	return ReadPlan[M]{generation: policy.generation, model: policy.model, use: use, selectingAction: selectingAction, fields: adapted}, nil
 }
 
 func (policy ModelPolicy[M]) classifyRequest(use classify.UseKind, action ir.Action, reach *golem.Predicate[M], fields []ir.FieldID) (classify.Request, error) {

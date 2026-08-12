@@ -85,7 +85,20 @@ func runtimeResourceMutations() []Mutation {
 			Summary: "invoke result hooks from a partial statement image before identity and field verification",
 			Patches: []Patch{{
 				Path: "go/runtime/mutation_scalar.go",
-				Before: `		if observer != nil {
+				Before: `	for index, statement := range statements {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return scalarMutationExecution{}, contextErr
+		}
+		arguments, err := scalarMutationArguments(program.Operation(), uint32(index), statement, result.statements)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		result.statements = append(result.statements, row)
+		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {
 				return scalarMutationExecution{}, err
 			}
@@ -103,7 +116,20 @@ func runtimeResourceMutations() []Mutation {
 		}
 	}
 `,
-				After: `		if observer != nil {
+				After: `	for index, statement := range statements {
+		if contextErr := ctx.Err(); contextErr != nil {
+			return scalarMutationExecution{}, contextErr
+		}
+		arguments, err := scalarMutationArguments(program.Operation(), uint32(index), statement, result.statements)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
+		if err != nil {
+			return scalarMutationExecution{}, err
+		}
+		result.statements = append(result.statements, row)
+		if observer != nil {
 			if err := observer(ctx, binding, uint32(index), result); err != nil {
 				return scalarMutationExecution{}, err
 			}

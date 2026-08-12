@@ -15,7 +15,7 @@ import (
 // path at a context-local boundary; no environment check exists in production.
 func TestP8MigrationInterruptionProcess(t *testing.T) {
 	if os.Getenv("GOLEM_P8_MIGRATION_HELPER") != "1" {
-		t.Skip("row-17 subprocess helper")
+		return
 	}
 	boundary := os.Getenv("GOLEM_P8_MIGRATION_BOUNDARY")
 	providerID := os.Getenv("GOLEM_P8_MIGRATION_PROVIDER")

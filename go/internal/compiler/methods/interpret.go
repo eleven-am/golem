@@ -12,6 +12,7 @@ import (
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
@@ -37,6 +38,7 @@ type interpreter struct {
 	handles         map[*types.Var]handleBinding
 	advanced        keyindex.AdvancedModelDeclarations
 	relations       []RelationOptionDeclaration
+	concurrency     *compilerconcurrency.Declaration
 	generated       []pendingGenerated
 	diagnostics     []ir.Diagnostic
 	graphql         *graphqlcontract.ModelPatch
@@ -99,6 +101,9 @@ func interpret(ctx context.Context, config Config) Result {
 		entry.finishSemantic()
 		result.Advanced = append(result.Advanced, entry.advanced)
 		result.RelationOptions = append(result.RelationOptions, entry.relations...)
+		if entry.concurrency != nil {
+			result.OptimisticConcurrency = append(result.OptimisticConcurrency, *entry.concurrency)
+		}
 		if entry.graphql != nil {
 			result.GraphQLModels = append(result.GraphQLModels, *entry.graphql)
 		}
@@ -121,6 +126,12 @@ func interpret(ctx context.Context, config Config) Result {
 			return result.RelationOptions[i].RelationID < result.RelationOptions[j].RelationID
 		}
 		return result.RelationOptions[i].Span.StartLine < result.RelationOptions[j].Span.StartLine
+	})
+	sort.Slice(result.OptimisticConcurrency, func(i, j int) bool {
+		if result.OptimisticConcurrency[i].ModelID != result.OptimisticConcurrency[j].ModelID {
+			return result.OptimisticConcurrency[i].ModelID < result.OptimisticConcurrency[j].ModelID
+		}
+		return result.OptimisticConcurrency[i].FieldID < result.OptimisticConcurrency[j].FieldID
 	})
 	graphqlcontract.SortPatches(result.GraphQLModels)
 	analyticscontract.SortPatches(result.AnalyticsModels)
@@ -146,7 +157,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "SemanticIndex", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}

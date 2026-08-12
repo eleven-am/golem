@@ -282,7 +282,7 @@ func TestPostgreSQLReviewedBackfillRejectsTamperMultipleStatementsAndWrongTarget
 	}
 	for _, item := range artifacts {
 		t.Run("artifact/"+item.name, func(t *testing.T) {
-			if err := validateReviewedBackfillArtifact(item.reviewed); err == nil || !strings.Contains(err.Error(), item.want) {
+			if err := migration.ValidateReviewedBackfillArtifact(item.reviewed); err == nil || !strings.Contains(err.Error(), item.want) {
 				t.Fatalf("error=%v; want %q", err, item.want)
 			}
 		})
@@ -362,7 +362,7 @@ func TestPostgreSQLReviewedBackfillFailureRollsBackSchemaDataAndLedger(t *testin
 		}
 		insertPostgreSQLArticles(t, database, namespace, "Kept", "Skipped")
 		err := New().ApplyMigration(context.Background(), database, manifest, files)
-		if err == nil || !strings.Contains(err.Error(), "postcondition") || !strings.Contains(err.Error(), "1 rows remain unset") {
+		if err == nil || !strings.Contains(err.Error(), "postcondition") || !strings.Contains(err.Error(), "1 rows violate the generated invariant") {
 			t.Fatalf("error=%v; want a generated postcondition failure", err)
 		}
 		if ledger, readErr := New().ReadLedger(context.Background(), database); readErr != nil || len(ledger) != 1 {

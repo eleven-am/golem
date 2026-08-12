@@ -54,6 +54,7 @@
     {"kind": "subscription", "operations": ["subscription.membership", "subscription.evaluation", "subscription.delivery", "subscription.suppression", "subscription.overflow", "subscription.cancellation"]},
     {"kind": "cdc", "operations": ["cdc.receive", "cdc.acknowledge"]},
     {"kind": "shutdown", "operations": ["shutdown.http", "shutdown.publisher"]},
-    {"kind": "semantic", "operations": ["semantic.refresh", "semantic.provider", "semantic.rank"]}
+    {"kind": "semantic", "operations": ["semantic.refresh", "semantic.provider", "semantic.rank"]},
+    {"kind": "query_plan", "operations": ["query_plan.explain"]}
   ]
 }

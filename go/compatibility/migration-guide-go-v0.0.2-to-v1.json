@@ -1,0 +1,29 @@
+{
+  "formatVersion": 1,
+  "from": {
+    "tag": "go/v0.0.2",
+    "commit": "efadc57d1da9b03e84c8cd746323fee3cc2f72c2"
+  },
+  "toMajor": 1,
+  "requiredActions": [
+    "migrate.database",
+    "migration-guide.execute",
+    "regenerate.generated"
+  ],
+  "corpora": [
+    {
+      "path": "internal/compatibility/testdata/p7",
+      "gitTree": "dce564e9e3aff0b0f96ae8b3278e75d588d2f71c"
+    },
+    {
+      "path": "internal/compatibility/testdata/p7-event",
+      "gitTree": "944c1ffbb2282b081f596b46de9218209651bf6b"
+    }
+  ],
+  "evidence": [
+    {
+      "identity": "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+      "command": "go test ./cmd/golem -run '^TestP8ExecutableGoV002ToV1MigrationGuide$' -count=1"
+    }
+  ]
+}

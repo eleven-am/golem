@@ -32,6 +32,7 @@ type Statement struct {
 	maxResultRows         int
 	guardColumns          bool
 	guardRowColumn        bool
+	planMap               AnalyticsPlanMap
 }
 
 type RenderOptions struct {
@@ -40,10 +41,11 @@ type RenderOptions struct {
 	MaxResultRows         int
 }
 
-func (s Statement) SQL() string       { return s.text }
-func (s Statement) Args() []any       { return append([]any(nil), s.args...) }
-func (s Statement) Columns() []Column { return append([]Column(nil), s.columns...) }
-func (s Statement) Grouped() bool     { return s.grouped }
+func (s Statement) SQL() string               { return s.text }
+func (s Statement) Args() []any               { return append([]any(nil), s.args...) }
+func (s Statement) Columns() []Column         { return append([]Column(nil), s.columns...) }
+func (s Statement) Grouped() bool             { return s.grouped }
+func (s Statement) PlanMap() AnalyticsPlanMap { return s.planMap.clone() }
 func (s Statement) ScanColumnCount() int {
 	count := len(s.columns)
 	if s.guardColumns {
@@ -94,10 +96,18 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 		return Statement{}, fmt.Errorf("P6_ANALYTICS_SQL_MODEL: physical model is absent")
 	}
 	rootAlias := physical.PhysicalName("golem_a0")
+	var planMap analyticsPlanMapBuilder
+	if err := planMap.add(string(rootAlias), policyir.ModelID(request.ModelID()), policyir.RelationID{}, analyticsAuthorizedPlanFieldIDs(authorized), AnalyticsPlanAliasPhysicalAccess); err != nil {
+		return Statement{}, err
+	}
+	policyAliases := policysql.NewPolicyAliasAllocator()
 	resolver := policysql.SchemaResolver(registry)
-	root, err := policysql.Compile(policysql.Request{Condition: authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: rootAlias})
+	root, err := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: rootAlias}, policyAliases)
 	if err != nil {
 		return Statement{}, fmt.Errorf("P6_ANALYTICS_SQL_POLICY: %w", err)
+	}
+	if err := planMap.mergePolicy(root.PolicyRelationAliases()); err != nil {
+		return Statement{}, err
 	}
 	classifications := map[golem.FieldID]readplan.Field{}
 	for _, field := range authorized.Fields() {
@@ -115,6 +125,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	relationClassifications := map[golem.FieldID]readplan.Field{}
 	for index, hop := range relationPath {
 		relationAliases[index] = physical.PhysicalName(fmt.Sprintf("golem_j%d", index))
+		if err := planMap.add(string(relationAliases[index]), policyir.ModelID(hop.Endpoint.TargetModelID()), policyir.RelationID(hop.Endpoint.RelationID()), analyticsAuthorizedPlanFieldIDs(hop.Authorized), AnalyticsPlanAliasPhysicalAccess); err != nil {
+			return Statement{}, err
+		}
 		if index == len(relationPath)-1 {
 			for _, field := range hop.Authorized.Fields() {
 				relationClassifications[golem.FieldID(field.FieldID())] = field
@@ -124,6 +137,19 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	args := []any{}
 	useContributionCTE := maxContributionRows > 0
 	contributionAlias := physical.PhysicalName("golem_contributions")
+	resultPlanFields := analyticsResultPlanFieldIDs(plan)
+	resultPlanRelation := policyir.RelationID{}
+	if len(relationPath) != 0 {
+		resultPlanRelation = policyir.RelationID(relationPath[len(relationPath)-1].Endpoint.RelationID())
+	}
+	addResultAlias := func(alias physical.PhysicalName, role AnalyticsPlanAliasRole) error {
+		return planMap.add(string(alias), policyir.ModelID(request.ModelID()), resultPlanRelation, resultPlanFields, role)
+	}
+	if useContributionCTE {
+		if err := addResultAlias(contributionAlias, AnalyticsPlanAliasMaterialize); err != nil {
+			return Statement{}, err
+		}
+	}
 	contributionProjection := []string{}
 	contributionProjectionNames := []string{}
 	expressionCache := map[string]string{}
@@ -290,8 +316,11 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 			}
 			conditions = append(conditions, dialect.Quote(targetAlias)+"."+dialect.Quote(child.ColumnName())+" = "+dialect.Quote(currentAlias)+"."+dialect.Quote(parent.ColumnName()))
 		}
-		policy, policyErr := policysql.Compile(policysql.Request{Condition: hop.Authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: targetAlias})
+		policy, policyErr := policysql.CompileWithPolicyAliasAllocator(policysql.Request{Condition: hop.Authorized.Where(), Provider: provider, Resolver: resolver, Dialect: dialect, Capabilities: capabilities, BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: targetAlias}, policyAliases)
 		if policyErr != nil {
+			return Statement{}, policyErr
+		}
+		if policyErr := planMap.mergePolicy(policy.PolicyRelationAliases()); policyErr != nil {
 			return Statement{}, policyErr
 		}
 		conditions = append(conditions, rebase(policy.SQL(), len(args), provider))
@@ -321,6 +350,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 		}
 		args = append(args, int64(maxContributionRows+1))
 		limitedAlias := physical.PhysicalName("golem_limited_contributions")
+		if err := addResultAlias(limitedAlias, AnalyticsPlanAliasStructural); err != nil {
+			return Statement{}, err
+		}
 		limited := "SELECT " + strings.Join(contributionProjection, ", ") + " FROM " + fromText + " LIMIT " + dialect.Placeholder(len(args))
 		outerProjection := make([]string, 0, len(contributionProjectionNames)+1)
 		for _, name := range contributionProjectionNames {
@@ -338,6 +370,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	projectedAliases := []string{}
 	if len(dimensions) > 0 {
 		groupedAlias := physical.PhysicalName("golem_grouped")
+		if err := addResultAlias(groupedAlias, AnalyticsPlanAliasAggregate); err != nil {
+			return Statement{}, err
+		}
 		outerSelect := make([]string, 0, len(columns)+2)
 		selected := map[string]bool{}
 		for _, column := range columns {
@@ -368,6 +403,12 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 				groupedCore += " LIMIT " + dialect.Placeholder(len(args))
 			}
 			limitedGroups := physical.PhysicalName("golem_limited_groups")
+			if err := addResultAlias(limitedGroups, AnalyticsPlanAliasAggregate); err != nil {
+				return Statement{}, err
+			}
+			if err := addResultAlias(physical.PhysicalName("golem_groups"), AnalyticsPlanAliasMaterialize); err != nil {
+				return Statement{}, err
+			}
 			groupedCTE = "SELECT " + dialect.Quote(limitedGroups) + ".*, COUNT(*) OVER () AS " + dialect.Quote("golem_intermediate_count") + " FROM (" + groupedCore + ") AS " + dialect.Quote(limitedGroups)
 			text = "SELECT " + strings.Join(outerSelect, ", ") + " FROM " + dialect.Quote("golem_groups") + " AS " + dialect.Quote(groupedAlias)
 		} else {
@@ -418,6 +459,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	}
 	if reversePage {
 		pageAlias := physical.PhysicalName("golem_page")
+		if err := addResultAlias(pageAlias, AnalyticsPlanAliasStructural); err != nil {
+			return Statement{}, err
+		}
 		public := make([]string, 0, len(projectedAliases)+2)
 		for _, name := range projectedAliases {
 			alias := dialect.Quote(physical.PhysicalName(name))
@@ -435,6 +479,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	guardRowColumn := false
 	if len(dimensions) > 0 && guardColumns {
 		visibleAlias := physical.PhysicalName("golem_visible")
+		if err := addResultAlias(visibleAlias, AnalyticsPlanAliasStructural); err != nil {
+			return Statement{}, err
+		}
 		pageProjection := make([]string, 0, len(projectedAliases)+4)
 		for _, name := range projectedAliases {
 			quoted := dialect.Quote(physical.PhysicalName(name))
@@ -456,6 +503,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 			sentinel = append(sentinel, "NULL AS "+dialect.Quote(physical.PhysicalName(name)))
 		}
 		groupsAlias := physical.PhysicalName("golem_guard_groups")
+		if err := addResultAlias(groupsAlias, AnalyticsPlanAliasMaterialize); err != nil {
+			return Statement{}, err
+		}
 		for _, name := range []physical.PhysicalName{"golem_contribution_count", "golem_intermediate_count"} {
 			quoted := dialect.Quote(name)
 			sentinel = append(sentinel, "COALESCE(MAX("+dialect.Quote(groupsAlias)+"."+quoted+"), 0) AS "+quoted)
@@ -464,6 +514,9 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 		sentinelSQL := "SELECT " + strings.Join(sentinel, ", ") + " FROM " + dialect.Quote("golem_groups") + " AS " + dialect.Quote(groupsAlias)
 
 		combinedAlias := physical.PhysicalName("golem_guarded")
+		if err := addResultAlias(combinedAlias, AnalyticsPlanAliasStructural); err != nil {
+			return Statement{}, err
+		}
 		finalProjection := make([]string, 0, len(columns)+3)
 		for _, column := range columns {
 			quoted := dialect.Quote(physical.PhysicalName(column.Alias))
@@ -484,7 +537,7 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	if contributionCTE != "" && !(len(dimensions) > 0 && guardColumns) {
 		text = "WITH " + dialect.Quote(contributionAlias) + " AS MATERIALIZED (" + contributionCTE + ") " + text
 	}
-	return Statement{text: text, args: args, columns: columns, grouped: len(dimensions) > 0, maxContributionRows: maxContributionRows, maxIntermediateGroups: maxIntermediateGroups, maxResultRows: maxResultRows, guardColumns: guardColumns, guardRowColumn: guardRowColumn}, nil
+	return Statement{text: text, args: args, columns: columns, grouped: len(dimensions) > 0, maxContributionRows: maxContributionRows, maxIntermediateGroups: maxIntermediateGroups, maxResultRows: maxResultRows, guardColumns: guardColumns, guardRowColumn: guardRowColumn, planMap: planMap.freeze()}, nil
 }
 
 type analyticsOrderSpec struct {

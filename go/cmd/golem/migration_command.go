@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/generate/pipeline"
 	"github.com/eleven-am/golem/go/internal/generate/publication"
 	"github.com/eleven-am/golem/go/internal/migration"
+	"github.com/eleven-am/golem/go/internal/migration/explain"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -43,6 +44,15 @@ type migrationNewOutput struct {
 	MigrationID   migration.MigrationID `json:"migrationId"`
 	Providers     []ir.Provider         `json:"providers"`
 	Changed       []string              `json:"changed"`
+	Pending       bool                  `json:"pending,omitempty"`
+	Draft         string                `json:"draft,omitempty"`
+}
+
+type migrationBackfillAttachOutput struct {
+	FormatVersion uint16                `json:"formatVersion"`
+	MigrationID   migration.MigrationID `json:"migrationId"`
+	Provider      ir.Provider           `json:"provider"`
+	Changed       []string              `json:"changed"`
 }
 
 type migrationApplyOutput struct {
@@ -59,8 +69,16 @@ func runMigration(ctx context.Context, directory string, args []string, stdout, 
 	switch args[0] {
 	case "new":
 		return runMigrationNew(ctx, directory, args[1:], stdout, stderr)
+	case "plan":
+		return runMigrationPlan(ctx, directory, args[1:], stdout, stderr)
 	case "apply":
 		return runMigrationApply(ctx, directory, args[1:], stdout, stderr)
+	case "backfill":
+		if len(args) < 2 || args[1] != "attach" {
+			writeError(stderr, errors.New(usage))
+			return 2
+		}
+		return runMigrationBackfillAttach(ctx, directory, args[2:], stdout, stderr)
 	default:
 		writeError(stderr, errors.New(usage))
 		return 2
@@ -123,6 +141,18 @@ func runMigrationNew(ctx context.Context, directory string, args []string, stdou
 		writeError(stderr, err)
 		return 1
 	}
+	if prepared.Pending != nil {
+		draft, err := workflow.WritePendingBackfill(module.directory, *prepared.Pending)
+		if err != nil {
+			writeError(stderr, err)
+			return 1
+		}
+		if err := encodeJSON(stdout, migrationNewOutput{FormatVersion: migrationOutputFormatVersion, MigrationID: prepared.MigrationID, Providers: prepared.Providers, Changed: []string{draft}, Pending: true, Draft: draft}); err != nil {
+			writeError(stderr, err)
+			return 1
+		}
+		return 0
+	}
 	published, err := publication.Apply(ctx, publication.Request{
 		ModuleDir: module.directory, ManifestPath: prepared.PublicationPath,
 		Prospective: prepared.Prospective, Mode: publication.ModePublish,
@@ -135,6 +165,75 @@ func runMigrationNew(ctx context.Context, directory string, args []string, stdou
 		writeError(stderr, err)
 		return 1
 	}
+	return 0
+}
+
+func runMigrationBackfillAttach(ctx context.Context, directory string, args []string, stdout, stderr io.Writer) int {
+	flags := flag.NewFlagSet("migration backfill attach", flag.ContinueOnError)
+	flags.SetOutput(stderr)
+	migrationID := flags.String("migration", "", "exact pending migration ID")
+	field := flags.String("field", "", "exact Model.Field backfill target")
+	filename := flags.String("file", "", "reviewed PostgreSQL SQL file")
+	migrations := flags.String("migrations", workflow.DefaultRoot, "module-relative migration history root")
+	if err := flags.Parse(args); err != nil || *migrationID == "" || *field == "" || *filename == "" || flags.NArg() != 0 {
+		writeError(stderr, errors.New(usage))
+		return 2
+	}
+	migrationRoot, err := canonicalMigrationRoot(*migrations)
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	module, err := resolveModule(directory)
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	if err := publication.Recover(ctx, module.directory); err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	reviewedPath := *filename
+	if !filepath.IsAbs(reviewedPath) {
+		reviewedPath = filepath.Join(directory, reviewedPath)
+	}
+	reviewed, err := os.ReadFile(reviewedPath)
+	if err != nil {
+		writeError(stderr, errors.New("reviewed backfill file could not be read"))
+		return 1
+	}
+	render, err := providerRenderer(ir.PostgreSQL)
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	prepared, err := workflow.PrepareBackfillAttach(ctx, workflow.BackfillAttachRequest{ModuleDir: module.directory, Root: migrationRoot, MigrationID: migration.MigrationID(*migrationID), Field: *field, SQL: reviewed, Render: render})
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	planText, err := explain.MarshalText(prepared.Report)
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	if _, err := stdout.Write(planText); err != nil {
+		writeError(stderr, errors.New("migration plan output could not be written"))
+		return 1
+	}
+	published, err := publication.Apply(ctx, publication.Request{
+		ModuleDir: module.directory, ManifestPath: prepared.PublicationPath,
+		Prospective: prepared.Prospective, Mode: publication.ModePublish,
+	})
+	if err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	if err := workflow.RemovePendingBackfill(module.directory, prepared.PendingPath, prepared.PendingSHA256); err != nil {
+		writeError(stderr, err)
+		return 1
+	}
+	_ = published
 	return 0
 }
 
@@ -250,15 +349,7 @@ func providerRenderer(provider ir.Provider) (func(migration.ManifestEntry) ([]by
 	case ir.PostgreSQL:
 		value := postgresql.New()
 		return func(entry migration.ManifestEntry) ([]byte, error) {
-			plan, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
-			if err != nil {
-				return nil, err
-			}
-			if plan.Initial {
-				script, renderErr := value.RenderInitial(entry.AfterSnapshot)
-				return []byte(script.SQL()), renderErr
-			}
-			script, renderErr := value.PlanIncremental(entry)
+			script, renderErr := value.RenderMigration(entry)
 			return []byte(script.SQL()), renderErr
 		}, nil
 	default:

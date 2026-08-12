@@ -35,9 +35,10 @@ const (
 type Code string
 
 const (
-	CodeConfig Code = "PROVIDER_CONFIG"
-	CodeOpen   Code = "PROVIDER_OPEN"
-	CodeClose  Code = "PROVIDER_CLOSE"
+	CodeConfig      Code = "PROVIDER_CONFIG"
+	CodeOpen        Code = "PROVIDER_OPEN"
+	CodeClose       Code = "PROVIDER_CLOSE"
+	CodeMaintenance Code = "PROVIDER_MAINTENANCE"
 )
 
 type providerError struct {
@@ -61,7 +62,7 @@ func CodeOf(err error) (Code, bool) {
 	if !errors.As(err, &classified) {
 		return "", false
 	}
-	return classified.code, classified.code == CodeConfig || classified.code == CodeOpen || classified.code == CodeClose
+	return classified.code, classified.code == CodeConfig || classified.code == CodeOpen || classified.code == CodeClose || classified.code == CodeMaintenance
 }
 
 type Version struct {
@@ -115,15 +116,17 @@ type TestMetadata struct {
 }
 
 type databaseState struct {
-	database     *sqlx.DB
-	provider     golem.Provider
-	capabilities Capabilities
-	pool         PoolStatus
-	testOnly     bool
+	database             *sqlx.DB
+	provider             golem.Provider
+	capabilities         Capabilities
+	pool                 PoolStatus
+	testOnly             bool
+	sqliteDataSourceName string
 
 	closeOnce sync.Once
 	closeErr  error
 	closed    chan struct{}
+	closeDone chan struct{}
 }
 
 func newDatabase(database *sqlx.DB, kind golem.Provider, version Version, features []string, pool PoolStatus) *Database {
@@ -138,8 +141,9 @@ func newDatabase(database *sqlx.DB, kind golem.Provider, version Version, featur
 			version:  version,
 			features: canonical,
 		},
-		pool:   pool,
-		closed: make(chan struct{}),
+		pool:      pool,
+		closed:    make(chan struct{}),
+		closeDone: make(chan struct{}),
 	}}
 }
 
@@ -215,6 +219,7 @@ func (database *Database) Close() error {
 		return nil
 	}
 	database.state.closeOnce.Do(func() {
+		defer close(database.state.closeDone)
 		if database.state.closed != nil {
 			close(database.state.closed)
 		}
@@ -239,6 +244,18 @@ func (state *databaseState) isClosed() bool {
 	}
 }
 
+func (state *databaseState) closeCompleted() bool {
+	if state == nil || state.closeDone == nil {
+		return false
+	}
+	select {
+	case <-state.closeDone:
+		return state.closeErr == nil
+	default:
+		return false
+	}
+}
+
 func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 	if ctx == nil || strings.TrimSpace(dataSourceName) == "" {
 		return nil, failure(CodeConfig, "sqlite provider configuration is invalid")
@@ -247,7 +264,7 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 	if err != nil {
 		return nil, failure(CodeOpen, "sqlite provider open failed")
 	}
-	return newDatabase(database, golem.SQLite, Version{
+	result := newDatabase(database, golem.SQLite, Version{
 		Major: report.Version.Major,
 		Minor: report.Version.Minor,
 		Patch: report.Version.Patch,
@@ -261,7 +278,23 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 		"policy-scalar-list.v1",
 		"policy-relation.v1",
 		"analytics-exact.v1",
-	}, PoolStatus{maximumOpen: sqliteVerifiedPoolWidth, maximumIdle: sqliteVerifiedPoolWidth}), nil
+	}, PoolStatus{maximumOpen: sqliteVerifiedPoolWidth, maximumIdle: sqliteVerifiedPoolWidth})
+	result.state.sqliteDataSourceName = dataSourceName
+	return result, nil
+}
+
+// CheckpointSQLiteForBackup performs the provider-owned SQLite checkpoint for
+// a verified handle after its application pool has been closed. Keeping the
+// data-source identity inside the sealed handle prevents callers from
+// checkpointing a different database than the one Golem opened and verified.
+func CheckpointSQLiteForBackup(ctx context.Context, database *Database) error {
+	if ctx == nil || database == nil || database.state == nil || database.state.provider != golem.SQLite || !database.state.closeCompleted() || strings.TrimSpace(database.state.sqliteDataSourceName) == "" {
+		return failure(CodeMaintenance, "sqlite backup checkpoint requires a closed verified SQLite provider handle")
+	}
+	if err := internalsqlite.New().CheckpointForBackup(ctx, database.state.sqliteDataSourceName); err != nil {
+		return failure(CodeMaintenance, "sqlite backup checkpoint failed")
+	}
+	return nil
 }
 
 type PostgreSQLPoolConfig struct {

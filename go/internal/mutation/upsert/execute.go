@@ -188,6 +188,9 @@ func retryableInterference(err error) bool {
 	if errors.As(err, &untrusted) {
 		return false
 	}
+	if uniqueCollision(err) {
+		return true
+	}
 	var postgres *pgconn.PgError
 	if errors.As(err, &postgres) {
 		switch postgres.Code {
@@ -217,7 +220,35 @@ func retryableInterference(err error) bool {
 	return false
 }
 
+func uniqueCollision(err error) bool {
+	var postgres *pgconn.PgError
+	if errors.As(err, &postgres) && postgres.Code == "23505" {
+		return true
+	}
+	var ncruces *ncrucsqlite.Error
+	if errors.As(err, &ncruces) {
+		switch ncruces.ExtendedCode() {
+		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
+			return true
+		}
+	}
+	var sqlite *moderncsqlite.Error
+	if errors.As(err, &sqlite) {
+		code := sqlite.Code()
+		return code == 1555 || code == 2067
+	}
+	return false
+}
+
 // RetryableInterference is the shared provider classification used by nested
 // upsert/connect-or-create whole-attempt retry. It exposes only the decision;
 // retry ownership and bounds remain with the calling mutation kernel.
 func RetryableInterference(err error) bool { return retryableInterference(err) }
+
+// UniqueCollision identifies only trusted provider unique/primary-key
+// collisions. Expectation-aware absent upsert uses it after rolling back its
+// create savepoint to reclassify the winner without an existence oracle.
+func UniqueCollision(err error) bool {
+	var untrusted interface{ UntrustedRetryCause() }
+	return !errors.As(err, &untrusted) && uniqueCollision(err)
+}

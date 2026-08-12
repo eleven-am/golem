@@ -57,6 +57,7 @@ type Registry struct {
 	byRoot      map[rootKey]compilerir.CustomOperationContractIR
 	byID        map[compilerir.ExtensionID]compilerir.CustomOperationContractIR
 	models      map[string]golem.ModelID
+	versioned   map[string]bool
 	enums       map[string]enumValues
 }
 
@@ -76,6 +77,7 @@ func New(compilation compilerir.CompilationIR) (*Registry, error) {
 		byRoot:      make(map[rootKey]compilerir.CustomOperationContractIR, len(compilation.Contract.CustomOperations)),
 		byID:        make(map[compilerir.ExtensionID]compilerir.CustomOperationContractIR, len(compilation.Contract.CustomOperations)),
 		models:      map[string]golem.ModelID{},
+		versioned:   map[string]bool{},
 		enums:       map[string]enumValues{},
 	}
 	for _, contract := range compilation.Contract.Models {
@@ -90,6 +92,9 @@ func New(compilation compilerir.CompilationIR) (*Registry, error) {
 			return nil, fmt.Errorf("P5_CUSTOM_MODEL: GraphQL model %q is duplicated", contract.GraphQLName)
 		}
 		registry.models[contract.GraphQLName] = model
+		if contract.OptimisticConcurrency != nil {
+			registry.versioned[contract.GraphQLName] = true
+		}
 	}
 	for _, enum := range compilation.Contract.Enums {
 		values := enumValues{graphQL: make(map[string]bool, len(enum.Values)), wire: make(map[string]bool, len(enum.Values))}
@@ -229,6 +234,9 @@ func (registry *Registry) validateType(typ compilerir.GraphQLTypeIR, argument bo
 	}
 	if typ.Element != nil {
 		return fmt.Errorf("non-list type has an element")
+	}
+	if typ.Kind == compilerir.GraphQLTypeUpdateManyInput && registry.versioned[typ.Name] {
+		return fmt.Errorf("optimistic-concurrency model %q has no update-many input", typ.Name)
 	}
 	switch typ.Kind {
 	case compilerir.GraphQLTypeScalar:

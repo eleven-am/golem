@@ -540,10 +540,14 @@ func compareVersion(left, right physical.Version) int {
 }
 
 func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, schema physical.PhysicalSchema) error {
+	normalized, err := physical.Normalize(schema)
+	if err != nil {
+		return err
+	}
 	if _, err := provider.probe(ctx, database); err != nil {
 		return err
 	}
-	script, err := provider.renderInitial(schema)
+	script, err := provider.renderInitial(normalized)
 	if err != nil {
 		return err
 	}
@@ -556,8 +560,8 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err := transaction.SelectContext(ctx, &existingRows, "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','index','view','trigger')"); err != nil {
 		return fmt.Errorf("sqlite initial apply inspect blank schema: %w", err)
 	}
-	allowed := make(map[string]struct{}, len(schema.Unmanaged))
-	for _, object := range schema.Unmanaged {
+	allowed := make(map[string]struct{}, len(normalized.Unmanaged))
+	for _, object := range normalized.Unmanaged {
 		allowed[object.Kind+"\x00"+string(object.Name)] = struct{}{}
 	}
 	for _, row := range existingRows {
@@ -581,16 +585,16 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("sqlite initial apply foreign_key_check close: %w", err)
 	}
-	actual, err := provider.introspectCatalog(ctx, transaction, schema)
+	actual, err := provider.introspectCatalog(ctx, transaction, normalized)
 	if err != nil {
 		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
-	wantPhysical, _ := physical.PhysicalFingerprint(schema)
+	wantPhysical, _ := physical.PhysicalFingerprint(normalized)
 	gotPhysical, _ := physical.PhysicalFingerprint(actual)
 	if gotPhysical != wantPhysical {
 		return fmt.Errorf("sqlite initial apply precommit physical fingerprint mismatch")
 	}
-	wantSystem, _ := physical.SystemFingerprint(schema.Provider, schema.System)
+	wantSystem, _ := physical.SystemFingerprint(normalized.Provider, normalized.System)
 	gotSystem, _ := physical.SystemFingerprint(actual.Provider, actual.System)
 	if gotSystem != wantSystem {
 		return fmt.Errorf("sqlite initial apply precommit system fingerprint mismatch")

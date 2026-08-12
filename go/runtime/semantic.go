@@ -32,7 +32,8 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if len(rows) == 0 {
 		return []golem.SemanticResult[M]{}, nil
 	}
-	if err := caller.app.semantic.RefreshAll(ctx); err != nil {
+	model := semanticModelID(descriptor.Metadata())
+	if err := caller.app.semantic.Refresh(ctx, model, indexName); err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, caller.app, descriptor, indexName, query, take, rows)
@@ -56,7 +57,8 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if len(rows) == 0 {
 		return []golem.SemanticResult[M]{}, nil
 	}
-	if err := system.app.semantic.RefreshAll(ctx); err != nil {
+	model := semanticModelID(descriptor.Metadata())
+	if err := system.app.semantic.Refresh(ctx, model, indexName); err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, system.app, descriptor, indexName, query, take, rows)
@@ -110,8 +112,7 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		byKey[key] = row
 		keys = append(keys, key)
 	}
-	model := descriptor.Metadata().ModelID()
-	ranks, err := app.semantic.Query(ctx, ir.ModelID(hex.EncodeToString(model[:])), indexName, query, keys, take)
+	ranks, err := app.semantic.Query(ctx, semanticModelID(descriptor.Metadata()), indexName, query, keys, take)
 	if err != nil {
 		return nil, err
 	}
@@ -128,6 +129,11 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		result = append(result, item)
 	}
 	return result, nil
+}
+
+func semanticModelID(metadata golem.ModelMetadata) ir.ModelID {
+	model := metadata.ModelID()
+	return ir.ModelID(hex.EncodeToString(model[:]))
 }
 
 func validateSemanticCandidateCount(count int) error {

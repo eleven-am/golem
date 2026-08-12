@@ -1,6 +1,16 @@
 # Human-readable migration plans implementation contract
 
-Status: **accepted implementation contract; not shipped**.
+Status: **implementation active; typed report, backfill attach, read-only
+prospective/reviewed command, and checked-social journey complete locally;
+compatibility and release evidence pending**.
+
+Current implementation boundary: the provider-neutral immutable report,
+Diff-owned non-persisted snapshot evidence, shared plan-shape validation,
+prospective/reviewed adapters, report-before-publication backfill attach path,
+shared all-provider preview, complete-chain validation before filtering, and
+read-only `migration plan` command are implemented and mutation-tested. The
+checked-social prospective and reviewed journeys pass without rewriting old
+history. Compatibility freeze and integrated release evidence remain open.
 
 Audience: the engineer implementing the feature and the reviewer deciding
 whether it is complete. This file is self-contained and covers presentation of
@@ -202,6 +212,25 @@ Logical names are display labels only. IDs and digests remain authoritative.
 Never include physical schema/table/index/constraint names in the machine
 document. The local terminal renderer may show a Go-facing name such as
 `Post.Title`, but never a DSN or absolute path.
+
+### 5.1 Hard report bounds
+
+Version 1 refuses the whole report before rendering when any of these closed
+limits would be exceeded:
+
+- at most 2 provider reports;
+- at most 65,536 phases and 65,536 operations per provider;
+- at most 65,536 dependencies, capabilities, artifacts, or warnings in any
+  owning collection;
+- at most 4,096 UTF-8 bytes in any display label, relative artifact path, enum,
+  ID, digest, or fixed detail string; and
+- at most 16 MiB for either final canonical JSON or final text output.
+
+These are report-encoding limits, not permission to truncate an authoritative
+plan. Exceeding one returns one closed plan-unavailable error and emits no
+partial JSON or text. A renderer must count while constructing the immutable
+report and again while encoding it; it must not allocate an unbounded
+intermediate document first.
 
 ## 6. Effect classification
 

@@ -34,6 +34,9 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	if len(result.Advanced) != 2 {
 		t.Fatalf("advanced models = %d, want 2", len(result.Advanced))
 	}
+	if len(result.OptimisticConcurrency) != 1 || result.OptimisticConcurrency[0].ModelID != userID || result.OptimisticConcurrency[0].FieldID != "16000000000000000000000000000000" {
+		t.Fatalf("optimistic concurrency declarations = %#v", result.OptimisticConcurrency)
+	}
 	if len(result.GraphQLModels) != 1 {
 		t.Fatalf("GraphQL model patches = %#v", result.GraphQLModels)
 	}
@@ -175,7 +178,17 @@ func TestInterpretRejectsHelpersAndForgedTypedValues(t *testing.T) {
 		Dir: moduleDirectory(t), Compilation: rejectCompilation(),
 		Packages: []modelcodegen.PackageSpec{{ImportPath: rejectPackage, PackageName: "reject", Directory: fixtureDirectory(t, "reject")}},
 	})
-	want := map[string]bool{"P1_METHOD_OPTION_CALL": false, "P1_METHOD_PROVIDER": false, "P1_METHOD_PROVIDER_NESTING": false, "P1_METHOD_RELATION_ACTION": false, "P1_METHOD_CAST_IDENTITY": false, "P1_METHOD_INDEX_COLUMN": false}
+	want := map[string]bool{
+		"P1_CONCURRENCY_FIELD":          false,
+		"P1_CONCURRENCY_DUPLICATE":      false,
+		"P1_CONCURRENCY_PROVIDER_SCOPE": false,
+		"P1_METHOD_OPTION_CALL":         false,
+		"P1_METHOD_PROVIDER":            false,
+		"P1_METHOD_PROVIDER_NESTING":    false,
+		"P1_METHOD_RELATION_ACTION":     false,
+		"P1_METHOD_CAST_IDENTITY":       false,
+		"P1_METHOD_INDEX_COLUMN":        false,
+	}
 	for _, diagnostic := range result.Diagnostics {
 		if _, exists := want[diagnostic.Code]; exists {
 			want[diagnostic.Code] = true
@@ -207,6 +220,7 @@ func fixtureCompilation() ir.CompilationIR {
 			field("13000000000000000000000000000000", "Name", ir.TypeString),
 			field("14000000000000000000000000000000", "Score", ir.TypeInt64),
 			field("15000000000000000000000000000000", "Small", ir.TypeInt16),
+			field("16000000000000000000000000000000", "Version", ir.TypeInt64),
 		}},
 		{ID: auditID, Go: ir.GoNamedTypeIR{PackagePath: fixturePackage, Name: "Audit"}, LogicalName: "Audit", Table: ir.TableBindingIR{PhysicalName: "audits"}, Fields: []ir.FieldIR{
 			field("21000000000000000000000000000000", "ID", ir.TypeInt64),

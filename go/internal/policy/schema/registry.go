@@ -61,6 +61,9 @@ type Registry struct {
 	enumLabels               map[compilerir.EnumID]map[compilerir.EnumValueID]string
 	physicalModels           map[golem.Provider]map[golem.ModelID]PhysicalModel
 	physicalFields           map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField
+	physicalModelNames       map[golem.Provider]map[physical.PhysicalName]golem.ModelID
+	physicalAccessObjects    map[golem.Provider]map[physical.PhysicalName]PhysicalAccessObject
+	physicalKeyAccessObjects map[golem.Provider]map[golem.ModelID][]PhysicalAccessObject
 	physicalNamespaces       map[golem.Provider]physical.PhysicalName
 	physicalSystemNamespaces map[golem.Provider]physical.PhysicalName
 	capabilities             map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
@@ -144,6 +147,10 @@ func (registry *Registry) EventModels() []Model {
 // fingerprinted registry.
 func (registry *Registry) Model(id golem.ModelID) (Model, bool) {
 	value, ok := registry.models[id]
+	if value.optimisticConcurrency != nil {
+		field := *value.optimisticConcurrency
+		value.optimisticConcurrency = &field
+	}
 	value.fields = append([]golem.FieldID(nil), value.fields...)
 	value.primaryKey = append([]golem.FieldID(nil), value.primaryKey...)
 	value.eventSnapshot = append([]golem.FieldID(nil), value.eventSnapshot...)
@@ -282,6 +289,80 @@ func (registry *Registry) PhysicalField(provider golem.Provider, model golem.Mod
 	return value.clone(), true
 }
 
+// PhysicalModelIDByName maps one provider diagnostic table name to the stable
+// model identity in this exact fingerprinted registry. The input name is used
+// only as a private lookup key and is never retained in the returned fact.
+func (registry *Registry) PhysicalModelIDByName(provider golem.Provider, name physical.PhysicalName) (golem.ModelID, bool) {
+	if registry == nil {
+		return golem.ModelID{}, false
+	}
+	values, ok := registry.physicalModelNames[provider]
+	if !ok {
+		return golem.ModelID{}, false
+	}
+	value, ok := values[name]
+	return value, ok
+}
+
+// PhysicalAccessObjectByName maps one provider diagnostic access-object name
+// to a closed stable identity. Unknown names fail closed; no naming convention
+// is parsed or inferred.
+func (registry *Registry) PhysicalAccessObjectByName(provider golem.Provider, name physical.PhysicalName) (PhysicalAccessObject, bool) {
+	if registry == nil {
+		return PhysicalAccessObject{}, false
+	}
+	values, ok := registry.physicalAccessObjects[provider]
+	if !ok {
+		return PhysicalAccessObject{}, false
+	}
+	value, ok := values[name]
+	return value.clone(), ok
+}
+
+// PhysicalKeyAccessObjects returns the reviewed primary/unique key inventory
+// for one model and provider snapshot. It exists for provider plans (notably
+// SQLite rowid and autoindex plans) that do not report an authored key name.
+func (registry *Registry) PhysicalKeyAccessObjects(provider golem.Provider, model golem.ModelID) []PhysicalAccessObject {
+	if registry == nil {
+		return nil
+	}
+	models, ok := registry.physicalKeyAccessObjects[provider]
+	if !ok {
+		return nil
+	}
+	values := models[model]
+	result := make([]PhysicalAccessObject, len(values))
+	for index, value := range values {
+		result[index] = value.clone()
+	}
+	return result
+}
+
+// PhysicalKeyAccessByFields resolves exactly one reviewed primary/unique key
+// by its stable ordered field sequence. Reordered, unknown, or ambiguous input
+// fails closed instead of guessing from a provider-generated name.
+func (registry *Registry) PhysicalKeyAccessByFields(provider golem.Provider, model golem.ModelID, kind PhysicalAccessKind, fields []golem.FieldID) (PhysicalAccessObject, bool) {
+	if registry == nil || model == (golem.ModelID{}) || kind != PhysicalAccessPrimaryKey && kind != PhysicalAccessUniqueIndex || !validPhysicalKeyFields(fields) {
+		return PhysicalAccessObject{}, false
+	}
+	models, ok := registry.physicalKeyAccessObjects[provider]
+	if !ok {
+		return PhysicalAccessObject{}, false
+	}
+	var match PhysicalAccessObject
+	found := false
+	for _, value := range models[model] {
+		if value.kind != kind || !equalPhysicalKeyFields(value.fields, fields) {
+			continue
+		}
+		if found {
+			return PhysicalAccessObject{}, false
+		}
+		match, found = value, true
+	}
+	return match.clone(), found
+}
+
 func (registry *Registry) Capability(provider golem.Provider, id compilerir.CapabilityID) (physical.CapabilityFact, bool) {
 	values, ok := registry.capabilities[provider]
 	if !ok {
@@ -293,18 +374,19 @@ func (registry *Registry) Capability(provider golem.Provider, id compilerir.Capa
 
 // Model is the minimum provider-neutral model fact used by the binder.
 type Model struct {
-	id              golem.ModelID
-	fields          []golem.FieldID
-	primaryKey      []golem.FieldID
-	identities      []Identity
-	equality        map[golem.FieldID]struct{}
-	maxTake         uint32
-	subscriptions   bool
-	eventSchema     compilerir.Fingerprint
-	eventSnapshot   []golem.FieldID
-	analytics       *compilerir.AggregationContractIR
-	scopedReads     bool
-	hookOwnedCreate []golem.FieldID
+	id                    golem.ModelID
+	fields                []golem.FieldID
+	primaryKey            []golem.FieldID
+	identities            []Identity
+	equality              map[golem.FieldID]struct{}
+	maxTake               uint32
+	subscriptions         bool
+	eventSchema           compilerir.Fingerprint
+	eventSnapshot         []golem.FieldID
+	analytics             *compilerir.AggregationContractIR
+	scopedReads           bool
+	hookOwnedCreate       []golem.FieldID
+	optimisticConcurrency *golem.FieldID
 }
 
 func (model Model) ID() golem.ModelID       { return model.id }
@@ -364,6 +446,15 @@ func (model Model) ScopedReadsEnabled() bool { return model.scopedReads }
 // hook. The inventory is contract metadata, not database schema metadata.
 func (model Model) GraphQLHookOwnedCreateFields() []golem.FieldID {
 	return append([]golem.FieldID(nil), model.hookOwnedCreate...)
+}
+
+// OptimisticConcurrency returns the sole compiler-owned version field. The
+// value is copied from the immutable three-way bootstrap agreement.
+func (model Model) OptimisticConcurrency() (golem.FieldID, bool) {
+	if model.optimisticConcurrency == nil {
+		return golem.FieldID{}, false
+	}
+	return *model.optimisticConcurrency, true
 }
 
 // EqualityIndexed reports the compiler-proven provider-neutral fact that an
@@ -503,6 +594,78 @@ func (model PhysicalModel) Provider() golem.Provider    { return model.provider 
 func (model PhysicalModel) ModelID() golem.ModelID      { return model.model }
 func (model PhysicalModel) Name() physical.PhysicalName { return model.name }
 
+// PhysicalAccessKind is the closed registry classification of a provider
+// access object. Bitmap selection is a provider-plan strategy over an index;
+// it is deliberately not stored as a second physical identity here.
+type PhysicalAccessKind uint8
+
+const (
+	PhysicalAccessUnknown PhysicalAccessKind = iota
+	PhysicalAccessPrimaryKey
+	PhysicalAccessUniqueIndex
+	PhysicalAccessIndex
+)
+
+// PhysicalIndexID is the fixed-width stable identity of a physical index. It
+// contains no provider name and grants no query capability.
+type PhysicalIndexID [16]byte
+
+// PhysicalAccessObject contains only sanitized identity facts. The mutually
+// exclusive key and index fields preserve whether the physical owner was a
+// primary/unique key or an explicit index.
+type PhysicalAccessObject struct {
+	kind    PhysicalAccessKind
+	model   golem.ModelID
+	keyID   golem.KeyID
+	indexID PhysicalIndexID
+	fields  []golem.FieldID
+}
+
+func (value PhysicalAccessObject) Kind() PhysicalAccessKind { return value.kind }
+func (value PhysicalAccessObject) ModelID() golem.ModelID   { return value.model }
+func (value PhysicalAccessObject) KeyID() (golem.KeyID, bool) {
+	return value.keyID, value.keyID != (golem.KeyID{}) && value.indexID == (PhysicalIndexID{})
+}
+func (value PhysicalAccessObject) IndexID() (PhysicalIndexID, bool) {
+	return value.indexID, value.indexID != (PhysicalIndexID{}) && value.keyID == (golem.KeyID{})
+}
+func (value PhysicalAccessObject) FieldIDs() []golem.FieldID {
+	return append([]golem.FieldID(nil), value.fields...)
+}
+func (value PhysicalAccessObject) clone() PhysicalAccessObject {
+	value.fields = value.FieldIDs()
+	return value
+}
+
+func validPhysicalKeyFields(fields []golem.FieldID) bool {
+	if len(fields) == 0 {
+		return false
+	}
+	seen := make(map[golem.FieldID]struct{}, len(fields))
+	for _, field := range fields {
+		if field == (golem.FieldID{}) {
+			return false
+		}
+		if _, duplicate := seen[field]; duplicate {
+			return false
+		}
+		seen[field] = struct{}{}
+	}
+	return true
+}
+
+func equalPhysicalKeyFields(left, right []golem.FieldID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
+}
+
 type PhysicalField struct {
 	provider             golem.Provider
 	model                golem.ModelID
@@ -637,4 +800,9 @@ func relationID(value compilerir.RelationID) (golem.RelationID, error) {
 func keyID(value compilerir.KeyID) (golem.KeyID, error) {
 	parsed, err := fixedID(string(value))
 	return golem.KeyID(parsed), err
+}
+
+func physicalIndexID(value compilerir.IndexID) (PhysicalIndexID, error) {
+	parsed, err := fixedID(string(value))
+	return PhysicalIndexID(parsed), err
 }

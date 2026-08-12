@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -17,6 +19,85 @@ import (
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
+
+func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
+	readSnapshot := func(name string) physical.PhysicalSchema {
+		t.Helper()
+		raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial." + name + ".snapshot.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema physical.PhysicalSchema
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		return schema
+	}
+	before := readSnapshot("before")
+	after := readSnapshot("after")
+	after.Extensions = append(after.Extensions, physical.Extension{
+		ID:       ir.ExtensionID(id(996)),
+		Provider: ir.SQLite,
+		Kind:     "historical.metadata",
+		Version:  1,
+		Owner:    physical.ObjectRef{Kind: ir.ObjectModel, ModelID: after.Tables[0].ID},
+	})
+	before, err := physical.NormalizeHistoricalV1(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err = physical.NormalizeHistoricalV1(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := migration.DiffHistorical(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFingerprint, err := physical.HistoricalPhysicalFingerprint(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFingerprint, err := physical.HistoricalPhysicalFingerprint(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := migration.ManifestEntry{
+		ID: "0001_initial", Operations: plan.Operations, Phases: plan.Phases,
+		BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()),
+		BeforeSnapshot: before, AfterSnapshot: after,
+	}
+	script, err := New().RenderMigration(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script.SQL() != string(want) {
+		t.Fatal("historical v1 extension metadata changed retained SQLite DDL")
+	}
+	if strings.Contains(script.SQL(), "vec0") || strings.Contains(script.SQL(), "_vec") {
+		t.Fatal("historical v1 renderer invented current semantic-extension DDL")
+	}
+
+	for name, mutate := range map[string]func(*migration.ManifestEntry){
+		"before fingerprint": func(value *migration.ManifestEntry) { value.BeforePhysical = migration.Digest(strings.Repeat("0", 64)) },
+		"after fingerprint":  func(value *migration.ManifestEntry) { value.AfterPhysical = migration.Digest(strings.Repeat("f", 64)) },
+		"provider": func(value *migration.ManifestEntry) {
+			value.AfterSnapshot.Provider.Provider = ir.PostgreSQL
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := entry
+			mutate(&forged)
+			if _, err := New().RenderMigration(forged); err == nil {
+				t.Fatal("forged sealed typed fact was accepted")
+			}
+		})
+	}
+}
 
 func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T) {
 	ctx := context.Background()
@@ -33,7 +114,7 @@ func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	after := before
+	after := normalizeMigrationFixture(t, before)
 	after.Extensions = []physical.Extension{extension}
 	after = normalizeMigrationFixture(t, after)
 	database := openMigrationFixture(t, provider, before, "semantic-index.db")
@@ -345,6 +426,48 @@ func TestSQLiteIncrementalRebuildUsesStableFieldMapping(t *testing.T) {
 	assertForeignKeysState(t, database, 1)
 }
 
+func TestSQLiteIncrementalInitializesConcurrencyWithProviderLiteralOne(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	after := normalizeMigrationFixture(t, before)
+	field := ir.FieldID("20000000000000000000000000000019")
+	after.Tables[0].Columns = append(after.Tables[0].Columns, physical.PhysicalColumn{ID: field, Name: "version", Ordinal: uint32(len(after.Tables[0].Columns)), Storage: physical.StorageType{Kind: physical.StorageSQLiteInteger}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+	after.Tables[0].OptimisticConcurrency = &field
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "concurrency.db")
+	if _, err := database.ExecContext(ctx, `INSERT INTO "items" ("id","name") VALUES (7,'kept')`); err != nil {
+		t.Fatal(err)
+	}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_concurrency.sql", nil)
+	plan, err := provider.PlanIncremental(manifest.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Rebuilds) != 1 {
+		t.Fatalf("rebuilds=%d, want one provider-owned rebuild", len(plan.Rebuilds))
+	}
+	var initialized int
+	for _, mapping := range plan.Rebuilds[0].Columns {
+		if mapping.FieldID == field && mapping.InitializeConcurrency && mapping.Source == "" {
+			initialized++
+		}
+	}
+	if initialized != 1 {
+		t.Fatalf("concurrency literal mappings=%d, want exactly one: %#v", initialized, plan.Rebuilds[0].Columns)
+	}
+	if sql := string(files["001_concurrency.sql"]); !strings.Contains(sql, `SELECT "id", "name", 1 FROM "items"`) || strings.Contains(sql, "DEFAULT 1") {
+		t.Fatalf("SQLite concurrency migration did not use the sole literal-one copy path:\n%s", sql)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	if err := database.GetContext(ctx, &version, `SELECT "version" FROM "items" WHERE "id"=7`); err != nil || version != 1 {
+		t.Fatalf("version=%d error=%v, want exact provider-initialized 1", version, err)
+	}
+}
+
 func TestSQLiteIncrementalFailureRollsBackSchemaLedgerAndForeignKeys(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
@@ -604,7 +727,7 @@ func TestSQLiteIncrementalPlannerRefusesInventedCast(t *testing.T) {
 	}
 	for _, operation := range plan.Operations {
 		entry.Risks = append(entry.Risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-		if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+		if migration.RequiresApproval(operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}
@@ -902,7 +1025,7 @@ func migrationFixtureManifest(t *testing.T, before, after physical.PhysicalSchem
 	}
 	for _, operation := range plan.Operations {
 		entry.Risks = append(entry.Risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-		if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+		if migration.RequiresApproval(operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}

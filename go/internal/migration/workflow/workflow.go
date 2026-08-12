@@ -53,6 +53,7 @@ type NewResult struct {
 	PublicationPath string
 	MigrationID     migration.MigrationID
 	Providers       []ir.Provider
+	Pending         *PendingBackfill
 }
 
 type History struct {
@@ -62,11 +63,12 @@ type History struct {
 }
 
 type State struct {
-	Publication     *codegenmanifest.Manifest
-	PublicationPath string
-	Artifacts       []codegenmanifest.Artifact
-	Histories       map[ir.Provider]History
-	HeadModel       *ir.ModelIR
+	Publication          *codegenmanifest.Manifest
+	PublicationPath      string
+	Artifacts            []codegenmanifest.Artifact
+	Histories            map[ir.Provider]History
+	HeadModel            *ir.ModelIR
+	HeadModelFingerprint ir.Fingerprint
 }
 
 func PublishedProviders(moduleDir, root string) ([]ir.Provider, error) {
@@ -110,46 +112,27 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 	if err != nil {
 		return NewResult{}, err
 	}
-	providers, err := canonicalProviders(request.Providers)
+	preview, err := Preview(ctx, PreviewRequest{
+		ModuleDir: request.ModuleDir, Root: root, ModelFingerprint: request.ModelFingerprint,
+		Model: request.Model, PreviousModel: request.PreviousModel, Providers: request.Providers,
+	})
 	if err != nil {
 		return NewResult{}, err
 	}
-	state, err := Load(ctx, request.ModuleDir, root, providers)
-	if err != nil {
+	state, headLength := preview.State, preview.HeadLength
+	if err := validateNewHeadLength(headLength); err != nil {
 		return NewResult{}, err
 	}
-	headLength := -1
-	for _, provider := range providers {
-		length := len(state.Histories[provider.Result.Provider.Provider].Manifest.Entries)
-		if headLength < 0 {
-			headLength = length
-		} else if length != headLength {
-			return NewResult{}, fmt.Errorf("declared provider migration heads are not in lockstep")
-		}
-	}
-	if headLength < 0 || headLength >= 9999 {
-		return NewResult{}, fmt.Errorf("migration history cannot allocate the next four-digit sequence")
+	providers := make([]Provider, len(preview.Providers))
+	for index := range preview.Providers {
+		providers[index] = preview.Providers[index].Provider
 	}
 	id := migration.MigrationID(fmt.Sprintf("%04d_%s", headLength+1, request.Name))
-	if fingerprint, fingerprintErr := ir.ModelFingerprint(request.Model); fingerprintErr != nil || fingerprint != request.ModelFingerprint {
-		return NewResult{}, fmt.Errorf("current ModelIR does not match its migration fingerprint")
+	beforeModel, beforeModelFingerprint := preview.BeforeModel, preview.BeforeModelFingerprint
+	beforeModelBytes, err := reviewedBeforeModelSnapshotBytes(state, root, headLength)
+	if err != nil {
+		return NewResult{}, err
 	}
-	beforeModel := ir.CanonicalEmptyModel()
-	if headLength != 0 {
-		if state.HeadModel == nil || request.PreviousModel == nil {
-			return NewResult{}, fmt.Errorf("incremental migration requires the exact previous reviewed ModelIR")
-		}
-		stateBytes, _ := ir.CanonicalModel(*state.HeadModel)
-		requestBytes, previousErr := ir.CanonicalModel(*request.PreviousModel)
-		if previousErr != nil || !bytes.Equal(stateBytes, requestBytes) {
-			return NewResult{}, fmt.Errorf("incremental migration previous ModelIR differs from the reviewed head")
-		}
-		beforeModel = *request.PreviousModel
-	} else if request.PreviousModel != nil {
-		return NewResult{}, fmt.Errorf("initial migration must start from the canonical empty ModelIR")
-	}
-	beforeModelFingerprint, _ := ir.ModelFingerprint(beforeModel)
-	beforeModelBytes, _ := modelSnapshotBytes(beforeModel)
 	afterModelBytes, _ := modelSnapshotBytes(request.Model)
 	approved := map[migration.OperationID]bool{}
 	for _, operationID := range request.Approvals {
@@ -166,30 +149,32 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		artifactByPath[artifact.Path] = artifact
 	}
 	var changedProviders []ir.Provider
-	for _, provider := range providers {
+	for _, providerPreview := range preview.Providers {
+		provider := providerPreview.Provider
 		providerID := provider.Result.Provider.Provider
 		history := state.Histories[providerID]
-		before, parentID, parentChain := canonicalEmpty(provider.Result.Schema), migration.MigrationID(""), migration.Digest("")
+		before, after, plan := providerPreview.Before, providerPreview.After, providerPreview.Plan
+		parentID, parentChain := migration.MigrationID(""), migration.Digest("")
 		if len(history.Manifest.Entries) != 0 {
 			head := history.Manifest.Entries[len(history.Manifest.Entries)-1]
-			before, parentID, parentChain = head.AfterSnapshot, head.ID, head.ChainHash
-			if head.AfterModel != migration.Digest(beforeModelFingerprint) {
-				return NewResult{}, fmt.Errorf("provider %s model head differs from the reviewed ModelIR", providerID)
-			}
+			parentID, parentChain = head.ID, head.ChainHash
 		}
-		after, err := physical.Normalize(provider.Result.Schema)
-		if err != nil {
-			return NewResult{}, err
-		}
-		plan, err := migration.Diff(before, after)
-		if err != nil {
-			return NewResult{}, fmt.Errorf("plan provider %s: %w", providerID, err)
+		backfills := pendingBackfillOperations(migration.ManifestEntry{Operations: plan.Operations})
+		pendingRequiredColumn := len(backfills) != 0
+		if pendingRequiredColumn && (len(providers) != 1 || providerID != ir.PostgreSQL || len(backfills) != 1) {
+			return NewResult{}, fmt.Errorf("reviewed required-column backfill authoring requires exactly one PostgreSQL provider and one target field")
 		}
 		var approvals []migration.Approval
 		var risks []migration.OperationRisk
 		for _, operation := range plan.Operations {
 			risks = append(risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
 			if migration.RequiresApproval(operation) {
+				if pendingRequiredColumn && operation.ObjectID == backfills[0].ObjectID {
+					continue
+				}
+				if pendingRequiredColumn {
+					return NewResult{}, fmt.Errorf("pending reviewed backfill cannot include unrelated approval operation %s", operation.ID)
+				}
 				if !approved[operation.ID] {
 					return NewResult{}, fmt.Errorf("provider %s operation %s risk %s requires --approve %s", providerID, operation.ID, operation.Risk, operation.ID)
 				}
@@ -197,30 +182,37 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 				approvals = append(approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 			}
 		}
-		if err := migration.ValidatePlan(plan, approvals); err != nil {
-			return NewResult{}, fmt.Errorf("provider %s: %w", providerID, err)
+		if !pendingRequiredColumn {
+			if err := migration.ValidatePlan(plan, approvals); err != nil {
+				return NewResult{}, fmt.Errorf("provider %s: %w", providerID, err)
+			}
 		}
-		beforeFingerprint, _ := physical.PhysicalFingerprint(before)
-		afterFingerprint, _ := physical.PhysicalFingerprint(after)
-		physicalChanged = physicalChanged || beforeFingerprint != afterFingerprint
+		physicalChanged = physicalChanged || len(plan.Operations) != 0
 		allowlist, _ := physical.UnmanagedAllowlistFingerprint(after)
 		entry := migration.ManifestEntry{
 			ID: id, ParentID: parentID, ParentChainHash: parentChain,
 			Operations: plan.Operations, Phases: plan.Phases, Risks: risks, Approvals: approvals,
 			BeforeModel: migration.Digest(beforeModelFingerprint), AfterModel: migration.Digest(request.ModelFingerprint),
-			BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()),
+			BeforePhysical: plan.BeforeFingerprint, AfterPhysical: plan.AfterFingerprint,
 			BeforeSnapshot: before, AfterSnapshot: after, UnmanagedAllowlistDigest: migration.Digest(allowlist.String()),
+		}
+		if pendingRequiredColumn {
+			pending, pendingErr := newPendingBackfill(request.ModuleDir, root, entry, request.Model, beforeModel, request.ModelFingerprint, request.ContractFingerprint, provider.Result.Fingerprint, provider.Result.SystemFingerprint)
+			if pendingErr != nil {
+				return NewResult{}, pendingErr
+			}
+			return NewResult{PublicationPath: path.Join(root, PublicationFilename), MigrationID: id, Providers: []ir.Provider{providerID}, Pending: &pending}, nil
 		}
 		sql, err := provider.Render(entry)
 		if err != nil {
 			return NewResult{}, fmt.Errorf("render provider %s migration %s: %w", providerID, id, err)
 		}
 		prefix := path.Join(root, string(providerID), string(id))
-		beforeBytes, err := snapshotBytes(before)
+		beforeBytes, err := historicalSnapshotBytes(before)
 		if err != nil {
 			return NewResult{}, err
 		}
-		afterBytes, err := snapshotBytes(after)
+		afterBytes, err := historicalSnapshotBytes(after)
 		if err != nil {
 			return NewResult{}, err
 		}
@@ -298,6 +290,13 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		return NewResult{}, err
 	}
 	return NewResult{Prospective: prospective, PublicationPath: path.Join(root, PublicationFilename), MigrationID: id, Providers: changedProviders}, nil
+}
+
+func validateNewHeadLength(headLength int) error {
+	if headLength >= 9999 {
+		return fmt.Errorf("migration history cannot allocate the next four-digit sequence")
+	}
+	return nil
 }
 
 func Load(ctx context.Context, moduleDir, root string, providers []Provider) (State, error) {
@@ -407,6 +406,14 @@ func loadReviewedState(ctx context.Context, moduleDir, root string) (State, erro
 				files[file.Path] = content
 				referenced[file.Path] = true
 			}
+			for _, companion := range entry.Manual {
+				content, ok := contents[companion.File.Path]
+				if !ok {
+					return State{}, fmt.Errorf("migration %s manual companion %s is absent from publication", entry.ID, companion.File.Path)
+				}
+				files[companion.File.Path] = content
+				referenced[companion.File.Path] = true
+			}
 			if err := verifyEntryArtifacts(canonical, providerID, entry, files); err != nil {
 				return State{}, err
 			}
@@ -441,8 +448,7 @@ func loadReviewedState(ctx context.Context, moduleDir, root string) (State, erro
 			return State{}, fmt.Errorf("migration publication contains unreferenced artifact %q", artifact.Path)
 		}
 	}
-	headModelFingerprint, _ := ir.ModelFingerprint(*state.HeadModel)
-	if publication.ModelFingerprint != headModelFingerprint {
+	if publication.ModelFingerprint != state.HeadModelFingerprint {
 		return State{}, fmt.Errorf("migration publication ModelFingerprint differs from the immutable ModelIR head")
 	}
 	publicationProviders := map[ir.Provider]codegenmanifest.ProviderFingerprint{}
@@ -450,12 +456,15 @@ func loadReviewedState(ctx context.Context, moduleDir, root string) (State, erro
 		publicationProviders[fingerprint.Provider] = fingerprint
 	}
 	for providerID, history := range state.Histories {
+		if len(history.Manifest.Entries) == 0 {
+			return State{}, fmt.Errorf("migration publication provider %s has no immutable physical head", providerID)
+		}
 		head := history.Manifest.Entries[len(history.Manifest.Entries)-1]
 		published, exists := publicationProviders[providerID]
 		if !exists || published.Fingerprint != ir.Fingerprint(head.AfterPhysical) {
 			return State{}, fmt.Errorf("migration publication provider %s fingerprint differs from the immutable physical head", providerID)
 		}
-		headSystem, systemErr := physical.SystemFingerprint(head.AfterSnapshot.Provider, head.AfterSnapshot.System)
+		headSystem, systemErr := physical.HistoricalSystemFingerprint(head.AfterSnapshot)
 		if systemErr != nil || published.SystemFingerprint != ir.Fingerprint(headSystem.String()) {
 			return State{}, fmt.Errorf("migration publication provider %s system fingerprint differs from the immutable system head", providerID)
 		}
@@ -523,6 +532,10 @@ func snapshotBytes(value physical.PhysicalSchema) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+func historicalSnapshotBytes(value physical.PhysicalSchema) ([]byte, error) {
+	return physical.MarshalHistoricalSnapshotJSON(value)
+}
+
 func modelSnapshotBytes(value ir.ModelIR) ([]byte, error) {
 	canonical, err := ir.CanonicalModel(value)
 	if err != nil {
@@ -539,11 +552,57 @@ func modelSnapshotBytes(value ir.ModelIR) ([]byte, error) {
 	return append(encoded, '\n'), nil
 }
 
+func reviewedBeforeModelSnapshotBytes(state State, root string, headLength int) ([]byte, error) {
+	if headLength == 0 {
+		return modelSnapshotBytes(ir.CanonicalEmptyModel())
+	}
+	if state.HeadModelFingerprint == "" {
+		return nil, fmt.Errorf("reviewed ModelIR head fingerprint is absent")
+	}
+	var headID migration.MigrationID
+	for providerID, history := range state.Histories {
+		if len(history.Manifest.Entries) != headLength {
+			return nil, fmt.Errorf("provider %s migration head length changed during authoring", providerID)
+		}
+		candidate := history.Manifest.Entries[headLength-1].ID
+		if headID == "" {
+			headID = candidate
+		} else if candidate != headID {
+			return nil, fmt.Errorf("declared provider model heads are not in lockstep")
+		}
+	}
+	if headID == "" {
+		return nil, fmt.Errorf("reviewed ModelIR head migration is absent")
+	}
+	expectedPath := path.Join(root, "models", string(headID)+".after.snapshot.json")
+	var matched *codegenmanifest.Artifact
+	for index := range state.Artifacts {
+		artifact := &state.Artifacts[index]
+		if artifact.Path != expectedPath {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf("reviewed ModelIR head artifact %s is duplicated", expectedPath)
+		}
+		matched = artifact
+	}
+	if matched == nil || matched.Kind != codegenmanifest.ArtifactMigrationSnapshot || !matched.Immutable {
+		return nil, fmt.Errorf("reviewed ModelIR head artifact %s is absent or not immutable", expectedPath)
+	}
+	snapshot, err := parseModelSnapshot(matched.Content)
+	if err != nil || snapshot.Fingerprint != state.HeadModelFingerprint {
+		return nil, fmt.Errorf("reviewed ModelIR head artifact %s does not match its frozen fingerprint", expectedPath)
+	}
+	return append([]byte(nil), matched.Content...), nil
+}
+
 func loadModelHistory(root string, contents map[string][]byte, histories map[ir.Provider]History, state *State) error {
 	var reference []migration.ManifestEntry
+	haveReference := false
 	for _, history := range histories {
-		if reference == nil {
+		if !haveReference {
 			reference = history.Manifest.Entries
+			haveReference = true
 			continue
 		}
 		if len(reference) != len(history.Manifest.Entries) {
@@ -556,9 +615,8 @@ func loadModelHistory(root string, contents map[string][]byte, histories map[ir.
 			}
 		}
 	}
-	previous := ir.CanonicalEmptyModel()
-	previousFingerprint := ir.EmptyModelFingerprint()
-	for _, entry := range reference {
+	var previous *ir.HistoricalModelSnapshot
+	for index, entry := range reference {
 		prefix := path.Join(root, "models", string(entry.ID))
 		before, err := parseModelSnapshot(contents[prefix+".before.snapshot.json"])
 		if err != nil {
@@ -568,37 +626,29 @@ func loadModelHistory(root string, contents map[string][]byte, histories map[ir.
 		if err != nil {
 			return fmt.Errorf("migration %s after ModelIR snapshot: %w", entry.ID, err)
 		}
-		beforeBytes, _ := ir.CanonicalModel(before)
-		previousBytes, _ := ir.CanonicalModel(previous)
-		beforeFingerprint, _ := ir.ModelFingerprint(before)
-		afterFingerprint, _ := ir.ModelFingerprint(after)
-		if !bytes.Equal(beforeBytes, previousBytes) || beforeFingerprint != previousFingerprint || migration.Digest(beforeFingerprint) != entry.BeforeModel || migration.Digest(afterFingerprint) != entry.AfterModel {
+		continuous := false
+		if index == 0 {
+			emptyBytes, emptyErr := ir.CanonicalModel(ir.CanonicalEmptyModel())
+			beforeBytes, beforeErr := ir.CanonicalModel(before.Model)
+			continuous = emptyErr == nil && beforeErr == nil && bytes.Equal(beforeBytes, emptyBytes)
+		} else {
+			continuous = previous != nil && bytes.Equal(before.Canonical, previous.Canonical) && before.Fingerprint == previous.Fingerprint
+		}
+		if !continuous || migration.Digest(before.Fingerprint) != entry.BeforeModel || migration.Digest(after.Fingerprint) != entry.AfterModel {
 			return fmt.Errorf("migration %s ModelIR snapshot chain is stale or discontinuous", entry.ID)
 		}
-		previous, previousFingerprint = after, afterFingerprint
+		previous = &after
 	}
-	if len(reference) != 0 {
-		copy := previous
+	if previous != nil {
+		copy := previous.Model
 		state.HeadModel = &copy
+		state.HeadModelFingerprint = previous.Fingerprint
 	}
 	return nil
 }
 
-func parseModelSnapshot(encoded []byte) (ir.ModelIR, error) {
-	if len(encoded) == 0 {
-		return ir.ModelIR{}, fmt.Errorf("snapshot is missing")
-	}
-	var value ir.ModelIR
-	decoder := json.NewDecoder(strings.NewReader(string(encoded)))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return ir.ModelIR{}, err
-	}
-	expected, err := modelSnapshotBytes(value)
-	if err != nil || !bytes.Equal(expected, encoded) {
-		return ir.ModelIR{}, fmt.Errorf("snapshot is not canonical normalized JSON")
-	}
-	return value, nil
+func parseModelSnapshot(encoded []byte) (ir.HistoricalModelSnapshot, error) {
+	return ir.DecodeHistoricalModelSnapshotJSON(encoded)
 }
 
 func verifyEntryArtifacts(root string, provider ir.Provider, entry migration.ManifestEntry, files map[string][]byte) error {
@@ -612,11 +662,11 @@ func verifyEntryArtifacts(root string, provider ir.Provider, entry migration.Man
 	if !equalStrings(actual, expected) {
 		return fmt.Errorf("provider %s migration %s does not contain the exact SQL/snapshot artifact set", provider, entry.ID)
 	}
-	before, err := snapshotBytes(entry.BeforeSnapshot)
+	before, err := historicalSnapshotBytes(entry.BeforeSnapshot)
 	if err != nil || !bytes.Equal(before, files[prefix+".before.snapshot.json"]) {
 		return fmt.Errorf("provider %s migration %s before snapshot artifact differs from embedded snapshot", provider, entry.ID)
 	}
-	after, err := snapshotBytes(entry.AfterSnapshot)
+	after, err := historicalSnapshotBytes(entry.AfterSnapshot)
 	if err != nil || !bytes.Equal(after, files[prefix+".after.snapshot.json"]) {
 		return fmt.Errorf("provider %s migration %s after snapshot artifact differs from embedded snapshot", provider, entry.ID)
 	}

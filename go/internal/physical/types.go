@@ -7,8 +7,11 @@ package physical
 import "github.com/eleven-am/golem/go/internal/compiler/ir"
 
 const (
-	SchemaFormatVersion    uint32 = 1
-	CanonicalFormatVersion uint32 = 1
+	// Version 3 adds the table-level optimistic-concurrency field identity.
+	// Version 2 remains an immutable reviewed-history format and cannot be
+	// decoded through the mutable current schema.
+	SchemaFormatVersion    uint32 = 3
+	CanonicalFormatVersion uint32 = 3
 )
 
 type PhysicalName string
@@ -82,6 +85,7 @@ const (
 	StoragePostgreSQLReal        StorageKind = "postgresql.real"
 	StoragePostgreSQLDouble      StorageKind = "postgresql.double_precision"
 	StoragePostgreSQLNumeric     StorageKind = "postgresql.numeric"
+	StoragePostgreSQLVarchar     StorageKind = "postgresql.varchar"
 	StoragePostgreSQLText        StorageKind = "postgresql.text"
 	StoragePostgreSQLBytea       StorageKind = "postgresql.bytea"
 	StoragePostgreSQLUUID        StorageKind = "postgresql.uuid"
@@ -232,15 +236,16 @@ type PhysicalIndex struct {
 }
 
 type PhysicalTable struct {
-	ID                   ir.ModelID
-	Name                 PhysicalName
-	Columns              []PhysicalColumn
-	PrimaryKey           *PhysicalKey
-	Uniques              []PhysicalKey
-	ForeignKeys          []PhysicalForeignKey
-	Checks               []PhysicalCheck
-	Indexes              []PhysicalIndex
-	RequiredCapabilities []CapabilityRequirement
+	ID                    ir.ModelID
+	Name                  PhysicalName
+	OptimisticConcurrency *ir.FieldID
+	Columns               []PhysicalColumn
+	PrimaryKey            *PhysicalKey
+	Uniques               []PhysicalKey
+	ForeignKeys           []PhysicalForeignKey
+	Checks                []PhysicalCheck
+	Indexes               []PhysicalIndex
+	RequiredCapabilities  []CapabilityRequirement
 }
 
 type SemanticValueKind string

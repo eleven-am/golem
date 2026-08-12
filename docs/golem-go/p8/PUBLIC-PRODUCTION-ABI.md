@@ -121,17 +121,19 @@ cannot be introduced as a convenience wrapper around a one-connection probe.
 type Code string
 
 const (
-    CodeConfig Code = "PROVIDER_CONFIG"
-    CodeOpen   Code = "PROVIDER_OPEN"
-    CodeClose  Code = "PROVIDER_CLOSE"
+    CodeConfig      Code = "PROVIDER_CONFIG"
+    CodeOpen        Code = "PROVIDER_OPEN"
+    CodeClose       Code = "PROVIDER_CLOSE"
+    CodeMaintenance Code = "PROVIDER_MAINTENANCE"
 )
 
 func CodeOf(err error) (Code, bool)
 ```
 
 The concrete provider error is private. `CodeOf` recognizes only errors created
-by the provider lifecycle. Configuration, open/probe, and close failures expose
-a closed code and sanitized message, never a wrapped driver error.
+by the provider lifecycle and provider-owned maintenance boundary.
+Configuration, open/probe, close, and maintenance failures expose a closed code
+and sanitized message, never a wrapped driver error.
 
 ## 3. SQLite opening
 
@@ -146,7 +148,20 @@ func Open(
     ctx context.Context,
     config Config,
 ) (*provider.Database, error)
+
+func CheckpointForBackup(
+    ctx context.Context,
+    database *provider.Database,
+) error
 ```
+
+`CheckpointForBackup` accepts only the exact verified SQLite handle returned by
+`Open`, after that handle has been closed. It owns one bounded maintenance
+connection and requires a truncating WAL checkpoint to report zero busy and
+remaining frames. Applications must first stop every writer, reader, and
+worker. The operation fails closed with `CodeMaintenance` when ownership is
+still busy and never exposes the stored DSN, wraps a driver error, or deletes a
+WAL/SHM sidecar directly.
 
 SQLite owns:
 
@@ -320,8 +335,30 @@ publisherErr := app.RunEventPublisher(publisherCtx)
 
 `RunEventPublisher` owns both durable outbox publication and configured CDC
 workers, as frozen by P7. The host cancels its context and waits for it before
-closing the provider database. `Open` never hides a background publisher,
-subscriber consumer, CDC worker, migration, or retry loop.
+closing the event transport and provider database. The ownership order is to
+stop HTTP admission, shut down GraphQL, cancel and wait for the publisher, close
+the transport, and then close the database. `Open` never hides a background
+publisher, subscriber consumer, CDC worker, migration, or retry loop.
+
+For a single SQLite process, the event transport is the process-local memory
+implementation. SQLite plus NATS is refused before any broker dial. PostgreSQL
+multi-process deployments use
+`github.com/eleven-am/golem/go/events/nats`. The social host selects it with
+`GOLEM_EVENT_TRANSPORT=nats`, a closed URL list in `GOLEM_NATS_URLS`, and a
+required database-unique prefix in `GOLEM_NATS_SUBJECT_PREFIX`. The broker
+authority is Core NATS with:
+
+```yaml
+max_payload: 2097152
+```
+
+Core NATS does not replay and is not durable; PostgreSQL/outbox truth remains
+durable and delivery remains at least once. The exact subject grammar is
+`<prefix>.g1.<event-schema-digest>.<model-id>`. Routing uses the logical event
+schema digest and model identity, while the generation digest is authenticated
+inside the encoded notice and never added to the subject. Availability is a
+dynamic readiness input, and every initial connection or reconnect must prove
+the broker payload ceiling before availability can become true.
 
 ## 6. Diagnostics commands
 
@@ -597,8 +634,9 @@ build immutable application and golem CLI from one version
   -> golem migration apply as a separate deployment step
   -> golem doctor
   -> start application
-  -> readiness passes
   -> start explicitly owned publisher/CDC workers
+  -> require database, publisher, and transport readiness
+  -> admit traffic
 ```
 
 Application startup never auto-applies migrations. A migration that requires an

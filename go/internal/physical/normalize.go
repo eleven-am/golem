@@ -1,6 +1,8 @@
 package physical
 
 import (
+	"fmt"
+	"reflect"
 	"sort"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -10,6 +12,95 @@ import (
 // validates the complete semantic graph. Ordered components (key/index/FK
 // columns and expression operands) retain their authored order.
 func Normalize(schema PhysicalSchema) (PhysicalSchema, error) {
+	normalized := normalizeCollections(schema)
+	if err := Validate(normalized); err != nil {
+		return PhysicalSchema{}, err
+	}
+	return normalized, nil
+}
+
+// NormalizeHistorical normalizes the explicitly retained reviewed-history
+// profiles. The original v1 decoder remains stricter: reviewed history also
+// contains the sealed v1 SQLite runtime transition whose after-snapshot names
+// the current ncruces driver. Callers must not use this function for active
+// generated provider documents.
+func NormalizeHistorical(schema PhysicalSchema) (PhysicalSchema, error) {
+	if schema.Version == 3 && schema.CanonicalVersion == 3 {
+		return NormalizeHistoricalV3(schema)
+	}
+	if schema.Version != 1 || schema.CanonicalVersion != 1 {
+		if schema.Version == 2 && schema.CanonicalVersion == 2 {
+			return NormalizeHistoricalV2(schema)
+		}
+		return PhysicalSchema{}, fmt.Errorf("unsupported historical physical format/canonical versions %d/%d", schema.Version, schema.CanonicalVersion)
+	}
+	if schema.Provider.Provider == ir.SQLite && schema.Provider.Driver == (DriverIdentity{Module: "github.com/ncruces/go-sqlite3", Adapter: "sqlx"}) {
+		reviewed := schema
+		reviewed.Provider.Driver = DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+		normalized, err := NormalizeHistoricalV1(reviewed)
+		if err != nil {
+			return PhysicalSchema{}, err
+		}
+		normalized.Provider.Driver = schema.Provider.Driver
+		return normalized, nil
+	}
+	return NormalizeHistoricalV1(schema)
+}
+
+// NormalizeHistoricalV3 is the independent frozen v3 normalization boundary.
+// It remains separate from Normalize even while v3 is current so reviewed
+// history cannot silently adopt later current rules.
+func NormalizeHistoricalV3(schema PhysicalSchema) (PhysicalSchema, error) {
+	if schema.Version != 3 || schema.CanonicalVersion != 3 {
+		return PhysicalSchema{}, fmt.Errorf("historical v3 normalization requires exact 3/3 versions")
+	}
+	if err := validateHistoricalV3SchemaShape(); err != nil {
+		return PhysicalSchema{}, err
+	}
+	if err := validateHistoricalV3ClosedValues(reflect.ValueOf(schema)); err != nil {
+		return PhysicalSchema{}, err
+	}
+	return normalizeHistoricalV3Tagged(schema)
+}
+
+// NormalizeHistoricalV2 is the independent frozen v2 normalization boundary.
+// It rejects every nonzero current-only field before sorting or validation.
+func NormalizeHistoricalV2(schema PhysicalSchema) (PhysicalSchema, error) {
+	if schema.Version != 2 || schema.CanonicalVersion != 2 {
+		return PhysicalSchema{}, fmt.Errorf("historical v2 normalization requires exact 2/2 versions")
+	}
+	if err := validateHistoricalV2SchemaShape(); err != nil {
+		return PhysicalSchema{}, err
+	}
+	if err := validateHistoricalV2ClosedValues(reflect.ValueOf(schema)); err != nil {
+		return PhysicalSchema{}, err
+	}
+	return normalizeHistoricalV2Tagged(schema)
+}
+
+// NormalizeHistoricalV1 is the closed original v1 vocabulary boundary. It
+// deliberately refuses current documents and later reviewed runtime profiles.
+func NormalizeHistoricalV1(schema PhysicalSchema) (PhysicalSchema, error) {
+	if schema.Version != 1 || schema.CanonicalVersion != 1 {
+		return PhysicalSchema{}, fmt.Errorf("historical v1 normalization requires exact 1/1 versions")
+	}
+	normalized, err := normalizeHistoricalV1Tagged(schema)
+	if err != nil {
+		return PhysicalSchema{}, err
+	}
+	if err := validateHistoricalV1SchemaShape(); err != nil {
+		return PhysicalSchema{}, err
+	}
+	if err := validateHistoricalV1ClosedValues(reflect.ValueOf(normalized)); err != nil {
+		return PhysicalSchema{}, err
+	}
+	if err := walkHistoricalV1Storage(reflect.ValueOf(normalized)); err != nil {
+		return PhysicalSchema{}, err
+	}
+	return normalized, nil
+}
+
+func normalizeCollections(schema PhysicalSchema) PhysicalSchema {
 	normalized := cloneSchema(schema)
 	sort.Slice(normalized.Provider.Capabilities, func(i, j int) bool {
 		a, b := normalized.Provider.Capabilities[i], normalized.Provider.Capabilities[j]
@@ -75,10 +166,7 @@ func Normalize(schema PhysicalSchema) (PhysicalSchema, error) {
 		}
 		return normalized.Unmanaged[i].Name < normalized.Unmanaged[j].Name
 	})
-	if err := Validate(normalized); err != nil {
-		return PhysicalSchema{}, err
-	}
-	return normalized, nil
+	return normalized
 }
 
 func sortRequirements(values []CapabilityRequirement) {
@@ -129,6 +217,7 @@ func cloneSchema(schema PhysicalSchema) PhysicalSchema {
 
 func cloneTable(table PhysicalTable) PhysicalTable {
 	result := table
+	result.OptimisticConcurrency = cloneFieldID(table.OptimisticConcurrency)
 	result.RequiredCapabilities = append([]CapabilityRequirement(nil), table.RequiredCapabilities...)
 	result.Columns = make([]PhysicalColumn, len(table.Columns))
 	for index, column := range table.Columns {

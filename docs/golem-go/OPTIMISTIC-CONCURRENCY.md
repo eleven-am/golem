@@ -1,6 +1,9 @@
 # First-class optimistic concurrency implementation contract
 
-Status: **accepted implementation contract; not shipped**.
+Status: **implementation active; public claim/declaration, compiler ownership,
+ContractIR v6 with frozen v5, and physical v3 with frozen v2/provider-owned
+initialization complete locally; runtime CAS, generated/GraphQL surfaces, and
+release evidence pending**.
 
 Audience: the engineer implementing optimistic concurrency and the reviewer
 deciding whether it is complete. This contract covers an explicit version-token
@@ -98,9 +101,14 @@ func ExpectExisting(value int64) ConcurrencyExpectation
 func ExpectAbsent() ConcurrencyExpectation
 ```
 
-Constructors retain invalid values only long enough for the ordinary freeze
-boundary to return `BAD_USER_INPUT`; they expose no struct literals or mutable
-state.
+Constructors retain a single opaque invalid state for non-positive values so
+the ordinary freeze boundary can return `BAD_USER_INPUT` before database work;
+they expose neither the raw value, a variant discriminator, nor mutable state.
+Runtime comparison does not unwrap a token: it compares it with the closed
+invalid zero state during freeze and, after reading the authorized locked row,
+compares it for equality with `ExpectVersion(observed)` or
+`ExpectExisting(observed)`. The already-observed row version, not a value
+extracted from the token, is used for the compare-and-swap bind.
 
 For a concurrency-enabled model, generated clients have these signatures:
 
@@ -115,14 +123,22 @@ The signatures apply equally to `Caller`, `System`, `CallerTx`, and `SystemTx`.
 There is no privileged System bypass. A trusted maintenance process reads the
 current token and supplies it like every other writer.
 
+Transaction-after hook executors are write clients too. Their single-row
+update, delete, and upsert operations require the same typed expectations when
+the target model is concurrency-enabled. Existing generic executor calls and
+its update-many/delete-many helpers must fail closed against a versioned model;
+they are not an internal authority bypass.
+
 Create takes no expectation and initializes version 1.
 
 ### 4.1 Upsert is explicit compare-and-swap
 
 For a concurrency-enabled model:
 
-- `ExpectAbsent()` means “create only if no row matches the unique selector.”
-  If a row exists—regardless of its version—the result is `CONFLICT`.
+- `ExpectAbsent()` means “create only if no authorized row matches the unique
+  selector.” An authorized existing row—regardless of its version—returns
+  `CONFLICT`. A policy-invisible existing row remains indistinguishable from a
+  missing row and returns `NOT_FOUND`; this API is not an existence oracle.
 - `ExpectExisting(v)` means “update only if an authorized row exists at version
   `v`.” A missing/invisible row remains `NOT_FOUND`; a visible row at another
   version is `CONFLICT`.
@@ -136,6 +152,11 @@ models. The caller states which prior state it observed.
 in version 1. One scalar expectation cannot safely represent different versions
 for multiple rows. Predicate-based nested `updateMany`/`deleteMany` are likewise
 omitted when they would mutate versioned rows.
+
+Generated model-specific batch input and batch hook request/result aliases are
+also omitted for a concurrency-enabled model. The framework's generic batch
+types remain available for non-versioned models, but a forged/model-erased old
+request against a versioned model is refused by the runtime registry boundary.
 
 Applications that require bulk compare-and-swap use an explicit transaction
 and individual selector/version pairs. A future bounded coordinated batch API
@@ -152,6 +173,13 @@ expectation for that row:
   require that owner's existing version; and
 - recursive writes apply the rule independently at every versioned node.
 
+A source-side relation change may reuse the root expectation only when the
+versioned root row is the sole foreign-key owner being changed. An inverse or
+to-many `set` that could disconnect unnamed existing owners is omitted in
+version 1; it cannot prove expectations for rows absent from its desired set.
+Targetless inverse operations are likewise omitted unless every affected owner
+is explicitly named with its expectation.
+
 If the generated nested grammar cannot name every affected row and expected
 version, that operation is omitted/refused for the versioned relation. It must
 not silently mutate without advancing/checking the token.
@@ -161,16 +189,22 @@ not silently mutate without advancing/checking the token.
 For concurrency-enabled models:
 
 - create inputs omit the version field;
-- update and delete operations require `expectedVersion: Int64!`;
+- update and delete operations require `expectedVersion: BigInt!`, reusing the
+  existing GraphQL scalar for logical Go `int64` rather than adding an alias;
 - upsert requires a closed expectation input;
 - output/read/filter/order may expose version under ordinary field policy; and
 - updateMany/deleteMany roots and nested batch variants are omitted.
+
+Custom GraphQL operations may not accept a generated `UpdateManyInput` or
+`DeleteManyInput` for a concurrency-enabled model. Old generated clients,
+generic maps, and model-erased internal requests do not regain the omitted
+capability: the binder/runtime registry refuses those forged paths before SQL.
 
 The upsert expectation is:
 
 ```graphql
 input PostConcurrencyExpectationInput {
-  version: Int64
+  version: BigInt
   absent: Boolean
 }
 ```
@@ -209,8 +243,9 @@ side effects:
 1. freeze and validate selector/input/expectation;
 2. resolve actor policy and select/lock the authorized pre-image using the
    existing provider transaction strategy;
-3. compare the loaded version and refuse stale expectations before invoking the
-   application before-hook;
+3. apply row/action authorization, compare the loaded version, and refuse stale
+   expectations before invoking the application before-hook; changed-field
+   authorization remains after the hook because the hook may transform input;
 4. invoke the before-hook exactly as existing mutation retry semantics require;
 5. revalidate the transformed mutation while retaining the immutable
    expectation;
@@ -221,13 +256,27 @@ side effects:
 9. flush facts/outbox in the same transaction; and
 10. run after-commit exactly once only after commit.
 
-Hooks may replace ordinary target guards today. On a concurrency-enabled model,
-target replacement must preserve the original expectation. No hook receives a
-capability to remove, lower, or forge it.
+Hooks may replace ordinary mutation targets today. On a concurrency-enabled
+model, the original frozen selector and authorized pre-image identity remain
+immutable after the version precheck. A before hook may transform ordinary
+input, but a semantically changed target/key is refused during revalidation;
+the expectation must never be applied to a different row that happens to carry
+the same version. No hook receives a capability to remove, lower, retarget, or
+forge the expectation.
 
 Conflict is an application outcome, not a provider-retry signal. Golem must not
 replay an application transaction closure or automatically retry using the
 newly observed version.
+
+Same-selector Golem upserts use the existing provider selector guard before
+the absence proof, so two `ExpectAbsent` upserts are serialized before
+`BeforeCreate` on both providers. A plain create or an external database writer
+does not own that upsert guard. On PostgreSQL, such a writer may win after a
+valid absence proof and after the retry-safe `BeforeCreate` hook has run once.
+That losing upsert still returns the closed visible `CONFLICT` or
+policy-invisible `NOT_FOUND` result and must emit no transaction-after hook,
+after-commit hook, fact, event, or durable write. Golem does not broaden every
+ordinary create with advisory locking to erase this mixed-operation edge.
 
 ## 8. Provider execution
 
@@ -257,7 +306,10 @@ version never retries.
 ## 9. Events, facts, and projections
 
 - A successful create fact/entity contains version 1.
-- A successful update/upsert fact/entity contains the advanced version.
+- A successful mutation result and every in-transaction/after-commit entity
+  produced for that mutation contain the advanced version. The existing durable
+  v2 update fact remains identity-based; later event hydration may observe a
+  newer committed row version and is not a historical row-snapshot guarantee.
 - A delete fact preserves the deleted row's last version; deletion does not
   manufacture a post-delete version.
 - A conflict emits no fact/event and changes no outbox/delivery row.
@@ -266,8 +318,11 @@ version never retries.
 
 ## 10. Schema, migration, and compatibility
 
-The compiler/ContractIR/physical snapshots must record concurrency field
-identity. Declaration order or renaming does not change its identity.
+ModelIR owns the concurrency field identity. ContractIR and physical snapshots
+carry independently interpretable, validated projections of that same identity;
+compilation/bootstrap requires exact agreement and never re-infers three
+separate facts. Declaration order or renaming does not change the stable field
+identity.
 
 Adding optimistic concurrency to an existing model requires one reviewed
 migration that:

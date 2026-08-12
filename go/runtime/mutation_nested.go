@@ -382,8 +382,21 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 }
 
 func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
+	return prepareNestedCompilationWithHookOwnedDeferral(app, policies, stance, operation, input, target, result, false, snapshots...)
+}
+
+// prepareNestedCompilationWithHookOwnedDeferral is used only by the pure
+// caller Create preflight that runs before BeforeCreate. It may defer the
+// exact missing fields declared hook-owned by the active ContractIR, and only
+// when the generated bindings contain the matching hook. The graph returned
+// by that preflight is never executed; the post-hook compilation calls the
+// strict entry point above and must bind every required create field.
+func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, deferHookOwned bool, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
 	if app == nil || input == nil || len(input.Relations()) == 0 || (operation != mutationir.Create && operation != mutationir.Update) {
 		return mutationnested.Result{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: create/update input with relations is required")
+	}
+	if deferHookOwned && (stance != mutationir.Caller || operation != mutationir.Create) {
+		return mutationnested.Result{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: hook-owned completeness can be deferred only for caller create preflight")
 	}
 	bounds, err := mutationir.NewStatementBounds(uint32(app.mutationLimits.statementParameters), uint32(app.mutationLimits.touchedRows))
 	if err != nil {
@@ -419,6 +432,13 @@ func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.Po
 		ownedFields, ownedErr := nestedRootSourceOwnedFields(*input, app.registry)
 		if ownedErr != nil {
 			return mutationnested.Result{}, ownedErr
+		}
+		if deferHookOwned {
+			missing, hookErr := callerCreatePreHookOwnedFields(app, *input)
+			if hookErr != nil {
+				return mutationnested.Result{}, hookErr
+			}
+			ownedFields = mergeRuntimeOwnedFields(ownedFields, missing)
 		}
 		bound, _, bindErr := mutationbind.CreateInputWithRuntimeOwnedFields(*input, app.registry, ownedFields)
 		if bindErr != nil {
@@ -471,7 +491,102 @@ func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.Po
 	if err != nil {
 		return mutationnested.Result{}, err
 	}
+	if err := refuseNestedVersionedExistingWrites(app.registry, built.Graph()); err != nil {
+		return mutationnested.Result{}, err
+	}
 	return built, nil
+}
+
+// callerCreatePreHookOwnedFields closes the only create-completeness
+// exemption available before application code. Field identities come from the
+// active ContractIR registry, authored fields are never included, and a
+// matching generated BeforeCreate binding is mandatory when anything is
+// deferred.
+func callerCreatePreHookOwnedFields[P, A any](app *App[P, A], input golem.FrozenMutationInput) ([]golem.FieldID, error) {
+	if app == nil || app.registry == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_CREATE_PREHOOK: active application registry is required")
+	}
+	model, present := app.registry.Model(input.ModelID())
+	if !present {
+		return nil, fmt.Errorf("P4_RUNTIME_CREATE_PREHOOK: create model is absent")
+	}
+	missing := missingRuntimeOwnedFields(input, model.GraphQLHookOwnedCreateFields())
+	if len(missing) != 0 && !hasBeforeCreateHook(app.bindings, input.ModelID()) {
+		return nil, fmt.Errorf("P4_RUNTIME_CREATE_PREHOOK: hook-owned create fields require a generated BeforeCreate hook")
+	}
+	return missing, nil
+}
+
+func prepareCallerCreatePreHookInput[P, A any](caller *Caller[P, A], input golem.FrozenMutationInput) error {
+	if caller == nil || caller.app == nil || caller.policies == nil {
+		return fmt.Errorf("P4_RUNTIME_CREATE_PREHOOK: active caller is required")
+	}
+	missing, err := callerCreatePreHookOwnedFields(caller.app, input)
+	if err != nil {
+		return err
+	}
+	_, _, err = mutationbind.CreateInputWithRuntimeOwnedFields(input, caller.app.registry, missing)
+	return err
+}
+
+// refuseNestedVersionedExistingWrites is the model-erased expectation gate for
+// the nested engine. Its grammar cannot yet carry one exact expectation per
+// existing row, so every node that can update/delete an existing versioned row
+// (including an FK-owner membership write) must stop during pure preparation.
+// Create nodes remain valid and receive their runtime-owned initial token via
+// the ordinary nested runtime-value boundary.
+func refuseNestedVersionedExistingWrites(registry *schema.Registry, graph mutationir.Graph) error {
+	if registry == nil {
+		return fmt.Errorf("P4_RUNTIME_NESTED_CONCURRENCY: active schema registry is required")
+	}
+	for _, node := range graph.Nodes() {
+		writesExisting := false
+		switch node.Operation() {
+		case mutationir.Connect, mutationir.Disconnect, mutationir.SetRelation,
+			mutationir.Update, mutationir.UpdateMany,
+			mutationir.Delete, mutationir.DeleteMany:
+			writesExisting = true
+		}
+		if !writesExisting {
+			continue
+		}
+		model, ok := registry.Model(golem.ModelID(node.ModelID()))
+		if !ok {
+			return fmt.Errorf("P4_RUNTIME_NESTED_CONCURRENCY: mutation model is absent")
+		}
+		if _, enabled := model.OptimisticConcurrency(); enabled {
+			return golem.RuntimeOperationError(
+				golem.CodeBadUserInput,
+				nestedConcurrencyOperationName(node.Operation()),
+				golem.ModelID(node.ModelID()),
+				golem.FieldID{},
+				"mutation request is invalid",
+				fmt.Errorf("P4_RUNTIME_NESTED_CONCURRENCY: existing versioned row mutation requires an exact per-row expectation"),
+			)
+		}
+	}
+	return nil
+}
+
+func nestedConcurrencyOperationName(operation mutationir.Operation) string {
+	switch operation {
+	case mutationir.Connect:
+		return "connect"
+	case mutationir.Disconnect:
+		return "disconnect"
+	case mutationir.SetRelation:
+		return "set"
+	case mutationir.Update:
+		return "update"
+	case mutationir.UpdateMany:
+		return "updateMany"
+	case mutationir.Delete:
+		return "delete"
+	case mutationir.DeleteMany:
+		return "deleteMany"
+	default:
+		return "mutation"
+	}
 }
 
 func nestedRootSourceOwnedFields(input golem.FrozenMutationInput, registry *schema.Registry) ([]golem.FieldID, error) {
@@ -755,6 +870,24 @@ func prepareCallerNestedGraph[P, A, M any](caller *Caller[P, A], descriptor gole
 		return mutationir.Graph{}, err
 	}
 	return prepareNestedGraph(caller.app, caller.policies, mutationir.Caller, operation, input, target, result, snapshots...)
+}
+
+// prepareCallerNestedCreatePreHookGraph preserves the pre-hook refusal gate
+// for model-erased nested existing-row writes while allowing only generated
+// BeforeCreate-owned required fields to remain absent until that hook runs.
+func prepareCallerNestedCreatePreHookGraph[P, A, M any](caller *Caller[P, A], descriptor golem.ModelDescriptor[M], input *golem.FrozenMutationInput, projection scalarMutationProjection, snapshots ...*mutationRuntimeValues) (mutationir.Graph, error) {
+	if caller == nil || caller.app == nil || caller.policies == nil || input == nil {
+		return mutationir.Graph{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: caller and frozen input are required")
+	}
+	result, err := projection.requirements(policyir.ModelID(descriptor.Metadata().ModelID()))
+	if err != nil {
+		return mutationir.Graph{}, err
+	}
+	built, err := prepareNestedCompilationWithHookOwnedDeferral(caller.app, caller.policies, mutationir.Caller, mutationir.Create, input, nil, result, true, snapshots...)
+	if err != nil {
+		return mutationir.Graph{}, err
+	}
+	return built.Graph(), nil
 }
 
 func nestedProjectionObserver[P, A, M any](app *App[P, A], descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, output *golem.Row[M], materialized *bool) func(context.Context, *executionBinding, mutationnested.AppliedNode) error {

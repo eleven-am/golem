@@ -75,28 +75,32 @@ type Input struct {
 // RootInput is the six-root GraphQL mutation vocabulary after public names,
 // exact scalars, selectors, predicates, and result selections are bound.
 type RootInput struct {
-	Operation RootOperation
-	Model     golem.ModelID
-	Target    *golem.FrozenMutationTarget
-	Where     *golem.FrozenPredicate
-	Data      *Input
-	Create    *Input
-	Update    *Input
-	Selection []readir.Selection
+	Operation              RootOperation
+	Model                  golem.ModelID
+	Target                 *golem.FrozenMutationTarget
+	Where                  *golem.FrozenPredicate
+	Data                   *Input
+	Create                 *Input
+	Update                 *Input
+	Selection              []readir.Selection
+	ExistingVersion        *golem.ExistingVersion
+	ConcurrencyExpectation *golem.ConcurrencyExpectation
 }
 
 // Request is the immutable handoff from generated GraphQL adapters to the P4
 // execution adapter. Inputs remain frozen P4 values, so P4 rebinds and
 // revalidates them against the active schema before any work.
 type Request struct {
-	operation mutationir.Operation
-	model     golem.ModelID
-	target    *golem.FrozenMutationTarget
-	where     *golem.FrozenPredicate
-	input     *golem.FrozenMutationInput
-	create    *golem.FrozenMutationInput
-	update    *golem.FrozenMutationInput
-	selection []readir.Selection
+	operation   mutationir.Operation
+	model       golem.ModelID
+	target      *golem.FrozenMutationTarget
+	where       *golem.FrozenPredicate
+	input       *golem.FrozenMutationInput
+	create      *golem.FrozenMutationInput
+	update      *golem.FrozenMutationInput
+	selection   []readir.Selection
+	existing    *golem.ExistingVersion
+	expectation *golem.ConcurrencyExpectation
 }
 
 func (request Request) Operation() mutationir.Operation { return request.operation }
@@ -135,6 +139,20 @@ func (request Request) Selection() []readir.Selection {
 	return append([]readir.Selection(nil), request.selection...)
 }
 
+func (request Request) ExistingVersion() (golem.ExistingVersion, bool) {
+	if request.existing == nil {
+		return golem.ExistingVersion{}, false
+	}
+	return *request.existing, true
+}
+
+func (request Request) ConcurrencyExpectation() (golem.ConcurrencyExpectation, bool) {
+	if request.expectation == nil {
+		return golem.ConcurrencyExpectation{}, false
+	}
+	return *request.expectation, true
+}
+
 // FreezeExecution joins the already-frozen P4 input with the P3 result
 // projection compiled from the same GraphQL root. Batch roots have no row
 // projection and return BatchPayload instead.
@@ -160,6 +178,14 @@ func (request Request) FreezeExecution(projection *golem.FrozenReadRequest) (gol
 		value := *request.update
 		input.Update = &value
 	}
+	if request.existing != nil {
+		value := *request.existing
+		return golem.RuntimeFreezeVersionedMutationRequest(golem.RuntimeVersionedMutationRequestInput{Request: input, ExistingVersion: &value})
+	}
+	if request.expectation != nil {
+		value := *request.expectation
+		return golem.RuntimeFreezeVersionedMutationRequest(golem.RuntimeVersionedMutationRequestInput{Request: input, ConcurrencyExpectation: &value})
+	}
 	return golem.RuntimeFreezeMutationRequest(input)
 }
 
@@ -183,6 +209,14 @@ func Lower(root RootInput, limits Limits) (Request, error) {
 	}
 	lower := lowerer{limits: limits}
 	request := Request{operation: rootIR(root.Operation), model: root.Model, selection: append([]readir.Selection(nil), root.Selection...)}
+	if root.ExistingVersion != nil {
+		value := *root.ExistingVersion
+		request.existing = &value
+	}
+	if root.ConcurrencyExpectation != nil {
+		value := *root.ConcurrencyExpectation
+		request.expectation = &value
+	}
 	if root.Target != nil {
 		value := *root.Target
 		request.target = &value
@@ -239,20 +273,21 @@ func validateRootShape(root RootInput) error {
 	hasTarget, hasWhere := root.Target != nil, root.Where != nil
 	hasData, hasCreate, hasUpdate := root.Data != nil, root.Create != nil, root.Update != nil
 	hasSelection := len(root.Selection) != 0
+	hasExisting, hasExpectation := root.ExistingVersion != nil, root.ConcurrencyExpectation != nil
 	valid := false
 	switch root.Operation {
 	case Create:
-		valid = !hasTarget && !hasWhere && hasData && !hasCreate && !hasUpdate
+		valid = !hasTarget && !hasWhere && hasData && !hasCreate && !hasUpdate && !hasExisting && !hasExpectation
 	case Update:
-		valid = hasTarget && !hasWhere && hasData && !hasCreate && !hasUpdate
+		valid = hasTarget && !hasWhere && hasData && !hasCreate && !hasUpdate && !hasExpectation
 	case Upsert:
-		valid = hasTarget && !hasWhere && !hasData && hasCreate && hasUpdate
+		valid = hasTarget && !hasWhere && !hasData && hasCreate && hasUpdate && !hasExisting
 	case Delete:
-		valid = hasTarget && !hasWhere && !hasData && !hasCreate && !hasUpdate
+		valid = hasTarget && !hasWhere && !hasData && !hasCreate && !hasUpdate && !hasExpectation
 	case UpdateMany:
-		valid = !hasTarget && hasWhere && hasData && !hasCreate && !hasUpdate && !hasSelection
+		valid = !hasTarget && hasWhere && hasData && !hasCreate && !hasUpdate && !hasSelection && !hasExisting && !hasExpectation
 	case DeleteMany:
-		valid = !hasTarget && hasWhere && !hasData && !hasCreate && !hasUpdate && !hasSelection
+		valid = !hasTarget && hasWhere && !hasData && !hasCreate && !hasUpdate && !hasSelection && !hasExisting && !hasExpectation
 	}
 	if !valid {
 		return fmt.Errorf("P5_MUTATION_ROOT: operation arguments do not match the generated root shape")

@@ -96,6 +96,27 @@ func TestNormalizeExtensionsRejectsCapabilitiesTypesDependenciesAndCollisionsAto
 	}
 }
 
+func TestOptimisticConcurrencyCustomUpdateManyInputIsRejectedThroughLists(t *testing.T) {
+	compilation := extensionFixture()
+	version := ir.FieldID("user-version")
+	compilation.Model.Models[0].Fields = append(compilation.Model.Models[0].Fields, ir.FieldIR{ID: version, Kind: ir.FieldScalar})
+	compilation.Model.Models[0].OptimisticConcurrency = &version
+	compilation.Contract.Models[0].Fields = append(compilation.Contract.Models[0].Fields, ir.FieldContractIR{FieldID: version, GraphQLName: "version"})
+	compilation.Contract.Models[0].OptimisticConcurrency = &version
+	before := compilation
+	element := ir.GraphQLTypeIR{Kind: ir.GraphQLTypeUpdateManyInput, Name: "User", Nullable: false}
+	operation := validCustom("unsafe-batch", "unsafeBatch", ir.GraphQLTypeIR{Kind: ir.GraphQLTypeScalar, Name: "String"})
+	operation.Capability = ir.CustomOperationCallerOnly
+	operation.Arguments = []ir.GraphQLArgumentContractIR{{Name: "data", Type: ir.GraphQLTypeIR{Kind: ir.GraphQLTypeList, Element: &element}}}
+	diagnostics := Normalize(&compilation, nil, []CustomOperationDeclaration{{Operation: operation}})
+	if !diagnosticCode(diagnostics, "P5_EXTENSION_CONCURRENCY_BATCH") {
+		t.Fatalf("diagnostics = %#v", diagnostics)
+	}
+	if !reflect.DeepEqual(compilation, before) {
+		t.Fatal("failed concurrency custom-input validation partially changed compilation")
+	}
+}
+
 func extensionFixture() ir.CompilationIR {
 	user := ir.ModelDeclIR{ID: "user", Go: ir.GoNamedTypeIR{PackagePath: "example/social", Name: "User"}, Fields: []ir.FieldIR{
 		{ID: "user-id", Kind: ir.FieldScalar}, {ID: "user-name", Kind: ir.FieldScalar},

@@ -26,6 +26,7 @@ const (
 	CodeCapabilityMissing  ValidationCode = "PHYSICAL_CAPABILITY_MISSING"
 	CodeCapabilityManifest ValidationCode = "PHYSICAL_CAPABILITY_MANIFEST"
 	CodeExtension          ValidationCode = "PHYSICAL_EXTENSION"
+	CodeConcurrency        ValidationCode = "PHYSICAL_CONCURRENCY"
 )
 
 type ValidationError struct {
@@ -78,11 +79,12 @@ var (
 )
 
 type validator struct {
-	schema       PhysicalSchema
-	errors       ValidationErrors
-	capabilities map[ir.CapabilityID]CapabilityFact
-	tables       map[ir.ModelID]PhysicalTable
-	objectNames  map[string]string
+	schema        PhysicalSchema
+	errors        ValidationErrors
+	capabilities  map[ir.CapabilityID]CapabilityFact
+	tables        map[ir.ModelID]PhysicalTable
+	objectNames   map[string]string
+	stableObjects map[string]string
 }
 
 // Validate proves structural consistency, registered capability availability,
@@ -90,10 +92,11 @@ type validator struct {
 // collections to already be in canonical order.
 func Validate(schema PhysicalSchema) error {
 	validation := &validator{
-		schema:       schema,
-		capabilities: make(map[ir.CapabilityID]CapabilityFact),
-		tables:       make(map[ir.ModelID]PhysicalTable),
-		objectNames:  make(map[string]string),
+		schema:        schema,
+		capabilities:  make(map[ir.CapabilityID]CapabilityFact),
+		tables:        make(map[ir.ModelID]PhysicalTable),
+		objectNames:   make(map[string]string),
+		stableObjects: make(map[string]string),
 	}
 	validation.validateHeader()
 	validation.indexTables()
@@ -120,6 +123,70 @@ func Validate(schema PhysicalSchema) error {
 		return a.Detail < b.Detail
 	})
 	return validation.errors
+}
+
+func validateHistoricalV1(schema PhysicalSchema) error {
+	if schema.Version != 1 || schema.CanonicalVersion != 1 {
+		return fmt.Errorf("historical physical schema is not v1/v1")
+	}
+	if err := validateHistoricalV1SchemaShape(); err != nil {
+		return err
+	}
+	if err := validateHistoricalV1ClosedValues(reflect.ValueOf(schema)); err != nil {
+		return err
+	}
+	if err := walkHistoricalV1Storage(reflect.ValueOf(schema)); err != nil {
+		return err
+	}
+	return validateHistoricalV1Tagged(schema)
+}
+
+func walkHistoricalV1Storage(value reflect.Value) error {
+	if !value.IsValid() {
+		return nil
+	}
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return nil
+		}
+		return walkHistoricalV1Storage(value.Elem())
+	}
+	if value.Type() == reflect.TypeOf(StorageType{}) {
+		storage := value.Interface().(StorageType)
+		allowed := map[StorageKind]bool{
+			StorageSQLiteInteger: true, StorageSQLiteReal: true, StorageSQLiteText: true, StorageSQLiteBlob: true,
+			StoragePostgreSQLBoolean: true, StoragePostgreSQLSmallInt: true, StoragePostgreSQLInteger: true, StoragePostgreSQLBigInt: true,
+			StoragePostgreSQLReal: true, StoragePostgreSQLDouble: true, StoragePostgreSQLNumeric: true, StoragePostgreSQLText: true,
+			StoragePostgreSQLBytea: true, StoragePostgreSQLUUID: true, StoragePostgreSQLDate: true, StoragePostgreSQLTime: true,
+			StoragePostgreSQLTimestampTZ: true, StoragePostgreSQLJSONB: true, StorageProviderExtension: true,
+		}
+		if !allowed[storage.Kind] {
+			return fmt.Errorf("historical physical v1 storage %q is unsupported", storage.Kind)
+		}
+		if storage.Kind == StoragePostgreSQLText && storage.Length != 0 {
+			return fmt.Errorf("historical physical v1 PostgreSQL text cannot carry length metadata")
+		}
+		return nil
+	}
+	switch value.Kind() {
+	case reflect.Struct:
+		fields, frozen := historicalV1StructFields[value.Type().Name()]
+		if !frozen {
+			return fmt.Errorf("historical physical v1 storage walk reached type %s outside the frozen projection", value.Type())
+		}
+		for _, fieldName := range fields {
+			if err := walkHistoricalV1Storage(value.FieldByName(fieldName)); err != nil {
+				return err
+			}
+		}
+	case reflect.Slice, reflect.Array:
+		for index := 0; index < value.Len(); index++ {
+			if err := walkHistoricalV1Storage(value.Index(index)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (v *validator) add(code ValidationCode, path, detail string) {
@@ -182,6 +249,7 @@ func (v *validator) indexTables() {
 	for index, table := range v.schema.Tables {
 		path := fmt.Sprintf("tables[%d]", index)
 		v.validateStableID(string(table.ID), path+".id")
+		v.registerStableObject(string(table.ID), path+".id")
 		if _, duplicate := v.tables[table.ID]; duplicate {
 			v.add(CodeDuplicate, path+".id", fmt.Sprintf("duplicate model ID %s", table.ID))
 		}
@@ -202,6 +270,7 @@ func (v *validator) validateTable(table PhysicalTable) {
 	for _, column := range table.Columns {
 		columnPath := path + ".column[" + string(column.ID) + "]"
 		v.validateStableID(string(column.ID), columnPath+".id")
+		v.registerStableObject(string(column.ID), columnPath+".id")
 		if _, duplicate := columns[column.ID]; duplicate {
 			v.add(CodeDuplicate, columnPath+".id", fmt.Sprintf("duplicate field ID %s", column.ID))
 		}
@@ -231,6 +300,19 @@ func (v *validator) validateTable(table PhysicalTable) {
 				v.add(CodeExpression, columnPath+".generated.kind", fmt.Sprintf("invalid generated kind %q", column.Generated.Kind))
 			}
 			v.validateExpression(column.Generated.Expression, columns, columnPath+".generated.expression")
+			if !reflect.DeepEqual(column.Generated.Expression.Type, column.Storage) {
+				v.add(CodeExpression, columnPath+".generated.expression.type", "generated expression result storage must exactly match the owning column")
+			}
+			if !column.Nullable && column.Generated.Expression.Nullable {
+				v.add(CodeExpression, columnPath+".generated.expression.nullable", "non-null generated column cannot use a nullable expression")
+			}
+			if v.schema.Provider.Provider == ir.PostgreSQL {
+				for _, referenced := range expressionFieldIDs(column.Generated.Expression) {
+					if source, exists := columns[referenced]; exists && source.Generated != nil {
+						v.add(CodeExpression, columnPath+".generated.expression", fmt.Sprintf("PostgreSQL generated column cannot reference generated field %s", referenced))
+					}
+				}
+			}
 		}
 		if column.Collation != nil {
 			v.validateSymbol(*column.Collation, ir.SchemaSymbolFunction, columnPath+".collation")
@@ -241,6 +323,7 @@ func (v *validator) validateTable(table PhysicalTable) {
 			v.add(CodeConstraint, path+".columns", fmt.Sprintf("column ordinals must be contiguous from zero; missing %d", ordinal))
 		}
 	}
+	v.validateOptimisticConcurrency(table, columns, path)
 
 	keyColumns := make([][]ir.FieldID, 0, len(table.Uniques)+1)
 	if table.PrimaryKey != nil {
@@ -267,6 +350,7 @@ func (v *validator) validateTable(table PhysicalTable) {
 	for _, check := range table.Checks {
 		checkPath := path + ".check[" + string(check.ID) + "]"
 		v.validateStableID(string(check.ID), checkPath+".id")
+		v.registerStableObject(string(check.ID), checkPath+".id")
 		if _, duplicate := seenChecks[check.ID]; duplicate {
 			v.add(CodeDuplicate, checkPath+".id", fmt.Sprintf("duplicate check ID %s", check.ID))
 		}
@@ -284,6 +368,7 @@ func (v *validator) validateTable(table PhysicalTable) {
 	for _, index := range table.Indexes {
 		indexPath := path + ".index[" + string(index.ID) + "]"
 		v.validateStableID(string(index.ID), indexPath+".id")
+		v.registerStableObject(string(index.ID), indexPath+".id")
 		if _, duplicate := seenIndexes[index.ID]; duplicate {
 			v.add(CodeDuplicate, indexPath+".id", fmt.Sprintf("duplicate index ID %s", index.ID))
 		}
@@ -292,8 +377,72 @@ func (v *validator) validateTable(table PhysicalTable) {
 	}
 }
 
+func (v *validator) validateOptimisticConcurrency(table PhysicalTable, columns map[ir.FieldID]PhysicalColumn, path string) {
+	if table.OptimisticConcurrency == nil {
+		return
+	}
+	field := *table.OptimisticConcurrency
+	column, exists := columns[field]
+	if !exists {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must name one same-table stored column")
+		return
+	}
+	wantStorage := StorageSQLiteInteger
+	if v.schema.Provider.Provider == ir.PostgreSQL {
+		wantStorage = StoragePostgreSQLBigInt
+	}
+	if column.Storage != (StorageType{Kind: wantStorage}) {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", fmt.Sprintf("field storage must be exact %s", wantStorage))
+	}
+	if column.Nullable {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must be non-null")
+	}
+	if column.Default.Kind != DefaultNone || column.Default.Literal != nil || column.Default.Expression != nil {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must have no physical default")
+	}
+	if column.Generated != nil {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must not be generated")
+	}
+	if column.Collation != nil {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must not carry collation")
+	}
+	identityOrForeignKey := table.PrimaryKey != nil && containsPhysicalField(table.PrimaryKey.Columns, field)
+	for _, key := range table.Uniques {
+		identityOrForeignKey = identityOrForeignKey || containsPhysicalField(key.Columns, field)
+	}
+	for _, candidate := range v.schema.Tables {
+		for _, foreign := range candidate.ForeignKeys {
+			identityOrForeignKey = identityOrForeignKey || containsPhysicalField(foreign.Columns, field) || containsPhysicalField(foreign.ReferencedColumns, field)
+		}
+	}
+	if identityOrForeignKey {
+		v.add(CodeConcurrency, path+".optimisticConcurrency", "field must not be an identity or foreign key component")
+	}
+}
+
+func containsPhysicalField(fields []ir.FieldID, target ir.FieldID) bool {
+	for _, field := range fields {
+		if field == target {
+			return true
+		}
+	}
+	return false
+}
+
+func expressionFieldIDs(expression Expression) []ir.FieldID {
+	var result []ir.FieldID
+	if expression.Column != nil {
+		result = append(result, *expression.Column)
+	}
+	for _, operand := range expression.Operands {
+		result = append(result, expressionFieldIDs(operand)...)
+	}
+	return result
+}
+
 func (v *validator) validateKey(modelID ir.ModelID, key PhysicalKey, columns map[ir.FieldID]PhysicalColumn, primary bool, path string) {
 	v.validateStableID(string(key.ID), path+".id")
+	v.registerStableObject(string(key.ID), path+".id")
 	v.validateName(key.Name, path+".name", false)
 	v.registerName(ir.ObjectKey, key.Name, path+".name")
 	owner := ObjectRef{Kind: ir.ObjectKey, ModelID: modelID, ObjectID: ir.ObjectID(key.ID)}
@@ -320,6 +469,7 @@ func (v *validator) validateKey(modelID ir.ModelID, key PhysicalKey, columns map
 func (v *validator) validateForeignKey(table PhysicalTable, foreignKey PhysicalForeignKey, columns map[ir.FieldID]PhysicalColumn, path string, _ [][]ir.FieldID) {
 	foreignPath := path + ".foreignKey[" + string(foreignKey.ID) + "]"
 	v.validateStableID(string(foreignKey.ID), foreignPath+".id")
+	v.registerStableObject(string(foreignKey.ID), foreignPath+".id")
 	v.validateName(foreignKey.Name, foreignPath+".name", false)
 	v.registerName(ir.ObjectForeignKey, foreignKey.Name, foreignPath+".name")
 	owner := ObjectRef{Kind: ir.ObjectForeignKey, ModelID: table.ID, ObjectID: ir.ObjectID(foreignKey.ID)}
@@ -491,8 +641,15 @@ func (v *validator) validateExpression(expression Expression, columns map[ir.Fie
 	case ExpressionColumn:
 		if expression.Column == nil || expression.Literal != nil || expression.Symbol != nil || len(expression.Operands) != 0 {
 			v.add(CodeExpression, path, "column expression must contain exactly one column reference")
-		} else if _, exists := columns[*expression.Column]; !exists {
+		} else if column, exists := columns[*expression.Column]; !exists {
 			v.add(CodeExpression, path+".column", fmt.Sprintf("field %s does not belong to table", *expression.Column))
+		} else {
+			if !reflect.DeepEqual(expression.Type, column.Storage) {
+				v.add(CodeExpression, path+".type", "column expression storage must exactly match the referenced field")
+			}
+			if expression.Nullable != column.Nullable {
+				v.add(CodeExpression, path+".nullable", "column expression nullability must exactly match the referenced field")
+			}
 		}
 	case ExpressionLiteral:
 		if expression.Literal == nil || expression.Column != nil || expression.Symbol != nil || len(expression.Operands) != 0 {
@@ -569,7 +726,7 @@ func (v *validator) validateStorage(storage StorageType, path string) {
 		valid = storage.Kind == StorageSQLiteInteger || storage.Kind == StorageSQLiteReal || storage.Kind == StorageSQLiteText || storage.Kind == StorageSQLiteBlob || storage.Kind == StorageProviderExtension
 	case ir.PostgreSQL:
 		switch storage.Kind {
-		case StoragePostgreSQLBoolean, StoragePostgreSQLSmallInt, StoragePostgreSQLInteger, StoragePostgreSQLBigInt, StoragePostgreSQLReal, StoragePostgreSQLDouble, StoragePostgreSQLNumeric, StoragePostgreSQLText, StoragePostgreSQLBytea, StoragePostgreSQLUUID, StoragePostgreSQLDate, StoragePostgreSQLTime, StoragePostgreSQLTimestampTZ, StoragePostgreSQLJSONB, StorageProviderExtension:
+		case StoragePostgreSQLBoolean, StoragePostgreSQLSmallInt, StoragePostgreSQLInteger, StoragePostgreSQLBigInt, StoragePostgreSQLReal, StoragePostgreSQLDouble, StoragePostgreSQLNumeric, StoragePostgreSQLVarchar, StoragePostgreSQLText, StoragePostgreSQLBytea, StoragePostgreSQLUUID, StoragePostgreSQLDate, StoragePostgreSQLTime, StoragePostgreSQLTimestampTZ, StoragePostgreSQLJSONB, StorageProviderExtension:
 			valid = true
 		}
 	}
@@ -582,6 +739,13 @@ func (v *validator) validateStorage(storage StorageType, path string) {
 		}
 	} else if storage.Precision != 0 || storage.Scale != 0 {
 		v.add(CodeStorage, path, "precision/scale are only valid for PostgreSQL numeric storage")
+	}
+	if storage.Kind == StoragePostgreSQLVarchar {
+		if storage.Length == 0 {
+			v.add(CodeStorage, path, "varchar requires a positive maximum length")
+		}
+	} else if storage.Kind != StoragePostgreSQLTime && storage.Kind != StoragePostgreSQLTimestampTZ && storage.Kind != StorageSQLiteText && storage.Kind != StorageSQLiteBlob && storage.Length != 0 {
+		v.add(CodeStorage, path, "length is not valid for this storage kind")
 	}
 	if storage.Kind == StorageProviderExtension {
 		if storage.Symbol == nil {
@@ -621,6 +785,7 @@ func (v *validator) validateExtensions() {
 	for _, extension := range v.schema.Extensions {
 		path := "extension[" + string(extension.ID) + "]"
 		v.validateStableID(string(extension.ID), path+".id")
+		v.registerStableObject(string(extension.ID), path+".id")
 		if _, duplicate := seen[extension.ID]; duplicate {
 			v.add(CodeDuplicate, path+".id", fmt.Sprintf("duplicate extension ID %s", extension.ID))
 		}
@@ -653,6 +818,7 @@ func (v *validator) validateSystem() {
 	for _, object := range system.Objects {
 		path := "system.object[" + string(object.ID) + "]"
 		v.validateStableID(string(object.ID), path+".id")
+		v.registerStableObject(string(object.ID), path+".id")
 		if _, duplicate := seen[object.ID]; duplicate {
 			v.add(CodeDuplicate, path+".id", fmt.Sprintf("duplicate system object ID %s", object.ID))
 		}
@@ -802,6 +968,14 @@ func (v *validator) validateStableID(value, path string) {
 	if err != nil || len(decoded) != 16 || value != strings.ToLower(value) {
 		v.add(CodeStableID, path, fmt.Sprintf("%q is not a canonical lowercase 128-bit hexadecimal ID", value))
 	}
+}
+
+func (v *validator) registerStableObject(value, path string) {
+	if previous, duplicate := v.stableObjects[value]; duplicate {
+		v.add(CodeDuplicate, path, fmt.Sprintf("operation-addressable stable ID %s also belongs to %s", value, previous))
+		return
+	}
+	v.stableObjects[value] = path
 }
 
 func IsValidationCode(err error, code ValidationCode) bool {

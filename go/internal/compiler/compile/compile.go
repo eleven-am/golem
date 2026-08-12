@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/codegen/registry"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/methods"
@@ -106,7 +107,7 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 			if !appFound {
 				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", resolved.Compilation.Model.Schema.PackagePath), raw.Root.Span))
 			} else {
-				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model})
+				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model, Contract: resolved.Compilation.Contract, DeclarationDiscovery: true})
 				if shellErr != nil {
 					diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
 				} else {
@@ -135,6 +136,9 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		diagnostics = append(diagnostics, applyRelationOptions(&resolved.Compilation.Model, interpreted.RelationOptions)...)
 	}
 	populateContractFields(raw, &resolved.Compilation)
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, compilerconcurrency.Apply(&resolved.Compilation, interpreted.OptimisticConcurrency)...)
+	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, analyticscontract.Normalize(&resolved.Compilation, interpreted.AnalyticsModels)...)
 	}
@@ -418,7 +422,7 @@ func canonicalCompilation(compilation ir.CompilationIR) (ir.CompilationIR, error
 }
 
 func validateComplete(compilation ir.CompilationIR) []ir.Diagnostic {
-	var diagnostics []ir.Diagnostic
+	diagnostics := compilerconcurrency.ValidateAgreement(compilation)
 	semanticOwners := make(map[ir.ObjectID]struct{})
 	for _, extension := range compilation.Model.Extensions {
 		if extension.Kind == semanticcontract.IndexKind {

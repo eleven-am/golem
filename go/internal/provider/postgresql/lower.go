@@ -22,6 +22,9 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 	if err := ctx.Err(); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
+	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
+		return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: %w", err)
+	}
 	targeted := false
 	for _, target := range model.Providers {
 		if target == ir.PostgreSQL {
@@ -95,6 +98,10 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 
 func lowerTable(model ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR) (physical.PhysicalTable, error) {
 	table := physical.PhysicalTable{ID: model.ID, Name: physical.PhysicalName(model.Table.PhysicalName)}
+	if model.OptimisticConcurrency != nil {
+		field := *model.OptimisticConcurrency
+		table.OptimisticConcurrency = &field
+	}
 	var persistedOrdinal uint32
 	fields := append([]ir.FieldIR(nil), model.Fields...)
 	sort.Slice(fields, func(i, j int) bool {
@@ -261,7 +268,11 @@ func syntheticChecks(modelID ir.ModelID, field ir.FieldIR, enums map[ir.EnumID]i
 	var result []physical.PhysicalCheck
 	add := func(kind string, expression physical.Expression) {
 		id := stableID("check", string(modelID), string(field.ID), kind)
-		result = append(result, physical.PhysicalCheck{ID: ir.CheckID(id), Name: generatedName("ck", kind, id), Expression: expression})
+		checkID, name := ir.CheckID(id), generatedName("ck", kind, id)
+		if kind == "max_length" {
+			checkID, name = physical.HistoricalV1MaxLengthCheckIdentity(modelID, field.ID)
+		}
+		result = append(result, physical.PhysicalCheck{ID: checkID, Name: name, Expression: expression})
 	}
 	column := physical.Expression{Kind: physical.ExpressionColumn, Type: storage, Nullable: field.Scalar.Nullable, Column: cloneField(&field.ID)}
 	if logical.Kind == ir.TypeEnum && logical.EnumID != nil {
@@ -277,12 +288,9 @@ func syntheticChecks(modelID ir.ModelID, field ir.FieldIR, enums map[ir.EnumID]i
 		typeof := physical.Expression{Kind: physical.ExpressionFunction, Type: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: field.Scalar.Nullable, Symbol: postgresSymbol("golem.postgresql.function.jsonb-typeof.v1", ir.SchemaSymbolFunction), Operands: []physical.Expression{column}}
 		add("json_array", operator(schemaexpr.Equal, typeof, physical.Expression{Kind: physical.ExpressionLiteral, Type: typeof.Type, Literal: &literal}))
 	}
-	if logical.MaxLength != nil && (logical.Kind == ir.TypeString || logical.Kind == ir.TypeBytes) {
+	if logical.MaxLength != nil && logical.Kind == ir.TypeBytes {
 		literal := ir.TypedLiteralIR{Kind: ir.LiteralInteger, Canonical: fmt.Sprint(*logical.MaxLength)}
-		function := "golem.schema.function.length.v1"
-		if logical.Kind == ir.TypeBytes {
-			function = "golem.postgresql.function.octet-length.v1"
-		}
+		function := "golem.postgresql.function.octet-length.v1"
 		length := physical.Expression{Kind: physical.ExpressionFunction, Type: physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}, Nullable: field.Scalar.Nullable, Symbol: semanticSymbol(function, ir.SchemaSymbolFunction), Operands: []physical.Expression{column}}
 		add("max_length", operator(schemaexpr.LessEqual, length, physical.Expression{Kind: physical.ExpressionLiteral, Type: length.Type, Literal: &literal}))
 	}

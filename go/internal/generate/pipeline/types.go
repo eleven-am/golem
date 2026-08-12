@@ -36,6 +36,10 @@ type Request struct {
 	// Source compilation, binding discovery, lowering, and complete prospective
 	// artifact construction remain enabled for read-only compatibility checks.
 	ReadOnlyDiagnostics bool
+	// ProspectiveModfileDir opts a read-only diagnostics request back into the
+	// exact generated-graph compile while placing its alternate go.mod/go.sum
+	// outside the consumer module. The caller owns and removes this directory.
+	ProspectiveModfileDir string
 	// ReviewedMigrations are verified immutable histories embedded into the
 	// generated application. Production CLI generation supplies exactly one
 	// non-empty history for every declared provider.

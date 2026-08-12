@@ -1,6 +1,9 @@
 # Safe query-plan visibility implementation contract
 
-Status: **accepted implementation contract; not shipped**.
+Status: **implementation active; public report, renderer identity maps, bounded
+SQLite/PostgreSQL capture, provider-neutral typed assembly, Caller runtime
+orchestration, and observation complete locally; generated Caller surfaces,
+compatibility, and mandatory live PostgreSQL evidence pending**.
 
 Audience: the engineer implementing the diagnostic and the reviewer deciding
 whether it is complete. This contract covers a sanitized, explicitly requested
@@ -89,9 +92,11 @@ An explain call must use the same production preparation path as the matching
 Caller operation:
 
 1. validate/freeze the exact typed request and limits;
-2. snapshot the actor and build fresh actor policies;
-3. run the matching before-read hook exactly once because it may narrow or
-   transform the request;
+2. use the same immutable actor/policy snapshot already owned by that generated
+   `Caller`; an explain method must not re-resolve a different policy snapshot
+   than the matching execution method;
+3. run the matching before-read hook exactly once when that production
+   operation has a before hook, because it may narrow or transform the request;
 4. re-freeze and re-authorize the transformed request;
 5. compile the same policy, field classification, relation hydration,
    pagination, analytics/scoped, and provider statement shape;
@@ -105,8 +110,10 @@ After-read hooks, computed resolvers/loaders, event delivery, and application
 row decoding do not run because no result rows exist.
 
 Read hooks are application code and may themselves perform external side
-effects. The documentation must say that `Explain...` runs the before hook just
-like the real read. Golem itself performs no application mutation.
+effects. The documentation must say that `Explain...` runs the same before hook
+as the real operation when that operation has one. Version 1 does not invent
+new hooks for count, analytics, grouping, or scoped operations that have no
+production hook today. Golem itself performs no application mutation.
 
 A denied policy, invalid/masked filter/order/selector, invalid hook result, or
 limit refusal follows the ordinary public error and executes zero provider
@@ -154,6 +161,11 @@ Golem's typed relation plan, including target model/relation IDs, batching
 capacity, and minimum/maximum possible statement counts. It does not claim an
 actual provider access path for the deferred statement.
 
+If the typed request and configured read limits do not provide a finite bound
+for a deferred branch, version 1 returns `PLAN_UNAVAILABLE`. It must not execute
+the root query to discover a bound, invent representative cardinality, or use
+`MaxUint32` as an undocumented infinity sentinel.
+
 Correlated relations contained in the root SQL are covered by the provider
 root plan normally.
 
@@ -187,9 +199,18 @@ func (node Node) ModelID() (golem.ModelID, bool)
 func (node Node) FieldIDs() []golem.FieldID
 func (node Node) RelationID() (golem.RelationID, bool)
 func (node Node) IndexID() (IndexID, bool)
+func (node Node) BatchCapacity() (uint32, bool)
+func (node Node) MinimumExecutionStatements() (uint32, bool)
+func (node Node) MaximumExecutionStatements() (uint32, bool)
 func (node Node) Children() []Node
 func (node Node) Warnings() []Warning
 ```
+
+The three bounded-batch accessors are present only on `deferredBatch` nodes.
+They return `(0, false)` on every other node. A deferred batch has a positive
+capacity, a finite maximum, and `minimum <= maximum`; zero is a valid minimum
+because an authorized root query may produce no parent keys. These are typed
+planning bounds, not observed or estimated row counts.
 
 `IndexID` is a fixed `[16]byte`-equivalent value owned by `queryplan`; it has no
 constructor from names and grants no query capability.
@@ -219,8 +240,17 @@ Warning:
   DEFERRED_BATCH
   MULTI_STATEMENT
   UNKNOWN_PROVIDER_NODE
-  PLAN_BOUNDED_REFUSAL
 ```
+
+The first statement purpose is fixed by the operation: find/count operations
+use `root`, aggregate/group operations use `analytics`, and scoped operations
+use `scoped`. Any later statement is only a `relationBatch` or
+`policyHydration`; the report producer rejects a second primary statement or a
+purpose that contradicts the operation.
+
+Boundedness refusal is an error, not a report warning: version 1 returns
+`PLAN_UNAVAILABLE` or `PLAN_TOO_COMPLEX` and no partial `Report`, so it cannot
+truthfully attach a warning to a value that does not exist.
 
 Every slice/accessor returns a copy. Report format version starts at 1. The
 canonical digest covers only the sanitized closed report, never raw SQL/plan
@@ -237,6 +267,19 @@ through the exact registry used to render the statement:
 - an unrecognized name produces `unknown` plus
   `UNKNOWN_PROVIDER_NODE`; and
 - raw names are discarded and never included in errors or trusted callbacks.
+
+The mapping registry is emitted at the point each private renderer allocates an
+alias; the sanitizer must not reverse-engineer alias naming conventions. Read,
+analytics, scoped, and policy-relation SQL fragments each contribute immutable
+alias facts for the exact statement. The physical registry likewise retains the
+typed primary-key, unique-index, and ordinary-index identities needed to map a
+recognized physical access object. Missing alias/access registration produces
+`unknown` plus `UNKNOWN_PROVIDER_NODE`; it never falls back to parsing a name.
+Every alias matcher must also be unambiguous within its exact rendered
+statement. Independently compiled policy fragments may not reuse one flat alias
+token and then ask the sanitizer to infer scope from provider-plan position;
+the renderer must allocate statement-unique aliases or retain an equally exact
+typed scope proof at allocation time.
 
 The report must not contain:
 
@@ -289,8 +332,10 @@ func CodeOf(error) (ErrorCode, bool)
 ```
 
 Ordinary authorization/input/hook failures remain ordinary `golem.Error`
-values and codes. Query-plan errors have fixed public messages and may retain a
-trusted wrapped cause, but `Error()` and the report never include that cause.
+values and codes. Query-plan errors have fixed public messages. A wrapped cause,
+when retained, is a fixed sanitized internal classification rather than a raw
+driver/provider error; `Error()`, trusted callbacks, and the report never expose
+raw provider diagnostic input.
 
 ## 10. Observation contract
 
@@ -298,7 +343,8 @@ Add one truthful observation operation for an explicit explain call. It must
 report:
 
 - provider and root ModelID;
-- phase prepare/execute/finish as appropriate;
+- one finish-phase record buffered until every provider row and connection is
+  closed;
 - exact number of provider `EXPLAIN` statements;
 - aggregate count equal to sanitized node count;
 - refused reason for input/policy/complexity/provider failure; and
@@ -315,7 +361,7 @@ Documentation must state:
 
 - call Explain only from trusted diagnostics/tests, not directly from an
   untrusted client endpoint;
-- before-read hooks execute;
+- a matching before-read hook executes when the real operation has one;
 - PostgreSQL/SQLite planning acquires a real pool connection;
 - provider statistics/version may change a plan without source changes;
 - a full scan may be correct for a small/selective query and an index does not

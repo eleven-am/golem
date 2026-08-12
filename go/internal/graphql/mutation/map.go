@@ -14,13 +14,15 @@ import (
 // before selector/filter maps cross into P4. Data inputs already carry stable
 // field/relation identities; Where is the GraphQL selector or predicate map.
 type MapRootInput struct {
-	Operation RootOperation
-	Model     compilerir.ModelID
-	Where     any
-	Data      *Input
-	Create    *Input
-	Update    *Input
-	Selection []readir.Selection
+	Operation              RootOperation
+	Model                  compilerir.ModelID
+	Where                  any
+	Data                   *Input
+	Create                 *Input
+	Update                 *Input
+	Selection              []readir.Selection
+	ExistingVersion        *golem.ExistingVersion
+	ConcurrencyExpectation *golem.ConcurrencyExpectation
 }
 
 type MapBinder struct {
@@ -29,6 +31,7 @@ type MapBinder struct {
 	models    map[compilerir.ModelID]compilerir.ModelDeclIR
 	contracts map[compilerir.ModelID]compilerir.ModelContractIR
 	relations map[compilerir.RelationID]compilerir.RelationIR
+	versioned map[compilerir.ModelID]compilerir.FieldID
 }
 
 func NewMapBinder(compilation compilerir.CompilationIR, limits Limits) (*MapBinder, error) {
@@ -38,13 +41,16 @@ func NewMapBinder(compilation compilerir.CompilationIR, limits Limits) (*MapBind
 	}
 	binder := &MapBinder{
 		query: query, limits: normalizeLimits(limits),
-		models: map[compilerir.ModelID]compilerir.ModelDeclIR{}, contracts: map[compilerir.ModelID]compilerir.ModelContractIR{}, relations: map[compilerir.RelationID]compilerir.RelationIR{},
+		models: map[compilerir.ModelID]compilerir.ModelDeclIR{}, contracts: map[compilerir.ModelID]compilerir.ModelContractIR{}, relations: map[compilerir.RelationID]compilerir.RelationIR{}, versioned: map[compilerir.ModelID]compilerir.FieldID{},
 	}
 	for _, model := range compilation.Model.Models {
 		binder.models[model.ID] = model
 	}
 	for _, contract := range compilation.Contract.Models {
 		binder.contracts[contract.ModelID] = contract
+		if contract.OptimisticConcurrency != nil {
+			binder.versioned[contract.ModelID] = *contract.OptimisticConcurrency
+		}
 	}
 	for _, relation := range compilation.Model.Relations {
 		binder.relations[relation.ID] = relation
@@ -60,29 +66,16 @@ func (binder *MapBinder) Lower(root MapRootInput) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	lowered := RootInput{Operation: root.Operation, Model: model, Data: root.Data, Create: root.Create, Update: root.Update, Selection: append([]readir.Selection(nil), root.Selection...)}
+	lowered := RootInput{Operation: root.Operation, Model: model, Data: root.Data, Create: root.Create, Update: root.Update, Selection: append([]readir.Selection(nil), root.Selection...), ExistingVersion: root.ExistingVersion, ConcurrencyExpectation: root.ConcurrencyExpectation}
 	switch root.Operation {
 	case Create:
 		if root.Where != nil {
 			return Request{}, fmt.Errorf("P5_MUTATION_MAP: create does not accept where")
 		}
 	case Update, Upsert, Delete:
-		selector, predicate, bindErr := binder.query.MutationSelector(root.Model, root.Where)
-		if bindErr != nil {
-			return Request{}, bindErr
-		}
-		frozen, freezeErr := binder.query.FreezePredicate(predicate)
-		if freezeErr != nil {
-			return Request{}, freezeErr
-		}
-		fields := selector.Fields()
-		publicFields := make([]golem.FieldID, len(fields))
-		for index, field := range fields {
-			publicFields[index] = golem.FieldID(field)
-		}
-		target, targetErr := golem.RuntimeMutationTargetFromPredicate(model, selector.KeyID(), publicFields, frozen)
+		target, targetErr := binder.Target(root.Model, root.Where)
 		if targetErr != nil {
-			return Request{}, fmt.Errorf("P5_MUTATION_TARGET: %w", targetErr)
+			return Request{}, targetErr
 		}
 		lowered.Target = &target
 	case UpdateMany, DeleteMany:
@@ -99,6 +92,37 @@ func (binder *MapBinder) Lower(root MapRootInput) (Request, error) {
 		return Request{}, fmt.Errorf("P5_MUTATION_MAP: unsupported root operation %d", root.Operation)
 	}
 	return Lower(lowered, binder.limits)
+}
+
+// Target binds one selector value without assigning mutation authority. It is
+// shared by generated roots and custom Selector arguments; custom selectors
+// must not manufacture a delete request merely to reuse selector coercion.
+func (binder *MapBinder) Target(modelID compilerir.ModelID, raw any) (golem.FrozenMutationTarget, error) {
+	if binder == nil || binder.query == nil {
+		return golem.FrozenMutationTarget{}, fmt.Errorf("P5_MUTATION_MAP: binder is absent")
+	}
+	model, err := golemModelID(modelID)
+	if err != nil {
+		return golem.FrozenMutationTarget{}, err
+	}
+	selector, predicate, err := binder.query.MutationSelector(modelID, raw)
+	if err != nil {
+		return golem.FrozenMutationTarget{}, err
+	}
+	frozen, err := binder.query.FreezePredicate(predicate)
+	if err != nil {
+		return golem.FrozenMutationTarget{}, err
+	}
+	fields := selector.Fields()
+	publicFields := make([]golem.FieldID, len(fields))
+	for index, field := range fields {
+		publicFields[index] = golem.FieldID(field)
+	}
+	target, err := golem.RuntimeMutationTargetFromPredicate(model, selector.KeyID(), publicFields, frozen)
+	if err != nil {
+		return golem.FrozenMutationTarget{}, fmt.Errorf("P5_MUTATION_TARGET: %w", err)
+	}
+	return target, nil
 }
 
 func fixedID(value string) ([16]byte, error) {

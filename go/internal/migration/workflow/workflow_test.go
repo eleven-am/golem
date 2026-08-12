@@ -3,11 +3,14 @@ package workflow
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -17,10 +20,191 @@ import (
 	"github.com/eleven-am/golem/go/internal/generate/pipeline"
 	"github.com/eleven-am/golem/go/internal/generate/publication"
 	"github.com/eleven-am/golem/go/internal/migration"
+	"github.com/eleven-am/golem/go/internal/migration/explain"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
+
+func TestReviewedBackfillSealingUsesReviewedHistoryAuthorities(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate workflow source")
+	}
+	source, err := os.ReadFile(filepath.Join(filepath.Dir(filename), "backfill.go"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(source)
+	if strings.Count(text, "migration.DiffReviewed(") != 2 || strings.Contains(text, "migration.Diff(") {
+		t.Fatal("reviewed backfill validation or sealing routes through the mutable current planner")
+	}
+	if strings.Count(text, "historicalSnapshotBytes(entry.") != 2 || strings.Contains(text, "snapshotBytes(entry.") {
+		t.Fatal("reviewed backfill sealing routes through mutable current snapshot JSON")
+	}
+}
+
+func TestLoadModelHistoryRejectsEmptyAndNonemptyProvidersInLockstepRegardlessOfMapOrder(t *testing.T) {
+	entry := migration.ManifestEntry{ID: "0001_initial"}
+	for iteration := 0; iteration < 128; iteration++ {
+		histories := make(map[ir.Provider]History, 2)
+		if iteration%2 == 0 {
+			histories[ir.SQLite] = History{Manifest: migration.Manifest{}}
+			histories[ir.PostgreSQL] = History{Manifest: migration.Manifest{Entries: []migration.ManifestEntry{entry}}}
+		} else {
+			histories[ir.PostgreSQL] = History{Manifest: migration.Manifest{Entries: []migration.ManifestEntry{entry}}}
+			histories[ir.SQLite] = History{Manifest: migration.Manifest{}}
+		}
+
+		state := State{}
+		err := loadModelHistory(DefaultRoot, nil, histories, &state)
+		if err == nil || err.Error() != "declared provider migration heads are not in lockstep" {
+			t.Fatalf("iteration %d empty/nonempty provider history error=%v", iteration, err)
+		}
+	}
+}
+
+func TestLoadModelHistoryAllowsAllProvidersToHaveEmptyDetachedHistory(t *testing.T) {
+	histories := map[ir.Provider]History{
+		ir.SQLite:     {Manifest: migration.Manifest{Entries: []migration.ManifestEntry{}}},
+		ir.PostgreSQL: {Manifest: migration.Manifest{Entries: []migration.ManifestEntry{}}},
+	}
+	state := State{}
+	if err := loadModelHistory(DefaultRoot, nil, histories, &state); err != nil {
+		t.Fatalf("all-empty provider history: %v", err)
+	}
+	if state.HeadModel != nil || state.HeadModelFingerprint != "" {
+		t.Fatalf("all-empty provider history attached a ModelIR head: %#v", state)
+	}
+}
+
+func TestCheckedSocialFrozenHistoryLoadsWithoutRewritingReleasedBytes(t *testing.T) {
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate workflow test source")
+	}
+	module := filepath.Clean(filepath.Join(filepath.Dir(filename), "..", "..", ".."))
+	social := filepath.Join(module, "examples", "social")
+	released := map[string]string{
+		"migrations/models/0001_initial.after.snapshot.json":                 "54eca1411dfe1d2bdda60a47f7673d416194382256564311e3515f0ac975a667",
+		"migrations/models/0001_initial.before.snapshot.json":                "69a22ca69b22b9fe854f41799b3bcdda3ab776f9e2f5c377e90ddd08348d4354",
+		"migrations/models/0002_sqlite_vec_runtime.after.snapshot.json":      "54eca1411dfe1d2bdda60a47f7673d416194382256564311e3515f0ac975a667",
+		"migrations/models/0002_sqlite_vec_runtime.before.snapshot.json":     "54eca1411dfe1d2bdda60a47f7673d416194382256564311e3515f0ac975a667",
+		"migrations/models/0003_physical_v2.after.snapshot.json":             "54eca1411dfe1d2bdda60a47f7673d416194382256564311e3515f0ac975a667",
+		"migrations/models/0003_physical_v2.before.snapshot.json":            "54eca1411dfe1d2bdda60a47f7673d416194382256564311e3515f0ac975a667",
+		"migrations/postgresql/0001_initial.after.snapshot.json":             "233a849c4c796d68d65b889cec6f79664d3814205dabcbeeb6c093135a34ec20",
+		"migrations/postgresql/0001_initial.before.snapshot.json":            "26b293bbeb7360cc4533a7cc4494e6472301d6e7bfb7969756612ac959002b60",
+		"migrations/postgresql/0001_initial.sql":                             "196bfebf70f8c4b2487bf87b5ff1a7a5ec94251967e10701aab5566deafc2136",
+		"migrations/postgresql/0002_sqlite_vec_runtime.after.snapshot.json":  "233a849c4c796d68d65b889cec6f79664d3814205dabcbeeb6c093135a34ec20",
+		"migrations/postgresql/0002_sqlite_vec_runtime.before.snapshot.json": "233a849c4c796d68d65b889cec6f79664d3814205dabcbeeb6c093135a34ec20",
+		"migrations/postgresql/0002_sqlite_vec_runtime.sql":                  "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"migrations/postgresql/0003_physical_v2.after.snapshot.json":         "266f71c8c88384e415ceeb2cb259a2d7d1a3e5fbff6238e874c73165a15e4a48",
+		"migrations/postgresql/0003_physical_v2.before.snapshot.json":        "233a849c4c796d68d65b889cec6f79664d3814205dabcbeeb6c093135a34ec20",
+		"migrations/postgresql/0003_physical_v2.sql":                         "ffdff3e2c4dc6f86faa17a1cca62bc1d02b62ef2ba616ba6a4622e6316aafea3",
+		"migrations/sqlite/0001_initial.after.snapshot.json":                 "29a59ec1e076a07cdcf6a5682114780930eb55b99a8c7c8b8c4b5a13bf6b8c6a",
+		"migrations/sqlite/0001_initial.before.snapshot.json":                "e97a1fe22dd3ad198cfb0a6547ca3e63588162af571f64b3a976c4b8b9e85e77",
+		"migrations/sqlite/0001_initial.sql":                                 "1ad19cf589c5b69f97f95290be4585efe0e3d409a8e1e5f39d9b49d29577e674",
+		"migrations/sqlite/0002_sqlite_vec_runtime.after.snapshot.json":      "c36334f25fdbc61774103764efa2422d75fa5fab2139b8ef19e3241d3cf2e4f9",
+		"migrations/sqlite/0002_sqlite_vec_runtime.before.snapshot.json":     "29a59ec1e076a07cdcf6a5682114780930eb55b99a8c7c8b8c4b5a13bf6b8c6a",
+		"migrations/sqlite/0002_sqlite_vec_runtime.sql":                      "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+		"migrations/sqlite/0003_physical_v2.after.snapshot.json":             "13ed85c858b59f606048ea916997af2f5c7b0c4773059264c118266c66846c6d",
+		"migrations/sqlite/0003_physical_v2.before.snapshot.json":            "c36334f25fdbc61774103764efa2422d75fa5fab2139b8ef19e3241d3cf2e4f9",
+		"migrations/sqlite/0003_physical_v2.sql":                             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+	}
+	assertReleasedSocialHistory := func() {
+		t.Helper()
+		for relative, want := range released {
+			content, err := os.ReadFile(filepath.Join(social, filepath.FromSlash(relative)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%x", sha256.Sum256(content)); got != want {
+				t.Fatalf("released social history %s digest=%s want=%s", relative, got, want)
+			}
+		}
+	}
+	assertReleasedSocialHistory()
+	manifestBytes, err := os.ReadFile(filepath.Join(social, "migrations", "sqlite", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := migration.ParseManifest(manifestBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reencoded, err := historicalSnapshotBytes(manifest.Entries[1].AfterSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	releasedSnapshot, err := os.ReadFile(filepath.Join(social, "migrations", "sqlite", "0002_sqlite_vec_runtime.after.snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(reencoded, releasedSnapshot) {
+		index := 0
+		for index < len(reencoded) && index < len(releasedSnapshot) && reencoded[index] == releasedSnapshot[index] {
+			index++
+		}
+		start := index - 80
+		if start < 0 {
+			start = 0
+		}
+		end := index + 120
+		if end > len(reencoded) {
+			end = len(reencoded)
+		}
+		t.Fatalf("released snapshot re-encoding differs at byte %d: got=%q", index, reencoded[start:end])
+	}
+	if bytes.Contains(reencoded, []byte(`"OptimisticConcurrency"`)) {
+		t.Fatal("pre-v3 snapshot re-encoding leaked the v3 optimistic-concurrency field")
+	}
+	state, err := loadReviewedState(context.Background(), social, DefaultRoot)
+	if err != nil {
+		t.Fatalf("load checked social frozen pre-v3 history: %v", err)
+	}
+	assertReleasedSocialHistory()
+	for provider, want := range map[ir.Provider][]migration.Digest{
+		ir.SQLite:     {"1460e997c8a275beb30c76a948fa6abeda092f4d36b93851e6f0ca2ad6865249", "b1ed9d3bd9207d69d80e1affabfad46f412afbab1183383200e4b59852ba81b7", "164a5de13865f9e2d4c8f424e494c764519f77b367b637510982e79f95d501d3", "2978bcfae671e90339b453462d4e8a913f9580fd8f69cc6ab7d3af489798081f", "b3a0f0fbf632f0984d1c3986d8ff9bcf6ba3d0724b52ba1b545c68172f4624d7"},
+		ir.PostgreSQL: {"1e6c1e82f8f56994b90b24697563f6ca4df9616b059a06736b2d0a1372ee1477", "3ab580245cb5f27bed603d293e514285906860dff09b854f35752c8ce3215578", "19c9b8114ba2f7cf7853e13bd2970d56aaab06db749f715f6442e9b45e9512b6", "99734d0bfb411d1a99100c3fa39acd298dfaae0cbfde310f8fb3206007c9bb92", "bb44afcbdc64dcda37b4608e2a569a771899bb25c3d209dbe9746d3e4b0847c7"},
+	} {
+		entries := state.Histories[provider].Manifest.Entries
+		if len(entries) != len(want) {
+			t.Fatalf("provider %s released entry count=%d", provider, len(entries))
+		}
+		for index := range entries {
+			if entries[index].ChainHash != want[index] {
+				t.Fatalf("provider %s entry %d chain hash=%s want=%s", provider, index, entries[index].ChainHash, want[index])
+			}
+		}
+	}
+	renderers := map[ir.Provider]func(migration.ManifestEntry) ([]byte, error){
+		ir.SQLite: func(entry migration.ManifestEntry) ([]byte, error) {
+			script, renderErr := sqlite.New().RenderMigration(entry)
+			return []byte(script.SQL()), renderErr
+		},
+		ir.PostgreSQL: func(entry migration.ManifestEntry) ([]byte, error) {
+			script, renderErr := postgresql.New().RenderMigration(entry)
+			return []byte(script.SQL()), renderErr
+		},
+	}
+	for provider, history := range state.Histories {
+		for _, entry := range history.Manifest.Entries {
+			rendered, renderErr := renderers[provider](entry)
+			if renderErr != nil {
+				t.Fatalf("provider %s migration %s render: %v", provider, entry.ID, renderErr)
+			}
+			var reviewedSQL []byte
+			for _, file := range entry.Files {
+				if strings.HasSuffix(file.Path, ".sql") {
+					reviewedSQL = history.Files[file.Path]
+				}
+			}
+			if !bytes.Equal(rendered, reviewedSQL) {
+				t.Fatalf("provider %s migration %s rendering changed released SQL bytes: got=%q want=%q", provider, entry.ID, rendered, reviewedSQL)
+			}
+		}
+	}
+}
 
 func TestSQLiteProviderHistoryAllowsOnlyTheReviewedDriverTransition(t *testing.T) {
 	vec := physical.CapabilityFact{ID: "sqlite.vec0.v1", Version: 1, Verification: physical.VerificationRuntimeProbe}
@@ -170,6 +354,148 @@ func TestTamperAndExactDestructiveApprovals(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "does not name a current") {
 		t.Fatalf("unknown approval error = %v", err)
 	}
+}
+
+func TestPostgreSQLReviewedBackfillAttachProducesCanonicalImmutableHistory(t *testing.T) {
+	compiled, allProviders := socialResult(t)
+	postgresProviders := providerSubset(t, allProviders, ir.PostgreSQL)
+	module := t.TempDir()
+	initial := prepare(t, module, "initial", compiled.Compilation.Model, nil, compiled.ContractFingerprint, postgresProviders, nil)
+	publish(t, module, initial)
+	beforeTree := tree(t, module)
+
+	previous := compiled.Compilation.Model
+	current, currentProviders, modelID, fieldID := addRequiredPostSlug(t, previous, postgresProviders)
+	fingerprint, err := ir.ModelFingerprint(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := PrepareNew(context.Background(), NewRequest{ModuleDir: module, Root: DefaultRoot, Name: "add_post_slug", Model: current, PreviousModel: &previous, ModelFingerprint: fingerprint, ContractFingerprint: compiled.ContractFingerprint, Providers: currentProviders})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Pending == nil || pending.MigrationID != "0002_add_post_slug" || pending.Prospective.Bytes != nil {
+		t.Fatalf("pending result = %#v", pending)
+	}
+	if afterPrepare := tree(t, module); !reflect.DeepEqual(afterPrepare, beforeTree) {
+		t.Fatal("PrepareNew mutated canonical history before attach")
+	}
+	draftPath, err := WritePendingBackfill(module, *pending.Pending)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), module, DefaultRoot, postgresProviders); err != nil {
+		t.Fatalf("non-authoritative draft affected publication loading: %v", err)
+	}
+	if _, err := WritePendingBackfill(module, *pending.Pending); err == nil || !strings.Contains(err.Error(), "already exists") {
+		t.Fatalf("draft overwrite error = %v", err)
+	}
+
+	reviewed := []byte(`UPDATE "public"."posts" SET "slug" = lower("title") WHERE "slug" IS NULL;` + "\n")
+	attached, err := PrepareBackfillAttach(context.Background(), BackfillAttachRequest{ModuleDir: module, Root: DefaultRoot, MigrationID: pending.MigrationID, Field: "Post.Slug", SQL: reviewed, Render: currentProviders[0].Render})
+	if err != nil {
+		t.Fatal(err)
+	}
+	priorModelBytes, err := os.ReadFile(filepath.Join(module, DefaultRoot, "models", "0001_initial.after.snapshot.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attachedBeforeModelBytes []byte
+	for _, artifact := range attached.Prospective.Artifacts {
+		if artifact.Path == filepath.ToSlash(filepath.Join(DefaultRoot, "models", "0002_add_post_slug.before.snapshot.json")) {
+			attachedBeforeModelBytes = artifact.Content
+		}
+	}
+	if !bytes.Equal(attachedBeforeModelBytes, priorModelBytes) {
+		t.Fatal("reviewed backfill attach did not copy exact prior after-model bytes")
+	}
+	if attached.Entry.ChainHash == "" || len(attached.Entry.Manual) != 1 || attached.Entry.Manual[0].File.SHA256 != migration.Checksum(reviewed) || attached.Provider != ir.PostgreSQL {
+		t.Fatalf("sealed entry is incomplete: %#v", attached.Entry)
+	}
+	planText, err := explain.MarshalText(attached.Report)
+	if err != nil || attached.Report.Mode() != explain.ModeReviewed || !bytes.Contains(planText, []byte("reviewed backfill")) || !bytes.Contains(planText, []byte(string(attached.Entry.Manual[0].Postcondition))) {
+		t.Fatalf("reviewed attach report is incomplete: report=%#v text=%q err=%v", attached.Report, planText, err)
+	}
+	if owner, ok := migration.BackfillOwner(attached.Entry.AfterSnapshot, fieldID); !ok || owner != modelID {
+		t.Fatalf("backfill owner = %s,%v want %s", owner, ok, modelID)
+	}
+	published, err := publication.Apply(context.Background(), publication.Request{ModuleDir: module, ManifestPath: attached.PublicationPath, Prospective: attached.Prospective})
+	if err != nil || len(published.Changed) == 0 {
+		t.Fatalf("publish attach: changed=%v err=%v", published.Changed, err)
+	}
+	if err := RemovePendingBackfill(module, attached.PendingPath, attached.PendingSHA256); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(module, filepath.FromSlash(draftPath))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("pending draft remains after seal: %v", err)
+	}
+	state, err := Load(context.Background(), module, DefaultRoot, currentProviders)
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := state.Histories[ir.PostgreSQL]
+	if len(history.Manifest.Entries) != 2 || history.Manifest.Entries[1].ChainHash != attached.Entry.ChainHash {
+		t.Fatalf("sealed history = %#v", history.Manifest.Entries)
+	}
+	companion := attached.Entry.Manual[0].File.Path
+	if got := history.Files[companion]; !bytes.Equal(got, reviewed) {
+		t.Fatalf("reviewed companion changed: %q", got)
+	}
+	if err := os.WriteFile(filepath.Join(module, filepath.FromSlash(companion)), append(reviewed, []byte("-- changed\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(context.Background(), module, DefaultRoot, currentProviders); err == nil || !strings.Contains(err.Error(), "rewritten") {
+		t.Fatalf("immutable companion rewrite error = %v", err)
+	}
+}
+
+func TestPostgreSQLReviewedBackfillAttachRefusesWrongFieldStaleParentAndInvalidArtifact(t *testing.T) {
+	compiled, allProviders := socialResult(t)
+	providers := providerSubset(t, allProviders, ir.PostgreSQL)
+	newDraft := func(t *testing.T) (string, NewResult, []Provider) {
+		module := t.TempDir()
+		initial := prepare(t, module, "initial", compiled.Compilation.Model, nil, compiled.ContractFingerprint, providers, nil)
+		publish(t, module, initial)
+		previous := compiled.Compilation.Model
+		current, nextProviders, _, _ := addRequiredPostSlug(t, previous, providers)
+		fingerprint, _ := ir.ModelFingerprint(current)
+		pending, err := PrepareNew(context.Background(), NewRequest{ModuleDir: module, Root: DefaultRoot, Name: "add_post_slug", Model: current, PreviousModel: &previous, ModelFingerprint: fingerprint, ContractFingerprint: compiled.ContractFingerprint, Providers: nextProviders})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := WritePendingBackfill(module, *pending.Pending); err != nil {
+			t.Fatal(err)
+		}
+		return module, pending, nextProviders
+	}
+	reviewed := []byte("UPDATE posts SET slug = title WHERE slug IS NULL;\n")
+
+	t.Run("wrong field", func(t *testing.T) {
+		module, pending, nextProviders := newDraft(t)
+		if _, err := PrepareBackfillAttach(context.Background(), BackfillAttachRequest{ModuleDir: module, Root: DefaultRoot, MigrationID: pending.MigrationID, Field: "Post.Title", SQL: reviewed, Render: nextProviders[0].Render}); err == nil || !strings.Contains(err.Error(), "already existed") {
+			t.Fatalf("wrong-field error = %v", err)
+		}
+	})
+	t.Run("invalid artifact", func(t *testing.T) {
+		module, pending, nextProviders := newDraft(t)
+		if _, err := PrepareBackfillAttach(context.Background(), BackfillAttachRequest{ModuleDir: module, Root: DefaultRoot, MigrationID: pending.MigrationID, Field: "Post.Slug", SQL: []byte("UPDATE posts SET slug = title;\r\n"), Render: nextProviders[0].Render}); err == nil || !strings.Contains(err.Error(), "LF endings") {
+			t.Fatalf("invalid-artifact error = %v", err)
+		}
+	})
+	t.Run("stale parent publication", func(t *testing.T) {
+		module, pending, nextProviders := newDraft(t)
+		publicationPath := filepath.Join(module, DefaultRoot, PublicationFilename)
+		content, err := os.ReadFile(publicationPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(publicationPath, append(content, ' '), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := PrepareBackfillAttach(context.Background(), BackfillAttachRequest{ModuleDir: module, Root: DefaultRoot, MigrationID: pending.MigrationID, Field: "Post.Slug", SQL: reviewed, Render: nextProviders[0].Render}); err == nil {
+			t.Fatal("stale parent publication was accepted")
+		}
+	})
 }
 
 func TestInterruptedPublicationRecoversWithoutPartialHistory(t *testing.T) {
@@ -346,7 +672,7 @@ func providerRegistry(t *testing.T, results []pipeline.ProviderResult) []Provide
 		case ir.PostgreSQL:
 			provider := postgresql.New()
 			providers = append(providers, Provider{Result: result, Render: func(entry migration.ManifestEntry) ([]byte, error) {
-				plan, err := migration.Diff(entry.BeforeSnapshot, entry.AfterSnapshot)
+				plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
 				if err != nil {
 					return nil, err
 				}
@@ -362,6 +688,58 @@ func providerRegistry(t *testing.T, results []pipeline.ProviderResult) []Provide
 		}
 	}
 	return providers
+}
+
+func providerSubset(t *testing.T, providers []Provider, wanted ir.Provider) []Provider {
+	t.Helper()
+	for _, provider := range providers {
+		if provider.Result.Provider.Provider == wanted {
+			return []Provider{provider}
+		}
+	}
+	t.Fatalf("provider %s is absent", wanted)
+	return nil
+}
+
+func addRequiredPostSlug(t *testing.T, model ir.ModelIR, providers []Provider) (ir.ModelIR, []Provider, ir.ModelID, ir.FieldID) {
+	t.Helper()
+	current := cloneModel(t, model)
+	fieldID := ir.FieldID("fffffffffffffffffffffffffffff101")
+	var modelID ir.ModelID
+	for modelIndex := range current.Models {
+		declaration := &current.Models[modelIndex]
+		if declaration.Go.Name != "Post" {
+			continue
+		}
+		modelID = declaration.ID
+		declaration.Fields = append(declaration.Fields, ir.FieldIR{ID: fieldID, CanonicalIdentity: declaration.CanonicalIdentity + ".field.slug", GoName: "Slug", LogicalName: "slug", DeclarationOrder: uint32(len(declaration.Fields)), Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "slug", Type: ir.LogicalTypeIR{Kind: ir.TypeString}}})
+		break
+	}
+	if modelID == "" {
+		t.Fatal("Post model is absent")
+	}
+	result := append([]Provider(nil), providers...)
+	for providerIndex := range result {
+		schema := result[providerIndex].Result.Schema
+		schema.Tables = append([]physical.PhysicalTable(nil), schema.Tables...)
+		for tableIndex := range schema.Tables {
+			if schema.Tables[tableIndex].ID != modelID {
+				continue
+			}
+			table := schema.Tables[tableIndex]
+			table.Columns = append([]physical.PhysicalColumn(nil), table.Columns...)
+			table.Columns = append(table.Columns, physical.PhysicalColumn{ID: fieldID, Name: "slug", Ordinal: uint32(len(table.Columns)), Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+			schema.Tables[tableIndex] = table
+		}
+		normalized, err := physical.Normalize(schema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fingerprint, _ := physical.PhysicalFingerprint(normalized)
+		result[providerIndex].Result.Schema = normalized
+		result[providerIndex].Result.Fingerprint = ir.Fingerprint(fingerprint.String())
+	}
+	return current, result, modelID, fieldID
 }
 
 func prepare(t *testing.T, module, name string, model ir.ModelIR, previous *ir.ModelIR, contract ir.Fingerprint, providers []Provider, approvals []migration.OperationID) NewResult {
@@ -506,4 +884,13 @@ func cloneModel(t *testing.T, value ir.ModelIR) ir.ModelIR {
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestPreviewAllowsSaturatedHistoryWhileMigrationNewRefusesAllocation(t *testing.T) {
+	if err := validatePreviewHeadLength(9999); err != nil {
+		t.Fatalf("read-only preview inherited authoring allocation policy: %v", err)
+	}
+	if err := validateNewHeadLength(9999); err == nil || !strings.Contains(err.Error(), "cannot allocate") {
+		t.Fatalf("migration new accepted saturated four-digit history: %v", err)
+	}
 }

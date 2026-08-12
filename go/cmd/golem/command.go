@@ -39,6 +39,8 @@ const usage = `usage:
   golem generate --app-out <directory> [--schema <pattern>] [--root <name>] [--manifest <path>] [--migrations <path>]
   golem check    --app-out <directory> [--schema <pattern>] [--root <name>] [--manifest <path>] [--migrations <path>]
   golem migration new --name <slug> [--schema <pattern>] [--root <name>] [--migrations <path>] [--approve <operation-id> ...]
+  golem migration plan [--schema <pattern>] [--root <name>] [--migrations <path>] [--migration <id>] [--provider <sqlite|postgresql>] [--json]
+  golem migration backfill attach --migration <id> --field <Model.Field> --file <path> [--migrations <path>]
   golem migration apply --provider <sqlite|postgresql> --dsn <explicit> [--migrations <path>]`
 
 const generationOutputFormatVersion uint16 = 1

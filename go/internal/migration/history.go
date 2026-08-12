@@ -167,25 +167,25 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 				}
 			}
 		}
-		beforeSnapshot, beforeNormalizeErr := physical.Normalize(entry.BeforeSnapshot)
-		afterSnapshot, afterNormalizeErr := physical.Normalize(entry.AfterSnapshot)
+		beforeSnapshot, beforeNormalizeErr := physical.NormalizeHistorical(entry.BeforeSnapshot)
+		afterSnapshot, afterNormalizeErr := physical.NormalizeHistorical(entry.AfterSnapshot)
 		if beforeNormalizeErr != nil || afterNormalizeErr != nil {
 			return fmt.Errorf("migration %s embeds invalid physical snapshot", entry.ID)
 		}
 		if !physical.CompatibleProviderHistory(beforeSnapshot.Provider, manifest.Provider) || !physical.CompatibleProviderHistory(afterSnapshot.Provider, manifest.Provider) {
 			return fmt.Errorf("migration %s snapshot provider differs from manifest provider", entry.ID)
 		}
-		before, beforeErr := physical.PhysicalFingerprint(beforeSnapshot)
-		after, afterErr := physical.PhysicalFingerprint(afterSnapshot)
+		before, beforeErr := physical.HistoricalPhysicalFingerprint(beforeSnapshot)
+		after, afterErr := physical.HistoricalPhysicalFingerprint(afterSnapshot)
 		if beforeErr != nil || afterErr != nil || Digest(before.String()) != entry.BeforePhysical || Digest(after.String()) != entry.AfterPhysical {
 			return fmt.Errorf("migration %s embeds stale physical snapshot", entry.ID)
 		}
-		allowlist, allowlistErr := physical.UnmanagedAllowlistFingerprint(afterSnapshot)
+		allowlist, allowlistErr := physical.HistoricalUnmanagedAllowlistFingerprint(afterSnapshot)
 		if allowlistErr != nil || Digest(allowlist.String()) != entry.UnmanagedAllowlistDigest {
 			return fmt.Errorf("migration %s unmanaged allowlist digest differs from embedded after snapshot", entry.ID)
 		}
-		beforeSystem, beforeSystemErr := physical.SystemFingerprint(beforeSnapshot.Provider, beforeSnapshot.System)
-		afterSystem, afterSystemErr := physical.SystemFingerprint(afterSnapshot.Provider, afterSnapshot.System)
+		beforeSystem, beforeSystemErr := physical.HistoricalSystemFingerprint(beforeSnapshot)
+		afterSystem, afterSystemErr := physical.HistoricalSystemFingerprint(afterSnapshot)
 		if beforeSystemErr != nil || afterSystemErr != nil {
 			return fmt.Errorf("migration %s embeds invalid system schema", entry.ID)
 		}
@@ -206,9 +206,9 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 				return fmt.Errorf("migration %s contains a system operation for a provider-metadata transition", entry.ID)
 			}
 		} else if beforeSystem != afterSystem {
-			beforeFragment, beforeFragmentErr := fragment(beforeSnapshot.System)
-			afterFragment, afterFragmentErr := fragment(afterSnapshot.System)
-			expectedPlan, expectedPlanErr := Diff(beforeSnapshot, afterSnapshot)
+			beforeFragment, beforeFragmentErr := fragmentVersion(beforeSnapshot.System, beforeSnapshot.CanonicalVersion)
+			afterFragment, afterFragmentErr := fragmentVersion(afterSnapshot.System, afterSnapshot.CanonicalVersion)
+			expectedPlan, expectedPlanErr := DiffReviewed(beforeSnapshot, afterSnapshot)
 			var expectedBootstrap Operation
 			var expectedAdditions []Operation
 			if expectedPlanErr == nil {
@@ -234,8 +234,8 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 		}
 		if index > 0 {
 			previous := manifest.Entries[index-1]
-			beforeAllowlist, beforeAllowlistErr := physical.UnmanagedAllowlistFingerprint(beforeSnapshot)
-			previousSystem, previousSystemErr := physical.SystemFingerprint(previous.AfterSnapshot.Provider, previous.AfterSnapshot.System)
+			beforeAllowlist, beforeAllowlistErr := physical.HistoricalUnmanagedAllowlistFingerprint(beforeSnapshot)
+			previousSystem, previousSystemErr := physical.HistoricalSystemFingerprint(previous.AfterSnapshot)
 			if beforeAllowlistErr != nil || Digest(beforeAllowlist.String()) != previous.UnmanagedAllowlistDigest {
 				return fmt.Errorf("migration %s unmanaged allowlist history is discontinuous", entry.ID)
 			}

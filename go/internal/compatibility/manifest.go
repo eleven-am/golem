@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	FormatVersion uint16 = 1
+	FormatVersion uint16 = 2
 	Module               = "github.com/eleven-am/golem/go"
 )
 
@@ -47,17 +47,18 @@ func (failure *Error) Error() string {
 func fail(reason Reason) error { return &Error{Reason: reason} }
 
 type Manifest struct {
-	FormatVersion      uint16           `json:"formatVersion"`
-	Module             string           `json:"module"`
-	Release            Release          `json:"release"`
-	MinimumGoVersion   string           `json:"minimumGoVersion"`
-	Providers          []Provider       `json:"providers"`
-	DeploymentProfiles []string         `json:"deploymentProfiles"`
-	Digests            Digests          `json:"digests"`
-	Versions           Versions         `json:"versions"`
-	HistoricalDecode   HistoricalDecode `json:"historicalDecode"`
-	RequiredActions    []string         `json:"requiredActions"`
-	KnownBoundaries    []string         `json:"knownBoundaries"`
+	FormatVersion      uint16                   `json:"formatVersion"`
+	Module             string                   `json:"module"`
+	Release            Release                  `json:"release"`
+	MinimumGoVersion   string                   `json:"minimumGoVersion"`
+	Providers          []Provider               `json:"providers"`
+	DeploymentProfiles []string                 `json:"deploymentProfiles"`
+	Digests            Digests                  `json:"digests"`
+	Versions           Versions                 `json:"versions"`
+	HistoricalDecode   HistoricalDecode         `json:"historicalDecode"`
+	MigrationGuide     *MigrationGuideAuthority `json:"migrationGuide"`
+	RequiredActions    []string                 `json:"requiredActions"`
+	KnownBoundaries    []string                 `json:"knownBoundaries"`
 }
 
 type Release struct {
@@ -79,6 +80,13 @@ type Digests struct {
 	GraphQLABI     string `json:"graphQLABI"`
 	CLIJSON        string `json:"cliJSON"`
 	Observation    string `json:"observation"`
+}
+
+type MigrationGuideAuthority struct {
+	Path    string `json:"path"`
+	SHA256  string `json:"sha256"`
+	FromTag string `json:"fromTag"`
+	ToMajor uint16 `json:"toMajor"`
 }
 
 type Versions struct {
@@ -104,6 +112,7 @@ type Versions struct {
 type HistoricalDecode struct {
 	SchemaBundles           []uint16 `json:"schemaBundles"`
 	GeneratedManifests      []uint16 `json:"generatedManifests"`
+	GraphQL                 []uint16 `json:"graphQL"`
 	ModelIR                 []uint16 `json:"modelIR"`
 	ContractIR              []uint16 `json:"contractIR"`
 	CanonicalIR             []uint16 `json:"canonicalIR"`
@@ -131,6 +140,10 @@ func Parse(encoded []byte, expectedDigest string) (Manifest, error) {
 	if !validDigest(expectedDigest) || digest(encoded) != expectedDigest {
 		return Manifest{}, fail(ReasonUntrustedDigest)
 	}
+	return parseCurrentManifest(encoded)
+}
+
+func parseCurrentManifest(encoded []byte) (Manifest, error) {
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var value Manifest
@@ -208,13 +221,13 @@ func validate(value Manifest) error {
 		return fail(ReasonInvalidManifest)
 	}
 	history := value.HistoricalDecode
-	if !canonicalVersions(history.SchemaBundles) || !canonicalVersions(history.GeneratedManifests) || !canonicalVersions(history.ModelIR) || !canonicalVersions(history.ContractIR) || !canonicalVersions(history.CanonicalIR) ||
+	if !canonicalVersions(history.SchemaBundles) || !canonicalVersions(history.GeneratedManifests) || !canonicalVersions(history.GraphQL) || !canonicalVersions(history.ModelIR) || !canonicalVersions(history.ContractIR) || !canonicalVersions(history.CanonicalIR) ||
 		!canonicalVersions(history.PhysicalSchema) || !canonicalVersions(history.PhysicalCanonical) || !canonicalVersions(history.MigrationManifest) ||
 		!canonicalVersions(history.MigrationCanonical) || !canonicalVersions(history.MigrationLedger) ||
 		!canonicalIdentities(history.FactCodecs, false) || !canonicalIdentities(history.EventCodecs, false) || !canonicalIdentities(history.PrincipalSnapshotCodecs, true) {
 		return fail(ReasonInvalidManifest)
 	}
-	if !isSubset(versions.FactCodecs, history.FactCodecs) || !isSubset(versions.EventCodecs, history.EventCodecs) || !isSubset(versions.PrincipalSnapshotCodecs, history.PrincipalSnapshotCodecs) || !containsVersion(history.SchemaBundles, versions.SchemaBundle) || !containsVersion(history.GeneratedManifests, versions.GeneratedManifest) {
+	if !isSubset(versions.FactCodecs, history.FactCodecs) || !isSubset(versions.EventCodecs, history.EventCodecs) || !isSubset(versions.PrincipalSnapshotCodecs, history.PrincipalSnapshotCodecs) || !containsVersion(history.SchemaBundles, versions.SchemaBundle) || !containsVersion(history.GeneratedManifests, versions.GeneratedManifest) || !containsVersion(history.GraphQL, versions.GraphQL) {
 		return fail(ReasonInvalidManifest)
 	}
 	for _, pair := range []struct {
@@ -233,6 +246,10 @@ func validate(value Manifest) error {
 	if !canonicalIdentities(value.RequiredActions, true) || !canonicalIdentities(value.KnownBoundaries, false) {
 		return fail(ReasonInvalidManifest)
 	}
+	guideRequired := hasIdentity(value.RequiredActions, "migration-guide.execute")
+	if guideRequired != (value.MigrationGuide != nil) || value.MigrationGuide != nil && !validMigrationGuideAuthority(*value.MigrationGuide) {
+		return fail(ReasonInvalidManifest)
+	}
 	return nil
 }
 
@@ -247,6 +264,9 @@ func validRelease(value Release) bool {
 }
 
 func canonicalIdentities(values []string, emptyOK bool) bool {
+	if values == nil {
+		return false
+	}
 	if len(values) == 0 {
 		return emptyOK
 	}
@@ -443,6 +463,7 @@ func compareFormatHistory(previous, current Manifest) ReleaseLevel {
 	}{
 		{previous.Versions.SchemaBundle, current.Versions.SchemaBundle, previous.HistoricalDecode.SchemaBundles, current.HistoricalDecode.SchemaBundles},
 		{previous.Versions.GeneratedManifest, current.Versions.GeneratedManifest, previous.HistoricalDecode.GeneratedManifests, current.HistoricalDecode.GeneratedManifests},
+		{previous.Versions.GraphQL, current.Versions.GraphQL, previous.HistoricalDecode.GraphQL, current.HistoricalDecode.GraphQL},
 		{previous.Versions.ModelIR, current.Versions.ModelIR, previous.HistoricalDecode.ModelIR, current.HistoricalDecode.ModelIR},
 		{previous.Versions.ContractIR, current.Versions.ContractIR, previous.HistoricalDecode.ContractIR, current.HistoricalDecode.ContractIR},
 		{previous.Versions.CanonicalIR, current.Versions.CanonicalIR, previous.HistoricalDecode.CanonicalIR, current.HistoricalDecode.CanonicalIR},

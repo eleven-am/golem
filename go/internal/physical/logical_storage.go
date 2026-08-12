@@ -70,7 +70,12 @@ func expectedPostgreSQLStorage(logical ir.LogicalTypeIR) (StorageType, error) {
 			return StorageType{}, fmt.Errorf("portable decimal precision %d exceeds 18", *logical.Precision)
 		}
 		return StorageType{Kind: StoragePostgreSQLNumeric, Precision: *logical.Precision, Scale: *logical.Scale}, nil
-	case ir.TypeString, ir.TypeEnum:
+	case ir.TypeString:
+		if logical.MaxLength != nil {
+			return StorageType{Kind: StoragePostgreSQLVarchar, Length: *logical.MaxLength}, nil
+		}
+		return StorageType{Kind: StoragePostgreSQLText}, nil
+	case ir.TypeEnum:
 		return StorageType{Kind: StoragePostgreSQLText}, nil
 	case ir.TypeBytes:
 		return StorageType{Kind: StoragePostgreSQLBytea}, nil

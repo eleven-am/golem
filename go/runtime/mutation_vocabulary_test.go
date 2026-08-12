@@ -135,8 +135,12 @@ func openMutationVocabularyFixture(t testing.TB, database *sqlx.DB, provider gol
 	userDescriptor := golem.GeneratedModelDescriptor[mutationResultUser](schema.User, golem.GeneratedDescriptorShape(
 		[]golem.FieldID{schema.UserID, schema.UserName}, nil, []golem.IdentityMetadata{userIdentity}, []golem.RelationMetadata{userRelation},
 	))
+	postScalars := []golem.FieldID{schema.PostID, schema.AuthorID, schema.PostTitle, schema.PostBigInt, schema.PostDecimal, schema.PostOptionalInt}
+	if schema.PostDateTime != (golem.FieldID{}) {
+		postScalars = append(postScalars, schema.PostDateTime)
+	}
 	postDescriptor := golem.GeneratedModelDescriptor[mutationResultPost](schema.Post, golem.GeneratedDescriptorShape(
-		[]golem.FieldID{schema.PostID, schema.AuthorID, schema.PostTitle, schema.PostBigInt, schema.PostDecimal, schema.PostOptionalInt}, nil, []golem.IdentityMetadata{postIdentity}, []golem.RelationMetadata{postRelation},
+		postScalars, nil, []golem.IdentityMetadata{postIdentity}, []golem.RelationMetadata{postRelation},
 	))
 	descriptors, err := golem.GeneratedApplicationDescriptors(schema.Bundle.GenerationDigest(), golem.GeneratedStampedPackageDescriptors(schema.Bundle.GenerationDigest(), userDescriptor.Metadata(), postDescriptor.Metadata()))
 	if err != nil {

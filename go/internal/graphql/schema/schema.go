@@ -21,6 +21,16 @@ type modelView struct {
 	relations map[ir.RelationID]ir.RelationIR
 }
 
+func validateOptimisticConcurrencyProjection(model ir.ModelDeclIR, contract ir.ModelContractIR) error {
+	if (model.OptimisticConcurrency == nil) != (contract.OptimisticConcurrency == nil) {
+		return fmt.Errorf("GraphQL model %s has inconsistent optimistic-concurrency projections", contract.ModelID)
+	}
+	if model.OptimisticConcurrency != nil && *model.OptimisticConcurrency != *contract.OptimisticConcurrency {
+		return fmt.Errorf("GraphQL model %s has mismatched optimistic-concurrency fields", contract.ModelID)
+	}
+	return nil
+}
+
 func Build(compilation ir.CompilationIR) (Document, error) {
 	if compilation.Contract.GraphQLABIVersion == 0 {
 		return Document{}, fmt.Errorf("GraphQL ContractIR is not normalized")
@@ -48,6 +58,9 @@ func Build(compilation ir.CompilationIR) (Document, error) {
 		model, ok := models[contract.ModelID]
 		if !ok {
 			return Document{}, fmt.Errorf("GraphQL contract references unknown model %s", contract.ModelID)
+		}
+		if err := validateOptimisticConcurrencyProjection(model, contract); err != nil {
+			return Document{}, err
 		}
 		fieldContracts := make(map[ir.FieldID]ir.FieldContractIR, len(contract.Fields))
 		for _, field := range contract.Fields {
@@ -297,6 +310,7 @@ func renderEnum(enum ir.EnumContractIR) string {
 
 func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, enums map[ir.EnumID]ir.EnumContractIR) ([]string, error) {
 	name := view.contract.GraphQLName
+	versioned := view.model.OptimisticConcurrency != nil
 	relationCreateFields, relationUpdateFields, err := relationOwnedMutationFields(view.model, view.contract, models, view.relations, nil)
 	if err != nil {
 		return nil, err
@@ -355,7 +369,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 					fmt.Fprintf(&where, "  %s: %sRelationFilter\n", fc.GraphQLName, target.GraphQLName)
 				}
 			}
-			capabilities, capabilityErr := relationMutationCapabilitiesFor(field, view.model, view.contract, models, view.relations)
+			capabilities, capabilityErr := relationGraphQLMutationCapabilities(field, view.model, view.contract, models, contracts, view.relations)
 			if capabilityErr != nil {
 				return nil, capabilityErr
 			}
@@ -364,7 +378,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 				fmt.Fprintf(&create, "  %s: %s%sCreateRelationInput%s\n", fc.GraphQLName, name, exported(fc.GraphQLName), bang(required))
 				createCount++
 			}
-			if capabilities.update {
+			if capabilities.update && !versioned {
 				fmt.Fprintf(&update, "  %s: %s%sUpdateRelationInput\n", fc.GraphQLName, name, exported(fc.GraphQLName))
 				updateCount++
 			}
@@ -372,6 +386,9 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		}
 		writableCreate = writableCreate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 		writableUpdate = writableUpdate && !field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
+		if view.model.OptimisticConcurrency != nil && field.ID == *view.model.OptimisticConcurrency {
+			writableCreate, writableUpdate = false, false
+		}
 		base, filter, updateType, scalarErr := scalarGraphQL(field.Scalar.Type, enums)
 		if scalarErr != nil {
 			return nil, fmt.Errorf("model %s field %s: %w", name, fc.GraphQLName, scalarErr)
@@ -397,8 +414,10 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 				fmt.Fprintf(&update, "  %s: %s\n", fc.GraphQLName, updateType)
 				updateCount++
 			}
-			fmt.Fprintf(&updateMany, "  %s: %s\n", fc.GraphQLName, updateType)
-			updateManyCount++
+			if !versioned {
+				fmt.Fprintf(&updateMany, "  %s: %s\n", fc.GraphQLName, updateType)
+				updateManyCount++
+			}
 		}
 	}
 	computed := append([]ir.ComputedFieldContractIR(nil), view.contract.Computed...)
@@ -494,6 +513,9 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 	if updateManyCount > 0 {
 		sections = append(sections, updateMany.String())
 	}
+	if versioned {
+		sections = append(sections, fmt.Sprintf("input %sConcurrencyExpectationInput {\n  version: BigInt\n  absent: Boolean\n}", name))
+	}
 	sections = append(sections, relationMutationTypes(view, contracts, models)...)
 	return sections, nil
 }
@@ -538,23 +560,36 @@ func renderRoots(views []modelView, custom []ir.CustomOperationContractIR) (stri
 			fmt.Fprintf(&mutation, "  %s(data: %sCreateInput!): %s!\n", roots.Create, name, name)
 			mutationCount++
 		}
+		versioned := view.model.OptimisticConcurrency != nil
 		if enabled[ir.OperationUpdate] && hasUpdate {
-			fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, data: %sUpdateInput!): %s!\n", roots.Update, name, name, name)
+			if versioned {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, expectedVersion: BigInt!, data: %sUpdateInput!): %s!\n", roots.Update, name, name, name)
+			} else {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, data: %sUpdateInput!): %s!\n", roots.Update, name, name, name)
+			}
 			mutationCount++
 		}
 		if enabled[ir.OperationUpsert] && hasCreate && hasUpdate {
-			fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, create: %sCreateInput!, update: %sUpdateInput!): %s!\n", roots.Upsert, name, name, name, name)
+			if versioned {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, expectation: %sConcurrencyExpectationInput!, create: %sCreateInput!, update: %sUpdateInput!): %s!\n", roots.Upsert, name, name, name, name, name)
+			} else {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, create: %sCreateInput!, update: %sUpdateInput!): %s!\n", roots.Upsert, name, name, name, name)
+			}
 			mutationCount++
 		}
 		if enabled[ir.OperationDelete] {
-			fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!): %s!\n", roots.Delete, name, name)
+			if versioned {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!, expectedVersion: BigInt!): %s!\n", roots.Delete, name, name)
+			} else {
+				fmt.Fprintf(&mutation, "  %s(where: %sWhereUniqueInput!): %s!\n", roots.Delete, name, name)
+			}
 			mutationCount++
 		}
-		if enabled[ir.OperationUpdateMany] && hasUpdateMany {
+		if !versioned && enabled[ir.OperationUpdateMany] && hasUpdateMany {
 			fmt.Fprintf(&mutation, "  %s(where: %sWhereInput!, data: %sUpdateManyInput!): BatchPayload!\n", roots.UpdateMany, name, name)
 			mutationCount++
 		}
-		if enabled[ir.OperationDeleteMany] {
+		if !versioned && enabled[ir.OperationDeleteMany] {
 			fmt.Fprintf(&mutation, "  %s(where: %sWhereInput!): BatchPayload!\n", roots.DeleteMany, name)
 			mutationCount++
 		}
@@ -855,7 +890,7 @@ func allRelationWithoutInputTypes(views []modelView, models map[ir.ModelID]ir.Mo
 			if err != nil {
 				return nil, err
 			}
-			createBody, updateBody, hasCreate, hasUpdate, err := renderWithoutInputPair(targetModel, targetContract, names, models, relations, enums)
+			createBody, updateBody, hasCreate, hasUpdate, err := renderWithoutInputPair(targetModel, targetContract, names, models, contracts, relations, enums)
 			if err != nil {
 				return nil, err
 			}
@@ -883,7 +918,7 @@ func allRelationWithoutInputTypes(views []modelView, models map[ir.ModelID]ir.Mo
 	return result, nil
 }
 
-func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, names nestedInputNames, models map[ir.ModelID]ir.ModelDeclIR, relations map[ir.RelationID]ir.RelationIR, enums map[ir.EnumID]ir.EnumContractIR) (createBody, updateBody string, hasCreate, hasUpdate bool, err error) {
+func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, names nestedInputNames, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR, enums map[ir.EnumID]ir.EnumContractIR) (createBody, updateBody string, hasCreate, hasUpdate bool, err error) {
 	relationCreateFields, relationUpdateFields, err := relationOwnedMutationFields(model, contract, models, relations, names.excluded)
 	if err != nil {
 		return "", "", false, false, err
@@ -902,12 +937,15 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 		if containsFieldID(names.excluded, field.ID) {
 			continue
 		}
+		if model.OptimisticConcurrency != nil && field.ID == *model.OptimisticConcurrency {
+			continue
+		}
 		fc, ok := fieldContractByID(contract, field.ID)
 		if !ok || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeReadOnly) {
 			continue
 		}
 		if field.Relation != nil {
-			capabilities, capabilityErr := relationMutationCapabilitiesFor(field, model, contract, models, relations)
+			capabilities, capabilityErr := relationGraphQLMutationCapabilities(field, model, contract, models, contracts, relations)
 			if capabilityErr != nil {
 				return "", "", false, false, capabilityErr
 			}
@@ -917,7 +955,7 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 				fmt.Fprintf(&create, "  %s: %sCreateRelationInput%s\n", fc.GraphQLName, prefix, bang(required))
 				hasCreate = true
 			}
-			if capabilities.update {
+			if capabilities.update && model.OptimisticConcurrency == nil {
 				fmt.Fprintf(&update, "  %s: %sUpdateRelationInput\n", fc.GraphQLName, prefix)
 				hasUpdate = true
 			}
@@ -945,6 +983,9 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 	}
 	create.WriteString("}")
 	update.WriteString("}")
+	if model.OptimisticConcurrency != nil {
+		hasUpdate = false
+	}
 	return create.String(), update.String(), hasCreate, hasUpdate, nil
 }
 
@@ -1014,7 +1055,7 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 		if !exists || !target.Exposed {
 			continue
 		}
-		capabilities, err := relationMutationCapabilitiesFor(field, view.model, view.contract, models, view.relations)
+		capabilities, err := relationGraphQLMutationCapabilities(field, view.model, view.contract, models, contracts, view.relations)
 		if err != nil || (!capabilities.create && !capabilities.update) {
 			continue
 		}
@@ -1023,13 +1064,23 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 			continue
 		}
 		targetCreate, targetUpdate, targetUpdateMany := modelInputCapabilitiesWithout(targetModel, target, nestedNames.excluded, view.relations)
+		targetVersioned := targetModel.OptimisticConcurrency != nil
+		// Membership operations write the relation's source-side foreign-key
+		// owner. From an inverse field that owner is the selected target row;
+		// GraphQL v1 cannot carry a separate expectation for it.
+		membershipNeedsExpectation := field.Relation.Role == ir.RelationInverse && targetVersioned
 		prefix := view.contract.GraphQLName + exported(fc.GraphQLName)
 		if capabilities.many {
 			if capabilities.create {
-				fields := []string{"  connect: [" + target.GraphQLName + "WhereUniqueInput!]"}
+				fields := []string{}
+				if !membershipNeedsExpectation {
+					fields = append(fields, "  connect: ["+target.GraphQLName+"WhereUniqueInput!]")
+				}
 				if targetCreate {
 					fields = append([]string{"  create: [" + nestedNames.create + "!]", "  createMany: [" + nestedNames.create + "!]"}, fields...)
-					fields = append(fields, "  connectOrCreate: ["+nestedNames.connectOrCreate+"!]")
+					if !membershipNeedsExpectation {
+						fields = append(fields, "  connectOrCreate: ["+nestedNames.connectOrCreate+"!]")
+					}
 				}
 				body := fmt.Sprintf("input %sCreateRelationInput {\n%s\n}", prefix, strings.Join(fields, "\n"))
 				if targetCreate {
@@ -1038,27 +1089,33 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 				result = append(result, body)
 			}
 			if capabilities.update {
-				fields := []string{
-					"  connect: [" + target.GraphQLName + "WhereUniqueInput!]",
-					"  disconnect: [" + target.GraphQLName + "WhereUniqueInput!]",
-					"  set: [" + target.GraphQLName + "WhereUniqueInput!]",
-					"  delete: [" + target.GraphQLName + "WhereUniqueInput!]",
-					"  deleteMany: [" + target.GraphQLName + "WhereInput!]",
+				fields := []string{}
+				if !membershipNeedsExpectation {
+					fields = append(fields,
+						"  connect: ["+target.GraphQLName+"WhereUniqueInput!]",
+						"  disconnect: ["+target.GraphQLName+"WhereUniqueInput!]",
+						"  set: ["+target.GraphQLName+"WhereUniqueInput!]",
+					)
+				}
+				if !targetVersioned {
+					fields = append(fields, "  delete: ["+target.GraphQLName+"WhereUniqueInput!]", "  deleteMany: ["+target.GraphQLName+"WhereInput!]")
 				}
 				var helpers []string
 				if targetCreate {
 					fields = append([]string{"  create: [" + nestedNames.create + "!]", "  createMany: [" + nestedNames.create + "!]"}, fields...)
-					fields = append(fields, "  connectOrCreate: ["+nestedNames.connectOrCreate+"!]")
+					if !membershipNeedsExpectation {
+						fields = append(fields, "  connectOrCreate: ["+nestedNames.connectOrCreate+"!]")
+					}
 				}
-				if targetUpdate {
+				if targetUpdate && !targetVersioned {
 					fields = append(fields, "  update: ["+nestedNames.updateWithWhere+"!]")
 					helpers = append(helpers, fmt.Sprintf("input %s { where: %sWhereUniqueInput! data: %s! }", nestedNames.updateWithWhere, target.GraphQLName, nestedNames.update))
 				}
-				if targetUpdateMany {
+				if targetUpdateMany && !targetVersioned {
 					fields = append(fields, "  updateMany: ["+nestedNames.updateManyWithWhere+"!]")
 					helpers = append(helpers, fmt.Sprintf("input %s { where: %sWhereInput! data: %sUpdateManyInput! }", nestedNames.updateManyWithWhere, target.GraphQLName, target.GraphQLName))
 				}
-				if targetCreate && targetUpdate {
+				if targetCreate && targetUpdate && !targetVersioned {
 					fields = append(fields, "  upsert: ["+nestedNames.upsertWithWhere+"!]")
 					helpers = append(helpers, fmt.Sprintf("input %s { where: %sWhereUniqueInput! create: %s! update: %s! }", nestedNames.upsertWithWhere, target.GraphQLName, nestedNames.create, nestedNames.update))
 				}
@@ -1071,10 +1128,15 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 			continue
 		}
 		if capabilities.create {
-			fields := []string{"  connect: " + target.GraphQLName + "WhereUniqueInput"}
+			fields := []string{}
+			if !membershipNeedsExpectation {
+				fields = append(fields, "  connect: "+target.GraphQLName+"WhereUniqueInput")
+			}
 			if targetCreate {
 				fields = append([]string{"  create: " + nestedNames.create}, fields...)
-				fields = append(fields, "  connectOrCreate: "+nestedNames.connectOrCreate)
+				if !membershipNeedsExpectation {
+					fields = append(fields, "  connectOrCreate: "+nestedNames.connectOrCreate)
+				}
 			}
 			body := fmt.Sprintf("input %sCreateRelationInput @oneOf {\n%s\n}", prefix, strings.Join(fields, "\n"))
 			if targetCreate {
@@ -1083,23 +1145,28 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 			result = append(result, body)
 		}
 		if capabilities.update {
-			fields := []string{"  connect: " + target.GraphQLName + "WhereUniqueInput"}
+			fields := []string{}
+			if !membershipNeedsExpectation {
+				fields = append(fields, "  connect: "+target.GraphQLName+"WhereUniqueInput")
+			}
 			var helpers []string
 			if targetCreate {
 				fields = append([]string{"  create: " + nestedNames.create}, fields...)
-				fields = append(fields, "  connectOrCreate: "+nestedNames.connectOrCreate)
+				if !membershipNeedsExpectation {
+					fields = append(fields, "  connectOrCreate: "+nestedNames.connectOrCreate)
+				}
 			}
-			if targetUpdate {
+			if targetUpdate && !targetVersioned {
 				fields = append(fields, "  update: "+nestedNames.update)
 			}
-			if targetCreate && targetUpdate {
+			if targetCreate && targetUpdate && !targetVersioned {
 				fields = append(fields, "  upsert: "+nestedNames.upsert)
 				helpers = append(helpers, fmt.Sprintf("input %s { create: %s! update: %s! }", nestedNames.upsert, nestedNames.create, nestedNames.update))
 			}
-			if !capabilities.required {
+			if !capabilities.required && !membershipNeedsExpectation {
 				fields = append(fields, "  disconnect: Boolean")
 			}
-			if !capabilities.required || capabilities.inverse {
+			if (!capabilities.required || capabilities.inverse) && !targetVersioned {
 				fields = append(fields, "  delete: Boolean")
 			}
 			body := fmt.Sprintf("input %sUpdateRelationInput {\n%s\n}", prefix, strings.Join(fields, "\n"))
@@ -1118,6 +1185,37 @@ type relationMutationCapabilities struct {
 	many     bool
 	required bool
 	inverse  bool
+}
+
+func relationGraphQLMutationCapabilities(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, contracts map[ir.ModelID]ir.ModelContractIR, relations map[ir.RelationID]ir.RelationIR) (relationMutationCapabilities, error) {
+	capabilities, err := relationMutationCapabilitiesFor(field, model, contract, models, relations)
+	if err != nil || field.Relation == nil || (!capabilities.create && !capabilities.update) {
+		return capabilities, err
+	}
+	relation := relationForField(field, relations)
+	if relation == nil {
+		return relationMutationCapabilities{}, fmt.Errorf("GraphQL relation %s is absent", field.Relation.RelationID)
+	}
+	targetID := relation.TargetModel
+	if field.Relation.Role == ir.RelationInverse {
+		targetID = relation.SourceModel
+	}
+	targetModel, modelOK := models[targetID]
+	targetContract, contractOK := contracts[targetID]
+	if !modelOK || !contractOK || !targetContract.Exposed {
+		return relationMutationCapabilities{}, fmt.Errorf("GraphQL relation %s target model %s is unavailable", relation.ID, targetID)
+	}
+	view := modelView{model: model, contract: contract, relations: relations}
+	names, err := relationNestedInputNames(view, field, targetContract)
+	if err != nil {
+		return relationMutationCapabilities{}, err
+	}
+	targetCreate, targetUpdate, targetUpdateMany := modelInputCapabilitiesWithout(targetModel, targetContract, names.excluded, relations)
+	targetVersioned := targetModel.OptimisticConcurrency != nil
+	membershipAvailable := field.Relation.Role != ir.RelationInverse || !targetVersioned
+	capabilities.create = capabilities.create && (targetCreate || membershipAvailable)
+	capabilities.update = capabilities.update && model.OptimisticConcurrency == nil && (targetCreate || membershipAvailable || !targetVersioned && (targetUpdate || targetUpdateMany || len(targetContract.Selectors) != 0))
+	return capabilities, nil
 }
 
 func relationMutationCapabilitiesFor(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, relations map[ir.RelationID]ir.RelationIR) (relationMutationCapabilities, error) {
@@ -1193,6 +1291,9 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			continue
 		}
 		if field.Scalar != nil {
+			if model.OptimisticConcurrency != nil && field.ID == *model.OptimisticConcurrency {
+				continue
+			}
 			if field.Scalar.DatabaseReadOnly || field.Scalar.Generation != nil {
 				continue
 			}
@@ -1208,10 +1309,13 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			if !hookOwnedCreateRelation(field, model, contract, relations) {
 				create = true
 			}
-			if !hasMode(fc.Modes, ir.ModeImmutable) {
+			if model.OptimisticConcurrency == nil && !hasMode(fc.Modes, ir.ModeImmutable) {
 				update = true
 			}
 		}
+	}
+	if model.OptimisticConcurrency != nil {
+		updateMany = false
 	}
 	return create, update, updateMany
 }

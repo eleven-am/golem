@@ -18,6 +18,33 @@ func (provider *Provider) renderInitial(schema physical.PhysicalSchema) (Script,
 	if err != nil {
 		return Script{}, err
 	}
+	return provider.renderNormalizedInitial(normalized)
+}
+
+type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }
+
+func (provider *Provider) renderReviewedInitialSnapshot(reviewed reviewedInitialSnapshot) (Script, error) {
+	schema := reviewed.schema
+	var normalized physical.PhysicalSchema
+	var err error
+	if schema.Version == 1 && schema.CanonicalVersion == 1 {
+		normalized, err = physical.NormalizeHistoricalV1(schema)
+		if err == nil {
+			// Released v1 treated extensions as metadata only. Provider extension
+			// DDL was introduced with the current physical format and must never
+			// be retroactively invented while replaying a sealed v1 snapshot.
+			normalized.Extensions = nil
+		}
+	} else {
+		normalized, err = physical.Normalize(schema)
+	}
+	if err != nil {
+		return Script{}, err
+	}
+	return provider.renderNormalizedInitial(normalized)
+}
+
+func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error) {
 	if normalized.Provider.Provider != ir.PostgreSQL {
 		return Script{}, fmt.Errorf("postgresql render: schema provider is %s", normalized.Provider.Provider)
 	}
@@ -116,6 +143,7 @@ type ddlRenderer struct {
 	tables           map[ir.ModelID]physical.PhysicalTable
 	beforeExtensions map[ir.ExtensionID]physical.Extension
 	backfilled       map[ir.FieldID]bool
+	formatUpgrade    bool
 }
 
 func (r ddlRenderer) table(table physical.PhysicalTable) (string, error) {
@@ -407,6 +435,8 @@ func renderStorage(storage physical.StorageType) (string, error) {
 		return "double precision", nil
 	case physical.StoragePostgreSQLNumeric:
 		return fmt.Sprintf("numeric(%d,%d)", storage.Precision, storage.Scale), nil
+	case physical.StoragePostgreSQLVarchar:
+		return fmt.Sprintf("character varying(%d)", storage.Length), nil
 	case physical.StoragePostgreSQLText:
 		return "text", nil
 	case physical.StoragePostgreSQLBytea:

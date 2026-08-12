@@ -71,6 +71,42 @@ func observeScopedInputRefusal[P, A any](ctx context.Context, app *App[P, A], ex
 	finishObservation(observation, failure)
 }
 
+type preparedScopedStatement struct {
+	plan      scoped.Plan
+	statement scoped.Statement
+}
+
+func prepareScopedStatement[P, A any](app *App[P, A], policies scoped.PolicySet, system bool, descriptor golem.ModelID, request golem.FrozenScopedQuery) (preparedScopedStatement, error) {
+	if descriptor != request.RootModelID() {
+		return preparedScopedStatement{}, scopedError(descriptor, fmt.Errorf("scoped request does not match generated client"))
+	}
+	if len(request.Joins()) > app.analyticsLimits.MaxScopedJoins || len(request.Selections()) > app.analyticsLimits.MaxScopedSelections || request.PredicateNodeCount() > app.analyticsLimits.MaxScopedPredicateNodes {
+		return preparedScopedStatement{}, scopedError(descriptor, fmt.Errorf("scoped query limit exceeded"))
+	}
+	if take, present := request.Take(); present && (take > app.analyticsLimits.MaxProgrammaticGroups || take < -app.analyticsLimits.MaxProgrammaticGroups) {
+		return preparedScopedStatement{}, scopedError(descriptor, fmt.Errorf("scoped result limit exceeded"))
+	}
+	var planned scoped.Plan
+	var err error
+	if system {
+		planned, err = scoped.System(request, app.registry, app.providers, app.readLimits.plan)
+	} else {
+		planned, err = scoped.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
+	}
+	if err != nil {
+		return preparedScopedStatement{}, scopedError(descriptor, err)
+	}
+	statement, err := scoped.Render(planned, app.registry, app.provider, app.capabilities, scoped.RenderOptions{
+		MaxContributionRows:   app.analyticsLimits.MaxContributionRows,
+		MaxIntermediateGroups: app.analyticsLimits.MaxIntermediateGroups,
+		MaxResultRows:         app.analyticsLimits.MaxProgrammaticGroups,
+	})
+	if err != nil {
+		return preparedScopedStatement{}, scopedError(descriptor, err)
+	}
+	return preparedScopedStatement{plan: planned, statement: statement}, nil
+}
+
 func executeScoped[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, policies scoped.PolicySet, system bool, auditID string, execution uint64, descriptor golem.ModelID, request golem.FrozenScopedQuery) (result []golem.ScopedRow, resultErr error) {
 	ctx, observation := beginExecutionObservation(ctx, app, executor, descriptor, observe.KindScopedRead, observe.OperationScopedRead)
 	defer func() {
@@ -89,34 +125,12 @@ func executeScoped[P, A any](ctx context.Context, app *App[P, A], executor *exec
 		outcome = golem.ScopedOutcomeRefused
 		return nil, scopedError(descriptor, fmt.Errorf("scoped request does not match generated client"))
 	}
-	if len(request.Joins()) > app.analyticsLimits.MaxScopedJoins || len(request.Selections()) > app.analyticsLimits.MaxScopedSelections || request.PredicateNodeCount() > app.analyticsLimits.MaxScopedPredicateNodes {
-		outcome = golem.ScopedOutcomeRefused
-		return nil, scopedError(descriptor, fmt.Errorf("scoped query limit exceeded"))
-	}
-	if take, present := request.Take(); present && (take > app.analyticsLimits.MaxProgrammaticGroups || take < -app.analyticsLimits.MaxProgrammaticGroups) {
-		outcome = golem.ScopedOutcomeRefused
-		return nil, scopedError(descriptor, fmt.Errorf("scoped result limit exceeded"))
-	}
-	var planned scoped.Plan
-	var err error
-	if system {
-		planned, err = scoped.System(request, app.registry, app.providers, app.readLimits.plan)
-	} else {
-		planned, err = scoped.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
-	}
+	prepared, err := prepareScopedStatement(app, policies, system, descriptor, request)
 	if err != nil {
 		outcome = golem.ScopedOutcomeRefused
-		return nil, scopedError(descriptor, err)
+		return nil, err
 	}
-	statement, err := scoped.Render(planned, app.registry, app.provider, app.capabilities, scoped.RenderOptions{
-		MaxContributionRows:   app.analyticsLimits.MaxContributionRows,
-		MaxIntermediateGroups: app.analyticsLimits.MaxIntermediateGroups,
-		MaxResultRows:         app.analyticsLimits.MaxProgrammaticGroups,
-	})
-	if err != nil {
-		outcome = golem.ScopedOutcomeRefused
-		return nil, scopedError(descriptor, err)
-	}
+	statement := prepared.statement
 	statementSQL = statement.SQL()
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {

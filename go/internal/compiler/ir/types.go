@@ -4,9 +4,17 @@
 package ir
 
 const (
-	RawDeclFormatVersion  uint16 = 2
-	ModelFormatVersion    uint16 = 1
-	ContractFormatVersion uint16 = 5
+	RawDeclFormatVersion uint16 = 2
+	ModelFormatVersion   uint16 = 2
+	// OptimisticConcurrencyModelFormatVersionRequired freezes the first
+	// ModelIR format that owns the optimistic-concurrency field identity.
+	// Released v1 documents remain owned by CanonicalDecodeModelV1.
+	OptimisticConcurrencyModelFormatVersionRequired uint16 = 2
+	ContractFormatVersion                           uint16 = 6
+	// OptimisticConcurrencyContractFormatVersionRequired freezes the first
+	// ContractIR format that carries the optimistic-concurrency projection.
+	// Released v5 documents remain owned by CanonicalDecodeContractV5.
+	OptimisticConcurrencyContractFormatVersionRequired uint16 = 6
 	// CanonicalFormatVersion versions the deterministic ModelIR and ContractIR
 	// encodings used for fingerprints and generated runtime schema bundles.
 	CanonicalFormatVersion uint16 = 1
@@ -234,6 +242,10 @@ type ModelDeclIR struct {
 	Indexes           []IndexIR         `json:"indexes"`
 	Checks            []CheckIR         `json:"checks"`
 	EqualityIndexes   []EqualityIndexIR `json:"equalityIndexes"`
+	// OptimisticConcurrency is the sole provider-neutral owner of the stable
+	// field identity selected by the explicit model declaration. Downstream
+	// contracts project and validate this identity; they do not infer it.
+	OptimisticConcurrency *FieldID `json:"optimisticConcurrency,omitempty"`
 }
 
 type TableBindingIR struct {
@@ -619,6 +631,12 @@ type ModelContractIR struct {
 	GraphQLPlural string             `json:"graphqlPlural"`
 	Roots         GraphQLRootNamesIR `json:"roots"`
 	Fields        []FieldContractIR  `json:"fields"`
+	// OptimisticConcurrency is a validated projection of the ModelIR owner. It
+	// is never inferred from contract names or field exposure.
+	//
+	// ContractIR v6 first serialized this projection. The retained v5 decoder
+	// has a separate DTO without this member and rejects relabelled v6 bytes.
+	OptimisticConcurrency *FieldID `json:"optimisticConcurrency,omitempty"`
 	// HookOwnedCreateFields are stable scalar identities omitted only from
 	// GraphQL create-shaped inputs and populated by BeforeCreate.
 	HookOwnedCreateFields []FieldID            `json:"hookOwnedCreateFields"`

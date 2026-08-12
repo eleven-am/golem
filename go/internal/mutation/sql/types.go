@@ -163,15 +163,17 @@ func (verification IdentityVerification) Fields() []policyir.FieldID {
 }
 
 type Program struct {
-	provider    policyir.Provider
-	operation   mutationir.Operation
-	model       policyir.ModelID
-	stance      mutationir.Stance
-	transaction TransactionRequirement
-	statements  []Statement
-	identity    IdentityVerification
-	authored    []policyir.FieldID
-	fact        mutationir.FactRequirement
+	provider                    policyir.Provider
+	operation                   mutationir.Operation
+	model                       policyir.ModelID
+	stance                      mutationir.Stance
+	transaction                 TransactionRequirement
+	statements                  []Statement
+	identity                    IdentityVerification
+	authored                    []policyir.FieldID
+	fact                        mutationir.FactRequirement
+	concurrency                 *policyir.FieldID
+	requiresConcurrencyPrecheck bool
 }
 
 func (program Program) Provider() policyir.Provider                    { return program.provider }
@@ -183,6 +185,13 @@ func (program Program) AuthoredFields() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), program.authored...)
 }
 func (program Program) FactRequirement() mutationir.FactRequirement { return program.fact }
+func (program Program) OptimisticConcurrency() (policyir.FieldID, bool) {
+	if program.concurrency == nil {
+		return policyir.FieldID{}, false
+	}
+	return *program.concurrency, true
+}
+func (program Program) RequiresConcurrencyPrecheck() bool { return program.requiresConcurrencyPrecheck }
 func (program Program) IdentityVerification() IdentityVerification {
 	copy := program.identity
 	copy.fields = program.identity.Fields()

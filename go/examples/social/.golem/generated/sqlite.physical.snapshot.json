@@ -1,17 +1,17 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "physical_snapshot",
   "formatVersion": 1,
-  "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
-  "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
+  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
+  "contractFingerprint": "444f42fab517cb460becd86047c5d84361d22276b3c122fe187322b73805dbf5",
   "provider": "sqlite",
-  "physicalFingerprint": "b2095b8f8bd11a26bb21dd1013b7f9b4243ebabb9a8fbedf1883786c06c0c97c",
-  "systemFingerprint": "8dba78af7d9b43d11b4c8f53075f5fc9577ca9f07bd408d4a299ed233cc81e4e",
-  "generationDigest": "67e09dc14051301561faf0abeb051cae667ef0a297e1041961ab9de8acf86636",
+  "physicalFingerprint": "412a2690b3d39676e46baa6142ec7b3200553b554c5c304e208f5c9ec1a64e46",
+  "systemFingerprint": "c86531b2bbe1daa5a3e87d25832eb4a9c9cc8f44d7201c7eeda4a5443aa65c70",
+  "generationDigest": "8cc8ca4d9394e310f5483513f6f2ceb7b4d11d233b45f93dd8e28a82f689f5ce",
   "generatorVersion": "p1-v1",
-  "templateAbiVersion": "p8-go-abi-v6",
+  "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
-    "Version": 1,
-    "CanonicalVersion": 1,
+    "Version": 3,
+    "CanonicalVersion": 3,
     "Provider": {
       "Provider": "sqlite",
       "Driver": {
@@ -93,6 +93,7 @@
       {
         "ID": "364a3861c2d382ec0f02e83974f3b3c4",
         "Name": "comments",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "a1b8335883c74028b9d15f7bba2d0f30",
@@ -583,6 +584,7 @@
       {
         "ID": "b2a6fb289365ab32869f1b2862cc6b5b",
         "Name": "post_tags",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "44075e35d88b9d06bdc3c011f32f8c73",
@@ -826,6 +828,7 @@
       {
         "ID": "b11b75f11668a6f7019d05b1740d5118",
         "Name": "posts",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "e20069ceb3135c47447fc322989acceb",
@@ -2195,6 +2198,7 @@
       {
         "ID": "9f0a32ff74e8340344dbde26a58ba9b2",
         "Name": "sessions",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "230e5e19e0a2649a5fc5a304a7dbd158",
@@ -2584,6 +2588,7 @@
       {
         "ID": "80fe9aaf21426d7926ca36ad6e8a95df",
         "Name": "tags",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "b5d7a5b516a8ed94b498d2363a247cf1",
@@ -2755,6 +2760,7 @@
       {
         "ID": "d5239ec6065febe61dad1b8d0b66bf07",
         "Name": "users",
+        "OptimisticConcurrency": null,
         "Columns": [
           {
             "ID": "184fbe94f719aa72470b6ab6b0eecfa1",
@@ -3110,6 +3116,131 @@
             "RequiredCapabilities": null
           }
         ],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "c3e1210586ec19f9c55a7b5f15728164",
+        "Name": "versioned_notes",
+        "OptimisticConcurrency": "019c5d089edd46d97fb11b7b6893bcaf",
+        "Columns": [
+          {
+            "ID": "c9b5e3b565cc624d5c431c99bbf2bf0c",
+            "Name": "id",
+            "Ordinal": 0,
+            "Storage": {
+              "Kind": "sqlite.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "119b733f77568cab2854d2a51c72c4f1",
+            "Name": "body",
+            "Ordinal": 1,
+            "Storage": {
+              "Kind": "sqlite.text",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          },
+          {
+            "ID": "019c5d089edd46d97fb11b7b6893bcaf",
+            "Name": "version",
+            "Ordinal": 2,
+            "Storage": {
+              "Kind": "sqlite.integer",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Default": {
+              "Kind": "none",
+              "Literal": null,
+              "Expression": null
+            },
+            "Generated": null,
+            "Collation": null,
+            "RequiredCapabilities": null
+          }
+        ],
+        "PrimaryKey": {
+          "ID": "ad3a8c84961484b8fc4d1a2bc5c50162",
+          "Name": "pk_versioned_notes",
+          "Columns": [
+            "c9b5e3b565cc624d5c431c99bbf2bf0c"
+          ],
+          "RequiredCapabilities": null
+        },
+        "Uniques": [],
+        "ForeignKeys": [],
+        "Checks": [
+          {
+            "ID": "2f0ba666c6ade108feca102134945c4d",
+            "Name": "ck_versioned_notes_id_uuid_2f0ba666c6",
+            "Expression": {
+              "Kind": "operator",
+              "Type": {
+                "Kind": "sqlite.integer",
+                "Precision": 0,
+                "Scale": 0,
+                "Length": 0,
+                "Symbol": null
+              },
+              "Nullable": false,
+              "Symbol": {
+                "Identity": "sqlite.check.uuid-canonical",
+                "Kind": "operator",
+                "Version": 1,
+                "Provider": "sqlite"
+              },
+              "Column": null,
+              "Literal": null,
+              "Operands": [
+                {
+                  "Kind": "column",
+                  "Type": {
+                    "Kind": "sqlite.text",
+                    "Precision": 0,
+                    "Scale": 0,
+                    "Length": 0,
+                    "Symbol": null
+                  },
+                  "Nullable": false,
+                  "Symbol": null,
+                  "Column": "c9b5e3b565cc624d5c431c99bbf2bf0c",
+                  "Literal": null,
+                  "Operands": []
+                }
+              ]
+            },
+            "RequiredCapabilities": null
+          }
+        ],
+        "Indexes": [],
         "RequiredCapabilities": null
       }
     ],

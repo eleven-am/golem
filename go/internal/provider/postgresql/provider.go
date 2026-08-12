@@ -62,9 +62,15 @@ func (provider *Provider) Lower(ctx context.Context, model ir.ModelIR, options p
 
 // Script is immutable provider-generated DDL. Its statement list is not
 // exported, so application input cannot be smuggled into migration execution.
-type Script struct{ statements []string }
+type Script struct {
+	statements []string
+	raw        string
+}
 
 func (script Script) SQL() string {
+	if script.raw != "" {
+		return script.raw
+	}
 	if len(script.statements) == 0 {
 		return ""
 	}

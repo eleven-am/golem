@@ -113,6 +113,88 @@ func TestCompleteSocialFixture(t *testing.T) {
 	}
 }
 
+func TestOptimisticConcurrencyDeclarationPublishesExactModelIRFieldOwner(t *testing.T) {
+	result := Compile(context.Background(), Config{Dir: "testdata/concurrency", Pattern: ".", Root: "DefineSchema"})
+	if len(result.Diagnostics) != 0 || result.Compilation == nil {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
+	}
+	if len(result.Compilation.Model.Models) != 1 {
+		t.Fatalf("models = %#v", result.Compilation.Model.Models)
+	}
+	model := result.Compilation.Model.Models[0]
+	if model.OptimisticConcurrency == nil {
+		t.Fatalf("ModelIR omitted optimistic concurrency owner: %#v", model)
+	}
+	var token ir.FieldID
+	for _, field := range model.Fields {
+		if field.GoName == "Token" {
+			token = field.ID
+		}
+	}
+	if token == "" || *model.OptimisticConcurrency != token {
+		t.Fatalf("optimistic concurrency = %v, token field = %s", model.OptimisticConcurrency, token)
+	}
+	if len(result.Compilation.Contract.Models) != 1 || result.Compilation.Contract.Models[0].OptimisticConcurrency == nil || *result.Compilation.Contract.Models[0].OptimisticConcurrency != token {
+		t.Fatalf("ContractIR optimistic concurrency projection = %#v", result.Compilation.Contract.Models)
+	}
+}
+
+func TestValidateCompleteRejectsOptimisticConcurrencyContractProjectionDrift(t *testing.T) {
+	const (
+		modelID ir.ModelID = "91000000000000000000000000000000"
+		idField ir.FieldID = "92000000000000000000000000000000"
+		fieldID ir.FieldID = "93000000000000000000000000000000"
+		otherID ir.FieldID = "95000000000000000000000000000000"
+	)
+	fixture := func() ir.CompilationIR {
+		modelField := fieldID
+		contractField := fieldID
+		return ir.CompilationIR{
+			Model: ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{
+				ID: modelID, LogicalName: "Post",
+				Fields: []ir.FieldIR{
+					{ID: idField, GoName: "ID", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}}},
+					{ID: fieldID, GoName: "Version", Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeInt64}}},
+				},
+				PrimaryKey:            &ir.KeyIR{ID: "94000000000000000000000000000000", Fields: []ir.FieldID{idField}},
+				OptimisticConcurrency: &modelField,
+			}}},
+			Contract: ir.ContractIR{FormatVersion: ir.ContractFormatVersion, Models: []ir.ModelContractIR{{
+				ModelID: modelID, Fields: []ir.FieldContractIR{{FieldID: idField, Modes: []ir.FieldMode{ir.ModeVisible}}, {FieldID: fieldID, Modes: []ir.FieldMode{ir.ModeVisible}}},
+				OptimisticConcurrency: &contractField,
+			}}},
+		}
+	}
+	tests := []struct {
+		name   string
+		mutate func(*ir.CompilationIR)
+		code   string
+	}{
+		{name: "missing", code: "P1_CONCURRENCY_CONTRACT_MISSING", mutate: func(compilation *ir.CompilationIR) {
+			compilation.Contract.Models[0].OptimisticConcurrency = nil
+		}},
+		{name: "mismatch", code: "P1_CONCURRENCY_CONTRACT_MISMATCH", mutate: func(compilation *ir.CompilationIR) {
+			value := otherID
+			compilation.Contract.Models[0].OptimisticConcurrency = &value
+		}},
+		{name: "duplicate", code: "P1_CONCURRENCY_CONTRACT_DUPLICATE", mutate: func(compilation *ir.CompilationIR) {
+			compilation.Contract.Models = append(compilation.Contract.Models, compilation.Contract.Models[0])
+		}},
+		{name: "orphan", code: "P1_CONCURRENCY_CONTRACT_ORPHAN", mutate: func(compilation *ir.CompilationIR) {
+			compilation.Model.Models[0].OptimisticConcurrency = nil
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			compilation := fixture()
+			test.mutate(&compilation)
+			if diagnostics := validateComplete(compilation); !containsCode(diagnostics, test.code) {
+				t.Fatalf("missing %s in %#v", test.code, diagnostics)
+			}
+		})
+	}
+}
+
 func TestGraphQLContractNormalizationMaterializesNamesOperationsLimitsEnumsAndExtensions(t *testing.T) {
 	result := Compile(context.Background(), Config{Dir: "testdata/graphql_extensions", Pattern: ".", Root: "DefineSchema"})
 	if len(result.Diagnostics) != 0 || result.Compilation == nil {

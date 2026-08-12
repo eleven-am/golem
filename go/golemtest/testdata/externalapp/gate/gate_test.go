@@ -2,19 +2,46 @@ package gate
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"example.com/golempolicykit/policy"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/golemtest"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/eleven-am/golem/go/provider"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 	"github.com/eleven-am/golem/go/provider/sqlite"
 )
+
+type externalCoverageObserver struct{}
+
+var externalCoverageMu sync.Mutex
+
+func (externalCoverageObserver) ObserveGolem(_ context.Context, value observe.Observation) {
+	path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE")
+	if path == "" {
+		return
+	}
+	externalCoverageMu.Lock()
+	defer externalCoverageMu.Unlock()
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		panic("open observation coverage sink")
+	}
+	if _, err := fmt.Fprintln(file, value.Provider(), value.Operation()); err != nil {
+		_ = file.Close()
+		panic("write observation coverage sink")
+	}
+	if err := file.Close(); err != nil {
+		panic("close observation coverage sink")
+	}
+}
 
 const (
 	aliceText = "11111111-1111-4111-8111-111111111111"
@@ -237,6 +264,7 @@ func openApplication(t *testing.T, database *provider.Database) application {
 	app, err := policy.Open(context.Background(), policy.Config[policy.Actor]{
 		Database:       database,
 		EventTransport: transport,
+		Observer:       externalCoverageObserver{},
 		ResolvePrincipal: func(_ context.Context, value policy.Actor) (policy.Actor, error) {
 			return value, nil
 		},
