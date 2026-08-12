@@ -35,15 +35,15 @@ separate tenant invariant as possible roadmap items.
 
 | Order | Work | Contract | State |
 |---:|---|---|---|
-| 0 | Correct query-triggered semantic refresh scope | [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) | Locally complete; final live pgvector rerun in order 8 |
+| 0 | Correct query-triggered semantic refresh scope | [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) | Locally complete including the final live pgvector rerun |
 | 1 | Complete the public policy testing kit | [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md) | Locally complete including the checked-social all-provider race gate |
 | 2 | Complete SQLite WAL and safe backup | [`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md) | Locally complete; documentation recovery journey remains separate |
-| 3 | Complete PostgreSQL widening and reviewed backfills | [`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md) | Locally complete through reviewed physical-v3 and VersionedNote publication; final integrated evidence remains in order 8 |
+| 3 | Complete PostgreSQL widening and reviewed backfills | [`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md) | Locally complete through reviewed physical-v3, VersionedNote publication, and integrated verification |
 | 4 | Implement human-readable migration plans | [`HUMAN-READABLE-MIGRATION-PLANS.md`](./HUMAN-READABLE-MIGRATION-PLANS.md) | Complete through the checked-social journey and exact eight-document CLI compatibility inventory |
-| 5 | Implement first-class optimistic concurrency | [`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md) | Locally complete through coordinated manifest-v2/corpus publication and the external generated SQLite race gate; mandatory hosted PostgreSQL C/linguistic rerun remains in order 8 |
-| 6 | Implement safe query-plan visibility | [`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md) | Locally complete through public/generated compatibility publication, the external generated SQLite race gate, and mandatory live PostgreSQL C/linguistic capture; hosted external PostgreSQL rerun remains in order 8 |
+| 5 | Implement first-class optimistic concurrency | [`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md) | Locally complete through coordinated compatibility publication and external generated SQLite/PostgreSQL C/linguistic verification; hosted confirmation remains in order 8 |
+| 6 | Implement safe query-plan visibility | [`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md) | Locally complete through compatibility publication and external generated SQLite/PostgreSQL C/linguistic verification; hosted confirmation remains in order 8 |
 | 7 | Implement the PostgreSQL-only NATS transport | [`ROADMAP.md`](./ROADMAP.md) | Locally complete through public compatibility publication and live PostgreSQL C/linguistic outage, duplicate, and no-replay evidence |
-| 8 | Run integrated release-candidate verification | P8 evidence and compatibility contracts | Pending |
+| 8 | Run integrated release-candidate verification | P8 evidence and compatibility contracts | Local all-profile verification complete; hosted release-candidate workflow and isolated mutation campaign pending |
 
 The order is deliberate. Human-readable plans depend on a truthful migration
 model. NATS is last because it expands the operational topology and cost profile;
@@ -57,9 +57,16 @@ clean.
 
 Orders 0–7 are locally complete. The coordinated Order-7 compatibility
 publication is frozen at a reviewed pass-2 manifest and pass-3 fixed point with
-its separately compiled trusted digest. Order 8 is the next and final integrated
-release-candidate boundary, including the deferred live pgvector and hosted
-external generated-application reruns.
+its separately compiled trusted digest. Order 8 has crossed its local integrated
+release-candidate boundary: the mandatory all-profile run passed 4,836 tests in
+142 packages with zero failures and zero skips, including live pgvector, Core
+NATS, PostgreSQL C/linguistic, and the external generated-application journeys.
+Its structured event stream is bound by SHA-256
+`31c5b60954a449ad5d0882a3dca4fcf4e204191798ba1d0cd41ed78833f70957`.
+The remaining Order-8 boundary is the hosted `p8-release-candidate` workflow,
+including its isolated mutation campaign and retained candidate evidence. A
+protected signed `go/v*` tag and publication remain a separate explicit release
+action.
 
 Order 7 preserves PostgreSQL/outbox durability while adding the maintained Core
 NATS cross-process transport; SQLite remains process-local and refuses NATS
