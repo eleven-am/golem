@@ -924,7 +924,7 @@ func seedIdentity(t *testing.T, system social.System[social.Principal], userID, 
 		t.Fatal(err)
 	}
 	if _, err := system.Sessions.Create(ctx, social.Sessions.Create(
-		social.Sessions.ID.Create(sessionID), social.Sessions.UserID.Create(userID), social.Sessions.TokenHash.Create(tokenHash[:]), social.Sessions.ExpiresAt.Create(time.Now().UTC().Add(time.Hour)),
+		social.Sessions.ID.Create(sessionID), social.Sessions.UserID.Create(userID), social.Sessions.TokenHash.Create(tokenHash[:]), social.Sessions.ExpiresAt.Create(time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)),
 	)); err != nil {
 		t.Fatal(err)
 	}
