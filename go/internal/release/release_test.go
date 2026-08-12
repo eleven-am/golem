@@ -260,7 +260,7 @@ func TestP8SignedCandidateRejectsMissingTamperedAndNonregularLicenseEvidence(t *
 	}
 }
 
-func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedMajorTransition(t *testing.T) {
+func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMinorTransition(t *testing.T) {
 	const historicalManifestSHA256 = "59bd82177890ff594f053ab0cc06f4d1a0b15567d85e673ae6ca563602062c1c"
 	fixture, err := os.ReadFile(filepath.Join(moduleRoot(t), "internal", "compatibility", "testdata", "go-v0.0.2-compatibility-manifest-v1.json"))
 	if err != nil {
@@ -292,7 +292,7 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedMajorTransiti
 	writeCurrentCompatibilityAuthority(t, moduleDir, true)
 	runTestCommand(t, repository, "git", "add", "go")
 	runTestCommand(t, repository, "git", "commit", "-qm", "reviewed current candidate")
-	runTestCommand(t, repository, "git", "tag", "-s", "go/v1.0.0", "-m", "reviewed major candidate")
+	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.0", "-m", "reviewed pre-stable minor candidate")
 	allowedBytes, err := os.ReadFile(allowed)
 	if err != nil {
 		t.Fatal(err)
@@ -302,10 +302,10 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedMajorTransiti
 		t.Fatal(err)
 	}
 	candidate, err := inspectCandidate(context.Background(), InspectConfig{
-		ModuleDir: moduleDir, Tag: "go/v1.0.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes),
+		ModuleDir: moduleDir, Tag: "go/v0.1.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes),
 	}, compatibility.Digest(templateBytes))
 	if err != nil || validateCandidate(candidate) != nil {
-		for _, tag := range []string{"go/v0.0.1", "go/v0.0.2", "go/v1.0.0"} {
+		for _, tag := range []string{"go/v0.0.1", "go/v0.0.2", "go/v0.1.0"} {
 			command := exec.Command("git", "-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile="+allowed, "verify-tag", tag)
 			command.Dir = repository
 			output, verifyErr := command.CombinedOutput()
@@ -387,12 +387,12 @@ func TestP8MigrationGuideTransitionRejectsFirstReleaseAndEverySignedAuthorityTam
 		}},
 	} {
 		t.Run(mutation.name, func(t *testing.T) {
-			repository, moduleDir, allowed, _ := signedTransitionRepository(t, "v1.0.0", true, false, false, false)
-			runTestCommand(t, repository, "git", "tag", "-d", "go/v1.0.0")
+			repository, moduleDir, allowed, _ := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
+			runTestCommand(t, repository, "git", "tag", "-d", "go/v0.1.0")
 			mutation.run(t, repository, moduleDir)
 			runTestCommand(t, repository, "git", "add", "-A", "go")
 			runTestCommand(t, repository, "git", "commit", "--amend", "-qm", "tampered candidate")
-			runTestCommand(t, repository, "git", "tag", "-s", "go/v1.0.0", "-m", "tampered candidate")
+			runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.0", "-m", "tampered candidate")
 			allowedBytes, err := os.ReadFile(allowed)
 			if err != nil {
 				t.Fatal(err)
@@ -401,7 +401,7 @@ func TestP8MigrationGuideTransitionRejectsFirstReleaseAndEverySignedAuthorityTam
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := inspectCandidate(context.Background(), InspectConfig{ModuleDir: moduleDir, Tag: "go/v1.0.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}, compatibility.Digest(template)); errorCode(err) != CodeInvalidCandidate {
+			if _, err := inspectCandidate(context.Background(), InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}, compatibility.Digest(template)); errorCode(err) != CodeInvalidCandidate {
 				t.Fatalf("signed guide tamper accepted: %v repository=%s", err, repository)
 			}
 		})
@@ -443,18 +443,18 @@ func TestP8FirstReleaseStillRequiresDigestBoundCanonicalCurrentEvidence(t *testi
 	}
 }
 
-func TestP8SignedCompatibilityTransitionRequiresMajorGuideAndAncestry(t *testing.T) {
+func TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry(t *testing.T) {
 	for _, test := range []struct {
 		name, version                                   string
 		guide, divergent, tamperPrevious, tamperCurrent bool
 		wantPass                                        bool
 	}{
-		{name: "minor-breaking", version: "v0.1.0"},
-		{name: "major-without-guide", version: "v1.0.0"},
-		{name: "major-reviewed", version: "v1.0.0", guide: true, wantPass: true},
-		{name: "tampered-previous-corpus", version: "v1.0.0", guide: true, tamperPrevious: true},
-		{name: "tampered-current-corpus", version: "v1.0.0", guide: true, tamperCurrent: true},
-		{name: "divergent-signed-baseline", version: "v1.0.0", guide: true, divergent: true},
+		{name: "patch-breaking", version: "v0.0.3", guide: true},
+		{name: "minor-without-guide", version: "v0.1.0"},
+		{name: "minor-reviewed", version: "v0.1.0", guide: true, wantPass: true},
+		{name: "tampered-previous-corpus", version: "v0.1.0", guide: true, tamperPrevious: true},
+		{name: "tampered-current-corpus", version: "v0.1.0", guide: true, tamperCurrent: true},
+		{name: "divergent-signed-baseline", version: "v0.1.0", guide: true, divergent: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			repository, moduleDir, allowed, trusted := signedTransitionRepository(t, test.version, test.guide, test.divergent, test.tamperPrevious, test.tamperCurrent)
@@ -540,16 +540,17 @@ func TestP8CLIAndObservationClassificationsRouteThroughReleasePolicy(t *testing.
 	for _, test := range []struct {
 		name, version, beforeCLI, afterCLI  string
 		beforeObservation, afterObservation []byte
+		guide                               bool
 		wantPass                            bool
 	}{
-		{name: "cli-change-minor-rejected", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("b", 64), beforeObservation: observationBytes, afterObservation: observationBytes},
-		{name: "cli-change-major-reviewed", version: "v1.0.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("b", 64), beforeObservation: observationBytes, afterObservation: observationBytes, wantPass: true},
+		{name: "cli-change-patch-rejected", version: "v0.0.3", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("b", 64), beforeObservation: observationBytes, afterObservation: observationBytes, guide: true},
+		{name: "cli-change-minor-reviewed", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("b", 64), beforeObservation: observationBytes, afterObservation: observationBytes, guide: true, wantPass: true},
 		{name: "observation-additive-minor", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("a", 64), beforeObservation: observationBytes, afterObservation: additiveBytes, wantPass: true},
-		{name: "observation-breaking-minor-rejected", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("a", 64), beforeObservation: observationBytes, afterObservation: breakingBytes},
-		{name: "observation-breaking-major-reviewed", version: "v1.0.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("a", 64), beforeObservation: observationBytes, afterObservation: breakingBytes, wantPass: true},
+		{name: "observation-breaking-minor-without-guide", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("a", 64), beforeObservation: observationBytes, afterObservation: breakingBytes},
+		{name: "observation-breaking-minor-reviewed", version: "v0.1.0", beforeCLI: strings.Repeat("a", 64), afterCLI: strings.Repeat("a", 64), beforeObservation: observationBytes, afterObservation: breakingBytes, guide: true, wantPass: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			repository, moduleDir, allowed, trusted := signedLayerTransitionRepository(t, test.version, test.beforeCLI, test.afterCLI, test.beforeObservation, test.afterObservation)
+			repository, moduleDir, allowed, trusted := signedLayerTransitionRepository(t, test.version, test.guide, test.beforeCLI, test.afterCLI, test.beforeObservation, test.afterObservation)
 			allowedBytes, err := os.ReadFile(allowed)
 			if err != nil {
 				t.Fatal(err)
@@ -1552,8 +1553,14 @@ func signedMissingEvidenceRepository(t *testing.T) (string, string, string, stri
 	repository := filepath.Join(base, "repository")
 	moduleDir := filepath.Join(repository, "go")
 	allowed := configureTransitionSigning(t, base, repository)
-	writeTestFile(t, filepath.Join(moduleDir, "go.mod"), "module "+ModulePath+"\n\ngo 1.25.0\n")
-	template, err := compatibility.Encode(compatibility.DevelopmentManifest())
+	writeTestFile(t, filepath.Join(moduleDir, "go.mod"), string(mustReadTestFile(t, "go.mod")))
+	for _, relative := range []string{compatibility.DependencyLicenseAuthorityPath, compatibility.ProjectLicensePath, compatibility.ThirdPartyNoticesPath} {
+		writeTestFile(t, filepath.Join(moduleDir, filepath.FromSlash(relative)), string(mustReadTestFile(t, relative)))
+	}
+	value := compatibility.DevelopmentManifest()
+	value.MigrationGuide = nil
+	value.RequiredActions = []string{"migrate.database", "regenerate.generated"}
+	template, err := compatibility.Encode(value)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1564,7 +1571,7 @@ func signedMissingEvidenceRepository(t *testing.T) (string, string, string, stri
 	return repository, moduleDir, allowed, compatibility.Digest(template)
 }
 
-func signedLayerTransitionRepository(t *testing.T, currentVersion, beforeCLI, afterCLI string, beforeObservation, afterObservation []byte) (string, string, string, string) {
+func signedLayerTransitionRepository(t *testing.T, currentVersion string, guide bool, beforeCLI, afterCLI string, beforeObservation, afterObservation []byte) (string, string, string, string) {
 	t.Helper()
 	base := t.TempDir()
 	repository := filepath.Join(base, "repository")
@@ -1575,8 +1582,8 @@ func signedLayerTransitionRepository(t *testing.T, currentVersion, beforeCLI, af
 	runTestCommand(t, repository, "git", "commit", "-qm", "baseline")
 	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.0.2", "-m", "baseline")
 	previousCommit := strings.TrimSpace(runTestCommandOutput(t, repository, "git", "rev-parse", "go/v0.0.2^{commit}"))
-	writeTransitionEvidence(t, moduleDir, "struct{Value string}", currentVersion == "v1.0.0", false, afterCLI, afterObservation)
-	if currentVersion == "v1.0.0" {
+	writeTransitionEvidence(t, moduleDir, "struct{Value string}", guide, false, afterCLI, afterObservation)
+	if guide {
 		writeSyntheticTransitionGuide(t, repository, moduleDir, previousCommit, currentVersion)
 	}
 	runTestCommand(t, repository, "git", "add", "go")
@@ -1672,9 +1679,6 @@ func writeTransitionEvidence(t *testing.T, moduleDir, generatedSignature string,
 
 func writeSyntheticTransitionGuide(t *testing.T, repository, moduleDir, previousCommit, currentVersion string) {
 	t.Helper()
-	if !strings.HasPrefix(currentVersion, "v1.") {
-		t.Fatalf("synthetic migration guide target=%s want stable v1", currentVersion)
-	}
 	paths := []string{"internal/compatibility/testdata/p7", "internal/compatibility/testdata/p7-event"}
 	corpora := make([]compatibility.MigrationGuideCorpus, len(paths))
 	for index, path := range paths {
@@ -1683,14 +1687,14 @@ func writeSyntheticTransitionGuide(t *testing.T, repository, moduleDir, previous
 	guide := compatibility.MigrationGuide{
 		FormatVersion: 1,
 		From:          compatibility.MigrationGuideEndpoint{Tag: "go/v0.0.2", Commit: previousCommit},
-		ToMajor:       1,
+		ToVersion:     currentVersion,
 		RequiredActions: []string{
 			"migrate.database", "migration-guide.execute", "regenerate.generated",
 		},
 		Corpora: corpora,
 		Evidence: []compatibility.MigrationGuideEvidence{{
-			Identity: ModulePath + "/internal/release:TestP8SignedCompatibilityTransitionRequiresMajorGuideAndAncestry",
-			Command:  "go test ./internal/release -run '^TestP8SignedCompatibilityTransitionRequiresMajorGuideAndAncestry$' -count=1",
+			Identity: ModulePath + "/internal/release:TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry",
+			Command:  "go test ./internal/release -run '^TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry$' -count=1",
 		}},
 	}
 	encoded, err := compatibility.EncodeMigrationGuide(guide)
@@ -1707,7 +1711,7 @@ func writeSyntheticTransitionGuide(t *testing.T, repository, moduleDir, previous
 	if err != nil {
 		t.Fatal(err)
 	}
-	value.MigrationGuide = &compatibility.MigrationGuideAuthority{Path: guidePath, SHA256: compatibility.MigrationGuideDigest(encoded), FromTag: "go/v0.0.2", ToMajor: 1}
+	value.MigrationGuide = &compatibility.MigrationGuideAuthority{Path: guidePath, SHA256: compatibility.MigrationGuideDigest(encoded), FromTag: "go/v0.0.2", ToVersion: currentVersion}
 	value.RequiredActions = append([]string(nil), guide.RequiredActions...)
 	manifestBytes, err = compatibility.Encode(value)
 	if err != nil {

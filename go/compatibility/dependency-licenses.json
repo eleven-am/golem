@@ -8,7 +8,7 @@
   },
   "notices": {
     "path": "THIRD_PARTY_NOTICES",
-    "sha256": "9fcb303bac3add18c77bbae96712323cb9bf094505e2dc0092e3b58e4482cd41"
+    "sha256": "6e9159eea6b9127f742688cda56c4b606dd1798ba60f97fefadb250c6015e7be"
   },
   "dependencies": [
     {

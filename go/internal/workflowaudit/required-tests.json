@@ -15,7 +15,7 @@
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/c",
         "github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
         "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication",
-        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c",
@@ -49,7 +49,7 @@
       "required": [
         "github.com/eleven-am/golem/go/internal/p8oracle/load:TestP8GoroutineQueueAndEvaluationHardBounds",
         "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication",
-        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+        "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic",
         "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c",

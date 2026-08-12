@@ -26,7 +26,7 @@ func TestP8RequiredProfileInventoryDeletionAndRenameAreDetected(t *testing.T) {
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestP8PostgreSQLClaimDepthSnapshotLiveProfiles/linguistic",
 		"github.com/eleven-am/golem/go/internal/provider/postgresql:TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution/linguistic",
 		"github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication",
-		"github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
+		"github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide",
 	} {
 		for _, replacement := range []string{"", identity + "Renamed"} {
 			mutant := strings.ReplaceAll(original, identity, replacement)

@@ -4,7 +4,7 @@
     "tag": "go/v0.0.2",
     "commit": "efadc57d1da9b03e84c8cd746323fee3cc2f72c2"
   },
-  "toMajor": 1,
+  "toVersion": "v0.1.0",
   "requiredActions": [
     "migrate.database",
     "migration-guide.execute",
@@ -22,8 +22,8 @@
   ],
   "evidence": [
     {
-      "identity": "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
-      "command": "go test ./cmd/golem -run '^TestP8ExecutableGoV002ToV1MigrationGuide$' -count=1"
+      "identity": "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide",
+      "command": "go test ./cmd/golem -run '^TestP8ExecutableGoV002ToV010MigrationGuide$' -count=1"
     }
   ]
 }

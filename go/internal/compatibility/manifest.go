@@ -83,10 +83,10 @@ type Digests struct {
 }
 
 type MigrationGuideAuthority struct {
-	Path    string `json:"path"`
-	SHA256  string `json:"sha256"`
-	FromTag string `json:"fromTag"`
-	ToMajor uint16 `json:"toMajor"`
+	Path      string `json:"path"`
+	SHA256    string `json:"sha256"`
+	FromTag   string `json:"fromTag"`
+	ToVersion string `json:"toVersion"`
 }
 
 type Versions struct {
@@ -382,6 +382,7 @@ func CompareRelease(previous, current Manifest, layers LayerAssessments) (Transi
 		required = maximumLevel(required, layerLevel(layer.change))
 	}
 
+	breaking := required == ReleaseMajor
 	generatedChanged := previous.Versions.Generator != current.Versions.Generator || previous.Versions.GeneratedTemplateABI != current.Versions.GeneratedTemplateABI ||
 		previous.Versions.SchemaBundle != current.Versions.SchemaBundle || previous.Versions.GraphQL != current.Versions.GraphQL ||
 		previous.Versions.ModelIR != current.Versions.ModelIR || previous.Versions.ContractIR != current.Versions.ContractIR || previous.Versions.CanonicalIR != current.Versions.CanonicalIR
@@ -392,6 +393,7 @@ func CompareRelease(previous, current Manifest, layers LayerAssessments) (Transi
 	required = maximumLevel(required, formatLevel)
 	providerLevel := compareProviders(previous, current)
 	required = maximumLevel(required, providerLevel)
+	breaking = breaking || formatLevel == ReleaseMajor || providerLevel == ReleaseMajor
 	if !reflect.DeepEqual(previous.RequiredActions, current.RequiredActions) || !reflect.DeepEqual(previous.KnownBoundaries, current.KnownBoundaries) {
 		required = maximumLevel(required, ReleaseMinor)
 	}
@@ -408,7 +410,10 @@ func CompareRelease(previous, current Manifest, layers LayerAssessments) (Transi
 	if providerLevel > ReleasePatch && !hasIdentity(current.RequiredActions, "upgrade.operator") {
 		return Transition{Actual: actual, Required: required}, fail(ReasonIncompatible)
 	}
-	if required == ReleaseMajor && !hasIdentity(current.RequiredActions, "migration-guide.execute") {
+	if required == ReleaseMajor && preStableMinorTransition(previous.Release, current.Release) {
+		required = ReleaseMinor
+	}
+	if breaking && !hasIdentity(current.RequiredActions, "migration-guide.execute") {
 		return Transition{Actual: actual, Required: required}, fail(ReasonIncompatible)
 	}
 	if actual < required {
@@ -453,6 +458,11 @@ func releaseTransition(previous, current Release) (ReleaseLevel, bool) {
 		return ReleaseMinor, true
 	}
 	return ReleasePatch, true
+}
+
+func preStableMinorTransition(previous, current Release) bool {
+	return semver.Major(previous.Version) == "v0" && semver.Major(current.Version) == "v0" &&
+		semver.MajorMinor(previous.Version) != semver.MajorMinor(current.Version)
 }
 
 func compareFormatHistory(previous, current Manifest) ReleaseLevel {

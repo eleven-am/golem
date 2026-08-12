@@ -12,7 +12,7 @@ import (
 // TrustedManifestSHA256 is compiled separately from compatibility/manifest.json.
 // Release tooling and tests must use this trust root rather than a digest read
 // from, or recomputed and accepted alongside, the artifact itself.
-const TrustedManifestSHA256 = "9e4351b69d0b372fce2bfe0cf5236a05b2acf2cceb37278178cc6b6a9ce434f9"
+const TrustedManifestSHA256 = "02572dc6ca1aedc862acc26523d5c888c592f9efb117f0e6a6f63a9ed4a35561"
 
 func DevelopmentManifest() Manifest {
 	return Manifest{
@@ -54,7 +54,7 @@ func DevelopmentManifest() Manifest {
 			MigrationManifest: []uint16{1}, MigrationCanonical: []uint16{1}, MigrationLedger: []uint16{1},
 			FactCodecs: []string{"golem.fact.v1", "golem.fact.v2"}, EventCodecs: []string{"golem.event.v1"}, PrincipalSnapshotCodecs: []string{},
 		},
-		MigrationGuide:  &MigrationGuideAuthority{Path: MigrationGuidePath, SHA256: MigrationGuideSHA256, FromTag: "go/v0.0.2", ToMajor: 1},
+		MigrationGuide:  &MigrationGuideAuthority{Path: MigrationGuidePath, SHA256: MigrationGuideSHA256, FromTag: "go/v0.0.2", ToVersion: "v0.1.0"},
 		RequiredActions: []string{"migrate.database", "migration-guide.execute", "regenerate.generated"},
 		KnownBoundaries: []string{"cdc.requires-adapter", "mysql.unsupported"},
 	}

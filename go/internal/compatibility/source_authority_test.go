@@ -58,7 +58,7 @@ func TestOptimisticConcurrencyCompatibilitySourceAuthority(t *testing.T) {
 	if !reflect.DeepEqual(manifest.RequiredActions, []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}) {
 		t.Fatalf("compatibility actions=%v; want exact migration/guide/regeneration actions", manifest.RequiredActions)
 	}
-	wantGuide := &MigrationGuideAuthority{Path: "compatibility/migration-guide-go-v0.0.2-to-v1.json", SHA256: "0236f261f03c5980500cc2f858b31f6eea8a83a37d613ad8c935935e29df7d35", FromTag: "go/v0.0.2", ToMajor: 1}
+	wantGuide := &MigrationGuideAuthority{Path: "compatibility/migration-guide-go-v0.0.2-to-v0.1.0.json", SHA256: "6fff0894d4ac402e0b2eb5bbbd722d560e1e775b661f0305467aed066d4ec142", FromTag: "go/v0.0.2", ToVersion: "v0.1.0"}
 	if !reflect.DeepEqual(manifest.MigrationGuide, wantGuide) {
 		t.Fatalf("compatibility migration guide authority=%#v; want %#v", manifest.MigrationGuide, wantGuide)
 	}

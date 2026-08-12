@@ -13,8 +13,8 @@ import (
 func TestMigrationGuideAuthorityProvenancePinsExactTaggedCorporaAndParser(t *testing.T) {
 	const (
 		wantCommit      = "efadc57d1da9b03e84c8cd746323fee3cc2f72c2"
-		wantParserSHA   = "fbcd43a6ec3f139b7c76b3a825929a6e4e84f5b2eaf85c5f1207b5c9d0076a5a"
-		wantParserLines = 176
+		wantParserSHA   = "cfbd0d1b8e22084a71e02d76775346d6e828bdb1076185eaa6d8c32046ca658c"
+		wantParserLines = 168
 	)
 	_, source, _, _ := runtime.Caller(0)
 	directory := filepath.Dir(source)

@@ -84,13 +84,16 @@ profile identities with immutable image-digest authority and fail-closed cleanup
 The public API corpus is additive and fixed at
 `8d0ba09168a461cb54190a8c94e217fc85b3134f988ae552bafaa291e42737d8`;
 the canonical checked manifest and separate trust root are fixed at
-`9e4351b69d0b372fce2bfe0cf5236a05b2acf2cceb37278178cc6b6a9ce434f9`.
+`02572dc6ca1aedc862acc26523d5c888c592f9efb117f0e6a6f63a9ed4a35561`.
 This is local Order-7 completion, not the final Order-8 release-candidate result.
 
 The release-upgrade boundary is executable rather than documentary only. Frozen
 v1-to-v3 reviewed migration composition and the immutable P7
 ModelIR-v1/ContractIR-v4/Physical-v1 bootstrap support the canonical
-`go/v0.0.2`-to-v1 guide across SQLite and PostgreSQL C/linguistic profiles. The
+`go/v0.0.2`-to-`go/v0.1.0` guide across SQLite and PostgreSQL C/linguistic
+profiles. The pre-1.0 release contract permits breaking changes only at a minor
+boundary, still requires the exact migration guide, and continues to reject a
+breaking patch. The
 release tooling verifies signed prior/current tags, ancestry, exact corpus trees,
 and guide endpoints/actions; build inventory, checksums, and provenance bind the
 detached guide bytes, while publish rejects missing, tampered, or symlinked guide

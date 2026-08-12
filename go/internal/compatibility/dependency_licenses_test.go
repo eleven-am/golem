@@ -17,17 +17,17 @@ import (
 func TestDependencyLicenseAuthorityIsCanonicalDigestBoundAndDetached(t *testing.T) {
 	root := dependencyLicenseModuleRoot(t)
 	encoded := dependencyLicenseRead(t, root, DependencyLicenseAuthorityPath)
-	if got := DependencyLicenseAuthorityDigest(encoded); got != "f5c8341f5d50f78d9f3b8dc2ae15adb9d9866a1f1cd3495ef83ef354525b0e65" {
+	if got := DependencyLicenseAuthorityDigest(encoded); got != "79194428844d892bfbb0535a946b88b61fbfaf51c88226d20e502a31a56e9e91" {
 		t.Fatalf("dependency license authority digest=%s", got)
 	}
-	if DependencyLicenseAuthoritySHA256 != "f5c8341f5d50f78d9f3b8dc2ae15adb9d9866a1f1cd3495ef83ef354525b0e65" {
+	if DependencyLicenseAuthoritySHA256 != "79194428844d892bfbb0535a946b88b61fbfaf51c88226d20e502a31a56e9e91" {
 		t.Fatalf("dependency license source digest=%s", DependencyLicenseAuthoritySHA256)
 	}
 	value, err := ParseDependencyLicenseAuthority(encoded, DependencyLicenseAuthoritySHA256)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "9fcb303bac3add18c77bbae96712323cb9bf094505e2dc0092e3b58e4482cd41" {
+	if value.Project.Path != "LICENSE" || value.Project.LicenseDeclared != "LicenseRef-Golem-GPLv3-Unspecified" || value.Project.SHA256 != "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986" || value.Notices.Path != "THIRD_PARTY_NOTICES" || value.Notices.SHA256 != "6e9159eea6b9127f742688cda56c4b606dd1798ba60f97fefadb250c6015e7be" {
 		t.Fatalf("project/notices authority=%+v %+v", value.Project, value.Notices)
 	}
 	want := []DependencyLicense{

@@ -377,7 +377,7 @@ type RequiredTestInventory struct {
 }
 
 const externalOptimisticConcurrencyWorkflowIdentity = "github.com/eleven-am/golem/go/golemtest:TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication"
-const executableMigrationGuideWorkflowIdentity = "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide"
+const executableMigrationGuideWorkflowIdentity = "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide"
 const externalNATSOutageCWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-c"
 const externalNATSOutageLinguisticWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSOutageReconnectAndReadiness/postgresql-linguistic"
 const externalNATSDuplicateCWorkflowIdentity = "github.com/eleven-am/golem/go/internal/p8oracle/natslive:TestOrder7ExternalGeneratedNATSDuplicateIdentityAndCoreNoReplay/postgresql-c"

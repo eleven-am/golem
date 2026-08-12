@@ -6,22 +6,21 @@ import (
 	"io"
 	"path"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"golang.org/x/mod/semver"
 )
 
 const (
-	MigrationGuidePath                 = "compatibility/migration-guide-go-v0.0.2-to-v1.json"
-	MigrationGuideSHA256               = "0236f261f03c5980500cc2f858b31f6eea8a83a37d613ad8c935935e29df7d35"
+	MigrationGuidePath                 = "compatibility/migration-guide-go-v0.0.2-to-v0.1.0.json"
+	MigrationGuideSHA256               = "6fff0894d4ac402e0b2eb5bbbd722d560e1e775b661f0305467aed066d4ec142"
 	migrationGuideFormatVersion uint16 = 1
 )
 
 type MigrationGuide struct {
 	FormatVersion   uint16                   `json:"formatVersion"`
 	From            MigrationGuideEndpoint   `json:"from"`
-	ToMajor         uint16                   `json:"toMajor"`
+	ToVersion       string                   `json:"toVersion"`
 	RequiredActions []string                 `json:"requiredActions"`
 	Corpora         []MigrationGuideCorpus   `json:"corpora"`
 	Evidence        []MigrationGuideEvidence `json:"evidence"`
@@ -116,18 +115,19 @@ func EncodeMigrationGuide(value MigrationGuide) ([]byte, error) {
 func MigrationGuideDigest(encoded []byte) string { return digest(encoded) }
 
 func ValidateMigrationGuideTransition(guide MigrationGuide, authority MigrationGuideAuthority, previousTag, previousCommit, currentTag, currentVersion string, actions []string) error {
-	major := semver.Major(currentVersion)
 	if !validMigrationGuide(guide) || !validMigrationGuideAuthority(authority) ||
 		authority.FromTag != previousTag || guide.From.Tag != previousTag || guide.From.Commit != previousCommit ||
-		!semver.IsValid(currentVersion) || semver.Prerelease(currentVersion) != "" || currentTag != "go/"+currentVersion || major == "" || semver.Compare(strings.TrimPrefix(previousTag, "go/"), currentVersion) >= 0 || majorNumber(major) != authority.ToMajor || authority.ToMajor != guide.ToMajor || !equalStrings(actions, guide.RequiredActions) {
+		!semver.IsValid(currentVersion) || semver.Prerelease(currentVersion) != "" || currentTag != "go/"+currentVersion || semver.Compare(strings.TrimPrefix(previousTag, "go/"), currentVersion) >= 0 || authority.ToVersion != currentVersion || guide.ToVersion != currentVersion || !equalStrings(actions, guide.RequiredActions) {
 		return fail(ReasonIncompatible)
 	}
 	return nil
 }
 
 func validMigrationGuideAuthority(value MigrationGuideAuthority) bool {
-	version := strings.TrimPrefix(value.FromTag, "go/")
-	return strings.HasPrefix(value.Path, "compatibility/") && safeGuidePath(value.Path) && validDigest(value.SHA256) && semver.IsValid(version) && semver.Prerelease(version) == "" && value.FromTag == "go/"+version && majorNumber(semver.Major(version)) < value.ToMajor
+	fromVersion := strings.TrimPrefix(value.FromTag, "go/")
+	return strings.HasPrefix(value.Path, "compatibility/") && safeGuidePath(value.Path) && validDigest(value.SHA256) &&
+		semver.IsValid(fromVersion) && semver.Prerelease(fromVersion) == "" && value.FromTag == "go/"+fromVersion &&
+		semver.IsValid(value.ToVersion) && semver.Prerelease(value.ToVersion) == "" && semver.Compare(fromVersion, value.ToVersion) < 0
 }
 
 func safeGuidePath(value string) bool {
@@ -136,8 +136,8 @@ func safeGuidePath(value string) bool {
 
 func validMigrationGuide(value MigrationGuide) bool {
 	version := strings.TrimPrefix(value.From.Tag, "go/")
-	if value.FormatVersion != 1 || !semver.IsValid(version) || semver.Prerelease(version) != "" || value.From.Tag != "go/"+version || !commitPattern.MatchString(value.From.Commit) || value.ToMajor == 0 ||
-		majorNumber(semver.Major(version)) >= value.ToMajor ||
+	if value.FormatVersion != 1 || !semver.IsValid(version) || semver.Prerelease(version) != "" || value.From.Tag != "go/"+version || !commitPattern.MatchString(value.From.Commit) ||
+		!semver.IsValid(value.ToVersion) || semver.Prerelease(value.ToVersion) != "" || semver.Compare(version, value.ToVersion) >= 0 ||
 		!canonicalIdentities(value.RequiredActions, false) || !hasIdentity(value.RequiredActions, "migration-guide.execute") || len(value.Corpora) == 0 || len(value.Evidence) == 0 {
 		return false
 	}
@@ -158,14 +158,6 @@ func validMigrationGuide(value MigrationGuide) bool {
 		}
 	}
 	return true
-}
-
-func majorNumber(major string) uint16 {
-	value, err := strconv.ParseUint(strings.TrimPrefix(major, "v"), 10, 16)
-	if err != nil {
-		return 0
-	}
-	return uint16(value)
 }
 
 func cloneMigrationGuide(value MigrationGuide) MigrationGuide {

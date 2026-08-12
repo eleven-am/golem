@@ -11,7 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compatibility"
 )
 
-func TestP8ExecutableGoV002ToV1MigrationGuide(t *testing.T) {
+func TestP8ExecutableGoV002ToV010MigrationGuide(t *testing.T) {
 	root := commandModuleRoot(t)
 	guidePath := filepath.Join(root, filepath.FromSlash(compatibility.MigrationGuidePath))
 	encoded, err := os.ReadFile(guidePath)
@@ -23,8 +23,8 @@ func TestP8ExecutableGoV002ToV1MigrationGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := compatibility.ValidateMigrationGuideTransition(guide, compatibility.MigrationGuideAuthority{
-		Path: compatibility.MigrationGuidePath, SHA256: compatibility.MigrationGuideSHA256, FromTag: "go/v0.0.2", ToMajor: 1,
-	}, "go/v0.0.2", "efadc57d1da9b03e84c8cd746323fee3cc2f72c2", "go/v1.0.0", "v1.0.0", []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}); err != nil {
+		Path: compatibility.MigrationGuidePath, SHA256: compatibility.MigrationGuideSHA256, FromTag: "go/v0.0.2", ToVersion: "v0.1.0",
+	}, "go/v0.0.2", "efadc57d1da9b03e84c8cd746323fee3cc2f72c2", "go/v0.1.0", "v0.1.0", []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -37,8 +37,8 @@ func TestP8ExecutableGoV002ToV1MigrationGuide(t *testing.T) {
 		p8GitRun(t, root, "diff", "--quiet", guide.From.Tag, "--", "go/"+corpus.Path)
 	}
 	if !reflect.DeepEqual(guide.Evidence, []compatibility.MigrationGuideEvidence{{
-		Identity: "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV1MigrationGuide",
-		Command:  "go test ./cmd/golem -run '^TestP8ExecutableGoV002ToV1MigrationGuide$' -count=1",
+		Identity: "github.com/eleven-am/golem/go/cmd/golem:TestP8ExecutableGoV002ToV010MigrationGuide",
+		Command:  "go test ./cmd/golem -run '^TestP8ExecutableGoV002ToV010MigrationGuide$' -count=1",
 	}}) {
 		t.Fatalf("guide evidence=%#v", guide.Evidence)
 	}
