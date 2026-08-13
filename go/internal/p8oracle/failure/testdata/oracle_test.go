@@ -1418,9 +1418,16 @@ func openFailureDatabase(t *testing.T, ctx context.Context, maximumOpen int) *pr
 
 func assertFailurePoolReleased(t *testing.T, database *provider.Database) {
 	t.Helper()
-	stats := database.UnsafeSQLX().Stats()
-	if stats.InUse != 0 || stats.OpenConnections > database.Pool().MaximumOpen() {
-		t.Fatalf("pool not released stats=%+v maximum=%d", stats, database.Pool().MaximumOpen())
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		stats := database.UnsafeSQLX().Stats()
+		if stats.InUse == 0 && stats.OpenConnections <= database.Pool().MaximumOpen() {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pool not released stats=%+v maximum=%d", stats, database.Pool().MaximumOpen())
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

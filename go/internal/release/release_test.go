@@ -292,7 +292,10 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMino
 	writeCurrentCompatibilityAuthority(t, moduleDir, true)
 	runTestCommand(t, repository, "git", "add", "go")
 	runTestCommand(t, repository, "git", "commit", "-qm", "reviewed current candidate")
-	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.0", "-m", "reviewed pre-stable minor candidate")
+	// A real go/v0.1.0 checkout already carries this tag into the disposable
+	// clone. Replace it only inside the fixture so the transition remains
+	// testable after publication.
+	runTestCommand(t, repository, "git", "tag", "-f", "-s", "go/v0.1.0", "-m", "reviewed pre-stable minor candidate")
 	allowedBytes, err := os.ReadFile(allowed)
 	if err != nil {
 		t.Fatal(err)
