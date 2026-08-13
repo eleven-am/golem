@@ -64,6 +64,22 @@ type CapabilityReporter interface {
 	TransportCapabilities() TransportCapabilities
 }
 
+// AvailabilityReporter is an optional operational SPI for transports whose
+// external dependency can become unavailable. It reports one closed readiness
+// bit only: implementations must not expose broker addresses, credentials,
+// errors, backlog, or connection state through this boundary.
+type AvailabilityReporter interface {
+	TransportAvailable() bool
+}
+
+// PayloadLimitReporter is an optional closed capability SPI for transports
+// backed by an external protocol. The value is the largest encoded event, in
+// bytes, that the transport has verified it can accept. It must not be derived
+// from payload contents or expose broker configuration through this boundary.
+type PayloadLimitReporter interface {
+	MaxEncodedEventBytes() int
+}
+
 // RuntimeBinding is the schema-bound decoding capability supplied by App.Open
 // to an installed transport that implements RuntimeBindableTransport. It lets
 // a broker adapter turn owned golem.event.v1 bytes into a sealed Notice without
@@ -94,6 +110,34 @@ func CapabilitiesOf(transport EventTransport) TransportCapabilities {
 	return TransportCapabilities{}
 }
 
+// AvailabilityOf returns the closed readiness state of a configured transport.
+// Transports without an external availability dependency remain available by
+// default; a nil transport is never available.
+func AvailabilityOf(transport EventTransport) bool {
+	if transport == nil {
+		return false
+	}
+	if reporter, ok := transport.(AvailabilityReporter); ok {
+		return reporter.TransportAvailable()
+	}
+	return true
+}
+
+// PayloadLimitOf returns a transport's closed positive encoded-payload limit.
+// The boolean is false when the transport does not report a limit or reports an
+// invalid non-positive value.
+func PayloadLimitOf(transport EventTransport) (int, bool) {
+	reporter, ok := transport.(PayloadLimitReporter)
+	if !ok {
+		return 0, false
+	}
+	limit := reporter.MaxEncodedEventBytes()
+	if limit <= 0 {
+		return 0, false
+	}
+	return limit, true
+}
+
 // Capabilities is an immutable operational snapshot. Slice accessors return
 // owned copies and the value contains no connection, payload, or principal
 // data.
@@ -102,6 +146,7 @@ type Capabilities struct {
 	factCodecs             []string
 	eventCodecs            []string
 	transport              TransportCapabilities
+	transportAvailable     bool
 	publisherEnabled       bool
 	publisherRunning       bool
 	subscriptionModels     []golem.ModelID
@@ -113,9 +158,16 @@ type Capabilities struct {
 // Values supplied here are diagnostic identities only; they confer no runtime
 // capability.
 func RuntimeCapabilities(provider golem.Provider, factCodecs, eventCodecs []string, transport TransportCapabilities, publisherEnabled, publisherRunning bool, subscriptionModels []golem.ModelID, cdcAdapters []string, externalWritesObserved bool) Capabilities {
+	return RuntimeCapabilitiesWithTransportAvailability(provider, factCodecs, eventCodecs, transport, transport.Identity() != "", publisherEnabled, publisherRunning, subscriptionModels, cdcAdapters, externalWritesObserved)
+}
+
+// RuntimeCapabilitiesWithTransportAvailability is the trusted runtime
+// constructor for a dynamic transport-readiness snapshot. The availability bit
+// is diagnostic only and grants no transport or decoding capability.
+func RuntimeCapabilitiesWithTransportAvailability(provider golem.Provider, factCodecs, eventCodecs []string, transport TransportCapabilities, transportAvailable, publisherEnabled, publisherRunning bool, subscriptionModels []golem.ModelID, cdcAdapters []string, externalWritesObserved bool) Capabilities {
 	return Capabilities{
 		provider: provider, factCodecs: append([]string(nil), factCodecs...),
-		eventCodecs: append([]string(nil), eventCodecs...), transport: transport,
+		eventCodecs: append([]string(nil), eventCodecs...), transport: transport, transportAvailable: transportAvailable,
 		publisherEnabled: publisherEnabled, publisherRunning: publisherRunning,
 		subscriptionModels:     append([]golem.ModelID(nil), subscriptionModels...),
 		cdcAdapters:            append([]string(nil), cdcAdapters...),
@@ -131,6 +183,7 @@ func (capabilities Capabilities) EventCodecVersions() []string {
 	return append([]string(nil), capabilities.eventCodecs...)
 }
 func (capabilities Capabilities) Transport() TransportCapabilities { return capabilities.transport }
+func (capabilities Capabilities) TransportAvailable() bool         { return capabilities.transportAvailable }
 func (capabilities Capabilities) PublisherEnabled() bool           { return capabilities.publisherEnabled }
 func (capabilities Capabilities) PublisherRunning() bool           { return capabilities.publisherRunning }
 func (capabilities Capabilities) SubscriptionModelIDs() []golem.ModelID {

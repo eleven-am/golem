@@ -2,7 +2,9 @@ package sqlite
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,8 +14,187 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
+
+func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
+	readSnapshot := func(name string) physical.PhysicalSchema {
+		t.Helper()
+		raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial." + name + ".snapshot.json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema physical.PhysicalSchema
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		return schema
+	}
+	before := readSnapshot("before")
+	after := readSnapshot("after")
+	after.Extensions = append(after.Extensions, physical.Extension{
+		ID:       ir.ExtensionID(id(996)),
+		Provider: ir.SQLite,
+		Kind:     "historical.metadata",
+		Version:  1,
+		Owner:    physical.ObjectRef{Kind: ir.ObjectModel, ModelID: after.Tables[0].ID},
+	})
+	before, err := physical.NormalizeHistoricalV1(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after, err = physical.NormalizeHistoricalV1(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := migration.DiffHistorical(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeFingerprint, err := physical.HistoricalPhysicalFingerprint(before)
+	if err != nil {
+		t.Fatal(err)
+	}
+	afterFingerprint, err := physical.HistoricalPhysicalFingerprint(after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := migration.ManifestEntry{
+		ID: "0001_initial", Operations: plan.Operations, Phases: plan.Phases,
+		BeforePhysical: migration.Digest(beforeFingerprint.String()), AfterPhysical: migration.Digest(afterFingerprint.String()),
+		BeforeSnapshot: before, AfterSnapshot: after,
+	}
+	script, err := New().RenderMigration(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if script.SQL() != string(want) {
+		t.Fatal("historical v1 extension metadata changed retained SQLite DDL")
+	}
+	if strings.Contains(script.SQL(), "vec0") || strings.Contains(script.SQL(), "_vec") {
+		t.Fatal("historical v1 renderer invented current semantic-extension DDL")
+	}
+
+	for name, mutate := range map[string]func(*migration.ManifestEntry){
+		"before fingerprint": func(value *migration.ManifestEntry) { value.BeforePhysical = migration.Digest(strings.Repeat("0", 64)) },
+		"after fingerprint":  func(value *migration.ManifestEntry) { value.AfterPhysical = migration.Digest(strings.Repeat("f", 64)) },
+		"provider": func(value *migration.ManifestEntry) {
+			value.AfterSnapshot.Provider.Provider = ir.PostgreSQL
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			forged := entry
+			mutate(&forged)
+			if _, err := New().RenderMigration(forged); err == nil {
+				t.Fatal("forged sealed typed fact was accepted")
+			}
+		})
+	}
+}
+
+func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{string(fixtureItemNameField)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{
+		ID: "70000000000000000000000000000001", Provider: ir.SQLite, Version: semanticcontract.Version,
+		Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := normalizeMigrationFixture(t, before)
+	after.Extensions = []physical.Extension{extension}
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "semantic-index.db")
+	manifest, files := migrationFixtureManifest(t, before, after, "001_semantic_index.sql", nil)
+	if len(manifest.Entries[0].Operations) != 2 || manifest.Entries[0].Operations[0].Kind != migration.CreateProviderExtension {
+		t.Fatalf("semantic operations = %#v", manifest.Entries[0].Operations)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var version string
+	if err := database.GetContext(ctx, &version, "SELECT vec_version()"); err != nil || version == "" {
+		t.Fatalf("sqlite-vec version=%q error=%v", version, err)
+	}
+}
+
+func TestSQLiteIncrementalSemanticIndexRewritePreservesOwnerRowsAndClearsDerivedState(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	base := incrementalFixtureSchema(t, false)
+	extensionID := ir.ExtensionID("70000000000000000000000000000001")
+	semanticExtension := func(dimensions uint16) physical.Extension {
+		t.Helper()
+		payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: dimensions, Fields: []string{string(fixtureItemNameField)}, Metric: "cosine"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: semanticcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return extension
+	}
+	before := base
+	before.Extensions = []physical.Extension{semanticExtension(3)}
+	before = normalizeMigrationFixture(t, before)
+	after := base
+	after.Extensions = []physical.Extension{semanticExtension(4)}
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "semantic-rewrite.db")
+	if _, err := database.ExecContext(ctx, `INSERT INTO "items" ("id","name") VALUES (1,'preserved')`); err != nil {
+		t.Fatal(err)
+	}
+	baseName := "_golem_semantic_" + string(extensionID)
+	encoded, err := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_vec" (record_key,embedding) VALUES ('old',?)`, encoded); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_state" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at) VALUES ('old',X'01','old','ready',1,NULL,1)`); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, files := migrationFixtureManifest(t, before, after, "002_semantic_rewrite.sql", nil)
+	operations := manifest.Entries[0].Operations
+	if len(operations) != 3 || operations[0].Kind != migration.DropProviderExtension || operations[1].Kind != migration.CreateProviderExtension || operations[0].Risk != migration.RiskRewrite || operations[1].Risk != migration.RiskRewrite {
+		t.Fatalf("semantic rewrite operations=%#v", operations)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var name string
+	if err := database.GetContext(ctx, &name, `SELECT "name" FROM "items" WHERE "id"=1`); err != nil || name != "preserved" {
+		t.Fatalf("owner row name=%q error=%v", name, err)
+	}
+	for _, suffix := range []string{"_state", "_vec"} {
+		var count int
+		if err := database.GetContext(ctx, &count, `SELECT COUNT(*) FROM "`+baseName+suffix+`"`); err != nil || count != 0 {
+			t.Fatalf("rebuilt %s count=%d error=%v", suffix, count, err)
+		}
+	}
+}
 
 func TestSQLiteIncrementalAdditiveMigrationAndExactLedger(t *testing.T) {
 	ctx := context.Background()
@@ -243,6 +424,48 @@ func TestSQLiteIncrementalRebuildUsesStableFieldMapping(t *testing.T) {
 		t.Fatalf("temporary table residue count=%d error=%v", temporaryCount, err)
 	}
 	assertForeignKeysState(t, database, 1)
+}
+
+func TestSQLiteIncrementalInitializesConcurrencyWithProviderLiteralOne(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	after := normalizeMigrationFixture(t, before)
+	field := ir.FieldID("20000000000000000000000000000019")
+	after.Tables[0].Columns = append(after.Tables[0].Columns, physical.PhysicalColumn{ID: field, Name: "version", Ordinal: uint32(len(after.Tables[0].Columns)), Storage: physical.StorageType{Kind: physical.StorageSQLiteInteger}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+	after.Tables[0].OptimisticConcurrency = &field
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "concurrency.db")
+	if _, err := database.ExecContext(ctx, `INSERT INTO "items" ("id","name") VALUES (7,'kept')`); err != nil {
+		t.Fatal(err)
+	}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_concurrency.sql", nil)
+	plan, err := provider.PlanIncremental(manifest.Entries[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Rebuilds) != 1 {
+		t.Fatalf("rebuilds=%d, want one provider-owned rebuild", len(plan.Rebuilds))
+	}
+	var initialized int
+	for _, mapping := range plan.Rebuilds[0].Columns {
+		if mapping.FieldID == field && mapping.InitializeConcurrency && mapping.Source == "" {
+			initialized++
+		}
+	}
+	if initialized != 1 {
+		t.Fatalf("concurrency literal mappings=%d, want exactly one: %#v", initialized, plan.Rebuilds[0].Columns)
+	}
+	if sql := string(files["001_concurrency.sql"]); !strings.Contains(sql, `SELECT "id", "name", 1 FROM "items"`) || strings.Contains(sql, "DEFAULT 1") {
+		t.Fatalf("SQLite concurrency migration did not use the sole literal-one copy path:\n%s", sql)
+	}
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	var version int64
+	if err := database.GetContext(ctx, &version, `SELECT "version" FROM "items" WHERE "id"=7`); err != nil || version != 1 {
+		t.Fatalf("version=%d error=%v, want exact provider-initialized 1", version, err)
+	}
 }
 
 func TestSQLiteIncrementalFailureRollsBackSchemaLedgerAndForeignKeys(t *testing.T) {
@@ -504,7 +727,7 @@ func TestSQLiteIncrementalPlannerRefusesInventedCast(t *testing.T) {
 	}
 	for _, operation := range plan.Operations {
 		entry.Risks = append(entry.Risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-		if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+		if migration.RequiresApproval(operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}
@@ -802,7 +1025,7 @@ func migrationFixtureManifest(t *testing.T, before, after physical.PhysicalSchem
 	}
 	for _, operation := range plan.Operations {
 		entry.Risks = append(entry.Risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-		if operation.Risk == migration.RiskDataLoss || operation.Risk == migration.RiskManual {
+		if migration.RequiresApproval(operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}

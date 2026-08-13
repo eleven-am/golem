@@ -930,6 +930,7 @@ func cloneFailureTopics(value golem.List[string]) golem.List[string] {
 
 func testMigrationInterruption(t *testing.T, database *provider.Database, example string) {
 	t.Helper()
+	const reviewedSocialMigrationCount = 5
 	boundaries := []struct {
 		name      string
 		committed bool
@@ -965,7 +966,7 @@ func testMigrationInterruption(t *testing.T, database *provider.Database, exampl
 			}
 			cli := os.Getenv("P8_ORACLE_CLI")
 			runFailureCommand(t, example, os.Environ(), cli, "migration", "apply", "--provider", os.Getenv("P8_ORACLE_PROVIDER"), "--dsn", targetDSN, "--migrations", "migrations")
-			if ledger, schema := migrationTargetState(t, targetDSN); ledger != 1 || !schema {
+			if ledger, schema := migrationTargetState(t, targetDSN); ledger != reviewedSocialMigrationCount || !schema {
 				t.Fatalf("boundary %s recovery ledger=%d schema=%t", boundary.name, ledger, schema)
 			}
 		}()

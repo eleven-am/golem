@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 )
 
 func TestCanonicalDecodeRoundTripsProviderSchemasExactly(t *testing.T) {
@@ -53,6 +55,131 @@ func TestCanonicalDecodeRoundTripsProviderSchemasExactly(t *testing.T) {
 	}
 }
 
+func TestCanonicalDecodeHistoricalAcceptsExactV1ButCurrentDecoderRefusesIt(t *testing.T) {
+	schema := postgresqlSocialSchema()
+	schema.Version = 1
+	schema.CanonicalVersion = 1
+	for tableIndex := range schema.Tables {
+		for columnIndex := range schema.Tables[tableIndex].Columns {
+			storage := &schema.Tables[tableIndex].Columns[columnIndex].Storage
+			if storage.Kind == StoragePostgreSQLVarchar {
+				storage.Kind = StoragePostgreSQLText
+				storage.Length = 0
+			}
+		}
+	}
+	payload, err := canonicalValueVersion(schema, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CanonicalDecode(payload); err == nil || !strings.Contains(err.Error(), "canonical format version") {
+		t.Fatalf("current decode error = %v; want closed v1 refusal", err)
+	}
+	decoded, err := CanonicalDecodeHistorical(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Version != 1 || decoded.CanonicalVersion != 1 {
+		t.Fatalf("historical versions = %d/%d, want 1/1", decoded.Version, decoded.CanonicalVersion)
+	}
+	if reviewed, err := CanonicalDecodeReviewedHistory(payload); err != nil || reviewed.Version != 1 {
+		t.Fatalf("reviewed-history v1 decode: version=%d err=%v", reviewed.Version, err)
+	}
+	currentPayload, err := CanonicalEncode(postgresqlSocialSchema())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CanonicalDecodeHistorical(currentPayload); err == nil || !strings.Contains(err.Error(), "canonical format version") {
+		t.Fatalf("v1-only historical decoder accepted current bytes: %v", err)
+	}
+	if reviewed, err := CanonicalDecodeReviewedHistory(currentPayload); err != nil || reviewed.Version != SchemaFormatVersion {
+		t.Fatalf("reviewed-history current decode: version=%d err=%v", reviewed.Version, err)
+	}
+	shuffled := schema
+	shuffled.Tables = append([]PhysicalTable(nil), schema.Tables...)
+	if len(shuffled.Tables) > 1 {
+		shuffled.Tables[0], shuffled.Tables[1] = shuffled.Tables[1], shuffled.Tables[0]
+	}
+	shuffledPayload, err := canonicalValueVersion(shuffled, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CanonicalDecodeHistorical(shuffledPayload); err == nil || !strings.Contains(err.Error(), "canonical normalized form") {
+		t.Fatalf("historical decoder accepted shuffled v1 collections: %v", err)
+	}
+	if roundTrip, err := canonicalValueVersion(decoded, 1); err != nil || !bytes.Equal(roundTrip, payload) {
+		t.Fatalf("historical round trip changed bytes: err=%v", err)
+	}
+	for _, kind := range []StorageKind{StoragePostgreSQLVarchar, StorageKind("postgresql.future_kind")} {
+		forged := schema
+		forged.Tables = append([]PhysicalTable(nil), schema.Tables...)
+		forged.Tables[0].Columns = append([]PhysicalColumn(nil), schema.Tables[0].Columns...)
+		forged.Tables[0].Columns[0].Storage = StorageType{Kind: kind, Length: 16}
+		if kind != StoragePostgreSQLVarchar {
+			forged.Tables[0].Columns[0].Storage.Length = 0
+		}
+		forgedPayload, err := canonicalValueVersion(forged, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := CanonicalDecodeHistorical(forgedPayload); err == nil || !strings.Contains(err.Error(), "historical physical v1 storage") {
+			t.Fatalf("historical decoder accepted v2/future storage %q: %v", kind, err)
+		}
+	}
+}
+
+func TestCanonicalDecodeHistoricalV1OwnsClosedTypeAndEnumContract(t *testing.T) {
+	schema := sqliteSocialSchema()
+	schema.Version = 1
+	schema.CanonicalVersion = 1
+	if err := validateHistoricalV1SchemaShape(); err != nil {
+		t.Fatalf("frozen v1 field/type projection: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*PhysicalSchema)
+	}{
+		{
+			name: "future capability verification",
+			mutate: func(value *PhysicalSchema) {
+				value.Provider.Capabilities[0].Verification = CapabilityVerification("future_verification")
+			},
+		},
+		{
+			name: "future expression kind",
+			mutate: func(value *PhysicalSchema) {
+				value.Tables[0].Checks[0].Expression.Kind = ExpressionKind("future_expression")
+			},
+		},
+		{
+			name: "future system object kind",
+			mutate: func(value *PhysicalSchema) {
+				value.System.Objects[0].Kind = SystemObjectKind("future_system_object")
+			},
+		},
+		{
+			name: "future IR literal kind",
+			mutate: func(value *PhysicalSchema) {
+				value.Tables[0].Columns[2].Default.Literal.Kind = ir.LiteralKind("future_literal")
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			forged := cloneSchema(schema)
+			test.mutate(&forged)
+			payload, err := canonicalValueVersion(forged, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := CanonicalDecodeHistorical(payload); err == nil || !strings.Contains(err.Error(), "frozen vocabulary") {
+				t.Fatalf("historical decoder accepted future vocabulary: %v", err)
+			}
+		})
+	}
+}
+
 func TestCanonicalDecodeRejectsMalformedDocuments(t *testing.T) {
 	encoded, err := CanonicalEncode(sqliteSocialSchema())
 	if err != nil {
@@ -73,7 +200,7 @@ func TestCanonicalDecodeRejectsMalformedDocuments(t *testing.T) {
 		{name: "unknown struct type", payload: replaceCanonicalText(t, encoded, "PhysicalSchema", "PhysicalSchemX"), contains: "unknown struct type"},
 		{name: "unknown field", payload: replaceCanonicalText(t, encoded, "CanonicalVersion", "CanonicalVersioX"), contains: "unknown or out-of-order field"},
 		{name: "trailing bytes", payload: append(append([]byte(nil), encoded...), 0), contains: "trailing bytes"},
-		{name: "invalid schema", payload: replaceCanonicalText(t, encoded, "modernc.org/sqlite", "modernc.org/sqlitX"), contains: "invalid schema"},
+		{name: "invalid schema", payload: replaceCanonicalText(t, encoded, "github.com/ncruces/go-sqlite3", "github.com/ncruces/go-sqliteX"), contains: "invalid schema"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

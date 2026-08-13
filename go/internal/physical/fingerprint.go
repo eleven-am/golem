@@ -36,6 +36,43 @@ func PhysicalFingerprint(schema PhysicalSchema) (Digest, error) {
 	return fingerprint(physicalFingerprintDomain, encoded), nil
 }
 
+// HistoricalPhysicalFingerprint reproduces the exact retained physical
+// fingerprint domain and canonical projection for reviewed snapshots.
+func HistoricalPhysicalFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistorical(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	if normalized.Version == 3 && normalized.CanonicalVersion == 3 {
+		return historicalV3PhysicalFingerprintNormalized(normalized)
+	}
+	normalized.System = SystemSchema{}
+	encoded, err := canonicalValueVersion(normalized, normalized.CanonicalVersion)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(physicalFingerprintDomain, encoded), nil
+}
+
+// HistoricalV3PhysicalFingerprint hashes a v3 snapshot through the retained
+// v3 normalizer and projection, never through mutable current-format code.
+func HistoricalV3PhysicalFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistoricalV3(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	return historicalV3PhysicalFingerprintNormalized(normalized)
+}
+
+func historicalV3PhysicalFingerprintNormalized(normalized PhysicalSchema) (Digest, error) {
+	normalized.System = SystemSchema{}
+	encoded, err := canonicalHistoricalValueVersion(normalized, 3, historicalV3StructFields)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(physicalFingerprintDomain, encoded), nil
+}
+
 // UnmanagedAllowlistFingerprint hashes the normalized reviewed allowlist in
 // provider and namespace scope. It is separate from PhysicalFingerprint so a
 // manifest can bind its explicit allowlist field to the embedded head snapshot.
@@ -50,6 +87,49 @@ func UnmanagedAllowlistFingerprint(schema PhysicalSchema) (Digest, error) {
 		Unmanaged []UnmanagedObject
 	}{Provider: normalized.Provider, Namespace: normalized.Namespace, Unmanaged: normalized.Unmanaged}
 	encoded, err := canonicalValue(value)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(unmanagedAllowlistFingerprintDomain, encoded), nil
+}
+
+func HistoricalUnmanagedAllowlistFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistorical(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	if normalized.Version == 3 && normalized.CanonicalVersion == 3 {
+		return historicalV3UnmanagedAllowlistFingerprintNormalized(normalized)
+	}
+	value := struct {
+		Provider  ProviderManifest
+		Namespace Namespace
+		Unmanaged []UnmanagedObject
+	}{Provider: normalized.Provider, Namespace: normalized.Namespace, Unmanaged: normalized.Unmanaged}
+	encoded, err := canonicalValueVersion(value, normalized.CanonicalVersion)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(unmanagedAllowlistFingerprintDomain, encoded), nil
+}
+
+// HistoricalV3UnmanagedAllowlistFingerprint hashes the reviewed allowlist
+// through the retained v3 profile.
+func HistoricalV3UnmanagedAllowlistFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistoricalV3(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	return historicalV3UnmanagedAllowlistFingerprintNormalized(normalized)
+}
+
+func historicalV3UnmanagedAllowlistFingerprintNormalized(normalized PhysicalSchema) (Digest, error) {
+	value := struct {
+		Provider  ProviderManifest
+		Namespace Namespace
+		Unmanaged []UnmanagedObject
+	}{Provider: normalized.Provider, Namespace: normalized.Namespace, Unmanaged: normalized.Unmanaged}
+	encoded, err := canonicalHistoricalValueVersion(value, 3, historicalV3StructFields)
 	if err != nil {
 		return Digest{}, err
 	}
@@ -80,6 +160,47 @@ func SystemFingerprint(provider ProviderManifest, system SystemSchema) (Digest, 
 		System   SystemSchema
 	}{Provider: normalized.Provider, System: normalized.System}
 	encoded, err := canonicalValue(value)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(systemFingerprintDomain, encoded), nil
+}
+
+func HistoricalSystemFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistorical(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	if normalized.Version == 3 && normalized.CanonicalVersion == 3 {
+		return historicalV3SystemFingerprintNormalized(normalized)
+	}
+	value := struct {
+		Provider ProviderManifest
+		System   SystemSchema
+	}{Provider: normalized.Provider, System: normalized.System}
+	encoded, err := canonicalValueVersion(value, normalized.CanonicalVersion)
+	if err != nil {
+		return Digest{}, err
+	}
+	return fingerprint(systemFingerprintDomain, encoded), nil
+}
+
+// HistoricalV3SystemFingerprint hashes provider and system state through the
+// retained v3 profile.
+func HistoricalV3SystemFingerprint(schema PhysicalSchema) (Digest, error) {
+	normalized, err := NormalizeHistoricalV3(schema)
+	if err != nil {
+		return Digest{}, err
+	}
+	return historicalV3SystemFingerprintNormalized(normalized)
+}
+
+func historicalV3SystemFingerprintNormalized(normalized PhysicalSchema) (Digest, error) {
+	value := struct {
+		Provider ProviderManifest
+		System   SystemSchema
+	}{Provider: normalized.Provider, System: normalized.System}
+	encoded, err := canonicalHistoricalValueVersion(value, 3, historicalV3StructFields)
 	if err != nil {
 		return Digest{}, err
 	}

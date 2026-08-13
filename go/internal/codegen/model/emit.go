@@ -129,10 +129,13 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		members := map[string]string{
 			"Where": "read method", "OrderBy": "read method", "Take": "read method",
 			"Skip": "read method", "Distinct": "read method", "Cursor": "read method", "Select": "read method", "Include": "read method", "Omit": "read method",
-			"Create": "mutation input method", "Update": "mutation input method", "UpdateMany": "mutation input method",
+			"Create": "mutation input method", "Update": "mutation input method",
 			"CountAll": "analytics method", "Aggregate": "analytics method", "AggregateWhere": "analytics method", "AggregateSelect": "analytics method",
 			"GroupBy": "analytics method", "GroupDimensions": "analytics method", "GroupMeasures": "analytics method", "GroupWhere": "analytics method",
 			"GroupHaving": "analytics method", "GroupOrderBy": "analytics method", "GroupTake": "analytics method", "GroupSkip": "analytics method",
+		}
+		if !modelUsesOptimisticConcurrency(model) {
+			members["UpdateMany"] = "mutation input method"
 		}
 		if contracts[model.ID].ScopedReads {
 			members["Scope"] = "scoped-read method"
@@ -184,6 +187,14 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 		}
 	}
+	generationLiteral := ""
+	if stamp != nil {
+		var err error
+		generationLiteral, err = schemaDigestLiteral(stamp.GenerationDigest)
+		if err != nil {
+			return File{}, nil, err
+		}
+	}
 
 	var body bytes.Buffer
 	symbols := make([]Symbol, 0)
@@ -200,7 +211,11 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		if err != nil {
 			return File{}, nil, err
 		}
-		fmt.Fprintf(&body, "var %s = golem.GeneratedModelDescriptor[%s](%s, %s)\n\n", descriptorName, model.Go.Name, modelLiteral, shape)
+		if generationLiteral == "" {
+			fmt.Fprintf(&body, "var %s = golem.GeneratedModelDescriptor[%s](%s, %s)\n\n", descriptorName, model.Go.Name, modelLiteral, shape)
+		} else {
+			fmt.Fprintf(&body, "var %s = golem.GeneratedStampedModelDescriptor[%s](%s, %s, %s)\n\n", descriptorName, model.Go.Name, generationLiteral, modelLiteral, shape)
+		}
 		emitMutationAliases(&body, model)
 		for _, selector := range orderedSelectors(contract, model) {
 			selectorType := generatedSelectorType(model, selector)
@@ -266,9 +281,11 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		fmt.Fprintf(&body, "func (%s) Update(first golem.UpdateValue[%s], rest ...golem.UpdateValue[%s]) %sUpdateInput {\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\tvalues := append([]golem.UpdateValue[%s]{first}, rest...)\n", model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.GeneratedUpdateInput(%s, values...)\n}\n\n", modelLiteral)
-		fmt.Fprintf(&body, "func (%s) UpdateMany(first golem.UpdateManyValue[%s], rest ...golem.UpdateManyValue[%s]) %sUpdateManyInput {\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
-		fmt.Fprintf(&body, "\tvalues := append([]golem.UpdateManyValue[%s]{first}, rest...)\n", model.Go.Name)
-		fmt.Fprintf(&body, "\treturn golem.GeneratedUpdateManyInput(%s, values...)\n}\n\n", modelLiteral)
+		if !modelUsesOptimisticConcurrency(model) {
+			fmt.Fprintf(&body, "func (%s) UpdateMany(first golem.UpdateManyValue[%s], rest ...golem.UpdateManyValue[%s]) %sUpdateManyInput {\n", typeName, model.Go.Name, model.Go.Name, model.Go.Name)
+			fmt.Fprintf(&body, "\tvalues := append([]golem.UpdateManyValue[%s]{first}, rest...)\n", model.Go.Name)
+			fmt.Fprintf(&body, "\treturn golem.GeneratedUpdateManyInput(%s, values...)\n}\n\n", modelLiteral)
+		}
 		fmt.Fprintf(&body, "func (%s) Where(predicate golem.Predicate[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
 		fmt.Fprintf(&body, "\treturn golem.Where(predicate)\n}\n\n")
 		fmt.Fprintf(&body, "func (%s) OrderBy(terms ...golem.OrderTerm[%s]) golem.ReadOption[%s] {\n", typeName, model.Go.Name, model.Go.Name)
@@ -312,7 +329,7 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			if fieldIsHidden(field.ID, contract) {
 				continue
 			}
-			initializer, err := emittedFieldInitializer(field, model, contract, modelByID, enumByID, relations, imports)
+			initializer, err := emittedFieldInitializer(field, model, contract, modelByID, enumByID, relations, imports, generationLiteral)
 			if err != nil {
 				return File{}, nil, err
 			}
@@ -468,12 +485,15 @@ func fieldIsHidden(field ir.FieldID, contract ir.ModelContractIR) bool {
 	return fieldModes(field, contract)[ir.ModeHidden]
 }
 
-func mutationCapabilities(field ir.FieldIR, contract ir.ModelContractIR) scalarMutationCapabilities {
+func mutationCapabilities(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR) scalarMutationCapabilities {
 	if field.Scalar == nil {
 		return scalarMutationCapabilities{}
 	}
 	modes := fieldModes(field.ID, contract)
 	result := scalarMutationCapabilities{readable: !modes[ir.ModeHidden] && !modes[ir.ModeWriteOnly]}
+	if model.OptimisticConcurrency != nil && *model.OptimisticConcurrency == field.ID {
+		return result
+	}
 	writable := !modes[ir.ModeHidden] && !modes[ir.ModeReadOnly] &&
 		!field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 	if !writable {
@@ -509,11 +529,19 @@ func generatedScalarFieldType(model ir.ModelDeclIR, field ir.FieldIR, capabiliti
 	return "golemGenerated" + model.Go.Name + field.GoName + "AnalyticsField"
 }
 
+func modelUsesOptimisticConcurrency(model ir.ModelDeclIR) bool {
+	return model.OptimisticConcurrency != nil
+}
+
 func emitMutationAliases(body *bytes.Buffer, model ir.ModelDeclIR) {
 	fmt.Fprintf(body, "type %sCreateInput = golem.CreateInput[%s]\n", model.Go.Name, model.Go.Name)
 	fmt.Fprintf(body, "type %sUpdateInput = golem.UpdateInput[%s]\n", model.Go.Name, model.Go.Name)
-	fmt.Fprintf(body, "type %sUpdateManyInput = golem.UpdateManyInput[%s]\n", model.Go.Name, model.Go.Name)
-	for _, operation := range []string{"Create", "Update", "Delete", "UpdateMany", "DeleteMany"} {
+	operations := []string{"Create", "Update", "Delete"}
+	if !modelUsesOptimisticConcurrency(model) {
+		fmt.Fprintf(body, "type %sUpdateManyInput = golem.UpdateManyInput[%s]\n", model.Go.Name, model.Go.Name)
+		operations = append(operations, "UpdateMany", "DeleteMany")
+	}
+	for _, operation := range operations {
 		fmt.Fprintf(body, "type %s%sHookRequest = golem.%sHookRequest[%s]\n", model.Go.Name, operation, operation, model.Go.Name)
 		fmt.Fprintf(body, "type %s%sHookResult = golem.%sHookResult[%s]\n", model.Go.Name, operation, operation, model.Go.Name)
 	}
@@ -521,7 +549,7 @@ func emitMutationAliases(body *bytes.Buffer, model ir.ModelDeclIR) {
 }
 
 func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet, scopedSchema bool) error {
-	capabilities := mutationCapabilities(field, contract)
+	capabilities := mutationCapabilities(field, model, contract)
 	analytics := capabilities.readable && analyticsFieldSupported(field)
 	scoped := scopedSchema && analytics
 	if !capabilities.create && !capabilities.set && !analytics && !scoped {
@@ -735,6 +763,17 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 	if err != nil {
 		return err
 	}
+	relation, ok := relations[field.Relation.RelationID]
+	if !ok {
+		return fmt.Errorf("model codegen: missing relation %s", field.Relation.RelationID)
+	}
+	owner, ok := models[relation.SourceModel]
+	if !ok {
+		return fmt.Errorf("model codegen: missing relation owner model %s", relation.SourceModel)
+	}
+	targetExistingSafe := !modelUsesOptimisticConcurrency(target)
+	ownerIsExpectedRoot := owner.ID == model.ID && field.Relation.Role == ir.RelationSource
+	ownerExistingSafe := !modelUsesOptimisticConcurrency(owner) || ownerIsExpectedRoot
 	base, err := fieldHandle(field, model.ID, models, nil, relations, imports)
 	if err != nil {
 		return err
@@ -766,7 +805,7 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 	}
 	identityArguments := strings.Join([]string{parentLiteral, fieldLiteral, relationLiteral, targetLiteral}, ", ")
 	sharedReturn := fmt.Sprintf("golem.NestedCreateValue[%s]", model.Go.Name)
-	if capabilities.update {
+	if capabilities.update && !modelUsesOptimisticConcurrency(model) {
 		sharedReturn = fmt.Sprintf("golem.NestedValue[%s]", model.Go.Name)
 	}
 	if capabilities.create {
@@ -775,47 +814,59 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 			fmt.Fprintf(body, "\treturn golem.GeneratedNestedCreate[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
 			fmt.Fprintf(body, "func (%s) CreateMany(first golem.CreateInput[%s], rest ...golem.CreateInput[%s]) %s {\n", typeName, targetType, targetType, sharedReturn)
 			fmt.Fprintf(body, "\treturn golem.GeneratedNestedCreateMany[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
-			fmt.Fprintf(body, "func (%s) Connect(first golem.MutationTarget[%s], rest ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, targetType, sharedReturn)
-			fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnect[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			if ownerExistingSafe {
+				fmt.Fprintf(body, "func (%s) Connect(first golem.MutationTarget[%s], rest ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, targetType, sharedReturn)
+				fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnect[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			}
 		} else {
 			fmt.Fprintf(body, "func (%s) Create(input golem.CreateInput[%s]) %s {\n", typeName, targetType, sharedReturn)
 			fmt.Fprintf(body, "\treturn golem.GeneratedNestedCreate[%s, %s](%s, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
-			fmt.Fprintf(body, "func (%s) Connect(target golem.MutationTarget[%s]) %s {\n", typeName, targetType, sharedReturn)
-			fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnect[%s, %s](%s, target)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			if ownerExistingSafe {
+				fmt.Fprintf(body, "func (%s) Connect(target golem.MutationTarget[%s]) %s {\n", typeName, targetType, sharedReturn)
+				fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnect[%s, %s](%s, target)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			}
 		}
-		fmt.Fprintf(body, "func (%s) ConnectOrCreate(target golem.MutationTarget[%s], create golem.CreateInput[%s]) %s {\n", typeName, targetType, targetType, sharedReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnectOrCreate[%s, %s](%s, target, create)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		if ownerExistingSafe {
+			fmt.Fprintf(body, "func (%s) ConnectOrCreate(target golem.MutationTarget[%s], create golem.CreateInput[%s]) %s {\n", typeName, targetType, targetType, sharedReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedConnectOrCreate[%s, %s](%s, target, create)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		}
 	}
-	if !capabilities.update {
+	if !capabilities.update || modelUsesOptimisticConcurrency(model) {
 		return nil
 	}
 	updateReturn := fmt.Sprintf("golem.NestedUpdateValue[%s]", model.Go.Name)
 	if capabilities.many {
-		fmt.Fprintf(body, "func (%s) Disconnect(first golem.MutationTarget[%s], rest ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedDisconnect[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) Set(targets ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedSet[%s, %s](%s, targets...)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) Update(target golem.MutationTarget[%s], input golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdate[%s, %s](%s, target, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) UpdateMany(predicate golem.Predicate[%s], input golem.UpdateManyInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdateMany[%s, %s](%s, predicate, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) Upsert(target golem.MutationTarget[%s], create golem.CreateInput[%s], update golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpsert[%s, %s](%s, target, create, update)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) Delete(target golem.MutationTarget[%s]) %s {\n", typeName, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedDelete[%s, %s](%s, target)\n}\n\n", model.Go.Name, targetType, identityArguments)
-		fmt.Fprintf(body, "func (%s) DeleteMany(predicate golem.Predicate[%s]) %s {\n", typeName, targetType, updateReturn)
-		fmt.Fprintf(body, "\treturn golem.GeneratedNestedDeleteMany[%s, %s](%s, predicate)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		if ownerExistingSafe {
+			fmt.Fprintf(body, "func (%s) Disconnect(first golem.MutationTarget[%s], rest ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedDisconnect[%s, %s](%s, first, rest...)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			fmt.Fprintf(body, "func (%s) Set(targets ...golem.MutationTarget[%s]) %s {\n", typeName, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedSet[%s, %s](%s, targets...)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		}
+		if targetExistingSafe {
+			fmt.Fprintf(body, "func (%s) Update(target golem.MutationTarget[%s], input golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdate[%s, %s](%s, target, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			fmt.Fprintf(body, "func (%s) UpdateMany(predicate golem.Predicate[%s], input golem.UpdateManyInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdateMany[%s, %s](%s, predicate, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			fmt.Fprintf(body, "func (%s) Upsert(target golem.MutationTarget[%s], create golem.CreateInput[%s], update golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpsert[%s, %s](%s, target, create, update)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			fmt.Fprintf(body, "func (%s) Delete(target golem.MutationTarget[%s]) %s {\n", typeName, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedDelete[%s, %s](%s, target)\n}\n\n", model.Go.Name, targetType, identityArguments)
+			fmt.Fprintf(body, "func (%s) DeleteMany(predicate golem.Predicate[%s]) %s {\n", typeName, targetType, updateReturn)
+			fmt.Fprintf(body, "\treturn golem.GeneratedNestedDeleteMany[%s, %s](%s, predicate)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		}
 		return nil
 	}
-	fmt.Fprintf(body, "func (%s) Update(input golem.UpdateInput[%s]) %s {\n", typeName, targetType, updateReturn)
-	fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdate[%s, %s](%s, nil, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
-	fmt.Fprintf(body, "func (%s) Upsert(create golem.CreateInput[%s], update golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
-	fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpsert[%s, %s](%s, nil, create, update)\n}\n\n", model.Go.Name, targetType, identityArguments)
-	if !capabilities.required {
+	if targetExistingSafe {
+		fmt.Fprintf(body, "func (%s) Update(input golem.UpdateInput[%s]) %s {\n", typeName, targetType, updateReturn)
+		fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpdate[%s, %s](%s, nil, input)\n}\n\n", model.Go.Name, targetType, identityArguments)
+		fmt.Fprintf(body, "func (%s) Upsert(create golem.CreateInput[%s], update golem.UpdateInput[%s]) %s {\n", typeName, targetType, targetType, updateReturn)
+		fmt.Fprintf(body, "\treturn golem.GeneratedNestedUpsert[%s, %s](%s, nil, create, update)\n}\n\n", model.Go.Name, targetType, identityArguments)
+	}
+	if !capabilities.required && ownerExistingSafe {
 		fmt.Fprintf(body, "func (%s) Disconnect() %s {\n", typeName, updateReturn)
 		fmt.Fprintf(body, "\treturn golem.GeneratedNestedDisconnectOne[%s, %s](%s)\n}\n\n", model.Go.Name, targetType, identityArguments)
 	}
-	if !capabilities.required || capabilities.inverse {
+	if targetExistingSafe && (!capabilities.required || capabilities.inverse) {
 		fmt.Fprintf(body, "func (%s) Delete() %s {\n", typeName, updateReturn)
 		fmt.Fprintf(body, "\treturn golem.GeneratedNestedDelete[%s, %s](%s, nil)\n}\n\n", model.Go.Name, targetType, identityArguments)
 	}
@@ -824,7 +875,7 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 
 func emittedFieldHandle(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
 	if field.Scalar != nil {
-		capabilities := mutationCapabilities(field, contract)
+		capabilities := mutationCapabilities(field, model, contract)
 		if capabilities.create || capabilities.set || (capabilities.readable && analyticsFieldSupported(field)) {
 			return generatedScalarFieldType(model, field, capabilities), nil
 		}
@@ -841,8 +892,8 @@ func emittedFieldHandle(field ir.FieldIR, model ir.ModelDeclIR, contract ir.Mode
 	return fieldHandle(field, model.ID, models, enums, relations, imports)
 }
 
-func emittedFieldInitializer(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
-	initializer, err := fieldInitializer(field, model.ID, models, enums, relations, imports)
+func emittedFieldInitializer(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet, generation string) (string, error) {
+	initializer, err := fieldInitializer(field, model.ID, models, enums, relations, imports, generation)
 	if err != nil {
 		return initializer, err
 	}
@@ -874,7 +925,7 @@ func emittedFieldInitializer(field ir.FieldIR, model ir.ModelDeclIR, contract ir
 	if field.Scalar == nil {
 		return initializer, nil
 	}
-	capabilities := mutationCapabilities(field, contract)
+	capabilities := mutationCapabilities(field, model, contract)
 	if !capabilities.create && !capabilities.set && !(capabilities.readable && analyticsFieldSupported(field)) {
 		return initializer, nil
 	}
@@ -928,7 +979,7 @@ func fieldHandle(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.Mo
 	return fmt.Sprintf("golem.%s[%s, %s]", kind, ownerModel.Go.Name, targetType), nil
 }
 
-func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
+func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet, generation string) (string, error) {
 	handle, err := fieldHandle(field, owner, models, enums, relations, imports)
 	if err != nil {
 		return "", err
@@ -942,7 +993,10 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 		}
 		constructor := handle[:open]
 		constructor = strings.TrimPrefix(constructor, "golem.")
-		return "golem.Generated" + constructor + args + "(" + literal + ")", nil
+		if generation == "" {
+			return "golem.Generated" + constructor + args + "(" + literal + ")", nil
+		}
+		return "golem.GeneratedStamped" + constructor + args + "(" + generation + ", " + literal + ")", nil
 	}
 	fieldLiteral, err := idLiteral("FieldID", string(field.ID))
 	if err != nil {
@@ -964,7 +1018,12 @@ func fieldInitializer(field ir.FieldIR, owner ir.ModelID, models map[ir.ModelID]
 	if err != nil {
 		return "", err
 	}
-	return constructor + args + "(" + fieldLiteral + ", " + relationLiteral + ", " + targetLiteral + ")", nil
+	arguments := fieldLiteral + ", " + relationLiteral + ", " + targetLiteral
+	if generation != "" {
+		constructor = strings.Replace(constructor, "Generated", "GeneratedStamped", 1)
+		arguments = generation + ", " + arguments
+	}
+	return constructor + args + "(" + arguments + ")", nil
 }
 
 // scalarHandle is the single bootstrap/final mapping from normalized logical

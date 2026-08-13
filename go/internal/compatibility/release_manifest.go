@@ -1,11 +1,18 @@
 package compatibility
 
-import "strings"
+import (
+	"strings"
+
+	codegenmanifest "github.com/eleven-am/golem/go/internal/codegen/manifest"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	"github.com/eleven-am/golem/go/internal/physical"
+)
 
 // TrustedManifestSHA256 is compiled separately from compatibility/manifest.json.
 // Release tooling and tests must use this trust root rather than a digest read
 // from, or recomputed and accepted alongside, the artifact itself.
-const TrustedManifestSHA256 = "59bd82177890ff594f053ab0cc06f4d1a0b15567d85e673ae6ca563602062c1c"
+const TrustedManifestSHA256 = "02572dc6ca1aedc862acc26523d5c888c592f9efb117f0e6a6f63a9ed4a35561"
 
 func DevelopmentManifest() Manifest {
 	return Manifest{
@@ -27,14 +34,14 @@ func DevelopmentManifest() Manifest {
 			PublicGoAPI:    PublicGoAPICorpusSHA256,
 			GeneratedGoABI: GeneratedGoABICorpusSHA256,
 			GraphQLABI:     GraphQLABICorpusSHA256,
-			CLIJSON:        "3a9d2a922b5784438145fd116a00b2aee46eb9ed73e97784ba60c577172ed137",
-			Observation:    "4a439f570a9561d587a22064ee3f7aa0040103624e303578149b5dec6d2e3cd5",
+			CLIJSON:        "a1228e10ba31fba966029245a85964bc0e49db85e55ac28774ea39a7ee5221df",
+			Observation:    "914a495c1b7832491e7aa32a17e31efb82bf249d338de376c1a7608013132803",
 		},
 		Versions: Versions{
-			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v5",
-			SchemaBundle: 2, GeneratedManifest: 2, GraphQL: 4,
-			ModelIR: 1, ContractIR: 5, CanonicalIR: 1,
-			PhysicalSchema: 1, PhysicalCanonical: 1,
+			Generator: codegenmanifest.GeneratorVersion, GeneratedTemplateABI: codegenmanifest.TemplateABIVersion,
+			SchemaBundle: 2, GeneratedManifest: codegenmanifest.FormatVersion, GraphQL: graphqlcontract.ABIVersion,
+			ModelIR: compilerir.ModelFormatVersion, ContractIR: compilerir.ContractFormatVersion, CanonicalIR: compilerir.CanonicalFormatVersion,
+			PhysicalSchema: uint16(physical.SchemaFormatVersion), PhysicalCanonical: uint16(physical.CanonicalFormatVersion),
 			MigrationManifest: 1, MigrationCanonical: 1, MigrationLedger: 1,
 			EventSchema: 1,
 			FactCodecs:  []string{"golem.fact.v1", "golem.fact.v2"},
@@ -42,12 +49,13 @@ func DevelopmentManifest() Manifest {
 		},
 		HistoricalDecode: HistoricalDecode{
 			SchemaBundles: []uint16{2}, GeneratedManifests: []uint16{1, 2},
-			ModelIR: []uint16{1}, ContractIR: []uint16{4, 5}, CanonicalIR: []uint16{1},
-			PhysicalSchema: []uint16{1}, PhysicalCanonical: []uint16{1},
+			GraphQL: []uint16{4, 5}, ModelIR: []uint16{1, 2}, ContractIR: []uint16{4, 5, 6}, CanonicalIR: []uint16{1},
+			PhysicalSchema: []uint16{1, 2, 3}, PhysicalCanonical: []uint16{1, 2, 3},
 			MigrationManifest: []uint16{1}, MigrationCanonical: []uint16{1}, MigrationLedger: []uint16{1},
 			FactCodecs: []string{"golem.fact.v1", "golem.fact.v2"}, EventCodecs: []string{"golem.event.v1"}, PrincipalSnapshotCodecs: []string{},
 		},
-		RequiredActions: []string{},
+		MigrationGuide:  &MigrationGuideAuthority{Path: MigrationGuidePath, SHA256: MigrationGuideSHA256, FromTag: "go/v0.0.2", ToVersion: "v0.1.0"},
+		RequiredActions: []string{"migrate.database", "migration-guide.execute", "regenerate.generated"},
 		KnownBoundaries: []string{"cdc.requires-adapter", "mysql.unsupported"},
 	}
 }

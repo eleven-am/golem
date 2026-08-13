@@ -6,12 +6,20 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	"github.com/jmoiron/sqlx"
-	_ "modernc.org/sqlite"
+	sqlite3 "github.com/ncruces/go-sqlite3"
+	"github.com/ncruces/go-sqlite3/driver"
+)
+
+const (
+	journalModeWAL    = "wal"
+	journalModeMemory = "memory"
+	synchronousFull   = 2
 )
 
 func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
@@ -19,11 +27,22 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 	if err != nil {
 		return nil, CapabilityReport{}, err
 	}
-	database, err := sqlx.Open("sqlite", configured)
+	standard, err := driver.Open(configured, initializeProviderConnection)
 	if err != nil {
 		return nil, CapabilityReport{}, fmt.Errorf("sqlite open: %w", err)
 	}
+	database := sqlx.NewDb(standard, "sqlite3")
 	return provider.verifyOpenedDatabase(ctx, database)
+}
+
+func initializeProviderConnection(connection *sqlite3.Conn) error {
+	if connection == nil {
+		return fmt.Errorf("sqlite open: provider connection initialization received no connection")
+	}
+	if err := connection.Exec("PRAGMA synchronous=FULL;"); err != nil {
+		return fmt.Errorf("sqlite open: provider-owned synchronous configuration failed: %w", err)
+	}
+	return nil
 }
 
 // verifyOpenedDatabase owns every resource after sqlx has allocated the pool.
@@ -33,12 +52,146 @@ func (provider *Provider) open(ctx context.Context, dataSourceName string) (*sql
 func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
 	database.SetMaxOpenConns(4)
 	database.SetMaxIdleConns(4)
+	if err := establishJournalMode(ctx, database); err != nil {
+		_ = database.Close()
+		return nil, CapabilityReport{}, err
+	}
 	report, err := provider.VerifyPool(ctx, database, 4)
 	if err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
+	if err := verifyProviderOwnedDurability(ctx, database, 4); err != nil {
+		_ = database.Close()
+		return nil, CapabilityReport{}, err
+	}
 	return database, report, nil
+}
+
+const (
+	journalModeTransitionBudget  = 5 * time.Second
+	journalModeTransitionBackoff = 10 * time.Millisecond
+)
+
+func establishJournalMode(ctx context.Context, database *sqlx.DB) error {
+	connection, err := database.Connx(ctx)
+	if err != nil {
+		return fmt.Errorf("sqlite open: bootstrap connection: %w", err)
+	}
+	defer connection.Close()
+	required, err := requiredJournalMode(ctx, connection)
+	if err != nil {
+		return err
+	}
+	if required == journalModeMemory {
+		observed, err := observedJournalMode(ctx, connection)
+		if err != nil {
+			return err
+		}
+		if observed != journalModeMemory {
+			return fmt.Errorf("sqlite open: named shared in-memory database reported journal mode %q, want %q", observed, journalModeMemory)
+		}
+		return nil
+	}
+	deadline := time.Now().Add(journalModeTransitionBudget)
+	for attempt := 0; ; attempt++ {
+		established, err := observedJournalMode(ctx, connection)
+		if err != nil {
+			return err
+		}
+		if established == journalModeWAL {
+			return nil
+		}
+		var applied string
+		transitionErr := connection.GetContext(ctx, &applied, "PRAGMA journal_mode=WAL")
+		if transitionErr == nil && normalizeJournalMode(applied) == journalModeWAL {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if transitionErr != nil {
+				return fmt.Errorf("sqlite open: write-ahead logging transition failed: %w", transitionErr)
+			}
+			return fmt.Errorf("sqlite open: write-ahead logging transition reported journal mode %q, want %q", applied, journalModeWAL)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("sqlite open: write-ahead logging transition failed: %w", ctx.Err())
+		case <-time.After(journalModeTransitionBackoff):
+		}
+	}
+}
+
+func verifyProviderOwnedDurability(ctx context.Context, database *sqlx.DB, width int) error {
+	if database == nil || width < 1 || database.Stats().InUse != 0 {
+		return fmt.Errorf("sqlite durability verification requires an idle bounded database")
+	}
+	waitCount := database.Stats().WaitCount
+	connections := make([]*sqlx.Conn, 0, width)
+	defer func() {
+		for _, connection := range connections {
+			_ = connection.Close()
+		}
+	}()
+	for index := 0; index < width; index++ {
+		connection, err := database.Connx(ctx)
+		if err != nil {
+			return fmt.Errorf("sqlite durability verification connection %d: %w", index, err)
+		}
+		connections = append(connections, connection)
+		if database.Stats().WaitCount != waitCount {
+			return fmt.Errorf("sqlite durability verification observed concurrent pool use")
+		}
+	}
+	if database.Stats().InUse != width {
+		return fmt.Errorf("sqlite durability verification did not exclusively hold every slot")
+	}
+	for index, connection := range connections {
+		required, err := requiredJournalMode(ctx, connection)
+		if err != nil {
+			return err
+		}
+		observed, err := observedJournalMode(ctx, connection)
+		if err != nil {
+			return err
+		}
+		if observed != required {
+			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA journal_mode=%q, want %q", index+1, observed, required)
+		}
+		var synchronous int
+		if err := connection.GetContext(ctx, &synchronous, "PRAGMA synchronous"); err != nil {
+			return fmt.Errorf("sqlite durability verification connection %d synchronous: %w", index+1, err)
+		}
+		if synchronous != synchronousFull {
+			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA synchronous=%d, want %d", index+1, synchronous, synchronousFull)
+		}
+	}
+	if database.Stats().WaitCount != waitCount {
+		return fmt.Errorf("sqlite durability verification observed concurrent pool use")
+	}
+	return nil
+}
+
+func requiredJournalMode(ctx context.Context, connection *sqlx.Conn) (string, error) {
+	var location string
+	if err := connection.GetContext(ctx, &location, "SELECT file FROM pragma_database_list WHERE name = 'main'"); err != nil {
+		return "", fmt.Errorf("sqlite open: main database location: %w", err)
+	}
+	if strings.TrimSpace(location) == "" {
+		return journalModeMemory, nil
+	}
+	return journalModeWAL, nil
+}
+
+func observedJournalMode(ctx context.Context, connection *sqlx.Conn) (string, error) {
+	var mode string
+	if err := connection.GetContext(ctx, &mode, "PRAGMA journal_mode"); err != nil {
+		return "", fmt.Errorf("sqlite open: journal mode: %w", err)
+	}
+	return normalizeJournalMode(mode), nil
+}
+
+func normalizeJournalMode(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func configureDataSourceName(dataSourceName string) (string, error) {
@@ -66,7 +219,7 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 		}
 		for _, value := range values {
 			if providerOwnedPragma(value) {
-				return "", fmt.Errorf("sqlite open: foreign_keys and busy_timeout pragmas are provider-owned")
+				return "", fmt.Errorf("sqlite open: journal_mode, synchronous, foreign_keys and busy_timeout pragmas are provider-owned")
 			}
 		}
 	}
@@ -82,6 +235,16 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 	if cachePresent && len(caches) != 1 {
 		return "", fmt.Errorf("sqlite open: duplicate or conflicting cache parameters are unsupported")
 	}
+	if modePresent && modes[0] == "ro" {
+		return "", fmt.Errorf("sqlite open: read-only databases cannot hold the provider-owned write-ahead logging profile")
+	}
+	if immutable, immutablePresent := normalizedQueryValue(normalized, "immutable"); immutablePresent {
+		for _, value := range immutable {
+			if value != "0" && value != "false" && value != "no" && value != "off" {
+				return "", fmt.Errorf("sqlite open: immutable databases cannot hold the provider-owned write-ahead logging profile")
+			}
+		}
+	}
 	if modePresent && modes[0] == "memory" {
 		name := strings.TrimPrefix(base, "file:")
 		if !strings.HasPrefix(base, "file:") || strings.Trim(name, "/") == "" || strings.EqualFold(name, ":memory:") || !cachePresent || caches[0] != "shared" {
@@ -93,6 +256,9 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 		separator = "&"
 	} else if hasQuery {
 		separator = ""
+	}
+	if !strings.HasPrefix(base, "file:") {
+		dataSourceName = "file:" + dataSourceName
 	}
 	return dataSourceName + separator + "_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate", nil
 }
@@ -114,7 +280,16 @@ func providerOwnedPragma(value string) bool {
 	if boundary := strings.IndexAny(value, "(= \t\r\n"); boundary >= 0 {
 		value = strings.TrimSpace(value[:boundary])
 	}
-	return value == "foreign_keys" || value == "busy_timeout"
+	if qualifier := strings.LastIndex(value, "."); qualifier >= 0 {
+		value = strings.TrimSpace(value[qualifier+1:])
+	}
+	value = strings.Trim(value, "\"'`[]")
+	switch value {
+	case "journal_mode", "synchronous", "foreign_keys", "busy_timeout":
+		return true
+	default:
+		return false
+	}
 }
 
 func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (CapabilityReport, error) {
@@ -153,6 +328,8 @@ func (provider *Provider) probe(ctx context.Context, database *sqlx.DB) (Capabil
 		PolicyScalarList: firstReport.PolicyScalarList && secondReport.PolicyScalarList,
 		PolicyRelation:   firstReport.PolicyRelation && secondReport.PolicyRelation,
 		AnalyticsExact:   firstReport.AnalyticsExact && secondReport.AnalyticsExact,
+		Vec0:             firstReport.Vec0 && secondReport.Vec0,
+		VecVersion:       firstReport.VecVersion,
 	}, nil
 }
 
@@ -205,6 +382,10 @@ func (*Provider) VerifyPool(ctx context.Context, database *sqlx.DB, width int) (
 		combined.PolicyScalarList = combined.PolicyScalarList && report.PolicyScalarList
 		combined.PolicyRelation = combined.PolicyRelation && report.PolicyRelation
 		combined.AnalyticsExact = combined.AnalyticsExact && report.AnalyticsExact
+		combined.Vec0 = combined.Vec0 && report.Vec0
+		if combined.VecVersion != report.VecVersion {
+			return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed different sqlite-vec versions")
+		}
 	}
 	if database.Stats().WaitCount != waitCount {
 		return CapabilityReport{}, fmt.Errorf("sqlite pool verification observed concurrent pool use")
@@ -268,7 +449,11 @@ func probeConnection(ctx context.Context, connection *sqlx.Conn, label string) (
 	if err := connection.QueryRowxContext(ctx, analyticsProbeSQL()).Scan(&integerSum, &decimalSum, &decimalAverage, &comparison, &ordering); err != nil || !validAnalyticsProbe(integerSum, decimalSum, decimalAverage, comparison, ordering) {
 		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection analytical exactness unavailable: integer=%q decimalSum=%q decimalAverage=%q comparison=%d ordering=%d error=%v", label, integerSum, decimalSum, decimalAverage, comparison, ordering, err)
 	}
-	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true}, nil
+	var vecVersion string
+	if err := connection.GetContext(ctx, &vecVersion, "SELECT vec_version()"); err != nil || vecVersion == "" {
+		return CapabilityReport{}, fmt.Errorf("sqlite probe %s connection sqlite-vec unavailable", label)
+	}
+	return CapabilityReport{Version: version, ForeignKeys: true, JSON1: true, GeneratedColumns: true, PolicyBinaryText: true, PolicyASCIIText: true, PolicyExactJSON: true, PolicyScalarList: true, PolicyRelation: true, AnalyticsExact: true, Vec0: true, VecVersion: vecVersion}, nil
 }
 
 // PolicyCapabilityProof measures the complete SQLite P2 policy function set on
@@ -355,10 +540,14 @@ func compareVersion(left, right physical.Version) int {
 }
 
 func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, schema physical.PhysicalSchema) error {
+	normalized, err := physical.Normalize(schema)
+	if err != nil {
+		return err
+	}
 	if _, err := provider.probe(ctx, database); err != nil {
 		return err
 	}
-	script, err := provider.renderInitial(schema)
+	script, err := provider.renderInitial(normalized)
 	if err != nil {
 		return err
 	}
@@ -371,8 +560,8 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err := transaction.SelectContext(ctx, &existingRows, "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','index','view','trigger')"); err != nil {
 		return fmt.Errorf("sqlite initial apply inspect blank schema: %w", err)
 	}
-	allowed := make(map[string]struct{}, len(schema.Unmanaged))
-	for _, object := range schema.Unmanaged {
+	allowed := make(map[string]struct{}, len(normalized.Unmanaged))
+	for _, object := range normalized.Unmanaged {
 		allowed[object.Kind+"\x00"+string(object.Name)] = struct{}{}
 	}
 	for _, row := range existingRows {
@@ -396,16 +585,16 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err := rows.Close(); err != nil {
 		return fmt.Errorf("sqlite initial apply foreign_key_check close: %w", err)
 	}
-	actual, err := provider.introspectCatalog(ctx, transaction, schema)
+	actual, err := provider.introspectCatalog(ctx, transaction, normalized)
 	if err != nil {
 		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
-	wantPhysical, _ := physical.PhysicalFingerprint(schema)
+	wantPhysical, _ := physical.PhysicalFingerprint(normalized)
 	gotPhysical, _ := physical.PhysicalFingerprint(actual)
 	if gotPhysical != wantPhysical {
 		return fmt.Errorf("sqlite initial apply precommit physical fingerprint mismatch")
 	}
-	wantSystem, _ := physical.SystemFingerprint(schema.Provider, schema.System)
+	wantSystem, _ := physical.SystemFingerprint(normalized.Provider, normalized.System)
 	gotSystem, _ := physical.SystemFingerprint(actual.Provider, actual.System)
 	if gotSystem != wantSystem {
 		return fmt.Errorf("sqlite initial apply precommit system fingerprint mismatch")

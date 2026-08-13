@@ -2,8 +2,207 @@
   "formatVersion": 1,
   "packages": [
     {
+      "path": "github.com/eleven-am/golem/go/embedding",
+      "declarations": [
+        {
+          "name": "Code",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "CodeInvalidInput",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_INVALID_INPUT\"",
+          "methods": []
+        },
+        {
+          "name": "CodeOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(err error) (github.com/eleven-am/golem/go/embedding.Code, bool)",
+          "methods": []
+        },
+        {
+          "name": "CodeProvider",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_PROVIDER\"",
+          "methods": []
+        },
+        {
+          "name": "CodeUnavailable",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/embedding.Code=\"EMBEDDING_UNAVAILABLE\"",
+          "methods": []
+        },
+        {
+          "name": "Error",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Errorfunc() string",
+            "pointer:Unwrapfunc() error"
+          ]
+        },
+        {
+          "name": "Input",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Keyfunc() string",
+            "pointer:Textfunc() string",
+            "value:Keyfunc() string",
+            "value:Textfunc() string"
+          ]
+        },
+        {
+          "name": "MaximumBatchSize",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=2048",
+          "methods": []
+        },
+        {
+          "name": "MaximumDimensions",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=2000",
+          "methods": []
+        },
+        {
+          "name": "MaximumInputBytes",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "untyped int=16777216",
+          "methods": []
+        },
+        {
+          "name": "NewError",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(code github.com/eleven-am/golem/go/embedding.Code, cause error) error",
+          "methods": []
+        },
+        {
+          "name": "NewInput",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(key string, text string) (github.com/eleven-am/golem/go/embedding.Input, error)",
+          "methods": []
+        },
+        {
+          "name": "NewRegistry",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(providers map[string]github.com/eleven-am/golem/go/embedding.Provider) (github.com/eleven-am/golem/go/embedding.Registry, error)",
+          "methods": []
+        },
+        {
+          "name": "NewSpecification",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(provider string, model string, revision string, dimensions int, maximumBatch int) (github.com/eleven-am/golem/go/embedding.Specification, error)",
+          "methods": []
+        },
+        {
+          "name": "NewVector",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(values []float32) (github.com/eleven-am/golem/go/embedding.Vector, error)",
+          "methods": []
+        },
+        {
+          "name": "Provider",
+          "kind": "type",
+          "typeKind": "interface",
+          "signature": "interface{Embedfunc(ctx context.Context, inputs []github.com/eleven-am/golem/go/embedding.Input) ([]github.com/eleven-am/golem/go/embedding.Vector, error);Specificationfunc() github.com/eleven-am/golem/go/embedding.Specification}",
+          "methods": [
+            "value:Embedfunc(ctx context.Context, inputs []github.com/eleven-am/golem/go/embedding.Input) ([]github.com/eleven-am/golem/go/embedding.Vector, error)",
+            "value:Specificationfunc() github.com/eleven-am/golem/go/embedding.Specification"
+          ]
+        },
+        {
+          "name": "Registry",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Lookupfunc(name string) (github.com/eleven-am/golem/go/embedding.Provider, bool)",
+            "pointer:Namesfunc() []string",
+            "pointer:Specificationfunc(name string) (github.com/eleven-am/golem/go/embedding.Specification, bool)",
+            "value:Lookupfunc(name string) (github.com/eleven-am/golem/go/embedding.Provider, bool)",
+            "value:Namesfunc() []string",
+            "value:Specificationfunc(name string) (github.com/eleven-am/golem/go/embedding.Specification, bool)"
+          ]
+        },
+        {
+          "name": "Specification",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Dimensionsfunc() int",
+            "pointer:FingerprintInputfunc() string",
+            "pointer:MaximumBatchfunc() int",
+            "pointer:Modelfunc() string",
+            "pointer:Providerfunc() string",
+            "pointer:Revisionfunc() string",
+            "pointer:Validatefunc() error",
+            "value:Dimensionsfunc() int",
+            "value:FingerprintInputfunc() string",
+            "value:MaximumBatchfunc() int",
+            "value:Modelfunc() string",
+            "value:Providerfunc() string",
+            "value:Revisionfunc() string",
+            "value:Validatefunc() error"
+          ]
+        },
+        {
+          "name": "ValidateResult",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(specification github.com/eleven-am/golem/go/embedding.Specification, inputs []github.com/eleven-am/golem/go/embedding.Input, vectors []github.com/eleven-am/golem/go/embedding.Vector) error",
+          "methods": []
+        },
+        {
+          "name": "Vector",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Dimensionsfunc() int",
+            "pointer:Valuesfunc() []float32",
+            "value:Dimensionsfunc() int",
+            "value:Valuesfunc() []float32"
+          ]
+        }
+      ]
+    },
+    {
       "path": "github.com/eleven-am/golem/go/events",
       "declarations": [
+        {
+          "name": "AvailabilityOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(transport github.com/eleven-am/golem/go/events.EventTransport) bool",
+          "methods": []
+        },
+        {
+          "name": "AvailabilityReporter",
+          "kind": "type",
+          "typeKind": "interface",
+          "signature": "interface{TransportAvailablefunc() bool}",
+          "methods": [
+            "value:TransportAvailablefunc() bool"
+          ]
+        },
         {
           "name": "CDCAdapter",
           "kind": "type",
@@ -81,6 +280,7 @@
             "pointer:PublisherEnabledfunc() bool",
             "pointer:PublisherRunningfunc() bool",
             "pointer:SubscriptionModelIDsfunc() []github.com/eleven-am/golem/go/golem.ModelID",
+            "pointer:TransportAvailablefunc() bool",
             "pointer:Transportfunc() github.com/eleven-am/golem/go/events.TransportCapabilities",
             "value:CDCAdapterIdentitiesfunc() []string",
             "value:EventCodecVersionsfunc() []string",
@@ -90,6 +290,7 @@
             "value:PublisherEnabledfunc() bool",
             "value:PublisherRunningfunc() bool",
             "value:SubscriptionModelIDsfunc() []github.com/eleven-am/golem/go/golem.ModelID",
+            "value:TransportAvailablefunc() bool",
             "value:Transportfunc() github.com/eleven-am/golem/go/events.TransportCapabilities"
           ]
         },
@@ -744,6 +945,22 @@
           "methods": []
         },
         {
+          "name": "PayloadLimitOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(transport github.com/eleven-am/golem/go/events.EventTransport) (int, bool)",
+          "methods": []
+        },
+        {
+          "name": "PayloadLimitReporter",
+          "kind": "type",
+          "typeKind": "interface",
+          "signature": "interface{MaxEncodedEventBytesfunc() int}",
+          "methods": [
+            "value:MaxEncodedEventBytesfunc() int"
+          ]
+        },
+        {
           "name": "ReportOperatorAudit",
           "kind": "func",
           "typeKind": "",
@@ -804,6 +1021,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func(provider github.com/eleven-am/golem/go/golem.Provider, factCodecs []string, eventCodecs []string, transport github.com/eleven-am/golem/go/events.TransportCapabilities, publisherEnabled bool, publisherRunning bool, subscriptionModels []github.com/eleven-am/golem/go/golem.ModelID, cdcAdapters []string, externalWritesObserved bool) github.com/eleven-am/golem/go/events.Capabilities",
+          "methods": []
+        },
+        {
+          "name": "RuntimeCapabilitiesWithTransportAvailability",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(provider github.com/eleven-am/golem/go/golem.Provider, factCodecs []string, eventCodecs []string, transport github.com/eleven-am/golem/go/events.TransportCapabilities, transportAvailable bool, publisherEnabled bool, publisherRunning bool, subscriptionModels []github.com/eleven-am/golem/go/golem.ModelID, cdcAdapters []string, externalWritesObserved bool) github.com/eleven-am/golem/go/events.Capabilities",
           "methods": []
         },
         {
@@ -934,6 +1158,40 @@
           "typeKind": "",
           "signature": "func(identity github.com/eleven-am/golem/go/events.CDCIdentity) error",
           "methods": []
+        }
+      ]
+    },
+    {
+      "path": "github.com/eleven-am/golem/go/events/nats",
+      "declarations": [
+        {
+          "name": "Config",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{URLs []string;SubjectPrefix string;Observer github.com/eleven-am/golem/go/events.Observer;ConnectTimeout time.Duration;FlushTimeout time.Duration;ReconnectWait time.Duration;MaxReconnects int;ReconnectBufferBytes int;MaxInboundPayloadBytes int;PendingMessages int;PendingBytes int;StreamBuffer int}",
+          "methods": null
+        },
+        {
+          "name": "Open",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(ctx context.Context, database *github.com/eleven-am/golem/go/provider.Database, config github.com/eleven-am/golem/go/events/nats.Config) (*github.com/eleven-am/golem/go/events/nats.Transport, error)",
+          "methods": []
+        },
+        {
+          "name": "Transport",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:BindEventRuntimefunc(binding github.com/eleven-am/golem/go/events.RuntimeBinding) error",
+            "pointer:Closefunc() error",
+            "pointer:MaxEncodedEventBytesfunc() int",
+            "pointer:Publishfunc(ctx context.Context, batch github.com/eleven-am/golem/go/events.EventBatch) error",
+            "pointer:Subscribefunc(ctx context.Context, requested github.com/eleven-am/golem/go/events.Subscription) (github.com/eleven-am/golem/go/events.Stream, error)",
+            "pointer:TransportAvailablefunc() bool",
+            "pointer:TransportCapabilitiesfunc() github.com/eleven-am/golem/go/events.TransportCapabilities"
+          ]
         }
       ]
     },
@@ -1354,6 +1612,13 @@
           "methods": null
         },
         {
+          "name": "ConcurrencyExpectation",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": null
+        },
+        {
           "name": "CreateFieldCapability",
           "kind": "type",
           "typeKind": "interface",
@@ -1572,6 +1837,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[M any](fields ...github.com/eleven-am/golem/go/golem.Column[M]) github.com/eleven-am/golem/go/golem.ReadOption[M]",
+          "methods": []
+        },
+        {
+          "name": "EmbeddingSpace",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(_ *github.com/eleven-am/golem/go/golem.Schema, _ string, _ uint16)",
           "methods": []
         },
         {
@@ -1813,6 +2085,34 @@
           ]
         },
         {
+          "name": "ExistingVersion",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": null
+        },
+        {
+          "name": "ExpectAbsent",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func() github.com/eleven-am/golem/go/golem.ConcurrencyExpectation",
+          "methods": []
+        },
+        {
+          "name": "ExpectExisting",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(value int64) github.com/eleven-am/golem/go/golem.ConcurrencyExpectation",
+          "methods": []
+        },
+        {
+          "name": "ExpectVersion",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(value int64) github.com/eleven-am/golem/go/golem.ExistingVersion",
+          "methods": []
+        },
+        {
           "name": "Field",
           "kind": "type",
           "typeKind": "interface",
@@ -1820,11 +2120,25 @@
           "methods": null
         },
         {
+          "name": "FieldGenerationDigest",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](field github.com/eleven-am/golem/go/golem.Field[M]) (generation github.com/eleven-am/golem/go/golem.SchemaDigest, ok bool)",
+          "methods": []
+        },
+        {
           "name": "FieldID",
           "kind": "type",
           "typeKind": "other",
           "signature": "[16]byte",
           "methods": null
+        },
+        {
+          "name": "FieldIdentity",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](field github.com/eleven-am/golem/go/golem.Field[M]) (identity github.com/eleven-am/golem/go/golem.FieldID, ok bool)",
+          "methods": []
         },
         {
           "name": "FindFirstHookRequest",
@@ -3721,6 +4035,132 @@
           "methods": null
         },
         {
+          "name": "GeneratedStampedBytesField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.BytesField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedEqualField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V github.com/eleven-am/golem/go/golem.EqualValue](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.EqualField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedJSONField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.JSONField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedListField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, E github.com/eleven-am/golem/go/golem.ListElement](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.ListField[M, E]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedModeJSONField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.ModeJSONField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedModeTextField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V ~string](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.ModeTextField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedModelDescriptor",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.ModelID, shape github.com/eleven-am/golem/go/golem.GeneratedModelShape) github.com/eleven-am/golem/go/golem.ModelDescriptor[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableBytesField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableBytesField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableEqualField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V github.com/eleven-am/golem/go/golem.EqualValue](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableEqualField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableJSONField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableJSONField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableListField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, E github.com/eleven-am/golem/go/golem.ListElement](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableListField[M, E]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableModeJSONField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableModeJSONField[M]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableModeTextField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V ~string](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableModeTextField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableOpaqueField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M, V any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableOpaqueField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableOrderedField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V github.com/eleven-am/golem/go/golem.OrderedValue](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableOrderedField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedNullableTextField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V ~string](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.NullableTextField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedOpaqueField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M, V any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.OpaqueField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedOrderedField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V github.com/eleven-am/golem/go/golem.OrderedValue](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.OrderedField[M, V]",
+          "methods": []
+        },
+        {
           "name": "GeneratedStampedPackageBindings",
           "kind": "func",
           "typeKind": "",
@@ -3732,6 +4172,27 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func(generation github.com/eleven-am/golem/go/golem.SchemaDigest, models ...github.com/eleven-am/golem/go/golem.ModelMetadata) github.com/eleven-am/golem/go/golem.PackageDescriptors",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedTextField",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any, V ~string](generation github.com/eleven-am/golem/go/golem.SchemaDigest, id github.com/eleven-am/golem/go/golem.FieldID) github.com/eleven-am/golem/go/golem.TextField[M, V]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedToMany",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M, R any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, fieldID github.com/eleven-am/golem/go/golem.FieldID, relationID github.com/eleven-am/golem/go/golem.RelationID, target ...github.com/eleven-am/golem/go/golem.ModelID) github.com/eleven-am/golem/go/golem.ToMany[M, R]",
+          "methods": []
+        },
+        {
+          "name": "GeneratedStampedToOne",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M, R any](generation github.com/eleven-am/golem/go/golem.SchemaDigest, fieldID github.com/eleven-am/golem/go/golem.FieldID, relationID github.com/eleven-am/golem/go/golem.RelationID, target ...github.com/eleven-am/golem/go/golem.ModelID) github.com/eleven-am/golem/go/golem.ToOne[M, R]",
           "methods": []
         },
         {
@@ -4865,7 +5326,9 @@
           "typeKind": "struct",
           "signature": "[M any]struct{}",
           "methods": [
+            "pointer:GenerationDigestfunc() github.com/eleven-am/golem/go/golem.SchemaDigest",
             "pointer:Metadatafunc() github.com/eleven-am/golem/go/golem.ModelMetadata",
+            "value:GenerationDigestfunc() github.com/eleven-am/golem/go/golem.SchemaDigest",
             "value:Metadatafunc() github.com/eleven-am/golem/go/golem.ModelMetadata"
           ]
         },
@@ -5498,6 +5961,13 @@
             "pointer:Exprfunc() github.com/eleven-am/golem/go/golem.SchemaExpr[M, V]",
             "value:Exprfunc() github.com/eleven-am/golem/go/golem.SchemaExpr[M, V]"
           ]
+        },
+        {
+          "name": "OptimisticConcurrency",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](_ github.com/eleven-am/golem/go/golem.ScalarColumn[M, int64]) github.com/eleven-am/golem/go/golem.ModelOption[M]",
+          "methods": []
         },
         {
           "name": "Or",
@@ -6462,6 +6932,13 @@
           "methods": []
         },
         {
+          "name": "RuntimeFreezeVersionedMutationRequest",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(input github.com/eleven-am/golem/go/golem.RuntimeVersionedMutationRequestInput) (github.com/eleven-am/golem/go/golem.RuntimeMutationRequest, error)",
+          "methods": []
+        },
+        {
           "name": "RuntimeGroupAnd",
           "kind": "const",
           "typeKind": "",
@@ -6869,7 +7346,9 @@
           "typeKind": "struct",
           "signature": "struct{}",
           "methods": [
+            "pointer:ConcurrencyExpectationfunc() (github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, bool)",
             "pointer:CreateInputfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationInput, bool)",
+            "pointer:ExistingVersionfunc() (github.com/eleven-am/golem/go/golem.ExistingVersion, bool)",
             "pointer:Inputfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationInput, bool)",
             "pointer:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
             "pointer:Operationfunc() github.com/eleven-am/golem/go/golem.RuntimeMutationOperation",
@@ -6877,7 +7356,9 @@
             "pointer:Targetfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationTarget, bool)",
             "pointer:UpdateInputfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationInput, bool)",
             "pointer:Wherefunc() (github.com/eleven-am/golem/go/golem.FrozenPredicate, bool)",
+            "value:ConcurrencyExpectationfunc() (github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, bool)",
             "value:CreateInputfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationInput, bool)",
+            "value:ExistingVersionfunc() (github.com/eleven-am/golem/go/golem.ExistingVersion, bool)",
             "value:Inputfunc() (github.com/eleven-am/golem/go/golem.FrozenMutationInput, bool)",
             "value:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
             "value:Operationfunc() github.com/eleven-am/golem/go/golem.RuntimeMutationOperation",
@@ -7328,6 +7809,20 @@
           "methods": null
         },
         {
+          "name": "RuntimeSemanticRecordKey",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](row github.com/eleven-am/golem/go/golem.Row[M], fields []github.com/eleven-am/golem/go/golem.FieldID) (string, error)",
+          "methods": []
+        },
+        {
+          "name": "RuntimeSemanticResult",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](row github.com/eleven-am/golem/go/golem.Row[M], distance float64) (github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
+          "methods": []
+        },
+        {
           "name": "RuntimeToManyOccurrenceCell",
           "kind": "func",
           "typeKind": "",
@@ -7499,6 +7994,13 @@
           "typeKind": "",
           "signature": "func(value github.com/eleven-am/golem/go/internal/event/metadatavalue.Value) (github.com/eleven-am/golem/go/golem.EventMetadata, error)",
           "methods": []
+        },
+        {
+          "name": "RuntimeVersionedMutationRequestInput",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{Request github.com/eleven-am/golem/go/golem.RuntimeMutationRequestInput;ExistingVersion *github.com/eleven-am/golem/go/golem.ExistingVersion;ConcurrencyExpectation *github.com/eleven-am/golem/go/golem.ConcurrencyExpectation}",
+          "methods": null
         },
         {
           "name": "SQLite",
@@ -8535,6 +9037,27 @@
           "methods": null
         },
         {
+          "name": "SemanticIndex",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](_ string, _ string, _ ...github.com/eleven-am/golem/go/golem.Column[M]) github.com/eleven-am/golem/go/golem.ModelOption[M]",
+          "methods": []
+        },
+        {
+          "name": "SemanticResult",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Distancefunc() float64",
+            "pointer:Rowfunc() github.com/eleven-am/golem/go/golem.Row[M]",
+            "pointer:Similarityfunc() float64",
+            "value:Distancefunc() float64",
+            "value:Rowfunc() github.com/eleven-am/golem/go/golem.Row[M]",
+            "value:Similarityfunc() float64"
+          ]
+        },
+        {
           "name": "SetCreate",
           "kind": "func",
           "typeKind": "",
@@ -8915,6 +9438,324 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[M any](predicate github.com/eleven-am/golem/go/golem.Predicate[M]) github.com/eleven-am/golem/go/golem.ReadOption[M]",
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "github.com/eleven-am/golem/go/golemtest",
+      "declarations": [
+        {
+          "name": "Access",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "AccessAlways",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=1",
+          "methods": []
+        },
+        {
+          "name": "AccessConditional",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=2",
+          "methods": []
+        },
+        {
+          "name": "AccessNever",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.Access=3",
+          "methods": []
+        },
+        {
+          "name": "CodeOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(err error) (github.com/eleven-am/golem/go/golemtest.ErrorCode, bool)",
+          "methods": []
+        },
+        {
+          "name": "Constraint",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:CanonicalBytesfunc() []byte",
+            "pointer:Constantfunc() (value bool, constant bool)",
+            "pointer:Viewfunc() github.com/eleven-am/golem/go/golem.FrozenPredicateView",
+            "value:CanonicalBytesfunc() []byte",
+            "value:Constantfunc() (value bool, constant bool)",
+            "value:Viewfunc() github.com/eleven-am/golem/go/golem.FrozenPredicateView"
+          ]
+        },
+        {
+          "name": "DependencyEntry",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Childrenfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "pointer:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "pointer:Kindfunc() github.com/eleven-am/golem/go/golemtest.DependencyKind",
+            "pointer:TargetModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)",
+            "value:Childrenfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "value:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "value:Kindfunc() github.com/eleven-am/golem/go/golemtest.DependencyKind",
+            "value:TargetModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)"
+          ]
+        },
+        {
+          "name": "DependencyKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "DependencyRelation",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.DependencyKind=2",
+          "methods": []
+        },
+        {
+          "name": "DependencyScalar",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.DependencyKind=1",
+          "methods": []
+        },
+        {
+          "name": "DependencyTree",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Entriesfunc() []github.com/eleven-am/golem/go/golemtest.DependencyEntry",
+            "pointer:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "value:Entriesfunc() []github.com/eleven-am/golem/go/golemtest.DependencyEntry",
+            "value:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID"
+          ]
+        },
+        {
+          "name": "Equivalent",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](constraint github.com/eleven-am/golem/go/golemtest.Constraint[M], expected github.com/eleven-am/golem/go/golem.Predicate[M]) (bool, error)",
+          "methods": []
+        },
+        {
+          "name": "ErrorCode",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "ErrorGenerationMismatch",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"GENERATION_MISMATCH\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorInvalidInput",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"INVALID_INPUT\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorPolicyAnalysis",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"POLICY_ANALYSIS_FAILED\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorPolicyFactory",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.ErrorCode=\"POLICY_FACTORY_FAILED\"",
+          "methods": []
+        },
+        {
+          "name": "FieldClassification",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Accessfunc() github.com/eleven-am/golem/go/golemtest.Access",
+            "pointer:Conditionfunc() (github.com/eleven-am/golem/go/golemtest.Constraint[M], bool)",
+            "pointer:Dependenciesfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "pointer:DischargedByConstraintfunc() bool",
+            "pointer:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "pointer:RequiredFieldsfunc() []github.com/eleven-am/golem/go/golem.FieldID",
+            "value:Accessfunc() github.com/eleven-am/golem/go/golemtest.Access",
+            "value:Conditionfunc() (github.com/eleven-am/golem/go/golemtest.Constraint[M], bool)",
+            "value:Dependenciesfunc() github.com/eleven-am/golem/go/golemtest.DependencyTree",
+            "value:DischargedByConstraintfunc() bool",
+            "value:FieldIDfunc() github.com/eleven-am/golem/go/golem.FieldID",
+            "value:RequiredFieldsfunc() []github.com/eleven-am/golem/go/golem.FieldID"
+          ]
+        },
+        {
+          "name": "Implies",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](constraint github.com/eleven-am/golem/go/golemtest.Constraint[M], expected github.com/eleven-am/golem/go/golem.Predicate[M]) (bool, error)",
+          "methods": []
+        },
+        {
+          "name": "Kit",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[A any]struct{}",
+          "methods": [
+            "pointer:ForActorfunc(actor A) (github.com/eleven-am/golem/go/golemtest.PolicySet, error)"
+          ]
+        },
+        {
+          "name": "Model",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[M any](policies github.com/eleven-am/golem/go/golemtest.PolicySet, descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M]) (github.com/eleven-am/golem/go/golemtest.ModelPolicy[M], error)",
+          "methods": []
+        },
+        {
+          "name": "ModelPolicy",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:ClassifyReadFieldsWithReachfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, reach github.com/eleven-am/golem/go/golem.Predicate[M], fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "pointer:ClassifyReadFieldsfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "pointer:RowConstraintfunc(action github.com/eleven-am/golem/go/golem.FrozenAction) (github.com/eleven-am/golem/go/golemtest.Constraint[M], error)",
+            "value:ClassifyReadFieldsWithReachfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, reach github.com/eleven-am/golem/go/golem.Predicate[M], fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "value:ClassifyReadFieldsfunc(use github.com/eleven-am/golem/go/golemtest.UseKind, selectingAction github.com/eleven-am/golem/go/golem.FrozenAction, fields ...github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.ReadPlan[M], error)",
+            "value:RowConstraintfunc(action github.com/eleven-am/golem/go/golem.FrozenAction) (github.com/eleven-am/golem/go/golemtest.Constraint[M], error)"
+          ]
+        },
+        {
+          "name": "New",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[A any](bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A], descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors, bundle github.com/eleven-am/golem/go/golem.SchemaBundle) (*github.com/eleven-am/golem/go/golemtest.Kit[A], error)",
+          "methods": []
+        },
+        {
+          "name": "PolicySet",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": null
+        },
+        {
+          "name": "ReadPlan",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "[M any]struct{}",
+          "methods": [
+            "pointer:Fieldfunc(field github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.FieldClassification[M], bool)",
+            "pointer:Fieldsfunc() []github.com/eleven-am/golem/go/golemtest.FieldClassification[M]",
+            "pointer:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "pointer:SelectingActionfunc() github.com/eleven-am/golem/go/golem.FrozenAction",
+            "pointer:UseKindfunc() github.com/eleven-am/golem/go/golemtest.UseKind",
+            "value:Fieldfunc(field github.com/eleven-am/golem/go/golem.Field[M]) (github.com/eleven-am/golem/go/golemtest.FieldClassification[M], bool)",
+            "value:Fieldsfunc() []github.com/eleven-am/golem/go/golemtest.FieldClassification[M]",
+            "value:ModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "value:SelectingActionfunc() github.com/eleven-am/golem/go/golem.FrozenAction",
+            "value:UseKindfunc() github.com/eleven-am/golem/go/golemtest.UseKind"
+          ]
+        },
+        {
+          "name": "UseAggregateMeasure",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=7",
+          "methods": []
+        },
+        {
+          "name": "UseAggregateOrder",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=10",
+          "methods": []
+        },
+        {
+          "name": "UseComputedDependency",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=11",
+          "methods": []
+        },
+        {
+          "name": "UseCursor",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=5",
+          "methods": []
+        },
+        {
+          "name": "UseDistinct",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=6",
+          "methods": []
+        },
+        {
+          "name": "UseFilter",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=2",
+          "methods": []
+        },
+        {
+          "name": "UseGroupDimension",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=8",
+          "methods": []
+        },
+        {
+          "name": "UseHaving",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=9",
+          "methods": []
+        },
+        {
+          "name": "UseKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "uint8",
+          "methods": null
+        },
+        {
+          "name": "UseOrder",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=4",
+          "methods": []
+        },
+        {
+          "name": "UseProjection",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=1",
+          "methods": []
+        },
+        {
+          "name": "UseSelector",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/golemtest.UseKind=3",
           "methods": []
         }
       ]
@@ -9535,6 +10376,13 @@
           "methods": []
         },
         {
+          "name": "KindQueryPlan",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Kind=\"query_plan\"",
+          "methods": []
+        },
+        {
           "name": "KindRead",
           "kind": "const",
           "typeKind": "",
@@ -9560,6 +10408,13 @@
           "kind": "const",
           "typeKind": "",
           "signature": "github.com/eleven-am/golem/go/observe.Kind=\"scoped_read\"",
+          "methods": []
+        },
+        {
+          "name": "KindSemantic",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Kind=\"semantic\"",
           "methods": []
         },
         {
@@ -9949,6 +10804,13 @@
           "methods": []
         },
         {
+          "name": "OperationQueryPlanExplain",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"query_plan.explain\"",
+          "methods": []
+        },
+        {
           "name": "OperationReadCount",
           "kind": "const",
           "typeKind": "",
@@ -9995,6 +10857,27 @@
           "kind": "const",
           "typeKind": "",
           "signature": "github.com/eleven-am/golem/go/observe.Operation=\"scoped.read\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticProvider",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.provider\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticRank",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.rank\"",
+          "methods": []
+        },
+        {
+          "name": "OperationSemanticRefresh",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/observe.Operation=\"semantic.refresh\"",
           "methods": []
         },
         {
@@ -10451,6 +11334,13 @@
           "methods": []
         },
         {
+          "name": "CodeMaintenance",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/provider.Code=\"PROVIDER_MAINTENANCE\"",
+          "methods": []
+        },
+        {
           "name": "CodeOf",
           "kind": "func",
           "typeKind": "",
@@ -10609,6 +11499,13 @@
       "path": "github.com/eleven-am/golem/go/provider/sqlite",
       "declarations": [
         {
+          "name": "CheckpointForBackup",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(ctx context.Context, database *github.com/eleven-am/golem/go/provider.Database) error",
+          "methods": []
+        },
+        {
           "name": "Config",
           "kind": "type",
           "typeKind": "struct",
@@ -10620,6 +11517,410 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func(ctx context.Context, config github.com/eleven-am/golem/go/provider/sqlite.Config) (*github.com/eleven-am/golem/go/provider.Database, error)",
+          "methods": []
+        }
+      ]
+    },
+    {
+      "path": "github.com/eleven-am/golem/go/queryplan",
+      "declarations": [
+        {
+          "name": "AccessKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "AccessKindBitmapIndex",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"bitmapIndex\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindConstant",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"constant\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindFullScan",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"fullScan\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindIndex",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"index\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindNone",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"none\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindPrimaryKey",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"primaryKey\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindUniqueIndex",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"uniqueIndex\"",
+          "methods": []
+        },
+        {
+          "name": "AccessKindUnknown",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.AccessKind=\"unknown\"",
+          "methods": []
+        },
+        {
+          "name": "CodeOf",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func(err error) (github.com/eleven-am/golem/go/queryplan.ErrorCode, bool)",
+          "methods": []
+        },
+        {
+          "name": "ErrorCode",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "ErrorInvalid",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.ErrorCode=\"PLAN_INVALID\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorTooComplex",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.ErrorCode=\"PLAN_TOO_COMPLEX\"",
+          "methods": []
+        },
+        {
+          "name": "ErrorUnavailable",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.ErrorCode=\"PLAN_UNAVAILABLE\"",
+          "methods": []
+        },
+        {
+          "name": "IndexID",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "[16]byte",
+          "methods": null
+        },
+        {
+          "name": "Node",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Accessfunc() github.com/eleven-am/golem/go/queryplan.AccessKind",
+            "pointer:BatchCapacityfunc() (uint32, bool)",
+            "pointer:Childrenfunc() []github.com/eleven-am/golem/go/queryplan.Node",
+            "pointer:FieldIDsfunc() []github.com/eleven-am/golem/go/golem.FieldID",
+            "pointer:IndexIDfunc() (github.com/eleven-am/golem/go/queryplan.IndexID, bool)",
+            "pointer:Kindfunc() github.com/eleven-am/golem/go/queryplan.NodeKind",
+            "pointer:MaximumExecutionStatementsfunc() (uint32, bool)",
+            "pointer:MinimumExecutionStatementsfunc() (uint32, bool)",
+            "pointer:ModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)",
+            "pointer:RelationIDfunc() (github.com/eleven-am/golem/go/golem.RelationID, bool)",
+            "pointer:Warningsfunc() []github.com/eleven-am/golem/go/queryplan.Warning",
+            "value:Accessfunc() github.com/eleven-am/golem/go/queryplan.AccessKind",
+            "value:BatchCapacityfunc() (uint32, bool)",
+            "value:Childrenfunc() []github.com/eleven-am/golem/go/queryplan.Node",
+            "value:FieldIDsfunc() []github.com/eleven-am/golem/go/golem.FieldID",
+            "value:IndexIDfunc() (github.com/eleven-am/golem/go/queryplan.IndexID, bool)",
+            "value:Kindfunc() github.com/eleven-am/golem/go/queryplan.NodeKind",
+            "value:MaximumExecutionStatementsfunc() (uint32, bool)",
+            "value:MinimumExecutionStatementsfunc() (uint32, bool)",
+            "value:ModelIDfunc() (github.com/eleven-am/golem/go/golem.ModelID, bool)",
+            "value:RelationIDfunc() (github.com/eleven-am/golem/go/golem.RelationID, bool)",
+            "value:Warningsfunc() []github.com/eleven-am/golem/go/queryplan.Warning"
+          ]
+        },
+        {
+          "name": "NodeKind",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "NodeKindAccess",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"access\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindAggregate",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"aggregate\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindConstant",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"constant\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindCorrelatedRelation",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"correlatedRelation\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindDeferredBatch",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"deferredBatch\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindJoin",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"join\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindMaterialize",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"materialize\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindSort",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"sort\"",
+          "methods": []
+        },
+        {
+          "name": "NodeKindUnknown",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.NodeKind=\"unknown\"",
+          "methods": []
+        },
+        {
+          "name": "Operation",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "OperationAggregate",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"aggregate\"",
+          "methods": []
+        },
+        {
+          "name": "OperationCount",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"count\"",
+          "methods": []
+        },
+        {
+          "name": "OperationFindFirst",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"findFirst\"",
+          "methods": []
+        },
+        {
+          "name": "OperationFindMany",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"findMany\"",
+          "methods": []
+        },
+        {
+          "name": "OperationFindUnique",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"findUnique\"",
+          "methods": []
+        },
+        {
+          "name": "OperationGroupBy",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"groupBy\"",
+          "methods": []
+        },
+        {
+          "name": "OperationRelationGroupBy",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"relationGroupBy\"",
+          "methods": []
+        },
+        {
+          "name": "OperationScoped",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Operation=\"scoped\"",
+          "methods": []
+        },
+        {
+          "name": "Report",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:CanonicalDigestfunc() [32]byte",
+            "pointer:FormatVersionfunc() uint16",
+            "pointer:MaximumExecutionStatementsfunc() uint32",
+            "pointer:MinimumExecutionStatementsfunc() uint32",
+            "pointer:Operationfunc() github.com/eleven-am/golem/go/queryplan.Operation",
+            "pointer:Providerfunc() github.com/eleven-am/golem/go/golem.Provider",
+            "pointer:RootModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "pointer:Statementsfunc() []github.com/eleven-am/golem/go/queryplan.Statement",
+            "pointer:Warningsfunc() []github.com/eleven-am/golem/go/queryplan.Warning",
+            "value:CanonicalDigestfunc() [32]byte",
+            "value:FormatVersionfunc() uint16",
+            "value:MaximumExecutionStatementsfunc() uint32",
+            "value:MinimumExecutionStatementsfunc() uint32",
+            "value:Operationfunc() github.com/eleven-am/golem/go/queryplan.Operation",
+            "value:Providerfunc() github.com/eleven-am/golem/go/golem.Provider",
+            "value:RootModelIDfunc() github.com/eleven-am/golem/go/golem.ModelID",
+            "value:Statementsfunc() []github.com/eleven-am/golem/go/queryplan.Statement",
+            "value:Warningsfunc() []github.com/eleven-am/golem/go/queryplan.Warning"
+          ]
+        },
+        {
+          "name": "Statement",
+          "kind": "type",
+          "typeKind": "struct",
+          "signature": "struct{}",
+          "methods": [
+            "pointer:Ordinalfunc() uint32",
+            "pointer:Purposefunc() github.com/eleven-am/golem/go/queryplan.StatementPurpose",
+            "pointer:Rootfunc() github.com/eleven-am/golem/go/queryplan.Node",
+            "value:Ordinalfunc() uint32",
+            "value:Purposefunc() github.com/eleven-am/golem/go/queryplan.StatementPurpose",
+            "value:Rootfunc() github.com/eleven-am/golem/go/queryplan.Node"
+          ]
+        },
+        {
+          "name": "StatementPurpose",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "StatementPurposeAnalytics",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.StatementPurpose=\"analytics\"",
+          "methods": []
+        },
+        {
+          "name": "StatementPurposePolicyHydration",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.StatementPurpose=\"policyHydration\"",
+          "methods": []
+        },
+        {
+          "name": "StatementPurposeRelationBatch",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.StatementPurpose=\"relationBatch\"",
+          "methods": []
+        },
+        {
+          "name": "StatementPurposeRoot",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.StatementPurpose=\"root\"",
+          "methods": []
+        },
+        {
+          "name": "StatementPurposeScoped",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.StatementPurpose=\"scoped\"",
+          "methods": []
+        },
+        {
+          "name": "Warning",
+          "kind": "type",
+          "typeKind": "other",
+          "signature": "string",
+          "methods": null
+        },
+        {
+          "name": "WarningDeferredBatch",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"DEFERRED_BATCH\"",
+          "methods": []
+        },
+        {
+          "name": "WarningFullScan",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"FULL_SCAN\"",
+          "methods": []
+        },
+        {
+          "name": "WarningMaterialization",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"MATERIALIZATION\"",
+          "methods": []
+        },
+        {
+          "name": "WarningMultiStatement",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"MULTI_STATEMENT\"",
+          "methods": []
+        },
+        {
+          "name": "WarningTemporarySort",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"TEMPORARY_SORT\"",
+          "methods": []
+        },
+        {
+          "name": "WarningUnknownProviderNode",
+          "kind": "const",
+          "typeKind": "",
+          "signature": "github.com/eleven-am/golem/go/queryplan.Warning=\"UNKNOWN_PROVIDER_NODE\"",
           "methods": []
         }
       ]
@@ -10644,6 +11945,7 @@
             "pointer:EventLimitsfunc() github.com/eleven-am/golem/go/events.Limits",
             "pointer:EventOperatorfunc() github.com/eleven-am/golem/go/events.Operator",
             "pointer:ForPrincipalfunc(ctx context.Context, principal P) (*github.com/eleven-am/golem/go/runtime.Caller[P, A], error)",
+            "pointer:RefreshSemanticIndexesfunc(ctx context.Context) error",
             "pointer:RunEventPublisherfunc(ctx context.Context) (resultErr error)",
             "pointer:Systemfunc() github.com/eleven-am/golem/go/runtime.System[P, A]"
           ]
@@ -10695,6 +11997,13 @@
           "methods": []
         },
         {
+          "name": "CallerDeleteVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "CallerEvents",
           "kind": "func",
           "typeKind": "",
@@ -10713,6 +12022,62 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], request github.com/eleven-am/golem/go/golem.FrozenReadRequest) ([]github.com/eleven-am/golem/go/golem.RuntimeModelRow, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainAggregate",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], request github.com/eleven-am/golem/go/golem.AggregateRequest[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainCount",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], options ...github.com/eleven-am/golem/go/golem.ReadOption[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainFindFirst",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], options ...github.com/eleven-am/golem/go/golem.ReadOption[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainFindMany",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], options ...github.com/eleven-am/golem/go/golem.ReadOption[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainFindUnique",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], selector github.com/eleven-am/golem/go/golem.UniqueSelectorValue[M], options ...github.com/eleven-am/golem/go/golem.ReadOption[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainGroupBy",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], request github.com/eleven-am/golem/go/golem.GroupRequest[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainRelationGroupBy",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], request github.com/eleven-am/golem/go/golem.RelationGroupRequest[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerExplainScoped",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], request github.com/eleven-am/golem/go/golem.ScopedQuery[M]) (github.com/eleven-am/golem/go/queryplan.Report, error)",
           "methods": []
         },
         {
@@ -10796,6 +12161,13 @@
           "methods": []
         },
         {
+          "name": "CallerSimilar",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
+          "methods": []
+        },
+        {
           "name": "CallerTransaction",
           "kind": "func",
           "typeKind": "",
@@ -10842,6 +12214,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.CallerTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], where github.com/eleven-am/golem/go/golem.Predicate[M]) (int64, error)",
+          "methods": []
+        },
+        {
+          "name": "CallerTxDeleteVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.CallerTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
           "methods": []
         },
         {
@@ -10901,10 +12280,24 @@
           "methods": []
         },
         {
+          "name": "CallerTxUpdateVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.CallerTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, input github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "CallerTxUpsert",
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.CallerTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
+          "name": "CallerTxUpsertVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.CallerTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
           "methods": []
         },
         {
@@ -10922,6 +12315,13 @@
           "methods": []
         },
         {
+          "name": "CallerUpdateVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, input github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "CallerUpsert",
           "kind": "func",
           "typeKind": "",
@@ -10929,10 +12329,17 @@
           "methods": []
         },
         {
+          "name": "CallerUpsertVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "Config",
           "kind": "type",
           "typeKind": "struct",
-          "signature": "[P any,A any]struct{Database *github.com/eleven-am/golem/go/provider.Database;Bundle github.com/eleven-am/golem/go/golem.SchemaBundle;Bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A];Descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventRegistry github.com/eleven-am/golem/go/golem.EventRegistry;EventFactories github.com/eleven-am/golem/go/runtime.EventFactoryRegistry;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (A, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(A) (A, error)}",
+          "signature": "[P any,A any]struct{Database *github.com/eleven-am/golem/go/provider.Database;Embeddings github.com/eleven-am/golem/go/embedding.Registry;Bundle github.com/eleven-am/golem/go/golem.SchemaBundle;Bindings github.com/eleven-am/golem/go/golem.ApplicationBindings[A];Descriptors github.com/eleven-am/golem/go/golem.ApplicationDescriptors;ReadLimits github.com/eleven-am/golem/go/runtime.ReadLimits;MutationLimits github.com/eleven-am/golem/go/runtime.MutationLimits;AnalyticsLimits github.com/eleven-am/golem/go/runtime.AnalyticsLimits;EventRegistry github.com/eleven-am/golem/go/golem.EventRegistry;EventFactories github.com/eleven-am/golem/go/runtime.EventFactoryRegistry;EventLimits github.com/eleven-am/golem/go/events.Limits;EventTransport github.com/eleven-am/golem/go/events.EventTransport;Observer github.com/eleven-am/golem/go/observe.Observer;CDCAdapters []github.com/eleven-am/golem/go/events.CDCAdapter;ReportEventOperator github.com/eleven-am/golem/go/events.OperatorAudit;HistoricalEventBundles []github.com/eleven-am/golem/go/golem.SchemaBundle;AfterCommitError func(context.Context, github.com/eleven-am/golem/go/golem.AfterCommitFailure);AuditPrincipal func(P) string;ReportScopedQuery func(context.Context, github.com/eleven-am/golem/go/golem.ScopedAuditRecord);ResolvePrincipal func(context.Context, P) (A, error);SnapshotPrincipal func(P) (P, error);SnapshotActor func(A) (A, error)}",
           "methods": null
         },
         {
@@ -11121,6 +12528,13 @@
           "methods": []
         },
         {
+          "name": "SystemDeleteVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "SystemFindFirst",
           "kind": "func",
           "typeKind": "",
@@ -11160,6 +12574,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], query github.com/eleven-am/golem/go/golem.ScopedQuery[M]) ([]github.com/eleven-am/golem/go/golem.ScopedRow, error)",
+          "methods": []
+        },
+        {
+          "name": "SystemSimilar",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
           "methods": []
         },
         {
@@ -11209,6 +12630,13 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.SystemTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], where github.com/eleven-am/golem/go/golem.Predicate[M]) (int64, error)",
+          "methods": []
+        },
+        {
+          "name": "SystemTxDeleteVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.SystemTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
           "methods": []
         },
         {
@@ -11268,10 +12696,24 @@
           "methods": []
         },
         {
+          "name": "SystemTxUpdateVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.SystemTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, input github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "SystemTxUpsert",
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.SystemTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
+          "name": "SystemTxUpsertVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, transaction *github.com/eleven-am/golem/go/runtime.SystemTx[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
           "methods": []
         },
         {
@@ -11289,10 +12731,24 @@
           "methods": []
         },
         {
+          "name": "SystemUpdateVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ExistingVersion, input github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
           "name": "SystemUpsert",
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
+          "methods": []
+        },
+        {
+          "name": "SystemUpsertVersioned",
+          "kind": "func",
+          "typeKind": "",
+          "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], target github.com/eleven-am/golem/go/golem.MutationTarget[M], expected github.com/eleven-am/golem/go/golem.ConcurrencyExpectation, create github.com/eleven-am/golem/go/golem.CreateInput[M], update github.com/eleven-am/golem/go/golem.UpdateInput[M], projections ...github.com/eleven-am/golem/go/golem.Projection[M]) (github.com/eleven-am/golem/go/golem.Row[M], error)",
           "methods": []
         },
         {

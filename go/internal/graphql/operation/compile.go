@@ -215,7 +215,8 @@ func New(compilation compilerir.CompilationIR, limits Limits) (*Compiler, error)
 			{compilerir.OperationDeleteMany, contract.Roots.DeleteMany, graphqlmutation.DeleteMany},
 		}
 		for _, root := range mutationRoots {
-			if enabled[root.enabled] {
+			versionedBatch := contract.OptimisticConcurrency != nil && (root.kind == graphqlmutation.UpdateMany || root.kind == graphqlmutation.DeleteMany)
+			if enabled[root.enabled] && !versionedBatch {
 				if err := compiler.addMutationRoot(root.name, mutationRootBinding{model: contract.ModelID, operation: root.kind}); err != nil {
 					return nil, err
 				}
@@ -722,15 +723,7 @@ func (c *Compiler) bindCustomValue(typ compilerir.GraphQLTypeIR, raw any) (any, 
 		if !modelKind {
 			return nil, fmt.Errorf("selector model %s is absent", typ.Name)
 		}
-		request, err := c.mutation.LowerValues(graphqlmutation.Delete, modelID, map[string]any{"where": raw}, nil)
-		if err != nil {
-			return nil, err
-		}
-		value, ok := request.Target()
-		if !ok {
-			return nil, fmt.Errorf("selector target is absent")
-		}
-		return value, nil
+		return c.mutation.Target(modelID, raw)
 	case compilerir.GraphQLTypeCreateInput, compilerir.GraphQLTypeUpdateInput, compilerir.GraphQLTypeUpdateManyInput:
 		if !modelKind {
 			return nil, fmt.Errorf("mutation input model %s is absent", typ.Name)

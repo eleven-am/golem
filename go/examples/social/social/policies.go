@@ -66,3 +66,14 @@ func (PostTag) DefinePolicy(rules *golem.Rules[PostTag], actor Actor) {
 		rules.CanDelete(golem.All[PostTag]())
 	}
 }
+
+func (VersionedNote) DefinePolicy(rules *golem.Rules[VersionedNote], actor Actor) {
+	if !actor.Authenticated {
+		return
+	}
+	all := golem.All[VersionedNote]()
+	rules.CanRead(all)
+	rules.CanCreate(all)
+	rules.CanUpdate(all)
+	rules.CanDelete(all)
+}

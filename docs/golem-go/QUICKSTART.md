@@ -236,7 +236,90 @@ validation, hooks, Golem transactions, invalidation, outbox facts, and events;
 it cannot join a caller transaction. Do not use it as an ordinary application
 repository.
 
-## 6. Serve GraphQL
+## 6. Prove the policy without a database
+
+`golemtest` answers, for one concrete actor, the two static questions the
+runtime asks before it touches a row: which rows an action reaches, and how each
+requested result field will be returned. It uses the production policy kernel,
+so a passing assertion is evidence about the runtime rather than about a second
+implementation. It opens no database, starts no goroutine, and runs no hook.
+
+A kit is built from the three generated artifacts of one generation, narrowed to
+one actor and one model:
+
+```go
+package docsnippet
+
+import (
+	"testing"
+
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/golemtest"
+	"github.com/eleven-am/golem/go/examples/social/social"
+)
+
+func TestAlicePostPolicy(t *testing.T) {
+	alice := golem.UUID{0x01}
+
+	bindings, err := social.GolemGeneratedApplicationBindings()
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptors, err := social.GolemGeneratedApplicationDescriptors()
+	if err != nil {
+		t.Fatal(err)
+	}
+	kit, err := golemtest.New(bindings, descriptors, social.GolemGeneratedSchemaBundle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	policies, err := kit.ForActor(social.Actor{UserID: alice, Authenticated: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	posts, err := golemtest.Model(policies, social.GolemGeneratedPostDescriptor)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	read, err := posts.RowConstraint(golem.FrozenActionRead)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := social.Posts.Published.Eq(true).Or(social.Posts.AuthorID.Eq(alice))
+	equivalent, err := golemtest.Equivalent(read, expected)
+	if err != nil || !equivalent {
+		t.Fatalf("read constraint equivalent=%v err=%v", equivalent, err)
+	}
+
+	plan, err := posts.ClassifyReadFields(
+		golemtest.UseProjection,
+		golem.FrozenActionRead,
+		social.Posts.Title,
+		social.Posts.Body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := plan.Field(social.Posts.Body)
+	if !ok || body.Access() != golemtest.AccessConditional {
+		t.Fatalf("Body classification=%v present=%v", body.Access(), ok)
+	}
+}
+```
+
+`Equivalent` proves implication in both directions through the production
+implication kernel; it is not a comparison of canonical text. `Access` is one of
+always, conditional, or never readable, and a conditional field carries the exact
+condition the runtime will mask it by.
+
+The kit is a policy inspection and proof kit, not a second authorization engine
+and not a mock database. It cannot decide whether a synthetic row is visible, so
+relation-aware execution stays an integration test through the generated caller.
+[`PRODUCTION.md`](./PRODUCTION.md) describes the full surface and what a passing
+assertion does and does not prove.
+
+## 7. Serve GraphQL
 
 The generated application builds one schema for every exposed model. It owns
 ordinary query and mutation roots, nested inputs, analytics, and model event
@@ -263,6 +346,8 @@ gateway outside Golem.
 - [`PRODUCTION.md`](./PRODUCTION.md) covers authorization, hooks, custom
   operations, analytics, events, security, deployment, troubleshooting, and
   upgrades.
+- [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) covers the optional managed
+  embedding-provider and similarity-search lifecycle.
 - [`p1/MIGRATION-COMMAND-CONTRACT.md`](./p1/MIGRATION-COMMAND-CONTRACT.md)
   defines review and refusal behavior for migration commands.
 - [`p8/PUBLIC-PRODUCTION-ABI.md`](./p8/PUBLIC-PRODUCTION-ABI.md) is the frozen

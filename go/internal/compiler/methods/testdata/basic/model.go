@@ -8,17 +8,19 @@ import (
 )
 
 type User struct {
-	ID    int64
-	Age   int64
-	Name  string
-	Score int64
-	Small int16
+	ID      int64
+	Age     int64
+	Name    string
+	Score   int64
+	Small   int16
+	Version int64
 }
 
 const adultAge int64 = 18
 
 func (User) GolemModel() g.ModelSpec[User] {
 	return g.DefineModel(
+		g.OptimisticConcurrency(Users.Version),
 		g.Analytics[User](
 			g.AnalyticsDimensions(Users.Age, Users.Name),
 			g.AnalyticsMeasures(Users.Age, Users.Score),
@@ -35,6 +37,7 @@ func (User) GolemModel() g.ModelSpec[User] {
 		g.Subscriptions[User](),
 		g.PrimaryKey("pk_users", Users.ID),
 		g.Unique("uq_users_name", Users.Name),
+		g.SemanticIndex("profile", "content", Users.Name),
 		g.Index[User]("idx_users_name_age").Keys(
 			g.IndexColumn(Users.Name).Desc(),
 			g.IndexExpr(g.Lower(Users.Name)),

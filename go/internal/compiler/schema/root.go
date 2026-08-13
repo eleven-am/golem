@@ -14,6 +14,7 @@ import (
 const golemImportPath = "github.com/eleven-am/golem/go/golem"
 
 var schemaNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
+var embeddingSpaceNamePattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 	type candidate struct {
@@ -73,6 +74,7 @@ func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 	seenName := false
 	seenActor := false
 	seenProviders := false
+	embeddingSpaces := map[string]bool{}
 	models := make(map[string]token.Pos)
 	for _, statement := range function.Body.List {
 		if _, ok := statement.(*ast.EmptyStmt); ok {
@@ -176,6 +178,28 @@ func (c *compiler) extractRoot(pkg *load.Package) *ir.RawSchemaDecl {
 				root.Providers = append(root.Providers, ir.RawProviderRef{Provider: provider, Ordinal: uint32(len(root.Providers)), Span: sourceSpan(pkg, expression.Pos(), expression.End())})
 			}
 
+		case "EmbeddingSpace":
+			if typeArgument != nil || len(call.Args) != 3 || !isIdent(call.Args[0], parameter) {
+				c.error(pkg, "P9_EMBEDDING_SPACE_CALL", "EmbeddingSpace requires (schema, name, dimensions)", call)
+				continue
+			}
+			name, nameOK := stringLiteral(call.Args[1])
+			dimensions, dimensionOK := uint16Literal(call.Args[2])
+			if !nameOK || !embeddingSpaceNamePattern.MatchString(name) {
+				c.error(pkg, "P9_EMBEDDING_SPACE_NAME", "embedding space name must match [a-z][a-z0-9_-]{0,62}", call.Args[1])
+				continue
+			}
+			if !dimensionOK || dimensions < 1 || dimensions > 2000 {
+				c.error(pkg, "P9_EMBEDDING_SPACE_DIMENSIONS", "embedding space dimensions must be a literal between 1 and 2000", call.Args[2])
+				continue
+			}
+			if embeddingSpaces[name] {
+				c.error(pkg, "P9_EMBEDDING_SPACE_DUPLICATE", "embedding space names must be unique", call)
+				continue
+			}
+			embeddingSpaces[name] = true
+			root.EmbeddingSpaces = append(root.EmbeddingSpaces, ir.RawEmbeddingSpace{Name: name, Dimensions: dimensions, Span: sourceSpan(pkg, call.Pos(), call.End())})
+
 		default:
 			c.error(pkg, "P1_SCHEMA_BODY_CALL", fmt.Sprintf("golem.%s is not permitted in the schema root", name), call)
 		}
@@ -277,6 +301,15 @@ func stringLiteral(expression ast.Expr) (string, bool) {
 	}
 	value, err := strconv.Unquote(literal.Value)
 	return value, err == nil
+}
+
+func uint16Literal(expression ast.Expr) (uint16, bool) {
+	literal, ok := expression.(*ast.BasicLit)
+	if !ok || literal.Kind != token.INT {
+		return 0, false
+	}
+	value, err := strconv.ParseUint(literal.Value, 10, 16)
+	return uint16(value), err == nil
 }
 
 func unquoteString(value string) string {

@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
@@ -166,25 +167,25 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 				}
 			}
 		}
-		beforeSnapshot, beforeNormalizeErr := physical.Normalize(entry.BeforeSnapshot)
-		afterSnapshot, afterNormalizeErr := physical.Normalize(entry.AfterSnapshot)
+		beforeSnapshot, beforeNormalizeErr := physical.NormalizeHistorical(entry.BeforeSnapshot)
+		afterSnapshot, afterNormalizeErr := physical.NormalizeHistorical(entry.AfterSnapshot)
 		if beforeNormalizeErr != nil || afterNormalizeErr != nil {
 			return fmt.Errorf("migration %s embeds invalid physical snapshot", entry.ID)
 		}
-		if !reflect.DeepEqual(beforeSnapshot.Provider, manifest.Provider) || !reflect.DeepEqual(afterSnapshot.Provider, manifest.Provider) {
+		if !physical.CompatibleProviderHistory(beforeSnapshot.Provider, manifest.Provider) || !physical.CompatibleProviderHistory(afterSnapshot.Provider, manifest.Provider) {
 			return fmt.Errorf("migration %s snapshot provider differs from manifest provider", entry.ID)
 		}
-		before, beforeErr := physical.PhysicalFingerprint(beforeSnapshot)
-		after, afterErr := physical.PhysicalFingerprint(afterSnapshot)
+		before, beforeErr := physical.HistoricalPhysicalFingerprint(beforeSnapshot)
+		after, afterErr := physical.HistoricalPhysicalFingerprint(afterSnapshot)
 		if beforeErr != nil || afterErr != nil || Digest(before.String()) != entry.BeforePhysical || Digest(after.String()) != entry.AfterPhysical {
 			return fmt.Errorf("migration %s embeds stale physical snapshot", entry.ID)
 		}
-		allowlist, allowlistErr := physical.UnmanagedAllowlistFingerprint(afterSnapshot)
+		allowlist, allowlistErr := physical.HistoricalUnmanagedAllowlistFingerprint(afterSnapshot)
 		if allowlistErr != nil || Digest(allowlist.String()) != entry.UnmanagedAllowlistDigest {
 			return fmt.Errorf("migration %s unmanaged allowlist digest differs from embedded after snapshot", entry.ID)
 		}
-		beforeSystem, beforeSystemErr := physical.SystemFingerprint(beforeSnapshot.Provider, beforeSnapshot.System)
-		afterSystem, afterSystemErr := physical.SystemFingerprint(afterSnapshot.Provider, afterSnapshot.System)
+		beforeSystem, beforeSystemErr := physical.HistoricalSystemFingerprint(beforeSnapshot)
+		afterSystem, afterSystemErr := physical.HistoricalSystemFingerprint(afterSnapshot)
 		if beforeSystemErr != nil || afterSystemErr != nil {
 			return fmt.Errorf("migration %s embeds invalid system schema", entry.ID)
 		}
@@ -200,10 +201,14 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 				systemAdditions = append(systemAdditions, operation)
 			}
 		}
-		if beforeSystem != afterSystem {
-			beforeFragment, beforeFragmentErr := fragment(beforeSnapshot.System)
-			afterFragment, afterFragmentErr := fragment(afterSnapshot.System)
-			expectedPlan, expectedPlanErr := Diff(beforeSnapshot, afterSnapshot)
+		if beforeSystem != afterSystem && reflect.DeepEqual(beforeSnapshot.System, afterSnapshot.System) {
+			if bootstrapCount != 0 || len(systemAdditions) != 0 {
+				return fmt.Errorf("migration %s contains a system operation for a provider-metadata transition", entry.ID)
+			}
+		} else if beforeSystem != afterSystem {
+			beforeFragment, beforeFragmentErr := fragmentVersion(beforeSnapshot.System, beforeSnapshot.CanonicalVersion)
+			afterFragment, afterFragmentErr := fragmentVersion(afterSnapshot.System, afterSnapshot.CanonicalVersion)
+			expectedPlan, expectedPlanErr := DiffReviewed(beforeSnapshot, afterSnapshot)
 			var expectedBootstrap Operation
 			var expectedAdditions []Operation
 			if expectedPlanErr == nil {
@@ -229,8 +234,8 @@ func verifyManifest(manifest Manifest, files map[string][]byte, verifyFileConten
 		}
 		if index > 0 {
 			previous := manifest.Entries[index-1]
-			beforeAllowlist, beforeAllowlistErr := physical.UnmanagedAllowlistFingerprint(beforeSnapshot)
-			previousSystem, previousSystemErr := physical.SystemFingerprint(previous.AfterSnapshot.Provider, previous.AfterSnapshot.System)
+			beforeAllowlist, beforeAllowlistErr := physical.HistoricalUnmanagedAllowlistFingerprint(beforeSnapshot)
+			previousSystem, previousSystemErr := physical.HistoricalSystemFingerprint(previous.AfterSnapshot)
 			if beforeAllowlistErr != nil || Digest(beforeAllowlist.String()) != previous.UnmanagedAllowlistDigest {
 				return fmt.Errorf("migration %s unmanaged allowlist history is discontinuous", entry.ID)
 			}
@@ -382,13 +387,13 @@ func validateEntrySemantics(entry ManifestEntry) error {
 			return err
 		}
 		operation, exists := operations[approval.OperationID]
-		if !exists || approvals[approval.OperationID] || (operation.Risk != RiskDataLoss && operation.Risk != RiskManual) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
+		if !exists || approvals[approval.OperationID] || !RequiresApproval(operation) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
 			return fmt.Errorf("approval for %s is not exact and object-scoped", approval.OperationID)
 		}
 		approvals[approval.OperationID] = true
 	}
 	for operationID, operation := range operations {
-		required := operation.Risk == RiskDataLoss || operation.Risk == RiskManual
+		required := RequiresApproval(operation)
 		if approvals[operationID] != required {
 			return fmt.Errorf("operation %s approval inventory is inconsistent with risk %s", operationID, operation.Risk)
 		}
@@ -396,17 +401,40 @@ func validateEntrySemantics(entry ManifestEntry) error {
 	manual := map[OperationID]bool{}
 	for _, companion := range entry.Manual {
 		operation, exists := operations[companion.OperationID]
-		if !exists || operation.Kind != ManualStep || manual[companion.OperationID] {
+		if !exists || !RequiresManualCompanion(operation) || manual[companion.OperationID] {
 			return fmt.Errorf("manual companion for %s does not map exactly to one manual operation", companion.OperationID)
+		}
+		if operation.Kind == BackfillColumn {
+			owner, resolved := BackfillOwner(entry.AfterSnapshot, ir.FieldID(operation.ObjectID))
+			if !resolved || companion.Postcondition != BackfillPostcondition(owner, ir.FieldID(operation.ObjectID)) {
+				return fmt.Errorf("backfill companion for %s does not carry the generated no-NULL postcondition", companion.OperationID)
+			}
 		}
 		manual[companion.OperationID] = true
 	}
 	for operationID, operation := range operations {
-		if (operation.Kind == ManualStep) != manual[operationID] {
+		if RequiresManualCompanion(operation) != manual[operationID] {
 			return fmt.Errorf("manual operation %s companion inventory is inconsistent", operationID)
+		}
+		if operation.Kind != BackfillColumn {
+			continue
+		}
+		for _, required := range []OperationKind{AddColumn, ValidateConstraint, AlterColumnNullability} {
+			if !hasOperation(operations, required, operation.ObjectID) {
+				return fmt.Errorf("backfill %s lacks its %s companion operation", operationID, required)
+			}
 		}
 	}
 	return nil
+}
+
+func hasOperation(operations map[OperationID]Operation, kind OperationKind, objectID string) bool {
+	for _, operation := range operations {
+		if operation.Kind == kind && operation.ObjectID == objectID {
+			return true
+		}
+	}
+	return false
 }
 
 func validRisk(risk Risk) bool {

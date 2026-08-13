@@ -15,6 +15,48 @@ const maxCanonicalDecodeDepth = 1024
 // A successful decode is validated and must reproduce payload byte-for-byte
 // when canonically encoded again.
 func CanonicalDecode(payload []byte) (PhysicalSchema, error) {
+	return canonicalDecode(payload, decodeCurrent)
+}
+
+// CanonicalDecodeHistorical decodes the explicitly supported physical
+// v1 canonical history. It exists only for immutable historical artifacts;
+// active generated provider documents must use CanonicalDecode. Version 1
+// cannot synthesize later physical identities.
+func CanonicalDecodeHistorical(payload []byte) (PhysicalSchema, error) {
+	return canonicalDecode(payload, decodeHistoricalV1Only)
+}
+
+// CanonicalDecodeHistoricalV2 decodes only the independently frozen physical
+// v2 document. It is for immutable reviewed history and never an active
+// provider bootstrap path.
+func CanonicalDecodeHistoricalV2(payload []byte) (PhysicalSchema, error) {
+	return canonicalDecode(payload, decodeHistoricalV2Only)
+}
+
+// CanonicalDecodeHistoricalV3 decodes only the independently frozen physical
+// v3 document. It never uses the mutable current struct projection or rules.
+func CanonicalDecodeHistoricalV3(payload []byte) (PhysicalSchema, error) {
+	return canonicalDecode(payload, decodeHistoricalV3Only)
+}
+
+// CanonicalDecodeReviewedHistory accepts only the explicitly retained v1, v2,
+// and v3 projections. It is the migration-history boundary; callers that claim
+// one exact version should use the corresponding version-specific decoder.
+func CanonicalDecodeReviewedHistory(payload []byte) (PhysicalSchema, error) {
+	return canonicalDecode(payload, decodeReviewedHistory)
+}
+
+type decodeMode uint8
+
+const (
+	decodeCurrent decodeMode = iota
+	decodeHistoricalV1Only
+	decodeHistoricalV2Only
+	decodeHistoricalV3Only
+	decodeReviewedHistory
+)
+
+func canonicalDecode(payload []byte, mode decodeMode) (PhysicalSchema, error) {
 	decoder := binaryDecoder{payload: payload}
 	magic, err := decoder.bytes()
 	if err != nil {
@@ -27,8 +69,34 @@ func CanonicalDecode(payload []byte) (PhysicalSchema, error) {
 	if err != nil {
 		return PhysicalSchema{}, decoder.wrap("canonical format version", err)
 	}
-	if version != uint64(CanonicalFormatVersion) {
+	acceptCurrent := mode == decodeCurrent
+	acceptV1 := mode == decodeHistoricalV1Only || mode == decodeReviewedHistory
+	acceptV2 := mode == decodeHistoricalV2Only || mode == decodeReviewedHistory
+	acceptV3 := mode == decodeHistoricalV3Only || mode == decodeReviewedHistory
+	accepted := version == uint64(CanonicalFormatVersion) && acceptCurrent || version == 1 && acceptV1 || version == 2 && acceptV2 || version == 3 && acceptV3
+	if !accepted {
 		return PhysicalSchema{}, decoder.fail("canonical format version", "got %d, want %d", version, CanonicalFormatVersion)
+	}
+	decoder.canonicalVersion = uint32(version)
+	if version == 3 && acceptV3 {
+		decoder.frozenProjection = historicalV3StructFields
+	}
+	if version == 1 {
+		// This guard owns the retained DTO/type projection and must run before
+		// caller bytes are interpreted as the mutable current root struct.
+		if err := validateHistoricalV1SchemaShape(); err != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: historical v1 schema shape: %w", err)
+		}
+	}
+	if version == 2 {
+		if err := validateHistoricalV2SchemaShape(); err != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: historical v2 schema shape: %w", err)
+		}
+	}
+	if version == 3 && acceptV3 {
+		if err := validateHistoricalV3SchemaShape(); err != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: historical v3 schema shape: %w", err)
+		}
 	}
 
 	var schema PhysicalSchema
@@ -38,10 +106,31 @@ func CanonicalDecode(payload []byte) (PhysicalSchema, error) {
 	if decoder.remaining() != 0 {
 		return PhysicalSchema{}, decoder.fail("document", "%d trailing bytes", decoder.remaining())
 	}
-	if err := Validate(schema); err != nil {
+	if err := validateDecodedSchema(schema, uint32(version), mode); err != nil {
 		return PhysicalSchema{}, fmt.Errorf("physical canonical decode: invalid schema: %w", err)
 	}
-	reencoded, err := CanonicalEncode(schema)
+	var reencoded []byte
+	if uint32(version) == CanonicalFormatVersion && mode == decodeCurrent {
+		reencoded, err = CanonicalEncode(schema)
+	} else if uint32(version) == 1 {
+		normalized, normalizeErr := NormalizeHistoricalV1(schema)
+		if normalizeErr != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: normalize historical v1: %w", normalizeErr)
+		}
+		reencoded, err = canonicalValueVersion(normalized, uint32(version))
+	} else if uint32(version) == 2 {
+		normalized, normalizeErr := NormalizeHistoricalV2(schema)
+		if normalizeErr != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: normalize historical v2: %w", normalizeErr)
+		}
+		reencoded, err = canonicalValueVersion(normalized, uint32(version))
+	} else {
+		normalized, normalizeErr := NormalizeHistoricalV3(schema)
+		if normalizeErr != nil {
+			return PhysicalSchema{}, fmt.Errorf("physical canonical decode: normalize historical v3: %w", normalizeErr)
+		}
+		reencoded, err = canonicalHistoricalValueVersion(normalized, 3, historicalV3StructFields)
+	}
 	if err != nil {
 		return PhysicalSchema{}, fmt.Errorf("physical canonical decode: re-encode: %w", err)
 	}
@@ -49,6 +138,22 @@ func CanonicalDecode(payload []byte) (PhysicalSchema, error) {
 		return PhysicalSchema{}, fmt.Errorf("physical canonical decode: document is not in canonical normalized form")
 	}
 	return schema, nil
+}
+
+func validateDecodedSchema(schema PhysicalSchema, canonicalVersion uint32, mode decodeMode) error {
+	if canonicalVersion == CanonicalFormatVersion && mode == decodeCurrent {
+		return Validate(schema)
+	}
+	if canonicalVersion == 3 && schema.Version == 3 && schema.CanonicalVersion == 3 {
+		return validateHistoricalV3(schema)
+	}
+	if canonicalVersion != 1 || schema.Version != 1 || schema.CanonicalVersion != 1 {
+		if canonicalVersion != 2 || schema.Version != 2 || schema.CanonicalVersion != 2 {
+			return fmt.Errorf("unsupported historical physical format/canonical versions %d/%d", schema.Version, schema.CanonicalVersion)
+		}
+		return validateHistoricalV2(schema)
+	}
+	return validateHistoricalV1(schema)
 }
 
 // CanonicalDecodeVerified is the SchemaBundle integration boundary. It checks
@@ -77,8 +182,10 @@ func CanonicalDecodeVerified(payload []byte, expectedPhysical, expectedSystem Di
 }
 
 type binaryDecoder struct {
-	payload []byte
-	offset  int
+	payload          []byte
+	offset           int
+	canonicalVersion uint32
+	frozenProjection map[string][]string
 }
 
 func (d *binaryDecoder) remaining() int { return len(d.payload) - d.offset }
@@ -196,11 +303,35 @@ func (d *binaryDecoder) value(target reflect.Value, depth int) error {
 		if err != nil {
 			return d.wrap(target.Type().String()+" field count", err)
 		}
-		if count != uint64(target.NumField()) {
-			return d.fail(target.Type().String(), "unknown schema shape with %d fields; want %d", count, target.NumField())
+		fields := make([]string, target.NumField())
+		for index := range fields {
+			fields[index] = target.Type().Field(index).Name
 		}
-		for index := 0; index < target.NumField(); index++ {
-			field := target.Type().Field(index)
+		if d.frozenProjection != nil {
+			frozen, ok := d.frozenProjection[name]
+			if !ok {
+				return d.fail(target.Type().String(), "struct is outside the frozen v%d schema", d.canonicalVersion)
+			}
+			fields = frozen
+		} else if d.canonicalVersion == 1 || d.canonicalVersion == 2 {
+			projection := historicalV1StructFields
+			if d.canonicalVersion == 2 {
+				projection = historicalV2StructFields
+			}
+			frozen, ok := projection[name]
+			if !ok {
+				return d.fail(target.Type().String(), "struct is outside the frozen v1 schema")
+			}
+			fields = frozen
+		}
+		if count != uint64(len(fields)) {
+			return d.fail(target.Type().String(), "unknown schema shape with %d fields; want %d", count, len(fields))
+		}
+		for _, fieldName := range fields {
+			field, ok := target.Type().FieldByName(fieldName)
+			if !ok {
+				return d.fail(target.Type().String(), "retained v1 destination field %s is absent", fieldName)
+			}
 			if !field.IsExported() {
 				return d.fail(target.Type().String(), "unexported destination field %s", field.Name)
 			}
@@ -211,7 +342,7 @@ func (d *binaryDecoder) value(target reflect.Value, depth int) error {
 			if name != field.Name {
 				return d.fail(target.Type().String(), "unknown or out-of-order field %q; want %q", name, field.Name)
 			}
-			if err := d.value(target.Field(index), depth+1); err != nil {
+			if err := d.value(target.FieldByIndex(field.Index), depth+1); err != nil {
 				return err
 			}
 		}

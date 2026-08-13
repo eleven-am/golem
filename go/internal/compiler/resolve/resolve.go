@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 type Result struct {
@@ -83,6 +84,29 @@ func (r *baseResolver) resolveSchema() {
 			PackagePath: root.PackagePath, RootFunction: root.FunctionName, Actor: actor,
 		},
 		Providers: providers,
+	}
+	for _, space := range root.EmbeddingSpaces {
+		payload, err := semanticcontract.Encode(semanticcontract.Space{Name: space.Name, Dimensions: space.Dimensions})
+		if err != nil {
+			r.diagnostics = append(r.diagnostics, ir.NewError("P9_EMBEDDING_SPACE_ENCODE", err.Error(), space.Span))
+			continue
+		}
+		for _, provider := range providers {
+			canonical := ir.OwnedIdentity(identity.ID, semanticcontract.SpaceKind+"\x00"+string(provider)+"\x00"+space.Name)
+			extensionIdentity, extensionDiagnostic := r.ids.Register(ir.ObjectExtension, canonical, space.Span)
+			if extensionDiagnostic != nil {
+				r.diagnostics = append(r.diagnostics, *extensionDiagnostic)
+				continue
+			}
+			r.compilation.Model.Extensions = append(r.compilation.Model.Extensions, ir.ProviderExtensionIR{
+				ID:       ir.ExtensionIDFrom(extensionIdentity),
+				Provider: provider,
+				Version:  semanticcontract.Version,
+				Owner:    ir.ObjectID(identity.ID),
+				Kind:     semanticcontract.SpaceKind,
+				Payload:  payload,
+			})
+		}
 	}
 	r.compilation.Contract = ir.ContractIR{FormatVersion: ir.ContractFormatVersion}
 }

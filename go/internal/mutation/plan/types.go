@@ -70,6 +70,10 @@ type RootRequest struct {
 	// though they are not caller-authored scalar values. Application defaults
 	// deliberately never enter this inventory.
 	AuthorizedRuntimeFields []policyir.FieldID
+	// ConcurrencyPrecheck asks the caller-update planner for one complete locked
+	// scalar snapshot and field grants for every field a before hook may author.
+	// It is valid only for the explicit optimistic-concurrency runtime kernel.
+	ConcurrencyPrecheck bool
 
 	Retry  mutationir.RetryClass
 	Bounds mutationir.StatementBounds

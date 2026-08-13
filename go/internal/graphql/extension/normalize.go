@@ -74,16 +74,20 @@ func Normalize(compilation *ir.CompilationIR, computed []ComputedDeclaration, cu
 
 	contracts := append([]ir.ModelContractIR(nil), compilation.Contract.Models...)
 	contractIndex := make(map[ir.ModelID]int, len(contracts))
+	versionedModelName := map[string]bool{}
 	for index := range contracts {
 		contracts[index].Computed = append([]ir.ComputedFieldContractIR(nil), contracts[index].Computed...)
 		contractIndex[contracts[index].ModelID] = index
 		if contracts[index].Exposed {
 			modelName[contracts[index].GraphQLName] = contracts[index].ModelID
+			if contracts[index].OptimisticConcurrency != nil {
+				versionedModelName[contracts[index].GraphQLName] = true
+			}
 		}
 	}
 	customOperations := append([]ir.CustomOperationContractIR(nil), compilation.Contract.CustomOperations...)
 
-	typeContext := graphQLTypeContext{models: modelName, enums: enumNames}
+	typeContext := graphQLTypeContext{models: modelName, enums: enumNames, versioned: versionedModelName}
 	extensionIDs := map[ir.ExtensionID]string{}
 	var diagnostics []ir.Diagnostic
 	reserveID := func(id ir.ExtensionID, owner string, span ir.SourceSpan) bool {
@@ -232,8 +236,9 @@ const (
 )
 
 type graphQLTypeContext struct {
-	models map[string]ir.ModelID
-	enums  map[string]struct{}
+	models    map[string]ir.ModelID
+	enums     map[string]struct{}
+	versioned map[string]bool
 }
 
 var scalarNames = map[string]struct{}{
@@ -250,6 +255,9 @@ func (context graphQLTypeContext) validate(value ir.GraphQLTypeIR, use typeUse, 
 	}
 	if value.Element != nil || value.Name == "" {
 		return []ir.Diagnostic{ir.NewError("P5_EXTENSION_TYPE", "GraphQL leaf types require a name and no element", span)}
+	}
+	if value.Kind == ir.GraphQLTypeUpdateManyInput && context.versioned[value.Name] {
+		return []ir.Diagnostic{ir.NewError("P5_EXTENSION_CONCURRENCY_BATCH", fmt.Sprintf("GraphQL update-many input for optimistic-concurrency model %q is not available", value.Name), span)}
 	}
 	known := false
 	switch value.Kind {

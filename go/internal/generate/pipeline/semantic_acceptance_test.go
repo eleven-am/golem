@@ -1,0 +1,310 @@
+package pipeline
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	"github.com/eleven-am/golem/go/internal/compiler/compile"
+	"github.com/eleven-am/golem/go/internal/physical"
+	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+)
+
+func TestFreshGeneratedSemanticSQLiteApplicationOwnsEmbeddingLifecycle(t *testing.T) {
+	root := t.TempDir()
+	writePipelineAcceptanceFile(t, root, "go.mod", fmt.Sprintf(`module example.com/semanticapp
+
+go 1.25
+
+require github.com/eleven-am/golem/go v0.0.0
+
+replace github.com/eleven-am/golem/go => %s
+`, moduleRoot(t)))
+	writePipelineAcceptanceFile(t, root, "actor/actor.go", "package actor\ntype Actor struct { Private bool; Denied bool }\n")
+	modelSource := strings.ReplaceAll(`package models
+
+import (
+  "example.com/semanticapp/actor"
+  "github.com/eleven-am/golem/go/golem"
+)
+
+type Post struct {
+  _ struct{} §golem:"model;id=semantic.Post;table=posts"§
+  ID golem.UUID §db:"id" golem:"id=semantic.Post.ID;pk"§
+  Title string §db:"title"§
+  Body string §db:"body"§
+}
+
+func (Post) GolemModel() golem.ModelSpec[Post] {
+  return golem.DefineModel(golem.SemanticIndex("related", "content", Posts.Title, Posts.Body))
+}
+
+func (Post) DefinePolicy(rules *golem.Rules[Post], value actor.Actor) {
+  if value.Denied { return }
+  if value.Private {
+    rules.CanRead(golem.All[Post]())
+    return
+  }
+  rules.CanRead(Posts.Title.StartsWith("public"))
+}
+`, "§", "`")
+	writePipelineAcceptanceFile(t, root, "models/models.go", modelSource)
+	writePipelineAcceptanceFile(t, root, "schema/schema.go", `package schema
+
+import (
+  "example.com/semanticapp/actor"
+  "example.com/semanticapp/models"
+  "github.com/eleven-am/golem/go/golem"
+)
+
+func DefineSchema(schema *golem.Schema) {
+  golem.SchemaName(schema, "semantic_acceptance")
+  golem.Actor[actor.Actor](schema)
+  golem.Model[models.Post](schema)
+  golem.Providers(schema, golem.SQLite)
+  golem.EmbeddingSpace(schema, "content", 3)
+}
+`)
+	writePipelineAcceptanceFile(t, root, "app/doc.go", "package app\n")
+	tidy := exec.Command("go", "mod", "tidy")
+	tidy.Dir = root
+	tidy.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := tidy.CombinedOutput(); err != nil {
+		t.Fatalf("prepare semantic consumer: %v\n%s", err, output)
+	}
+
+	request := Request{
+		Compile:    compile.Config{Dir: root, Pattern: "./schema", Root: "DefineSchema"},
+		AppPackage: modelcodegen.PackageSpec{ImportPath: "example.com/semanticapp/app", PackageName: "app", Directory: filepath.Join(root, "app")},
+		Lowerers:   []physical.Lowerer{sqliteprovider.New()},
+		Env:        []string{"GOWORK=off"},
+	}
+	reviewed := p8BuildWithReviewedSQLiteHistory(t, context.Background(), request)
+	writeP5ScalarGeneratedArtifacts(t, root, reviewed.Result.Prospective.Artifacts)
+	databasePath := filepath.Join(t.TempDir(), "semantic-application.db")
+	database, _, err := sqliteprovider.New().Open(context.Background(), "file:"+databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p8ApplyReviewedSQLiteHistory(t, context.Background(), database, reviewed.History)
+	for _, row := range [][3]string{
+		{"10000000-0000-0000-0000-000000000001", "public alpha", "shared topic"},
+		{"10000000-0000-0000-0000-000000000002", "private alpha", "secret canary"},
+		{"10000000-0000-0000-0000-000000000003", "public beta", "other topic"},
+	} {
+		if _, err := database.Exec(`INSERT INTO "posts" ("id","title","body") VALUES (?,?,?)`, row[0], row[1], row[2]); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	writePipelineAcceptanceFile(t, root, "acceptance/semantic_test.go", fmt.Sprintf(`package acceptance_test
+
+import (
+  "context"
+  "errors"
+  "fmt"
+  "os"
+  "strings"
+  "sync"
+  "testing"
+
+  "example.com/semanticapp/actor"
+  "example.com/semanticapp/app"
+  "example.com/semanticapp/models"
+  "github.com/eleven-am/golem/go/embedding"
+  "github.com/eleven-am/golem/go/golem"
+  "github.com/eleven-am/golem/go/observe"
+  providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
+)
+
+type embedder struct {
+  specification embedding.Specification
+  mu sync.Mutex
+  calls int
+}
+
+func (value *embedder) Specification() embedding.Specification { return value.specification }
+func (value *embedder) Embed(_ context.Context, inputs []embedding.Input) ([]embedding.Vector, error) {
+  value.mu.Lock()
+  value.calls += len(inputs)
+  value.mu.Unlock()
+  result := make([]embedding.Vector, len(inputs))
+  for index, input := range inputs {
+    vector := []float32{0, 0, 1}
+    if strings.Contains(input.Text(), "alpha") { vector = []float32{1, 0, 0} }
+    if strings.Contains(input.Text(), "beta") { vector = []float32{0, 1, 0} }
+    result[index], _ = embedding.NewVector(vector)
+  }
+  return result, nil
+}
+func (value *embedder) count() int { value.mu.Lock(); defer value.mu.Unlock(); return value.calls }
+
+type observed struct {
+  operation observe.Operation
+  outcome observe.Outcome
+  reason observe.Reason
+  statements int
+  aggregate int64
+}
+
+type observationTrace struct {
+  mu sync.Mutex
+  values []observed
+}
+
+func (trace *observationTrace) ObserveGolem(_ context.Context, value observe.Observation) {
+  if path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE"); path != "" {
+    observationCoverageMu.Lock()
+    file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+    if err != nil { observationCoverageMu.Unlock(); panic("open observation coverage sink") }
+    _, writeErr := fmt.Fprintln(file, value.Provider(), value.Operation())
+    closeErr := file.Close()
+    observationCoverageMu.Unlock()
+    if writeErr != nil || closeErr != nil { panic("write observation coverage sink") }
+  }
+  if value.Kind() != observe.KindSemantic { return }
+  trace.mu.Lock()
+  defer trace.mu.Unlock()
+  trace.values = append(trace.values, observed{
+    operation: value.Operation(), outcome: value.Outcome(), reason: value.Reason(),
+    statements: value.StatementCount(), aggregate: value.AggregateCount(),
+  })
+}
+
+var observationCoverageMu sync.Mutex
+
+func (trace *observationTrace) reset() {
+  trace.mu.Lock()
+  defer trace.mu.Unlock()
+  trace.values = nil
+}
+
+func (trace *observationTrace) snapshot() []observed {
+  trace.mu.Lock()
+  defer trace.mu.Unlock()
+  return append([]observed(nil), trace.values...)
+}
+
+func assertSemanticTrace(t *testing.T, trace *observationTrace, want ...observed) {
+  t.Helper()
+  got := trace.snapshot()
+  if len(got) != len(want) { t.Fatalf("semantic observations=%%#v want=%%#v", got, want) }
+  for position := range want {
+    if got[position] != want[position] { t.Fatalf("semantic observation[%%d]=%%#v want=%%#v", position, got[position], want[position]) }
+  }
+  trace.reset()
+}
+
+func success(operation observe.Operation, statements int, aggregate int64) observed {
+  return observed{operation: operation, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: statements, aggregate: aggregate}
+}
+
+func TestGeneratedSimilarityIsAuthorizedAndIncremental(t *testing.T) {
+  ctx := context.Background()
+  database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: %q})
+  if err != nil { t.Fatal(err) }
+  t.Cleanup(func() { _ = database.Close() })
+  specification, _ := embedding.NewSpecification("test", "deterministic", "v1", 3, 8)
+  provider := &embedder{specification: specification}
+  embeddings, err := embedding.NewRegistry(map[string]embedding.Provider{"content": provider})
+  if err != nil { t.Fatal(err) }
+  observations := &observationTrace{}
+  application, err := app.Open(ctx, app.Config[string]{
+    Database: database,
+    Embeddings: embeddings,
+    Observer: observations,
+    ResolvePrincipal: func(_ context.Context, principal string) (actor.Actor, error) { return actor.Actor{Private: principal == "private", Denied: principal == "denied"}, nil },
+  })
+  if err != nil { t.Fatal(err) }
+  denied, err := application.ForPrincipal(ctx, "denied")
+  if err != nil { t.Fatal(err) }
+  deniedRows, err := denied.Posts.SimilarRelated(ctx, "alpha", 10)
+  var deniedFailure *golem.Error
+  if len(deniedRows) != 0 || !errors.As(err, &deniedFailure) || deniedFailure.Code != golem.CodeForbidden || provider.count() != 0 {
+    t.Fatalf("denied search rows=%%d error=%%v provider calls=%%d", len(deniedRows), err, provider.count())
+  }
+  assertSemanticTrace(t, observations)
+  caller, err := application.ForPrincipal(ctx, "public")
+  if err != nil { t.Fatal(err) }
+  empty, err := caller.Posts.SimilarRelated(ctx, "alpha", 10, models.Posts.Title.StartsWith("absent"))
+  if err != nil { t.Fatal(err) }
+  if len(empty) != 0 || provider.count() != 0 {
+    t.Fatalf("empty authorized search rows=%%d provider calls=%%d", len(empty), provider.count())
+  }
+  assertSemanticTrace(t, observations)
+  ranked, err := caller.Posts.SimilarRelated(ctx, "alpha", 10)
+  if err != nil { t.Fatal(err) }
+  if len(ranked) != 2 || ranked[0].Distance() != 0 || ranked[0].Similarity() != 1 {
+    t.Fatalf("public ranks=%%#v", ranked)
+  }
+  first, _ := golem.Value(ranked[0].Row(), models.Posts.Title).Get()
+  second, _ := golem.Value(ranked[1].Row(), models.Posts.Title).Get()
+  if first != "public alpha" || second != "public beta" || strings.Contains(first+second, "private") {
+    t.Fatalf("authorized titles=%%q,%%q", first, second)
+  }
+  if provider.count() != 4 { t.Fatalf("initial provider calls=%%d want=4", provider.count()) }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticProvider, 0, 3),
+    success(observe.OperationSemanticRefresh, 11, 3),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 2),
+  )
+  trusted, err := application.System().Posts.SimilarRelated(ctx, "alpha", 10)
+  if err != nil { t.Fatal(err) }
+  if len(trusted) != 3 || provider.count() != 5 {
+    t.Fatalf("trusted ranks=%%d provider calls=%%d", len(trusted), provider.count())
+  }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 3),
+  )
+  if _, err := caller.Posts.SimilarRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
+  if provider.count() != 6 { t.Fatalf("unchanged rows were re-embedded: calls=%%d", provider.count()) }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 2),
+  )
+  if _, err := database.UnsafeSQLX().Exec("UPDATE \"posts\" SET \"body\"='alpha revised' WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
+  if _, err := caller.Posts.SimilarRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
+  if provider.count() != 8 { t.Fatalf("incremental refresh calls=%%d want=8", provider.count()) }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRefresh, 5, 1),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 2),
+  )
+  if _, err := database.UnsafeSQLX().Exec("DELETE FROM \"posts\" WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
+  if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
+  if provider.count() != 8 { t.Fatalf("delete cleanup unexpectedly embedded: calls=%%d", provider.count()) }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 4, 1),
+  )
+  afterDelete, err := caller.Posts.SimilarRelated(ctx, "alpha", 10)
+  if err != nil { t.Fatal(err) }
+  if len(afterDelete) != 1 || provider.count() != 9 {
+    t.Fatalf("delete cleanup rows=%%d provider calls=%%d", len(afterDelete), provider.count())
+  }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 1),
+  )
+}
+`, "file:"+databasePath))
+	command := exec.Command("go", "test", "-mod=mod", "-count=1", "./...")
+	command.Dir = root
+	command.Env = append(os.Environ(), "GOWORK=off")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("fresh semantic consumer failed: %v\n%s", err, output)
+	}
+}

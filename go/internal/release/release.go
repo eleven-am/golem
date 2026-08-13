@@ -30,6 +30,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	"github.com/eleven-am/golem/go/internal/compatibility"
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/semver"
 )
 
 const (
@@ -82,16 +83,28 @@ func atStage(err error, stage string) error {
 }
 
 type Candidate struct {
-	Module           string
-	Version          string
-	Tag              string
-	Commit           string
-	Manifest         []byte
-	TemplateSHA256   string
-	SourceTreeSHA256 string
-	SignersSHA256    string
-	SourceDateEpoch  int64
-	seal             string
+	Module               string
+	Version              string
+	Tag                  string
+	Commit               string
+	Manifest             []byte
+	TemplateSHA256       string
+	SourceTreeSHA256     string
+	SignersSHA256        string
+	SourceDateEpoch      int64
+	migrationGuidePath   string
+	migrationGuideSHA256 string
+	migrationGuide       []byte
+	licenseAuthority     []byte
+	projectLicense       []byte
+	thirdPartyNotices    []byte
+	seal                 string
+}
+
+type releaseMigrationGuide struct {
+	path   string
+	sha256 string
+	bytes  []byte
 }
 
 type InspectConfig struct {
@@ -140,33 +153,42 @@ type Digest struct {
 }
 
 type sourceSBOM struct {
-	SPDXVersion       string             `json:"spdxVersion"`
-	DataLicense       string             `json:"dataLicense"`
-	SPDXID            string             `json:"SPDXID"`
-	Name              string             `json:"name"`
-	DocumentNamespace string             `json:"documentNamespace"`
-	CreationInfo      spdxCreation       `json:"creationInfo"`
-	DocumentDescribes []string           `json:"documentDescribes"`
-	Packages          []spdxPackage      `json:"packages"`
-	Relationships     []spdxRelationship `json:"relationships"`
+	SPDXVersion       string                 `json:"spdxVersion"`
+	DataLicense       string                 `json:"dataLicense"`
+	SPDXID            string                 `json:"SPDXID"`
+	Name              string                 `json:"name"`
+	DocumentNamespace string                 `json:"documentNamespace"`
+	CreationInfo      spdxCreation           `json:"creationInfo"`
+	DocumentDescribes []string               `json:"documentDescribes"`
+	Packages          []spdxPackage          `json:"packages"`
+	Relationships     []spdxRelationship     `json:"relationships"`
+	ExtractedLicenses []spdxExtractedLicense `json:"hasExtractedLicensingInfos"`
 }
 
 type sourceUnit struct {
-	Path     string
-	Version  string
-	Checksum string
+	Path            string
+	Version         string
+	Checksum        string
+	LicenseDeclared string
+}
+
+type archiveEntry struct {
+	Name    string
+	Mode    fs.FileMode
+	Content []byte
 }
 
 type binarySBOM struct {
-	SPDXVersion       string             `json:"spdxVersion"`
-	DataLicense       string             `json:"dataLicense"`
-	SPDXID            string             `json:"SPDXID"`
-	Name              string             `json:"name"`
-	DocumentNamespace string             `json:"documentNamespace"`
-	CreationInfo      spdxCreation       `json:"creationInfo"`
-	DocumentDescribes []string           `json:"documentDescribes"`
-	Packages          []spdxPackage      `json:"packages"`
-	Relationships     []spdxRelationship `json:"relationships"`
+	SPDXVersion       string                 `json:"spdxVersion"`
+	DataLicense       string                 `json:"dataLicense"`
+	SPDXID            string                 `json:"SPDXID"`
+	Name              string                 `json:"name"`
+	DocumentNamespace string                 `json:"documentNamespace"`
+	CreationInfo      spdxCreation           `json:"creationInfo"`
+	DocumentDescribes []string               `json:"documentDescribes"`
+	Packages          []spdxPackage          `json:"packages"`
+	Relationships     []spdxRelationship     `json:"relationships"`
+	ExtractedLicenses []spdxExtractedLicense `json:"hasExtractedLicensingInfos"`
 }
 
 type spdxCreation struct {
@@ -196,6 +218,12 @@ type spdxRelationship struct {
 	SPDXElementID      string `json:"spdxElementId"`
 	RelationshipType   string `json:"relationshipType"`
 	RelatedSPDXElement string `json:"relatedSpdxElement"`
+}
+
+type spdxExtractedLicense struct {
+	LicenseID     string `json:"licenseId"`
+	ExtractedText string `json:"extractedText"`
+	Name          string `json:"name"`
 }
 
 type inTotoStatement struct {
@@ -289,7 +317,6 @@ func inspectCandidate(ctx context.Context, config InspectConfig, trustedManifest
 	if err != nil {
 		return Candidate{}, err
 	}
-	verifyArguments := []string{"verify-tag", tag}
 	if config.AllowedSignersFile != "" {
 		allowed, resolveErr := filepath.Abs(config.AllowedSignersFile)
 		if resolveErr != nil {
@@ -299,10 +326,10 @@ func inspectCandidate(ctx context.Context, config InspectConfig, trustedManifest
 		if validateErr != nil {
 			return Candidate{}, fail(CodeUnsignedTag)
 		}
+		config.AllowedSignersFile = allowed
 		config.AllowedSignersSHA256 = signerDigest
-		verifyArguments = []string{"-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile=" + allowed, "verify-tag", tag}
 	}
-	if err := run(ctx, repository, nil, "git", verifyArguments...); err != nil {
+	if err := verifySignedReleaseTag(ctx, repository, tag, config.AllowedSignersFile); err != nil {
 		return Candidate{}, fail(CodeUnsignedTag)
 	}
 	commit, err := output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+tag+"^{commit}")
@@ -354,11 +381,289 @@ func inspectCandidate(ctx context.Context, config InspectConfig, trustedManifest
 	if err != nil || ValidateAgreement(ModulePath, tag, commit, released) != nil {
 		return Candidate{}, fail(CodeInvalidCandidate)
 	}
+	guide, err := verifyCompatibilityTransition(ctx, repository, modulePrefix, config, released)
+	if err != nil {
+		return Candidate{}, fail(CodeInvalidCandidate)
+	}
+	licenseAuthority, projectLicense, thirdPartyNotices, err := releaseLicenseEvidenceAt(ctx, repository, modulePrefix, commit, moduleBytes)
+	if err != nil {
+		return Candidate{}, fail(CodeInvalidCandidate)
+	}
 	sourceTreeSHA256, err := gitModuleTreeDigest(ctx, repository, commit, modulePrefix)
 	if err != nil {
 		return Candidate{}, fail(CodeInvalidCandidate)
 	}
-	return sealCandidate(Candidate{Module: ModulePath, Version: version, Tag: tag, Commit: commit, Manifest: releaseBytes, TemplateSHA256: compatibility.Digest(templateBytes), SourceTreeSHA256: sourceTreeSHA256, SignersSHA256: config.AllowedSignersSHA256, SourceDateEpoch: epoch}), nil
+	return sealCandidate(Candidate{Module: ModulePath, Version: version, Tag: tag, Commit: commit, Manifest: releaseBytes, TemplateSHA256: compatibility.Digest(templateBytes), SourceTreeSHA256: sourceTreeSHA256, SignersSHA256: config.AllowedSignersSHA256, SourceDateEpoch: epoch, migrationGuidePath: guide.path, migrationGuideSHA256: guide.sha256, migrationGuide: guide.bytes, licenseAuthority: licenseAuthority, projectLicense: projectLicense, thirdPartyNotices: thirdPartyNotices}), nil
+}
+
+func releaseLicenseEvidenceAt(ctx context.Context, repository, modulePrefix, commit string, moduleBytes []byte) ([]byte, []byte, []byte, error) {
+	read := func(relative string) ([]byte, error) {
+		if !safeReleaseRelativePath(relative) {
+			return nil, fail(CodeInvalidCandidate)
+		}
+		entry, treeErr := output(ctx, repository, nil, "git", "ls-tree", commit, "--", modulePrefix+relative)
+		fields := strings.Fields(entry)
+		if treeErr != nil || len(fields) != 4 || fields[0] != "100644" || fields[1] != "blob" || fields[3] != modulePrefix+relative {
+			return nil, fail(CodeInvalidCandidate)
+		}
+		return commandOutput(ctx, repository, nil, "git", "show", commit+":"+modulePrefix+relative)
+	}
+	authorityBytes, err := read(compatibility.DependencyLicenseAuthorityPath)
+	if err != nil {
+		return nil, nil, nil, fail(CodeInvalidCandidate)
+	}
+	authority, err := compatibility.ParseDependencyLicenseAuthority(authorityBytes, compatibility.DependencyLicenseAuthoritySHA256)
+	if err != nil {
+		return nil, nil, nil, fail(CodeInvalidCandidate)
+	}
+	projectLicense, err := read(authority.Project.Path)
+	if err != nil {
+		return nil, nil, nil, fail(CodeInvalidCandidate)
+	}
+	thirdPartyNotices, err := read(authority.Notices.Path)
+	if err != nil || compatibility.ValidateDependencyLicenseFiles(authority, projectLicense, thirdPartyNotices) != nil {
+		return nil, nil, nil, fail(CodeInvalidCandidate)
+	}
+	parsed, err := modfile.Parse("go.mod", moduleBytes, nil)
+	if err != nil || !dependencyLicenseVersionsMatch(parsed, authority) {
+		return nil, nil, nil, fail(CodeInvalidCandidate)
+	}
+	return authorityBytes, projectLicense, thirdPartyNotices, nil
+}
+
+func dependencyLicenseVersionsMatch(moduleFile *modfile.File, authority compatibility.DependencyLicenseAuthority) bool {
+	expected := []compatibility.DependencyLicense{
+		{Module: "github.com/klauspost/compress", Version: "v1.18.5"},
+		{Module: "github.com/nats-io/nats.go", Version: "v1.52.0"},
+		{Module: "github.com/nats-io/nkeys", Version: "v0.4.15"},
+		{Module: "github.com/nats-io/nuid", Version: "v1.0.1"},
+		{Module: "golang.org/x/crypto", Version: "v0.49.0"},
+		{Module: "golang.org/x/sys", Version: "v0.47.0"},
+	}
+	if len(authority.Dependencies) != len(expected) {
+		return false
+	}
+	for index := range expected {
+		if authority.Dependencies[index].Module != expected[index].Module || authority.Dependencies[index].Version != expected[index].Version {
+			return false
+		}
+	}
+	selected := make(map[string]string, len(moduleFile.Require))
+	for _, requirement := range moduleFile.Require {
+		selected[requirement.Mod.Path] = requirement.Mod.Version
+	}
+	for _, dependency := range authority.Dependencies {
+		if selected[dependency.Module] != dependency.Version {
+			return false
+		}
+	}
+	return true
+}
+
+type releaseCompatibilityEvidence struct {
+	publicGoAPI    compatibility.APIInventory
+	generatedGoABI compatibility.APIInventory
+	graphQLABI     compatibility.GraphQLInventory
+	observation    compatibility.ObservationInventory
+}
+
+func verifySignedReleaseTag(ctx context.Context, repository, tag, allowedSignersFile string) error {
+	arguments := []string{"verify-tag", tag}
+	if allowedSignersFile != "" {
+		arguments = []string{"-c", "gpg.format=ssh", "-c", "gpg.ssh.allowedSignersFile=" + allowedSignersFile, "verify-tag", tag}
+	}
+	return run(ctx, repository, nil, "git", arguments...)
+}
+
+func verifyCompatibilityTransition(ctx context.Context, repository, modulePrefix string, config InspectConfig, current compatibility.Manifest) (releaseMigrationGuide, error) {
+	after, err := compatibilityEvidenceAt(ctx, repository, modulePrefix, current.Release.Commit, current)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	previousTag, previousVersion, firstRelease, err := greatestLowerReleaseTag(ctx, repository, current.Release.Tag, current.Release.Version, config.AllowedSignersFile)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	if firstRelease {
+		if current.MigrationGuide != nil || containsString(current.RequiredActions, "migration-guide.execute") {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+		return releaseMigrationGuide{}, nil
+	}
+	previousCommit, err := output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+previousTag+"^{commit}")
+	if err != nil || !commitPattern.MatchString(previousCommit) {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	if err := run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", previousCommit, current.Release.Commit); err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	previous, err := developmentManifestAt(ctx, repository, modulePrefix, previousCommit)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	previous.Release = compatibility.Release{Development: false, Version: previousVersion, Tag: previousTag, Commit: previousCommit}
+	if encoded, encodeErr := compatibility.Encode(previous); encodeErr != nil || ValidateAgreement(ModulePath, previousTag, previousCommit, previous) != nil || len(encoded) == 0 {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	before, err := compatibilityEvidenceAt(ctx, repository, modulePrefix, previousCommit, previous)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	guide, err := verifyMigrationGuideTransition(ctx, repository, modulePrefix, previousTag, previousCommit, current)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	layers := compatibility.LayerAssessments{
+		PublicGoAPI:    compatibility.CompareAPI(before.publicGoAPI, after.publicGoAPI),
+		GeneratedGoABI: compatibility.CompareAPI(before.generatedGoABI, after.generatedGoABI),
+		GraphQLABI:     compatibility.CompareGraphQL(before.graphQLABI, after.graphQLABI),
+		CLIJSON:        conservativeDigestAssessment(previous.Digests.CLIJSON, current.Digests.CLIJSON),
+		Observation:    compatibility.CompareObservation(before.observation, after.observation),
+	}
+	if _, err := compatibility.CompareRelease(previous, current, layers); err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	return guide, nil
+}
+
+func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefix, previousTag, previousCommit string, current compatibility.Manifest) (releaseMigrationGuide, error) {
+	hasAction := containsString(current.RequiredActions, "migration-guide.execute")
+	if current.MigrationGuide == nil {
+		if hasAction {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+		return releaseMigrationGuide{}, nil
+	}
+	if !hasAction {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	authority := *current.MigrationGuide
+	encoded, err := commandOutput(ctx, repository, nil, "git", "show", current.Release.Commit+":"+modulePrefix+authority.Path)
+	if err != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	guide, err := compatibility.ParseMigrationGuide(encoded, authority.SHA256)
+	if err != nil || compatibility.ValidateMigrationGuideTransition(guide, authority, previousTag, previousCommit, current.Release.Tag, current.Release.Version, current.RequiredActions) != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	for _, corpus := range guide.Corpora {
+		for _, commit := range []string{previousCommit, current.Release.Commit} {
+			object := commit + ":" + modulePrefix + corpus.Path
+			actual, resolveErr := output(ctx, repository, nil, "git", "rev-parse", "--verify", object)
+			kind, typeErr := output(ctx, repository, nil, "git", "cat-file", "-t", object)
+			if resolveErr != nil || typeErr != nil || kind != "tree" || actual != corpus.GitTree {
+				return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+			}
+		}
+	}
+	return releaseMigrationGuide{path: authority.Path, sha256: authority.SHA256, bytes: append([]byte(nil), encoded...)}, nil
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func greatestLowerReleaseTag(ctx context.Context, repository, currentTag, currentVersion, allowedSignersFile string) (string, string, bool, error) {
+	encoded, err := output(ctx, repository, nil, "git", "for-each-ref", "--format=%(refname:strip=2)", "refs/tags/go/v*")
+	if err != nil {
+		return "", "", false, fail(CodeInvalidCandidate)
+	}
+	bestTag, bestVersion := "", ""
+	foundCurrent := false
+	for _, candidate := range strings.Split(encoded, "\n") {
+		candidate = strings.TrimSpace(candidate)
+		if candidate == "" {
+			continue
+		}
+		version, versionErr := VersionFromTag(candidate)
+		if versionErr != nil {
+			return "", "", false, fail(CodeInvalidCandidate)
+		}
+		if candidate == currentTag {
+			foundCurrent = true
+			continue
+		}
+		if verifySignedReleaseTag(ctx, repository, candidate, allowedSignersFile) != nil || semver.Compare(version, currentVersion) >= 0 {
+			return "", "", false, fail(CodeInvalidCandidate)
+		}
+		if bestVersion == "" || semver.Compare(version, bestVersion) > 0 {
+			bestTag, bestVersion = candidate, version
+		}
+	}
+	if !foundCurrent {
+		return "", "", false, fail(CodeInvalidCandidate)
+	}
+	if bestTag == "" {
+		return "", "", true, nil
+	}
+	return bestTag, bestVersion, false, nil
+}
+
+func developmentManifestAt(ctx context.Context, repository, modulePrefix, commit string) (compatibility.Manifest, error) {
+	encoded, err := commandOutput(ctx, repository, nil, "git", "show", commit+":"+modulePrefix+"compatibility/manifest.json")
+	if err != nil {
+		return compatibility.Manifest{}, fail(CodeInvalidCandidate)
+	}
+	value, err := compatibility.ParseHistorical(encoded, compatibility.Digest(encoded))
+	if err != nil || !value.Release.Development || value.Release.Version != "devel" || value.Release.Tag != "" || value.Release.Commit != strings.Repeat("0", 40) {
+		return compatibility.Manifest{}, fail(CodeInvalidCandidate)
+	}
+	return value, nil
+}
+
+func compatibilityEvidenceAt(ctx context.Context, repository, modulePrefix, commit string, value compatibility.Manifest) (releaseCompatibilityEvidence, error) {
+	read := func(path, expected string) ([]byte, error) {
+		encoded, err := commandOutput(ctx, repository, nil, "git", "show", commit+":"+modulePrefix+path)
+		if err != nil || compatibility.Digest(encoded) != expected {
+			return nil, fail(CodeInvalidCandidate)
+		}
+		return encoded, nil
+	}
+	publicBytes, err := read("internal/compatibility/testdata/public-go-api.json", value.Digests.PublicGoAPI)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, err
+	}
+	public, err := compatibility.ParseAPIInventory(publicBytes)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, fail(CodeInvalidCandidate)
+	}
+	generatedBytes, err := read("internal/compatibility/testdata/generated-go-abi.json", value.Digests.GeneratedGoABI)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, err
+	}
+	generated, err := compatibility.ParseAPIInventory(generatedBytes)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, fail(CodeInvalidCandidate)
+	}
+	graphQLBytes, err := read("internal/compatibility/testdata/graphql-abi.json", value.Digests.GraphQLABI)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, err
+	}
+	graphQL, err := compatibility.ParseGraphQLInventory(graphQLBytes)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, fail(CodeInvalidCandidate)
+	}
+	observationBytes, err := read("observe/telemetry-manifest.json", value.Digests.Observation)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, err
+	}
+	observation, err := compatibility.ParseObservationInventory(observationBytes)
+	if err != nil {
+		return releaseCompatibilityEvidence{}, fail(CodeInvalidCandidate)
+	}
+	return releaseCompatibilityEvidence{publicGoAPI: public, generatedGoABI: generated, graphQLABI: graphQL, observation: observation}, nil
+}
+
+func conservativeDigestAssessment(previous, current string) compatibility.LayerChange {
+	if previous == current {
+		return compatibility.LayerUnchanged
+	}
+	return compatibility.LayerBreaking
 }
 
 // ValidateAgreement is the semantic tag/module/version/commit comparison used
@@ -410,22 +715,35 @@ func Build(ctx context.Context, config BuildConfig) (Inventory, error) {
 			modules[index].Checksum = config.Candidate.SourceTreeSHA256
 		}
 	}
+	licenseAuthority, err := compatibility.ParseDependencyLicenseAuthority(config.Candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
+	if err != nil || compatibility.ValidateDependencyLicenseFiles(licenseAuthority, config.Candidate.projectLicense, config.Candidate.thirdPartyNotices) != nil || !applySourceModuleLicenses(modules, licenseAuthority) {
+		return Inventory{}, fail(CodeInvalidCandidate)
+	}
 	goVersion, err := output(ctx, config.ModuleDir, cleanGoEnvironment(os.Environ(), false, ""), goBinary, "env", "GOVERSION")
 	if err != nil || goVersion == "" {
 		return Inventory{}, &Error{Code: CodeBuild, stage: "go-version"}
 	}
-	source := newSourceSBOM(config.Candidate, modules)
+	source := newSourceSBOM(config.Candidate, modules, licenseAuthority)
 	if err := writeCanonicalJSON(filepath.Join(config.OutputDir, "golem_source.spdx.json"), source); err != nil {
 		return Inventory{}, err
 	}
 	if err := os.WriteFile(filepath.Join(config.OutputDir, "compatibility-manifest.json"), config.Candidate.Manifest, 0o644); err != nil {
 		return Inventory{}, fail(CodeBuild)
 	}
+	if err := writeCandidateMigrationGuide(config.OutputDir, config.Candidate); err != nil {
+		return Inventory{}, err
+	}
 	notes, err := buildReleaseNotes(config.Candidate)
 	if err != nil {
 		return Inventory{}, atStage(err, "release-notes")
 	}
 	if err := os.WriteFile(filepath.Join(config.OutputDir, "RELEASE_NOTES.md"), notes, 0o644); err != nil {
+		return Inventory{}, fail(CodeBuild)
+	}
+	if err := os.WriteFile(filepath.Join(config.OutputDir, compatibility.ProjectLicensePath), config.Candidate.projectLicense, 0o644); err != nil {
+		return Inventory{}, fail(CodeBuild)
+	}
+	if err := os.WriteFile(filepath.Join(config.OutputDir, compatibility.ThirdPartyNoticesPath), config.Candidate.thirdPartyNotices, 0o644); err != nil {
 		return Inventory{}, fail(CodeBuild)
 	}
 	for _, platform := range platforms {
@@ -495,15 +813,24 @@ func buildPlatform(ctx context.Context, config BuildConfig, goBinary, goVersion 
 	}
 	archivePath := filepath.Join(config.OutputDir, archive)
 	archiveTime := time.Unix(config.Candidate.SourceDateEpoch, 0).UTC()
+	entries := []archiveEntry{
+		{Name: compatibility.ProjectLicensePath, Mode: 0o644, Content: config.Candidate.projectLicense},
+		{Name: compatibility.ThirdPartyNoticesPath, Mode: 0o644, Content: config.Candidate.thirdPartyNotices},
+		{Name: binaryName, Mode: 0o755, Content: binaryBytes},
+	}
 	if platform.GOOS == "windows" {
-		err = writeZip(archivePath, binaryName, binaryBytes, archiveTime)
+		err = writeZip(archivePath, entries, archiveTime)
 	} else {
-		err = writeTarGzip(archivePath, binaryName, binaryBytes, archiveTime)
+		err = writeTarGzip(archivePath, entries, archiveTime)
 	}
 	if err != nil {
 		return &Error{Code: CodeBuild, stage: "archive"}
 	}
-	sbom := newBinarySBOM(config.Candidate, platform, digest(binaryBytes), goVersion)
+	licenseAuthority, parseErr := compatibility.ParseDependencyLicenseAuthority(config.Candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
+	if parseErr != nil {
+		return &Error{Code: CodeBuild, stage: "binary-license-authority"}
+	}
+	sbom := newBinarySBOM(config.Candidate, platform, digest(binaryBytes), goVersion, licenseAuthority.Project.LicenseDeclared)
 	if err := writeCanonicalJSON(filepath.Join(config.OutputDir, base+".spdx.json"), sbom); err != nil {
 		return &Error{Code: CodeBuild, stage: "binary-sbom"}
 	}
@@ -543,6 +870,12 @@ func VerifyReproducible(ctx context.Context, config BuildConfig) error {
 func Publish(staged, releases string, candidate Candidate) error {
 	if validateCandidate(candidate) != nil || staged == "" || releases == "" {
 		return fail(CodeInvalidCandidate)
+	}
+	if err := verifyBuiltMigrationGuide(staged, candidate); err != nil {
+		return err
+	}
+	if err := verifyBuiltLicenseEvidence(staged, candidate); err != nil {
+		return err
 	}
 	target := filepath.Join(releases, candidate.Version)
 	if _, err := os.Stat(target); err == nil {
@@ -787,17 +1120,118 @@ func validateCandidate(candidate Candidate) error {
 	if err != nil || ValidateAgreement(candidate.Module, candidate.Tag, candidate.Commit, manifest) != nil {
 		return fail(CodeInvalidCandidate)
 	}
+	if manifest.MigrationGuide == nil {
+		if candidate.migrationGuidePath != "" || candidate.migrationGuideSHA256 != "" || len(candidate.migrationGuide) != 0 {
+			return fail(CodeInvalidCandidate)
+		}
+	} else {
+		authority := *manifest.MigrationGuide
+		if candidate.migrationGuidePath != authority.Path || candidate.migrationGuideSHA256 != authority.SHA256 || !safeReleaseRelativePath(candidate.migrationGuidePath) {
+			return fail(CodeInvalidCandidate)
+		}
+		if _, err := compatibility.ParseMigrationGuide(candidate.migrationGuide, candidate.migrationGuideSHA256); err != nil {
+			return fail(CodeInvalidCandidate)
+		}
+	}
+	authority, err := compatibility.ParseDependencyLicenseAuthority(candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
+	if err != nil || compatibility.ValidateDependencyLicenseFiles(authority, candidate.projectLicense, candidate.thirdPartyNotices) != nil {
+		return fail(CodeInvalidCandidate)
+	}
 	return nil
 }
 
 func sealCandidate(candidate Candidate) Candidate {
 	candidate.Manifest = append([]byte(nil), candidate.Manifest...)
+	candidate.migrationGuide = append([]byte(nil), candidate.migrationGuide...)
+	candidate.licenseAuthority = append([]byte(nil), candidate.licenseAuthority...)
+	candidate.projectLicense = append([]byte(nil), candidate.projectLicense...)
+	candidate.thirdPartyNotices = append([]byte(nil), candidate.thirdPartyNotices...)
 	candidate.seal = candidateSeal(candidate)
 	return candidate
 }
 
 func candidateSeal(candidate Candidate) string {
-	return digest([]byte(candidate.Module + "\x00" + candidate.Version + "\x00" + candidate.Tag + "\x00" + candidate.Commit + "\x00" + candidate.TemplateSHA256 + "\x00" + candidate.SourceTreeSHA256 + "\x00" + candidate.SignersSHA256 + "\x00" + strconv.FormatInt(candidate.SourceDateEpoch, 10) + "\x00" + string(candidate.Manifest)))
+	return digest([]byte(candidate.Module + "\x00" + candidate.Version + "\x00" + candidate.Tag + "\x00" + candidate.Commit + "\x00" + candidate.TemplateSHA256 + "\x00" + candidate.SourceTreeSHA256 + "\x00" + candidate.SignersSHA256 + "\x00" + strconv.FormatInt(candidate.SourceDateEpoch, 10) + "\x00" + string(candidate.Manifest) + "\x00" + candidate.migrationGuidePath + "\x00" + candidate.migrationGuideSHA256 + "\x00" + string(candidate.migrationGuide) + "\x00" + string(candidate.licenseAuthority) + "\x00" + string(candidate.projectLicense) + "\x00" + string(candidate.thirdPartyNotices)))
+}
+
+func safeReleaseRelativePath(value string) bool {
+	if value == "" || filepath.ToSlash(value) != value || filepath.IsAbs(value) || filepath.Clean(filepath.FromSlash(value)) != filepath.FromSlash(value) {
+		return false
+	}
+	for _, element := range strings.Split(value, "/") {
+		if element == "" || element == "." || element == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func writeCandidateMigrationGuide(root string, candidate Candidate) error {
+	if len(candidate.migrationGuide) == 0 {
+		return nil
+	}
+	if !safeReleaseRelativePath(candidate.migrationGuidePath) || digest(candidate.migrationGuide) != candidate.migrationGuideSHA256 {
+		return fail(CodeInvalidCandidate)
+	}
+	target := filepath.Join(root, filepath.FromSlash(candidate.migrationGuidePath))
+	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+		return fail(CodeBuild)
+	}
+	if err := os.WriteFile(target, candidate.migrationGuide, 0o644); err != nil {
+		return fail(CodeBuild)
+	}
+	return nil
+}
+
+func verifyBuiltMigrationGuide(root string, candidate Candidate) error {
+	if len(candidate.migrationGuide) == 0 {
+		return nil
+	}
+	if !safeReleaseRelativePath(candidate.migrationGuidePath) {
+		return fail(CodeInvalidCandidate)
+	}
+	target := filepath.Join(root, filepath.FromSlash(candidate.migrationGuidePath))
+	if !regularFileBelowRoot(root, candidate.migrationGuidePath) {
+		return fail(CodeInvalidCandidate)
+	}
+	encoded, err := os.ReadFile(target)
+	if err != nil || !bytes.Equal(encoded, candidate.migrationGuide) || digest(encoded) != candidate.migrationGuideSHA256 {
+		return fail(CodeInvalidCandidate)
+	}
+	return nil
+}
+
+func verifyBuiltLicenseEvidence(root string, candidate Candidate) error {
+	for relative, expected := range map[string][]byte{
+		compatibility.ProjectLicensePath:    candidate.projectLicense,
+		compatibility.ThirdPartyNoticesPath: candidate.thirdPartyNotices,
+	} {
+		if !regularFileBelowRoot(root, relative) {
+			return fail(CodeInvalidCandidate)
+		}
+		encoded, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
+		if err != nil || !bytes.Equal(encoded, expected) {
+			return fail(CodeInvalidCandidate)
+		}
+	}
+	return nil
+}
+
+func regularFileBelowRoot(root, relative string) bool {
+	current := filepath.Clean(root)
+	elements := strings.Split(relative, "/")
+	for index, element := range elements {
+		current = filepath.Join(current, element)
+		info, err := os.Lstat(current)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return false
+		}
+		last := index == len(elements)-1
+		if last != info.Mode().IsRegular() || !last && !info.IsDir() {
+			return false
+		}
+	}
+	return true
 }
 
 func buildReleaseNotes(candidate Candidate) ([]byte, error) {
@@ -896,6 +1330,26 @@ func sourceModules(ctx context.Context, directory, goBinary string) ([]sourceUni
 	return result, nil
 }
 
+func applySourceModuleLicenses(modules []sourceUnit, authority compatibility.DependencyLicenseAuthority) bool {
+	found := make(map[string]bool, len(authority.Dependencies)+1)
+	for index := range modules {
+		declared, ok := authority.LicenseFor(modules[index].Path, modules[index].Version)
+		if ok {
+			modules[index].LicenseDeclared = declared
+			found[modules[index].Path] = true
+		}
+	}
+	if !found[authority.Project.Module] {
+		return false
+	}
+	for _, dependency := range authority.Dependencies {
+		if !found[dependency.Module] {
+			return false
+		}
+	}
+	return true
+}
+
 func downloadModuleSum(ctx context.Context, directory, goBinary, path, version string) (string, error) {
 	encoded, err := commandOutput(ctx, directory, append(os.Environ(), "GOWORK=off"), goBinary, "mod", "download", "-json", path+"@"+version)
 	if err != nil {
@@ -954,35 +1408,51 @@ func validateAllowedSigners(path, expectedDigest string) (string, error) {
 	return actual, nil
 }
 
-func newSourceSBOM(candidate Candidate, modules []sourceUnit) sourceSBOM {
+func newSourceSBOM(candidate Candidate, modules []sourceUnit, authority compatibility.DependencyLicenseAuthority) sourceSBOM {
 	packages := make([]spdxPackage, len(modules))
 	relationships := make([]spdxRelationship, len(modules))
 	describes := make([]string, 0, 1)
 	for index, module := range modules {
 		id := fmt.Sprintf("SPDXRef-Package-%d", index+1)
-		packages[index] = spdxPackage{SPDXID: id, Name: module.Path, VersionInfo: module.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: "NOASSERTION", CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: module.Checksum}}}
+		declared := module.LicenseDeclared
+		if declared == "" {
+			declared = "NOASSERTION"
+		}
+		packages[index] = spdxPackage{SPDXID: id, Name: module.Path, VersionInfo: module.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: declared, CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: module.Checksum}}}
 		relationships[index] = spdxRelationship{SPDXElementID: "SPDXRef-DOCUMENT", RelationshipType: "DESCRIBES", RelatedSPDXElement: id}
 		if module.Path == ModulePath {
 			describes = append(describes, id)
 		}
 	}
+	extracted := []spdxExtractedLicense{{LicenseID: authority.Project.LicenseDeclared, ExtractedText: string(candidate.projectLicense), Name: "Golem GPLv3 text; only/or-later unspecified"}}
+	for _, dependency := range authority.Dependencies {
+		if !strings.HasPrefix(dependency.LicenseDeclared, "LicenseRef-") {
+			continue
+		}
+		license, ok := compatibility.DependencyLicenseText(candidate.thirdPartyNotices, dependency)
+		if !ok {
+			continue
+		}
+		extracted = append(extracted, spdxExtractedLicense{LicenseID: dependency.LicenseDeclared, ExtractedText: string(license), Name: dependency.Module + " composite license text"})
+	}
 	return sourceSBOM{
 		SPDXVersion: "SPDX-2.3", DataLicense: "CC0-1.0", SPDXID: "SPDXRef-DOCUMENT", Name: "golem-source-" + candidate.Version,
 		DocumentNamespace: "https://eleven-am.github.io/golem/spdx/" + candidate.Version + "/source",
 		CreationInfo:      spdxCreation{Created: time.Unix(candidate.SourceDateEpoch, 0).UTC().Format(time.RFC3339), Creators: []string{"Tool: github.com/eleven-am/golem/go/internal/release@v1"}, LicenseListVersion: "3.25"},
-		DocumentDescribes: describes, Packages: packages, Relationships: relationships,
+		DocumentDescribes: describes, Packages: packages, Relationships: relationships, ExtractedLicenses: extracted,
 	}
 }
 
-func newBinarySBOM(candidate Candidate, platform Platform, binarySHA, goVersion string) binarySBOM {
+func newBinarySBOM(candidate Candidate, platform Platform, binarySHA, goVersion, licenseDeclared string) binarySBOM {
 	id := "SPDXRef-Package-golem"
 	return binarySBOM{
 		SPDXVersion: "SPDX-2.3", DataLicense: "CC0-1.0", SPDXID: "SPDXRef-DOCUMENT", Name: "golem-" + candidate.Version + "-" + platform.ID(),
 		DocumentNamespace: "https://eleven-am.github.io/golem/spdx/" + candidate.Version + "/" + platform.ID(),
 		CreationInfo:      spdxCreation{Created: time.Unix(candidate.SourceDateEpoch, 0).UTC().Format(time.RFC3339), Creators: []string{"Tool: github.com/eleven-am/golem/go/internal/release@v1", "Tool: " + goVersion}, LicenseListVersion: "3.25"},
 		DocumentDescribes: []string{id},
-		Packages:          []spdxPackage{{SPDXID: id, Name: "golem", VersionInfo: candidate.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: "NOASSERTION", CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: binarySHA}}}},
+		Packages:          []spdxPackage{{SPDXID: id, Name: "golem", VersionInfo: candidate.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: licenseDeclared, CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: binarySHA}}}},
 		Relationships:     []spdxRelationship{{SPDXElementID: "SPDXRef-DOCUMENT", RelationshipType: "DESCRIBES", RelatedSPDXElement: id}},
+		ExtractedLicenses: []spdxExtractedLicense{{LicenseID: licenseDeclared, ExtractedText: string(candidate.projectLicense), Name: "Golem GPLv3 text; only/or-later unspecified"}},
 	}
 }
 
@@ -992,19 +1462,26 @@ func newProvenance(candidate Candidate, platforms []string, subjects []Digest) i
 		inTotoSubjects[index] = inTotoSubject{Name: subject.Name, Digest: map[string]string{"sha256": subject.SHA256}}
 	}
 	invocation := digest([]byte(candidate.Tag + "\x00" + candidate.Commit + "\x00" + strings.Join(platforms, ",")))
+	dependencies := []slsaResolvedDependency{
+		{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag, Digest: map[string]string{"gitCommit": candidate.Commit}},
+		{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag + "#subdirectory=go", Digest: map[string]string{"sha256": candidate.SourceTreeSHA256}},
+		{URI: "file:compatibility/manifest.json", Digest: map[string]string{"sha256": candidate.TemplateSHA256}},
+		{URI: "urn:golem:release-allowed-signers", Digest: map[string]string{"sha256": candidate.SignersSHA256}},
+		{URI: "file:" + compatibility.DependencyLicenseAuthorityPath, Digest: map[string]string{"sha256": compatibility.DependencyLicenseAuthoritySHA256}},
+		{URI: "file:" + compatibility.ProjectLicensePath, Digest: map[string]string{"sha256": digest(candidate.projectLicense)}},
+		{URI: "file:" + compatibility.ThirdPartyNoticesPath, Digest: map[string]string{"sha256": digest(candidate.thirdPartyNotices)}},
+	}
+	if len(candidate.migrationGuide) != 0 {
+		dependencies = append(dependencies, slsaResolvedDependency{URI: "file:" + candidate.migrationGuidePath, Digest: map[string]string{"sha256": candidate.migrationGuideSHA256}})
+	}
 	return inTotoStatement{
 		Type: "https://in-toto.io/Statement/v1", Subject: inTotoSubjects, PredicateType: "https://slsa.dev/provenance/v1",
 		Predicate: slsaPredicate{
 			BuildDefinition: slsaBuildDefinition{
-				BuildType:          "https://github.com/eleven-am/golem/go/internal/release@v1",
-				ExternalParameters: slsaExternalParameters{Module: candidate.Module, Version: candidate.Version, Tag: candidate.Tag, Commit: candidate.Commit, Platforms: append([]string(nil), platforms...)},
-				InternalParameters: map[string]any{},
-				ResolvedDependencies: []slsaResolvedDependency{
-					{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag, Digest: map[string]string{"gitCommit": candidate.Commit}},
-					{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag + "#subdirectory=go", Digest: map[string]string{"sha256": candidate.SourceTreeSHA256}},
-					{URI: "file:compatibility/manifest.json", Digest: map[string]string{"sha256": candidate.TemplateSHA256}},
-					{URI: "urn:golem:release-allowed-signers", Digest: map[string]string{"sha256": candidate.SignersSHA256}},
-				},
+				BuildType:            "https://github.com/eleven-am/golem/go/internal/release@v1",
+				ExternalParameters:   slsaExternalParameters{Module: candidate.Module, Version: candidate.Version, Tag: candidate.Tag, Commit: candidate.Commit, Platforms: append([]string(nil), platforms...)},
+				InternalParameters:   map[string]any{},
+				ResolvedDependencies: dependencies,
 			},
 			RunDetails: slsaRunDetails{Builder: slsaBuilder{ID: "https://github.com/eleven-am/golem/go/internal/release@v1"}, Metadata: slsaMetadata{InvocationID: "urn:sha256:" + invocation}},
 		},
@@ -1023,7 +1500,10 @@ func cleanBuildEnvironment(environment []string, platform Platform) []string {
 	return append(result, "GOOS="+platform.GOOS, "GOARCH="+platform.GOARCH, "CGO_ENABLED=0", "GOWORK=off")
 }
 
-func writeTarGzip(path, name string, content []byte, timestamp time.Time) error {
+func writeTarGzip(path string, entries []archiveEntry, timestamp time.Time) error {
+	if !canonicalArchiveEntries(entries) {
+		return fail(CodeInvalidCandidate)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -1032,12 +1512,14 @@ func writeTarGzip(path, name string, content []byte, timestamp time.Time) error 
 	gzipWriter, _ := gzip.NewWriterLevel(file, gzip.BestCompression)
 	gzipWriter.Header.ModTime, gzipWriter.Header.OS = timestamp, 255
 	tarWriter := tar.NewWriter(gzipWriter)
-	header := &tar.Header{Name: name, Mode: 0o755, Size: int64(len(content)), ModTime: timestamp, Uid: 0, Gid: 0, Format: tar.FormatUSTAR}
-	if err := tarWriter.WriteHeader(header); err != nil {
-		return err
-	}
-	if _, err := tarWriter.Write(content); err != nil {
-		return err
+	for _, entry := range entries {
+		header := &tar.Header{Name: entry.Name, Mode: int64(entry.Mode.Perm()), Size: int64(len(entry.Content)), ModTime: timestamp, Uid: 0, Gid: 0, Format: tar.FormatUSTAR}
+		if err := tarWriter.WriteHeader(header); err != nil {
+			return err
+		}
+		if _, err := tarWriter.Write(entry.Content); err != nil {
+			return err
+		}
 	}
 	if err := tarWriter.Close(); err != nil {
 		return err
@@ -1045,24 +1527,41 @@ func writeTarGzip(path, name string, content []byte, timestamp time.Time) error 
 	return gzipWriter.Close()
 }
 
-func writeZip(path, name string, content []byte, timestamp time.Time) error {
+func writeZip(path string, entries []archiveEntry, timestamp time.Time) error {
+	if !canonicalArchiveEntries(entries) {
+		return fail(CodeInvalidCandidate)
+	}
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer file.Close()
 	writer := zip.NewWriter(file)
-	header := &zip.FileHeader{Name: name, Method: zip.Deflate}
-	header.SetModTime(timestamp)
-	header.SetMode(0o755)
-	entry, err := writer.CreateHeader(header)
-	if err != nil {
-		return err
-	}
-	if _, err := entry.Write(content); err != nil {
-		return err
+	for _, item := range entries {
+		header := &zip.FileHeader{Name: item.Name, Method: zip.Deflate}
+		header.SetModTime(timestamp)
+		header.SetMode(item.Mode)
+		entry, err := writer.CreateHeader(header)
+		if err != nil {
+			return err
+		}
+		if _, err := entry.Write(item.Content); err != nil {
+			return err
+		}
 	}
 	return writer.Close()
+}
+
+func canonicalArchiveEntries(entries []archiveEntry) bool {
+	if len(entries) == 0 {
+		return false
+	}
+	for index, entry := range entries {
+		if !safeReleaseRelativePath(entry.Name) || len(entry.Content) == 0 || entry.Mode != 0o644 && entry.Mode != 0o755 || index > 0 && entries[index-1].Name >= entry.Name {
+			return false
+		}
+	}
+	return true
 }
 
 func writeCanonicalJSON(path string, value any) error {

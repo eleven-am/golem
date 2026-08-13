@@ -113,6 +113,17 @@ func NewMutationVocabularyPostgreSQLNamespaces(t testing.TB, namespace, systemNa
 	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, true, true, false, namespace, systemNamespace, false, false, false)
 }
 
+// NewOptimisticConcurrency is the complete portable Post fixture with its
+// existing logical int64 field explicitly owned as the version token. It is a
+// real bootstrap bundle for runtime CAS tests, not a mutable registry fake.
+func NewOptimisticConcurrency(t testing.TB) Fixture {
+	return newFixtureConfiguredWithConcurrency(t, 0, 0, ContractModes{}, true, true, true, true, false, "public", "_golem", false, false, false, true)
+}
+
+func NewOptimisticConcurrencyPostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
+	return newFixtureConfiguredWithConcurrency(t, 0, 0, ContractModes{}, true, true, true, true, false, namespace, systemNamespace, false, false, false, true)
+}
+
 // NewMutationExactValues adds the complete live cross-provider mutation value
 // vocabulary required by P4: nullable scalar, bytes, JSON, scalar-list JSON,
 // Decimal, BigInt, and microsecond DateTime.
@@ -137,6 +148,10 @@ func newFixtureWithSubscriptions(t testing.TB, userMaxTake, postMaxTake uint32, 
 }
 
 func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads bool) Fixture {
+	return newFixtureConfiguredWithConcurrency(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, false)
+}
+
+func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool) Fixture {
 	t.Helper()
 	user, post := compilerir.ModelID(id(1)), compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
@@ -183,6 +198,16 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 			compilerir.FieldIR{ID: postDecimal, GoName: "Decimal", LogicalName: "Decimal", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: "decimal_value", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeDecimal, Precision: &precision, Scale: &scale}}},
 		)
 	}
+	if optimisticConcurrency {
+		field := postBigInt
+		model.Models[1].OptimisticConcurrency = &field
+		// OC runtime retry acceptance also carries one application-owned Updated
+		// value so the end-to-end kernel can prove preparation happens once.
+		updated := scalar(postDateTime, "DateTime", "datetime_value", compilerir.TypeDateTime, true)
+		precision := uint16(6)
+		updated.Scalar.Type.Precision, updated.Scalar.Updated = &precision, true
+		model.Models[1].Fields = append(model.Models[1].Fields, updated)
+	}
 	if mutationVocabulary {
 		model.Models[1].Fields = append(model.Models[1].Fields, compilerir.FieldIR{ID: postOptionalInt, GoName: "OptionalInt", LogicalName: "OptionalInt", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Column: "optional_int", Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeInt64}, Nullable: true}})
 	}
@@ -213,6 +238,16 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 	if exactValues {
 		contract.Models[1].Fields = append(contract.Models[1].Fields, compilerir.FieldContractIR{FieldID: postBigInt}, compilerir.FieldContractIR{FieldID: postDecimal})
 	}
+	if optimisticConcurrency {
+		field := postBigInt
+		contract.Models[1].OptimisticConcurrency = &field
+		contract.Models[1].Fields = append(contract.Models[1].Fields, compilerir.FieldContractIR{FieldID: postDateTime})
+		for index := range contract.Models[1].Fields {
+			if contract.Models[1].Fields[index].FieldID == field {
+				contract.Models[1].Fields[index].Modes = []compilerir.FieldMode{compilerir.ModeVisible}
+			}
+		}
+	}
 	if mutationVocabulary {
 		contract.Models[1].Fields = append(contract.Models[1].Fields, compilerir.FieldContractIR{FieldID: postOptionalInt})
 	}
@@ -241,6 +276,19 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 	})
 	sqliteSchema := physicalSchema(compilerir.SQLite, user, post, userID, userName, postID, authorID, postTitle, postBigInt, postDecimal, postOptionalInt, postNullableText, postBytes, postJSON, postList, postDateTime, userKey, postKey, indexedAuthor, exactValues, mutationVocabulary, fullExactValues)
 	postgresSchema := physicalSchema(compilerir.PostgreSQL, user, post, userID, userName, postID, authorID, postTitle, postBigInt, postDecimal, postOptionalInt, postNullableText, postBytes, postJSON, postList, postDateTime, userKey, postKey, indexedAuthor, exactValues, mutationVocabulary, fullExactValues)
+	if optimisticConcurrency {
+		field := postBigInt
+		sqliteSchema.Tables[1].OptimisticConcurrency = &field
+		postgresSchema.Tables[1].OptimisticConcurrency = &field
+		logical := compilerir.LogicalTypeIR{Kind: compilerir.TypeDateTime, Precision: func() *uint16 { value := uint16(6); return &value }()}
+		for _, target := range []*physical.PhysicalSchema{&sqliteSchema, &postgresSchema} {
+			storage, storageErr := physical.ExpectedStorage(target.Provider.Provider, logical)
+			if storageErr != nil {
+				t.Fatal(storageErr)
+			}
+			target.Tables[1].Columns = append(target.Tables[1].Columns, physical.PhysicalColumn{ID: postDateTime, Name: "datetime_value", Ordinal: uint32(len(target.Tables[1].Columns)), Storage: storage, Nullable: true, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}})
+		}
+	}
 	if nullableAuthor {
 		sqliteSchema.Tables[1].Columns[1].Nullable = true
 		postgresSchema.Tables[1].Columns[1].Nullable = true
@@ -286,6 +334,9 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 	}
 	if mutationVocabulary {
 		fixture.PostOptionalInt = golem.FieldID(mustFixed(t, string(postOptionalInt)))
+	}
+	if optimisticConcurrency {
+		fixture.PostDateTime = golem.FieldID(mustFixed(t, string(postDateTime)))
 	}
 	if fullExactValues {
 		fixture.PostNullableText = golem.FieldID(mustFixed(t, string(postNullableText)))

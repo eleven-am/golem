@@ -1,3 +1,5 @@
+//go:build releaseintegration
+
 package main
 
 import (
@@ -10,18 +12,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/eleven-am/golem/go/internal/migration"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-func TestP8P7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
+func p8RunP7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
+	t.Helper()
 	profiles := []struct {
 		name, environment, fallback string
 	}{
@@ -44,12 +47,12 @@ func TestP8P7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
 			module := p8P7UpgradeModule(t)
 			disposable := newDocumentationPostgreSQLDatabase(t, resolved[index])
 			dsn := disposable.dataSourceName
+			p8RunGolem(t, module, "migration", "apply", "--provider", "postgresql", "--dsn", dsn, "--migrations", "p8-corpus-migrations")
 			provider := internalpostgresql.New()
 			database, _, err := provider.Open(ctx, dsn)
 			if err != nil {
 				t.Fatal(err)
 			}
-			p8InstallP7PostgreSQL(t, database, filepath.Join(module, "p8-corpus-migrations"))
 			event := p8ReadFrozenEvent(t)
 			p8SeedPostgreSQLUpgradeState(t, database, event)
 			before := p8SnapshotPostgreSQLUpgradeState(t, database)
@@ -57,11 +60,17 @@ func TestP8P7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			p8RunGolem(t, module, "migration", "new", "--name", "p8_upgrade", "--schema", "./cmd/golem/testdata/social", "--migrations", "p8-corpus-migrations")
+			p8RunMigrationNewWithExactApprovals(t, module)
 			for _, providerName := range []string{"postgresql", "sqlite"} {
 				content, err := os.ReadFile(filepath.Join(module, "p8-corpus-migrations", providerName, "0002_p8_upgrade.sql"))
-				if err != nil || len(content) != 0 {
-					t.Fatalf("metadata-only %s migration bytes=%q err=%v", providerName, content, err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if providerName == "postgresql" && (!bytes.Contains(content, []byte("TYPE character varying")) || !bytes.Contains(content, []byte("DROP CONSTRAINT"))) {
+					t.Fatalf("PostgreSQL v1->v2 representation migration is incomplete:\n%s", content)
+				}
+				if providerName == "sqlite" && len(content) != 0 {
+					t.Fatalf("SQLite format-only migration bytes=%q", content)
 				}
 			}
 			p8RunGolem(t, module, "generate", "--schema", "./cmd/golem/testdata/social", "--app-out", "./cmd/golem/testdata/social", "--migrations", "p8-corpus-migrations")
@@ -84,56 +93,6 @@ func TestP8P7ToReleaseUpgradePostgreSQLProfiles(t *testing.T) {
 	}
 }
 
-func p8InstallP7PostgreSQL(t *testing.T, database interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}, migrationRoot string) {
-	t.Helper()
-	ctx := context.Background()
-	script, err := os.ReadFile(filepath.Join(migrationRoot, "postgresql", "0001_initial.sql"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for index, statement := range strings.Split(string(script), ";\n") {
-		statement = strings.TrimSpace(statement)
-		if statement == "" {
-			continue
-		}
-		if _, err := database.ExecContext(ctx, statement); err != nil {
-			t.Fatalf("install P7 PostgreSQL statement %d: %v", index, err)
-		}
-	}
-	manifestBytes, err := os.ReadFile(filepath.Join(migrationRoot, "postgresql", "manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	history, err := migration.ParseManifest(manifestBytes)
-	if err != nil || len(history.Entries) != 1 {
-		t.Fatalf("decode P7 PostgreSQL history: entries=%d err=%v", len(history.Entries), err)
-	}
-	entry := history.Entries[0]
-	files, err := json.Marshal(entry.Files)
-	if err != nil {
-		t.Fatal(err)
-	}
-	type phase struct {
-		Ordinal          uint32                `json:"ordinal"`
-		Status           migration.PhaseStatus `json:"status"`
-		AfterFingerprint migration.Digest      `json:"afterFingerprint"`
-	}
-	phases := make([]phase, len(entry.Phases))
-	for index, value := range entry.Phases {
-		phases[index] = phase{Ordinal: value.Ordinal, Status: migration.PhaseApplied, AfterFingerprint: value.AfterFingerprint}
-	}
-	phaseBytes, err := json.Marshal(phases)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = database.ExecContext(ctx, `INSERT INTO "_golem"."_golem_migrations" (migration_id,parent_chain_hash,chain_hash,file_checksums,before_physical_fingerprint,after_physical_fingerprint,phases,applied_at) VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7::jsonb,$8)`, string(entry.ID), string(entry.ParentChainHash), string(entry.ChainHash), files, string(entry.BeforePhysical), string(entry.AfterPhysical), phaseBytes, time.Unix(1700000000, 0).UTC())
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func p8SeedPostgreSQLUpgradeState(t *testing.T, database interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 	Rebind(string) string
@@ -152,7 +111,8 @@ func p8SeedPostgreSQLUpgradeState(t *testing.T, database interface {
 	exec(`INSERT INTO _golem._golem_outbox_delivery(causation_id,status,first_recorded_at,attempt_count,available_at,updated_at) VALUES(?,?,?,?,?,?)`, event.CausationID, "pending", event.RecordedAt, 0, event.RecordedAt, event.RecordedAt)
 }
 
-func TestP8P7ToReleaseUpgradeSQLite(t *testing.T) {
+func p8RunP7ToReleaseUpgradeSQLite(t *testing.T) {
+	t.Helper()
 	ctx := context.Background()
 	module := p8P7UpgradeModule(t)
 	dsn := "file:" + filepath.Join(module, "upgrade.sqlite")
@@ -184,11 +144,17 @@ func TestP8P7ToReleaseUpgradeSQLite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	p8RunGolem(t, module, "migration", "new", "--name", "p8_upgrade", "--schema", "./cmd/golem/testdata/social", "--migrations", "p8-corpus-migrations")
+	p8RunMigrationNewWithExactApprovals(t, module)
 	for _, providerName := range []string{"postgresql", "sqlite"} {
 		content, err := os.ReadFile(filepath.Join(module, "p8-corpus-migrations", providerName, "0002_p8_upgrade.sql"))
-		if err != nil || len(content) != 0 {
-			t.Fatalf("metadata-only %s migration bytes=%q err=%v", providerName, content, err)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if providerName == "postgresql" && (!bytes.Contains(content, []byte("TYPE character varying")) || !bytes.Contains(content, []byte("DROP CONSTRAINT"))) {
+			t.Fatalf("PostgreSQL v1->v2 representation migration is incomplete:\n%s", content)
+		}
+		if providerName == "sqlite" && len(content) != 0 {
+			t.Fatalf("SQLite format-only migration bytes=%q", content)
 		}
 	}
 	p8RunGolem(t, module, "generate", "--schema", "./cmd/golem/testdata/social", "--app-out", "./cmd/golem/testdata/social", "--migrations", "p8-corpus-migrations")
@@ -464,4 +430,30 @@ func p8RunGolem(t *testing.T, directory string, arguments ...string) []byte {
 		t.Fatalf("golem %s failed code=%d diagnostic=%s", arguments[0], code, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes()
+}
+
+func p8RunMigrationNewWithExactApprovals(t *testing.T, directory string) {
+	t.Helper()
+	p8RunMigrationNewArgumentsWithExactApprovals(t, directory, []string{"migration", "new", "--name", "p8_upgrade", "--schema", "./cmd/golem/testdata/social", "--migrations", "p8-corpus-migrations"})
+}
+
+func p8RunMigrationNewArgumentsWithExactApprovals(t *testing.T, directory string, arguments []string) {
+	t.Helper()
+	arguments = append([]string(nil), arguments...)
+	approvalPattern := regexp.MustCompile(`requires --approve ([0-9a-f]{32})`)
+	seen := map[string]bool{}
+	for attempts := 0; attempts < 64; attempts++ {
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), directory, arguments, &stdout, &stderr)
+		if code == 0 {
+			return
+		}
+		match := approvalPattern.FindStringSubmatch(stderr.String())
+		if code != 1 || len(match) != 2 || seen[match[1]] {
+			t.Fatalf("migration new exact-approval discovery failed code=%d diagnostic=%s", code, strings.TrimSpace(stderr.String()))
+		}
+		seen[match[1]] = true
+		arguments = append(arguments, "--approve", match[1])
+	}
+	t.Fatal("migration new exact-approval discovery exceeded its closed bound")
 }

@@ -1,3 +1,5 @@
+//go:build releaseintegration
+
 package main
 
 import (
@@ -19,7 +21,8 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8UpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testing.T) {
+func p8RunUpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testing.T) {
+	t.Helper()
 	profiles := []struct {
 		name, provider, dsn string
 	}{
@@ -51,11 +54,19 @@ func TestP8UpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testin
 				t.Fatal(err)
 			}
 
-			p8RunGolem(t, module, "migration", "new", "--name", "p8_upgrade", "--schema", "./internal/compatibility/testdata/p7-event/source", "--migrations", migrationRoot)
+			p8RunMigrationNewArgumentsWithExactApprovals(t, module, []string{"migration", "new", "--name", "p8_upgrade", "--schema", "./internal/compatibility/testdata/p7-event/source", "--migrations", migrationRoot})
 			for _, providerName := range []string{"sqlite", "postgresql"} {
 				content, err := os.ReadFile(filepath.Join(module, migrationRoot, providerName, "0002_p8_upgrade.sql"))
-				if err != nil || len(content) != 0 {
-					t.Fatalf("event upgrade must be metadata-only for %s: bytes=%q err=%v", providerName, content, err)
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch providerName {
+				case "sqlite":
+					if len(content) != 0 {
+						t.Fatalf("SQLite event upgrade must be format-only: %q", content)
+					}
+				case "postgresql":
+					p8AssertEventUpgradePostgreSQLRepresentationSQL(t, string(content))
 				}
 			}
 			p8RunGolem(t, module, "generate", "--schema", "./internal/compatibility/testdata/p7-event/source", "--app-out", "./internal/compatibility/testdata/p7-event/source", "--migrations", migrationRoot)
@@ -70,6 +81,28 @@ func TestP8UpgradePreservesAuthorizationMigrationChainAndPendingEvents(t *testin
 				t.Fatalf("event upgrade changed durable identity/history: before=%#v after=%#v", before, after)
 			}
 		})
+	}
+}
+
+func p8AssertEventUpgradePostgreSQLRepresentationSQL(t *testing.T, sql string) {
+	t.Helper()
+	const (
+		table      = `"p7_event_posts"`
+		column     = `"title"`
+		constraint = `"ck_max_length_9df162382f90"`
+	)
+	statements := strings.Split(strings.TrimSuffix(strings.TrimSpace(sql), ";"), ";\n")
+	if len(statements) != 2 {
+		t.Fatalf("PostgreSQL event upgrade statements=%d want=2:\n%s", len(statements), sql)
+	}
+	want := []string{
+		`ALTER TABLE "public".` + table + ` DROP CONSTRAINT ` + constraint,
+		`ALTER TABLE "public".` + table + ` ALTER COLUMN ` + column + ` TYPE character varying(80) USING ` + column + `::character varying(80)`,
+	}
+	for index := range want {
+		if statements[index] != want[index] {
+			t.Fatalf("PostgreSQL event upgrade statement %d=%q want=%q", index, statements[index], want[index])
+		}
 	}
 }
 

@@ -20,6 +20,18 @@ import (
 // Render accepts only a validated, root-only scalar Create, Update, or Delete
 // plan. It returns SQL plus closed positional dataflow; it never executes SQL.
 func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (Program, error) {
+	return render(plan, registry, provider, capabilities, false)
+}
+
+// RenderVersioned is the sole SQL construction boundary for an update/delete
+// whose exact expectation will be validated by the runtime CAS kernel. It
+// carries no claim value; the returned program is marked as requiring the
+// kernel's unforgeable precheck capability before execution.
+func RenderVersioned(plan mutationir.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (Program, error) {
+	return render(plan, registry, provider, capabilities, true)
+}
+
+func render(plan mutationir.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, versioned bool) (Program, error) {
 	if registry == nil {
 		return Program{}, fail(CodeInput, policyir.ModelID{}, policyir.FieldID{}, "active schema registry is required", nil)
 	}
@@ -55,7 +67,27 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 	if !ok {
 		return Program{}, fail(CodeSchema, node.ModelID(), policyir.FieldID{}, "root physical model is absent", nil)
 	}
-	context := renderContext{plan: plan, node: node, registry: registry, provider: provider, capabilities: capabilities, dialect: dialect, resolver: resolver, model: model, alias: "golem_m0"}
+	context := renderContext{plan: plan, node: node, registry: registry, provider: provider, capabilities: capabilities, dialect: dialect, resolver: resolver, model: model, alias: "golem_m0", precheckAllAuthorizations: versioned && plan.Stance() == mutationir.Caller && node.Operation() == mutationir.Update}
+	logicalModel, ok := registry.Model(golem.ModelID(node.ModelID()))
+	if !ok {
+		return Program{}, fail(CodeSchema, node.ModelID(), policyir.FieldID{}, "root logical model is absent", nil)
+	}
+	if field, enabled := logicalModel.OptimisticConcurrency(); enabled {
+		value := policyir.FieldID(field)
+		context.concurrency = &value
+		for _, operation := range node.ScalarOperations() {
+			if operation.FieldID() == value && !operation.RuntimeOwned() {
+				return Program{}, fail(CodeInput, node.ModelID(), value, "optimistic-concurrency field is application authored", nil)
+			}
+		}
+		if node.Operation() == mutationir.Update || node.Operation() == mutationir.Delete {
+			if !versioned {
+				return Program{}, fail(CodeUnsupported, node.ModelID(), value, "optimistic-concurrency mutation requires an explicit expectation", nil)
+			}
+		}
+	} else if versioned {
+		return Program{}, fail(CodeInput, node.ModelID(), policyir.FieldID{}, "explicit concurrency rendering requires a concurrency-enabled model", nil)
+	}
 	if node.IdentityBehavior() == mutationir.IdentityMayChange && registry.IdentityChangeRequiresReferentialEnumeration(golem.ModelID(node.ModelID()), golemFields(scalarOperationFields(node.ScalarOperations()))) {
 		return Program{}, fail(CodeUnsupported, node.ModelID(), policyir.FieldID{}, "identity-changing scalar update has relation effects that are not enumerated by this mutation graph", nil)
 	}
@@ -84,19 +116,27 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		identity.hasBefore = true
 		identity.beforeStatement = 0
 	}
-	return Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), fact: node.Fact()}, nil
+	program := Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), fact: node.Fact()}
+	if context.concurrency != nil {
+		field := *context.concurrency
+		program.concurrency = &field
+		program.requiresConcurrencyPrecheck = versioned && (node.Operation() == mutationir.Update || node.Operation() == mutationir.Delete)
+	}
+	return program, nil
 }
 
 type renderContext struct {
-	plan         mutationir.Plan
-	node         mutationir.Node
-	registry     *schema.Registry
-	provider     policyir.Provider
-	capabilities policysql.CapabilityProof
-	dialect      policysql.Dialect
-	resolver     policysql.Resolver
-	model        policysql.Model
-	alias        physical.PhysicalName
+	plan                      mutationir.Plan
+	node                      mutationir.Node
+	registry                  *schema.Registry
+	provider                  policyir.Provider
+	capabilities              policysql.CapabilityProof
+	dialect                   policysql.Dialect
+	resolver                  policysql.Resolver
+	model                     policysql.Model
+	alias                     physical.PhysicalName
+	concurrency               *policyir.FieldID
+	precheckAllAuthorizations bool
 }
 
 func (context renderContext) renderCreate() ([]Statement, error) {
@@ -159,7 +199,7 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 func (context renderContext) renderUpdate() ([]Statement, error) {
 	target, _ := context.node.Target()
 	operations := context.node.ScalarOperations()
-	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations))
+	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields())
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +225,7 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 	}
 	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where + lock, bindings: whereBindings, columns: preColumns, authorizations: authorizationColumns, cardinality: ExactlyOneRow}}
 
-	assignments := make([]string, len(operations))
+	assignments := make([]string, len(operations), len(operations)+1)
 	updateBindings := make([]Binding, 0, len(operations))
 	for index, operation := range operations {
 		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), operation.FieldID())
@@ -202,12 +242,26 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		}
 		assignments[index] = column + " = " + expression
 	}
+	if context.concurrency != nil {
+		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), *context.concurrency)
+		if !ok || field.Type.Kind() != policyir.ValueInt64 || field.Type.Nullable() {
+			return nil, fail(CodeSchema, context.node.ModelID(), *context.concurrency, "optimistic-concurrency field has no exact non-null int64 descriptor", nil)
+		}
+		column := context.dialect.Quote(field.Column)
+		assignments = append(assignments, column+" = ("+column+" + 1)")
+	}
 	updateWhere, updateWhereBindings, err := context.actionWhere(target, true, len(updateBindings))
 	if err != nil {
 		return nil, err
 	}
 	updateBindings = append(updateBindings, updateWhereBindings...)
-	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations))
+	if context.concurrency != nil {
+		field, _ := context.resolver.Field(context.provider, context.node.ModelID(), *context.concurrency)
+		updateBindings = append(updateBindings, Binding{kind: PriorResultBinding, statementIndex: 0, field: *context.concurrency})
+		updateWhere += " AND " + context.qualified(field.Column) + " = " + context.dialect.Placeholder(len(updateBindings))
+		updateWhere += " AND " + context.qualified(field.Column) + " < 9223372036854775807"
+	}
+	returned, err := context.returnFields(context.node.AfterRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields())
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +302,7 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 
 func (context renderContext) renderDelete() ([]Statement, error) {
 	target, _ := context.node.Target()
-	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey())
+	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.plan.ResultRequirements().Fields(), context.primaryKey(), context.concurrencyFields())
 	if err != nil {
 		return nil, err
 	}
@@ -268,6 +322,24 @@ func (context renderContext) renderDelete() ([]Statement, error) {
 	pkWhere, pkBindings, err := context.priorPrimaryKeyWhere(0)
 	if err != nil {
 		return nil, err
+	}
+	if context.concurrency != nil {
+		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), *context.concurrency)
+		if !ok || field.Type.Kind() != policyir.ValueInt64 || field.Type.Nullable() {
+			return nil, fail(CodeSchema, context.node.ModelID(), *context.concurrency, "optimistic-concurrency field has no exact non-null int64 descriptor", nil)
+		}
+		// The locked primary identity prevents hook retargeting, but it is not a
+		// substitute for the authorized target contract. Re-evaluate the exact
+		// selector, caller selection policy, and target guard in the atomic DELETE
+		// so a policy dependency revoked while Before runs cannot be bypassed.
+		authorizedWhere, authorizedBindings, renderErr := context.actionWhere(target, true, len(pkBindings))
+		if renderErr != nil {
+			return nil, renderErr
+		}
+		pkWhere += " AND (" + authorizedWhere + ")"
+		pkBindings = append(pkBindings, authorizedBindings...)
+		pkBindings = append(pkBindings, Binding{kind: PriorResultBinding, statementIndex: 0, field: *context.concurrency})
+		pkWhere += " AND " + context.qualified(field.Column) + " = " + context.dialect.Placeholder(len(pkBindings))
 	}
 	returning, resultColumns, err := context.returning(beforeFields)
 	if err != nil {
@@ -329,7 +401,9 @@ func (context renderContext) actionWhere(target mutationir.Target, includeSelect
 		if compileErr != nil {
 			return "", nil, compileErr
 		}
-		parts = append(parts, fragment.text)
+		// A compiled target guard may be a top-level disjunction. Keep it grouped
+		// under the selector predicate so SQL precedence cannot widen the target.
+		parts = append(parts, "("+fragment.text+")")
 		bindings = append(bindings, fragment.bindings...)
 	}
 	if includeSelection {
@@ -363,7 +437,7 @@ func (context renderContext) authorizationSelect(offset int) (string, []Binding,
 	bindings := make([]Binding, 0)
 	columns := make([]AuthorizationColumn, 0, len(context.node.FieldAuthorizations()))
 	for _, authorization := range context.node.FieldAuthorizations() {
-		if _, applies := authored[authorization.FieldID()]; !applies {
+		if _, applies := authored[authorization.FieldID()]; !applies && !context.precheckAllAuthorizations {
 			continue
 		}
 		if _, ok := context.resolver.Field(context.provider, context.node.ModelID(), authorization.FieldID()); !ok {
@@ -413,7 +487,10 @@ func (context renderContext) postconditionStatement(source uint32, conditions []
 		if compileErr != nil {
 			return Statement{}, false, compileErr
 		}
-		parts = append(parts, fragment.text)
+		// A compiled postcondition may be a top-level disjunction. Group it
+		// beneath the locked primary identity so SQL operator precedence cannot
+		// widen verification to unrelated rows.
+		parts = append(parts, "("+fragment.text+")")
 		bindings = append(bindings, fragment.bindings...)
 	}
 	pk := context.primaryKey()
@@ -498,6 +575,13 @@ func (context renderContext) primaryKey() []policyir.FieldID {
 		result[index] = policyir.FieldID(public[index])
 	}
 	return result
+}
+
+func (context renderContext) concurrencyFields() []policyir.FieldID {
+	if context.concurrency == nil {
+		return nil
+	}
+	return []policyir.FieldID{*context.concurrency}
 }
 
 func (context renderContext) identityVerificationFields() []policyir.FieldID {

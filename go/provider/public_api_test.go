@@ -47,6 +47,7 @@ import (
 
 func compileFrozenProviderAPI(ctx context.Context, database *provider.Database) {
 	_, _ = sqlite.Open(ctx, sqlite.Config{DataSourceName: "file:app.sqlite"})
+	_ = sqlite.CheckpointForBackup(ctx, database)
 	_, _ = postgresql.Open(ctx, postgresql.Config{
 		DataSourceName: "postgresql://user@localhost/app",
 		Pool: postgresql.PoolConfig{MaximumOpen: 4, MaximumIdle: 2},
@@ -114,12 +115,12 @@ func TestP8PublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
 
 	expectedObjects := map[string][]string{
 		paths[0]: {
-			"Capabilities", "Code", "CodeClose", "CodeConfig", "CodeOf", "CodeOpen", "Database", "Feature",
+			"Capabilities", "Code", "CodeClose", "CodeConfig", "CodeMaintenance", "CodeOf", "CodeOpen", "Database", "Feature",
 			"FeatureAdvisoryLocks", "FeatureAnalyticsExact", "FeatureForeignKeys", "FeatureGeneratedColumns", "FeatureJSON",
 			"FeaturePolicyASCIIText", "FeaturePolicyBinaryText", "FeaturePolicyExactJSON", "FeaturePolicyRelation", "FeaturePolicyScalarList",
 			"PoolStatus", "Version",
 		},
-		paths[1]: {"Config", "Open"},
+		paths[1]: {"CheckpointForBackup", "Config", "Open"},
 		paths[2]: {"Config", "Open", "PoolConfig"},
 	}
 	expectedMethods := map[string]map[string][]string{

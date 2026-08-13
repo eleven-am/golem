@@ -411,7 +411,7 @@ func runP8SocialJourney(t *testing.T, database *provider.Database) {
 	if _, err := system.Sessions.Create(ctx, social.Sessions.Create(
 		social.Sessions.ID.Create(sessionID),
 		social.Sessions.UserID.Create(userID), social.Sessions.TokenHash.Create(tokenHash[:]),
-		social.Sessions.ExpiresAt.Create(time.Now().UTC().Add(time.Hour)),
+		social.Sessions.ExpiresAt.Create(time.Now().UTC().Add(time.Hour).Truncate(time.Microsecond)),
 	)); err != nil {
 		t.Fatalf("seed bytes/session scalar: %v", err)
 	}

@@ -52,3 +52,33 @@ func TestCustomOperationCannotRequestSystemDBTxRawSQLOrUnknownType(t *testing.T)
 		})
 	}
 }
+
+func TestCustomRegistryRejectsVersionedUpdateManyInputNestedInList(t *testing.T) {
+	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/graphql_extensions", Pattern: "."})
+	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
+		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
+	}
+	compilation := *compiled.Compilation
+	if len(compilation.Contract.CustomOperations) == 0 {
+		t.Fatal("fixture has no custom operations")
+	}
+	var modelName string
+	for index := range compilation.Contract.Models {
+		contract := &compilation.Contract.Models[index]
+		if !contract.Exposed {
+			continue
+		}
+		version := compilerir.FieldID("f0000000000000000000000000000091")
+		contract.OptimisticConcurrency = &version
+		modelName = contract.GraphQLName
+		break
+	}
+	if modelName == "" {
+		t.Fatal("fixture has no exposed model")
+	}
+	element := compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeUpdateManyInput, Name: modelName}
+	compilation.Contract.CustomOperations[0].Arguments = []compilerir.GraphQLArgumentContractIR{{Name: "data", Type: compilerir.GraphQLTypeIR{Kind: compilerir.GraphQLTypeList, Element: &element}}}
+	if _, err := New(compilation); err == nil {
+		t.Fatal("versioned update-many custom argument was accepted")
+	}
+}

@@ -61,6 +61,7 @@ func TestCompatibilityManifestRejectsInvalidClosedInventories(t *testing.T) {
 		{name: "missing digest", mutate: func(value *Manifest) { value.Digests.GraphQLABI = "" }},
 		{name: "zero format identity", mutate: func(value *Manifest) { value.Versions.ContractIR = 0 }},
 		{name: "current codec not historically decoded", mutate: func(value *Manifest) { value.HistoricalDecode.FactCodecs = []string{"golem.fact.v1"} }},
+		{name: "current GraphQL not historically inventoried", mutate: func(value *Manifest) { value.HistoricalDecode.GraphQL = []uint16{3} }},
 		{name: "unsorted actions", mutate: func(value *Manifest) { value.RequiredActions = []string{"operator.restart", "migration.apply"} }},
 		{name: "boundary prose", mutate: func(value *Manifest) { value.KnownBoundaries = []string{"contains spaces"} }},
 	}
@@ -98,7 +99,7 @@ func compatibilityFixture() Manifest {
 			GraphQLABI: strings.Repeat("3", 64), CLIJSON: strings.Repeat("4", 64), Observation: strings.Repeat("5", 64),
 		},
 		Versions: Versions{
-			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v5",
+			Generator: "p1-v1", GeneratedTemplateABI: "p8-go-abi-v6",
 			SchemaBundle: 2, GeneratedManifest: 2, GraphQL: 4,
 			ModelIR: 1, ContractIR: 5, CanonicalIR: 1, PhysicalSchema: 1, PhysicalCanonical: 1,
 			MigrationManifest: 1, MigrationCanonical: 1, MigrationLedger: 1, EventSchema: 1,
@@ -106,7 +107,7 @@ func compatibilityFixture() Manifest {
 			PrincipalSnapshotCodecs: []string{},
 		},
 		HistoricalDecode: HistoricalDecode{
-			SchemaBundles: []uint16{1, 2}, GeneratedManifests: []uint16{1, 2}, ModelIR: []uint16{1}, ContractIR: []uint16{4, 5}, CanonicalIR: []uint16{1},
+			SchemaBundles: []uint16{1, 2}, GeneratedManifests: []uint16{1, 2}, GraphQL: []uint16{4}, ModelIR: []uint16{1}, ContractIR: []uint16{4, 5}, CanonicalIR: []uint16{1},
 			PhysicalSchema: []uint16{1}, PhysicalCanonical: []uint16{1}, MigrationManifest: []uint16{1}, MigrationCanonical: []uint16{1}, MigrationLedger: []uint16{1},
 			FactCodecs:  []string{"golem.fact.v1", "golem.fact.v2"},
 			EventCodecs: []string{"golem.event.v1"}, PrincipalSnapshotCodecs: []string{},

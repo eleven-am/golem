@@ -73,6 +73,7 @@ type Program struct {
 	token       [32]byte
 	guard       Statement
 	probe       Statement
+	exactProbe  Statement
 	cleanup     *Statement
 	create      mutationir.Node
 	update      mutationir.Node
@@ -136,6 +137,13 @@ func (program Program) RetryClass() mutationir.RetryClass { return program.retry
 func (program Program) GuardToken() [32]byte              { return program.token }
 func (program Program) GuardStatement() Statement         { return cloneStatement(program.guard) }
 func (program Program) ProbeStatement() Statement         { return cloneStatement(program.probe) }
+
+// ExactSelectorProbeStatement is the private non-disclosing existence check
+// used only by the expectation-aware absent-row runtime after the authorized
+// reach probe misses. It must never be exposed as an application read.
+func (program Program) ExactSelectorProbeStatement() Statement {
+	return cloneStatement(program.exactProbe)
+}
 func (program Program) CleanupStatement() (Statement, bool) {
 	if program.cleanup == nil {
 		return Statement{}, false
@@ -234,8 +242,20 @@ func Prepare(plan mutationir.Plan, registry *schema.Registry, provider policyir.
 		lock = " FOR UPDATE"
 	}
 	probe := Statement{role: ProbeUpdateReach, sql: "SELECT 1 FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + fragment.SQL() + lock, args: fragment.Args()}
+	exactFragment, err := policysql.Compile(policysql.Request{
+		Condition: selector, Provider: provider, Resolver: resolver,
+		Dialect: dialect, Capabilities: capabilities,
+		BoundFingerprint: resolver.SchemaFingerprint(), RootAlias: alias,
+	})
+	if err != nil {
+		return Program{}, fail(CodeRender, "exact selector probe could not be compiled", err)
+	}
+	if uint32(len(exactFragment.Args())) > plan.Bounds().MaxParameters() {
+		return Program{}, fail(CodeRender, "exact selector probe exceeds the plan parameter bound", nil)
+	}
+	exactProbe := Statement{role: ProbeUpdateReach, sql: "SELECT 1 FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + exactFragment.SQL() + lock, args: exactFragment.Args()}
 	guard, cleanup := guardStatements(provider, token)
-	return Program{provider: provider, transaction: transaction, retry: plan.RetryClass(), token: token, guard: guard, probe: probe, cleanup: cleanup, create: create, update: update}, nil
+	return Program{provider: provider, transaction: transaction, retry: plan.RetryClass(), token: token, guard: guard, probe: probe, exactProbe: exactProbe, cleanup: cleanup, create: create, update: update}, nil
 }
 
 func exactBranches(nodes []mutationir.Node, root mutationir.Node) (mutationir.Node, mutationir.Node, error) {

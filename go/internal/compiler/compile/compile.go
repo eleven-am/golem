@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/codegen/registry"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/methods"
@@ -20,6 +21,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 type Config struct {
@@ -105,7 +107,7 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 			if !appFound {
 				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", resolved.Compilation.Model.Schema.PackagePath), raw.Root.Span))
 			} else {
-				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model})
+				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model, Contract: resolved.Compilation.Contract, DeclarationDiscovery: true})
 				if shellErr != nil {
 					diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
 				} else {
@@ -117,6 +119,9 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 			}
 			interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs})
 			diagnostics = append(diagnostics, interpreted.Diagnostics...)
+			if !hasErrors(interpreted.Diagnostics) {
+				resolved.Compilation.Model.Extensions = append(resolved.Compilation.Model.Extensions, interpreted.Extensions...)
+			}
 		}
 	}
 	if !hasErrors(diagnostics) {
@@ -131,6 +136,9 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		diagnostics = append(diagnostics, applyRelationOptions(&resolved.Compilation.Model, interpreted.RelationOptions)...)
 	}
 	populateContractFields(raw, &resolved.Compilation)
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, compilerconcurrency.Apply(&resolved.Compilation, interpreted.OptimisticConcurrency)...)
+	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, analyticscontract.Normalize(&resolved.Compilation, interpreted.AnalyticsModels)...)
 	}
@@ -414,7 +422,13 @@ func canonicalCompilation(compilation ir.CompilationIR) (ir.CompilationIR, error
 }
 
 func validateComplete(compilation ir.CompilationIR) []ir.Diagnostic {
-	var diagnostics []ir.Diagnostic
+	diagnostics := compilerconcurrency.ValidateAgreement(compilation)
+	semanticOwners := make(map[ir.ObjectID]struct{})
+	for _, extension := range compilation.Model.Extensions {
+		if extension.Kind == semanticcontract.IndexKind {
+			semanticOwners[extension.Owner] = struct{}{}
+		}
+	}
 	modelIDs := make(map[ir.ModelID]ir.ModelDeclIR, len(compilation.Model.Models))
 	fieldModels := make(map[ir.FieldID]ir.ModelID)
 	for _, model := range compilation.Model.Models {
@@ -424,6 +438,19 @@ func validateComplete(compilation ir.CompilationIR) []ir.Diagnostic {
 		modelIDs[model.ID] = model
 		if model.PrimaryKey == nil || len(model.PrimaryKey.Fields) == 0 {
 			diagnostics = append(diagnostics, ir.NewError("P1_PRIMARY_KEY_MISSING", fmt.Sprintf("model %s requires a primary key", model.LogicalName), ir.SourceSpan{}))
+		}
+		if _, semantic := semanticOwners[ir.ObjectID(model.ID)]; semantic {
+			if model.PrimaryKey == nil || len(model.PrimaryKey.Fields) == 0 {
+				diagnostics = append(diagnostics, ir.NewError("P9_SEMANTIC_IDENTITY", "semantic indexes require a primary identity", ir.SourceSpan{}))
+			} else {
+				for _, fieldID := range model.PrimaryKey.Fields {
+					field, ok := completeField(model, fieldID)
+					if !ok || field.Scalar == nil || !semanticIdentityType(field.Scalar.Type.Kind) {
+						diagnostics = append(diagnostics, ir.NewError("P9_SEMANTIC_IDENTITY_TYPE", "semantic indexes support String, UUID, Int16, Int32, and Int64 primary identity components", ir.SourceSpan{}))
+						break
+					}
+				}
+			}
 		}
 		for _, field := range model.Fields {
 			if owner, duplicate := fieldModels[field.ID]; duplicate {
@@ -469,6 +496,24 @@ func validateComplete(compilation ir.CompilationIR) []ir.Diagnostic {
 	}
 	ir.SortDiagnostics(diagnostics)
 	return diagnostics
+}
+
+func completeField(model ir.ModelDeclIR, fieldID ir.FieldID) (ir.FieldIR, bool) {
+	for _, field := range model.Fields {
+		if field.ID == fieldID {
+			return field, true
+		}
+	}
+	return ir.FieldIR{}, false
+}
+
+func semanticIdentityType(kind ir.LogicalTypeKind) bool {
+	switch kind {
+	case ir.TypeString, ir.TypeUUID, ir.TypeInt16, ir.TypeInt32, ir.TypeInt64:
+		return true
+	default:
+		return false
+	}
 }
 
 func hasErrors(diagnostics []ir.Diagnostic) bool {

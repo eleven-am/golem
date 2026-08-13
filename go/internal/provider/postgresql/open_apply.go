@@ -129,12 +129,12 @@ current_setting('TimeZone') = 'UTC'
 }
 
 func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, schema physical.PhysicalSchema) (err error) {
-	if database == nil {
-		return fmt.Errorf("postgresql apply initial: nil database")
-	}
 	normalized, err := physical.Normalize(schema)
 	if err != nil {
 		return err
+	}
+	if database == nil {
+		return fmt.Errorf("postgresql apply initial: nil database")
 	}
 	script, err := provider.renderInitial(normalized)
 	if err != nil {
@@ -214,22 +214,22 @@ func advisoryKey(schema physical.PhysicalSchema) int64 {
 }
 
 func compareFingerprints(expected, actual physical.PhysicalSchema) error {
-	expectedPhysical, err := physical.PhysicalFingerprint(expected)
+	expectedPhysical, err := physical.HistoricalPhysicalFingerprint(expected)
 	if err != nil {
 		return err
 	}
-	actualPhysical, err := physical.PhysicalFingerprint(actual)
+	actualPhysical, err := physical.HistoricalPhysicalFingerprint(actual)
 	if err != nil {
 		return err
 	}
 	if expectedPhysical != actualPhysical {
 		return fmt.Errorf("application physical fingerprint mismatch: expected %s actual %s", expectedPhysical, actualPhysical)
 	}
-	expectedSystem, err := physical.SystemFingerprint(expected.Provider, expected.System)
+	expectedSystem, err := physical.HistoricalSystemFingerprint(expected)
 	if err != nil {
 		return err
 	}
-	actualSystem, err := physical.SystemFingerprint(actual.Provider, actual.System)
+	actualSystem, err := physical.HistoricalSystemFingerprint(actual)
 	if err != nil {
 		return err
 	}

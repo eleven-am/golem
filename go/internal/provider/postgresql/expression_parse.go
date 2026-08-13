@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"unicode"
 
@@ -36,6 +37,8 @@ type expressionParser struct {
 	table    physical.PhysicalTable
 }
 
+const catalogCastVarcharToTextV1 = "golem.postgresql.cast.varchar-to-text.v1"
+
 func parseCatalogExpression(source string, table physical.PhysicalTable) (physical.Expression, error) {
 	tokens, err := lexExpression(source)
 	if err != nil {
@@ -50,6 +53,90 @@ func parseCatalogExpression(source string, table physical.PhysicalTable) (physic
 		return physical.Expression{}, fmt.Errorf("unexpected token %q", parser.peek().text)
 	}
 	return result, nil
+}
+
+// parseCatalogGeneratedExpression reverses only PostgreSQL's registered
+// implicit varchar-to-text coercion for lower/upper generated expressions.
+// PostgreSQL 15 deparses lower(varchar_column) as
+// lower((varchar_column)::text), although the reviewed portable expression is
+// string-preserving. The explicit cast is parsed and type checked first; this
+// function then reconstructs the exact reviewed expression only when the
+// source and generated target have identical bounded-string storage.
+func parseCatalogGeneratedExpression(source string, table physical.PhysicalTable, reviewed physical.Expression) (physical.Expression, error) {
+	value, err := parseCatalogExpression(source, table)
+	if err != nil {
+		return physical.Expression{}, err
+	}
+	return normalizeCatalogExpressionAgainstReviewed(value, reviewed)
+}
+
+func normalizeCatalogExpressionAgainstReviewed(value, reviewed physical.Expression) (physical.Expression, error) {
+	if value.Kind == physical.ExpressionCast && value.Symbol != nil && value.Symbol.Identity == catalogCastVarcharToTextV1 && len(value.Operands) == 1 && reviewed.Type.Kind == physical.StoragePostgreSQLVarchar {
+		source := value.Operands[0]
+		alignCatalogExpressionCollections(&source, reviewed)
+		if !reflect.DeepEqual(source, reviewed) || value.Type.Kind != physical.StoragePostgreSQLText {
+			return physical.Expression{}, fmt.Errorf("registered catalog string coercion does not match the reviewed expression")
+		}
+		return source, nil
+	}
+	if value.Kind == reviewed.Kind && reflect.DeepEqual(value.Symbol, reviewed.Symbol) && len(value.Operands) == len(reviewed.Operands) {
+		for index := range value.Operands {
+			normalized, err := normalizeCatalogExpressionAgainstReviewed(value.Operands[index], reviewed.Operands[index])
+			if err != nil {
+				return physical.Expression{}, err
+			}
+			value.Operands[index] = normalized
+		}
+		alignCatalogExpressionCollections(&value, reviewed)
+		if reflect.DeepEqual(value, reviewed) {
+			return value, nil
+		}
+		if value.Symbol != nil && (value.Symbol.Identity == schemaexpr.Lower || value.Symbol.Identity == schemaexpr.Upper) && value.Type.Kind == physical.StoragePostgreSQLText && reviewed.Type.Kind == physical.StoragePostgreSQLVarchar {
+			if len(reviewed.Operands) != 1 || reviewed.Type != reviewed.Operands[0].Type {
+				return physical.Expression{}, fmt.Errorf("registered catalog string coercion does not match the reviewed expression")
+			}
+			value.Type = reviewed.Type
+			if reflect.DeepEqual(value, reviewed) {
+				return value, nil
+			}
+			return physical.Expression{}, fmt.Errorf("registered catalog string function coercion changes reviewed expression facts")
+		}
+	}
+	if value.Symbol == nil || reviewed.Symbol == nil || value.Symbol.Identity != reviewed.Symbol.Identity || (reviewed.Symbol.Identity != schemaexpr.Lower && reviewed.Symbol.Identity != schemaexpr.Upper) || len(value.Operands) != 1 || len(reviewed.Operands) != 1 {
+		return value, nil
+	}
+	cast := value.Operands[0]
+	if cast.Kind != physical.ExpressionCast || cast.Symbol == nil || cast.Symbol.Identity != catalogCastVarcharToTextV1 || len(cast.Operands) != 1 {
+		return value, nil
+	}
+	sourceValue := cast.Operands[0]
+	reviewedSource := reviewed.Operands[0]
+	alignCatalogExpressionCollections(&sourceValue, reviewedSource)
+	if reviewed.Type.Kind != physical.StoragePostgreSQLVarchar || sourceValue.Type != reviewedSource.Type || reviewedSource.Type != reviewed.Type || cast.Type.Kind != physical.StoragePostgreSQLText || !reflect.DeepEqual(sourceValue, reviewedSource) {
+		return physical.Expression{}, fmt.Errorf("registered generated string coercion does not match the reviewed expression")
+	}
+	value.Operands[0] = sourceValue
+	value.Type = reviewed.Type
+	alignCatalogExpressionCollections(&value, reviewed)
+	if !reflect.DeepEqual(value, reviewed) {
+		return physical.Expression{}, fmt.Errorf("registered generated string coercion changes reviewed expression facts")
+	}
+	return value, nil
+}
+
+func alignCatalogExpressionCollections(value *physical.Expression, reviewed physical.Expression) {
+	if len(value.Operands) != len(reviewed.Operands) {
+		return
+	}
+	if len(value.Operands) == 0 {
+		if reviewed.Operands != nil {
+			value.Operands = make([]physical.Expression, 0)
+		}
+		return
+	}
+	for index := range value.Operands {
+		alignCatalogExpressionCollections(&value.Operands[index], reviewed.Operands[index])
+	}
 }
 
 func (p *expressionParser) peek() token {
@@ -382,6 +469,9 @@ func parseCastStorage(value string) (physical.StorageType, error) {
 	return physical.StorageType{}, fmt.Errorf("unsupported cast type %q", value)
 }
 func castIdentity(from, to physical.StorageType) string {
+	if from.Kind == physical.StoragePostgreSQLVarchar && to.Kind == physical.StoragePostgreSQLText {
+		return catalogCastVarcharToTextV1
+	}
 	if from.Kind == physical.StoragePostgreSQLSmallInt && to.Kind == physical.StoragePostgreSQLInteger {
 		return schemaexpr.CastInt16ToInt32
 	}

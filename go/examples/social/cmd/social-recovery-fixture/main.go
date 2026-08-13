@@ -98,7 +98,7 @@ func main() {
 	case "verify":
 		// Verification below deliberately performs no writes.
 	case "drain":
-		err = drainRecoveryFact(ctx, application)
+		err = drainRecoveryFact(ctx, database, application)
 	}
 	if err != nil {
 		recoveryFailure()
@@ -186,7 +186,7 @@ func seedRecoveryCanary(ctx context.Context, application *social.App[social.Prin
 	return err
 }
 
-func drainRecoveryFact(ctx context.Context, application *social.App[social.Principal]) error {
+func drainRecoveryFact(ctx context.Context, database *provider.Database, application *social.App[social.Principal]) error {
 	postID, err := golem.ParseUUID(recoveryPostID)
 	if err != nil {
 		return err
@@ -206,6 +206,11 @@ func drainRecoveryFact(ctx context.Context, application *social.App[social.Princ
 	receiveContext, stopReceive := context.WithTimeout(ctx, 10*time.Second)
 	event, err := stream.Recv(receiveContext)
 	stopReceive()
+	if err == nil {
+		deliveryContext, stopDelivery := context.WithTimeout(ctx, 10*time.Second)
+		err = waitRecoveryFactDelivered(deliveryContext, database)
+		stopDelivery()
+	}
 	stopPublisher()
 	select {
 	case publisherErr := <-publisherDone:
@@ -224,6 +229,36 @@ func drainRecoveryFact(ctx context.Context, application *social.App[social.Princ
 		return errors.New("publisher delivered the wrong recovery fact")
 	}
 	return nil
+}
+
+func waitRecoveryFactDelivered(ctx context.Context, database *provider.Database) error {
+	managedSchema := ""
+	switch database.Provider() {
+	case golem.SQLite:
+	case golem.PostgreSQL:
+		managedSchema = `"_golem".`
+	default:
+		return errors.New("recovery provider is unsupported")
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		var delivered int
+		if err := database.UnsafeSQLX().GetContext(ctx, &delivered, `SELECT COUNT(*) FROM `+managedSchema+`"_golem_outbox_delivery" WHERE status = 'delivered'`); err != nil {
+			return err
+		}
+		if delivered == 1 {
+			return nil
+		}
+		if delivered > 1 {
+			return errors.New("recovery delivery evidence is ambiguous")
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
 }
 
 func readRecoverySnapshot(ctx context.Context, database *provider.Database, application *social.App[social.Principal]) (recoverySnapshot, error) {

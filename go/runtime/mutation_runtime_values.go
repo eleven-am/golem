@@ -50,7 +50,14 @@ func (values *mutationRuntimeValues) applyAt(input mutationbind.ScalarInput, reg
 	if err != nil {
 		return mutationbind.ScalarInput{}, err
 	}
-	return mutationbind.WithRuntimeOwnedValues(input, registry, resolved)
+	bound, err := mutationbind.WithRuntimeOwnedValues(input, registry, resolved)
+	if err != nil {
+		return mutationbind.ScalarInput{}, err
+	}
+	if input.Kind() == mutationbind.InputCreate {
+		return mutationbind.WithOptimisticConcurrencyCreate(bound, registry)
+	}
+	return bound, nil
 }
 
 func (values *mutationRuntimeValues) applyOperations(model policyir.ModelID, kind mutationbind.InputKind, operations []mutationir.ScalarOperation, registry *schema.Registry, slot uint32) ([]mutationir.ScalarOperation, error) {

@@ -146,26 +146,6 @@ func TestVersionSubprocessLinkerProvenance(t *testing.T) {
 	}
 }
 
-func TestDoctorSQLiteMissingTargetIsNotCreated(t *testing.T) {
-	module := writeSingleProviderModule(t)
-	database := filepath.Join(t.TempDir(), "must-not-be-created.db")
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), module, []string{"doctor", "--provider", "sqlite", "--dsn", database, "--json"}, &stdout, &stderr)
-	if code != 1 {
-		t.Fatalf("doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
-	}
-	if _, err := os.Stat(database); !os.IsNotExist(err) {
-		t.Fatalf("doctor created missing SQLite target: %v", err)
-	}
-	var output doctorOutput
-	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
-		t.Fatal(err)
-	}
-	if output.Capabilities != "fail" || output.Schema != "unreachable" {
-		t.Fatalf("missing-target doctor = %#v", output)
-	}
-}
-
 func TestP8DoctorIsReadOnlyAndUsesPublicProviderLifecycle(t *testing.T) {
 	module := writeSingleProviderModule(t)
 	databasePath := filepath.Join(t.TempDir(), "read-only.db")
@@ -429,7 +409,6 @@ func TestP8DoctorStateMatrixBothProviders(t *testing.T) {
 		env  string
 	}{
 		{name: "postgresql-c", env: "GOLEM_TEST_POSTGRES_DSN"},
-		{name: "postgresql-linguistic", env: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
 	} {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))

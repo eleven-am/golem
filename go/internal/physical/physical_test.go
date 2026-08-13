@@ -109,6 +109,29 @@ func TestValidateRejectsIdentifiersStorageAndConstraintViolations(t *testing.T) 
 	}
 }
 
+func TestValidateRejectsInvalidPostgreSQLVarcharMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		edit func(*StorageType)
+		text string
+	}{
+		{name: "zero length", edit: func(value *StorageType) { value.Length = 0 }, text: "positive maximum length"},
+		{name: "precision", edit: func(value *StorageType) { value.Precision = 8 }, text: "precision/scale"},
+		{name: "scale", edit: func(value *StorageType) { value.Scale = 1 }, text: "precision/scale"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := postgresqlSocialSchema()
+			storage := &schema.Tables[0].Columns[0].Storage
+			*storage = StorageType{Kind: StoragePostgreSQLVarchar, Length: 32}
+			test.edit(storage)
+			err := Validate(schema)
+			if err == nil || !IsValidationCode(err, CodeStorage) || !strings.Contains(err.Error(), test.text) {
+				t.Fatalf("error = %v; want storage error containing %q", err, test.text)
+			}
+		})
+	}
+}
+
 func TestValidateAcceptsSetDefaultWithLocalDefault(t *testing.T) {
 	schema := sqliteSocialSchema()
 	posts := tableByName(&schema, "posts")
@@ -167,6 +190,98 @@ func TestExpressionValidationIsClosedAndProviderScoped(t *testing.T) {
 	}
 }
 
+func TestPostgreSQLGeneratedColumnCannotReferenceGeneratedColumn(t *testing.T) {
+	schema := postgresqlSocialSchema()
+	table := tableByName(&schema, "posts")
+	source := table.Columns[1]
+	first := &table.Columns[2]
+	second := &table.Columns[3]
+	generated := func(input PhysicalColumn, output StorageType) *GeneratedExpression {
+		field := input.ID
+		return &GeneratedExpression{Kind: GeneratedStored, Expression: Expression{
+			Kind: ExpressionFunction, Type: output,
+			Symbol:   &SemanticSymbol{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Version: 1, Provider: ir.ProviderScopePortable},
+			Operands: []Expression{{Kind: ExpressionColumn, Type: input.Storage, Column: &field, Operands: []Expression{}}},
+		}}
+	}
+	first.Generated = generated(source, first.Storage)
+	second.Generated = generated(*first, second.Storage)
+	if err := Validate(schema); err == nil || !strings.Contains(err.Error(), "cannot reference generated field") {
+		t.Fatalf("PostgreSQL generated dependency error=%v", err)
+	}
+}
+
+func TestPhysicalExpressionColumnAndGeneratedRootBindExactTypes(t *testing.T) {
+	t.Run("column source storage", func(t *testing.T) {
+		schema := sqliteSocialSchema()
+		expression := &tableByName(&schema, "posts").Checks[0].Expression.Operands[0]
+		expression.Type = StorageType{Kind: StorageSQLiteBlob}
+		if err := Validate(schema); err == nil || !strings.Contains(err.Error(), "storage must exactly match") {
+			t.Fatalf("stale column-expression storage error=%v", err)
+		}
+	})
+	t.Run("column source nullability", func(t *testing.T) {
+		schema := sqliteSocialSchema()
+		expression := &tableByName(&schema, "posts").Checks[0].Expression.Operands[0]
+		expression.Nullable = true
+		if err := Validate(schema); err == nil || !strings.Contains(err.Error(), "nullability must exactly match") {
+			t.Fatalf("stale column-expression nullability error=%v", err)
+		}
+	})
+	for _, test := range []struct {
+		name   string
+		mutate func(*GeneratedExpression)
+		text   string
+	}{
+		{name: "generated root storage", mutate: func(value *GeneratedExpression) { value.Expression.Type = StorageType{Kind: StoragePostgreSQLBytea} }, text: "result storage must exactly match"},
+		{name: "generated root nullability", mutate: func(value *GeneratedExpression) { value.Expression.Nullable = true }, text: "non-null generated column"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := postgresqlSocialSchema()
+			table := tableByName(&schema, "posts")
+			source := table.Columns[1]
+			field := source.ID
+			generated := &GeneratedExpression{Kind: GeneratedStored, Expression: Expression{
+				Kind: ExpressionFunction, Type: table.Columns[2].Storage,
+				Symbol:   &SemanticSymbol{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Version: 1, Provider: ir.ProviderScopePortable},
+				Operands: []Expression{{Kind: ExpressionColumn, Type: source.Storage, Nullable: source.Nullable, Column: &field, Operands: []Expression{}}},
+			}}
+			table.Columns[2].Generated = generated
+			test.mutate(generated)
+			if err := Validate(schema); err == nil || !strings.Contains(err.Error(), test.text) {
+				t.Fatalf("generated root binding error=%v", err)
+			}
+		})
+	}
+}
+
+func TestPhysicalOperationAddressableIDsAreSchemaGloballyUnique(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*PhysicalSchema)
+	}{
+		{name: "cross-table field", mutate: func(schema *PhysicalSchema) {
+			schema.Tables[1].Columns[0].ID = schema.Tables[0].Columns[0].ID
+		}},
+		{name: "cross-kind key and index", mutate: func(schema *PhysicalSchema) {
+			schema.Tables[0].Indexes[0].ID = ir.IndexID(schema.Tables[0].PrimaryKey.ID)
+		}},
+		{name: "duplicate foreign key", mutate: func(schema *PhysicalSchema) {
+			duplicate := schema.Tables[0].ForeignKeys[0]
+			duplicate.Name = "fk_posts_author_duplicate"
+			schema.Tables[0].ForeignKeys = append(schema.Tables[0].ForeignKeys, duplicate)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			schema := cloneSchema(sqliteSocialSchema())
+			test.mutate(&schema)
+			if err := Validate(schema); err == nil || !IsValidationCode(err, CodeDuplicate) || !strings.Contains(err.Error(), "operation-addressable stable ID") {
+				t.Fatalf("global stable-ID collision error=%v", err)
+			}
+		})
+	}
+}
+
 func TestPhysicalAndSystemFingerprintsHaveSeparateDomains(t *testing.T) {
 	schema := sqliteSocialSchema()
 	physicalBefore, err := PhysicalFingerprint(schema)
@@ -199,6 +314,8 @@ func TestPhysicalAndSystemFingerprintsHaveSeparateDomains(t *testing.T) {
 
 	changed := sqliteSocialSchema()
 	tableByName(&changed, "posts").Columns[2].Nullable = true
+	tableByName(&changed, "posts").Checks[0].Expression.Nullable = true
+	tableByName(&changed, "posts").Checks[0].Expression.Operands[0].Nullable = true
 	physicalChanged, err := PhysicalFingerprint(changed)
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +389,7 @@ func TestCanonicalFragmentIsStableAndRejectsUnsupportedKinds(t *testing.T) {
 
 func TestProviderManifestFloorsAndFactsAreValidated(t *testing.T) {
 	sqlite := SQLiteManifest()
-	if sqlite.Driver != (DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}) || sqlite.MinimumVersion != (Version{Major: 3, Minor: 38}) {
+	if sqlite.Driver != (DriverIdentity{Module: "github.com/ncruces/go-sqlite3", Adapter: "sqlx"}) || sqlite.MinimumVersion != (Version{Major: 3, Minor: 38}) {
 		t.Fatalf("SQLite manifest = %#v", sqlite)
 	}
 	if len(sqlite.Capabilities) != 1 || sqlite.Capabilities[0].ID != CapabilitySQLiteForeignKeys || sqlite.Capabilities[0].Verification != VerificationRuntimeProbe {
@@ -284,6 +401,16 @@ func TestProviderManifestFloorsAndFactsAreValidated(t *testing.T) {
 	}
 
 	schema := sqliteSocialSchema()
+	schema.Provider.Driver = DriverIdentity{Module: "modernc.org/sqlite", Adapter: "sqlx"}
+	if err := Validate(schema); err != nil {
+		t.Fatalf("historical reviewed SQLite driver identity was rejected: %v", err)
+	}
+	schema = sqliteSocialSchema()
+	schema.Provider.Driver = DriverIdentity{Module: "example.com/unknown", Adapter: "sqlx"}
+	if err := Validate(schema); err == nil || !IsValidationCode(err, CodeProvider) {
+		t.Fatalf("unknown SQLite driver error = %v", err)
+	}
+	schema = sqliteSocialSchema()
 	schema.Provider.MinimumVersion = Version{Major: 3, Minor: 37}
 	if err := Validate(schema); err == nil || !IsValidationCode(err, CodeProvider) {
 		t.Fatalf("old SQLite floor error = %v", err)
@@ -292,6 +419,27 @@ func TestProviderManifestFloorsAndFactsAreValidated(t *testing.T) {
 	schema.Provider.Capabilities[0].Verification = "assumed"
 	if err := Validate(schema); err == nil || !IsValidationCode(err, CodeCapabilityManifest) {
 		t.Fatalf("optimistic capability error = %v", err)
+	}
+}
+
+func TestReviewedHistoricalV1NormalizationAcceptsOnlyReleasedSQLiteDriverTransition(t *testing.T) {
+	schema := sqliteSocialSchema()
+	schema.Version, schema.CanonicalVersion = 1, 1
+	schema.Provider.Capabilities = append(schema.Provider.Capabilities, CapabilityFact{ID: "sqlite.vec0.v1", Version: 1, Verification: VerificationRuntimeProbe})
+	if _, err := NormalizeHistoricalV1(schema); err == nil {
+		t.Fatal("strict original-v1 normalization accepted the reviewed ncruces transition")
+	}
+	normalized, err := NormalizeHistorical(schema)
+	if err != nil {
+		t.Fatalf("reviewed-history normalization rejected the sealed SQLite runtime transition: %v", err)
+	}
+	if normalized.Provider.Driver != schema.Provider.Driver || normalized.Version != 1 || normalized.CanonicalVersion != 1 {
+		t.Fatalf("reviewed-history normalization changed the sealed profile: %#v", normalized.Provider)
+	}
+	forged := schema
+	forged.Provider.Driver.Module = "example.com/forged"
+	if _, err := NormalizeHistorical(forged); err == nil {
+		t.Fatal("reviewed-history normalization accepted an unregistered SQLite driver")
 	}
 }
 

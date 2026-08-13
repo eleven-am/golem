@@ -24,5 +24,6 @@ func DefineSchema(schema *golem.Schema) {
 	golem.Model[Comment](schema)
 	golem.Model[Tag](schema)
 	golem.Model[PostTag](schema)
+	golem.Model[VersionedNote](schema)
 	golem.Providers(schema, golem.SQLite, golem.PostgreSQL)
 }

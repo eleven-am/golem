@@ -10,12 +10,69 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
 type bindPost struct{}
 type bindUser struct{}
+
+func TestOptimisticConcurrencyFieldHasOneClosedRuntimeOwner(t *testing.T) {
+	fixture := schematest.NewOptimisticConcurrency(t)
+	field, ok := fixture.Registry.Field(fixture.Post, fixture.PostBigInt)
+	if !ok {
+		t.Fatal("optimistic-concurrency field is absent")
+	}
+	typ, err := bindType(field.LogicalType(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one, err := policyir.SignedValue(policyir.ValueInt64, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	forged, err := mutationir.NewSet(policyir.FieldID(fixture.PostBigInt), typ, one)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []InputKind{InputCreate, InputUpdate, InputUpdateMany} {
+		if _, err := WithRuntimeOwnedOperations(policyir.ModelID(fixture.Post), kind, []mutationir.ScalarOperation{forged}, fixture.Registry, nil); err == nil {
+			t.Fatalf("model-erased kind %d accepted an authored concurrency operation", kind)
+		}
+	}
+
+	bare := ScalarInput{model: policyir.ModelID(fixture.Post), kind: InputCreate}
+	owned, err := WithOptimisticConcurrencyCreate(bare, fixture.Registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operations := owned.Operations()
+	if len(operations) != 1 || operations[0].FieldID() != policyir.FieldID(fixture.PostBigInt) || !operations[0].RuntimeOwned() {
+		t.Fatalf("runtime-owned create operations=%#v", operations)
+	}
+	value, present := operations[0].Value()
+	got, signed := value.Signed()
+	if !present || !signed || got != 1 {
+		t.Fatalf("runtime-owned create value=(%d,%t,%t), want exact int64 one", got, present, signed)
+	}
+	if _, err := WithOptimisticConcurrencyCreate(owned, fixture.Registry); err == nil {
+		t.Fatal("present-field skip mutant accepted a second concurrency owner")
+	}
+
+	// The caller hook-owned preflight uses this exact binder entry point. A
+	// deferred required field inventory must never make an authored concurrency
+	// token acceptable.
+	token := golem.GeneratedEqualField[bindPost, int64](fixture.PostBigInt)
+	forgedCreate := freezeCreate(t, golem.GeneratedCreateInput(fixture.Post,
+		golem.GeneratedCreateFieldValue(fixture.Post, token, int64(77)),
+	))
+	if _, _, err := CreateInputWithRuntimeOwnedFields(forgedCreate, fixture.Registry, nil); err == nil {
+		t.Fatal("hook-owned create preflight binder accepted an authored concurrency token")
+	} else {
+		assertBindCode(t, err, CodeExposure, fixture.PostBigInt)
+	}
+}
 
 func TestMutationBinderRejectsForgedZeroAndDuplicateValues(t *testing.T) {
 	testMutationBinderRejectsForgedZeroAndDuplicateValues(t)

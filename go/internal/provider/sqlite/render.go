@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
@@ -17,6 +18,33 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 	if err != nil {
 		return Script{}, err
 	}
+	return renderNormalizedInitial(normalized)
+}
+
+type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }
+
+func (*Provider) renderReviewedInitialSnapshot(reviewed reviewedInitialSnapshot) (Script, error) {
+	schema := reviewed.schema
+	var normalized physical.PhysicalSchema
+	var err error
+	if schema.Version == 1 && schema.CanonicalVersion == 1 {
+		normalized, err = physical.NormalizeHistoricalV1(schema)
+		if err == nil {
+			// Released v1 extensions were metadata only. Semantic-index storage
+			// DDL belongs to the current physical format and cannot be invented
+			// while replaying immutable v1 history.
+			normalized.Extensions = nil
+		}
+	} else {
+		normalized, err = physical.Normalize(schema)
+	}
+	if err != nil {
+		return Script{}, err
+	}
+	return renderNormalizedInitial(normalized)
+}
+
+func renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error) {
 	if normalized.Provider.Provider != ir.SQLite {
 		return Script{}, fmt.Errorf("sqlite render: physical provider is %s", normalized.Provider.Provider)
 	}
@@ -53,7 +81,40 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 			statements = append(statements, statement)
 		}
 	}
+	for _, extension := range normalized.Extensions {
+		rendered, renderErr := renderSemanticExtension(extension)
+		if renderErr != nil {
+			return Script{}, renderErr
+		}
+		statements = append(statements, rendered...)
+	}
 	return Script{statements: statements}, nil
+}
+
+func renderSemanticExtension(extension physical.Extension) ([]string, error) {
+	descriptor, err := semanticstorage.Decode(extension)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite render semantic extension %s: %w", extension.ID, err)
+	}
+	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
+	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
+	return []string{
+		"CREATE TABLE " + quote(state) + " (" +
+			quote("record_key") + " TEXT NOT NULL, " +
+			quote("source_hash") + " BLOB NOT NULL, " +
+			quote("space_fingerprint") + " TEXT NOT NULL, " +
+			quote("status") + " TEXT NOT NULL, " +
+			quote("attempt_count") + " INTEGER NOT NULL DEFAULT 0, " +
+			quote("error_code") + " TEXT, " +
+			quote("updated_at") + " INTEGER NOT NULL, " +
+			"PRIMARY KEY (" + quote("record_key") + "), " +
+			"CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
+			"CHECK (" + quote("attempt_count") + " >= 0), " +
+			"CHECK (" + quote("updated_at") + " >= 0)) STRICT",
+		"CREATE VIRTUAL TABLE " + quote(vectors) + " USING vec0(" +
+			"record_key TEXT PRIMARY KEY, " +
+			"embedding float[" + strconv.Itoa(int(descriptor.Dimensions)) + "] distance_metric=cosine)",
+	}, nil
 }
 
 func renderSystemObject(object physical.SystemObject) (string, error) {

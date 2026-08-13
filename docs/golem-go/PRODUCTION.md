@@ -1,10 +1,8 @@
 # Golem for Go production guide
 
-Status: **unreleased P8 working documentation**. This guide describes the
-implemented P1–P7 behavior and the production contract P8 is proving. A feature
-whose P8 evidence is still pending is not release evidence merely because it is
-described here. The mandatory state is tracked in
-[`p8/P8-EVIDENCE.md`](./p8/P8-EVIDENCE.md).
+This guide describes the supported production contract. Published module tags,
+the compatibility manifest, and the release workflow—not historical planning
+documents—determine release status.
 
 ## Product boundary
 
@@ -56,6 +54,105 @@ does not explain whether a null came from storage or policy.
 `System` and `SystemTx` bypass caller policies and caller hooks. They retain
 schema validation, transactions, facts, invalidation, limits, and provider
 verification and belong only in trusted application infrastructure.
+
+## Policy testing
+
+`github.com/eleven-am/golem/go/golemtest` lets an application assert the policy
+it already authored for one actor without opening a database or starting an
+application. It answers two static questions with the same policy kernel the
+runtime uses: the resolved row constraint for an action, and the readability of
+requested result fields for a statement reach. It is an inspection and proof
+kit, not a second authorization engine: it cannot mutate or bypass policy,
+cannot manufacture a model, field, or relation identity, and cannot decide
+whether a synthetic row is visible.
+
+`golemtest.New` takes the three generated artifacts of one generation —
+`GolemGeneratedApplicationBindings`, `GolemGeneratedApplicationDescriptors`, and
+`GolemGeneratedSchemaBundle` — and requires all three to carry the same non-zero
+generation digest. It opens no database, starts no goroutine, invokes no hook,
+and runs no policy factory. `Kit.ForActor` invokes every generated policy factory
+exactly once per call, keeps no cross-call cache, discards the actor once the
+policies are frozen, and converts a policy-factory panic into a closed error.
+`golemtest.Model` narrows one actor's policy set to one typed model and rejects a
+descriptor that is not the one registered in that kit.
+
+`ModelPolicy.RowConstraint` returns the production resolver's own answer for
+read, create, update, or delete. `Constraint.Constant` reports a constraint that
+collapsed to "every row" or "refused". `Constraint.View` walks the resolved
+expression as the same closed predicate view a frozen rule exposes, and
+`Constraint.CanonicalBytes` is stable diagnostic evidence only. `Equivalent` and
+`Implies` prove statements about a constraint through the production implication
+kernel after production's own normalization; `Equivalent` is implication in both
+directions and is deliberately not a comparison of canonical text. Both freeze
+the expected predicate against the model descriptor the constraint retains, and
+both report a kernel refusal as an error rather than as a false answer, so a
+`false` result means "not proved" rather than "disproved".
+
+`ModelPolicy.ClassifyReadFields` classifies requested fields as always,
+conditionally, or never readable for the reach of a selecting action.
+Classification is a read question: the selecting action only chooses which
+action's row constraint defines the statement's reach, while fields are always
+judged through the read policy, exactly as the runtime does when it returns rows
+from a read or from a mutation. The caller's first-seen field order is preserved
+and later duplicates are dropped. A conditional field carries the exact condition
+the runtime masks it by, the scalar fields the condition needs, and the relation
+hydration tree the runtime privately fetches to decide it; a relation entry keeps
+its target model even when its own subtree is empty.
+`ClassifyReadFieldsWithReach` adds the narrower caller predicate production
+would combine with the actor's row policy, refuses a predicate that would widen
+that policy, and reports through `DischargedByConstraint` when the narrowed
+reach already proves a field's condition so the runtime can return it unmasked.
+
+```go
+package docsnippet
+
+import (
+	"testing"
+
+	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/golemtest"
+	"github.com/eleven-am/golem/go/examples/social/social"
+)
+
+func assertOwnedReachDischargesBody(t *testing.T, posts golemtest.ModelPolicy[social.Post], alice golem.UUID) {
+	plan, err := posts.ClassifyReadFieldsWithReach(
+		golemtest.UseProjection,
+		golem.FrozenActionRead,
+		social.Posts.AuthorID.Eq(alice),
+		social.Posts.Body,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, ok := plan.Field(social.Posts.Body)
+	if !ok || body.Access() != golemtest.AccessConditional || !body.DischargedByConstraint() {
+		t.Fatalf("Body access=%v discharged=%v present=%v", body.Access(), body.DischargedByConstraint(), ok)
+	}
+}
+```
+
+Errors are closed and classifiable with `golemtest.CodeOf` as invalid input,
+generation mismatch, policy-factory failure, or policy-analysis refusal, and the
+classification survives ordinary `%w` wrapping. Error text is not an ABI and
+never carries the actor, a token, session, email, tenant, database, or row
+value, a panic payload, a raw predicate operand, or an internal type name. Stable
+`golem.ModelID` and `golem.FieldID` values may be reported. No exported signature
+in the package names a type from an internal package.
+
+What a passing assertion proves has limits worth stating. The kit answers the
+static policy question; it does not execute SQL, so provider collation, null and
+missing-target semantics at execution time, and relation hydration remain
+integration concerns of the generated caller. Two behaviours in particular differ
+from the naive reading of a static answer. A relation hop inside a *field
+condition* is decided at runtime only over target rows the actor may read, so a
+condition that names an invisible target row is false for that row even though
+the kit's condition text does not mention the target model's own read policy.
+And an explicit relation projection that omits a field some condition depends on
+makes the runtime refuse the statement rather than guess. Both are properties of
+the runtime, not of the kit, and both are covered by the kit's external
+generated-application evidence.
+[`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md) records the full contract and
+its recorded limitations.
 
 ## Hooks
 
@@ -138,6 +235,36 @@ typed joins and expressions. They are not raw SQL: only generated scope fields,
 approved joins, predicates, grouping, selections, and ordering can be composed,
 and every accepted/refused execution emits the configured safe audit record.
 
+## Semantic indexes
+
+Semantic indexes are an optional generated Go-client capability. The schema
+declares an embedding space and ordered text projection; application startup
+registers a matching `embedding.Provider`. Generated caller and system clients
+then expose one `Similar<Name>` method per index. Similarity is not currently a
+generated GraphQL root and is not exposed on transaction clients because
+refresh and vector ranking are separate managed database operations.
+
+Similarity first applies ordinary read authorization and hooks to fix a
+bounded candidate set. An empty or refused read performs no embedding work;
+otherwise Golem refreshes the durable index and ranks only that fixed set. The
+embedding provider is trusted
+infrastructure: it receives the exact query text and canonical documents for
+all indexed rows, including rows the current caller cannot read. Golem does not
+implicitly send principals or database primary identities, although an
+identity-bearing field deliberately declared in the index is sent as indexed
+text. Approve the provider for
+every indexed field, make its `Embed` implementation concurrency-safe, and
+honor cancellation. Authorization protects returned rows; it does not make an
+external embedding service a data-loss-prevention boundary.
+
+Refresh scans all source rows to compute hashes but embeds only missing,
+changed, or provider-fingerprint-stale documents. Deleted-row vectors are
+removed during the next explicit or query-triggered refresh, not synchronously
+with the model delete. Provider batch writes are individually transactional and
+retry-safe. See [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) for limits, error
+codes, SQLite portability, pgvector prerequisites, and deletion/retention
+guidance.
+
 ## Migrations and generated artifacts
 
 The reviewed history is part of the generated application identity. Generation
@@ -154,8 +281,10 @@ build application and CLI from one version
   -> rehearse provider backup and restore
   -> golem migration apply
   -> golem doctor
-  -> start application and require readiness
+  -> start application
   -> start explicitly owned publisher/CDC workers
+  -> require database, publisher, and transport readiness
+  -> admit traffic
 ```
 
 `App.Open` never migrates. Keep migration snapshots, manifests, SQL, generated
@@ -173,8 +302,35 @@ runtime never grows an unbounded queue.
 
 The core memory transport is process-local. It is appropriate for one process,
 not multi-process fan-out or durability. Multiple PostgreSQL application
-processes require an externally supplied transport that passes Golem's transport
-conformance suite.
+processes use the maintained `github.com/eleven-am/golem/go/events/nats`
+adapter. SQLite always uses the process-local memory transport; selecting NATS
+with SQLite is a configuration error.
+
+The maintained adapter uses Core NATS, not JetStream. PostgreSQL and its outbox
+remain the durable source of truth. Core NATS does not replay, and delivery
+remains at least once: reconnects and explicit republishes can deliver the same stable
+event ID more than once. Subjects are exactly
+`<prefix>.g1.<event-schema-digest>.<model-id>`, routed by
+`EventSchemaDigest and ModelID`. The generation digest is authenticated inside
+the notice and is not a routing component. `SubjectPrefix is required and must
+be unique to the authoritative database within the NATS account`; use a
+deployment/database identity, not a shared default.
+
+The social host selects the adapter with `GOLEM_EVENT_TRANSPORT=nats`, reads the
+closed URL list from `GOLEM_NATS_URLS`, and requires the unique prefix in
+`GOLEM_NATS_SUBJECT_PREFIX`. The broker and adapter payload authorities must
+agree. The reviewed Core NATS server configuration contains:
+
+```yaml
+max_payload: 2097152
+```
+
+The adapter refuses startup or reconnect when the broker ceiling is smaller
+than its configured event limit. A terminal disconnect makes readiness fail;
+a reconnect restores transport availability only after the ceiling is proved
+again. Shutdown must stop HTTP admission, shut down GraphQL, cancel and wait for
+the publisher, close the transport, and then close the database. A failed or
+timed-out ownership barrier does not close a downstream dependency still in use.
 
 Writes made outside Golem are invisible unless a conformant CDC adapter is
 configured. Core supplies the CDC interface and conformance harness, not vendor
@@ -190,6 +346,7 @@ caller-overridden provider pragmas are refused. The verified provider owns the
 driver, foreign-key and busy-timeout settings, immediate transaction locking,
 pool width, functions, and capability probes. Run exactly one application
 process against the file unless a separately tested topology says otherwise.
+Do not configure NATS for SQLite.
 
 ### PostgreSQL single process
 
@@ -199,16 +356,17 @@ cleanup. Caller DSN `options` and direct provider-session overrides are refused.
 
 ### PostgreSQL multiple processes
 
-Use a conformant cross-process event transport. Add a conformant CDC adapter
-only if external SQL writers must appear in subscriptions. Read/mutation SQL
-semantics remain portable; event reach depends on explicitly installed
-infrastructure capabilities.
+Use the maintained Core NATS transport with a database-unique subject prefix
+and a broker payload ceiling at least as large as the configured event limit.
+Add a conformant CDC adapter only if external SQL writers must appear in
+subscriptions. Read/mutation SQL semantics remain portable; event reach depends
+on explicitly installed infrastructure capabilities.
 
 ## Health, observability, and secrets
 
 Liveness reports process health only. Readiness fails closed for a closed
 database, schema or migration mismatch, incompatible generated artifacts, or a
-required unavailable event transport. Neither endpoint returns provider,
+stopped publisher or required unavailable event transport. Neither endpoint returns provider,
 schema, backlog, principal, capability, or raw error detail.
 
 P8's unified `observe` API and maintained slog/OpenTelemetry adapters are not
@@ -258,12 +416,48 @@ same snapshot byte for byte, run `doctor`, then start the explicit publisher and
 prove that the restored pending fact reaches the transport and becomes
 delivered.
 
-For SQLite, stop every application/worker owner, checkpoint and close the
-verified database, prove there is no nonempty WAL sidecar, and only then copy
-the database file. Copying the main file while a writer or WAL remains active
-is not a supported backup. For PostgreSQL, use a version-compatible logical or
+For SQLite, stop every application/worker owner, close the verified database,
+call the supported `provider/sqlite.CheckpointForBackup` operation with that
+exact closed handle, prove there is no nonempty WAL sidecar, and only then copy
+the database file. A busy checkpoint fails the backup; recovery code must never
+delete or truncate `-wal` or `-shm` files itself. Copying the main file while a
+writer or WAL remains active is not a supported backup. For PostgreSQL, use a
+version-compatible logical or
 physical backup tool against a disposable rehearsal database and restore into a
 new database; never test recovery by mutating the shared source database.
+
+The SQLite maintenance boundary is explicit:
+
+```go
+package docsnippet
+
+import (
+    "context"
+
+    providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
+)
+
+func prepareSQLiteBackup(ctx context.Context, dsn string) error {
+    database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: dsn})
+    if err != nil {
+        return err
+    }
+    // Stop every application, event, and semantic owner before closing this handle.
+    if err := database.Close(); err != nil {
+        return err
+    }
+    if err := providersqlite.CheckpointForBackup(ctx, database); err != nil {
+        return err
+    }
+    // The application may now verify that no nonempty -wal remains and copy the
+    // main database file with its platform's ordinary file-copy facilities.
+    return nil
+}
+```
+
+The operation is deliberately not available through `UnsafeSQLX`: callers
+cannot accidentally checkpoint a different path than the sealed handle's
+verified database identity, and an open handle is always refused.
 
 The checked-in example provides a public-only deterministic rehearsal canary:
 

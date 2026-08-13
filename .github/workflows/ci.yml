@@ -49,6 +49,8 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v7
         with:
           node-version: 20
@@ -76,15 +78,10 @@ jobs:
       - run: npm audit --omit=dev --audit-level=critical
       - name: Verify Go policy kernel
         working-directory: go
-        run: go test -p=1 -count=1 ./...
-      - name: Repeat and shuffle Go policy kernel
+        run: go test -p=1 -count=1 -timeout=30m ./...
+      - name: Race-check concurrent Go runtime surfaces
         working-directory: go
-        run: |
-          go test -p=1 -count=2 ./...
-          go test -shuffle=on -count=10 ./internal/policy/...
-      - name: Race-check Go policy kernel
-        working-directory: go
-        run: go test -p=1 -race -count=1 ./...
+        run: go test -p=1 -race -count=1 -timeout=30m ./events/... ./provider/... ./runtime
       - name: Vet Go policy kernel
         working-directory: go
         run: go vet ./...

@@ -1,6 +1,10 @@
 package golem
 
-import "fmt"
+import (
+	"fmt"
+
+	"github.com/eleven-am/golem/go/internal/concurrencyclaim"
+)
 
 // RuntimeMutationOperation is the model-erased form of the six P4 root
 // mutation operations. Generated GraphQL adapters use it after every public
@@ -20,14 +24,16 @@ const (
 // contains only frozen P4 inputs and a frozen P3 result projection. Runtime
 // execution rebinds all of them against the active schema before database work.
 type RuntimeMutationRequest struct {
-	operation  RuntimeMutationOperation
-	model      ModelID
-	target     *FrozenMutationTarget
-	where      *FrozenPredicate
-	input      *FrozenMutationInput
-	create     *FrozenMutationInput
-	update     *FrozenMutationInput
-	projection *FrozenReadRequest
+	operation   RuntimeMutationOperation
+	model       ModelID
+	target      *FrozenMutationTarget
+	where       *FrozenPredicate
+	input       *FrozenMutationInput
+	create      *FrozenMutationInput
+	update      *FrozenMutationInput
+	projection  *FrozenReadRequest
+	existing    *ExistingVersion
+	expectation *ConcurrencyExpectation
 }
 
 type RuntimeMutationRequestInput struct {
@@ -41,30 +47,70 @@ type RuntimeMutationRequestInput struct {
 	Projection *FrozenReadRequest
 }
 
+// RuntimeVersionedMutationRequestInput is the additive GraphQL-to-runtime
+// boundary for one exact optimistic-concurrency claim. Keeping it separate
+// preserves RuntimeMutationRequestInput's released unkeyed-literal shape.
+type RuntimeVersionedMutationRequestInput struct {
+	Request                RuntimeMutationRequestInput
+	ExistingVersion        *ExistingVersion
+	ConcurrencyExpectation *ConcurrencyExpectation
+}
+
 func RuntimeFreezeMutationRequest(input RuntimeMutationRequestInput) (RuntimeMutationRequest, error) {
+	return runtimeFreezeMutationRequest(input, nil, nil)
+}
+
+// RuntimeFreezeVersionedMutationRequest freezes a versioned update, delete,
+// or upsert request. The claim is copied and retained only in its closed public
+// value type; callers cannot supply a raw integer authority.
+func RuntimeFreezeVersionedMutationRequest(input RuntimeVersionedMutationRequestInput) (RuntimeMutationRequest, error) {
+	hasExisting, hasExpectation := input.ExistingVersion != nil, input.ConcurrencyExpectation != nil
+	switch input.Request.Operation {
+	case RuntimeMutationUpdate, RuntimeMutationDelete:
+		if !hasExisting || hasExpectation {
+			return RuntimeMutationRequest{}, fmt.Errorf("runtime versioned mutation request: update and delete require exactly one existing-version claim")
+		}
+	case RuntimeMutationUpsert:
+		if hasExisting || !hasExpectation {
+			return RuntimeMutationRequest{}, fmt.Errorf("runtime versioned mutation request: upsert requires exactly one concurrency expectation")
+		}
+	default:
+		return RuntimeMutationRequest{}, fmt.Errorf("runtime versioned mutation request: operation does not support a concurrency claim")
+	}
+	return runtimeFreezeMutationRequest(input.Request, input.ExistingVersion, input.ConcurrencyExpectation)
+}
+
+func runtimeFreezeMutationRequest(input RuntimeMutationRequestInput, existing *ExistingVersion, expectation *ConcurrencyExpectation) (RuntimeMutationRequest, error) {
 	if input.Operation < RuntimeMutationCreate || input.Operation > RuntimeMutationDeleteMany || input.Model == (ModelID{}) {
 		return RuntimeMutationRequest{}, fmt.Errorf("runtime mutation request: operation and model are required")
 	}
 	hasTarget, hasWhere := input.Target != nil, input.Where != nil
 	hasInput, hasCreate, hasUpdate := input.Input != nil, input.Create != nil, input.Update != nil
 	hasProjection := input.Projection != nil
+	hasExisting, hasExpectation := existing != nil, expectation != nil
 	valid := false
 	switch input.Operation {
 	case RuntimeMutationCreate:
-		valid = !hasTarget && !hasWhere && hasInput && !hasCreate && !hasUpdate && hasProjection
+		valid = !hasTarget && !hasWhere && hasInput && !hasCreate && !hasUpdate && hasProjection && !hasExisting && !hasExpectation
 	case RuntimeMutationUpdate:
-		valid = hasTarget && !hasWhere && hasInput && !hasCreate && !hasUpdate && hasProjection
+		valid = hasTarget && !hasWhere && hasInput && !hasCreate && !hasUpdate && hasProjection && !hasExpectation
 	case RuntimeMutationUpsert:
-		valid = hasTarget && !hasWhere && !hasInput && hasCreate && hasUpdate && hasProjection
+		valid = hasTarget && !hasWhere && !hasInput && hasCreate && hasUpdate && hasProjection && !hasExisting
 	case RuntimeMutationDelete:
-		valid = hasTarget && !hasWhere && !hasInput && !hasCreate && !hasUpdate && hasProjection
+		valid = hasTarget && !hasWhere && !hasInput && !hasCreate && !hasUpdate && hasProjection && !hasExpectation
 	case RuntimeMutationUpdateMany:
-		valid = !hasTarget && hasWhere && hasInput && !hasCreate && !hasUpdate && !hasProjection
+		valid = !hasTarget && hasWhere && hasInput && !hasCreate && !hasUpdate && !hasProjection && !hasExisting && !hasExpectation
 	case RuntimeMutationDeleteMany:
-		valid = !hasTarget && hasWhere && !hasInput && !hasCreate && !hasUpdate && !hasProjection
+		valid = !hasTarget && hasWhere && !hasInput && !hasCreate && !hasUpdate && !hasProjection && !hasExisting && !hasExpectation
 	}
 	if !valid {
 		return RuntimeMutationRequest{}, fmt.Errorf("runtime mutation request: argument shape does not match operation")
+	}
+	if hasExisting && !concurrencyclaim.ValidExistingVersion(concurrencyclaim.ExistingVersion(*existing)) {
+		return RuntimeMutationRequest{}, fmt.Errorf("runtime mutation request: existing-version expectation is invalid")
+	}
+	if hasExpectation && !concurrencyclaim.ValidExpectation(concurrencyclaim.ConcurrencyExpectation(*expectation)) {
+		return RuntimeMutationRequest{}, fmt.Errorf("runtime mutation request: concurrency expectation is invalid")
 	}
 	if input.Target != nil && input.Target.Selector().ModelID() != input.Model {
 		return RuntimeMutationRequest{}, fmt.Errorf("runtime mutation request: target belongs to another model")
@@ -83,6 +129,14 @@ func RuntimeFreezeMutationRequest(input RuntimeMutationRequestInput) (RuntimeMut
 		}
 	}
 	result := RuntimeMutationRequest{operation: input.Operation, model: input.Model}
+	if existing != nil {
+		value := *existing
+		result.existing = &value
+	}
+	if expectation != nil {
+		value := *expectation
+		result.expectation = &value
+	}
 	if input.Target != nil {
 		value := cloneFrozenMutationTarget(*input.Target)
 		result.target = &value
@@ -147,6 +201,18 @@ func (request RuntimeMutationRequest) Projection() (FrozenReadRequest, bool) {
 		return FrozenReadRequest{}, false
 	}
 	return request.projection.clone(), true
+}
+func (request RuntimeMutationRequest) ExistingVersion() (ExistingVersion, bool) {
+	if request.existing == nil {
+		return ExistingVersion{}, false
+	}
+	return *request.existing, true
+}
+func (request RuntimeMutationRequest) ConcurrencyExpectation() (ConcurrencyExpectation, bool) {
+	if request.expectation == nil {
+		return ConcurrencyExpectation{}, false
+	}
+	return *request.expectation, true
 }
 
 type RuntimeMutationResult struct {

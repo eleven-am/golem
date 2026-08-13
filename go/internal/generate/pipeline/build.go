@@ -27,6 +27,7 @@ import (
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -52,7 +53,7 @@ func build(ctx context.Context, request Request) (Result, error) {
 	if err != nil {
 		return Result{}, fmt.Errorf("emit model bootstrap: %w", err)
 	}
-	registryShell, err := registry.EmitShell(registry.ShellRequest{AppPackage: request.AppPackage, Actor: compilation.Model.Schema.Actor, Model: compilation.Model, GolemImportPath: request.GolemImportPath})
+	registryShell, err := registry.EmitShell(registry.ShellRequest{AppPackage: request.AppPackage, Actor: compilation.Model.Schema.Actor, Model: compilation.Model, Contract: compilation.Contract, GolemImportPath: request.GolemImportPath})
 	if err != nil {
 		return Result{}, fmt.Errorf("emit registry bootstrap: %w", err)
 	}
@@ -125,7 +126,7 @@ func build(ctx context.Context, request Request) (Result, error) {
 	if prospective.GenerationDigest != provisional.GenerationDigest {
 		return Result{}, fmt.Errorf("generation digest changed after stamping final artifacts")
 	}
-	if !request.ReadOnlyDiagnostics {
+	if !request.ReadOnlyDiagnostics || request.ProspectiveModfileDir != "" {
 		if err := compileProspective(ctx, compiled, request, prospective.Artifacts); err != nil {
 			return Result{}, err
 		}
@@ -618,8 +619,15 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 	if len(environment) != 0 {
 		environment = append(os.Environ(), environment...)
 	}
+	var err error
+	if request.ProspectiveModfileDir != "" {
+		environment, err = prospectiveOwnedWorkspace(ctx, compiled.ModuleDir, environment, request.ProspectiveModfileDir)
+		if err != nil {
+			return err
+		}
+	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule
-	buildFlags, cleanupModfile, err := prospectivePackageBuildFlags(ctx, compiled.ModuleDir, environment)
+	buildFlags, cleanupModfile, err := prospectivePackageBuildFlagsIn(ctx, compiled.ModuleDir, environment, request.ProspectiveModfileDir)
 	if err != nil {
 		return err
 	}
@@ -680,6 +688,10 @@ func compileProspective(ctx context.Context, compiled compile.Result, request Re
 // workspace the isolated alternate modfile retains the existing behavior that
 // may populate only temporary dependency sums.
 func prospectivePackageBuildFlags(ctx context.Context, moduleDir string, environment []string) ([]string, func(), error) {
+	return prospectivePackageBuildFlagsIn(ctx, moduleDir, environment, "")
+}
+
+func prospectivePackageBuildFlagsIn(ctx context.Context, moduleDir string, environment []string, modfileDir string) ([]string, func(), error) {
 	workspace, err := activeGoWorkspace(ctx, moduleDir, environment)
 	if err != nil {
 		return nil, func() {}, err
@@ -687,7 +699,7 @@ func prospectivePackageBuildFlags(ctx context.Context, moduleDir string, environ
 	if workspace {
 		return []string{"-mod=readonly"}, func() {}, nil
 	}
-	modfile, cleanup, err := prospectiveModfile(moduleDir)
+	modfile, cleanup, err := prospectiveModfileIn(moduleDir, modfileDir)
 	if err != nil {
 		return nil, func() {}, err
 	}
@@ -695,15 +707,82 @@ func prospectivePackageBuildFlags(ctx context.Context, moduleDir string, environ
 }
 
 func activeGoWorkspace(ctx context.Context, moduleDir string, environment []string) (bool, error) {
+	value, err := activeGoWorkspacePath(ctx, moduleDir, environment)
+	return value != "" && value != "off" && value != os.DevNull, err
+}
+
+func activeGoWorkspacePath(ctx context.Context, moduleDir string, environment []string) (string, error) {
 	command := exec.CommandContext(ctx, "go", "env", "GOWORK")
 	command.Dir = moduleDir
 	command.Env = environment
 	output, err := command.Output()
 	if err != nil {
-		return false, fmt.Errorf("resolve prospective Go workspace: %w", err)
+		return "", fmt.Errorf("resolve prospective Go workspace: %w", err)
 	}
-	value := strings.TrimSpace(string(output))
-	return value != "" && value != "off" && value != os.DevNull, nil
+	return strings.TrimSpace(string(output)), nil
+}
+
+func prospectiveOwnedWorkspace(ctx context.Context, moduleDir string, environment []string, ownedDir string) ([]string, error) {
+	workspacePath, err := activeGoWorkspacePath(ctx, moduleDir, environment)
+	if err != nil || workspacePath == "" || workspacePath == "off" || workspacePath == os.DevNull {
+		return environment, err
+	}
+	content, err := os.ReadFile(workspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("read prospective Go workspace: %w", err)
+	}
+	parsed, err := modfile.ParseWork(workspacePath, content, nil)
+	if err != nil {
+		return nil, fmt.Errorf("parse prospective Go workspace: %w", err)
+	}
+	workspaceDir := filepath.Dir(workspacePath)
+	uses := append([]*modfile.Use(nil), parsed.Use...)
+	for _, use := range uses {
+		absolute := use.Path
+		if !filepath.IsAbs(absolute) {
+			absolute = filepath.Join(workspaceDir, filepath.FromSlash(absolute))
+		}
+		if err := parsed.DropUse(use.Path); err != nil {
+			return nil, fmt.Errorf("normalize prospective Go workspace use: %w", err)
+		}
+		if err := parsed.AddUse(filepath.ToSlash(filepath.Clean(absolute)), use.ModulePath); err != nil {
+			return nil, fmt.Errorf("normalize prospective Go workspace use: %w", err)
+		}
+	}
+	for _, replacement := range append([]*modfile.Replace(nil), parsed.Replace...) {
+		if replacement.New.Version != "" || filepath.IsAbs(replacement.New.Path) {
+			continue
+		}
+		absolute := filepath.Clean(filepath.Join(workspaceDir, filepath.FromSlash(replacement.New.Path)))
+		if err := parsed.AddReplace(replacement.Old.Path, replacement.Old.Version, filepath.ToSlash(absolute), ""); err != nil {
+			return nil, fmt.Errorf("normalize prospective Go workspace replacement: %w", err)
+		}
+	}
+	parsed.Cleanup()
+	ownedContent := modfile.Format(parsed.Syntax)
+	ownedWorkspace := filepath.Join(ownedDir, "go.work")
+	if err := os.WriteFile(ownedWorkspace, ownedContent, 0o600); err != nil {
+		return nil, fmt.Errorf("write prospective Go workspace: %w", err)
+	}
+	if sum, readErr := os.ReadFile(workspacePath + ".sum"); readErr == nil {
+		if writeErr := os.WriteFile(ownedWorkspace+".sum", sum, 0o600); writeErr != nil {
+			return nil, fmt.Errorf("write prospective Go workspace sums: %w", writeErr)
+		}
+	} else if !os.IsNotExist(readErr) {
+		return nil, fmt.Errorf("read prospective Go workspace sums: %w", readErr)
+	}
+	base := environment
+	if len(base) == 0 {
+		base = os.Environ()
+	}
+	result := make([]string, 0, len(base)+1)
+	for _, value := range base {
+		if !strings.HasPrefix(value, "GOWORK=") {
+			result = append(result, value)
+		}
+	}
+	result = append(result, "GOWORK="+ownedWorkspace)
+	return result, nil
 }
 
 // prospectiveModfile gives go/packages an isolated dependency workspace. A
@@ -712,11 +791,40 @@ func activeGoWorkspace(ctx context.Context, moduleDir string, environment []stri
 // dependencies, but must not mutate the user's go.mod/go.sum during inspect,
 // check, or a failed publication.
 func prospectiveModfile(moduleDir string) (string, func(), error) {
+	return prospectiveModfileIn(moduleDir, "")
+}
+
+func prospectiveModfileIn(moduleDir, ownedDir string) (string, func(), error) {
 	content, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
 	if err != nil {
 		return "", func() {}, fmt.Errorf("read module file for prospective compilation: %w", err)
 	}
-	file, err := os.CreateTemp(moduleDir, ".golem-prospective-*.mod")
+	if ownedDir != "" {
+		parsed, parseErr := modfile.Parse("go.mod", content, nil)
+		if parseErr != nil {
+			return "", func() {}, fmt.Errorf("parse module file for prospective compilation: %w", parseErr)
+		}
+		for _, replacement := range append([]*modfile.Replace(nil), parsed.Replace...) {
+			if replacement.New.Version != "" || filepath.IsAbs(replacement.New.Path) {
+				continue
+			}
+			absolute := filepath.Clean(filepath.Join(moduleDir, filepath.FromSlash(replacement.New.Path)))
+			if replaceErr := parsed.AddReplace(replacement.Old.Path, replacement.Old.Version, filepath.ToSlash(absolute), ""); replaceErr != nil {
+				return "", func() {}, fmt.Errorf("normalize module replacement for prospective compilation: %w", replaceErr)
+			}
+		}
+		content, err = parsed.Format()
+		if err != nil {
+			return "", func() {}, fmt.Errorf("format module file for prospective compilation: %w", err)
+		}
+	}
+	temporaryRoot := moduleDir
+	pattern := ".golem-prospective-*.mod"
+	if ownedDir != "" {
+		temporaryRoot = ownedDir
+		pattern = "golem-prospective-*.mod"
+	}
+	file, err := os.CreateTemp(temporaryRoot, pattern)
 	if err != nil {
 		return "", func() {}, fmt.Errorf("create prospective module file: %w", err)
 	}

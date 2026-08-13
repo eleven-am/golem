@@ -20,6 +20,11 @@ func Actor[A any](_ *Schema)             {}
 func Model[M any](_ *Schema)             {}
 func Providers(_ *Schema, _ ...Provider) {}
 
+// EmbeddingSpace declares one schema-wide embedding space. Dimensions are
+// frozen into reviewed provider migrations; runtime configuration must supply
+// an embedding.Provider with the same dimensions.
+func EmbeddingSpace(_ *Schema, _ string, _ uint16) {}
+
 type (
 	// Descriptor IDs are fixed-width values rather than string aliases. The
 	// compiler IR owns hexadecimal serialization; generated Go emits array
@@ -34,8 +39,9 @@ type (
 // relation targets remain IDs and are resolved only after package registries
 // are composed, so generated package initialization cannot form pointer cycles.
 type ModelDescriptor[M any] struct {
-	metadata ModelMetadata
-	_        func() M
+	metadata   ModelMetadata
+	generation SchemaDigest
+	_          func() M
 }
 
 func GeneratedModelDescriptor[M any](id ModelID, shape GeneratedModelShape) ModelDescriptor[M] {
@@ -43,7 +49,14 @@ func GeneratedModelDescriptor[M any](id ModelID, shape GeneratedModelShape) Mode
 	return ModelDescriptor[M]{metadata: metadata}
 }
 
-func (descriptor ModelDescriptor[M]) Metadata() ModelMetadata { return descriptor.metadata.clone() }
+func GeneratedStampedModelDescriptor[M any](generation SchemaDigest, id ModelID, shape GeneratedModelShape) ModelDescriptor[M] {
+	result := GeneratedModelDescriptor[M](id, shape)
+	result.generation = generation
+	return result
+}
+
+func (descriptor ModelDescriptor[M]) Metadata() ModelMetadata        { return descriptor.metadata.clone() }
+func (descriptor ModelDescriptor[M]) GenerationDigest() SchemaDigest { return descriptor.generation }
 
 // Stable scalar declaration types are intentionally representation-opaque in
 // P1. Later runtime phases own value parsing and database codecs.
@@ -85,6 +98,11 @@ type modelOption[M any] struct{ _ func() M }
 func (modelOption[M]) modelOption(M) {}
 
 func DefineModel[M any](_ ...ModelOption[M]) ModelSpec[M] { return ModelSpec[M]{} }
+
+// SemanticIndex declares a named semantic projection over ordered text fields.
+// The embedding space is declared once in DefineSchema. Golem owns projection
+// storage, refresh, similarity queries, and authorization.
+func SemanticIndex[M any](_, _ string, _ ...Column[M]) ModelOption[M] { return modelOption[M]{} }
 
 type GraphQLOperation string
 
@@ -276,6 +294,49 @@ func Cast[M any, From any, To any](_ SchemaValue[M, From], _ SchemaCast[From, To
 type Field[M any] interface {
 	fieldModel(M)
 	fieldIdentity() FieldID
+	fieldGeneration() SchemaDigest
+}
+
+// FieldIdentity reports the stable generated identity of a sealed field handle.
+//
+// It is the single read-only bridge that lets a separate package name a field
+// the application already declared. It is not a constructor: it cannot mint an
+// identity, look one up by name, reach a field of another model, or grant any
+// read, write, or policy capability. The only handles it can answer for are the
+// generated ones the application itself exposes.
+//
+// The second result is false for a nil, zero, or otherwise malformed handle,
+// and the returned identity is then the zero FieldID.
+func FieldIdentity[M any](field Field[M]) (identity FieldID, ok bool) {
+	defer func() {
+		if recover() != nil {
+			identity, ok = FieldID{}, false
+		}
+	}()
+	if field == nil {
+		return FieldID{}, false
+	}
+	value := field.fieldIdentity()
+	if value == (FieldID{}) {
+		return FieldID{}, false
+	}
+	return value, true
+}
+
+func FieldGenerationDigest[M any](field Field[M]) (generation SchemaDigest, ok bool) {
+	defer func() {
+		if recover() != nil {
+			generation, ok = SchemaDigest{}, false
+		}
+	}()
+	if field == nil {
+		return SchemaDigest{}, false
+	}
+	generation = field.fieldGeneration()
+	if generation == (SchemaDigest{}) {
+		return SchemaDigest{}, false
+	}
+	return generation, true
 }
 
 type Column[M any] interface {
@@ -293,15 +354,17 @@ type ScalarColumn[M any, V any] interface {
 }
 
 type fieldCore[M any, V any] struct {
-	id FieldID
-	_  func(M) V
+	id         FieldID
+	generation SchemaDigest
+	_          func(M) V
 }
 
-func (fieldCore[M, V]) columnModel(M)                {}
-func (fieldCore[M, V]) fieldModel(M)                 {}
-func (field fieldCore[M, V]) fieldIdentity() FieldID { return field.id }
-func (fieldCore[M, V]) schemaValue(M, V)             {}
-func (fieldCore[M, V]) Expr() SchemaExpr[M, V]       { return SchemaExpr[M, V]{} }
+func (fieldCore[M, V]) columnModel(M)                       {}
+func (fieldCore[M, V]) fieldModel(M)                        {}
+func (field fieldCore[M, V]) fieldIdentity() FieldID        { return field.id }
+func (field fieldCore[M, V]) fieldGeneration() SchemaDigest { return field.generation }
+func (fieldCore[M, V]) schemaValue(M, V)                    {}
+func (fieldCore[M, V]) Expr() SchemaExpr[M, V]              { return SchemaExpr[M, V]{} }
 func (field fieldCore[M, V]) readSelection(M) readSelectionNode {
 	return readSelectionNode{kind: readSelectionScalar, field: field.id}
 }
@@ -332,6 +395,10 @@ func GeneratedEqualField[M any, V EqualValue](id FieldID) EqualField[M, V] {
 	return EqualField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
 }
 
+func GeneratedStampedEqualField[M any, V EqualValue](generation SchemaDigest, id FieldID) EqualField[M, V] {
+	return EqualField[M, V]{fieldCore: fieldCore[M, V]{id: id, generation: generation}}
+}
+
 func (field EqualField[M, V]) Eq(value V) Predicate[M] {
 	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEq, scalarOperand(value))
 }
@@ -357,6 +424,10 @@ func GeneratedOrderedField[M any, V OrderedValue](id FieldID) OrderedField[M, V]
 	return OrderedField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
 }
 
+func GeneratedStampedOrderedField[M any, V OrderedValue](generation SchemaDigest, id FieldID) OrderedField[M, V] {
+	return OrderedField[M, V]{EqualField: GeneratedStampedEqualField[M, V](generation, id)}
+}
+
 func (field OrderedField[M, V]) LT(value V) Predicate[M] {
 	return predicateScalar[M](field.fieldIdentity(), frozenOperatorLT, scalarOperand(value))
 }
@@ -374,6 +445,10 @@ type TextField[M any, V ~string] struct{ OrderedField[M, V] }
 
 func GeneratedTextField[M any, V ~string](id FieldID) TextField[M, V] {
 	return TextField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
+}
+
+func GeneratedStampedTextField[M any, V ~string](generation SchemaDigest, id FieldID) TextField[M, V] {
+	return TextField[M, V]{OrderedField: GeneratedStampedOrderedField[M, V](generation, id)}
 }
 
 func (field TextField[M, V]) Contains(value V) Predicate[M] {
@@ -405,8 +480,14 @@ type TextComparison[M any, V ~string] struct {
 func GeneratedModeTextField[M any, V ~string](id FieldID) ModeTextField[M, V] {
 	return ModeTextField[M, V]{TextField: GeneratedTextField[M, V](id)}
 }
+func GeneratedStampedModeTextField[M any, V ~string](generation SchemaDigest, id FieldID) ModeTextField[M, V] {
+	return ModeTextField[M, V]{TextField: GeneratedStampedTextField[M, V](generation, id)}
+}
 func GeneratedNullableModeTextField[M any, V ~string](id FieldID) NullableModeTextField[M, V] {
 	return NullableModeTextField[M, V]{NullableTextField: GeneratedNullableTextField[M, V](id)}
+}
+func GeneratedStampedNullableModeTextField[M any, V ~string](generation SchemaDigest, id FieldID) NullableModeTextField[M, V] {
+	return NullableModeTextField[M, V]{NullableTextField: GeneratedStampedNullableTextField[M, V](generation, id)}
 }
 func (field ModeTextField[M, V]) Compare(mode ComparisonMode) TextComparison[M, V] {
 	return textComparison[M, V](field.fieldIdentity(), mode)
@@ -459,6 +540,9 @@ type ListField[M any, E ListElement] struct{ fieldCore[M, List[E]] }
 func GeneratedListField[M any, E ListElement](id FieldID) ListField[M, E] {
 	return ListField[M, E]{fieldCore: fieldCore[M, List[E]]{id: id}}
 }
+func GeneratedStampedListField[M any, E ListElement](generation SchemaDigest, id FieldID) ListField[M, E] {
+	return ListField[M, E]{fieldCore: fieldCore[M, List[E]]{id: id, generation: generation}}
+}
 
 func (field ListField[M, E]) Has(value E) Predicate[M] {
 	return predicateList[M](field.fieldIdentity(), frozenOperatorListHas, scalarOperand(value))
@@ -481,6 +565,9 @@ type BytesField[M any] struct{ fieldCore[M, []byte] }
 func GeneratedBytesField[M any](id FieldID) BytesField[M] {
 	return BytesField[M]{fieldCore: fieldCore[M, []byte]{id: id}}
 }
+func GeneratedStampedBytesField[M any](generation SchemaDigest, id FieldID) BytesField[M] {
+	return BytesField[M]{fieldCore: fieldCore[M, []byte]{id: id, generation: generation}}
+}
 
 func (field BytesField[M]) Eq(value []byte) Predicate[M] {
 	return predicateScalar[M](field.fieldIdentity(), frozenOperatorEq, bytesOperand(value))
@@ -500,6 +587,9 @@ type OpaqueField[M any, V any] struct{ fieldCore[M, V] }
 func GeneratedOpaqueField[M any, V any](id FieldID) OpaqueField[M, V] {
 	return OpaqueField[M, V]{fieldCore: fieldCore[M, V]{id: id}}
 }
+func GeneratedStampedOpaqueField[M any, V any](generation SchemaDigest, id FieldID) OpaqueField[M, V] {
+	return OpaqueField[M, V]{fieldCore: fieldCore[M, V]{id: id, generation: generation}}
+}
 
 type JSONField[M any] struct{ fieldCore[M, JSON[any]] }
 type NullableJSONField[M any] struct{ JSONField[M] }
@@ -518,14 +608,26 @@ type JSONStringComparison[M any] struct {
 func GeneratedJSONField[M any](id FieldID) JSONField[M] {
 	return JSONField[M]{fieldCore: fieldCore[M, JSON[any]]{id: id}}
 }
+func GeneratedStampedJSONField[M any](generation SchemaDigest, id FieldID) JSONField[M] {
+	return JSONField[M]{fieldCore: fieldCore[M, JSON[any]]{id: id, generation: generation}}
+}
 func GeneratedNullableJSONField[M any](id FieldID) NullableJSONField[M] {
 	return NullableJSONField[M]{JSONField: GeneratedJSONField[M](id)}
+}
+func GeneratedStampedNullableJSONField[M any](generation SchemaDigest, id FieldID) NullableJSONField[M] {
+	return NullableJSONField[M]{JSONField: GeneratedStampedJSONField[M](generation, id)}
 }
 func GeneratedModeJSONField[M any](id FieldID) ModeJSONField[M] {
 	return ModeJSONField[M]{JSONField: GeneratedJSONField[M](id)}
 }
+func GeneratedStampedModeJSONField[M any](generation SchemaDigest, id FieldID) ModeJSONField[M] {
+	return ModeJSONField[M]{JSONField: GeneratedStampedJSONField[M](generation, id)}
+}
 func GeneratedNullableModeJSONField[M any](id FieldID) NullableModeJSONField[M] {
 	return NullableModeJSONField[M]{ModeJSONField: GeneratedModeJSONField[M](id)}
+}
+func GeneratedStampedNullableModeJSONField[M any](generation SchemaDigest, id FieldID) NullableModeJSONField[M] {
+	return NullableModeJSONField[M]{ModeJSONField: GeneratedStampedModeJSONField[M](generation, id)}
 }
 func (field JSONField[M]) Root() JSONTarget[M] {
 	return JSONTarget[M]{field: field.fieldIdentity(), path: jsonRootPath()}
@@ -608,6 +710,9 @@ type NullableEqualField[M any, V EqualValue] struct{ EqualField[M, V] }
 func GeneratedNullableEqualField[M any, V EqualValue](id FieldID) NullableEqualField[M, V] {
 	return NullableEqualField[M, V]{EqualField: GeneratedEqualField[M, V](id)}
 }
+func GeneratedStampedNullableEqualField[M any, V EqualValue](generation SchemaDigest, id FieldID) NullableEqualField[M, V] {
+	return NullableEqualField[M, V]{EqualField: GeneratedStampedEqualField[M, V](generation, id)}
+}
 
 func (field NullableEqualField[M, V]) IsNull() Predicate[M] {
 	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
@@ -620,6 +725,9 @@ type NullableOrderedField[M any, V OrderedValue] struct{ OrderedField[M, V] }
 
 func GeneratedNullableOrderedField[M any, V OrderedValue](id FieldID) NullableOrderedField[M, V] {
 	return NullableOrderedField[M, V]{OrderedField: GeneratedOrderedField[M, V](id)}
+}
+func GeneratedStampedNullableOrderedField[M any, V OrderedValue](generation SchemaDigest, id FieldID) NullableOrderedField[M, V] {
+	return NullableOrderedField[M, V]{OrderedField: GeneratedStampedOrderedField[M, V](generation, id)}
 }
 
 func (field NullableOrderedField[M, V]) IsNull() Predicate[M] {
@@ -634,6 +742,9 @@ type NullableTextField[M any, V ~string] struct{ TextField[M, V] }
 func GeneratedNullableTextField[M any, V ~string](id FieldID) NullableTextField[M, V] {
 	return NullableTextField[M, V]{TextField: GeneratedTextField[M, V](id)}
 }
+func GeneratedStampedNullableTextField[M any, V ~string](generation SchemaDigest, id FieldID) NullableTextField[M, V] {
+	return NullableTextField[M, V]{TextField: GeneratedStampedTextField[M, V](generation, id)}
+}
 
 func (field NullableTextField[M, V]) IsNull() Predicate[M] {
 	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
@@ -646,6 +757,9 @@ type NullableListField[M any, E ListElement] struct{ ListField[M, E] }
 
 func GeneratedNullableListField[M any, E ListElement](id FieldID) NullableListField[M, E] {
 	return NullableListField[M, E]{ListField: GeneratedListField[M, E](id)}
+}
+func GeneratedStampedNullableListField[M any, E ListElement](generation SchemaDigest, id FieldID) NullableListField[M, E] {
+	return NullableListField[M, E]{ListField: GeneratedStampedListField[M, E](generation, id)}
 }
 
 func (field NullableListField[M, E]) IsNull() Predicate[M] {
@@ -660,6 +774,9 @@ type NullableBytesField[M any] struct{ BytesField[M] }
 func GeneratedNullableBytesField[M any](id FieldID) NullableBytesField[M] {
 	return NullableBytesField[M]{BytesField: GeneratedBytesField[M](id)}
 }
+func GeneratedStampedNullableBytesField[M any](generation SchemaDigest, id FieldID) NullableBytesField[M] {
+	return NullableBytesField[M]{BytesField: GeneratedStampedBytesField[M](generation, id)}
+}
 
 func (field NullableBytesField[M]) IsNull() Predicate[M] {
 	return predicatePresence[M](field.fieldIdentity(), frozenOperatorIsNull)
@@ -673,6 +790,9 @@ type NullableOpaqueField[M any, V any] struct{ OpaqueField[M, V] }
 func GeneratedNullableOpaqueField[M any, V any](id FieldID) NullableOpaqueField[M, V] {
 	return NullableOpaqueField[M, V]{OpaqueField: GeneratedOpaqueField[M, V](id)}
 }
+func GeneratedStampedNullableOpaqueField[M any, V any](generation SchemaDigest, id FieldID) NullableOpaqueField[M, V] {
+	return NullableOpaqueField[M, V]{OpaqueField: GeneratedStampedOpaqueField[M, V](generation, id)}
+}
 
 func (field NullableOpaqueField[M, V]) IsNull() Predicate[M] {
 	return predicateJSONPresence[M](field.fieldIdentity(), frozenOperatorIsNull)
@@ -685,6 +805,7 @@ type ToOne[M any, R any] struct {
 	fieldID     FieldID
 	relationID  RelationID
 	targetModel ModelID
+	generation  SchemaDigest
 	_           func(M) R
 }
 
@@ -720,6 +841,7 @@ type ToMany[M any, R any] struct {
 	fieldID     FieldID
 	relationID  RelationID
 	targetModel ModelID
+	generation  SchemaDigest
 	_           func(M) R
 }
 
@@ -739,10 +861,24 @@ func GeneratedToMany[M any, R any](fieldID FieldID, relationID RelationID, targe
 	return ToMany[M, R]{fieldID: fieldID, relationID: relationID, targetModel: targetModel}
 }
 
-func (ToOne[M, R]) fieldModel(M)                  {}
-func (field ToOne[M, R]) fieldIdentity() FieldID  { return field.fieldID }
-func (ToMany[M, R]) fieldModel(M)                 {}
-func (field ToMany[M, R]) fieldIdentity() FieldID { return field.fieldID }
+func GeneratedStampedToOne[M any, R any](generation SchemaDigest, fieldID FieldID, relationID RelationID, target ...ModelID) ToOne[M, R] {
+	result := GeneratedToOne[M, R](fieldID, relationID, target...)
+	result.generation = generation
+	return result
+}
+
+func GeneratedStampedToMany[M any, R any](generation SchemaDigest, fieldID FieldID, relationID RelationID, target ...ModelID) ToMany[M, R] {
+	result := GeneratedToMany[M, R](fieldID, relationID, target...)
+	result.generation = generation
+	return result
+}
+
+func (ToOne[M, R]) fieldModel(M)                         {}
+func (field ToOne[M, R]) fieldIdentity() FieldID         { return field.fieldID }
+func (field ToOne[M, R]) fieldGeneration() SchemaDigest  { return field.generation }
+func (ToMany[M, R]) fieldModel(M)                        {}
+func (field ToMany[M, R]) fieldIdentity() FieldID        { return field.fieldID }
+func (field ToMany[M, R]) fieldGeneration() SchemaDigest { return field.generation }
 
 func (field ToOne[M, R]) Is(value Predicate[R]) Predicate[M] {
 	return predicateRelation[M](field.fieldID, field.relationID, frozenOperatorRelationIs, value.node)

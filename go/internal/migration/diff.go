@@ -9,42 +9,190 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 // Diff compares validated normalized physical schemas by stable IDs. It never
 // infers a rename from spelling similarity.
 func Diff(before, after physical.PhysicalSchema) (Plan, error) {
-	left, err := physical.Normalize(before)
+	return diffSchemas(before, after, false, false)
+}
+
+// DiffHistorical reproduces the exact v1 operation graph for immutable
+// migration snapshots. It is a verification boundary, never an authoring path.
+func DiffHistorical(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 1 || before.CanonicalVersion != 1 || after.Version != 1 || after.CanonicalVersion != 1 {
+		return Plan{}, fmt.Errorf("historical diff requires exact v1/v1 snapshots")
+	}
+	left, err := physical.NormalizeHistorical(before)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical before: %w", err)
+	}
+	right, err := physical.NormalizeHistorical(after)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical after: %w", err)
+	}
+	plan, err := diffHistoricalV1Tagged(left, right)
+	if err != nil {
+		return Plan{}, err
+	}
+	return withPlanSnapshotFacts(plan, left, right), nil
+}
+
+// DiffHistoricalV2 reproduces only the frozen v2 operation algebra. It never
+// routes through the mutable current planner.
+func DiffHistoricalV2(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 2 || before.CanonicalVersion != 2 || after.Version != 2 || after.CanonicalVersion != 2 {
+		return Plan{}, fmt.Errorf("historical v2 diff requires exact v2/v2 snapshots")
+	}
+	left, err := physical.NormalizeHistoricalV2(before)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical v2 before: %w", err)
+	}
+	right, err := physical.NormalizeHistoricalV2(after)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical v2 after: %w", err)
+	}
+	plan, err := diffHistoricalV2Tagged(left, right)
+	if err != nil {
+		return Plan{}, err
+	}
+	return withPlanSnapshotFacts(plan, left, right), nil
+}
+
+// DiffHistoricalV3 reproduces only the frozen v3 operation algebra. It never
+// routes through the mutable current planner, even while v3 is current.
+func DiffHistoricalV3(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 3 || before.CanonicalVersion != 3 || after.Version != 3 || after.CanonicalVersion != 3 {
+		return Plan{}, fmt.Errorf("historical v3 diff requires exact v3/v3 snapshots")
+	}
+	left, err := physical.NormalizeHistoricalV3(before)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical v3 before: %w", err)
+	}
+	right, err := physical.NormalizeHistoricalV3(after)
+	if err != nil {
+		return Plan{}, fmt.Errorf("normalize historical v3 after: %w", err)
+	}
+	plan, err := diffHistoricalV3Tagged(left, right)
+	if err != nil {
+		return Plan{}, err
+	}
+	return withHistoricalV3PlanSnapshotFacts(plan, left, right), nil
+}
+
+// DiffPhysicalFormatUpgrade plans the frozen v1-to-v2 transition. It never
+// targets mutable current format dynamically.
+func DiffPhysicalFormatUpgrade(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 1 || before.CanonicalVersion != 1 || after.Version != 2 || after.CanonicalVersion != 2 {
+		return Plan{}, fmt.Errorf("unsupported physical format upgrade %d/%d -> %d/%d", before.Version, before.CanonicalVersion, after.Version, after.CanonicalVersion)
+	}
+	return diffHistoricalV1ToV2Tagged(before, after)
+}
+
+// DiffOptimisticConcurrencyPhysicalUpgrade plans the sole frozen v2-to-v3
+// transition. Current-only optimistic-concurrency metadata is validated before
+// any operation is emitted.
+func DiffOptimisticConcurrencyPhysicalUpgrade(before, after physical.PhysicalSchema) (Plan, error) {
+	if before.Version != 2 || before.CanonicalVersion != 2 || after.Version != 3 || after.CanonicalVersion != 3 {
+		return Plan{}, fmt.Errorf("unsupported optimistic-concurrency physical upgrade %d/%d -> %d/%d", before.Version, before.CanonicalVersion, after.Version, after.CanonicalVersion)
+	}
+	return diffOptimisticConcurrencyV2ToV3Tagged(before, after)
+}
+
+// DiffReviewed selects the exact retained canonical algebra for an immutable
+// reviewed entry. Mixed physical versions are always refused.
+func DiffReviewed(before, after physical.PhysicalSchema) (Plan, error) {
+	switch {
+	case before.Version == physical.SchemaFormatVersion && before.CanonicalVersion == physical.CanonicalFormatVersion && after.Version == physical.SchemaFormatVersion && after.CanonicalVersion == physical.CanonicalFormatVersion:
+		if physical.SchemaFormatVersion != 3 || physical.CanonicalFormatVersion != 3 {
+			return Plan{}, fmt.Errorf("current physical format %d/%d has no reviewed planner dispatch", physical.SchemaFormatVersion, physical.CanonicalFormatVersion)
+		}
+		return DiffHistoricalV3(before, after)
+	case before.Version == 1 && before.CanonicalVersion == 1 && after.Version == 1 && after.CanonicalVersion == 1:
+		return DiffHistorical(before, after)
+	case before.Version == 1 && before.CanonicalVersion == 1 && after.Version == 2 && after.CanonicalVersion == 2:
+		return DiffPhysicalFormatUpgrade(before, after)
+	case before.Version == 1 && before.CanonicalVersion == 1 && after.Version == 3 && after.CanonicalVersion == 3:
+		return diffHistoricalV1ToV3Composed(before, after)
+	case before.Version == 2 && before.CanonicalVersion == 2 && after.Version == 2 && after.CanonicalVersion == 2:
+		return DiffHistoricalV2(before, after)
+	case before.Version == 2 && before.CanonicalVersion == 2 && after.Version == 3 && after.CanonicalVersion == 3:
+		return DiffOptimisticConcurrencyPhysicalUpgrade(before, after)
+	case before.Version == 3 && before.CanonicalVersion == 3 && after.Version == 3 && after.CanonicalVersion == 3:
+		return DiffHistoricalV3(before, after)
+	default:
+		return Plan{}, fmt.Errorf("unsupported reviewed physical version pair %d/%d -> %d/%d", before.Version, before.CanonicalVersion, after.Version, after.CanonicalVersion)
+	}
+}
+
+func diffSchemas(before, after physical.PhysicalSchema, historicalBefore, historicalAfter bool) (Plan, error) {
+	normalizeBefore := physical.Normalize
+	if historicalBefore {
+		normalizeBefore = physical.NormalizeHistorical
+	}
+	normalizeAfter := physical.Normalize
+	if historicalAfter {
+		normalizeAfter = physical.NormalizeHistorical
+	}
+	left, err := normalizeBefore(before)
 	if err != nil {
 		return Plan{}, fmt.Errorf("normalize before: %w", err)
 	}
-	right, err := physical.Normalize(after)
+	right, err := normalizeAfter(after)
 	if err != nil {
 		return Plan{}, fmt.Errorf("normalize after: %w", err)
 	}
 	if left.Provider.Provider != right.Provider.Provider {
 		return Plan{}, fmt.Errorf("cannot diff providers %s and %s", left.Provider.Provider, right.Provider.Provider)
 	}
-	leftFP, err := physical.PhysicalFingerprint(left)
+	beforeFingerprint := physical.PhysicalFingerprint
+	if historicalBefore {
+		beforeFingerprint = physical.HistoricalPhysicalFingerprint
+	}
+	afterFingerprint := physical.PhysicalFingerprint
+	if historicalAfter {
+		afterFingerprint = physical.HistoricalPhysicalFingerprint
+	}
+	leftFP, err := beforeFingerprint(left)
 	if err != nil {
 		return Plan{}, err
 	}
-	rightFP, err := physical.PhysicalFingerprint(right)
+	rightFP, err := afterFingerprint(right)
 	if err != nil {
 		return Plan{}, err
 	}
-	builder := diffBuilder{before: left, after: right}
+	if reflect.DeepEqual(left, right) {
+		return withPlanSnapshotFacts(Plan{
+			Provider: right.Provider.Provider, BeforeFingerprint: Digest(leftFP.String()), AfterFingerprint: Digest(rightFP.String()),
+		}, left, right), nil
+	}
+	builder := diffBuilder{before: left, after: right, beforeCanonicalVersion: left.CanonicalVersion, afterCanonicalVersion: right.CanonicalVersion, formatUpgrade: left.Version == 1 && right.Version == 2, historicalReplay: left.Version == right.Version && left.Version < physical.SchemaFormatVersion}
+	if err := builder.identifyGeneratedWideningRecreation(); err != nil {
+		return Plan{}, err
+	}
 	beforeSystem, err := physical.SystemFingerprint(left.Provider, left.System)
+	if historicalBefore {
+		beforeSystem, err = physical.HistoricalSystemFingerprint(left)
+	}
 	if err != nil {
 		return Plan{}, err
 	}
 	afterSystem, err := physical.SystemFingerprint(right.Provider, right.System)
+	if historicalAfter {
+		afterSystem, err = physical.HistoricalSystemFingerprint(right)
+	}
 	if err != nil {
 		return Plan{}, err
 	}
 	initial := false
 	if beforeSystem != afterSystem {
-		if emptySystemSchema(left.System) && len(left.Tables) == 0 && len(left.Extensions) == 0 && len(left.Unmanaged) == 0 && len(right.System.Objects) != 0 {
+		if reflect.DeepEqual(left.System, right.System) {
+			// Provider runtime/capability transitions alter the physical and
+			// system fingerprints without changing a database system object. The
+			// reviewed before/after snapshots and RecordSchemaVersion operation
+			// own this metadata-only transition.
+		} else if emptySystemSchema(left.System) && len(left.Tables) == 0 && len(left.Extensions) == 0 && len(left.Unmanaged) == 0 && len(right.System.Objects) != 0 {
 			initial = true
 		} else {
 			additions, upgradeErr := systemObjectAdditions(left.System, right.System)
@@ -74,6 +222,9 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 	if err := builder.recreateDestructiveDependents(); err != nil {
 		return Plan{}, err
 	}
+	if err := builder.extensions(); err != nil {
+		return Plan{}, err
+	}
 	recordBefore, recordAfter := Digest(leftFP.String()), Digest(rightFP.String())
 	record := Operation{Kind: RecordSchemaVersion, Stage: 100, ObjectID: "schema-version", Before: recordBefore, After: recordAfter, Mode: Transactional, Risk: RiskSafe, LogicalPath: "schema"}
 	record.ID = stableOperationID(record.Kind, record.ObjectID, record.Before, record.After)
@@ -89,7 +240,61 @@ func Diff(before, after physical.PhysicalSchema) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	return plan, nil
+	return withPlanSnapshotFacts(plan, left, right), nil
+}
+
+func (b *diffBuilder) extensions() error {
+	before := make(map[ir.ExtensionID]physical.Extension, len(b.before.Extensions))
+	after := make(map[ir.ExtensionID]physical.Extension, len(b.after.Extensions))
+	for _, extension := range b.before.Extensions {
+		before[extension.ID] = extension
+	}
+	for _, extension := range b.after.Extensions {
+		after[extension.ID] = extension
+	}
+	ids := make([]ir.ExtensionID, 0, len(before)+len(after))
+	seen := map[ir.ExtensionID]bool{}
+	for id := range before {
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	for id := range after {
+		if !seen[id] {
+			ids = append(ids, id)
+		}
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	for _, id := range ids {
+		left, had := before[id]
+		right, has := after[id]
+		switch {
+		case !had:
+			if err := b.add(CreateProviderExtension, 45, string(id), nil, right, RiskSafe); err != nil {
+				return err
+			}
+		case !has:
+			if err := b.add(DropProviderExtension, 75, string(id), left, nil, RiskDataLoss); err != nil {
+				return err
+			}
+		case !reflect.DeepEqual(left, right):
+			if left.Kind != semanticcontract.IndexKind || right.Kind != semanticcontract.IndexKind || left.Version != semanticcontract.Version || right.Version != semanticcontract.Version || left.Owner != right.Owner || left.Provider != right.Provider {
+				return fmt.Errorf("provider extension %s cannot change in place", id)
+			}
+			// Semantic shadow state is derived entirely from the unchanged owner
+			// rows. A reviewed projection or dimension change therefore rebuilds
+			// the same stable extension identity by dropping its old state/vector
+			// tables and recreating the new physical contract. It is a rewrite, not
+			// owner-row data loss; runtime refresh repopulates the empty shadow
+			// storage from the source table.
+			if err := b.add(DropProviderExtension, 44, string(id), left, nil, RiskRewrite); err != nil {
+				return err
+			}
+			if err := b.add(CreateProviderExtension, 45, string(id), nil, right, RiskRewrite); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.SystemObject, error) {
@@ -129,8 +334,165 @@ func emptySystemSchema(system physical.SystemSchema) bool {
 }
 
 type diffBuilder struct {
-	before, after physical.PhysicalSchema
-	operations    []Operation
+	before, after          physical.PhysicalSchema
+	operations             []Operation
+	beforeCanonicalVersion uint32
+	afterCanonicalVersion  uint32
+	formatUpgrade          bool
+	historicalReplay       bool
+	detachedGenerated      map[ir.FieldID]ir.ModelID
+	generatedDrops         map[ir.FieldID]ir.ModelID
+	generatedAdds          map[ir.FieldID]ir.ModelID
+	generatedInputs        map[ir.FieldID][]ir.FieldID
+}
+
+// identifyGeneratedWideningRecreation closes PostgreSQL's generated
+// column dependency rule at the provider-neutral plan boundary. PostgreSQL
+// cannot alter a source column's type while a stored generated column depends
+// on it, and the minimum supported server cannot restore a dropped expression
+// in place. The reviewed DAG therefore detaches and recreates exact derived
+// columns; their source data remains authoritative.
+func (b *diffBuilder) identifyGeneratedWideningRecreation() error {
+	if b.historicalReplay || b.after.Provider.Provider != ir.PostgreSQL {
+		return nil
+	}
+	b.detachedGenerated = map[ir.FieldID]ir.ModelID{}
+	b.generatedDrops = map[ir.FieldID]ir.ModelID{}
+	b.generatedAdds = map[ir.FieldID]ir.ModelID{}
+	b.generatedInputs = map[ir.FieldID][]ir.FieldID{}
+	afterTables := make(map[ir.ModelID]physical.PhysicalTable, len(b.after.Tables))
+	for _, table := range b.after.Tables {
+		afterTables[table.ID] = table
+	}
+	for _, beforeTable := range b.before.Tables {
+		afterTable, exists := afterTables[beforeTable.ID]
+		if !exists {
+			continue
+		}
+		beforeColumns := make(map[ir.FieldID]physical.PhysicalColumn, len(beforeTable.Columns))
+		afterColumns := make(map[ir.FieldID]physical.PhysicalColumn, len(afterTable.Columns))
+		changing := map[ir.FieldID]bool{}
+		for _, column := range beforeTable.Columns {
+			beforeColumns[column.ID] = column
+		}
+		for _, column := range afterTable.Columns {
+			afterColumns[column.ID] = column
+			before, had := beforeColumns[column.ID]
+			if had && !reflect.DeepEqual(before.Storage, column.Storage) {
+				legacy := b.formatUpgrade && before.Storage.Kind == physical.StoragePostgreSQLText && column.Storage.Kind == physical.StoragePostgreSQLVarchar
+				if physicalWideningRepresentation(before.Storage, column.Storage, legacy) {
+					changing[column.ID] = true
+				}
+			}
+		}
+		for field, beforeColumn := range beforeColumns {
+			afterColumn, retained := afterColumns[field]
+			if beforeColumn.Generated == nil || retained && afterColumn.Generated != nil {
+				continue
+			}
+			inputs := uniqueFields(expressionFields(beforeColumn.Generated.Expression))
+			if fieldsIntersect(inputs, changing) {
+				b.generatedDrops[field] = beforeTable.ID
+				b.generatedInputs[field] = inputs
+			}
+		}
+		for field, afterColumn := range afterColumns {
+			beforeColumn, retained := beforeColumns[field]
+			if afterColumn.Generated == nil {
+				continue
+			}
+			inputs := uniqueFields(expressionFields(afterColumn.Generated.Expression))
+			if !fieldsIntersect(inputs, changing) {
+				continue
+			}
+			if !retained || beforeColumn.Generated == nil {
+				b.generatedAdds[field] = beforeTable.ID
+				b.generatedInputs[field] = inputs
+				continue
+			}
+			if beforeColumn.Generated.Kind != physical.GeneratedStored || afterColumn.Generated.Kind != physical.GeneratedStored || !sameGeneratedColumnAcrossWidening(beforeColumn, afterColumn, b.formatUpgrade) {
+				return fmt.Errorf("PostgreSQL widening generated field %s cannot be recreated exactly", field)
+			}
+			// A bounded input does not prove that an arbitrary generated
+			// expression has a bounded output. The released v1 representation
+			// owned an independent registered max-length CHECK for every bounded
+			// field, including generated fields; require that exact proof before
+			// translating the generated output from text to varchar.
+			if b.formatUpgrade && beforeColumn.Storage.Kind == physical.StoragePostgreSQLText && afterColumn.Storage.Kind == physical.StoragePostgreSQLVarchar && !legacyVarcharRepresentation(beforeTable, afterTable, field, beforeColumn, afterColumn) {
+				return fmt.Errorf("physical v1->v2 generated field %s lacks the exact legacy bounded-string representation", field)
+			}
+			b.detachedGenerated[field] = beforeTable.ID
+			b.generatedDrops[field] = beforeTable.ID
+			b.generatedAdds[field] = beforeTable.ID
+			b.generatedInputs[field] = inputs
+		}
+	}
+	return nil
+}
+
+func fieldsIntersect(fields []ir.FieldID, selected map[ir.FieldID]bool) bool {
+	for _, field := range fields {
+		if selected[field] {
+			return true
+		}
+	}
+	return false
+}
+
+func uniqueFields(values []ir.FieldID) []ir.FieldID {
+	seen := map[ir.FieldID]bool{}
+	result := make([]ir.FieldID, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func sameGeneratedColumnAcrossWidening(before, after physical.PhysicalColumn, formatUpgrade bool) bool {
+	left, right := before, after
+	// Stable FieldID owns identity. The reviewed detach/add envelope can apply a
+	// simultaneous physical rename without a separate RenameColumn operation.
+	left.Name, right.Name = "", ""
+	left.Storage, right.Storage = physical.StorageType{}, physical.StorageType{}
+	leftDefault, rightDefault := left.Default.Expression, right.Default.Expression
+	left.Default.Expression, right.Default.Expression = nil, nil
+	leftGenerated, rightGenerated := left.Generated, right.Generated
+	left.Generated, right.Generated = nil, nil
+	if !reflect.DeepEqual(left, right) || !sameWideningExpression(leftDefault, rightDefault, formatUpgrade) || leftGenerated == nil || rightGenerated == nil || leftGenerated.Kind != rightGenerated.Kind {
+		return false
+	}
+	return physicalWideningRepresentation(before.Storage, after.Storage, formatUpgrade) && sameWideningExpression(&leftGenerated.Expression, &rightGenerated.Expression, formatUpgrade)
+}
+
+func sameWideningExpression(before, after *physical.Expression, formatUpgrade bool) bool {
+	if before == nil || after == nil {
+		return before == nil && after == nil
+	}
+	left, right := *before, *after
+	leftOperands, rightOperands := left.Operands, right.Operands
+	left.Operands, right.Operands = nil, nil
+	leftType, rightType := left.Type, right.Type
+	left.Type, right.Type = physical.StorageType{}, physical.StorageType{}
+	if !reflect.DeepEqual(left, right) || !physicalWideningRepresentation(leftType, rightType, formatUpgrade) || len(leftOperands) != len(rightOperands) {
+		return false
+	}
+	for index := range leftOperands {
+		if !sameWideningExpression(&leftOperands[index], &rightOperands[index], formatUpgrade) {
+			return false
+		}
+	}
+	return true
+}
+
+func physicalWideningRepresentation(before, after physical.StorageType, formatUpgrade bool) bool {
+	if reflect.DeepEqual(before, after) {
+		return true
+	}
+	return PostgreSQLAutomaticTypeTransition(before, after, formatUpgrade)
 }
 
 func (b *diffBuilder) tables() error {
@@ -169,6 +531,9 @@ func (b *diffBuilder) tables() error {
 				return err
 			}
 		default:
+			if err := validateConcurrencyTransition(left, right); err != nil {
+				return err
+			}
 			if left.Name != right.Name {
 				if err := b.add(RenameTable, 25, string(id), left.Name, right.Name, RiskSafe); err != nil {
 					return err
@@ -180,6 +545,27 @@ func (b *diffBuilder) tables() error {
 			if err := b.objects(left, right); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+func validateConcurrencyTransition(before, after physical.PhysicalTable) error {
+	if before.OptimisticConcurrency != nil {
+		if after.OptimisticConcurrency == nil {
+			return fmt.Errorf("optimistic concurrency cannot be removed from model %s", before.ID)
+		}
+		if *before.OptimisticConcurrency != *after.OptimisticConcurrency {
+			return fmt.Errorf("optimistic concurrency field cannot change on model %s", before.ID)
+		}
+		return nil
+	}
+	if after.OptimisticConcurrency == nil {
+		return nil
+	}
+	for _, column := range before.Columns {
+		if column.ID == *after.OptimisticConcurrency {
+			return fmt.Errorf("optimistic concurrency cannot adopt existing field %s on model %s", column.ID, before.ID)
 		}
 	}
 	return nil
@@ -200,25 +586,71 @@ func (b *diffBuilder) columns(left, right physical.PhysicalTable) error {
 		z, has := cur[id]
 		switch {
 		case !had:
-			risk := RiskSafe
-			if !z.Nullable && z.Default.Kind == physical.DefaultNone {
-				risk = RiskManual
+			if right.OptimisticConcurrency != nil && *right.OptimisticConcurrency == id {
+				if err := b.requiredConcurrencyColumn(z); err != nil {
+					return err
+				}
+				continue
 			}
-			if err := b.add(AddColumn, 30, string(id), nil, z, risk); err != nil {
+			if b.generatedAdds[id] == right.ID {
+				if err := b.add(AddColumn, 47, string(id), nil, z, RiskRewrite); err != nil {
+					return err
+				}
+				continue
+			}
+			if !z.Nullable && z.Default.Kind == physical.DefaultNone {
+				if z.Generated == nil {
+					if err := b.requiredColumnBackfill(z); err != nil {
+						return err
+					}
+					continue
+				}
+				if err := b.add(AddColumn, 30, string(id), nil, z, RiskManual); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := b.add(AddColumn, 30, string(id), nil, z, RiskSafe); err != nil {
 				return err
 			}
 		case !has:
+			if b.generatedDrops[id] == left.ID {
+				if err := b.add(DropColumn, 43, string(id), a, nil, RiskRewrite); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := b.add(DropColumn, 70, string(id), a, nil, RiskDataLoss); err != nil {
 				return err
 			}
 		default:
+			if b.detachedGenerated[id] == left.ID {
+				if err := b.add(DropColumn, 43, string(id), a, nil, RiskRewrite); err != nil {
+					return err
+				}
+				if err := b.add(AddColumn, 47, string(id), nil, z, RiskRewrite); err != nil {
+					return err
+				}
+				continue
+			}
+			formatRepresentation := false
 			if a.Name != z.Name {
 				if err := b.add(RenameColumn, 35, string(id), a.Name, z.Name, RiskSafe); err != nil {
 					return err
 				}
 			}
 			if !reflect.DeepEqual(a.Storage, z.Storage) {
-				if err := b.add(AlterColumnType, 45, string(id), a.Storage, z.Storage, RiskDataLoss); err != nil {
+				risk := RiskDataLoss
+				if b.formatUpgrade && a.Storage.Kind == physical.StoragePostgreSQLText && z.Storage.Kind == physical.StoragePostgreSQLVarchar {
+					if !legacyVarcharRepresentation(left, right, id, a, z) {
+						return fmt.Errorf("physical v1->v2 field %s lacks the exact legacy bounded-string representation", id)
+					}
+					formatRepresentation = true
+					risk = RiskRewrite
+				} else if SafeWidening(b.after.Provider.Provider, a.Storage, z.Storage) {
+					risk = RiskRewrite
+				}
+				if err := b.add(AlterColumnType, 45, string(id), a.Storage, z.Storage, risk); err != nil {
 					return err
 				}
 			}
@@ -240,7 +672,8 @@ func (b *diffBuilder) columns(left, right physical.PhysicalTable) error {
 					return err
 				}
 			}
-			if !reflect.DeepEqual(a.Generated, z.Generated) || !reflect.DeepEqual(a.Collation, z.Collation) {
+			generatedOrCollationChanged := !reflect.DeepEqual(a.Generated, z.Generated) || !reflect.DeepEqual(a.Collation, z.Collation)
+			if generatedOrCollationChanged && !formatRepresentation {
 				if err := b.add(RebuildTable, 55, string(left.ID), left, right, RiskRewrite); err != nil {
 					return err
 				}
@@ -248,6 +681,94 @@ func (b *diffBuilder) columns(left, right physical.PhysicalTable) error {
 		}
 	}
 	return nil
+}
+
+func (b *diffBuilder) requiredConcurrencyColumn(column physical.PhysicalColumn) error {
+	id := string(column.ID)
+	if err := b.add(AddColumn, 30, id, nil, column, RiskSafe); err != nil {
+		return err
+	}
+	if err := b.add(InitializeConcurrencyColumn, 31, id, nil, column, RiskRewrite); err != nil {
+		return err
+	}
+	if err := b.add(ValidateConstraint, 32, id, nil, column, RiskSafe); err != nil {
+		return err
+	}
+	return b.add(AlterColumnNullability, 33, id, true, false, RiskSafe)
+}
+
+func legacyVarcharRepresentation(beforeTable, afterTable physical.PhysicalTable, field ir.FieldID, before, after physical.PhysicalColumn) bool {
+	if before.Storage.Kind != physical.StoragePostgreSQLText || before.Storage.Length != 0 || after.Storage.Kind != physical.StoragePostgreSQLVarchar || after.Storage.Length == 0 {
+		return false
+	}
+	if !sameColumnAcrossV1V2Representation(before, after) {
+		return false
+	}
+	checkID, checkName := physical.HistoricalV1MaxLengthCheckIdentity(beforeTable.ID, field)
+	fieldCopy := field
+	integer := physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}
+	literal := ir.TypedLiteralIR{Kind: ir.LiteralInteger, Canonical: fmt.Sprint(after.Storage.Length)}
+	column := physical.Expression{Kind: physical.ExpressionColumn, Type: before.Storage, Nullable: before.Nullable, Column: &fieldCopy, Operands: []physical.Expression{}}
+	length := physical.Expression{Kind: physical.ExpressionFunction, Type: integer, Nullable: before.Nullable, Symbol: &physical.SemanticSymbol{Identity: "golem.schema.function.length.v1", Kind: ir.SchemaSymbolFunction, Version: 1, Provider: ir.ProviderScopePortable}, Operands: []physical.Expression{column}}
+	expected := physical.PhysicalCheck{ID: checkID, Name: checkName, Expression: physical.Expression{Kind: physical.ExpressionOperator, Type: physical.StorageType{Kind: physical.StoragePostgreSQLBoolean}, Nullable: before.Nullable, Symbol: &physical.SemanticSymbol{Identity: "golem.schema.predicate.less-equal.v1", Kind: ir.SchemaSymbolOperator, Version: 1, Provider: ir.ProviderScopePortable}, Operands: []physical.Expression{length, physical.Expression{Kind: physical.ExpressionLiteral, Type: integer, Literal: &literal, Operands: []physical.Expression{}}}}}
+	found := 0
+	for _, check := range beforeTable.Checks {
+		if check.ID == expected.ID {
+			found++
+			if !reflect.DeepEqual(check, expected) {
+				return false
+			}
+		}
+	}
+	if found != 1 {
+		return false
+	}
+	for _, check := range afterTable.Checks {
+		if check.ID == expected.ID {
+			return false
+		}
+	}
+	return true
+}
+
+func sameColumnAcrossV1V2Representation(before, after physical.PhysicalColumn) bool {
+	left, right := before, after
+	left.Storage, right.Storage = physical.StorageType{}, physical.StorageType{}
+	leftDefault, rightDefault := left.Default.Expression, right.Default.Expression
+	left.Default.Expression, right.Default.Expression = nil, nil
+	leftGenerated, rightGenerated := left.Generated, right.Generated
+	left.Generated, right.Generated = nil, nil
+	if !reflect.DeepEqual(left, right) || !sameRepresentationExpression(leftDefault, rightDefault) {
+		return false
+	}
+	if leftGenerated == nil || rightGenerated == nil {
+		return leftGenerated == nil && rightGenerated == nil
+	}
+	return leftGenerated.Kind == rightGenerated.Kind && sameRepresentationExpression(&leftGenerated.Expression, &rightGenerated.Expression)
+}
+
+func sameRepresentationExpression(before, after *physical.Expression) bool {
+	if before == nil || after == nil {
+		return before == nil && after == nil
+	}
+	left, right := *before, *after
+	leftOperands, rightOperands := left.Operands, right.Operands
+	left.Operands, right.Operands = nil, nil
+	leftType, rightType := left.Type, right.Type
+	left.Type, right.Type = physical.StorageType{}, physical.StorageType{}
+	if !reflect.DeepEqual(left, right) || !sameRepresentationStorage(leftType, rightType) || len(leftOperands) != len(rightOperands) {
+		return false
+	}
+	for index := range leftOperands {
+		if !sameRepresentationExpression(&leftOperands[index], &rightOperands[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func sameRepresentationStorage(before, after physical.StorageType) bool {
+	return reflect.DeepEqual(before, after) || (before.Kind == physical.StoragePostgreSQLText && before.Precision == 0 && before.Scale == 0 && before.Length == 0 && before.Symbol == nil && after.Kind == physical.StoragePostgreSQLVarchar && after.Precision == 0 && after.Scale == 0 && after.Length > 0 && after.Symbol == nil)
 }
 
 func (b *diffBuilder) objects(left, right physical.PhysicalTable) error {
@@ -366,6 +887,14 @@ func (b *diffBuilder) recreateDestructiveDependents() error {
 				return err
 			}
 		}
+		for field := range b.detachedGenerated {
+			// Referencing foreign keys live in a different table but carry the
+			// detached target FieldID in ReferencedColumns. Recreate dependents
+			// across the complete schema, not only the generated field's owner.
+			if err := b.recreateTableDependents(beforeTable, afterTable, field); err != nil {
+				return err
+			}
+		}
 	}
 	return nil
 }
@@ -452,11 +981,11 @@ func (b *diffBuilder) key(table ir.ModelID, a, z *physical.PhysicalKey, add, dro
 }
 
 func (b *diffBuilder) add(kind OperationKind, stage uint16, id string, before, after any, risk Risk) error {
-	a, err := fragment(before)
+	a, err := fragmentVersion(before, b.beforeCanonicalVersion)
 	if err != nil {
 		return err
 	}
-	z, err := fragment(after)
+	z, err := fragmentVersion(after, b.afterCanonicalVersion)
 	if err != nil {
 		return err
 	}
@@ -496,7 +1025,10 @@ func (b *diffBuilder) dependencies() {
 		}
 	}
 	columnTable := map[string]ir.ModelID{}
+	beforeColumns := map[ir.FieldID]physical.PhysicalColumn{}
+	afterColumns := map[ir.FieldID]physical.PhysicalColumn{}
 	objects := map[string]ir.ModelID{}
+	extensionModels := map[string]ir.ModelID{}
 	for _, table := range tables {
 		for _, column := range table.Columns {
 			columnTable[string(column.ID)] = table.ID
@@ -517,6 +1049,24 @@ func (b *diffBuilder) dependencies() {
 			objects[string(index.ID)] = table.ID
 		}
 	}
+	for _, table := range b.before.Tables {
+		for _, column := range table.Columns {
+			beforeColumns[column.ID] = column
+		}
+	}
+	for _, table := range b.after.Tables {
+		for _, column := range table.Columns {
+			afterColumns[column.ID] = column
+		}
+	}
+	for _, extension := range b.after.Extensions {
+		extensionModels[string(extension.ID)] = extension.Owner.ModelID
+	}
+	for _, extension := range b.before.Extensions {
+		if extensionModels[string(extension.ID)] == "" {
+			extensionModels[string(extension.ID)] = extension.Owner.ModelID
+		}
+	}
 	for index := range b.operations {
 		op := &b.operations[index]
 		if op.Kind == BootstrapSystemSchema {
@@ -528,6 +1078,17 @@ func (b *diffBuilder) dependencies() {
 		if op.Kind == CreateTable {
 			addDep(op, CreateNamespace, string(b.after.Namespace.Name))
 		}
+		if op.Kind == CreateProviderExtension {
+			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
+			addDep(op, DropProviderExtension, op.ObjectID)
+		}
+		if op.Kind == DropTable {
+			for extensionID, modelID := range extensionModels {
+				if string(modelID) == op.ObjectID {
+					addDep(op, DropProviderExtension, extensionID)
+				}
+			}
+		}
 		tableID := columnTable[op.ObjectID]
 		if tableID == "" {
 			tableID = objects[op.ObjectID]
@@ -535,6 +1096,26 @@ func (b *diffBuilder) dependencies() {
 		if tableID != "" && op.Kind != CreateTable {
 			addDep(op, CreateTable, string(tableID))
 			addDep(op, RenameTable, string(tableID))
+		}
+		if op.Kind == BackfillColumn {
+			addDep(op, AddColumn, op.ObjectID)
+		}
+		if op.Kind == InitializeConcurrencyColumn {
+			addDep(op, AddColumn, op.ObjectID)
+		}
+		if !b.historicalReplay && op.Kind == AddColumn {
+			if column := afterColumns[ir.FieldID(op.ObjectID)]; column.Generated != nil {
+				for _, field := range expressionFields(column.Generated.Expression) {
+					addDep(op, AddColumn, string(field))
+				}
+			}
+		}
+		if op.Kind == ValidateConstraint {
+			addDep(op, BackfillColumn, op.ObjectID)
+			addDep(op, InitializeConcurrencyColumn, op.ObjectID)
+		}
+		if op.Kind == AlterColumnNullability {
+			addDep(op, ValidateConstraint, op.ObjectID)
 		}
 		for add, drop := range map[OperationKind]OperationKind{AddPrimaryKey: DropPrimaryKey, AddUnique: DropUnique, AddForeignKey: DropForeignKey, AddCheck: DropCheck, CreateIndex: DropIndex} {
 			if op.Kind == add {
@@ -547,6 +1128,18 @@ func (b *diffBuilder) dependencies() {
 					addDep(op, AddColumn, string(field))
 					addDep(op, AlterColumnType, string(field))
 					addDep(op, AlterColumnNullability, string(field))
+				}
+			}
+		}
+		if op.Kind == DropPrimaryKey || op.Kind == DropUnique {
+			if owner, ok := tables[tableID]; ok {
+				columns := referencedFields(owner, op.ObjectID)
+				for _, table := range tables {
+					for _, fk := range table.ForeignKeys {
+						if fk.ReferencedTable == owner.ID && reflect.DeepEqual(fk.ReferencedColumns, columns) {
+							addDep(op, DropForeignKey, string(fk.ID))
+						}
+					}
 				}
 			}
 		}
@@ -576,10 +1169,59 @@ func (b *diffBuilder) dependencies() {
 			}
 		}
 		if op.Kind == DropColumn || op.Kind == AlterColumnType || op.Kind == AlterColumnNullability {
-			for _, table := range tables {
+			for _, table := range append(append([]physical.PhysicalTable(nil), b.before.Tables...), b.after.Tables...) {
 				for _, object := range dependentObjects(table, ir.FieldID(op.ObjectID)) {
 					for _, kind := range []OperationKind{DropForeignKey, DropIndex, DropCheck, DropUnique, DropPrimaryKey} {
 						addDep(op, kind, object)
+					}
+				}
+			}
+		}
+		if !b.historicalReplay && op.Kind == DropColumn {
+			field := ir.FieldID(op.ObjectID)
+			for generated, column := range beforeColumns {
+				if column.Generated != nil && containsField(expressionFields(column.Generated.Expression), field) {
+					addDep(op, DropColumn, string(generated))
+				}
+			}
+		}
+		// The generated-column dependency algebra was introduced with physical
+		// format v2. Exact v1/v1 replay is owned by the retained v1 planner and
+		// must never acquire dependencies invented by the current planner.
+		if !b.historicalReplay && (len(b.generatedDrops) != 0 || len(b.generatedAdds) != 0) {
+			switch op.Kind {
+			case DropColumn:
+				field := ir.FieldID(op.ObjectID)
+				if tableID, generated := b.generatedDrops[field]; generated {
+					for dependent, owner := range b.generatedDrops {
+						if owner == tableID && containsField(b.generatedInputs[dependent], field) {
+							addDep(op, DropColumn, string(dependent))
+						}
+					}
+				}
+			case AlterColumnType:
+				tableID := columnTable[op.ObjectID]
+				for field, owner := range b.generatedDrops {
+					if owner == tableID {
+						addDep(op, DropColumn, string(field))
+					}
+				}
+			case AddColumn:
+				field := ir.FieldID(op.ObjectID)
+				tableID, generated := b.generatedAdds[field]
+				if generated {
+					if b.generatedDrops[field] == tableID {
+						addDep(op, DropColumn, op.ObjectID)
+					}
+					for _, candidate := range b.operations {
+						if candidate.Kind == AlterColumnType && columnTable[candidate.ObjectID] == tableID {
+							addDep(op, AlterColumnType, candidate.ObjectID)
+						}
+					}
+					for _, input := range b.generatedInputs[field] {
+						if b.generatedAdds[input] == tableID {
+							addDep(op, AddColumn, string(input))
+						}
 					}
 				}
 			}
@@ -767,10 +1409,14 @@ func containsField(values []ir.FieldID, field ir.FieldID) bool {
 }
 
 func fragment(value any) (Digest, error) {
+	return fragmentVersion(value, physical.CanonicalFormatVersion)
+}
+
+func fragmentVersion(value any, version uint32) (Digest, error) {
 	if value == nil {
 		return "", nil
 	}
-	encoded, err := physical.CanonicalFragment(value)
+	encoded, err := physical.CanonicalFragmentVersion(value, version)
 	if err != nil {
 		return "", err
 	}

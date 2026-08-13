@@ -14,7 +14,6 @@ import (
 
 	compilerscalar "github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
-	modernsqlite "modernc.org/sqlite"
 )
 
 const (
@@ -23,13 +22,7 @@ const (
 	policyJSONFunction      = "golem_policy_json"
 )
 
-func init() {
-	modernsqlite.MustRegisterDeterministicScalarFunction(policyASCIIFoldFunction, 1, sqliteASCIIFold)
-	modernsqlite.MustRegisterDeterministicScalarFunction(policyListFunction, 4, sqlitePolicyList)
-	modernsqlite.MustRegisterDeterministicScalarFunction(policyJSONFunction, 6, sqlitePolicyJSON)
-}
-
-func sqliteASCIIFold(_ *modernsqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+func sqliteASCIIFold(arguments []driver.Value) (driver.Value, error) {
 	if len(arguments) != 1 {
 		return nil, fmt.Errorf("%s: arity", policyASCIIFoldFunction)
 	}
@@ -43,7 +36,7 @@ func sqliteASCIIFold(_ *modernsqlite.FunctionContext, arguments []driver.Value) 
 	return foldPolicyASCII(value), nil
 }
 
-func sqlitePolicyList(_ *modernsqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+func sqlitePolicyList(arguments []driver.Value) (driver.Value, error) {
 	if len(arguments) != 4 {
 		return nil, fmt.Errorf("%s: arity", policyListFunction)
 	}
@@ -123,7 +116,7 @@ func sqlitePolicyList(_ *modernsqlite.FunctionContext, arguments []driver.Value)
 	return policyBool(matched), nil
 }
 
-func sqlitePolicyJSON(_ *modernsqlite.FunctionContext, arguments []driver.Value) (driver.Value, error) {
+func sqlitePolicyJSON(arguments []driver.Value) (driver.Value, error) {
 	if len(arguments) != 6 {
 		return nil, fmt.Errorf("%s: arity", policyJSONFunction)
 	}

@@ -59,6 +59,10 @@
     {"symbol":"OperationCDCAcknowledge","source":"runtime/observation.go"},
     {"symbol":"OperationMigrationInspect","source":"runtime/runtime.go"},
     {"symbol":"OperationShutdownHTTP","source":"graphql/websocket.go"},
-    {"symbol":"OperationShutdownPublisher","source":"runtime/event_lifecycle.go"}
+    {"symbol":"OperationShutdownPublisher","source":"runtime/event_lifecycle.go"},
+    {"symbol":"OperationSemanticRefresh","source":"internal/semantic/runtime/manager.go"},
+    {"symbol":"OperationSemanticProvider","source":"internal/semantic/runtime/manager.go"},
+    {"symbol":"OperationSemanticRank","source":"internal/semantic/runtime/manager.go"},
+    {"symbol":"OperationQueryPlanExplain","source":"runtime/queryplan.go"}
   ]
 }

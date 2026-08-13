@@ -3513,6 +3513,20 @@
           "directives": []
         },
         {
+          "name": "createVersionedNote",
+          "type": "VersionedNote!",
+          "default": null,
+          "arguments": [
+            {
+              "name": "data",
+              "type": "VersionedNoteCreateInput!",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
+        },
+        {
           "name": "deleteComment",
           "type": "Comment!",
           "default": null,
@@ -3646,6 +3660,26 @@
             {
               "name": "where",
               "type": "UserWhereUniqueInput!",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
+        },
+        {
+          "name": "deleteVersionedNote",
+          "type": "VersionedNote!",
+          "default": null,
+          "arguments": [
+            {
+              "name": "expectedVersion",
+              "type": "BigInt!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "where",
+              "type": "VersionedNoteWhereUniqueInput!",
               "default": null,
               "directives": []
             }
@@ -3873,6 +3907,32 @@
           "directives": []
         },
         {
+          "name": "updateVersionedNote",
+          "type": "VersionedNote!",
+          "default": null,
+          "arguments": [
+            {
+              "name": "data",
+              "type": "VersionedNoteUpdateInput!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "expectedVersion",
+              "type": "BigInt!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "where",
+              "type": "VersionedNoteWhereUniqueInput!",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
+        },
+        {
           "name": "upsertComment",
           "type": "Comment!",
           "default": null,
@@ -3996,6 +4056,38 @@
             {
               "name": "where",
               "type": "UserWhereUniqueInput!",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
+        },
+        {
+          "name": "upsertVersionedNote",
+          "type": "VersionedNote!",
+          "default": null,
+          "arguments": [
+            {
+              "name": "create",
+              "type": "VersionedNoteCreateInput!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "expectation",
+              "type": "VersionedNoteConcurrencyExpectationInput!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "update",
+              "type": "VersionedNoteUpdateInput!",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "where",
+              "type": "VersionedNoteWhereUniqueInput!",
               "default": null,
               "directives": []
             }
@@ -10820,6 +10912,64 @@
             }
           ],
           "directives": []
+        },
+        {
+          "name": "versionedNote",
+          "type": "VersionedNote",
+          "default": null,
+          "arguments": [
+            {
+              "name": "where",
+              "type": "VersionedNoteWhereUniqueInput!",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
+        },
+        {
+          "name": "versionedNotes",
+          "type": "[VersionedNote!]!",
+          "default": null,
+          "arguments": [
+            {
+              "name": "cursor",
+              "type": "VersionedNoteWhereUniqueInput",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "distinct",
+              "type": "[VersionedNoteScalarField!]",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "orderBy",
+              "type": "[VersionedNoteOrderByInput!]",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "skip",
+              "type": "Int",
+              "default": null,
+              "directives": []
+            },
+            {
+              "name": "take",
+              "type": "Int",
+              "default": "50",
+              "directives": []
+            },
+            {
+              "name": "where",
+              "type": "VersionedNoteWhereInput",
+              "default": null,
+              "directives": []
+            }
+          ],
+          "directives": []
         }
       ],
       "directives": []
@@ -12915,6 +13065,231 @@
           "arguments": [],
           "directives": []
         },
+        {
+          "name": "ID",
+          "type": "UUID",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": [
+        "oneOf()"
+      ]
+    },
+    {
+      "name": "VersionedNote",
+      "kind": "OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "body",
+          "type": "String",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "id",
+          "type": "UUID",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "version",
+          "type": "BigInt",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteConcurrencyExpectationInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "absent",
+          "type": "Boolean",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "version",
+          "type": "BigInt",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteCreateInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "body",
+          "type": "String!",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "id",
+          "type": "UUID",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteOrderByInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "body",
+          "type": "SortOrder",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "id",
+          "type": "SortOrder",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "version",
+          "type": "SortOrder",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteScalarField",
+      "kind": "ENUM",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [
+        "body",
+        "id",
+        "version"
+      ],
+      "fields": [],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteUpdateInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "body",
+          "type": "StringUpdateOperationsInput",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "id",
+          "type": "UUIDUpdateOperationsInput",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteWhereInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
+        {
+          "name": "AND",
+          "type": "[VersionedNoteWhereInput!]",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "NOT",
+          "type": "[VersionedNoteWhereInput!]",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "OR",
+          "type": "[VersionedNoteWhereInput!]",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "all",
+          "type": "Boolean",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "body",
+          "type": "StringFilter",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "id",
+          "type": "UUIDFilter",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        },
+        {
+          "name": "version",
+          "type": "BigIntFilter",
+          "default": null,
+          "arguments": [],
+          "directives": []
+        }
+      ],
+      "directives": []
+    },
+    {
+      "name": "VersionedNoteWhereUniqueInput",
+      "kind": "INPUT_OBJECT",
+      "interfaces": null,
+      "types": null,
+      "enumValues": [],
+      "fields": [
         {
           "name": "ID",
           "type": "UUID",

@@ -14,9 +14,14 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options physical.LowerOptions) (physical.PhysicalSchema, error) {
+	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
+		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: %w", err)
+	}
 	namespace := options.Namespace
 	if namespace == "" {
 		namespace = "main"
@@ -27,10 +32,6 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 	if !containsProvider(model.Providers, ir.SQLite) {
 		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: logical schema %s does not target SQLite", model.Schema.ID)
 	}
-	if len(model.Extensions) != 0 {
-		return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: provider extensions require a registered SQLite lowering implementation; extension=%s owner=%s", model.Extensions[0].ID, model.Extensions[0].Owner)
-	}
-
 	lowering := lowerState{
 		model:     model,
 		manifest:  provider.Manifest(),
@@ -80,6 +81,22 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 			return physical.PhysicalSchema{}, err
 		}
 	}
+	for _, extension := range model.Extensions {
+		if extension.Provider != ir.SQLite {
+			continue
+		}
+		if extension.Kind == semanticcontract.SpaceKind {
+			continue
+		}
+		if extension.Kind != semanticcontract.IndexKind {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
+		}
+		lowered, err := semanticstorage.Lower(extension)
+		if err != nil {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower extension %s: %w", extension.ID, err)
+		}
+		schema.Extensions = append(schema.Extensions, lowered)
+	}
 	return physical.Normalize(schema)
 }
 
@@ -94,6 +111,10 @@ type lowerState struct {
 
 func (state *lowerState) lowerTable(model ir.ModelDeclIR) (physical.PhysicalTable, error) {
 	table := physical.PhysicalTable{ID: model.ID, Name: physical.PhysicalName(model.Table.PhysicalName)}
+	if model.OptimisticConcurrency != nil {
+		field := *model.OptimisticConcurrency
+		table.OptimisticConcurrency = &field
+	}
 	fieldMap := make(map[ir.FieldID]physical.PhysicalColumn)
 	fields := append([]ir.FieldIR(nil), model.Fields...)
 	sort.SliceStable(fields, func(i, j int) bool {

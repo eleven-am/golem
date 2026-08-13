@@ -5,7 +5,10 @@ import (
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/concurrencyclaim"
+	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -83,6 +86,10 @@ func executeCallerFrozenMutation[P, A, M any](ctx context.Context, caller *Calle
 	if request.ModelID() != model {
 		return golem.RuntimeMutationResult{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "mutation", model, golem.FieldID{}, "mutation request belongs to another model", nil)
 	}
+	versioned, err := frozenMutationConcurrencyMode(caller.app.registry, model, request)
+	if err != nil {
+		return golem.RuntimeMutationResult{}, err
+	}
 	var projection scalarMutationProjection
 	if frozen, present := request.Projection(); present {
 		var err error
@@ -110,6 +117,17 @@ func executeCallerFrozenMutation[P, A, M any](ctx context.Context, caller *Calle
 		if !targetOK || !inputOK {
 			return golem.RuntimeMutationResult{}, frozenMutationShape(model)
 		}
+		if versioned {
+			expected, _ := request.ExistingVersion()
+			claim, claimErr := freezeScalarConcurrencyClaim(expected)
+			if claimErr != nil {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Update, model, claimErr)
+			}
+			if len(input.Relations()) != 0 {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Update, model, fmt.Errorf("versioned nested mutation requires an expectation for every written row"))
+			}
+			return rowResult(executeCallerVersionedRootScalar(ctx, caller, descriptor, mutationir.Update, &input, target, claim, projection, mutationir.Update))
+		}
 		return rowResult(executeCallerRootScalar(ctx, caller, descriptor, mutationir.Update, &input, &target, projection))
 	case golem.RuntimeMutationUpsert:
 		target, targetOK := request.Target()
@@ -118,17 +136,91 @@ func executeCallerFrozenMutation[P, A, M any](ctx context.Context, caller *Calle
 		if !targetOK || !createOK || !updateOK {
 			return golem.RuntimeMutationResult{}, frozenMutationShape(model)
 		}
+		if versioned {
+			if len(create.Relations()) != 0 || len(update.Relations()) != 0 {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Upsert, model, fmt.Errorf("versioned nested upsert requires an expectation for every written row"))
+			}
+			if _, bindErr := mutationbind.CreateInput(create, caller.app.registry); bindErr != nil {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Upsert, model, bindErr)
+			}
+			if _, bindErr := mutationbind.UpdateInput(update, caller.app.registry); bindErr != nil {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Upsert, model, bindErr)
+			}
+			expected, _ := request.ConcurrencyExpectation()
+			claim := concurrencyclaim.ConcurrencyExpectation(expected)
+			if concurrencyclaim.IsAbsent(claim) {
+				return rowResult(executeCallerAbsentVersionedUpsert(ctx, caller, descriptor, target, create, update, projection))
+			}
+			return rowResult(executeCallerExistingVersionedUpsert(ctx, caller, descriptor, target, update, existingExpectationConcurrencyClaim{expectation: claim}, projection))
+		}
 		return rowResult(executeCallerRootUpsert(ctx, caller, descriptor, target, create, update, projection))
 	case golem.RuntimeMutationDelete:
 		target, ok := request.Target()
 		if !ok {
 			return golem.RuntimeMutationResult{}, frozenMutationShape(model)
 		}
+		if versioned {
+			expected, _ := request.ExistingVersion()
+			claim, claimErr := freezeScalarConcurrencyClaim(expected)
+			if claimErr != nil {
+				return golem.RuntimeMutationResult{}, publicMutationPreparationError(mutationir.Delete, model, claimErr)
+			}
+			return rowResult(executeCallerVersionedRootScalar(ctx, caller, descriptor, mutationir.Delete, nil, target, claim, projection, mutationir.Delete))
+		}
 		return rowResult(executeCallerRootScalar(ctx, caller, descriptor, mutationir.Delete, nil, &target, projection))
 	case golem.RuntimeMutationUpdateMany, golem.RuntimeMutationDeleteMany:
 		return executeCallerFrozenBatchMutation(ctx, caller, model, request)
 	default:
 		return golem.RuntimeMutationResult{}, frozenMutationShape(model)
+	}
+}
+
+func frozenMutationConcurrencyMode(registry *policyschema.Registry, model golem.ModelID, request golem.RuntimeMutationRequest) (bool, error) {
+	// The concrete registry remains the sole owner of whether the model is
+	// versioned. The frozen request may retain a closed claim, but that claim is
+	// never sufficient to manufacture authority for another model/operation.
+	if registry == nil {
+		return false, golem.RuntimeOperationError(golem.CodeBadUserInput, "mutation", model, golem.FieldID{}, "mutation request is invalid", fmt.Errorf("mutation registry is absent"))
+	}
+	fact, ok := registry.Model(model)
+	versioned := false
+	if ok {
+		_, versioned = fact.OptimisticConcurrency()
+	}
+	_, hasExisting := request.ExistingVersion()
+	_, hasExpectation := request.ConcurrencyExpectation()
+	operation := runtimeMutationOperationName(request.Operation())
+	if !versioned {
+		if hasExisting || hasExpectation {
+			return false, golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, golem.FieldID{}, "mutation request is invalid", fmt.Errorf("non-versioned mutation carried a concurrency expectation"))
+		}
+		return false, nil
+	}
+	valid := request.Operation() == golem.RuntimeMutationCreate && !hasExisting && !hasExpectation ||
+		(request.Operation() == golem.RuntimeMutationUpdate || request.Operation() == golem.RuntimeMutationDelete) && hasExisting && !hasExpectation ||
+		request.Operation() == golem.RuntimeMutationUpsert && !hasExisting && hasExpectation
+	if !valid {
+		return true, golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, golem.FieldID{}, "mutation request is invalid", fmt.Errorf("optimistic-concurrency request has no exact operation claim"))
+	}
+	return true, nil
+}
+
+func runtimeMutationOperationName(operation golem.RuntimeMutationOperation) string {
+	switch operation {
+	case golem.RuntimeMutationCreate:
+		return "create"
+	case golem.RuntimeMutationUpdate:
+		return "update"
+	case golem.RuntimeMutationUpsert:
+		return "upsert"
+	case golem.RuntimeMutationDelete:
+		return "delete"
+	case golem.RuntimeMutationUpdateMany:
+		return "updateMany"
+	case golem.RuntimeMutationDeleteMany:
+		return "deleteMany"
+	default:
+		return "mutation"
 	}
 }
 

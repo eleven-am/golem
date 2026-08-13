@@ -28,10 +28,7 @@ func main() {
 	ctx := context.Background()
 	public, err := compatibility.BuildAPIInventory(ctx, compatibility.APIRequest{
 		Directory: root,
-		Patterns: []string{
-			"./events", "./golem", "./graphql", "./observe", "./provider",
-			"./provider/postgresql", "./provider/sqlite", "./runtime",
-		},
+		Patterns:  compatibility.PublicGoAPIPatterns(),
 	})
 	if err != nil {
 		fail("public-api-build")

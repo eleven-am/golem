@@ -1,14 +1,7 @@
 # P2-B public authoring ABI
 
-Status: **controlling P2-B contract; the complete portable authoring surface and
-generated handle families are implemented and runtime agreement is active for
-the proved SQLite/PostgreSQL inventory recorded in [`STATUS.md`](./STATUS.md)**
-
-Authority: [`../BIBLE.md`](../BIBLE.md), especially sections 0, 6–8,
-20, and 21. The detailed operator and policy-resolution chapters apply after
-the resolutions recorded here. [`OPERATOR-ABI.md`](./OPERATOR-ABI.md) remains
-the accepted P2-A baseline; this document records the complete authoring cells
-implemented after that baseline.
+Status: **controlling contract; the complete portable authoring surface and
+generated handle families are implemented for SQLite and PostgreSQL**
 
 ## 1. Scope and fixed outcomes
 
@@ -346,7 +339,7 @@ closed agreement inventory before accepting a policy.
 
 The detailed TypeScript evidence records PostgreSQL string-segment arrays and
 SQLite JSONPath strings. That syntax reflects provider client inputs, not the
-Bible's provider-neutral condition-tree requirement. The Go ABI resolves the
+provider-neutral public condition-tree requirement. The Go ABI resolves the
 difference once, before either renderer, with typed segments:
 
 ```go
@@ -690,30 +683,16 @@ Generated code must be regenerated because relation initializers and eligible
 field handle types changed. `ListField`, `ModeTextField`, and `ModeJSONField` are
 now emitted by the current template ABI.
 
-## 11. Contradictions and required resolutions
+## 11. Compatibility decisions
 
-The following source contradictions were found. The proposed resolution is stated
-where authority is sufficient; genuinely unresolved items remain explicit.
+- SQLite and PostgreSQL are supported equally by the portable operator surface.
+- JSON paths use typed segments; provider spellings remain renderer internals.
+- Null checks use explicit typed presence methods rather than null operands.
+- Enums remain equality-only and do not inherit string operations.
+- Missing relation dependencies remain distinct from empty relations and fail
+  closed.
 
-### 11.1 Resolved by the Bible's authority
-
-- `01-operators.md` says the Go port need not ship SQLite. Bible sections 2, 4,
-  20, and 21 require SQLite and PostgreSQL equally. This proposal uses the Bible.
-- The detailed JSON chapter exposes provider input path spellings. Bible section
-  7 requires a provider-neutral condition tree. This proposal uses typed segments
-  and leaves provider spelling to renderers.
-- The detailed scalar table accepts null operands for ordering/text and gives them
-  constant-false meaning. Bible section 7.3 permits one documented null rule and
-  the accepted P2-A Go contract chose explicit presence methods. This proposal
-  preserves the typed Go rule and does not import TypeScript null operands.
-- Historical enum-to-text behavior permits lexical and text operations. The
-  accepted typed baseline intentionally makes enums equality-only. This proposal
-  does not reopen that TypeScript leak.
-- The detailed evaluator treats an unloaded to-many relation as empty. The P2
-  plan requires missing dependency data to be distinct and fail closed. The P2
-  plan/Bible security invariant wins.
-
-### 11.2 Resolved during implementation
+### 11.1 Resolved during implementation
 
 1. **Portable JSON implementation.** Exact JSON equality, ordering, typed paths,
    null sentinels, string operations, and array operations now have one Go

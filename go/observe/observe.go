@@ -32,6 +32,8 @@ const (
 	KindSubscription Kind = "subscription"
 	KindCDC          Kind = "cdc"
 	KindShutdown     Kind = "shutdown"
+	KindSemantic     Kind = "semantic"
+	KindQueryPlan    Kind = "query_plan"
 )
 
 const (
@@ -150,6 +152,10 @@ const (
 	OperationMigrationInspect          Operation = "migration.inspect"
 	OperationShutdownHTTP              Operation = "shutdown.http"
 	OperationShutdownPublisher         Operation = "shutdown.publisher"
+	OperationSemanticRefresh           Operation = "semantic.refresh"
+	OperationSemanticProvider          Operation = "semantic.provider"
+	OperationSemanticRank              Operation = "semantic.rank"
+	OperationQueryPlanExplain          Operation = "query_plan.explain"
 )
 
 // Observation is immutable and can only be produced through Golem's validated
@@ -217,7 +223,7 @@ func validKind(value Kind) bool {
 	switch value {
 	case KindRuntime, KindRead, KindMutation, KindGraphQL, KindAnalytics, KindScopedRead,
 		KindTransaction, KindHook, KindRelationLoad, KindMigration, KindEvent,
-		KindSubscription, KindCDC, KindShutdown:
+		KindSubscription, KindCDC, KindShutdown, KindSemantic, KindQueryPlan:
 		return true
 	default:
 		return false
@@ -279,7 +285,8 @@ func validOperation(value Operation) bool {
 		OperationSubscriptionEvaluation, OperationSubscriptionDelivery, OperationSubscriptionSuppression,
 		OperationSubscriptionOverflow, OperationSubscriptionCancellation, OperationCDCReceive,
 		OperationCDCAcknowledge, OperationMigrationInspect, OperationShutdownHTTP,
-		OperationShutdownPublisher:
+		OperationShutdownPublisher, OperationSemanticRefresh, OperationSemanticProvider,
+		OperationSemanticRank, OperationQueryPlanExplain:
 		return true
 	default:
 		return false

@@ -9,7 +9,44 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
+
+func TestSemanticIndexRendersPgvectorHNSWStorage(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := semanticcontract.Encode(semanticcontract.Index{
+		Name: "related", Space: "content", Dimensions: 384,
+		Fields: []string{id(29)}, Metric: "cosine",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{
+		ID: ir.ExtensionID(id(73)), Provider: ir.PostgreSQL, Version: semanticcontract.Version,
+		Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload,
+	})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "social"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	script, err := provider.RenderInitial(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_semantic_" + id(73)
+	for _, fragment := range []string{
+		"CREATE EXTENSION IF NOT EXISTS vector",
+		`CREATE TABLE "social"."` + base + `_state"`,
+		`CREATE TABLE "social"."` + base + `_vec"`,
+		`"embedding" vector(384) NOT NULL`,
+		`CREATE INDEX "` + base + `_hnsw" ON "social"."` + base + `_vec" USING hnsw ("embedding" vector_cosine_ops)`,
+	} {
+		if !strings.Contains(script.SQL(), fragment) {
+			t.Fatalf("PostgreSQL semantic DDL missing %q:\n%s", fragment, script.SQL())
+		}
+	}
+}
 
 func TestLowerPreservesPortablePostgreSQLSemantics(t *testing.T) {
 	provider := New()
@@ -102,6 +139,23 @@ func TestRenderInitialFullyQualifiesAndQuotesEveryObject(t *testing.T) {
 	}
 }
 
+func TestPublicPostgreSQLRenderInitialRefusesHistoricalV1(t *testing.T) {
+	schema, err := New().Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "social"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema.Version, schema.CanonicalVersion = 1, 1
+	if _, err := New().RenderInitial(schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public RenderInitial accepted historical v1: %v", err)
+	}
+	if _, err := New().Introspect(context.Background(), nil, schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public Introspect did not refuse historical v1 before database work: %v", err)
+	}
+	if err := New().ApplyInitial(context.Background(), nil, schema); err == nil || !strings.Contains(err.Error(), "got 1, want") {
+		t.Fatalf("public ApplyInitial did not refuse historical v1 before database work: %v", err)
+	}
+}
+
 func hasPostgreSQLSystemObject(system physical.SystemSchema, kind physical.SystemObjectKind) bool {
 	for _, object := range system.Objects {
 		if object.Kind == kind {
@@ -129,6 +183,36 @@ func TestCatalogExpressionParserNormalizesPostgreSQLOutput(t *testing.T) {
 	}
 	if expression.Operands[0].Symbol == nil || expression.Operands[0].Symbol.Identity != "golem.postgresql.function.jsonb-typeof.v1" {
 		t.Fatalf("parsed json check = %#v", expression)
+	}
+}
+
+func TestCatalogGeneratedExpressionNormalizesOnlyRegisteredVarcharTextCoercion(t *testing.T) {
+	field := ir.FieldID("10000000000000000000000000000001")
+	storage := physical.StorageType{Kind: physical.StoragePostgreSQLVarchar, Length: 160}
+	table := physical.PhysicalTable{ID: ir.ModelID("00000000000000000000000000000001"), Name: "posts", Columns: []physical.PhysicalColumn{{ID: field, Name: "title", Storage: storage, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}}}
+
+	raw, err := parseCatalogExpression(`lower((title)::text)`, table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(raw.Operands) != 1 || raw.Operands[0].Kind != physical.ExpressionCast || raw.Operands[0].Symbol == nil || raw.Operands[0].Symbol.Identity != catalogCastVarcharToTextV1 {
+		t.Fatalf("raw registered cast was not preserved: %#v", raw)
+	}
+	reviewed := physical.Expression{Kind: physical.ExpressionFunction, Type: storage, Symbol: &physical.SemanticSymbol{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Version: 1, Provider: ir.ProviderScopePortable}, Operands: []physical.Expression{{Kind: physical.ExpressionColumn, Type: storage, Column: &field, Operands: []physical.Expression{}}}}
+	normalized, err := parseCatalogGeneratedExpression(`lower((title)::text)`, table, reviewed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.Type != storage || len(normalized.Operands) != 1 || normalized.Operands[0].Kind != physical.ExpressionColumn || normalized.Operands[0].Type != storage {
+		t.Fatalf("generated coercion did not reconstruct reviewed expression: %#v", normalized)
+	}
+	if _, err := parseCatalogGeneratedExpression(`lower((title)::uuid)`, table, reviewed); err == nil || !strings.Contains(err.Error(), "unsupported catalog cast uuid") {
+		t.Fatalf("unregistered catalog cast error = %v", err)
+	}
+	otherReviewed := reviewed
+	otherReviewed.Type = physical.StorageType{Kind: physical.StoragePostgreSQLVarchar, Length: 159}
+	if _, err := parseCatalogGeneratedExpression(`lower((title)::text)`, table, otherReviewed); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched target coercion error = %v", err)
 	}
 }
 
@@ -386,6 +470,52 @@ func TestLiveBlankSchemaRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLiveOptimisticConcurrencyIntrospectionRequiresExactCatalogProof(t *testing.T) {
+	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("GOLEM_TEST_POSTGRES_DSN is not set")
+	}
+	provider := New()
+	database, _, err := provider.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	const namespace = "golem_oc_introspection_live"
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_oc_introspection_live" CASCADE`)
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_oc_introspection_live" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+
+	model := fixtureModel()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalarField(field, "Version", 11, "version", ir.LogicalTypeIR{Kind: ir.TypeInt64}, false))
+	model.Models[1].OptimisticConcurrency = &field
+	expected, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ApplyInitial(context.Background(), database, expected); err != nil {
+		t.Fatalf("post-apply optimistic-concurrency introspection: %v", err)
+	}
+	actual, err := provider.Introspect(context.Background(), database, expected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedFingerprint, _ := physical.PhysicalFingerprint(expected)
+	actualFingerprint, _ := physical.PhysicalFingerprint(actual)
+	if actualFingerprint != expectedFingerprint {
+		t.Fatalf("live reconciled fingerprint=%s want=%s", actualFingerprint, expectedFingerprint)
+	}
+
+	if _, err := database.Exec(`ALTER TABLE "golem_oc_introspection_live"."posts" ALTER COLUMN "version" TYPE integer USING "version"::integer`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Introspect(context.Background(), database, expected); err == nil || !strings.Contains(err.Error(), "optimistic concurrency column") {
+		t.Fatalf("drifted live concurrency column error=%v", err)
+	}
+}
+
 func fixtureModel() ir.ModelIR {
 	users, posts := ir.ModelID(id(1)), ir.ModelID(id(2))
 	userID, postID, authorID := ir.FieldID(id(11)), ir.FieldID(id(21)), ir.FieldID(id(22))
@@ -401,6 +531,111 @@ func fixtureModel() ir.ModelIR {
 			scalarField(authorID, "AuthorID", 2, "author_id", ir.LogicalTypeIR{Kind: ir.TypeUUID}, false), scalarField(ir.FieldID(id(23)), "Amount", 3, "amount", ir.LogicalTypeIR{Kind: ir.TypeDecimal, Precision: &precision, Scale: &scale}, false), scalarField(ir.FieldID(id(24)), "Day", 4, "day", ir.LogicalTypeIR{Kind: ir.TypeDate}, false), scalarField(ir.FieldID(id(25)), "Clock", 5, "clock", ir.LogicalTypeIR{Kind: ir.TypeTime, Precision: &timePrecision}, false), scalarField(ir.FieldID(id(26)), "CreatedAt", 6, "created_at", ir.LogicalTypeIR{Kind: ir.TypeDateTime, Precision: &timePrecision}, false), scalarField(ir.FieldID(id(27)), "Metadata", 7, "metadata", ir.LogicalTypeIR{Kind: ir.TypeJSON}, true), scalarField(ir.FieldID(id(28)), "Tags", 8, "tags", ir.LogicalTypeIR{Kind: ir.TypeScalarList, Element: &ir.LogicalTypeIR{Kind: ir.TypeString}, Capability: &listCapability}, false), scalarField(ir.FieldID(id(29)), "Title", 9, "title", ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &max}, false), scalarField(ir.FieldID(id(30)), "Status", 10, "status", ir.LogicalTypeIR{Kind: ir.TypeEnum, EnumID: &statusID}, false)}, PrimaryKey: &ir.KeyIR{ID: ir.KeyID(id(32)), Kind: ir.KeyPrimary, PhysicalName: "pk_posts", Fields: []ir.FieldID{postID}}, Indexes: []ir.IndexIR{{ID: ir.IndexID(id(50)), ModelID: posts, PhysicalName: "idx_posts_created", Method: ir.IndexBTree, Provider: ir.ProviderScopePortable, Keys: []ir.IndexKeyIR{{Column: fieldPointer(ir.FieldID(id(26))), Direction: ir.SortAsc, Nulls: ir.NullsDefault}}}}},
 	}, Relations: []ir.RelationIR{{ID: ir.RelationID(id(80)), SourceModel: posts, TargetModel: users, SourceField: ir.FieldID(id(99)), Cardinality: ir.RelationOne, LocalFields: []ir.FieldID{authorID}, RemoteFields: []ir.FieldID{userID}, ForeignKey: &ir.ForeignKeyIR{ID: ir.ForeignKeyID(id(40)), PhysicalName: "fk_posts_author", OnUpdate: ir.ActionNoAction, OnDelete: ir.ActionCascade, Match: ir.MatchSimple, Deferrable: ir.NotDeferrable}}}}
 }
+
+func TestLowerProjectsOnlyDeclaredOptimisticConcurrencyField(t *testing.T) {
+	model := fixtureModel()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalarField(field, "Version", 11, "version", ir.LogicalTypeIR{Kind: ir.TypeInt64}, false))
+	model.Models[1].OptimisticConcurrency = &field
+	schema, err := New().Lower(context.Background(), model, physical.LowerOptions{Namespace: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := physicalTable(t, schema, "posts")
+	if table.OptimisticConcurrency == nil || *table.OptimisticConcurrency != field {
+		t.Fatalf("physical concurrency = %v; want %s", table.OptimisticConcurrency, field)
+	}
+	column, ok := postgresqlColumn(table, field)
+	if !ok || column.Storage != (physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}) || column.Nullable || column.Default.Kind != physical.DefaultNone {
+		t.Fatalf("concurrency column = %#v, %v", column, ok)
+	}
+	model.Models[1].OptimisticConcurrency = nil
+	schema, err = New().Lower(context.Background(), model, physical.LowerOptions{Namespace: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table := physicalTable(t, schema, "posts"); table.OptimisticConcurrency != nil {
+		t.Fatalf("undeclared version-like field was inferred: %v", table.OptimisticConcurrency)
+	}
+}
+
+func TestLowerRejectsIneligibleLogicalOptimisticConcurrencyField(t *testing.T) {
+	model := fixtureModel()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalarField(field, "Version", 11, "version", ir.LogicalTypeIR{Kind: ir.TypeInt32}, false))
+	model.Models[1].OptimisticConcurrency = &field
+	if _, err := New().Lower(context.Background(), model, physical.LowerOptions{Namespace: "public"}); err == nil || !strings.Contains(err.Error(), "logical type int64") {
+		t.Fatalf("PostgreSQL lower accepted logical int32 concurrency field: %v", err)
+	}
+}
+
+func TestPostgreSQLIntrospectionReconcilesConcurrencyOnlyAfterExactCatalogTableProof(t *testing.T) {
+	model := fixtureModel()
+	field := ir.FieldID(id(60))
+	model.Models[1].Fields = append(model.Models[1].Fields, scalarField(field, "Version", 11, "version", ir.LogicalTypeIR{Kind: ir.TypeInt64}, false))
+	model.Models[1].OptimisticConcurrency = &field
+	expected, err := New().Lower(context.Background(), model, physical.LowerOptions{Namespace: "public"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	withoutDeclaration := func(t *testing.T) physical.PhysicalSchema {
+		t.Helper()
+		actual, err := physical.Normalize(expected)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := range actual.Tables {
+			actual.Tables[index].OptimisticConcurrency = nil
+		}
+		return actual
+	}
+
+	actual := withoutDeclaration(t)
+	reconciled, err := reconcileOptimisticConcurrency(expected, actual)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if table := physicalTable(t, reconciled, "posts"); table.OptimisticConcurrency == nil || *table.OptimisticConcurrency != field {
+		t.Fatalf("reconciled concurrency = %v; want %s", table.OptimisticConcurrency, field)
+	}
+	expectedFingerprint, _ := physical.PhysicalFingerprint(expected)
+	actualFingerprint, _ := physical.PhysicalFingerprint(reconciled)
+	if actualFingerprint != expectedFingerprint {
+		t.Fatalf("reconciled fingerprint=%s want=%s", actualFingerprint, expectedFingerprint)
+	}
+
+	for _, test := range []struct {
+		name string
+		edit func(*physical.PhysicalTable)
+		want string
+	}{
+		{name: "column storage", edit: func(table *physical.PhysicalTable) {
+			column, _ := postgresqlColumn(*table, field)
+			for index := range table.Columns {
+				if table.Columns[index].ID == column.ID {
+					table.Columns[index].Storage = physical.StorageType{Kind: physical.StoragePostgreSQLInteger}
+				}
+			}
+		}, want: "column"},
+		{name: "table constraint", edit: func(table *physical.PhysicalTable) {
+			table.Indexes = nil
+		}, want: "table"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			forged := withoutDeclaration(t)
+			for index := range forged.Tables {
+				if forged.Tables[index].Name == "posts" {
+					test.edit(&forged.Tables[index])
+				}
+			}
+			if _, err := reconcileOptimisticConcurrency(expected, forged); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("forged catalog proof error=%v", err)
+			}
+		})
+	}
+}
+
 func scalarField(identifier ir.FieldID, name string, ordinal uint32, column ir.SQLIdentifier, kind ir.LogicalTypeIR, nullable bool) ir.FieldIR {
 	return ir.FieldIR{ID: identifier, GoName: name, LogicalName: name, DeclarationOrder: ordinal, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: column, Type: kind, Nullable: nullable}}
 }

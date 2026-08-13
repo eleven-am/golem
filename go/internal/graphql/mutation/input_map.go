@@ -19,18 +19,34 @@ func (binder *MapBinder) LowerValues(operation RootOperation, model compilerir.M
 	state := mapInputState{binder: binder}
 	root := MapRootInput{Operation: operation, Model: model, Selection: append([]readir.Selection(nil), selection...)}
 	required := map[string]bool{}
+	_, versioned := binder.versioned[model]
 	switch operation {
 	case Create:
 		required["data"] = true
 	case Update:
 		required["where"], required["data"] = true, true
+		if versioned {
+			required["expectedVersion"] = true
+		}
 	case Upsert:
 		required["where"], required["create"], required["update"] = true, true, true
+		if versioned {
+			required["expectation"] = true
+		}
 	case Delete:
 		required["where"] = true
+		if versioned {
+			required["expectedVersion"] = true
+		}
 	case UpdateMany:
+		if versioned {
+			return Request{}, fmt.Errorf("P5_MUTATION_BATCH: optimistic-concurrency model does not expose updateMany")
+		}
 		required["where"], required["data"] = true, true
 	case DeleteMany:
+		if versioned {
+			return Request{}, fmt.Errorf("P5_MUTATION_BATCH: optimistic-concurrency model does not expose deleteMany")
+		}
 		required["where"] = true
 	default:
 		return Request{}, fmt.Errorf("P5_MUTATION_MAP: unsupported root operation %d", operation)
@@ -46,6 +62,23 @@ func (binder *MapBinder) LowerValues(operation RootOperation, model compilerir.M
 		}
 	}
 	root.Where = arguments["where"]
+	if versioned {
+		switch operation {
+		case Update, Delete:
+			value, ok := arguments["expectedVersion"].(int64)
+			if !ok || value <= 0 {
+				return Request{}, fmt.Errorf("P5_MUTATION_EXPECTATION: expectedVersion requires a positive BigInt")
+			}
+			claim := golem.ExpectVersion(value)
+			root.ExistingVersion = &claim
+		case Upsert:
+			claim, expectationErr := concurrencyExpectation(arguments["expectation"])
+			if expectationErr != nil {
+				return Request{}, expectationErr
+			}
+			root.ConcurrencyExpectation = &claim
+		}
+	}
 	var err error
 	switch operation {
 	case Create:
@@ -64,6 +97,28 @@ func (binder *MapBinder) LowerValues(operation RootOperation, model compilerir.M
 		return Request{}, err
 	}
 	return binder.Lower(root)
+}
+
+func concurrencyExpectation(raw any) (golem.ConcurrencyExpectation, error) {
+	object, ok := raw.(map[string]any)
+	if !ok || len(object) != 1 {
+		return golem.ConcurrencyExpectation{}, fmt.Errorf("P5_MUTATION_EXPECTATION: expectation requires exactly one member")
+	}
+	if version, present := object["version"]; present {
+		value, valid := version.(int64)
+		if !valid || value <= 0 {
+			return golem.ConcurrencyExpectation{}, fmt.Errorf("P5_MUTATION_EXPECTATION: version requires a positive BigInt")
+		}
+		return golem.ExpectExisting(value), nil
+	}
+	if absent, present := object["absent"]; present {
+		value, valid := absent.(bool)
+		if !valid || !value {
+			return golem.ConcurrencyExpectation{}, fmt.Errorf("P5_MUTATION_EXPECTATION: absent must be true")
+		}
+		return golem.ExpectAbsent(), nil
+	}
+	return golem.ConcurrencyExpectation{}, fmt.Errorf("P5_MUTATION_EXPECTATION: expectation member is unknown")
 }
 
 func (binder *MapBinder) CustomInput(kind InputKind, model compilerir.ModelID, raw any) (golem.FrozenMutationInput, error) {
@@ -113,6 +168,9 @@ func (state *mapInputState) input(modelID compilerir.ModelID, kind InputKind, ra
 		if reason := mutationFieldRefusal(field, fieldContract, kind); reason != "" {
 			return nil, fmt.Errorf("P5_MUTATION_FIELD: %s.%s %s", contract.GraphQLName, name, reason)
 		}
+		if concurrency, enabled := state.binder.versioned[modelID]; enabled && field.ID == concurrency {
+			return nil, fmt.Errorf("P5_MUTATION_FIELD: %s.%s is runtime-owned", contract.GraphQLName, name)
+		}
 		if field.Scalar != nil {
 			scalar, err := state.scalar(modelID, field, kind, object[name])
 			if err != nil {
@@ -129,6 +187,11 @@ func (state *mapInputState) input(modelID compilerir.ModelID, kind InputKind, ra
 			return nil, fmt.Errorf("P5_MUTATION_RELATION: %s.%s: %w", contract.GraphQLName, name, err)
 		}
 		result.Relations = append(result.Relations, relations...)
+	}
+	if kind != CreateInput {
+		if _, versioned := state.binder.versioned[modelID]; versioned && len(result.Relations) != 0 {
+			return nil, fmt.Errorf("P5_MUTATION_RELATION: versioned update cannot carry relation writes without per-row expectations")
+		}
 	}
 	if kind != CreateInput && len(result.Scalars) == 0 && len(result.Relations) == 0 {
 		return nil, fmt.Errorf("P5_MUTATION_INPUT: update input has no operations")
@@ -233,6 +296,12 @@ func (state *mapInputState) relation(parent compilerir.ModelDeclIR, field compil
 		}
 		if kind == CreateInput && item.action > golem.MutationRelationConnectOrCreate {
 			return nil, fmt.Errorf("nested operation %s is not legal during create", item.name)
+		}
+		_, targetVersioned := state.binder.versioned[targetID]
+		writesExistingTarget := item.action == golem.MutationRelationUpdate || item.action == golem.MutationRelationUpdateMany || item.action == golem.MutationRelationUpsert || item.action == golem.MutationRelationDelete || item.action == golem.MutationRelationDeleteMany
+		writesVersionedInverseOwner := field.Relation.Role == compilerir.RelationInverse && (item.action == golem.MutationRelationConnect || item.action == golem.MutationRelationConnectOrCreate || item.action == golem.MutationRelationDisconnect || item.action == golem.MutationRelationSet)
+		if targetVersioned && (writesExistingTarget || writesVersionedInverseOwner) {
+			return nil, fmt.Errorf("nested operation %s requires an expectation for versioned model %s", item.name, targetID)
 		}
 		if !many && (item.action == golem.MutationRelationCreateMany || item.action == golem.MutationRelationSet || item.action == golem.MutationRelationUpdateMany || item.action == golem.MutationRelationDeleteMany) {
 			return nil, fmt.Errorf("nested operation %s is not legal on a to-one relation", item.name)

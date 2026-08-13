@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -153,6 +154,23 @@ func TestBoundedBatchSQLIsDeterministicPortableAndPerParent(t *testing.T) {
 		second, renderErr := RenderBatch(child, endpoint, keys, fixture.Registry, provider, proof)
 		if renderErr != nil || first.SQL() != second.SQL() || fmt.Sprint(first.Args()) != fmt.Sprint(second.Args()) {
 			t.Fatalf("provider %d batch SQL is nondeterministic: %v", provider, renderErr)
+		}
+		if !reflect.DeepEqual(first.PlanMap().AliasFacts(), second.PlanMap().AliasFacts()) {
+			t.Fatalf("provider %d batch plan map is nondeterministic", provider)
+		}
+		batchRoot := first.PlanMap().MatchingAliasFacts("golem_br0")
+		if len(batchRoot) != 1 {
+			t.Fatalf("provider %d batch root facts=%#v", provider, batchRoot)
+		}
+		assertPlanAliasFact(t, batchRoot[0], "golem_br0", policyir.ModelID(fixture.Post), policyir.RelationID(fixture.Authorship), []policyir.FieldID{policyir.FieldID(fixture.AuthorID)}, PlanAliasPhysicalAccess)
+		cursorFacts := first.PlanMap().MatchingAliasFacts("golem_cp0")
+		if len(cursorFacts) != 1 || cursorFacts[0].ModelID() != policyir.ModelID(fixture.Post) {
+			t.Fatalf("provider %d batch cursor facts=%#v", provider, cursorFacts)
+		}
+		for _, omitted := range []string{"golem_b0", "golem_bd0", "golem_bp0", "golem_cursor0", "golem_c0"} {
+			if facts := first.PlanMap().MatchingAliasFacts(omitted); len(facts) != 0 {
+				t.Fatalf("provider %d derived/projection alias %q retained facts %#v", provider, omitted, facts)
+			}
 		}
 		for _, fragment := range []string{"ROW_NUMBER() OVER (PARTITION BY", "golem_distinct_rank", "golem_page_rank", "> 1", "<= 3"} {
 			if !strings.Contains(first.SQL(), fragment) {
@@ -336,6 +354,17 @@ func TestRelationCountRendersDeterministicallyAndExecutesAuthorizedTargetBeforeC
 		second, renderErr := Render(planned, fixture.Registry, provider, proof)
 		if renderErr != nil || first.SQL() != second.SQL() {
 			t.Fatalf("provider %d relation-count render is not deterministic: %v", provider, renderErr)
+		}
+		if !reflect.DeepEqual(first.PlanMap().AliasFacts(), second.PlanMap().AliasFacts()) {
+			t.Fatalf("provider %d relation-count plan map is nondeterministic", provider)
+		}
+		countFacts := first.PlanMap().MatchingAliasFacts("golem_rc0")
+		if len(countFacts) != 1 {
+			t.Fatalf("provider %d relation-count facts=%#v", provider, countFacts)
+		}
+		assertPlanAliasFact(t, countFacts[0], "golem_rc0", policyir.ModelID(fixture.Post), policyir.RelationID(fixture.Authorship), nil, PlanAliasCorrelatedRelation)
+		if facts := first.PlanMap().MatchingAliasFacts("golem_count0"); len(facts) != 0 {
+			t.Fatalf("provider %d count projection alias retained access facts %#v", provider, facts)
 		}
 		if len(first.CountColumns()) != 1 || len(first.Args()) != 2 || !strings.Contains(first.SQL(), "SELECT COUNT(*) FROM") || !strings.Contains(first.SQL(), "author_id") {
 			t.Fatalf("provider %d SQL=%s args=%#v counts=%#v", provider, first.SQL(), first.Args(), first.CountColumns())

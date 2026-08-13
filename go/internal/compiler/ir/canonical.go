@@ -279,6 +279,12 @@ func normalizeRaw(raw *RawDeclIR) {
 	sort.Slice(raw.Root.Providers, func(i, j int) bool {
 		return providerRank(raw.Root.Providers[i].Provider) < providerRank(raw.Root.Providers[j].Provider)
 	})
+	for i := range raw.Root.EmbeddingSpaces {
+		raw.Root.EmbeddingSpaces[i].Span = NormalizeSourceSpan(raw.Root.EmbeddingSpaces[i].Span)
+	}
+	sort.Slice(raw.Root.EmbeddingSpaces, func(i, j int) bool {
+		return raw.Root.EmbeddingSpaces[i].Name < raw.Root.EmbeddingSpaces[j].Name
+	})
 	if raw.Root.Actor != nil {
 		raw.Root.Actor.Span = NormalizeSourceSpan(raw.Root.Actor.Span)
 	}
@@ -365,6 +371,9 @@ func forceRawSlices(raw *RawDeclIR) {
 	}
 	if raw.Root.Models == nil {
 		raw.Root.Models = []RawModelRef{}
+	}
+	if raw.Root.EmbeddingSpaces == nil {
+		raw.Root.EmbeddingSpaces = []RawEmbeddingSpace{}
 	}
 	if raw.Models == nil {
 		raw.Models = []RawModelDecl{}

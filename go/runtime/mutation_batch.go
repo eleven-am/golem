@@ -27,6 +27,9 @@ func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	if err := refuseLegacyVersionedMutation(caller.app.registry, descriptor.Metadata().ModelID(), "updateMany"); err != nil {
+		return 0, err
+	}
 	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpdateMany)
 	defer func() {
 		if observation != nil {
@@ -60,6 +63,9 @@ func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
+	if err := refuseLegacyVersionedMutation(caller.app.registry, descriptor.Metadata().ModelID(), "deleteMany"); err != nil {
+		return 0, err
+	}
 	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationDeleteMany)
 	defer func() {
 		if observation != nil {
@@ -89,6 +95,9 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
+	if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "updateMany"); err != nil {
+		return 0, err
+	}
 	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpdateMany)
 	defer func() {
 		if observation != nil {
@@ -106,6 +115,9 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
+	}
+	if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "deleteMany"); err != nil {
+		return 0, err
 	}
 	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationDeleteMany)
 	defer func() {

@@ -1,5 +1,5 @@
 {
-  "formatVersion": 1,
+  "formatVersion": 2,
   "module": "github.com/eleven-am/golem/go",
   "release": {
     "development": true,
@@ -32,23 +32,23 @@
     "embedded-single-process"
   ],
   "digests": {
-    "publicGoAPI": "1d78abb94828c891f1890b426e71ec9422f43691090d4c14cbb7e8a80a1e6f42",
-    "generatedGoABI": "e56cbc8bfc4e1228832d167f2d8cf65aa300555c44708e958c936e23dc58b1f3",
-    "graphQLABI": "66756b950116b082ed803fe0c17c7f53628425090b8278c84fe5cd4f3615e2c6",
-    "cliJSON": "3a9d2a922b5784438145fd116a00b2aee46eb9ed73e97784ba60c577172ed137",
-    "observation": "4a439f570a9561d587a22064ee3f7aa0040103624e303578149b5dec6d2e3cd5"
+    "publicGoAPI": "8d0ba09168a461cb54190a8c94e217fc85b3134f988ae552bafaa291e42737d8",
+    "generatedGoABI": "1b3143c256180cccfcadac36a1477e05ba8062078b82f7327b67763acace6b2b",
+    "graphQLABI": "b307c48c82966aee3bb4643ce239fc5dc6a620edfcd9cb29e2d15132b7bfc4ce",
+    "cliJSON": "a1228e10ba31fba966029245a85964bc0e49db85e55ac28774ea39a7ee5221df",
+    "observation": "914a495c1b7832491e7aa32a17e31efb82bf249d338de376c1a7608013132803"
   },
   "versions": {
     "generator": "p1-v1",
-    "generatedTemplateABI": "p8-go-abi-v5",
+    "generatedTemplateABI": "p8-go-abi-v7",
     "schemaBundle": 2,
     "generatedManifest": 2,
-    "graphQL": 4,
-    "modelIR": 1,
-    "contractIR": 5,
+    "graphQL": 5,
+    "modelIR": 2,
+    "contractIR": 6,
     "canonicalIR": 1,
-    "physicalSchema": 1,
-    "physicalCanonical": 1,
+    "physicalSchema": 3,
+    "physicalCanonical": 3,
     "migrationManifest": 1,
     "migrationCanonical": 1,
     "migrationLedger": 1,
@@ -70,21 +70,31 @@
       1,
       2
     ],
+    "graphQL": [
+      4,
+      5
+    ],
     "modelIR": [
-      1
+      1,
+      2
     ],
     "contractIR": [
       4,
-      5
+      5,
+      6
     ],
     "canonicalIR": [
       1
     ],
     "physicalSchema": [
-      1
+      1,
+      2,
+      3
     ],
     "physicalCanonical": [
-      1
+      1,
+      2,
+      3
     ],
     "migrationManifest": [
       1
@@ -104,7 +114,17 @@
     ],
     "principalSnapshotCodecs": []
   },
-  "requiredActions": [],
+  "migrationGuide": {
+    "path": "compatibility/migration-guide-go-v0.0.2-to-v0.1.0.json",
+    "sha256": "6fff0894d4ac402e0b2eb5bbbd722d560e1e775b661f0305467aed066d4ec142",
+    "fromTag": "go/v0.0.2",
+    "toVersion": "v0.1.0"
+  },
+  "requiredActions": [
+    "migrate.database",
+    "migration-guide.execute",
+    "regenerate.generated"
+  ],
   "knownBoundaries": [
     "cdc.requires-adapter",
     "mysql.unsupported"

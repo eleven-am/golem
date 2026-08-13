@@ -108,9 +108,10 @@ func (database *Database) Close() error {
 type Code string
 
 const (
-	CodeConfig Code = "PROVIDER_CONFIG"
-	CodeOpen   Code = "PROVIDER_OPEN"
-	CodeClose  Code = "PROVIDER_CLOSE"
+	CodeConfig      Code = "PROVIDER_CONFIG"
+	CodeOpen        Code = "PROVIDER_OPEN"
+	CodeClose       Code = "PROVIDER_CLOSE"
+	CodeMaintenance Code = "PROVIDER_MAINTENANCE"
 )
 
 func CodeOf(err error) (Code, bool) {

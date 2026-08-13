@@ -1,14 +1,14 @@
 {"_golemGenerated":"golem:p1:artifact:v1",
   "kind": "contract_metadata",
   "formatVersion": 1,
-  "modelFingerprint": "12561a7db05fce8ae3fe95ad6afff42ac9a6ba899f523cfb839ce8bf202e4543",
-  "contractFingerprint": "d5e658d88697c0768967591d8b29cd9d153ad73968ab4ee39b69329c7e735beb",
-  "generationDigest": "651702bfd93114612e6d241d411bff367462483d1a93619598a8e1195ed12064",
+  "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
+  "contractFingerprint": "444f42fab517cb460becd86047c5d84361d22276b3c122fe187322b73805dbf5",
+  "generationDigest": "8cc8ca4d9394e310f5483513f6f2ceb7b4d11d233b45f93dd8e28a82f689f5ce",
   "generatorVersion": "p1-v1",
-  "templateAbiVersion": "p8-go-abi-v5",
+  "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
-    "formatVersion": 5,
-    "graphqlAbiVersion": 4,
+    "formatVersion": 6,
+    "graphqlAbiVersion": 5,
     "models": [
       {
         "modelId": "364a3861c2d382ec0f02e83974f3b3c4",
@@ -947,6 +947,76 @@
         "exposed": true
       },
       {
+        "modelId": "c3e1210586ec19f9c55a7b5f15728164",
+        "graphqlName": "VersionedNote",
+        "graphqlPlural": "VersionedNotes",
+        "roots": {
+          "findOne": "versionedNote",
+          "findMany": "versionedNotes",
+          "create": "createVersionedNote",
+          "update": "updateVersionedNote",
+          "upsert": "upsertVersionedNote",
+          "delete": "deleteVersionedNote",
+          "updateMany": "updateManyVersionedNotes",
+          "deleteMany": "deleteManyVersionedNotes",
+          "aggregate": "aggregateVersionedNotes",
+          "groupBy": "groupByVersionedNotes",
+          "relationGroupBy": "relationGroupByVersionedNotes",
+          "events": "versionedNoteEvents"
+        },
+        "fields": [
+          {
+            "fieldId": "019c5d089edd46d97fb11b7b6893bcaf",
+            "graphqlName": "version",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "119b733f77568cab2854d2a51c72c4f1",
+            "graphqlName": "body",
+            "modes": [
+              "visible"
+            ]
+          },
+          {
+            "fieldId": "c9b5e3b565cc624d5c431c99bbf2bf0c",
+            "graphqlName": "id",
+            "modes": [
+              "visible"
+            ]
+          }
+        ],
+        "optimisticConcurrency": "019c5d089edd46d97fb11b7b6893bcaf",
+        "hookOwnedCreateFields": [],
+        "selectors": [
+          {
+            "keyId": "ad3a8c84961484b8fc4d1a2bc5c50162",
+            "kind": "primary",
+            "name": "ID",
+            "fields": [
+              "c9b5e3b565cc624d5c431c99bbf2bf0c"
+            ]
+          }
+        ],
+        "operations": [
+          "create",
+          "delete",
+          "findMany",
+          "findOne",
+          "update",
+          "upsert"
+        ],
+        "subscriptions": false,
+        "scopedReads": false,
+        "limits": {
+          "defaultPageSize": 50,
+          "maxPageSize": 500
+        },
+        "computed": [],
+        "exposed": true
+      },
+      {
         "modelId": "d5239ec6065febe61dad1b8d0b66bf07",
         "graphqlName": "User",
         "graphqlPlural": "Users",
@@ -1190,6 +1260,19 @@
         "receiver": {
           "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
           "name": "User"
+        },
+        "name": "DefinePolicy",
+        "kind": "policy",
+        "actor": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "Actor"
+        }
+      },
+      {
+        "modelId": "c3e1210586ec19f9c55a7b5f15728164",
+        "receiver": {
+          "packagePath": "github.com/eleven-am/golem/go/examples/social/social",
+          "name": "VersionedNote"
         },
         "name": "DefinePolicy",
         "kind": "policy",

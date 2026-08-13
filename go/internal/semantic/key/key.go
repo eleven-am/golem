@@ -1,0 +1,103 @@
+// Package key owns the closed canonical identity encoding shared by source
+// scans and authorized typed rows. Keys are opaque and never leave Golem's
+// managed semantic storage boundary.
+package key
+
+import (
+	"encoding/hex"
+	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+	"time"
+)
+
+func Encode(values []any) (string, error) {
+	if len(values) == 0 {
+		return "", fmt.Errorf("semantic key: identity is empty")
+	}
+	var result strings.Builder
+	result.WriteString("golem-semantic-key:v1")
+	for _, value := range values {
+		encoded, err := encodeValue(value)
+		if err != nil {
+			return "", err
+		}
+		fmt.Fprintf(&result, "|%d:", len(encoded))
+		result.WriteString(encoded)
+	}
+	if result.Len() > 512 {
+		return "", fmt.Errorf("semantic key: identity exceeds 512 bytes")
+	}
+	return result.String(), nil
+}
+
+func encodeValue(value any) (string, error) {
+	if value == nil {
+		return "", fmt.Errorf("semantic key: primary identity contains null")
+	}
+	if instant, ok := value.(time.Time); ok {
+		return "t:" + instant.UTC().Format(time.RFC3339Nano), nil
+	}
+	reflected := reflect.ValueOf(value)
+	for reflected.Kind() == reflect.Pointer {
+		if reflected.IsNil() {
+			return "", fmt.Errorf("semantic key: primary identity contains null")
+		}
+		reflected = reflected.Elem()
+	}
+	switch reflected.Kind() {
+	case reflect.String:
+		text := reflected.String()
+		if uuid, ok := canonicalUUID(text); ok {
+			return "uuid:" + uuid, nil
+		}
+		return "s:" + strconv.Itoa(len(text)) + ":" + text, nil
+	case reflect.Bool:
+		if reflected.Bool() {
+			return "b:1", nil
+		}
+		return "b:0", nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return "i:" + strconv.FormatInt(reflected.Int(), 10), nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		return "u:" + strconv.FormatUint(reflected.Uint(), 10), nil
+	case reflect.Float32, reflect.Float64:
+		return "f:" + strconv.FormatFloat(reflected.Float(), 'g', -1, reflected.Type().Bits()), nil
+	case reflect.Slice:
+		if reflected.Type().Elem().Kind() == reflect.Uint8 {
+			bytes := reflected.Bytes()
+			if len(bytes) == 16 {
+				return "uuid:" + hex.EncodeToString(bytes), nil
+			}
+			return "x:" + hex.EncodeToString(bytes), nil
+		}
+	case reflect.Array:
+		if reflected.Type().Elem().Kind() == reflect.Uint8 {
+			bytes := make([]byte, reflected.Len())
+			for index := range bytes {
+				bytes[index] = byte(reflected.Index(index).Uint())
+			}
+			if len(bytes) == 16 {
+				return "uuid:" + hex.EncodeToString(bytes), nil
+			}
+			return "x:" + hex.EncodeToString(bytes), nil
+		}
+	}
+	if stringer, ok := value.(fmt.Stringer); ok {
+		text := stringer.String()
+		return "v:" + strconv.Itoa(len(text)) + ":" + text, nil
+	}
+	return "", fmt.Errorf("semantic key: unsupported primary identity type %T", value)
+}
+
+func canonicalUUID(value string) (string, bool) {
+	compact := strings.ReplaceAll(strings.ToLower(value), "-", "")
+	if len(compact) != 32 {
+		return "", false
+	}
+	if _, err := hex.DecodeString(compact); err != nil {
+		return "", false
+	}
+	return compact, true
+}

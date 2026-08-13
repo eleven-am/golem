@@ -15,6 +15,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -23,11 +24,20 @@ type catalogQueryer interface {
 	QueryRowxContext(context.Context, string, ...any) *sqlx.Row
 }
 
+// reviewedSnapshot is intentionally constructible only from a sealed migration
+// entry inside this package. It prevents active provider entry points from
+// accepting an unverified historical schema as authority.
+type reviewedSnapshot struct{ schema physical.PhysicalSchema }
+
 func (provider *Provider) introspect(ctx context.Context, database *sqlx.DB, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
+	normalized, err := physical.Normalize(expected)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
 	if database == nil {
 		return physical.PhysicalSchema{}, fmt.Errorf("postgresql introspect: nil database")
 	}
-	return provider.introspectQuery(ctx, database, expected)
+	return provider.introspectQuery(ctx, database, normalized)
 }
 
 func (provider *Provider) introspectQuery(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
@@ -35,6 +45,18 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
+	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized)
+}
+
+func (provider *Provider) introspectReviewedQuery(ctx context.Context, query catalogQueryer, reviewed reviewedSnapshot) (physical.PhysicalSchema, error) {
+	expectedNormalized, err := physical.NormalizeHistorical(reviewed.schema)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized)
+}
+
+func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query catalogQueryer, expectedNormalized physical.PhysicalSchema) (physical.PhysicalSchema, error) {
 	report, err := probeCapabilities(ctx, query)
 	if err != nil {
 		return physical.PhysicalSchema{}, err
@@ -42,7 +64,16 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	if report.Version.Major < 15 || !report.JSONB || !report.GeneratedColumns || !report.AdvisoryLocks || !report.BinaryText || !report.ASCIIInsensitive || !report.ExactJSON || !report.ScalarListJSON || !report.RelationCorrelation {
 		return physical.PhysicalSchema{}, fmt.Errorf("postgresql capability verification failed: version=%d.%d jsonb=%t generated=%t advisory=%t binary=%t ascii=%t exactJSON=%t scalarListJSON=%t relation=%t", report.Version.Major, report.Version.Minor, report.JSONB, report.GeneratedColumns, report.AdvisoryLocks, report.BinaryText, report.ASCIIInsensitive, report.ExactJSON, report.ScalarListJSON, report.RelationCorrelation)
 	}
-	actual := physical.PhysicalSchema{Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion, Provider: provider.Manifest(), Namespace: expectedNormalized.Namespace, Unmanaged: append([]physical.UnmanagedObject(nil), expectedNormalized.Unmanaged...)}
+	activeProbe := expectedNormalized
+	activeProbe.Provider = provider.Manifest()
+	activeNormalized, activeErr := physical.NormalizeHistorical(activeProbe)
+	if activeErr != nil || !physical.CompatibleProviderHistory(expectedNormalized.Provider, activeNormalized.Provider) {
+		return physical.PhysicalSchema{}, fmt.Errorf("postgresql active provider is incompatible with the reviewed provider identity")
+	}
+	// Catalog facts prove the active driver/capabilities above. Fingerprint
+	// reconstruction must retain the reviewed provider identity rather than
+	// silently stamping a newer runtime manifest into immutable history.
+	actual := physical.PhysicalSchema{Version: expectedNormalized.Version, CanonicalVersion: expectedNormalized.CanonicalVersion, Provider: expectedNormalized.Provider, Namespace: expectedNormalized.Namespace, Unmanaged: append([]physical.UnmanagedObject(nil), expectedNormalized.Unmanaged...)}
 	allowed := map[string]bool{}
 	for _, object := range expectedNormalized.Unmanaged {
 		allowed[object.Kind+"\x00"+string(object.Name)] = true
@@ -50,6 +81,17 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	expectedTables := map[string]physical.PhysicalTable{}
 	for _, table := range expectedNormalized.Tables {
 		expectedTables[string(table.Name)] = table
+	}
+	semanticTables := map[string]bool{}
+	if expectedNormalized.Version != 1 || expectedNormalized.CanonicalVersion != 1 {
+		for _, extension := range expectedNormalized.Extensions {
+			descriptor, decodeErr := semanticstorage.Decode(extension)
+			if decodeErr != nil {
+				return physical.PhysicalSchema{}, decodeErr
+			}
+			semanticTables[string(descriptor.Storage)+"_state"] = true
+			semanticTables[string(descriptor.Storage)+"_vec"] = true
+		}
 	}
 	tableByOID := map[int64]*physical.PhysicalTable{}
 	tableOIDByName := map[string]int64{}
@@ -68,6 +110,15 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 			return physical.PhysicalSchema{}, err
 		}
 		if allowed["table\x00"+name] {
+			continue
+		}
+		if semanticTables[name] {
+			if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+			}
+			if err := validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity); err != nil {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+			}
 			continue
 		}
 		if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
@@ -118,6 +169,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 	}
 	columnsByAttnum := map[int64]map[int]physical.PhysicalColumn{}
 	visibleOrdinals := map[int64]uint32{}
+	actualOwnerColumns := map[int64][]string{}
 	type pendingGenerated struct {
 		tableOID   int64
 		attnum     int
@@ -160,16 +212,21 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog column %s.%s: %w", table.Name, name, parseErr)
 		}
 		fieldID := ir.FieldID(stableID("catalog-column", string(table.ID), name))
+		ordinal := visibleOrdinals[oid]
 		if wanted, ok := expectedTables[string(table.Name)]; ok {
 			for _, column := range wanted.Columns {
 				if string(column.Name) == name {
 					fieldID = column.ID
+					ordinal = column.Ordinal
 					break
 				}
 			}
 		}
-		column := physical.PhysicalColumn{ID: fieldID, Name: physical.PhysicalName(name), Ordinal: visibleOrdinals[oid], Storage: storage, Nullable: !notNull, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}
+		column := physical.PhysicalColumn{ID: fieldID, Name: physical.PhysicalName(name), Ordinal: ordinal, Storage: storage, Nullable: !notNull, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}}
 		visibleOrdinals[oid]++
+		if generated == "" {
+			actualOwnerColumns[oid] = append(actualOwnerColumns[oid], name)
+		}
 		if !defaultCollation {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog column %s.%s: non-default collation is not baseline", table.Name, name)
 		}
@@ -207,10 +264,49 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 	if err = rows.Close(); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
+	for tableName, wanted := range expectedTables {
+		oid, exists := tableOIDByName[tableName]
+		if !exists {
+			continue
+		}
+		if expectedNormalized.Version == physical.SchemaFormatVersion && expectedNormalized.CanonicalVersion == physical.CanonicalFormatVersion {
+			expectedOwners := make([]string, 0, len(wanted.Columns))
+			for _, column := range wanted.Columns {
+				if column.Generated == nil {
+					expectedOwners = append(expectedOwners, string(column.Name))
+				}
+			}
+			if !reflect.DeepEqual(actualOwnerColumns[oid], expectedOwners) {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog table %s: non-generated column order differs from the reviewed schema", tableName)
+			}
+		} else {
+			expectedVisible := make([]string, 0, len(wanted.Columns))
+			for _, column := range wanted.Columns {
+				expectedVisible = append(expectedVisible, string(column.Name))
+			}
+			actualVisible := make([]string, 0, len(tableByOID[oid].Columns))
+			for _, column := range tableByOID[oid].Columns {
+				actualVisible = append(actualVisible, string(column.Name))
+			}
+			if !reflect.DeepEqual(actualVisible, expectedVisible) {
+				return physical.PhysicalSchema{}, fmt.Errorf("postgresql historical catalog table %s: column order differs from the reviewed schema", tableName)
+			}
+		}
+	}
 	for _, pending := range pendingGeneratedExpressions {
 		table := tableByOID[pending.tableOID]
 		column := columnsByAttnum[pending.tableOID][pending.attnum]
-		expression, parseErr := parseCatalogExpression(pending.expression, *table)
+		var reviewed *physical.Expression
+		for _, expectedColumn := range expectedTables[string(table.Name)].Columns {
+			if expectedColumn.ID == column.ID && expectedColumn.Generated != nil {
+				reviewed = &expectedColumn.Generated.Expression
+				break
+			}
+		}
+		if reviewed == nil {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql generated expression has no reviewed owner")
+		}
+		expression, parseErr := parseCatalogGeneratedExpression(pending.expression, *table, *reviewed)
 		if parseErr != nil {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql generated expression %s.%s: %w", table.Name, column.Name, parseErr)
 		}
@@ -231,7 +327,130 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return physical.Normalize(actual)
+	if expectedNormalized.Version != 1 || expectedNormalized.CanonicalVersion != 1 {
+		if err := introspectSemanticExtensions(ctx, query, expectedNormalized); err != nil {
+			return physical.PhysicalSchema{}, err
+		}
+	}
+	actual.Extensions = append([]physical.Extension(nil), expectedNormalized.Extensions...)
+	actualNormalized, err := physical.NormalizeHistorical(actual)
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	return reconcileOptimisticConcurrency(expectedNormalized, actualNormalized)
+}
+
+// PostgreSQL has no catalog object for Golem's optimistic-concurrency
+// declaration. Reconstruct that logical fact only after the catalog-backed
+// table and its exact owner column have independently round-tripped. This keeps
+// expected metadata from masking physical drift.
+func reconcileOptimisticConcurrency(expected, actual physical.PhysicalSchema) (physical.PhysicalSchema, error) {
+	actualTables := make(map[ir.ModelID]int, len(actual.Tables))
+	for index := range actual.Tables {
+		actualTables[actual.Tables[index].ID] = index
+	}
+	for _, expectedTable := range expected.Tables {
+		if expectedTable.OptimisticConcurrency == nil {
+			continue
+		}
+		actualIndex, exists := actualTables[expectedTable.ID]
+		if !exists || actual.Tables[actualIndex].Name != expectedTable.Name {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency table %s does not exactly match the reviewed table identity", expectedTable.ID)
+		}
+		actualTable := actual.Tables[actualIndex]
+		field := *expectedTable.OptimisticConcurrency
+		var expectedColumn, actualColumn *physical.PhysicalColumn
+		for index := range expectedTable.Columns {
+			if expectedTable.Columns[index].ID == field {
+				expectedColumn = &expectedTable.Columns[index]
+				break
+			}
+		}
+		for index := range actualTable.Columns {
+			if actualTable.Columns[index].ID == field {
+				actualColumn = &actualTable.Columns[index]
+				break
+			}
+		}
+		if expectedColumn == nil || actualColumn == nil || !reflect.DeepEqual(*expectedColumn, *actualColumn) {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency column %s.%s does not exactly match the reviewed catalog-backed column", expectedTable.ID, field)
+		}
+		expectedWithoutDeclaration := expectedTable
+		expectedWithoutDeclaration.OptimisticConcurrency = nil
+		actualWithoutDeclaration := actualTable
+		actualWithoutDeclaration.OptimisticConcurrency = nil
+		if !reflect.DeepEqual(expectedWithoutDeclaration, actualWithoutDeclaration) {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency table %s does not exactly match the reviewed catalog-backed table", expectedTable.ID)
+		}
+		value := field
+		actual.Tables[actualIndex].OptimisticConcurrency = &value
+	}
+	return physical.NormalizeHistorical(actual)
+}
+
+func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema) error {
+	if len(expected.Extensions) == 0 {
+		return nil
+	}
+	var vectorVersion string
+	if err := query.QueryRowxContext(ctx, `SELECT extversion FROM pg_catalog.pg_extension WHERE extname='vector'`).Scan(&vectorVersion); err != nil || !supportedPGVectorVersion(vectorVersion) {
+		return fmt.Errorf("postgresql semantic introspect: pgvector >=0.8.0 is required")
+	}
+	for _, extension := range expected.Extensions {
+		descriptor, err := semanticstorage.Decode(extension)
+		if err != nil {
+			return err
+		}
+		state := string(descriptor.Storage) + "_state"
+		vectors := string(descriptor.Storage) + "_vec"
+		index := string(descriptor.Storage) + "_hnsw"
+		var stateColumns, vectorColumns string
+		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
+		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), state).Scan(&stateColumns); err != nil {
+			return err
+		}
+		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), vectors).Scan(&vectorColumns); err != nil {
+			return err
+		}
+		wantState := "record_key:text:true,source_hash:bytea:true,space_fingerprint:text:true,status:text:true,attempt_count:integer:true,error_code:text:false,updated_at:bigint:true"
+		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
+		if stateColumns != wantState || vectorColumns != wantVectors {
+			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)
+		}
+		var indexMethod, opclass string
+		var valid, ready bool
+		if err := query.QueryRowxContext(ctx, `SELECT am.amname,opc.opcname,i.indisvalid,i.indisready FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ci.relam JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0] WHERE n.nspname=$1 AND ct.relname=$2 AND ci.relname=$3`, string(expected.Namespace.Name), vectors, index).Scan(&indexMethod, &opclass, &valid, &ready); err != nil {
+			return fmt.Errorf("postgresql semantic introspect: HNSW index missing extension=%s", extension.ID)
+		}
+		if indexMethod != "hnsw" || opclass != "vector_cosine_ops" || !valid || !ready {
+			return fmt.Errorf("postgresql semantic introspect: HNSW index drift extension=%s", extension.ID)
+		}
+	}
+	return nil
+}
+
+func supportedPGVectorVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	numbers := make([]int, len(parts))
+	for index, part := range parts {
+		if part == "" || len(part) > 1 && part[0] == '0' {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+		value, err := strconv.Atoi(part)
+		if err != nil {
+			return false
+		}
+		numbers[index] = value
+	}
+	return numbers[0] > 0 || numbers[0] == 0 && numbers[1] >= 8
 }
 
 func introspectConstraints(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, columns map[int64]map[int]physical.PhysicalColumn) error {
@@ -287,7 +506,22 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 			if err != nil {
 				return fmt.Errorf("postgresql check %s: %w", name, err)
 			}
-			table.Checks = append(table.Checks, physical.PhysicalCheck{ID: checkID(wanted, name, table.ID), Name: physical.PhysicalName(name), Expression: parsed})
+			id := checkID(wanted, name, table.ID)
+			var reviewed *physical.Expression
+			for index := range wanted.Checks {
+				if wanted.Checks[index].ID == id {
+					reviewed = &wanted.Checks[index].Expression
+					break
+				}
+			}
+			if reviewed == nil {
+				return fmt.Errorf("postgresql check has no reviewed expression")
+			}
+			parsed, err = normalizeCatalogExpressionAgainstReviewed(parsed, *reviewed)
+			if err != nil {
+				return fmt.Errorf("postgresql check expression: %w", err)
+			}
+			table.Checks = append(table.Checks, physical.PhysicalCheck{ID: id, Name: physical.PhysicalName(name), Expression: parsed})
 		default:
 			return fmt.Errorf("postgresql constraint %s has unsupported type %q", name, kind)
 		}
@@ -332,6 +566,14 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		}
 		keys, options := parseCatalogNumbers(item.keyText), parseCatalogNumbers(item.optionText)
 		index := physical.PhysicalIndex{ID: indexID(expected[string(table.Name)], item.name, table.ID), Name: physical.PhysicalName(item.name), Unique: item.unique, Method: physical.IndexMethod(item.method), CreationMode: physical.IndexTransactional}
+		var reviewedIndex *physical.PhysicalIndex
+		for position := range expected[string(table.Name)].Indexes {
+			candidate := &expected[string(table.Name)].Indexes[position]
+			if candidate.ID == index.ID {
+				reviewedIndex = candidate
+				break
+			}
+		}
 		advanced := false
 		for position := 0; position < item.keyCount; position++ {
 			key := physical.IndexKey{Direction: ir.SortAsc, Nulls: ir.NullsDefault}
@@ -364,6 +606,13 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 				if err != nil {
 					return err
 				}
+				if reviewedIndex == nil || position >= len(reviewedIndex.Keys) || reviewedIndex.Keys[position].Expression == nil {
+					return fmt.Errorf("postgresql expression index has no reviewed key")
+				}
+				expression, err = normalizeCatalogExpressionAgainstReviewed(expression, *reviewedIndex.Keys[position].Expression)
+				if err != nil {
+					return fmt.Errorf("postgresql expression index key: %w", err)
+				}
 				key.Expression = &expression
 				advanced = true
 			}
@@ -381,6 +630,13 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 			predicate, err := parseCatalogExpression(item.predicateText, *table)
 			if err != nil {
 				return err
+			}
+			if reviewedIndex == nil || reviewedIndex.Predicate == nil {
+				return fmt.Errorf("postgresql partial index has no reviewed predicate")
+			}
+			predicate, err = normalizeCatalogExpressionAgainstReviewed(predicate, *reviewedIndex.Predicate)
+			if err != nil {
+				return fmt.Errorf("postgresql index predicate: %w", err)
 			}
 			index.Predicate = &predicate
 			advanced = true
@@ -710,7 +966,10 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 	return compareFingerprints(expected, actual)
 }
 
-var numericType = regexp.MustCompile(`^numeric\(([0-9]+),([0-9]+)\)$`)
+var (
+	numericType = regexp.MustCompile(`^numeric\(([0-9]+),([0-9]+)\)$`)
+	varcharType = regexp.MustCompile(`^character varying\(([0-9]+)\)$`)
+)
 
 func parseCatalogStorage(value string) (physical.StorageType, error) {
 	switch value {
@@ -741,6 +1000,10 @@ func parseCatalogStorage(value string) (physical.StorageType, error) {
 		p, _ := strconv.Atoi(match[1])
 		s, _ := strconv.Atoi(match[2])
 		return physical.StorageType{Kind: physical.StoragePostgreSQLNumeric, Precision: uint16(p), Scale: uint16(s)}, nil
+	}
+	if match := varcharType.FindStringSubmatch(value); match != nil {
+		length, _ := strconv.Atoi(match[1])
+		return physical.StorageType{Kind: physical.StoragePostgreSQLVarchar, Length: uint32(length)}, nil
 	}
 	for _, item := range []struct {
 		prefix string
@@ -1021,7 +1284,7 @@ func validCatalogLiteralCast(suffix string, storage physical.StorageType) bool {
 		// The renderer intentionally leaves text/enum literals uncast. Every other
 		// quoted storage form owns an explicit cast, so accepting an omitted cast
 		// would broaden the catalog language beyond what Golem emits.
-		return storage.Kind == physical.StoragePostgreSQLText
+		return storage.Kind == physical.StoragePostgreSQLText || storage.Kind == physical.StoragePostgreSQLVarchar
 	}
 	accepted := map[physical.StorageKind][]string{
 		physical.StoragePostgreSQLBoolean:     {"::boolean"},
@@ -1031,6 +1294,7 @@ func validCatalogLiteralCast(suffix string, storage physical.StorageType) bool {
 		physical.StoragePostgreSQLReal:        {"::real"},
 		physical.StoragePostgreSQLDouble:      {"::double precision"},
 		physical.StoragePostgreSQLNumeric:     {"::numeric", fmt.Sprintf("::numeric(%d,%d)", storage.Precision, storage.Scale)},
+		physical.StoragePostgreSQLVarchar:     {"::character varying", "::varchar", fmt.Sprintf("::character varying(%d)", storage.Length), fmt.Sprintf("::varchar(%d)", storage.Length)},
 		physical.StoragePostgreSQLText:        {"::text"},
 		physical.StoragePostgreSQLBytea:       {"::bytea"},
 		physical.StoragePostgreSQLUUID:        {"::uuid"},

@@ -22,6 +22,7 @@ const (
 	CapabilityPolicyScalarList  ir.CapabilityID = "scalar-list.json-array.v1"
 	CapabilityPolicyRelation    ir.CapabilityID = "policy.relation-correlation.v1"
 	CapabilityAnalyticsExact    ir.CapabilityID = "analytics.exact-arithmetic.v1"
+	CapabilityVec0              ir.CapabilityID = "sqlite.vec0.v1"
 )
 
 type Provider struct{}
@@ -40,6 +41,7 @@ func (*Provider) Manifest() physical.ProviderManifest {
 		physical.CapabilityFact{ID: CapabilityPolicyScalarList, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityPolicyRelation, Version: 1, Verification: physical.VerificationRuntimeProbe},
 		physical.CapabilityFact{ID: CapabilityAnalyticsExact, Version: 1, Verification: physical.VerificationRuntimeProbe},
+		physical.CapabilityFact{ID: CapabilityVec0, Version: 1, Verification: physical.VerificationRuntimeProbe},
 	)
 }
 
@@ -54,9 +56,11 @@ type CapabilityReport struct {
 	PolicyScalarList bool
 	PolicyRelation   bool
 	AnalyticsExact   bool
+	Vec0             bool
+	VecVersion       string
 }
 
-// Open opens a modernc.org/sqlite database through sqlx and proves the provider
+// Open opens the CGO-free sqlite-vec WASM database through sqlx and proves the provider
 // floor and required connection capabilities before returning it.
 func (provider *Provider) Open(ctx context.Context, dataSourceName string) (*sqlx.DB, CapabilityReport, error) {
 	return provider.open(ctx, dataSourceName)

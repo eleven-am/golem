@@ -19,10 +19,7 @@ func TestP8PublicGoAPIDiffGate(t *testing.T) {
 	}
 	current, err := BuildAPIInventory(context.Background(), APIRequest{
 		Directory: root,
-		Patterns: []string{
-			"./events", "./golem", "./graphql", "./observe", "./provider",
-			"./provider/postgresql", "./provider/sqlite", "./runtime",
-		},
+		Patterns:  publicGoAPIPatterns(),
 	})
 	if err != nil {
 		t.Fatal(err)

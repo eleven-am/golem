@@ -173,3 +173,23 @@ func (PostTag) GolemModel() golem.ModelSpec[PostTag] {
 		golem.RelationOptions(PostTags.Tag).OnDelete(golem.Cascade),
 	)
 }
+
+type VersionedNote struct {
+	_ struct{} `golem:"model;id=example.social.VersionedNote;table=versioned_notes;graphql=VersionedNote"`
+
+	ID      golem.UUID `db:"id" golem:"id=example.social.VersionedNote.ID;pk;default=uuid"`
+	Body    string     `db:"body" golem:"id=example.social.VersionedNote.Body"`
+	Version int64      `db:"version" golem:"id=example.social.VersionedNote.Version"`
+}
+
+func (VersionedNote) GolemModel() golem.ModelSpec[VersionedNote] {
+	return golem.DefineModel(
+		golem.OptimisticConcurrency(VersionedNotes.Version),
+		golem.GraphQL[VersionedNote](
+			golem.GraphQLOperations(
+				golem.GraphQLFindOne, golem.GraphQLFindMany,
+				golem.GraphQLCreate, golem.GraphQLUpdate, golem.GraphQLUpsert, golem.GraphQLDelete,
+			),
+		),
+	)
+}

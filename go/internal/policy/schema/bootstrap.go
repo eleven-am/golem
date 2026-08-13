@@ -40,7 +40,7 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 	}
 
 	modelDocument := bundle.Model()
-	model, err := decodeModel(modelDocument)
+	model, err := decodeModel(modelDocument, historical)
 	if err != nil {
 		return nil, err
 	}
@@ -49,6 +49,9 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 	if err != nil {
 		return nil, err
 	}
+	if err := physical.ValidateOptimisticConcurrencyLogical(model); err != nil {
+		return nil, fail(CodeModel, "model.optimisticConcurrency", "%v", err)
+	}
 
 	builder := registryBuilder{
 		registry: Registry{
@@ -56,6 +59,9 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 			models: make(map[golem.ModelID]Model), fields: make(map[golem.ModelID]map[golem.FieldID]Field), relations: make(map[relationKey]RelationEndpoint),
 			enumValues: make(map[compilerir.EnumID]map[string]compilerir.EnumValueID), enumLabels: make(map[compilerir.EnumID]map[compilerir.EnumValueID]string), physicalModels: make(map[golem.Provider]map[golem.ModelID]PhysicalModel),
 			physicalFields: make(map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField), capabilities: make(map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact),
+			physicalModelNames:       make(map[golem.Provider]map[physical.PhysicalName]golem.ModelID),
+			physicalAccessObjects:    make(map[golem.Provider]map[physical.PhysicalName]PhysicalAccessObject),
+			physicalKeyAccessObjects: make(map[golem.Provider]map[golem.ModelID][]PhysicalAccessObject),
 			physicalNamespaces:       make(map[golem.Provider]physical.PhysicalName),
 			physicalSystemNamespaces: make(map[golem.Provider]physical.PhysicalName),
 		},
@@ -68,13 +74,27 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 	if err := builder.validateContract(contract); err != nil {
 		return nil, err
 	}
-	if err := builder.indexProviders(model, bundle.Providers()); err != nil {
+	if err := builder.indexProviders(model, bundle.Providers(), historical); err != nil {
 		return nil, err
 	}
 	return &builder.registry, nil
 }
 
-func decodeModel(document golem.SchemaDocument) (compilerir.ModelIR, error) {
+func decodeModel(document golem.SchemaDocument, historical bool) (compilerir.ModelIR, error) {
+	if historical && document.FormatVersion() == 1 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
+		model, err := compilerir.CanonicalDecodeModelV1(document.Bytes())
+		if err != nil {
+			return compilerir.ModelIR{}, fail(CodeDocument, "model.payload", "%v", err)
+		}
+		fingerprint, err := compilerir.ModelFingerprintV1(document.Bytes())
+		if err != nil {
+			return compilerir.ModelIR{}, fail(CodeFingerprint, "model", "%v", err)
+		}
+		if fingerprint != compilerir.Fingerprint(document.Fingerprint().String()) {
+			return compilerir.ModelIR{}, fail(CodeFingerprint, "model", "fingerprint mismatch")
+		}
+		return model, nil
+	}
 	if document.FormatVersion() != uint32(compilerir.ModelFormatVersion) || document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
 		return compilerir.ModelIR{}, fail(CodeDocument, "model", "unsupported format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
 	}
@@ -102,6 +122,20 @@ func decodeModel(document golem.SchemaDocument) (compilerir.ModelIR, error) {
 func decodeContract(document golem.SchemaDocument, historical bool) (compilerir.ContractIR, error) {
 	if historical && document.FormatVersion() == 4 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
 		return decodeHistoricalContractV4(document)
+	}
+	if historical && document.FormatVersion() == 5 && document.CanonicalVersion() == uint32(compilerir.CanonicalFormatVersion) {
+		contract, err := compilerir.CanonicalDecodeContractV5(document.Bytes())
+		if err != nil {
+			return compilerir.ContractIR{}, fail(CodeDocument, "contract.payload", "%v", err)
+		}
+		fingerprint, err := compilerir.ContractFingerprintV5(document.Bytes())
+		if err != nil {
+			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "%v", err)
+		}
+		if fingerprint != compilerir.Fingerprint(document.Fingerprint().String()) {
+			return compilerir.ContractIR{}, fail(CodeFingerprint, "contract", "fingerprint mismatch")
+		}
+		return contract, nil
 	}
 	if document.FormatVersion() != uint32(compilerir.ContractFormatVersion) || document.CanonicalVersion() != uint32(compilerir.CanonicalFormatVersion) {
 		return compilerir.ContractIR{}, fail(CodeDocument, "contract", "unsupported format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
@@ -231,6 +265,13 @@ type registryBuilder struct {
 	logicalEnums  []compilerir.EnumIR
 }
 
+func equalOptionalCompilerFieldID(left, right *compilerir.FieldID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
 func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 	declaredProviders := make(map[compilerir.Provider]bool, len(model.Providers))
 	for index, provider := range model.Providers {
@@ -291,6 +332,13 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		builder.logicalModels[logicalModel.ID] = logicalModel
 		builder.logicalFields[logicalModel.ID] = make(map[compilerir.FieldID]compilerir.FieldIR, len(logicalModel.Fields))
 		modelFact := Model{id: mid, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes))}
+		if logicalModel.OptimisticConcurrency != nil {
+			field, fieldErr := fieldID(*logicalModel.OptimisticConcurrency)
+			if fieldErr != nil {
+				return fail(CodeIdentity, path+".optimisticConcurrency", "%v", fieldErr)
+			}
+			modelFact.optimisticConcurrency = &field
+		}
 		builder.registry.fields[mid] = make(map[golem.FieldID]Field, len(logicalModel.Fields))
 		for fieldIndex, logicalField := range logicalModel.Fields {
 			fieldPath := fmt.Sprintf("%s.fields[%d]", path, fieldIndex)
@@ -513,6 +561,25 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 			return fail(CodeContract, path+".modelId", "duplicate model ID %s", model.ModelID)
 		}
 		seenModels[model.ModelID] = true
+		logicalModel := builder.logicalModels[model.ModelID]
+		if !equalOptionalCompilerFieldID(logicalModel.OptimisticConcurrency, model.OptimisticConcurrency) {
+			return fail(CodeContract, path+".optimisticConcurrency", "ModelIR and ContractIR optimistic-concurrency identities disagree")
+		}
+		if model.OptimisticConcurrency != nil {
+			matches := 0
+			for _, field := range model.Fields {
+				if field.FieldID != *model.OptimisticConcurrency {
+					continue
+				}
+				matches++
+				if len(field.Modes) != 1 || field.Modes[0] != compilerir.ModeVisible {
+					return fail(CodeContract, path+".optimisticConcurrency", "optimistic-concurrency field requires the exact ordinary visible contract mode")
+				}
+			}
+			if matches != 1 {
+				return fail(CodeContract, path+".optimisticConcurrency", "optimistic-concurrency field requires one exact contract field")
+			}
+		}
 		mid, _ := modelID(model.ModelID)
 		fact := builder.registry.models[mid]
 		fact.maxTake = model.Limits.MaxTake
@@ -620,7 +687,7 @@ func (builder *registryBuilder) validateContract(contract compilerir.ContractIR)
 	return nil
 }
 
-func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documents []golem.ProviderSchemaDocument) error {
+func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documents []golem.ProviderSchemaDocument, historical bool) error {
 	declared := make(map[golem.Provider]bool, len(model.Providers))
 	for _, provider := range model.Providers {
 		declared[golem.Provider(provider)] = true
@@ -641,10 +708,7 @@ func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documen
 		}
 		seen[provider] = true
 		schemaDocument := document.Schema()
-		if schemaDocument.FormatVersion() != physical.SchemaFormatVersion || schemaDocument.CanonicalVersion() != physical.CanonicalFormatVersion {
-			return fail(CodeDocument, path, "unsupported physical format/canonical versions %d/%d", schemaDocument.FormatVersion(), schemaDocument.CanonicalVersion())
-		}
-		decoded, err := physical.CanonicalDecodeVerified(schemaDocument.Bytes(), physical.Digest(schemaDocument.Fingerprint()), physical.Digest(document.SystemFingerprint()))
+		decoded, err := decodeProviderSchemaDocument(schemaDocument, document.SystemFingerprint(), historical)
 		if err != nil {
 			return fail(CodePhysical, path, "%v", err)
 		}
@@ -659,10 +723,57 @@ func (builder *registryBuilder) indexProviders(model compilerir.ModelIR, documen
 	return nil
 }
 
+func decodeProviderSchemaDocument(document golem.SchemaDocument, system golem.SchemaDigest, historical bool) (physical.PhysicalSchema, error) {
+	if !historical {
+		if document.FormatVersion() != physical.SchemaFormatVersion || document.CanonicalVersion() != physical.CanonicalFormatVersion {
+			return physical.PhysicalSchema{}, fmt.Errorf("unsupported physical format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
+		}
+		return physical.CanonicalDecodeVerified(document.Bytes(), physical.Digest(document.Fingerprint()), physical.Digest(system))
+	}
+	if document.FormatVersion() != document.CanonicalVersion() {
+		return physical.PhysicalSchema{}, fmt.Errorf("unsupported historical physical format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
+	}
+	var (
+		decoded physical.PhysicalSchema
+		err     error
+	)
+	switch document.FormatVersion() {
+	case 1:
+		decoded, err = physical.CanonicalDecodeHistorical(document.Bytes())
+	case 2:
+		decoded, err = physical.CanonicalDecodeHistoricalV2(document.Bytes())
+	case 3:
+		decoded, err = physical.CanonicalDecodeHistoricalV3(document.Bytes())
+	default:
+		return physical.PhysicalSchema{}, fmt.Errorf("unsupported historical physical format/canonical versions %d/%d", document.FormatVersion(), document.CanonicalVersion())
+	}
+	if err != nil {
+		return physical.PhysicalSchema{}, err
+	}
+	physicalFingerprint, err := physical.HistoricalPhysicalFingerprint(decoded)
+	if err != nil {
+		return physical.PhysicalSchema{}, fmt.Errorf("historical physical fingerprint: %w", err)
+	}
+	if physicalFingerprint != physical.Digest(document.Fingerprint()) {
+		return physical.PhysicalSchema{}, fmt.Errorf("historical physical fingerprint mismatch: got %s want %s", physicalFingerprint, physical.Digest(document.Fingerprint()))
+	}
+	systemFingerprint, err := physical.HistoricalSystemFingerprint(decoded)
+	if err != nil {
+		return physical.PhysicalSchema{}, fmt.Errorf("historical system fingerprint: %w", err)
+	}
+	if systemFingerprint != physical.Digest(system) {
+		return physical.PhysicalSchema{}, fmt.Errorf("historical system fingerprint mismatch: got %s want %s", systemFingerprint, physical.Digest(system))
+	}
+	return decoded, nil
+}
+
 func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema physical.PhysicalSchema) error {
 	path := "providers[" + string(provider) + "]"
 	models := make(map[golem.ModelID]PhysicalModel, len(schema.Tables))
 	fields := make(map[golem.ModelID]map[golem.FieldID]PhysicalField, len(schema.Tables))
+	modelNames := make(map[physical.PhysicalName]golem.ModelID, len(schema.Tables))
+	accessObjects := make(map[physical.PhysicalName]PhysicalAccessObject)
+	keyAccessObjects := make(map[golem.ModelID][]PhysicalAccessObject, len(schema.Tables))
 	if len(schema.Tables) != len(builder.logicalModels) {
 		return fail(CodePhysical, path+".tables", "physical table inventory has %d entries, want %d", len(schema.Tables), len(builder.logicalModels))
 	}
@@ -672,7 +783,57 @@ func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema ph
 			return fail(CodePhysical, path+".tables", "unknown physical model ID %s", table.ID)
 		}
 		mid, _ := modelID(table.ID)
+		if !equalOptionalCompilerFieldID(logicalModel.OptimisticConcurrency, table.OptimisticConcurrency) {
+			return fail(CodePhysical, path+".table["+string(table.ID)+"].optimisticConcurrency", "ModelIR and physical optimistic-concurrency identities disagree")
+		}
 		models[mid] = PhysicalModel{provider: provider, model: mid, name: table.Name}
+		if _, duplicate := modelNames[table.Name]; duplicate {
+			return fail(CodePhysical, path+".tables", "physical plan table lookup is ambiguous")
+		}
+		modelNames[table.Name] = mid
+		if table.PrimaryKey != nil {
+			id, err := keyID(table.PrimaryKey.ID)
+			if err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].primaryKey.id", "invalid stable key identity")
+			}
+			keyFields, fieldErr := physicalKeyFields(table.PrimaryKey.Columns)
+			if fieldErr != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].primaryKey.columns", "invalid stable key field identity")
+			}
+			fact := PhysicalAccessObject{kind: PhysicalAccessPrimaryKey, model: mid, keyID: id, fields: keyFields}
+			if err := registerPhysicalAccessObject(accessObjects, table.PrimaryKey.Name, fact); err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].primaryKey", "%v", err)
+			}
+			keyAccessObjects[mid] = append(keyAccessObjects[mid], fact.clone())
+		}
+		for _, key := range table.Uniques {
+			id, err := keyID(key.ID)
+			if err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].uniques", "invalid stable key identity")
+			}
+			keyFields, fieldErr := physicalKeyFields(key.Columns)
+			if fieldErr != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].uniques", "invalid stable key field identity")
+			}
+			fact := PhysicalAccessObject{kind: PhysicalAccessUniqueIndex, model: mid, keyID: id, fields: keyFields}
+			if err := registerPhysicalAccessObject(accessObjects, key.Name, fact); err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].uniques", "%v", err)
+			}
+			keyAccessObjects[mid] = append(keyAccessObjects[mid], fact.clone())
+		}
+		for _, index := range table.Indexes {
+			id, err := physicalIndexID(index.ID)
+			if err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].indexes", "invalid stable index identity")
+			}
+			kind := PhysicalAccessIndex
+			if index.Unique {
+				kind = PhysicalAccessUniqueIndex
+			}
+			if err := registerPhysicalAccessObject(accessObjects, index.Name, PhysicalAccessObject{kind: kind, model: mid, indexID: id}); err != nil {
+				return fail(CodePhysical, path+".table["+string(table.ID)+"].indexes", "%v", err)
+			}
+		}
 		persisted := make(map[compilerir.FieldID]compilerir.FieldIR)
 		for _, logicalField := range logicalModel.Fields {
 			if logicalField.Scalar != nil {
@@ -692,7 +853,7 @@ func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema ph
 			if err != nil {
 				return fail(CodePhysical, path+".table["+string(table.ID)+"].column["+string(column.ID)+"].storage", "derive logical storage: %v", err)
 			}
-			if !physical.StorageEqual(column.Storage, expectedStorage) {
+			if !physical.StorageEqual(column.Storage, expectedStorage) && !historicalV1PostgreSQLBoundedStringAgreement(schema, table, column, logicalField) {
 				return fail(CodePhysical, path+".table["+string(table.ID)+"].column["+string(column.ID)+"].storage", "logical type %q requires %#v, got %#v", logicalField.Scalar.Type.Kind, expectedStorage, column.Storage)
 			}
 			if logicalField.Scalar.Nullable != column.Nullable {
@@ -707,7 +868,100 @@ func (builder *registryBuilder) indexPhysical(provider golem.Provider, schema ph
 		capabilities[capability.ID] = capability
 	}
 	builder.registry.physicalModels[provider], builder.registry.physicalFields[provider], builder.registry.capabilities[provider] = models, fields, capabilities
+	builder.registry.physicalModelNames[provider], builder.registry.physicalAccessObjects[provider] = modelNames, accessObjects
+	builder.registry.physicalKeyAccessObjects[provider] = keyAccessObjects
 	builder.registry.physicalNamespaces[provider] = schema.Namespace.Name
 	builder.registry.physicalSystemNamespaces[provider] = schema.System.Namespace.Name
 	return nil
+}
+
+func historicalV1PostgreSQLBoundedStringAgreement(schema physical.PhysicalSchema, table physical.PhysicalTable, column physical.PhysicalColumn, logical compilerir.FieldIR) bool {
+	if schema.Version != 1 || schema.CanonicalVersion != 1 || schema.Provider.Provider != compilerir.PostgreSQL || logical.Scalar == nil || logical.Scalar.Type.Kind != compilerir.TypeString || logical.Scalar.Type.MaxLength == nil || *logical.Scalar.Type.MaxLength == 0 || column.Storage != (physical.StorageType{Kind: physical.StoragePostgreSQLText}) {
+		return false
+	}
+	id, name := physical.HistoricalV1MaxLengthCheckIdentity(table.ID, column.ID)
+	integer := physical.StorageType{Kind: physical.StoragePostgreSQLBigInt}
+	boolean := physical.StorageType{Kind: physical.StoragePostgreSQLBoolean}
+	fieldID := column.ID
+	literal := compilerir.TypedLiteralIR{Kind: compilerir.LiteralInteger, Canonical: fmt.Sprintf("%d", *logical.Scalar.Type.MaxLength)}
+	want := physical.PhysicalCheck{ID: id, Name: name, Expression: physical.Expression{
+		Kind: physical.ExpressionOperator, Type: boolean, Nullable: column.Nullable,
+		Symbol: &physical.SemanticSymbol{Identity: "golem.schema.predicate.less-equal.v1", Kind: compilerir.SchemaSymbolOperator, Version: 1, Provider: compilerir.ProviderScopePortable},
+		Operands: []physical.Expression{
+			{Kind: physical.ExpressionFunction, Type: integer, Nullable: column.Nullable, Symbol: &physical.SemanticSymbol{Identity: "golem.schema.function.length.v1", Kind: compilerir.SchemaSymbolFunction, Version: 1, Provider: compilerir.ProviderScopePortable}, Operands: []physical.Expression{{Kind: physical.ExpressionColumn, Type: column.Storage, Nullable: column.Nullable, Column: &fieldID, Operands: []physical.Expression{}}}},
+			{Kind: physical.ExpressionLiteral, Type: integer, Literal: &literal, Operands: []physical.Expression{}},
+		},
+	}}
+	found := 0
+	for _, check := range table.Checks {
+		if check.ID == id || check.Name == name {
+			found++
+			if check.ID != want.ID || check.Name != want.Name || len(check.RequiredCapabilities) != 0 || !equalHistoricalV1Expression(check.Expression, want.Expression) {
+				return false
+			}
+		}
+	}
+	return found == 1
+}
+
+func equalHistoricalV1Expression(left, right physical.Expression) bool {
+	if left.Kind != right.Kind || !reflect.DeepEqual(left.Type, right.Type) || left.Nullable != right.Nullable || !equalHistoricalV1Symbol(left.Symbol, right.Symbol) || !equalHistoricalV1Field(left.Column, right.Column) || !equalHistoricalV1Literal(left.Literal, right.Literal) || len(left.Operands) != len(right.Operands) {
+		return false
+	}
+	for index := range left.Operands {
+		if !equalHistoricalV1Expression(left.Operands[index], right.Operands[index]) {
+			return false
+		}
+	}
+	return true
+}
+
+func equalHistoricalV1Symbol(left, right *physical.SemanticSymbol) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalHistoricalV1Field(left, right *compilerir.FieldID) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func equalHistoricalV1Literal(left, right *compilerir.TypedLiteralIR) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return *left == *right
+}
+
+func registerPhysicalAccessObject(values map[physical.PhysicalName]PhysicalAccessObject, name physical.PhysicalName, value PhysicalAccessObject) error {
+	if _, duplicate := values[name]; duplicate {
+		// Names originate in untrusted provider plan/schema inputs. The private
+		// canary must not cross even this bootstrap diagnostic boundary.
+		return fmt.Errorf("physical plan access-object lookup is ambiguous")
+	}
+	hasKey, hasIndex := value.keyID != (golem.KeyID{}), value.indexID != (PhysicalIndexID{})
+	if name == "" || value.kind == PhysicalAccessUnknown || value.model == (golem.ModelID{}) || hasKey == hasIndex || hasKey != validPhysicalKeyFields(value.fields) {
+		return fmt.Errorf("physical plan access-object lookup fact is invalid")
+	}
+	values[name] = value.clone()
+	return nil
+}
+
+func physicalKeyFields(values []compilerir.FieldID) ([]golem.FieldID, error) {
+	result := make([]golem.FieldID, len(values))
+	for index, value := range values {
+		field, err := fieldID(value)
+		if err != nil {
+			return nil, err
+		}
+		result[index] = field
+	}
+	if !validPhysicalKeyFields(result) {
+		return nil, fmt.Errorf("invalid physical key fields")
+	}
+	return result, nil
 }

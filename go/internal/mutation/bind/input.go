@@ -85,11 +85,71 @@ func WithRuntimeOwnedValues(input ScalarInput, registry *schema.Registry, values
 	return ScalarInput{model: input.model, kind: input.kind, operations: operations}, nil
 }
 
+// WithOptimisticConcurrencyCreate installs the sole runtime-owned initial
+// token for a concurrency-enabled model. Ordinary runtime defaults are not an
+// authority for this field: its schema explicitly forbids a default/updated
+// producer, and the fixed value 1 belongs only to this closed boundary.
+func WithOptimisticConcurrencyCreate(input ScalarInput, registry *schema.Registry) (ScalarInput, error) {
+	if registry == nil || input.model == (policyir.ModelID{}) || input.kind != InputCreate {
+		return ScalarInput{}, fail(CodeInput, golem.ModelID(input.model), golem.FieldID{}, "optimistic-concurrency create input is invalid", nil)
+	}
+	model, ok := registry.Model(golem.ModelID(input.model))
+	if !ok {
+		return ScalarInput{}, fail(CodeModel, golem.ModelID(input.model), golem.FieldID{}, "optimistic-concurrency model is absent", nil)
+	}
+	fieldID, enabled := model.OptimisticConcurrency()
+	if !enabled {
+		return input, nil
+	}
+	field, ok := registry.Field(model.ID(), fieldID)
+	if !ok || field.Kind() == compilerir.FieldRelation || field.LogicalType().Kind != compilerir.TypeInt64 || field.Nullable() || field.Updated() || field.DatabaseReadOnly() {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency field is not the exact stored int64 owner", nil)
+	}
+	if _, present := field.Default(); present {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency field has a competing default owner", nil)
+	}
+	if _, present := field.Generation(); present {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency field has a competing generated owner", nil)
+	}
+	operations := input.Operations()
+	for _, operation := range operations {
+		if operation.FieldID() == policyir.FieldID(fieldID) {
+			return ScalarInput{}, fail(CodeExposure, model.ID(), fieldID, "optimistic-concurrency field cannot be application authored", nil)
+		}
+	}
+	typ, err := bindType(field.LogicalType(), false)
+	if err != nil || typ.Kind() != policyir.ValueInt64 {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency field has an invalid runtime type", err)
+	}
+	one, err := policyir.SignedValue(policyir.ValueInt64, 1)
+	if err != nil {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency initial value is invalid", err)
+	}
+	operation, err := mutationir.NewRuntimeSet(policyir.FieldID(fieldID), typ, one)
+	if err != nil {
+		return ScalarInput{}, fail(CodeInternal, model.ID(), fieldID, "optimistic-concurrency initial operation is invalid", err)
+	}
+	operations = append(operations, operation)
+	sort.Slice(operations, func(i, j int) bool {
+		left, right := operations[i].FieldID(), operations[j].FieldID()
+		return string(left[:]) < string(right[:])
+	})
+	return ScalarInput{model: input.model, kind: input.kind, operations: operations}, nil
+}
+
 // WithRuntimeOwnedOperations is the model-erased nested-planner boundary. The
 // supplied operations must already have passed ordinary public binding; this
 // function only reconstructs that immutable input long enough to apply the
 // same runtime-ownership validation used by root mutations.
 func WithRuntimeOwnedOperations(model policyir.ModelID, kind InputKind, operations []mutationir.ScalarOperation, registry *schema.Registry, values []RuntimeOwnedValue) ([]mutationir.ScalarOperation, error) {
+	if registry == nil {
+		return nil, fail(CodeInput, golem.ModelID(model), golem.FieldID{}, "active schema registry is required", nil)
+	}
+	modelFact, ok := registry.Model(golem.ModelID(model))
+	if !ok {
+		return nil, fail(CodeModel, golem.ModelID(model), golem.FieldID{}, "model-erased mutation model is absent", nil)
+	}
+	concurrencyField, concurrencyEnabled := modelFact.OptimisticConcurrency()
 	for _, operation := range operations {
 		if err := operation.Validate(); err != nil {
 			return nil, fail(CodeOperation, golem.ModelID(model), golem.FieldID(operation.FieldID()), "nested scalar operation is invalid", err)
@@ -97,10 +157,19 @@ func WithRuntimeOwnedOperations(model policyir.ModelID, kind InputKind, operatio
 		if operation.RuntimeOwned() {
 			return nil, fail(CodeOperation, golem.ModelID(model), golem.FieldID(operation.FieldID()), "nested scalar operation was resolved more than once", nil)
 		}
+		if concurrencyEnabled && operation.FieldID() == policyir.FieldID(concurrencyField) {
+			return nil, fail(CodeExposure, golem.ModelID(model), concurrencyField, "optimistic-concurrency field cannot cross a model-erased authored boundary", nil)
+		}
 	}
 	resolved, err := WithRuntimeOwnedValues(ScalarInput{model: model, kind: kind, operations: append([]mutationir.ScalarOperation(nil), operations...)}, registry, values)
 	if err != nil {
 		return nil, err
+	}
+	if kind == InputCreate {
+		resolved, err = WithOptimisticConcurrencyCreate(resolved, registry)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return resolved.Operations(), nil
 }
@@ -143,6 +212,7 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 	if kind != InputCreate && len(runtimeFields) != 0 {
 		return ScalarInput{}, nil, fail(CodeInput, modelID, golem.FieldID{}, "runtime-owned fields are valid only for create", nil)
 	}
+	concurrencyField, concurrencyEnabled := model.OptimisticConcurrency()
 	runtimeOwned := make(map[golem.FieldID]struct{}, len(runtimeFields))
 	runtimeInventory := make([]policyir.FieldID, 0, len(runtimeFields))
 	for _, fieldID := range runtimeFields {
@@ -191,6 +261,9 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 		if _, owned := runtimeOwned[fieldID]; owned {
 			return ScalarInput{}, nil, fail(CodeOperation, modelID, fieldID, "runtime-owned correlation field cannot also be explicitly authored", nil)
 		}
+		if concurrencyEnabled && fieldID == concurrencyField {
+			return ScalarInput{}, nil, fail(CodeExposure, modelID, fieldID, "optimistic-concurrency field cannot be application authored", nil)
+		}
 		if reason := mutationExposure(field, kind); reason != "" {
 			return ScalarInput{}, nil, fail(CodeExposure, modelID, fieldID, reason, nil)
 		}
@@ -211,6 +284,9 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 
 	if kind == InputCreate {
 		for _, fieldID := range model.Fields() {
+			if concurrencyEnabled && fieldID == concurrencyField {
+				continue
+			}
 			field, ok := registry.Field(modelID, fieldID)
 			if !ok || field.Kind() == compilerir.FieldRelation || !createRequired(field) {
 				continue

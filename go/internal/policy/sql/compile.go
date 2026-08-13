@@ -10,6 +10,20 @@ import (
 )
 
 func Compile(request Request) (Fragment, error) {
+	return compile(request, NewPolicyAliasAllocator())
+}
+
+// CompileWithPolicyAliasAllocator compiles one fragment within an outer
+// renderer-owned statement allocation scope. The allocator must be fresh for
+// that statement and shared by every fragment that contributes SQL to it.
+func CompileWithPolicyAliasAllocator(request Request, aliases *PolicyAliasAllocator) (Fragment, error) {
+	if aliases == nil {
+		return Fragment{}, &Error{Code: CodeInput, ModelID: request.Condition.ModelID(), Detail: "policy alias allocator is required"}
+	}
+	return compile(request, aliases)
+}
+
+func compile(request Request, aliases *PolicyAliasAllocator) (Fragment, error) {
 	if request.Resolver == nil || request.Dialect == nil || request.RootAlias == "" {
 		return Fragment{}, &Error{Code: CodeInput, ModelID: request.Condition.ModelID(), Detail: "resolver, dialect, and root alias are required"}
 	}
@@ -39,12 +53,16 @@ func Compile(request Request) (Fragment, error) {
 	if err := validateCapabilities(request.Condition, request.Provider, request.Resolver, request.Capabilities); err != nil {
 		return Fragment{}, err
 	}
-	compiler := compiler{request: request, binder: Binder{dialect: request.Dialect, resolver: request.Resolver}, nextAlias: 1}
+	compiler := compiler{request: request, binder: Binder{dialect: request.Dialect, resolver: request.Resolver}, aliases: aliases}
 	text, err := compiler.condition(request.Condition, request.RootAlias)
 	if err != nil {
 		return Fragment{}, err
 	}
-	return Fragment{text: text, args: cloneArgs(compiler.binder.args)}, nil
+	return Fragment{
+		text:                  text,
+		args:                  cloneArgs(compiler.binder.args),
+		policyRelationAliases: append([]PolicyRelationAliasFact(nil), compiler.policyRelationAliases...),
+	}, nil
 }
 
 func validateCapabilities(condition ir.Condition, provider ir.Provider, resolver Resolver, proof CapabilityProof) error {
@@ -86,9 +104,10 @@ func validateCapabilities(condition ir.Condition, provider ir.Provider, resolver
 }
 
 type compiler struct {
-	request   Request
-	binder    Binder
-	nextAlias int
+	request               Request
+	binder                Binder
+	aliases               *PolicyAliasAllocator
+	policyRelationAliases []PolicyRelationAliasFact
 }
 
 func (compiler *compiler) condition(condition ir.Condition, alias physical.PhysicalName) (string, error) {
@@ -173,8 +192,7 @@ func (compiler *compiler) relation(condition ir.Condition, parentAlias physical.
 	if !ok || model.ID != target {
 		return "", compiler.failure(condition, CodeSchema, "relation target has no physical descriptor", nil)
 	}
-	alias := physical.PhysicalName(fmt.Sprintf("golem_p%d", compiler.nextAlias))
-	compiler.nextAlias++
+	alias := compiler.allocatePolicyRelationAlias(target, relationID)
 	correlations := make([]string, len(descriptor.Pairs))
 	for index, pair := range descriptor.Pairs {
 		parent, parentOK := compiler.request.Resolver.Field(compiler.request.Provider, condition.ModelID(), pair.Parent)
@@ -209,6 +227,15 @@ func (compiler *compiler) relation(condition ir.Condition, parentAlias physical.
 	default:
 		return "", compiler.failure(condition, CodeRender, "unsupported relation operator", nil)
 	}
+}
+
+// allocatePolicyRelationAlias is the single ownership point for both the SQL
+// alias and its sanitizer fact. Callers cannot allocate one without recording
+// the other.
+func (compiler *compiler) allocatePolicyRelationAlias(model ir.ModelID, relation ir.RelationID) physical.PhysicalName {
+	alias := compiler.aliases.allocate()
+	compiler.policyRelationAliases = append(compiler.policyRelationAliases, newPolicyRelationAliasFact(alias, model, relation))
+	return physical.PhysicalName(alias)
 }
 
 func sameType(left, right ir.TypeRef) bool {

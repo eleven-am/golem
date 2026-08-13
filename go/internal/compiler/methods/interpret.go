@@ -12,6 +12,7 @@ import (
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
+	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
@@ -37,12 +38,16 @@ type interpreter struct {
 	handles         map[*types.Var]handleBinding
 	advanced        keyindex.AdvancedModelDeclarations
 	relations       []RelationOptionDeclaration
+	concurrency     *compilerconcurrency.Declaration
 	generated       []pendingGenerated
 	diagnostics     []ir.Diagnostic
 	graphql         *graphqlcontract.ModelPatch
 	graphqlDeclared bool
 	analytics       *analyticscontract.ModelPatch
 	computed        []graphqlextension.ComputedDeclaration
+	extensions      []ir.ProviderExtensionIR
+	semanticIndexes map[string]bool
+	semanticNodes   []*ast.CallExpr
 }
 
 type handleBinding struct {
@@ -88,13 +93,17 @@ func interpret(ctx context.Context, config Config) Result {
 		entry := &interpreter{
 			config: config, pkg: pkg, model: model,
 			engine: schemaexpr.New(model, config.Registry), vocab: vocab, handles: handles,
-			advanced: keyindex.AdvancedModelDeclarations{ModelID: model.ID},
+			advanced: keyindex.AdvancedModelDeclarations{ModelID: model.ID}, semanticIndexes: map[string]bool{},
 		}
 		entry.interpretModel()
 		entry.interpretGraphQLModel()
 		entry.finishGenerated()
+		entry.finishSemantic()
 		result.Advanced = append(result.Advanced, entry.advanced)
 		result.RelationOptions = append(result.RelationOptions, entry.relations...)
+		if entry.concurrency != nil {
+			result.OptimisticConcurrency = append(result.OptimisticConcurrency, *entry.concurrency)
+		}
 		if entry.graphql != nil {
 			result.GraphQLModels = append(result.GraphQLModels, *entry.graphql)
 		}
@@ -102,6 +111,7 @@ func interpret(ctx context.Context, config Config) Result {
 			result.AnalyticsModels = append(result.AnalyticsModels, *entry.analytics)
 		}
 		result.GraphQLComputed = append(result.GraphQLComputed, entry.computed...)
+		result.Extensions = append(result.Extensions, entry.extensions...)
 		result.Diagnostics = append(result.Diagnostics, entry.diagnostics...)
 	}
 	custom, customDiagnostics := interpretGraphQLSchema(config, loaded)
@@ -117,9 +127,25 @@ func interpret(ctx context.Context, config Config) Result {
 		}
 		return result.RelationOptions[i].Span.StartLine < result.RelationOptions[j].Span.StartLine
 	})
+	sort.Slice(result.OptimisticConcurrency, func(i, j int) bool {
+		if result.OptimisticConcurrency[i].ModelID != result.OptimisticConcurrency[j].ModelID {
+			return result.OptimisticConcurrency[i].ModelID < result.OptimisticConcurrency[j].ModelID
+		}
+		return result.OptimisticConcurrency[i].FieldID < result.OptimisticConcurrency[j].FieldID
+	})
 	graphqlcontract.SortPatches(result.GraphQLModels)
 	analyticscontract.SortPatches(result.AnalyticsModels)
 	graphqlextension.SortDeclarations(result.GraphQLComputed, result.GraphQLCustom)
+	sort.Slice(result.Extensions, func(i, j int) bool {
+		left, right := result.Extensions[i], result.Extensions[j]
+		if left.Provider != right.Provider {
+			return left.Provider < right.Provider
+		}
+		if left.Owner != right.Owner {
+			return left.Owner < right.Owner
+		}
+		return left.ID < right.ID
+	})
 	ir.SortDiagnostics(result.Diagnostics)
 	return result
 }
@@ -131,7 +157,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "PrimaryKey", "Unique", "Index", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}
