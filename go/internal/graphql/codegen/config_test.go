@@ -42,14 +42,14 @@ func TestRenderSemanticSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing
 	if len(bindings) != 1 {
 		t.Fatalf("semantic bindings = %#v", bindings)
 	}
-	for _, fragment := range []string{"*Caller[P]", "Take *int32", "Where *golem.Predicate[Record]", "take := 25", "take > 250", "caller.Records.SearchContent", "ranked[index].Row()", "GeneratedCustomPredicateArgument"} {
+	for _, fragment := range []string{"*Caller[P]", "Take *int32", "Where *golem.Predicate[Record]", "args.Take == nil", "caller.Records.SearchContent", "ranked[index].Row()", "GeneratedCustomPredicateArgument"} {
 		if !strings.Contains(bindings[0], fragment) {
 			t.Fatalf("semantic binding missing %q:\n%s", fragment, bindings[0])
 		}
 	}
 }
 
-func TestRenderSemanticSearchBindingCapsDefaultAtPortableMaximum(t *testing.T) {
+func TestRenderSemanticSearchBindingLeavesPagingToTheRuntimeOperationCompiler(t *testing.T) {
 	operation := ir.CustomOperationContractIR{Operation: ir.CustomOperationQuery, Name: "searchRecordsByContent", Resolver: ir.AttachedMethodIR{Name: "content", Kind: "customquery"}}
 	model := ir.ModelDeclIR{LogicalName: "Record", Go: ir.GoNamedTypeIR{Name: "Record"}}
 	contract := ir.ModelContractIR{Limits: ir.LimitContractIR{DefaultPageSize: 1500, MaxPageSize: 2000}}
@@ -57,7 +57,7 @@ func TestRenderSemanticSearchBindingCapsDefaultAtPortableMaximum(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, fragment := range []string{"take := 1000", "take > 1000"} {
+	for _, fragment := range []string{"args.Take == nil", "take := int(*args.Take)"} {
 		if !strings.Contains(resolver, fragment) {
 			t.Fatalf("semantic maximum missing %q:\n%s", fragment, resolver)
 		}

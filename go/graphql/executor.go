@@ -153,7 +153,25 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 				response.Errors = append(response.Errors, PresentError(ctx, executeErr, []any{root.ResponseName}, executor.report))
 				data[root.ResponseName] = nil
 			} else {
-				encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, result.Value(), computed.resolve)
+				value := result.Value()
+				request, order, semantic, hydrateErr := executor.compiler.PrepareSemanticCustomHydration(root, value)
+				if hydrateErr == nil && semantic {
+					value = []any{}
+					if len(order) != 0 {
+						var rows []golem.RuntimeModelRow
+						rows, hydrateErr = caller.ExecuteFrozenRead(customContext, request)
+						if hydrateErr == nil {
+							value, hydrateErr = executor.compiler.FinishSemanticCustomHydration(root, order, rows)
+						}
+					}
+				}
+				if hydrateErr != nil {
+					finishGraphQLChild(observation, hydrateErr)
+					response.Errors = append(response.Errors, PresentError(ctx, hydrateErr, []any{root.ResponseName}, executor.report))
+					data[root.ResponseName] = nil
+					continue
+				}
+				encoded, failures, encodeErr := executor.compiler.EncodeCustomWithComputedPartial(customContext, root, value, computed.resolve)
 				finishGraphQLChild(observation, encodeErr)
 				if encodeErr != nil {
 					response.Errors = append(response.Errors, PresentError(ctx, encodeErr, []any{root.ResponseName}, executor.report))

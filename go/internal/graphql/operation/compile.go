@@ -103,6 +103,7 @@ type CustomRoot struct {
 	Arguments    map[string]any
 	Result       compilerir.GraphQLTypeIR
 	Slots        []selectset.Slot
+	semantic     *semanticCustomRoot
 }
 
 type MutationRoot struct {
@@ -630,6 +631,10 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 	if err != nil {
 		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
 	}
+	semantic, err := c.bindSemanticSearchTake(contract, arguments, root.field.Arguments.ForName("take") != nil)
+	if err != nil {
+		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+	}
 	prepared, err := c.custom.Prepare(kind, root.field.Name, arguments)
 	if err != nil {
 		return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
@@ -663,6 +668,12 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 			return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, selectErr)
 		}
 		compiled.Slots = selectset.StableSlots(selected.Slots)
+		if semantic {
+			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, selected.Selections)
+			if err != nil {
+				return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
+			}
+		}
 	}
 	return compiled, nil
 }
