@@ -15,8 +15,54 @@ import (
 	gqlconfig "github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
+
+func TestRenderSemanticSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing.T) {
+	compilation := ir.CompilationIR{
+		Model:    ir.ModelIR{Schema: ir.SchemaIdentityIR{PackagePath: "example.test/app"}, Models: []ir.ModelDeclIR{{ID: "record", LogicalName: "Record", Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Record"}}}},
+		Contract: ir.ContractIR{Models: []ir.ModelContractIR{{ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: ir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 250}}}},
+	}
+	payload, _ := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{"field"}, Metric: "cosine"})
+	compilation.Model.Extensions = []ir.ProviderExtensionIR{{ID: "semantic", Provider: ir.SQLite, Version: 1, Owner: "record", Kind: semanticcontract.IndexKind, Payload: payload}}
+	if diagnostics := graphqlextension.AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("semantic diagnostics = %#v", diagnostics)
+	}
+	bindings, err := renderCustomBindings(&compilation, func(path, preferred string) string {
+		if path == "example.test/app" {
+			return ""
+		}
+		return preferred
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("semantic bindings = %#v", bindings)
+	}
+	for _, fragment := range []string{"*Caller[P]", "Take *int32", "Where *golem.Predicate[Record]", "take := 25", "take > 250", "caller.Records.SearchContent", "ranked[index].Row()", "GeneratedCustomPredicateArgument"} {
+		if !strings.Contains(bindings[0], fragment) {
+			t.Fatalf("semantic binding missing %q:\n%s", fragment, bindings[0])
+		}
+	}
+}
+
+func TestRenderSemanticSearchBindingCapsDefaultAtPortableMaximum(t *testing.T) {
+	operation := ir.CustomOperationContractIR{Operation: ir.CustomOperationQuery, Name: "searchRecordsByContent", Resolver: ir.AttachedMethodIR{Name: "content", Kind: "customquery"}}
+	model := ir.ModelDeclIR{LogicalName: "Record", Go: ir.GoNamedTypeIR{Name: "Record"}}
+	contract := ir.ModelContractIR{Limits: ir.LimitContractIR{DefaultPageSize: 1500, MaxPageSize: 2000}}
+	resolver, err := renderSemanticSearchResolver(operation, model, contract, func(string, string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{"take := 1000", "take > 1000"} {
+		if !strings.Contains(resolver, fragment) {
+			t.Fatalf("semantic maximum missing %q:\n%s", fragment, resolver)
+		}
+	}
+}
 
 func TestEmitIsDeterministicValidGoAndCarriesCallerOnlyServerAssembly(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})

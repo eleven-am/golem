@@ -70,8 +70,11 @@ func Emit(request Request) (File, error) {
 	if err != nil {
 		return File{}, err
 	}
-	semantic, err := semanticIndexes(request.Schema.Model)
+	semantic, err := semanticcontract.IndexesByModel(request.Schema.Model)
 	if err != nil {
+		return File{}, fmt.Errorf("registry codegen: %w", err)
+	}
+	if err := validateSemanticMethodNames(semantic); err != nil {
 		return File{}, err
 	}
 	packages := append([]modelcodegen.PackageSpec(nil), request.ModelPackages...)
@@ -271,7 +274,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func (client Caller%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 		emitQueryPlanClientMethods(source, model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, queryplanAlias, descriptor, contractHasRelationDimensions(contract), contract.ScopedReads)
 		for _, index := range semantic[model.ID] {
-			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSimilar(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		if contract.Subscriptions {
 			eventType := model.Go.Name + "Event"
@@ -291,7 +294,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func (client System%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client System%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 		for _, index := range semantic[model.ID] {
-			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSimilar(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		emitAnalyticsClientMethods(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
@@ -460,59 +463,26 @@ func pluralName(name string) string {
 	return name + "s"
 }
 
-func semanticIndexes(model ir.ModelIR) (map[ir.ModelID][]semanticcontract.Index, error) {
-	result := make(map[ir.ModelID][]semanticcontract.Index)
-	seen := make(map[string]string)
-	for _, extension := range model.Extensions {
-		if extension.Kind != semanticcontract.IndexKind {
-			continue
-		}
-		index, err := semanticcontract.DecodeIndex(extension.Payload)
-		if err != nil {
-			return nil, fmt.Errorf("registry codegen: invalid semantic index: %w", err)
-		}
-		owner := ir.ModelID(extension.Owner)
-		key := string(owner) + "\x00" + index.Name
-		payload, _ := semanticcontract.Encode(index)
-		if previous, exists := seen[key]; exists {
-			if previous != payload {
-				return nil, fmt.Errorf("registry codegen: provider semantic index definitions differ")
-			}
-			continue
-		}
-		seen[key] = payload
-		result[owner] = append(result[owner], index)
-	}
-	for modelID := range result {
-		sort.Slice(result[modelID], func(i, j int) bool { return result[modelID][i].Name < result[modelID][j].Name })
+func validateSemanticMethodNames(indexes map[ir.ModelID][]semanticcontract.Index) error {
+	for modelID := range indexes {
 		methods := make(map[string]string)
-		for _, index := range result[modelID] {
-			method := semanticMethodName(index.Name)
+		for _, index := range indexes[modelID] {
+			if _, ok := semanticcontract.ExportedIndexName(index.Name); !ok {
+				return fmt.Errorf("registry codegen: semantic index name %q cannot form a Go method", index.Name)
+			}
+			method := semanticSearchMethodName(index.Name)
 			if previous, collision := methods[method]; collision && previous != index.Name {
-				return nil, fmt.Errorf("registry codegen: semantic index names %q and %q collide in Go", previous, index.Name)
+				return fmt.Errorf("registry codegen: semantic index names %q and %q collide in Go", previous, index.Name)
 			}
 			methods[method] = index.Name
 		}
 	}
-	return result, nil
+	return nil
 }
 
-func semanticMethodName(name string) string {
-	var result strings.Builder
-	result.WriteString("Similar")
-	upper := true
-	for _, char := range name {
-		if char == '-' || char == '_' {
-			upper = true
-			continue
-		}
-		if upper && char >= 'a' && char <= 'z' {
-			char -= 'a' - 'A'
-		}
-		result.WriteRune(char)
-		upper = false
-	}
-	return result.String()
+func semanticSearchMethodName(name string) string {
+	exported, _ := semanticcontract.ExportedIndexName(name)
+	return "Search" + exported
 }
 
 type preparedDocument struct {

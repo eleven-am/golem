@@ -12161,7 +12161,7 @@
           "methods": []
         },
         {
-          "name": "CallerSimilar",
+          "name": "CallerSearch",
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, caller *github.com/eleven-am/golem/go/runtime.Caller[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",
@@ -12577,7 +12577,7 @@
           "methods": []
         },
         {
-          "name": "SystemSimilar",
+          "name": "SystemSearch",
           "kind": "func",
           "typeKind": "",
           "signature": "func[P, A, M any](ctx context.Context, system github.com/eleven-am/golem/go/runtime.System[P, A], descriptor github.com/eleven-am/golem/go/golem.ModelDescriptor[M], indexName string, query string, take int, predicates ...github.com/eleven-am/golem/go/golem.Predicate[M]) ([]github.com/eleven-am/golem/go/golem.SemanticResult[M], error)",

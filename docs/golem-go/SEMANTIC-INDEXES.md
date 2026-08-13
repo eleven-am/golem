@@ -1,7 +1,5 @@
 # Semantic indexes
 
-Status: **unreleased Go feature**.
-
 Golem semantic indexes turn selected model text fields into a managed embedding
 index. Application code declares what a document means and supplies an embedding
 provider. It does not declare vector columns, shadow tables, HNSW indexes, or
@@ -14,11 +12,11 @@ dimension count must match the configured provider:
 
 ```go
 func DefineSchema(schema *golem.Schema) {
-	golem.SchemaName(schema, "articles")
+	golem.SchemaName(schema, "records")
 	golem.Actor[Principal](schema)
-	golem.Model[Article](schema)
+	golem.Model[Record](schema)
 	golem.Providers(schema, golem.SQLite, golem.PostgreSQL)
-	golem.EmbeddingSpace(schema, "article-content", 1536)
+	golem.EmbeddingSpace(schema, "record-content", 1536)
 }
 ```
 
@@ -27,14 +25,14 @@ string fields. Field order is part of the canonical document and therefore part
 of migration and generation review:
 
 ```go
-func (Article) GolemModel() golem.ModelSpec[Article] {
+func (Record) GolemModel() golem.ModelSpec[Record] {
 	return golem.DefineModel(
 		golem.SemanticIndex(
-			"related",
-			"article-content",
-			Articles.Title,
-			Articles.Summary,
-			Articles.Body,
+			"content",
+			"record-content",
+			Records.Title,
+			Records.Summary,
+			Records.Body,
 		),
 	)
 }
@@ -63,7 +61,7 @@ if err != nil {
 }
 
 providers, err := embedding.NewRegistry(map[string]embedding.Provider{
-	"article-content": articleEmbedder{specification: specification},
+	"record-content": recordEmbedder{specification: specification},
 })
 if err != nil {
 	return err
@@ -107,27 +105,48 @@ state/vector tables under the same stable index identity, preserves the owner
 table, and lazily repopulates the empty index. The application build and
 configured provider dimensions must change together with that migration.
 
-## Query related rows
+## Search indexed rows
 
 Generation adds one typed method per semantic index:
 
 ```go
-related, err := caller.Articles.SimilarRelated(
+results, err := caller.Records.SearchContent(
 	ctx,
 	"reliable background jobs",
 	10,
-	Articles.Published.Eq(true), // optional additional predicate
+	Records.Published.Eq(true), // optional additional predicate
 )
 ```
 
-The method name is `Similar` plus the exported Go spelling of the declared
-index name: `related` becomes `SimilarRelated`, while `related-posts` becomes
-`SimilarRelatedPosts`. Generation refuses two names that collapse to the same
+The method name is `Search` plus the exported Go spelling of the declared index
+name: `content` becomes `SearchContent`, while `record-content` becomes
+`SearchRecordContent`. Generation refuses two names that collapse to the same
 Go method.
 
-Each result contains the authorized `golem.Row[Article]`, cosine distance, and
+Each result contains the authorized `golem.Row[Record]`, cosine distance, and
 similarity (`1 - distance`). Smaller distance is better. Equal distances use
 the canonical primary identity as a deterministic tie-breaker.
+
+Every semantic index on a GraphQL-exposed model also adds one caller-authorized
+GraphQL query. For a model whose GraphQL plural is `Records` and an index named
+`content`, the root is:
+
+```graphql
+searchRecordsByContent(
+  query: String!
+  take: Int
+  where: RecordWhereInput
+): [Record!]!
+```
+
+`take` defaults to the lower of the model's GraphQL page size and Golem's
+portable semantic-result limit. It cannot exceed the lower of the model's
+maximum page size and that semantic limit. The optional `where` argument is
+applied in addition to the model's read policy. GraphQL returns normal model
+objects so selections, computed fields, and field masking behave exactly like
+other generated reads. Distance and similarity remain available from the Go
+`SemanticResult`; the GraphQL root deliberately does not introduce a second
+scored-result object type.
 
 The optional final argument is one typed predicate—not arbitrary read options.
 Golem chooses the projection and candidate bound so pagination or an omitted
@@ -143,12 +162,9 @@ Caller search first executes the model's ordinary read policy and read hooks.
 Only readable rows with readable primary identities are handed to the vector
 ranking query. A highly similar forbidden row is therefore absent, not masked
 after ranking. The generated `System` client has the corresponding trusted
-method. Similarity methods are intentionally absent from `CallerTx` and
+method. Semantic search methods are intentionally absent from `CallerTx` and
 `SystemTx`: refresh and provider-native vector ranking do not join an
 application mutation transaction.
-
-The first semantic release exposes this operation through generated Go clients.
-A generated GraphQL semantic root is not yet part of the frozen GraphQL ABI.
 
 ## Refresh lifecycle
 

@@ -14,6 +14,9 @@ import (
 
 	"github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 	"github.com/vektah/gqlparser/v2/ast"
 )
 
@@ -403,10 +406,12 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 		return nil, nil
 	}
 	models := map[string]ir.ModelDeclIR{}
+	contracts := map[string]ir.ModelContractIR{}
 	for _, contract := range compilation.Contract.Models {
 		for _, model := range compilation.Model.Models {
 			if model.ID == contract.ModelID {
 				models[contract.GraphQLName] = model
+				contracts[contract.GraphQLName] = contract
 				break
 			}
 		}
@@ -415,7 +420,19 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 	sort.Slice(operations, func(i, j int) bool { return operations[i].ExtensionID < operations[j].ExtensionID })
 	bindings := make([]string, 0, len(operations))
 	for _, operation := range operations {
-		resolver, err := renderCallable(operation.Resolver, qualify)
+		var resolver string
+		var err error
+		if graphqlextension.IsSemanticSearchOperation(*compilation, operation) {
+			modelName := resultModelName(operation.Result)
+			model, ok := models[modelName]
+			if !ok {
+				return nil, fmt.Errorf("GraphQL semantic search result model %s is absent", modelName)
+			}
+			contract := contracts[modelName]
+			resolver, err = renderSemanticSearchResolver(operation, model, contract, qualify)
+		} else {
+			resolver, err = renderCallable(operation.Resolver, qualify)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -468,6 +485,33 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 		bindings = append(bindings, fmt.Sprintf("golemgraphql.%s(%s)", constructor, arguments))
 	}
 	return bindings, nil
+}
+
+func renderSemanticSearchResolver(operation ir.CustomOperationContractIR, model ir.ModelDeclIR, contract ir.ModelContractIR, qualify func(string, string) string) (string, error) {
+	if operation.Operation != ir.CustomOperationQuery || operation.Resolver.Name == "" || operation.Resolver.Kind != "customquery" {
+		return "", fmt.Errorf("GraphQL semantic search operation %s is invalid", operation.Name)
+	}
+	exported, ok := semanticcontract.ExportedIndexName(operation.Resolver.Name)
+	if !ok {
+		return "", fmt.Errorf("GraphQL semantic search index %q cannot form a Go method", operation.Resolver.Name)
+	}
+	alias := qualify(model.Go.PackagePath, "golemmodels")
+	modelType := model.Go.Name
+	if alias != "" {
+		modelType = alias + "." + modelType
+	}
+	defaultTake := contract.Limits.DefaultPageSize
+	if defaultTake == 0 {
+		defaultTake = 50
+	}
+	maximumTake := contract.Limits.MaxPageSize
+	if maximumTake == 0 || maximumTake > semanticruntime.MaximumResults {
+		maximumTake = semanticruntime.MaximumResults
+	}
+	if defaultTake > maximumTake {
+		defaultTake = maximumTake
+	}
+	return fmt.Sprintf("func(ctx context.Context, caller *Caller[P], args struct { Query string; Take *int32; Where *golem.Predicate[%[1]s] }) ([]golem.Row[%[1]s], error) { take := %[2]d; if args.Take != nil { take = int(*args.Take); if take < 1 || take > %[5]d { return nil, fmt.Errorf(\"semantic search take must be between 1 and %[5]d\") } }; where := make([]golem.Predicate[%[1]s], 0, 1); if args.Where != nil { where = append(where, *args.Where) }; ranked, err := caller.%[3]s.Search%[4]s(ctx, args.Query, take, where...); if err != nil { return nil, err }; rows := make([]golem.Row[%[1]s], len(ranked)); for index := range ranked { rows[index] = ranked[index].Row() }; return rows, nil }", modelType, defaultTake, plural(model.LogicalName), exported, maximumTake), nil
 }
 
 type eventBinding struct {

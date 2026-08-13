@@ -266,7 +266,7 @@ func uuid(t *testing.T, text string) golem.UUID {
   return value
 }
 
-func TestGeneratedPGVectorSimilarityIsNativeAuthorizedAndIncremental(t *testing.T) {
+func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   ctx := context.Background()
   database, err := providerpostgresql.Open(ctx, providerpostgresql.Config{DataSourceName: {{DSN}}})
   if err != nil { t.Fatal(err) }
@@ -316,7 +316,7 @@ func TestGeneratedPGVectorSimilarityIsNativeAuthorizedAndIncremental(t *testing.
 
   caller, err := application.ForPrincipal(ctx, "public")
   if err != nil { t.Fatal(err) }
-  ranked, err := caller.Posts.SimilarRelated(ctx, "alpha", 10)
+  ranked, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if provider.count() != 5 { t.Fatalf("query provider calls=%d want=5", provider.count()) }
   if len(ranked) != 3 || ranked[0].Distance() != 0 || ranked[0].Similarity() != 1 || ranked[1].Distance() != 0 {
@@ -380,7 +380,7 @@ func TestGeneratedPGVectorSimilarityIsNativeAuthorizedAndIncremental(t *testing.
     if bulkTrace[index] != (observed{operation: observe.OperationSemanticProvider, aggregate: 8}) { t.Fatalf("bulk provider observation[%d]=%#v", index, bulkTrace[index]) }
   }
   if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 2002, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
-  plannerRanks, err := caller.Posts.SimilarRelated(ctx, "alpha", 10)
+  plannerRanks, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if len(plannerRanks) != 10 || provider.count() != 1007 { t.Fatalf("generated HNSW ranks=%d calls=%d", len(plannerRanks), provider.count()) }
   for _, rank := range plannerRanks {
