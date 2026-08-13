@@ -111,6 +111,16 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
+      - name: Restore annotated release tag
+        run: |
+          case "${GITHUB_REF_NAME}" in
+            go/v*) ;;
+            *) echo "release ref is not a Go module tag" >&2; exit 1 ;;
+          esac
+          tag_ref="refs/tags/${GITHUB_REF_NAME}"
+          git fetch --force --no-tags origin "${tag_ref}:${tag_ref}"
+          test "$(git cat-file -t "${tag_ref}")" = tag
+          test "$(git rev-parse "${tag_ref}^{commit}")" = "${GITHUB_SHA}"
       - name: Materialize release signer authority
         env:
           ALLOWED_SIGNERS_B64: ${{ secrets.GOLEM_RELEASE_ALLOWED_SIGNERS_B64 }}
