@@ -3,16 +3,19 @@ package operation
 import (
 	"context"
 	"encoding/hex"
+	"fmt"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	selectset "github.com/eleven-am/golem/go/internal/graphql/select"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 	"github.com/vektah/gqlparser/v2/parser"
@@ -71,6 +74,115 @@ func TestCompilerLowersAliasedRootAndNestedArgumentsToP3(t *testing.T) {
 	}
 	if childTake, present := child.Take(); !present || childTake != 2 {
 		t.Fatalf("frozen child take = %d/%v", childTake, present)
+	}
+}
+
+func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankOrder(t *testing.T) {
+	compilation := semanticSocial(t)
+	document, err := graphqlschema.Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	schema, err := gqlparser.LoadSchema(&ast.Source{Name: "generated.graphql", Input: document.SDL})
+	if err != nil {
+		t.Fatal(err)
+	}
+	operation := compilation.Contract.CustomOperations[0]
+	postContract := contractNamed(t, compilation.Contract, "Post")
+	postModel := modelByIDForTest(t, compilation.Model, postContract.ModelID)
+	relationField, relation, targetContract := firstRelationForTest(t, compilation, postModel)
+	postID := fieldContractByIDForTest(t, postContract, postModel.PrimaryKey.Fields[0])
+	targetModel := modelByIDForTest(t, compilation.Model, targetContract.ModelID)
+	targetID := fieldContractByIDForTest(t, targetContract, targetModel.PrimaryKey.Fields[0])
+	limitQuery, limitErrors := gqlparser.LoadQuery(schema, `query Limit { `+operation.Name+`(query: "rank me") { `+postID.GraphQLName+` } }`)
+	if len(limitErrors) != 0 {
+		t.Fatal(limitErrors)
+	}
+	limitCompiler, err := New(compilation, Limits{Bind: graphqlbind.Limits{MaxPageSize: 2}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	limited, err := limitCompiler.Compile(limitQuery, limitQuery.Operations.ForName("Limit"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(limited.Custom) != 1 || limited.Custom[0].Arguments["take"] != int32(2) {
+		t.Fatalf("runtime-limited semantic take = %#v", limited.Custom)
+	}
+	overflow, overflowErrors := gqlparser.LoadQuery(schema, `query { `+operation.Name+`(query: "rank me", take: 3) { `+postID.GraphQLName+` } }`)
+	if len(overflowErrors) != 0 {
+		t.Fatal(overflowErrors)
+	}
+	if _, err := limitCompiler.Compile(overflow, overflow.Operations[0], nil); err == nil {
+		t.Fatal("semantic take above the runtime GraphQL maximum was accepted")
+	}
+
+	relationArguments := ""
+	if definition := schema.Types[postContract.GraphQLName].Fields.ForName(relationField.GraphQLName); definition != nil && definition.Arguments.ForName("take") != nil {
+		relationArguments = "(take: 1)"
+	}
+	query, queryErrors := gqlparser.LoadQuery(schema, `query Search { `+operation.Name+`(query: "rank me") { `+postID.GraphQLName+` `+relationField.GraphQLName+relationArguments+` { `+targetID.GraphQLName+` } } }`)
+	if len(queryErrors) != 0 {
+		t.Fatal(queryErrors)
+	}
+	compiler, err := New(compilation, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := compiler.Compile(query, query.Operations.ForName("Search"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.Custom) != 1 || compiled.Custom[0].semantic == nil {
+		t.Fatalf("semantic root/take = %#v", compiled.Custom)
+	}
+
+	postModelID := golemModelID(postModel.ID)
+	postFieldID, _ := publicFieldID(postModel.PrimaryKey.Fields[0])
+	firstIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 1)
+	secondIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 2)
+	firstRanked := runtimeRowForTest(t, postModelID, postFieldID, firstIdentity)
+	secondRanked := runtimeRowForTest(t, postModelID, postFieldID, secondIdentity)
+	if _, _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstRanked}); err != nil || active {
+		t.Fatalf("scalar-only semantic search scheduled hydration: active=%t err=%v", active, err)
+	}
+	request, order, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{secondRanked, firstRanked})
+	if err != nil || !active {
+		t.Fatalf("prepare semantic hydration active=%t err=%v", active, err)
+	}
+	if take, ok := request.Take(); !ok || take != 2 || len(request.Selection()) < 2 {
+		t.Fatalf("semantic hydration request take/selection = %d/%t/%d", take, ok, len(request.Selection()))
+	}
+	selectedRelation := false
+	for _, selection := range request.Selection() {
+		selectedRelation = selectedRelation || selection.IsRelation()
+	}
+	if !selectedRelation {
+		t.Fatal("semantic hydration request discarded the selected relation")
+	}
+
+	relationSlot := slotByFieldForTest(t, compiled.Custom[0].Slots, relationField.FieldID)
+	targetModelID := golemModelID(targetModel.ID)
+	targetFieldID, _ := publicFieldID(targetModel.PrimaryKey.Fields[0])
+	child := runtimeRowForTest(t, targetModelID, targetFieldID, semanticIdentityValue(t, generatedFieldByIDForTest(t, targetModel, targetModel.PrimaryKey.Fields[0]), 9))
+	firstHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child)
+	secondHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child)
+	hydrated, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], order, []golem.RuntimeModelRow{firstHydrated, secondHydrated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, failures, err := compiler.EncodeCustomWithComputedPartial(context.Background(), compiled.Custom[0], hydrated, func(context.Context, compilerir.ModelID, []golem.RuntimeModelRow, selectset.Slot) ([]any, error) {
+		return nil, fmt.Errorf("unexpected computed resolver")
+	})
+	if err != nil || len(failures) != 0 {
+		t.Fatalf("semantic relation encode failures=%#v err=%v", failures, err)
+	}
+	items := encoded.([]any)
+	if len(items) != 2 || items[0].(map[string]any)[relationField.GraphQLName] == nil || items[1].(map[string]any)[relationField.GraphQLName] == nil {
+		t.Fatalf("semantic relation result = %#v", encoded)
+	}
+	if got := items[0].(map[string]any)[postID.GraphQLName]; got == items[1].(map[string]any)[postID.GraphQLName] || got != graphqlIdentityValue(secondIdentity) {
+		t.Fatalf("semantic rank order = %#v", items)
 	}
 }
 
@@ -603,6 +715,164 @@ func social(t *testing.T) compilerir.CompilationIR {
 		t.Fatalf("compile diagnostics = %#v", result.Diagnostics)
 	}
 	return *result.Compilation
+}
+
+func semanticSocial(t *testing.T) compilerir.CompilationIR {
+	t.Helper()
+	compilation := social(t)
+	post := contractNamed(t, compilation.Contract, "Post")
+	model := modelByIDForTest(t, compilation.Model, post.ModelID)
+	title := generatedFieldNamedForTest(t, model, "Title")
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{string(title.ID)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, provider := range []compilerir.Provider{compilerir.SQLite, compilerir.PostgreSQL} {
+		compilation.Model.Extensions = append(compilation.Model.Extensions, compilerir.ProviderExtensionIR{
+			ID: compilerir.ExtensionID(fmt.Sprintf("%032x", index+1)), Provider: provider, Version: semanticcontract.Version,
+			Owner: compilerir.ObjectID(model.ID), Kind: semanticcontract.IndexKind, Payload: payload,
+		})
+	}
+	if diagnostics := graphqlextension.AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("semantic diagnostics = %#v", diagnostics)
+	}
+	if len(compilation.Contract.CustomOperations) != 1 {
+		t.Fatalf("semantic operations = %#v", compilation.Contract.CustomOperations)
+	}
+	return compilation
+}
+
+func modelByIDForTest(t *testing.T, model compilerir.ModelIR, id compilerir.ModelID) compilerir.ModelDeclIR {
+	t.Helper()
+	for _, candidate := range model.Models {
+		if candidate.ID == id {
+			return candidate
+		}
+	}
+	t.Fatalf("missing model %s", id)
+	return compilerir.ModelDeclIR{}
+}
+
+func generatedFieldNamedForTest(t *testing.T, model compilerir.ModelDeclIR, name string) compilerir.FieldIR {
+	t.Helper()
+	for _, field := range model.Fields {
+		if field.GoName == name {
+			return field
+		}
+	}
+	t.Fatalf("missing field %s.%s", model.Go.Name, name)
+	return compilerir.FieldIR{}
+}
+
+func generatedFieldByIDForTest(t *testing.T, model compilerir.ModelDeclIR, id compilerir.FieldID) compilerir.FieldIR {
+	t.Helper()
+	for _, field := range model.Fields {
+		if field.ID == id {
+			return field
+		}
+	}
+	t.Fatalf("missing field %s.%s", model.Go.Name, id)
+	return compilerir.FieldIR{}
+}
+
+func fieldContractByIDForTest(t *testing.T, contract compilerir.ModelContractIR, id compilerir.FieldID) compilerir.FieldContractIR {
+	t.Helper()
+	for _, field := range contract.Fields {
+		if field.FieldID == id {
+			return field
+		}
+	}
+	t.Fatalf("missing contract field %s.%s", contract.GraphQLName, id)
+	return compilerir.FieldContractIR{}
+}
+
+func firstRelationForTest(t *testing.T, compilation compilerir.CompilationIR, source compilerir.ModelDeclIR) (compilerir.FieldContractIR, compilerir.RelationIR, compilerir.ModelContractIR) {
+	t.Helper()
+	sourceContract := contractNamed(t, compilation.Contract, source.Go.Name)
+	for _, relation := range compilation.Model.Relations {
+		if relation.SourceModel != source.ID {
+			continue
+		}
+		field := fieldContractByIDForTest(t, sourceContract, relation.SourceField)
+		for _, target := range compilation.Contract.Models {
+			if target.ModelID == relation.TargetModel {
+				return field, relation, target
+			}
+		}
+	}
+	t.Fatalf("model %s has no exposed relation", source.Go.Name)
+	return compilerir.FieldContractIR{}, compilerir.RelationIR{}, compilerir.ModelContractIR{}
+}
+
+func semanticIdentityValue(t *testing.T, field compilerir.FieldIR, value byte) any {
+	t.Helper()
+	if field.Scalar == nil {
+		t.Fatalf("identity field %s is not scalar", field.ID)
+	}
+	switch field.Scalar.Type.Kind {
+	case compilerir.TypeUUID:
+		var result golem.UUID
+		result[len(result)-1] = value
+		return result
+	case compilerir.TypeString:
+		return fmt.Sprintf("id-%d", value)
+	case compilerir.TypeInt16:
+		return int16(value)
+	case compilerir.TypeInt32:
+		return int32(value)
+	case compilerir.TypeInt64:
+		return int64(value)
+	default:
+		t.Fatalf("unsupported semantic identity type %s", field.Scalar.Type.Kind)
+		return nil
+	}
+}
+
+func runtimeRowForTest(t *testing.T, model golem.ModelID, field golem.FieldID, value any) golem.RuntimeModelRow {
+	t.Helper()
+	row, err := golem.RuntimeModelReadRow(model, golem.RuntimePresentReadCell(field, value, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func slotByFieldForTest(t *testing.T, slots []selectset.Slot, field compilerir.FieldID) selectset.Slot {
+	t.Helper()
+	for _, slot := range slots {
+		if slot.FieldID == field {
+			return slot
+		}
+	}
+	t.Fatalf("missing slot for field %s", field)
+	return selectset.Slot{}
+}
+
+func runtimeRelationRowForTest(t *testing.T, model golem.ModelID, identityField golem.FieldID, identity any, relationField compilerir.FieldID, slot selectset.Slot, relation compilerir.RelationIR, child golem.RuntimeModelRow) golem.RuntimeModelRow {
+	t.Helper()
+	field, err := publicFieldID(relationField)
+	if err != nil {
+		t.Fatal(err)
+	}
+	occurrence := golem.RuntimeOccurrenceID(slot.Occurrence)
+	var cell golem.RuntimeOccurrenceCell
+	if relation.Cardinality == compilerir.RelationMany {
+		cell = golem.RuntimeToManyOccurrenceCell(field, occurrence, []golem.RuntimeModelRow{child})
+	} else {
+		cell = golem.RuntimeToOneOccurrenceCell(field, occurrence, child)
+	}
+	row, err := golem.RuntimeModelReadRowWithOccurrences(model, []golem.RuntimeReadCell{golem.RuntimePresentReadCell(identityField, identity, nil)}, nil, []golem.RuntimeOccurrenceCell{cell})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func graphqlIdentityValue(value any) any {
+	if uuid, ok := value.(golem.UUID); ok {
+		return uuid.String()
+	}
+	return value
 }
 
 func contractNamed(t *testing.T, contract compilerir.ContractIR, name string) compilerir.ModelContractIR {

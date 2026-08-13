@@ -124,6 +124,7 @@ import (
   "example.com/semanticapp/models"
   "github.com/eleven-am/golem/go/embedding"
   "github.com/eleven-am/golem/go/golem"
+	golemgraphql "github.com/eleven-am/golem/go/graphql"
   "github.com/eleven-am/golem/go/observe"
   providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 )
@@ -329,6 +330,20 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if !strings.Contains(oversizedResponse.Body.String(), "\"errors\":[{") {
     t.Fatalf("oversized semantic GraphQL response=%%s", oversizedResponse.Body.String())
   }
+
+	limited, err := application.GraphQL(app.GraphQLConfig[string]{
+		PrincipalFromContext: func(context.Context) (string, bool) { return "public", true },
+		Limits: golemgraphql.Limits{MaxPageSize: 1},
+		ReportInternalError: func(context.Context, error) {},
+	})
+	if err != nil { t.Fatal(err) }
+	overRuntimeLimit := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 2) { title } }\"}"))
+	overRuntimeLimit.Header.Set("Content-Type", "application/json")
+	overRuntimeLimitResponse := httptest.NewRecorder()
+	limited.Handler().ServeHTTP(overRuntimeLimitResponse, overRuntimeLimit)
+	if !strings.Contains(overRuntimeLimitResponse.Body.String(), "\"errors\":[{") {
+		t.Fatalf("runtime-limited semantic GraphQL response=%%s", overRuntimeLimitResponse.Body.String())
+	}
 }
 `, "file:"+databasePath))
 	command := exec.Command("go", "test", "-mod=mod", "-count=1", "./...")
