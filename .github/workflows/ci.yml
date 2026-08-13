@@ -81,7 +81,7 @@ jobs:
         run: go test -p=1 -count=1 -timeout=30m ./...
       - name: Race-check concurrent Go runtime surfaces
         working-directory: go
-        run: go test -p=1 -race -count=1 ./events/... ./provider/... ./runtime
+        run: go test -p=1 -race -count=1 -timeout=30m ./events/... ./provider/... ./runtime
       - name: Vet Go policy kernel
         working-directory: go
         run: go vet ./...
