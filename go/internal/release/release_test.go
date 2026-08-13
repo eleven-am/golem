@@ -277,6 +277,15 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMino
 	repository := filepath.Join(base, "repository")
 	runTestCommand(t, base, "git", "clone", "-q", "--no-local", filepath.Dir(moduleRoot(t)), repository)
 	runTestCommand(t, repository, "git", "checkout", "-q", "-b", "candidate", "go/v0.0.2")
+	// Keep this historical transition fixture independent of releases created
+	// after go/v0.0.2. Otherwise a newer real tag can become the selected
+	// baseline (or make the synthetic candidate non-latest) and turn this into
+	// a test of the live repository rather than the frozen v0.0.2 boundary.
+	for _, tag := range strings.Fields(runTestCommandOutput(t, repository, "git", "tag", "--list", "go/v*")) {
+		if tag != "go/v0.0.1" && tag != "go/v0.0.2" {
+			runTestCommand(t, repository, "git", "tag", "-d", tag)
+		}
+	}
 	moduleDir := filepath.Join(repository, "go")
 	for _, relative := range []string{
 		"internal/compatibility/testdata/public-go-api.json",
@@ -292,10 +301,7 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMino
 	writeCurrentCompatibilityAuthority(t, moduleDir, true)
 	runTestCommand(t, repository, "git", "add", "go")
 	runTestCommand(t, repository, "git", "commit", "-qm", "reviewed current candidate")
-	// A real go/v0.1.0 checkout already carries this tag into the disposable
-	// clone. Replace it only inside the fixture so the transition remains
-	// testable after publication.
-	runTestCommand(t, repository, "git", "tag", "-f", "-s", "go/v0.1.0", "-m", "reviewed pre-stable minor candidate")
+	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.0", "-m", "reviewed pre-stable minor candidate")
 	allowedBytes, err := os.ReadFile(allowed)
 	if err != nil {
 		t.Fatal(err)
