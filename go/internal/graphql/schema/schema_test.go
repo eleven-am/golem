@@ -8,6 +8,8 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/vektah/gqlparser/v2"
 	"github.com/vektah/gqlparser/v2/ast"
 )
@@ -35,6 +37,33 @@ func TestSocialSDLIsDeterministicAndValid(t *testing.T) {
 		if !strings.Contains(first.SDL, expected) {
 			t.Errorf("SDL missing %q", expected)
 		}
+	}
+}
+
+func TestSemanticIndexAddsGeneratedSearchQuery(t *testing.T) {
+	compilation := compilerir.CompilationIR{
+		Model: compilerir.ModelIR{Schema: compilerir.SchemaIdentityIR{PackagePath: "example.test/app"}, Models: []compilerir.ModelDeclIR{{
+			ID: "record", Go: compilerir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Record"}, LogicalName: "Record",
+			Fields:     []compilerir.FieldIR{{ID: "record-id", GoName: "ID", Kind: compilerir.FieldScalar, Scalar: &compilerir.ScalarFieldIR{Type: compilerir.LogicalTypeIR{Kind: compilerir.TypeString}}}},
+			PrimaryKey: &compilerir.KeyIR{ID: "record-primary", Kind: compilerir.KeyPrimary, Fields: []compilerir.FieldID{"record-id"}},
+		}}},
+		Contract: compilerir.ContractIR{GraphQLABIVersion: 5, Models: []compilerir.ModelContractIR{{
+			ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: compilerir.LimitContractIR{DefaultPageSize: 25},
+			Fields: []compilerir.FieldContractIR{{FieldID: "record-id", GraphQLName: "id"}}, Selectors: []compilerir.SelectorContractIR{{KeyID: "record-primary", Kind: compilerir.KeyPrimary, Name: "primary", Fields: []compilerir.FieldID{"record-id"}}},
+		}}},
+	}
+	payload, _ := semanticcontract.Encode(semanticcontract.Index{Name: "content", Space: "content", Dimensions: 3, Fields: []string{"field"}, Metric: "cosine"})
+	compilation.Model.Extensions = []compilerir.ProviderExtensionIR{{ID: "index", Provider: compilerir.SQLite, Version: 1, Owner: "record", Kind: semanticcontract.IndexKind, Payload: payload}}
+	if diagnostics := graphqlextension.AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("semantic diagnostics = %#v", diagnostics)
+	}
+	document, err := Build(compilation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "searchRecordsByContent(query: String!, take: Int, where: RecordWhereInput): [Record!]!"
+	if !strings.Contains(document.SDL, want) {
+		t.Fatalf("semantic SDL missing %q:\n%s", want, document.SDL)
 	}
 }
 

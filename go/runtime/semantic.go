@@ -11,12 +11,12 @@ import (
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 )
 
-// CallerSimilar executes ordinary caller authorization before distance
+// CallerSearch executes ordinary caller authorization before distance
 // evaluation. Only authorized rows with readable primary identities become
 // candidates for provider-native ranking.
-func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
 	if caller == nil || caller.app == nil || ctx == nil {
-		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "similar", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "search", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
 	options, err := semanticReadOptions(predicates, query, take)
 	if err != nil {
@@ -39,7 +39,7 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	return rankSemanticRows(ctx, caller.app, descriptor, indexName, query, take, rows)
 }
 
-func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
 	if system.app == nil || ctx == nil {
 		return nil, fmt.Errorf("P9_SEMANTIC_RUNTIME: system execution is unavailable")
 	}

@@ -3,6 +3,8 @@ package contract
 import (
 	"reflect"
 	"testing"
+
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 )
 
 func TestSpaceAndIndexContractsAreCanonicalAndStrict(t *testing.T) {
@@ -32,5 +34,34 @@ func TestSpaceAndIndexContractsAreCanonicalAndStrict(t *testing.T) {
 		if _, err := DecodeSpace(invalid); err == nil {
 			t.Fatalf("invalid space accepted: %s", invalid)
 		}
+	}
+}
+
+func TestIndexesByModelOwnsProviderNeutralProjection(t *testing.T) {
+	payload, _ := Encode(Index{Name: "content", Space: "text", Dimensions: 3, Fields: []string{"field"}, Metric: "cosine"})
+	model := ir.ModelIR{Extensions: []ir.ProviderExtensionIR{
+		{Provider: ir.PostgreSQL, Owner: "record", Kind: IndexKind, Payload: payload},
+		{Provider: ir.SQLite, Owner: "record", Kind: IndexKind, Payload: payload},
+	}}
+	indexes, err := IndexesByModel(model)
+	if err != nil || len(indexes["record"]) != 1 || indexes["record"][0].Name != "content" {
+		t.Fatalf("indexes=%#v err=%v", indexes, err)
+	}
+	different, _ := Encode(Index{Name: "content", Space: "text", Dimensions: 4, Fields: []string{"field"}, Metric: "cosine"})
+	model.Extensions[1].Payload = different
+	if _, err := IndexesByModel(model); err == nil {
+		t.Fatal("provider semantic-index mismatch was accepted")
+	}
+}
+
+func TestExportedIndexNameIsSharedByGeneratedSurfaces(t *testing.T) {
+	for input, want := range map[string]string{"content": "Content", "record-content": "RecordContent", "related_posts": "RelatedPosts"} {
+		got, ok := ExportedIndexName(input)
+		if !ok || got != want {
+			t.Fatalf("ExportedIndexName(%q)=(%q,%t) want %q", input, got, ok, want)
+		}
+	}
+	if _, ok := ExportedIndexName("content.v2"); ok {
+		t.Fatal("invalid semantic index name formed a generated identifier")
 	}
 }

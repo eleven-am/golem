@@ -3,7 +3,7 @@ package compatibility
 // Frozen corpus digests are compiled independently from testdata. Changing a
 // corpus file and its expectation is an explicit compatibility review.
 const (
-	PublicGoAPICorpusSHA256    = "8d0ba09168a461cb54190a8c94e217fc85b3134f988ae552bafaa291e42737d8"
+	PublicGoAPICorpusSHA256    = "6f41bc3a3b05a05899d4b6ed962902a65ec974f57715970de8324907a1adb2d7"
 	GeneratedGoABICorpusSHA256 = "1b3143c256180cccfcadac36a1477e05ba8062078b82f7327b67763acace6b2b"
 	GraphQLABICorpusSHA256     = "b307c48c82966aee3bb4643ce239fc5dc6a620edfcd9cb29e2d15132b7bfc4ce"
 )
