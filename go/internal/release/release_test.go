@@ -486,6 +486,71 @@ func TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry(t
 	}
 }
 
+func TestP8PatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
+	repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
+	runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "patch candidate")
+	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "patch candidate")
+	allowedBytes, err := os.ReadFile(allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.1", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
+	candidate, err := inspectCandidate(context.Background(), config, trusted)
+	if err != nil || validateCandidate(candidate) != nil {
+		t.Fatalf("patch release did not retain the signed historical guide: %v repository=%s", err, repository)
+	}
+
+	runTestCommand(t, repository, "git", "tag", "-d", "go/v0.1.0")
+	if _, err := inspectCandidate(context.Background(), config, trusted); errorCode(err) != CodeInvalidCandidate {
+		t.Fatalf("patch release without signed historical target error=%v repository=%s", err, repository)
+	}
+}
+
+func TestP8HistoricalGuideRetentionRefusesNewReleaseLineAndAuthorityDrift(t *testing.T) {
+	t.Run("new-release-line", func(t *testing.T) {
+		repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
+		runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "new minor candidate")
+		runTestCommand(t, repository, "git", "tag", "-s", "go/v0.2.0", "-m", "new minor candidate")
+		allowedBytes, err := os.ReadFile(allowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.2.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
+		if _, err := inspectCandidate(context.Background(), config, trusted); errorCode(err) != CodeInvalidCandidate {
+			t.Fatalf("new release line retained an older guide: %v repository=%s", err, repository)
+		}
+	})
+
+	t.Run("authority-drift", func(t *testing.T) {
+		repository, moduleDir, allowed, _ := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
+		guide := mustReadPath(t, filepath.Join(moduleDir, compatibility.MigrationGuidePath))
+		const retainedPath = "compatibility/retained-migration-guide.json"
+		writeTestFile(t, filepath.Join(moduleDir, retainedPath), string(guide))
+		manifestBytes := mustReadPath(t, filepath.Join(moduleDir, "compatibility", "manifest.json"))
+		manifest, err := compatibility.ParseHistorical(manifestBytes, compatibility.Digest(manifestBytes))
+		if err != nil || manifest.MigrationGuide == nil {
+			t.Fatalf("parse target manifest: %v", err)
+		}
+		manifest.MigrationGuide.Path = retainedPath
+		manifestBytes, err = compatibility.Encode(manifest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeTestFile(t, filepath.Join(moduleDir, "compatibility", "manifest.json"), string(manifestBytes))
+		runTestCommand(t, repository, "git", "add", "go")
+		runTestCommand(t, repository, "git", "commit", "-qm", "relabel retained guide")
+		runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "relabel retained guide")
+		allowedBytes, err := os.ReadFile(allowed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.1", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
+		if _, err := inspectCandidate(context.Background(), config, compatibility.Digest(manifestBytes)); errorCode(err) != CodeInvalidCandidate {
+			t.Fatalf("patch release changed retained guide authority: %v repository=%s", err, repository)
+		}
+	})
+}
+
 func TestP8SoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
 	for _, tamper := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bound", true: "tampered"}[tamper], func(t *testing.T) {
