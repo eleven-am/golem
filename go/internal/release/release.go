@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -558,10 +559,21 @@ func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefi
 			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 		}
 	} else {
+		if semver.MajorMinor(authority.ToVersion) != semver.MajorMinor(current.Release.Version) {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
 		targetCommit, err = output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+targetTag+"^{commit}")
 		if err != nil || !commitPattern.MatchString(targetCommit) || verifySignedReleaseTag(ctx, repository, targetTag, allowedSignersFile) != nil ||
 			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", sourceCommit, targetCommit) != nil ||
 			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", targetCommit, current.Release.Commit) != nil {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+		target, targetErr := developmentManifestAt(ctx, repository, modulePrefix, targetCommit)
+		if targetErr != nil || target.MigrationGuide == nil || *target.MigrationGuide != authority || !slices.Equal(target.RequiredActions, current.RequiredActions) {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+		targetGuide, targetGuideErr := commandOutput(ctx, repository, nil, "git", "show", targetCommit+":"+modulePrefix+authority.Path)
+		if targetGuideErr != nil || !bytes.Equal(targetGuide, encoded) {
 			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 		}
 	}
