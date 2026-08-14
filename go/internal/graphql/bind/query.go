@@ -2,7 +2,6 @@ package bind
 
 import (
 	"fmt"
-	"sort"
 	"strconv"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -699,9 +698,4 @@ func jsonPath(raw any) (policyir.JSONPath, error) {
 		}
 	}
 	return policyir.NewJSONPath(segments...)
-}
-
-// StableOrder is used only by diagnostics/tests that need identity order.
-func StableOrder(values []policyir.FieldID) {
-	sort.Slice(values, func(i, j int) bool { return string(values[i][:]) < string(values[j][:]) })
 }

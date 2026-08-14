@@ -312,7 +312,7 @@ func TestSystemUpsertGuardV1MigratesIntrospectsAndRollsBackSQLite(t *testing.T) 
 	}
 }
 
-func TestP7DeliverySystemObjectMigratesBackfillsAndDriftChecksSQLite(t *testing.T) {
+func TestDeliverySystemObjectMigratesBackfillsAndDriftChecksSQLite(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	before := incrementalFixtureSchema(t, false)

@@ -17,7 +17,7 @@ func (incompatibleDeliveryResolver) CanDeliverEventSchema(golem.ModelID, golem.E
 	return false
 }
 
-func TestP7IncompatibleHistoricalSchemaBlocksWithoutTransportOrAck(t *testing.T) {
+func TestIncompatibleHistoricalSchemaBlocksWithoutTransportOrAck(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := publisherValidLease(t, fixture)
 	coordinator := &publisherTestCoordinator{renewed: true}
@@ -67,7 +67,7 @@ func (coordinator *p7ResumableCoordinator) Resume(_ context.Context, causation s
 	return true, nil
 }
 
-func TestP7MissingHistoricalSchemaBlocksWithoutAckAndResumes(t *testing.T) {
+func TestMissingHistoricalSchemaBlocksWithoutAckAndResumes(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := publisherValidLease(t, fixture)
 	coordinator := &p7ResumableCoordinator{publisherTestCoordinator: publisherTestCoordinator{renewed: true}}

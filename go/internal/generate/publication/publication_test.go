@@ -42,7 +42,7 @@ func TestPublishCheckAndStaleRemoval(t *testing.T) {
 	}
 }
 
-func TestP7GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
+func TestGraphQLGenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
 	directory := t.TempDir()
 	graphqlGo := func(path, version string) manifest.Artifact {
 		value := artifact(path, "package app\nconst graphQLVersion = \""+version+"\"\n")
@@ -101,7 +101,7 @@ func TestP7GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing
 	}
 }
 
-func TestP6GenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
+func TestFullGenerationPublishesAtomicallyAndRemovesOwnedStaleArtifacts(t *testing.T) {
 	directory := t.TempDir()
 	generatedGo := func(path, version string, kind manifest.ArtifactKind) manifest.Artifact {
 		value := artifact(path, "package app\nconst p6Version = \""+version+"\"\n")

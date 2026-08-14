@@ -17,7 +17,7 @@ import (
 	"time"
 )
 
-func TestP8ExternalSocialApplicationGenerateCheckBuildAndRun(t *testing.T) {
+func TestExternalSocialApplicationGenerateCheckBuildAndRun(t *testing.T) {
 	exampleRoot := socialHostRoot(t)
 	freshRoot := filepath.Join(t.TempDir(), "social")
 	copyP8AuthoredApplication(t, exampleRoot, freshRoot)

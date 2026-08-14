@@ -244,7 +244,7 @@ func TestGraphQLHookOwnedFieldsAreCanonicalContractOnlyMetadata(t *testing.T) {
 	}
 }
 
-func TestP7EventSchemaFingerprintCanonicalLogicalShape(t *testing.T) {
+func TestEventSchemaFingerprintCanonicalLogicalShape(t *testing.T) {
 	id := FieldID("00000000000000000000000000000001")
 	title := FieldID("00000000000000000000000000000002")
 	enumField := FieldID("00000000000000000000000000000003")
@@ -292,7 +292,7 @@ func TestP7EventSchemaFingerprintCanonicalLogicalShape(t *testing.T) {
 	}
 }
 
-func TestP7EventSchemaBuilderRejectsNonScalarDuplicateAndUnknownEnumShapes(t *testing.T) {
+func TestEventSchemaBuilderRejectsNonScalarDuplicateAndUnknownEnumShapes(t *testing.T) {
 	id := FieldID("00000000000000000000000000000001")
 	relation := FieldID("00000000000000000000000000000002")
 	enumField := FieldID("00000000000000000000000000000003")

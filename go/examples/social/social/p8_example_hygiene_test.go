@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-func TestP8ExampleContainsNoInternalImportOrOrdinaryResolverClone(t *testing.T) {
+func TestExampleContainsNoInternalImportOrOrdinaryResolverClone(t *testing.T) {
 	root := socialExampleRoot(t)
 	assertNoReplaceDirective(t, filepath.Join(root, "go.mod"))
 
@@ -57,7 +57,7 @@ func TestP8ExampleContainsNoInternalImportOrOrdinaryResolverClone(t *testing.T) 
 	}
 }
 
-func TestP8ExampleGeneratedAndReviewedInventoryIsCheckedIn(t *testing.T) {
+func TestExampleGeneratedAndReviewedInventoryIsCheckedIn(t *testing.T) {
 	root := socialExampleRoot(t)
 	for _, relative := range []string{
 		".golem/generated-manifest.json",

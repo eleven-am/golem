@@ -112,9 +112,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http/httptest"
-  "os"
   "strings"
   "sync"
   "testing"
@@ -165,15 +163,6 @@ type observationTrace struct {
 }
 
 func (trace *observationTrace) ObserveGolem(_ context.Context, value observe.Observation) {
-  if path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE"); path != "" {
-    observationCoverageMu.Lock()
-    file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-    if err != nil { observationCoverageMu.Unlock(); panic("open observation coverage sink") }
-    _, writeErr := fmt.Fprintln(file, value.Provider(), value.Operation())
-    closeErr := file.Close()
-    observationCoverageMu.Unlock()
-    if writeErr != nil || closeErr != nil { panic("write observation coverage sink") }
-  }
   if value.Kind() != observe.KindSemantic { return }
   trace.mu.Lock()
   defer trace.mu.Unlock()
@@ -182,8 +171,6 @@ func (trace *observationTrace) ObserveGolem(_ context.Context, value observe.Obs
     statements: value.StatementCount(), aggregate: value.AggregateCount(),
   })
 }
-
-var observationCoverageMu sync.Mutex
 
 func (trace *observationTrace) reset() {
   trace.mu.Lock()

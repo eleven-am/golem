@@ -11,11 +11,11 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
-// TestP7DeleteSnapshotDependencyInventoryAndEveryMutationPath crosses the
+// TestDeleteSnapshotDependencyInventoryAndEveryMutationPath crosses the
 // production runtime boundary instead of merely inspecting planner inputs. It
 // executes caller/system root, batch, and nested deletes and then independently
 // checks every durable delete fact against the compiler-owned event inventory.
-func TestP7DeleteSnapshotDependencyInventoryAndEveryMutationPath(t *testing.T) {
+func TestDeleteSnapshotDependencyInventoryAndEveryMutationPath(t *testing.T) {
 	forEachMutationResultProvider(t, MutationLimits{}, assertP7DeleteSnapshotMutationPaths)
 }
 

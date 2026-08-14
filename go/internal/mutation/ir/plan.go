@@ -173,18 +173,6 @@ func (plan Plan) validate() error {
 	return nil
 }
 
-func (plan Plan) clone() Plan {
-	copy := plan
-	copy.graph = plan.graph.clone()
-	copy.result = plan.result.clone()
-	copy.providers = plan.ProviderRequirements()
-	if plan.factCodec != nil {
-		value := *plan.factCodec
-		copy.factCodec = &value
-	}
-	return copy
-}
-
 func emptyImage(model policyir.ModelID) ImageRequirements {
 	value, _ := NewImageRequirements(model, nil, nil)
 	return value

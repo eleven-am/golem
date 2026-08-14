@@ -625,9 +625,6 @@ func RelationCount[M, R any](row Row[M], field ToMany[M, R]) ReadValue[int64] {
 	return ReadValue[int64]{state: ReadPresent, value: value}
 }
 
-// RuntimeOccurrenceToOne and RuntimeOccurrenceToMany are used by generated
-// GraphQL encoders to read aliased relation slots without exposing an untyped
-// string-keyed row representation.
 func RuntimeOccurrenceToOne[M, R any](row Row[M], field ToOne[M, R], occurrence RuntimeOccurrenceID) ReadValue[Row[R]] {
 	cell, ok := row.occurrences[runtimeOccurrenceKey{field: field.fieldID, occurrence: uint32(occurrence)}]
 	if !ok {

@@ -30,7 +30,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8VersionHumanAndJSONGolden(t *testing.T) {
+func TestVersionHumanAndJSONGolden(t *testing.T) {
 	previousVersion, previousCommit := buildVersion, buildCommit
 	buildVersion = "v1.2.3"
 	buildCommit = "0123456789abcdef0123456789abcdef01234567"
@@ -146,7 +146,7 @@ func TestVersionSubprocessLinkerProvenance(t *testing.T) {
 	}
 }
 
-func TestP8DoctorIsReadOnlyAndUsesPublicProviderLifecycle(t *testing.T) {
+func TestDoctorIsReadOnlyAndUsesPublicProviderLifecycle(t *testing.T) {
 	module := writeSingleProviderModule(t)
 	databasePath := filepath.Join(t.TempDir(), "read-only.db")
 	var stdout, stderr bytes.Buffer
@@ -248,7 +248,7 @@ func TestP8DoctorIsReadOnlyAndUsesPublicProviderLifecycle(t *testing.T) {
 	}
 }
 
-func TestP8DoctorStateMatrixBothProviders(t *testing.T) {
+func TestDoctorStateMatrixBothProviders(t *testing.T) {
 	module := writeSingleProviderModule(t)
 	canary := "doctor-secret-host-user-password"
 	database := filepath.Join(t.TempDir(), canary+".db")
@@ -673,7 +673,7 @@ func snapshotPostgreSQLDoctorState(t *testing.T, dsn string) postgreSQLDoctorSna
 	return result
 }
 
-func TestP8DoctorOutputRedactionCanary(t *testing.T) {
+func TestDoctorOutputRedactionCanary(t *testing.T) {
 	const canary = "P8_DOCTOR_SECRET_HOST_USER_PASSWORD_DATABASE_SQL_ROW"
 	module := writeSocialModule(t, false)
 	cases := []struct {
@@ -729,7 +729,7 @@ func TestP8DoctorOutputRedactionCanary(t *testing.T) {
 	}
 }
 
-func TestP8DoctorCloseFailureIsClosedAndRedacted(t *testing.T) {
+func TestDoctorCloseFailureIsClosedAndRedacted(t *testing.T) {
 	const canary = "P8_DOCTOR_RAW_DRIVER_CLOSE_CANARY"
 	raw := sql.OpenDB(doctorCloseFailureConnector{message: canary})
 	if err := raw.PingContext(context.Background()); err != nil {

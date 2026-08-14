@@ -7,7 +7,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7SealedNoticeValidationAndOwnership(t *testing.T) {
+func TestSealedNoticeValidationAndOwnership(t *testing.T) {
 	valid := func(action golem.EventAction, ordinal uint32, encoded []byte) error {
 		_, err := NewNotice(golem.EventID{1}, golem.SchemaDigest{2}, golem.ModelID{3}, action, golem.CausationID{4}, ordinal, encoded)
 		return err
@@ -35,7 +35,7 @@ func TestP7SealedNoticeValidationAndOwnership(t *testing.T) {
 	}
 }
 
-func TestP7SealedBatchRequiresOneContiguousCausation(t *testing.T) {
+func TestSealedBatchRequiresOneContiguousCausation(t *testing.T) {
 	causation := golem.CausationID{4}
 	notice := func(event byte, ordinal uint32, owner golem.CausationID) Notice {
 		result, err := NewNotice(golem.EventID{event}, golem.SchemaDigest{2}, golem.ModelID{3}, golem.EventCreated, owner, ordinal, []byte{event})
@@ -61,7 +61,7 @@ func TestP7SealedBatchRequiresOneContiguousCausation(t *testing.T) {
 	}
 }
 
-func TestP7SealedSubscriptionRejectsAbsentRoutingIdentity(t *testing.T) {
+func TestSealedSubscriptionRejectsAbsentRoutingIdentity(t *testing.T) {
 	if _, err := NewSubscription(golem.SchemaDigest{}, golem.ModelID{1}); err == nil {
 		t.Fatal("zero generation accepted")
 	}

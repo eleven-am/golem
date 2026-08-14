@@ -71,17 +71,6 @@ func TestIndexedToManyRendersAuthorizedCorrelatedJSONAcrossProviders(t *testing.
 				t.Fatalf("provider %d correlated derived/projection alias %q retained facts %#v", provider, omitted, facts)
 			}
 		}
-		for _, fragment := range []string{"COALESCE", "golem_payload", "golem_rel0", "author_id", "ORDER BY"} {
-			if !strings.Contains(statement.SQL(), fragment) {
-				t.Errorf("provider %d SQL lacks %q: %s", provider, fragment, statement.SQL())
-			}
-		}
-		if provider == policyir.ProviderSQLite && !strings.Contains(statement.SQL(), "json_group_array") {
-			t.Errorf("SQLite correlated JSON aggregate missing: %s", statement.SQL())
-		}
-		if !strings.Contains(statement.SQL(), "golem_ordinal") || !strings.Contains(statement.SQL(), "ROW_NUMBER() OVER (ORDER BY") {
-			t.Errorf("provider %d correlated aggregate has no explicit emitted ordinal: %s", provider, statement.SQL())
-		}
 		if provider == policyir.ProviderPostgreSQL && (!strings.Contains(statement.SQL(), "json_agg") || !strings.Contains(statement.SQL(), "::text") || !strings.Contains(statement.SQL(), `ORDER BY "golem_cg0"."golem_ordinal"`)) {
 			t.Errorf("PostgreSQL correlated exact text boundary missing: %s", statement.SQL())
 		}

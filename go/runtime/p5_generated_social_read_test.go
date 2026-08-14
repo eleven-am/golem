@@ -310,7 +310,7 @@ func p5SocialSlice(t *testing.T, value any) []any {
 	return result
 }
 
-func TestP5ActiveGeneratedSocialGraphMasksOccurrencesAndCompleteSixModelsAcrossProviders(t *testing.T) {
+func TestActiveGeneratedSocialGraphMasksOccurrencesAndCompleteSixModelsAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -387,7 +387,7 @@ fragment PostView on Post { id title author { id name } comments { id body } _co
 	}
 }
 
-func TestP5ActiveGeneratedSocialPositionsPagingSelectorsAndZeroSQLAcrossProviders(t *testing.T) {
+func TestActiveGeneratedSocialPositionsPagingSelectorsAndZeroSQLAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -446,7 +446,7 @@ func TestP5ActiveGeneratedSocialPositionsPagingSelectorsAndZeroSQLAcrossProvider
 	}
 }
 
-func TestP5ActiveGeneratedSocialGraphQLMatchesGeneratedGoCallerAndInvisibleUnique(t *testing.T) {
+func TestActiveGeneratedSocialGraphQLMatchesGeneratedGoCallerAndInvisibleUnique(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

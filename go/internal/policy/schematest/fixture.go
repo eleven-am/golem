@@ -65,10 +65,6 @@ func NewSubscribedIndexed(t testing.TB) Fixture {
 	return newFixtureWithSubscriptions(t, 0, 0, ContractModes{}, true, false, true)
 }
 
-func NewSubscribedIndexedPostgreSQLNamespace(t testing.TB, namespace physical.PhysicalName) Fixture {
-	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, "_golem", false, false, false)
-}
-
 func NewSubscribedIndexedPostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
 	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, false, false)
 }

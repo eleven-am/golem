@@ -10,7 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/runtime/testdata/p6metrics"
 )
 
-func TestP6AnalyticsAndScopedNeverInvokeOrdinaryReadHooks(t *testing.T) {
+func TestAnalyticsAndScopedNeverInvokeOrdinaryReadHooks(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

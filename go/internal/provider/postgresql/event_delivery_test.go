@@ -22,7 +22,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP7PostgreSQLDeliveryCoordinatorLiveProfiles(t *testing.T) {
+func TestPostgreSQLDeliveryCoordinatorLiveProfiles(t *testing.T) {
 	profiles := []struct {
 		name string
 		env  string
@@ -41,7 +41,7 @@ func TestP7PostgreSQLDeliveryCoordinatorLiveProfiles(t *testing.T) {
 	}
 }
 
-func TestP8PostgreSQLClaimDepthSnapshotLiveProfiles(t *testing.T) {
+func TestPostgreSQLClaimDepthSnapshotLiveProfiles(t *testing.T) {
 	if dsn := os.Getenv("GOLEM_P8_POSTGRES_DEPTH_WORKER_DSN"); dsn != "" {
 		p8PostgreSQLDepthSubprocessWorker(t, dsn, os.Getenv("GOLEM_P8_DEPTH_WORKER_OUTPUT"), os.Getenv("GOLEM_P8_DEPTH_WORKER_MODE"), os.Getenv("GOLEM_P8_DEPTH_WORKER_CAUSATION"))
 		return
@@ -181,7 +181,7 @@ func p8RunPostgreSQLDepthSubprocesses(t *testing.T, dsn, wantCausation string, b
 	outputDirectory := t.TempDir()
 	for index := range processes {
 		output := filepath.Join(outputDirectory, fmt.Sprintf("depth-%d.json", index))
-		command := exec.Command(os.Args[0], "-test.run=^TestP8PostgreSQLClaimDepthSnapshotLiveProfiles$", "-test.count=1")
+		command := exec.Command(os.Args[0], "-test.run=^TestPostgreSQLClaimDepthSnapshotLiveProfiles$", "-test.count=1")
 		command.Env = append(os.Environ(), "GOLEM_P8_POSTGRES_DEPTH_WORKER_DSN="+dsn, "GOLEM_P8_DEPTH_WORKER_OUTPUT="+output, "GOLEM_P8_DEPTH_WORKER_MODE=claim")
 		log := &bytes.Buffer{}
 		command.Stdout = log
@@ -267,7 +267,7 @@ func p8PostgreSQLDepthSubprocessWorker(t *testing.T, dsn, output, mode, causatio
 
 func p8RunPostgreSQLDepthCrash(t *testing.T, dsn, causation string) {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestP8PostgreSQLClaimDepthSnapshotLiveProfiles$", "-test.count=1")
+	command := exec.Command(os.Args[0], "-test.run=^TestPostgreSQLClaimDepthSnapshotLiveProfiles$", "-test.count=1")
 	command.Env = append(os.Environ(), "GOLEM_P8_POSTGRES_DEPTH_WORKER_DSN="+dsn, "GOLEM_P8_DEPTH_WORKER_MODE=crash", "GOLEM_P8_DEPTH_WORKER_CAUSATION="+causation)
 	output, err := command.CombinedOutput()
 	var exitError *exec.ExitError
@@ -309,7 +309,7 @@ func p8AssertPostgreSQLDeliveryConservation(t *testing.T, database *sqlx.DB, wan
 	}
 }
 
-func TestP7PostgreSQLSystemCheckConstraintKeysCanonicalizeAsSetsOnly(t *testing.T) {
+func TestPostgreSQLSystemCheckConstraintKeysCanonicalizeAsSetsOnly(t *testing.T) {
 	if got := canonicalSystemConstraintKeys("c", "{2,6,7,8,10,11,9,6}"); got != "{2,6,7,8,9,10,11}" {
 		t.Fatalf("CHECK conkey canonicalization=%q", got)
 	}

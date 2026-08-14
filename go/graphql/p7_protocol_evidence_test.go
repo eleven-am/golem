@@ -13,7 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestP7HTTPQueriesMutationsRemainP5Equivalent(t *testing.T) {
+func TestHTTPQueriesMutationsRemainP5Equivalent(t *testing.T) {
 	executor := &boundaryExecutor{}
 	server, err := NewServer(`type Query { viewer: Int! } type Mutation { setViewer(value: Int!): Int! } type Subscription { ticks: Int! }`, Config[int]{
 		PrincipalFromContext: func(context.Context) (int, bool) { return 41, true },
@@ -58,7 +58,7 @@ func mustP7JSON(t testing.TB, value any) json.RawMessage {
 	return encoded
 }
 
-func TestP7UnsupportedLegacyProtocolAndSSEAreNotSilentlyAccepted(t *testing.T) {
+func TestUnsupportedLegacyProtocolAndSSEAreNotSilentlyAccepted(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{})
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
@@ -79,7 +79,7 @@ func TestP7UnsupportedLegacyProtocolAndSSEAreNotSilentlyAccepted(t *testing.T) {
 	}
 }
 
-func TestP7WebSocketAuthInitAndOperationLimits(t *testing.T) {
+func TestWebSocketAuthInitAndOperationLimits(t *testing.T) {
 	t.Run("authentication", func(t *testing.T) {
 		server, _ := newProtocolServer(t, events.Limits{})
 		host := httptest.NewServer(server.Handler())

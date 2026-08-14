@@ -18,7 +18,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8RuntimeRequiresExactReviewedMigrationLedgerPostgreSQL(t *testing.T) {
+func TestRuntimeRequiresExactReviewedMigrationLedgerPostgreSQL(t *testing.T) {
 	profiles := []struct{ name, environment string }{
 		{name: "c", environment: "GOLEM_TEST_POSTGRES_DSN"},
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},

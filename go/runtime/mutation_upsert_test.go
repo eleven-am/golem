@@ -53,7 +53,7 @@ func TestRootUpsertTruthfullyCreatesThenUpdatesWithProjection(t *testing.T) {
 	}
 }
 
-func TestP8HookOwnedRootUpsertDefersOnlySelectedCreateCompleteness(t *testing.T) {
+func TestHookOwnedRootUpsertDefersOnlySelectedCreateCompleteness(t *testing.T) {
 	ctx := context.Background()
 	var beforeCreate atomic.Int64
 	fixture := mutationResultHookOwnedFixture(t, MutationLimits{}, func(schema schematest.Fixture, _ golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor] {

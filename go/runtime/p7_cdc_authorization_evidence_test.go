@@ -21,7 +21,7 @@ func (p7AuthorizationCDCAdapter) CorrelatesGolemTransaction(context.Context, eve
 }
 func (p7AuthorizationCDCAdapter) Run(context.Context, events.CDCEmitter) error { return nil }
 
-func TestP7CDCUsesSameFreshSubscriptionAuthorization(t *testing.T) {
+func TestCDCUsesSameFreshSubscriptionAuthorization(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

@@ -66,7 +66,7 @@ func p8RuntimeDatabaseConfig(t *testing.T) (*providerapi.Database, Config[testPr
 	}
 }
 
-func TestP8RuntimeBorrowsVerifiedDatabaseAndDerivesProviderFromHandle(t *testing.T) {
+func TestRuntimeBorrowsVerifiedDatabaseAndDerivesProviderFromHandle(t *testing.T) {
 	database, config := p8RuntimeDatabaseConfig(t)
 	app, err := Open(context.Background(), config)
 	if err != nil {
@@ -153,7 +153,7 @@ func p8ApplyReviewedSQLiteFixture(t *testing.T, ctx context.Context, database *p
 	)
 }
 
-func TestP8RuntimeRejectsNilZeroAndClosedHandlesBeforePrincipalWork(t *testing.T) {
+func TestRuntimeRejectsNilZeroAndClosedHandlesBeforePrincipalWork(t *testing.T) {
 	tests := []struct {
 		name    string
 		prepare func(*providerapi.Database, *Config[testPrincipal, testActor])
@@ -184,7 +184,7 @@ func TestP8RuntimeRejectsNilZeroAndClosedHandlesBeforePrincipalWork(t *testing.T
 	}
 }
 
-func TestP8RuntimeRestoresVerifiedPoolProfileBeforeCapabilityReproof(t *testing.T) {
+func TestRuntimeRestoresVerifiedPoolProfileBeforeCapabilityReproof(t *testing.T) {
 	database, config := p8RuntimeDatabaseConfig(t)
 	database.UnsafeSQLX().SetMaxOpenConns(1)
 	database.UnsafeSQLX().SetMaxIdleConns(0)
@@ -200,7 +200,7 @@ func TestP8RuntimeRestoresVerifiedPoolProfileBeforeCapabilityReproof(t *testing.
 	}
 }
 
-func TestP8RuntimeRejectsHandleWithoutMatchingPhysicalSchemaAndDoesNotCloseIt(t *testing.T) {
+func TestRuntimeRejectsHandleWithoutMatchingPhysicalSchemaAndDoesNotCloseIt(t *testing.T) {
 	database, config := p8RuntimeDatabaseConfig(t)
 	providers := config.Bundle.Providers()
 	postgres := make([]golem.ProviderSchemaDocument, 0, 1)
@@ -221,7 +221,7 @@ func TestP8RuntimeRejectsHandleWithoutMatchingPhysicalSchemaAndDoesNotCloseIt(t 
 	}
 }
 
-func TestP8RuntimeStartupFailuresUseClosedSanitizedMessages(t *testing.T) {
+func TestRuntimeStartupFailuresUseClosedSanitizedMessages(t *testing.T) {
 	t.Run("ledger", func(t *testing.T) {
 		database, config := p8RuntimeDatabaseConfig(t)
 		if _, err := database.UnsafeSQLX().Exec(`DELETE FROM "_golem_migrations"`); err != nil {

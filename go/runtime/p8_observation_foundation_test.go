@@ -61,7 +61,7 @@ func (collector *p8ObservationCollector) matching(kind observe.Kind, operation o
 	return result
 }
 
-func TestP8ObservationPreflightRefusalIsVisibleAndExecutesZeroSQL(t *testing.T) {
+func TestObservationPreflightRefusalIsVisibleAndExecutesZeroSQL(t *testing.T) {
 	fixture := newMutationResultFixture(t)
 	collector := &p8ObservationCollector{}
 	fixture.app.observer = collector
@@ -127,7 +127,7 @@ func p8AssertPoolReleasedWhileObserverBlocked[P, A any](t *testing.T, app *App[P
 	}
 }
 
-func TestP8StandaloneMutationDeliversObserverOnlyAfterConnectionRelease(t *testing.T) {
+func TestStandaloneMutationDeliversObserverOnlyAfterConnectionRelease(t *testing.T) {
 	fixture := newMutationResultFixture(t)
 	observer := &p8BlockingObserver{
 		kind: observe.KindMutation, operation: observe.OperationMutationCreate,
@@ -154,7 +154,7 @@ func TestP8StandaloneMutationDeliversObserverOnlyAfterConnectionRelease(t *testi
 	}
 }
 
-func TestP8CallerTransactionAggregatesChildStatementsAndReleasesConnectionBeforeDelivery(t *testing.T) {
+func TestCallerTransactionAggregatesChildStatementsAndReleasesConnectionBeforeDelivery(t *testing.T) {
 	fixture := newMutationResultFixture(t)
 	caller, err := fixture.app.ForPrincipal(context.Background(), mutationResultPrincipal{})
 	if err != nil {
@@ -202,7 +202,7 @@ func TestP8CallerTransactionAggregatesChildStatementsAndReleasesConnectionBefore
 	}
 }
 
-func TestP8LegacyEventObserverAdaptsIntoUnifiedClosedRecord(t *testing.T) {
+func TestLegacyEventObserverAdaptsIntoUnifiedClosedRecord(t *testing.T) {
 	collector := &p8ObservationCollector{}
 	model := golem.ModelID{15: 91}
 	events.Observe(
@@ -224,7 +224,7 @@ func TestP8LegacyEventObserverAdaptsIntoUnifiedClosedRecord(t *testing.T) {
 	}
 }
 
-func TestP8ObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T) {
+func TestObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T) {
 	hookFactory := func(schema schematest.Fixture, title golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor] {
 		return []golem.HookBinding[mutationResultActor]{
 			golem.GeneratedBeforeHookBinding[mutationResultActor, mutationResultPost, golem.UpdateManyHookRequest[mutationResultPost]](schema.Post, golem.HookUpdateMany, func(_ context.Context, request *golem.UpdateManyHookRequest[mutationResultPost]) error {
@@ -257,7 +257,6 @@ func TestP8ObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T
 			t.Fatalf("deleteMany count=%d err=%v", count, err)
 		}
 		p8AssertBatchRootAndHooks(t, collector, false)
-		p8AppendDynamicCoverage(t, collector.values)
 
 		seed(243, 244)
 		collector.mu.Lock()
@@ -275,7 +274,6 @@ func TestP8ObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T
 			t.Fatal(err)
 		}
 		p8AssertBatchRootAndHooks(t, collector, true)
-		p8AppendDynamicCoverage(t, collector.values)
 
 		seed(245, 246)
 		collector.mu.Lock()
@@ -312,7 +310,6 @@ func TestP8ObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T
 			t.Fatalf("frozen GraphQL deleteMany count=%d/%t", count, ok)
 		}
 		p8AssertBatchRootAndHooks(t, collector, false)
-		p8AppendDynamicCoverage(t, collector.values)
 
 		collector.mu.Lock()
 		collector.values = nil
@@ -337,7 +334,6 @@ func TestP8ObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T
 		if len(collector.matching(observe.KindTransaction, observe.OperationSystemTransaction)) != 1 {
 			t.Fatalf("missing system transaction observation: %v", collector.values)
 		}
-		p8AppendDynamicCoverage(t, collector.values)
 	}
 	t.Run("sqlite", func(t *testing.T) {
 		run(t, newMutationResultFixtureWithHooks(t, MutationLimits{}, hookFactory, func(context.Context, golem.AfterCommitFailure) {}))
@@ -372,26 +368,5 @@ func p8AssertBatchRootAndHooks(t *testing.T, collector *p8ObservationCollector, 
 	}
 	if !callerTransaction && len(transactions) != 0 {
 		t.Fatalf("unexpected caller transaction observations=%v", transactions)
-	}
-}
-
-func p8AppendDynamicCoverage(t *testing.T, values []p8ObservationSnapshot) {
-	t.Helper()
-	path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE")
-	if path == "" {
-		return
-	}
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, value := range values {
-		if _, err := fmt.Fprintln(file, value.provider, value.operation); err != nil {
-			_ = file.Close()
-			t.Fatal(err)
-		}
-	}
-	if err := file.Close(); err != nil {
-		t.Fatal(err)
 	}
 }

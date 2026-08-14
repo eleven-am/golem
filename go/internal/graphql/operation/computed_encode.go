@@ -60,20 +60,6 @@ func (c *Compiler) EncodeMutationWithComputedPartial(ctx context.Context, root M
 	return encoded[0], failures, nil
 }
 
-func (c *Compiler) EncodeCustomWithComputed(ctx context.Context, root CustomRoot, value any, resolve ComputedResolver) (any, error) {
-	if c == nil || resolve == nil {
-		return nil, fmt.Errorf("P5_CUSTOM_ENCODE: compiler and resolver are required")
-	}
-	encoded, failures, err := c.EncodeCustomWithComputedPartial(ctx, root, value, resolve)
-	if err != nil {
-		return nil, err
-	}
-	if len(failures) != 0 {
-		return nil, failures[0].Err
-	}
-	return encoded, nil
-}
-
 // EncodeCustomWithComputedPartial preserves authorized sibling data when a
 // computed occurrence fails. gqlgen later applies the declared nullability.
 func (c *Compiler) EncodeCustomWithComputedPartial(ctx context.Context, root CustomRoot, value any, resolve ComputedResolver) (any, []ComputedFieldFailure, error) {
@@ -174,18 +160,6 @@ func (c *Compiler) EncodeReadWithComputedPartial(ctx context.Context, root ReadR
 		result[index] = encoded[index]
 	}
 	return result, failures, nil
-}
-
-func (c *Compiler) encodeComputedRows(ctx context.Context, modelID compilerir.ModelID, rows []golem.RuntimeModelRow, slots []selectset.Slot, resolve ComputedResolver) ([]map[string]any, error) {
-	paths := make([][]any, len(rows))
-	encoded, failures, err := c.encodeComputedRowsPartial(ctx, modelID, rows, slots, resolve, paths)
-	if err != nil {
-		return nil, err
-	}
-	if len(failures) != 0 {
-		return nil, failures[0].Err
-	}
-	return encoded, nil
 }
 
 func (c *Compiler) encodeComputedRowsPartial(ctx context.Context, modelID compilerir.ModelID, rows []golem.RuntimeModelRow, slots []selectset.Slot, resolve ComputedResolver, paths [][]any) ([]map[string]any, []ComputedFieldFailure, error) {
@@ -400,17 +374,6 @@ func propagateThroughList(values []ComputedFieldFailure, element, list compileri
 		return stopFailurePropagation(values)
 	}
 	return values
-}
-
-func (c *Compiler) encodeComputedValue(ctx context.Context, typ compilerir.GraphQLTypeIR, value any, children []selectset.Slot, resolve ComputedResolver) (any, error) {
-	encoded, failures, err := c.encodeComputedValuePartial(ctx, typ, value, children, resolve, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(failures) != 0 {
-		return nil, failures[0].Err
-	}
-	return encoded, nil
 }
 
 func (c *Compiler) encodeComputedValuePartial(ctx context.Context, typ compilerir.GraphQLTypeIR, value any, children []selectset.Slot, resolve ComputedResolver, path []any) (any, []ComputedFieldFailure, error) {

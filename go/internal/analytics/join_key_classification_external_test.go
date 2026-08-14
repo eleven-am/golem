@@ -19,7 +19,7 @@ func (values analyticsJoinPolicyMap) Policy(model policyir.ModelID) (policyir.Po
 	return value, ok
 }
 
-func TestP6RelationJoinCorrelationKeysRequireDischargedClassificationBeforeSQL(t *testing.T) {
+func TestRelationJoinCorrelationKeysRequireDischargedClassificationBeforeSQL(t *testing.T) {
 	registry, err := schema.New(p5social.GolemGeneratedSchemaBundle())
 	if err != nil {
 		t.Fatal(err)

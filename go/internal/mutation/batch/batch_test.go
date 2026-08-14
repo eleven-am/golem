@@ -72,19 +72,27 @@ func TestBatchRejectsPartialImagesAtEveryExactSetBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := program.PrepareCaptured([]mutationdecode.Row{partial}); err == nil || !strings.Contains(err.Error(), "complete scalar image") {
-		t.Fatalf("partial capture image was accepted: %v", err)
-	}
+	_, err = program.PrepareCaptured([]mutationdecode.Row{partial})
+	assertIncompleteScalarImage(t, "capture", err)
 	before := []mutationdecode.Row{postRow(t, fixture, 1, "old")}
 	prepared, err := program.PrepareCaptured(before)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := prepared.Verify([]mutationdecode.Row{partial}, []mutationdecode.Row{partial}, 0); err == nil || !strings.Contains(err.Error(), "complete scalar image") {
-		t.Fatalf("partial apply image was accepted: %v", err)
+	_, err = prepared.Verify([]mutationdecode.Row{partial}, []mutationdecode.Row{partial}, 0)
+	assertIncompleteScalarImage(t, "apply", err)
+	_, err = prepared.Verify(before, []mutationdecode.Row{partial}, 0)
+	assertIncompleteScalarImage(t, "after", err)
+}
+
+func assertIncompleteScalarImage(t *testing.T, phase string, err error) {
+	t.Helper()
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodeSet {
+		t.Fatalf("%s partial image error=%#v", phase, err)
 	}
-	if _, err := prepared.Verify(before, []mutationdecode.Row{partial}, 0); err == nil || !strings.Contains(err.Error(), "complete scalar image") {
-		t.Fatalf("partial after image was accepted: %v", err)
+	if !strings.Contains(failure.Detail, "not a complete scalar image") {
+		t.Fatalf("%s partial image was refused for another set reason: %s", phase, failure.Detail)
 	}
 }
 

@@ -11,7 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7RevalidationFailureDisconnectsWithStableError(t *testing.T) {
+func TestRevalidationFailureDisconnectsWithStableError(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

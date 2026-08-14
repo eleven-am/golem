@@ -76,7 +76,7 @@ func newProtocolServer(t *testing.T, limits events.Limits) (*Server[int], *proto
 	return server, stream
 }
 
-func TestP7GraphQLTransportWSProtocolCorpus(t *testing.T) {
+func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 	server, stream := newProtocolServer(t, events.Limits{})
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
@@ -106,7 +106,7 @@ func TestP7GraphQLTransportWSProtocolCorpus(t *testing.T) {
 	}
 }
 
-func TestP7WebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
+func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{ConnectionInitTimeout: 25 * time.Millisecond})
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
@@ -141,7 +141,7 @@ func TestP7WebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T)
 	}
 }
 
-func TestP7HTTPRefusesSubscriptionsAndShutdownClosesActiveWebSockets(t *testing.T) {
+func TestHTTPRefusesSubscriptionsAndShutdownClosesActiveWebSockets(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{})
 	response := server.Execute(context.Background(), 41, Request{Query: `subscription { ticks }`})
 	if len(response.Errors) != 1 || response.Errors[0].Extensions["code"] != "SUBSCRIPTION_TRANSPORT_REQUIRED" {
@@ -179,7 +179,7 @@ func (stream *panicResponseStream) Close() error {
 	return nil
 }
 
-func TestP7WebSocketOperationPanicIsSanitizedAndConnectionSurvives(t *testing.T) {
+func TestWebSocketOperationPanicIsSanitizedAndConnectionSurvives(t *testing.T) {
 	panicking := &panicResponseStream{}
 	server, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
 		PrincipalFromContext: func(context.Context) (int, bool) { return 41, true },

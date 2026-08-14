@@ -1279,14 +1279,6 @@ func identityMetadataLiteral(selector ir.SelectorContractIR, model ir.ModelDeclI
 	return fmt.Sprintf("golem.GeneratedIdentityMetadata(%s, %s, %s%s)", modelID, keyID, kind, fields), nil
 }
 
-func selectorInitializer(selector ir.SelectorContractIR, model ir.ModelDeclIR) (string, error) {
-	metadata, err := identityMetadataLiteral(selector, model)
-	if err != nil {
-		return "", err
-	}
-	return strings.Replace(metadata, "golem.GeneratedIdentityMetadata", "golem.GeneratedIdentitySelector["+model.Go.Name+"]", 1), nil
-}
-
 func orderedSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR) []ir.SelectorContractIR {
 	selectors := append([]ir.SelectorContractIR(nil), contract.Selectors...)
 	sort.Slice(selectors, func(i, j int) bool {
@@ -1297,20 +1289,6 @@ func orderedSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR) []ir.Se
 		return selectors[i].KeyID < selectors[j].KeyID
 	})
 	return selectors
-}
-
-// orderedCompoundSelectors returns only selectors that require a distinct
-// namespace member. A single-field identity is selected through its existing
-// typed ScalarField handle; its identity remains present in ModelMetadata.
-func orderedCompoundSelectors(contract ir.ModelContractIR, model ir.ModelDeclIR) []ir.SelectorContractIR {
-	selectors := orderedSelectors(contract, model)
-	result := make([]ir.SelectorContractIR, 0, len(selectors))
-	for _, selector := range selectors {
-		if len(selector.Fields) > 1 {
-			result = append(result, selector)
-		}
-	}
-	return result
 }
 
 func generatedSelectorName(selector ir.SelectorContractIR, model ir.ModelDeclIR) string {

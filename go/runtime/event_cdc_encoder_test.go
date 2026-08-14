@@ -15,7 +15,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestP7ProductionCDCEncoderUsesCanonicalV2FactAndEventPath(t *testing.T) {
+func TestProductionCDCEncoderUsesCanonicalV2FactAndEventPath(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, history := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "created")
@@ -45,7 +45,7 @@ func TestP7ProductionCDCEncoderUsesCanonicalV2FactAndEventPath(t *testing.T) {
 	}
 }
 
-func TestP7ProductionCDCReplayKeepsExactEventIDAndCanonicalBytes(t *testing.T) {
+func TestProductionCDCReplayKeepsExactEventIDAndCanonicalBytes(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, _ := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "replayed")
@@ -63,7 +63,7 @@ func TestP7ProductionCDCReplayKeepsExactEventIDAndCanonicalBytes(t *testing.T) {
 	}
 }
 
-func TestP7ProductionCDCEncoderRejectsNoncanonicalRecordedTime(t *testing.T) {
+func TestProductionCDCEncoderRejectsNoncanonicalRecordedTime(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, _ := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "recorded")
@@ -83,7 +83,7 @@ func TestP7ProductionCDCEncoderRejectsNoncanonicalRecordedTime(t *testing.T) {
 	}
 }
 
-func TestP7ProductionCDCEncoderCapturesCompilerOwnedDeleteSnapshot(t *testing.T) {
+func TestProductionCDCEncoderCapturesCompilerOwnedDeleteSnapshot(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, history := testCDCEventEncoder(t, fixture)
 	before := testCDCPostRow(t, fixture, false, "deleted")
@@ -112,7 +112,7 @@ func TestP7ProductionCDCEncoderCapturesCompilerOwnedDeleteSnapshot(t *testing.T)
 	}
 }
 
-func TestP7ProductionCDCEncoderRejectsProjectedIncompleteForeignRelationAndInvalidImages(t *testing.T) {
+func TestProductionCDCEncoderRejectsProjectedIncompleteForeignRelationAndInvalidImages(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, _ := testCDCEventEncoder(t, fixture)
 	completeCells := testCDCPostCells(fixture, "valid")
@@ -157,7 +157,7 @@ func TestP7ProductionCDCEncoderRejectsProjectedIncompleteForeignRelationAndInval
 	}
 }
 
-func TestP7ProductionCDCEncoderDistinguishesTrustedStoredNullFromMaskedNull(t *testing.T) {
+func TestProductionCDCEncoderDistinguishesTrustedStoredNullFromMaskedNull(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexedOptionalSource(t)
 	encoder, _ := testCDCEventEncoder(t, fixture)
 	cells := []golem.RuntimeReadCell{

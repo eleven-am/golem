@@ -16,7 +16,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 )
 
-func TestP3PostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
+func TestPostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	if dsn == "" {
 		t.Skip("GOLEM_TEST_POSTGRES_DSN is not configured")
@@ -163,7 +163,7 @@ func TestP3PostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
 	}
 }
 
-func TestP3PostgreSQLLiveOrderingAgreesAcrossCollationProfiles(t *testing.T) {
+func TestPostgreSQLLiveOrderingAgreesAcrossCollationProfiles(t *testing.T) {
 	cDefault := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	linguistic := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if cDefault == "" || linguistic == "" {

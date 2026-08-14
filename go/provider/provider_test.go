@@ -11,7 +11,7 @@ import (
 	providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 )
 
-func TestP8UnsafeSQLXIsOnlyRawPoolEscape(t *testing.T) {
+func TestUnsafeSQLXIsOnlyRawPoolEscape(t *testing.T) {
 	typeOfDatabase := reflect.TypeOf((*provider.Database)(nil))
 	if _, exists := typeOfDatabase.MethodByName("UnsafeSQLX"); !exists {
 		t.Fatal("UnsafeSQLX is missing")
@@ -23,7 +23,7 @@ func TestP8UnsafeSQLXIsOnlyRawPoolEscape(t *testing.T) {
 	}
 }
 
-func TestP8DatabaseValueCopiesShareCloseOwnership(t *testing.T) {
+func TestDatabaseValueCopiesShareCloseOwnership(t *testing.T) {
 	database, err := providersqlite.Open(context.Background(), providersqlite.Config{
 		DataSourceName: "file:p8_provider_copy_close?mode=memory&cache=shared",
 	})
@@ -57,7 +57,7 @@ func TestP8DatabaseValueCopiesShareCloseOwnership(t *testing.T) {
 	}
 }
 
-func TestP8DatabaseHandleCannotBeForgedOrProviderMismatched(t *testing.T) {
+func TestDatabaseHandleCannotBeForgedOrProviderMismatched(t *testing.T) {
 	var zero provider.Database
 	if zero.Provider() != "" || zero.UnsafeSQLX() != nil || zero.Capabilities().Provider() != "" {
 		t.Fatalf("zero handle published capabilities")
@@ -89,7 +89,7 @@ func TestP8DatabaseHandleCannotBeForgedOrProviderMismatched(t *testing.T) {
 	}
 }
 
-func TestP8CapabilitiesReturnOwnedCanonicalFeatures(t *testing.T) {
+func TestCapabilitiesReturnOwnedCanonicalFeatures(t *testing.T) {
 	database, err := providersqlite.Open(context.Background(), providersqlite.Config{
 		DataSourceName: "file:p8_provider_capabilities?mode=memory&cache=shared",
 	})

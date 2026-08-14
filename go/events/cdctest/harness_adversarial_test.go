@@ -8,7 +8,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7CDCReplayComparisonIncludesExactImageContents(t *testing.T) {
+func TestCDCReplayComparisonIncludesExactImageContents(t *testing.T) {
 	model := golem.ModelID{15: 1}
 	field := golem.FieldID{15: 2}
 	firstRow, err := golem.RuntimeCDCModelRow(model, golem.RuntimePresentReadCell(field, "before", nil))

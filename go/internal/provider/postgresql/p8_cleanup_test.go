@@ -11,7 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8PostgreSQLAllocatedProbeFailureClosesConnection(t *testing.T) {
+func TestPostgreSQLAllocatedProbeFailureClosesConnection(t *testing.T) {
 	var connects, closes atomic.Int64
 	raw := sql.OpenDB(postgreSQLCleanupConnector{connects: &connects, closes: &closes})
 	database := sqlx.NewDb(raw, "p8-cleanup")

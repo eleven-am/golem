@@ -22,7 +22,7 @@ func (values policyMap) Policy(model policyir.ModelID) (policyir.Policy, bool) {
 	return value, ok
 }
 
-func TestP6ScopedAuthorizedInnerAndLeftJoinOracle(t *testing.T) {
+func TestScopedAuthorizedInnerAndLeftJoinOracle(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	posts := golem.GeneratedScope[scopedSQLPost](fixture.Post)
 	authorRelation := golem.GeneratedToOne[scopedSQLPost, scopedSQLUser](fixture.PostAuthor, fixture.Authorship, fixture.User)
@@ -95,7 +95,7 @@ func assertJoinPolicyOrGrouped(t *testing.T, joinSQL string) {
 	t.Fatalf("joined alternative policy has no OR: %s", joinSQL)
 }
 
-func TestP6ScopedJoinCorrelationKeysRequireDischargedClassification(t *testing.T) {
+func TestScopedJoinCorrelationKeysRequireDischargedClassification(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	posts := golem.GeneratedScope[scopedSQLPost](fixture.Post)
 	author := golem.InnerJoin(posts, golem.GeneratedToOne[scopedSQLPost, scopedSQLUser](fixture.PostAuthor, fixture.Authorship, fixture.User))
@@ -264,7 +264,7 @@ func alternativeStringReadPolicy(t *testing.T, model golem.ModelID, field golem.
 	return policy
 }
 
-func TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *testing.T) {
+func TestScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	users := golem.GeneratedScope[scopedSQLUser](fixture.User)
 	posts := golem.InnerJoin(users, golem.GeneratedToMany[scopedSQLUser, scopedSQLPost](fixture.UserPosts, fixture.Authorship, fixture.Post))
@@ -306,7 +306,7 @@ func scopedProof(provider policyir.Provider, fixture schematest.Fixture) (policy
 	return policysql.NewCapabilityProof(provider, [32]byte(fixture.Registry.ModelFingerprint()), policyir.CapabilityBinaryText, policyir.CapabilityASCIIInsensitiveText, policyir.CapabilityExactJSON, policyir.CapabilityScalarListJSON, policyir.CapabilityRelationCorrelation)
 }
 
-func TestP6ScopedProviderSQLIsDeterministic(t *testing.T) {
+func TestScopedProviderSQLIsDeterministic(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	posts := golem.GeneratedScope[scopedSQLPost](fixture.Post)
 	title := golem.GeneratedScopedTextField(posts, golem.GeneratedTextField[scopedSQLPost, string](fixture.PostTitle))
@@ -333,7 +333,7 @@ func TestP6ScopedProviderSQLIsDeterministic(t *testing.T) {
 	}
 }
 
-func TestP8ScopedRebasesNumberedPlaceholdersAcrossProviders(t *testing.T) {
+func TestScopedRebasesNumberedPlaceholdersAcrossProviders(t *testing.T) {
 	for _, test := range []struct {
 		name, input, want string
 		provider          policyir.Provider
@@ -349,7 +349,7 @@ func TestP8ScopedRebasesNumberedPlaceholdersAcrossProviders(t *testing.T) {
 	}
 }
 
-func TestP6ScopedClassificationPositionSpy(t *testing.T) {
+func TestScopedClassificationPositionSpy(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	posts := golem.GeneratedScope[scopedSQLPost](fixture.Post)
 	title := golem.GeneratedScopedTextField(posts, golem.GeneratedTextField[scopedSQLPost, string](fixture.PostTitle))
@@ -398,7 +398,7 @@ func conditionalStringFieldReadPolicy(t *testing.T, model golem.ModelID, field g
 	return result
 }
 
-func TestP6ScopedExactNumericHavingOrderAndLimitGuards(t *testing.T) {
+func TestScopedExactNumericHavingOrderAndLimitGuards(t *testing.T) {
 	fixture := schematest.NewIndexedExactScoped(t)
 	posts := golem.GeneratedScope[scopedSQLPost](fixture.Post)
 	big := golem.GeneratedScopedIntegerField(posts, golem.GeneratedOrderedField[scopedSQLPost, int64](fixture.PostBigInt))

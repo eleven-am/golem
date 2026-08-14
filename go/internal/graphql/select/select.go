@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"sort"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
@@ -652,10 +651,4 @@ func StableSlots(values []Slot) []Slot {
 		result[index].Computed = graphqlextension.CloneComputedSelection(result[index].Computed)
 	}
 	return result
-}
-
-// SortSlotsByResponseName is intended only for deterministic diagnostics and
-// tests. Response serialization retains authored order and must not call it.
-func SortSlotsByResponseName(values []Slot) {
-	sort.SliceStable(values, func(i, j int) bool { return values[i].ResponseName < values[j].ResponseName })
 }

@@ -25,7 +25,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP7SQLiteDeliveryClaimFenceOperatorAndRetention(t *testing.T) {
+func TestSQLiteDeliveryClaimFenceOperatorAndRetention(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -96,7 +96,7 @@ func TestP7SQLiteDeliveryClaimFenceOperatorAndRetention(t *testing.T) {
 	}
 }
 
-func TestP7SQLiteConcurrentWorkersClaimWholeCausationsExclusively(t *testing.T) {
+func TestSQLiteConcurrentWorkersClaimWholeCausationsExclusively(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -155,7 +155,7 @@ func TestP7SQLiteConcurrentWorkersClaimWholeCausationsExclusively(t *testing.T) 
 	}
 }
 
-func TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized(t *testing.T) {
+func TestSQLiteClaimDepthSnapshotIsExactAndSerialized(t *testing.T) {
 	if databasePath := os.Getenv("GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE"); databasePath != "" {
 		p8SQLiteDepthSubprocessWorker(t, databasePath, os.Getenv("GOLEM_P8_DEPTH_WORKER_OUTPUT"), os.Getenv("GOLEM_P8_DEPTH_WORKER_MODE"), os.Getenv("GOLEM_P8_DEPTH_WORKER_CAUSATION"))
 		return
@@ -271,7 +271,7 @@ func p8RunSQLiteDepthSubprocesses(t *testing.T, databasePath, wantCausation stri
 	outputDirectory := t.TempDir()
 	for index := range processes {
 		output := filepath.Join(outputDirectory, fmt.Sprintf("depth-%d.json", index))
-		command := exec.Command(os.Args[0], "-test.run=^TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
+		command := exec.Command(os.Args[0], "-test.run=^TestSQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
 		command.Env = append(os.Environ(), "GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE="+databasePath, "GOLEM_P8_DEPTH_WORKER_OUTPUT="+output, "GOLEM_P8_DEPTH_WORKER_MODE=claim")
 		log := &bytes.Buffer{}
 		command.Stdout = log
@@ -350,7 +350,7 @@ func p8SQLiteDepthSubprocessWorker(t *testing.T, databasePath, output, mode, cau
 
 func p8RunSQLiteDepthCrash(t *testing.T, databasePath, causation string) {
 	t.Helper()
-	command := exec.Command(os.Args[0], "-test.run=^TestP8SQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
+	command := exec.Command(os.Args[0], "-test.run=^TestSQLiteClaimDepthSnapshotIsExactAndSerialized$", "-test.count=1")
 	command.Env = append(os.Environ(), "GOLEM_P8_SQLITE_DEPTH_WORKER_DATABASE="+databasePath, "GOLEM_P8_DEPTH_WORKER_MODE=crash", "GOLEM_P8_DEPTH_WORKER_CAUSATION="+causation)
 	output, err := command.CombinedOutput()
 	var exitError *exec.ExitError
@@ -384,7 +384,7 @@ func p8AssertSQLiteDeliveryConservation(t *testing.T, database *sqlx.DB, want ma
 	}
 }
 
-func TestP7SQLiteMissingStateMaterializationIsBoundedPerClaim(t *testing.T) {
+func TestSQLiteMissingStateMaterializationIsBoundedPerClaim(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -415,7 +415,7 @@ func TestP7SQLiteMissingStateMaterializationIsBoundedPerClaim(t *testing.T) {
 	}
 }
 
-func TestP7SQLiteNewCausalDeliveryInsertIsIdempotentAndConflictSpecific(t *testing.T) {
+func TestSQLiteNewCausalDeliveryInsertIsIdempotentAndConflictSpecific(t *testing.T) {
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
 	recordedAt := time.Unix(1_700_000_000, 123_456_789).UTC()
@@ -450,7 +450,7 @@ func TestP7SQLiteNewCausalDeliveryInsertIsIdempotentAndConflictSpecific(t *testi
 	}
 }
 
-func TestP7SQLiteMissingStateInspectionAndRetireAreClosed(t *testing.T) {
+func TestSQLiteMissingStateInspectionAndRetireAreClosed(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -481,7 +481,7 @@ func TestP7SQLiteMissingStateInspectionAndRetireAreClosed(t *testing.T) {
 	}
 }
 
-func TestP7SQLiteExpiredTokenCanRenewUntilDatabaseReownershipThenIsFenced(t *testing.T) {
+func TestSQLiteExpiredTokenCanRenewUntilDatabaseReownershipThenIsFenced(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -515,7 +515,7 @@ func TestP7SQLiteExpiredTokenCanRenewUntilDatabaseReownershipThenIsFenced(t *tes
 	}
 }
 
-func TestP7SQLiteDeliveryProviderCommonHarness(t *testing.T) {
+func TestSQLiteDeliveryProviderCommonHarness(t *testing.T) {
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
 	cause := deliveryUUID(9)

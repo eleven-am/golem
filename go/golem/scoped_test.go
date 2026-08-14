@@ -23,7 +23,7 @@ var (
 	scopedCommentsRelation = RelationID{32}
 )
 
-func TestP6ScopedIRStructuralAllowlist(t *testing.T) {
+func TestScopedIRStructuralAllowlist(t *testing.T) {
 	posts := GeneratedScope[scopedTestPost](scopedPostModel)
 	author := LeftJoin(posts, GeneratedToOne[scopedTestPost, scopedTestUser](scopedPostAuthor, scopedAuthorRelation, scopedUserModel))
 	comments := InnerJoin(posts, GeneratedToMany[scopedTestPost, scopedTestComment](scopedPostComments, scopedCommentsRelation, scopedCommentModel))
@@ -59,7 +59,7 @@ func TestP6ScopedIRStructuralAllowlist(t *testing.T) {
 	}
 }
 
-func TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *testing.T) {
+func TestScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *testing.T) {
 	postsA := GeneratedScope[scopedTestPost](scopedPostModel)
 	postsB := GeneratedScope[scopedTestPost](scopedPostModel)
 	titleA := GeneratedScopedTextField(postsA, GeneratedTextField[scopedTestPost, string](scopedPostTitle))
@@ -76,7 +76,7 @@ func TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *tes
 	}
 }
 
-func TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testing.T) {
+func TestScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testing.T) {
 	posts := GeneratedScope[scopedTestPost](scopedPostModel)
 	author := LeftJoin(posts, GeneratedToOne[scopedTestPost, scopedTestUser](scopedPostAuthor, scopedAuthorRelation, scopedUserModel))
 	country := GeneratedScopedTextField(author, GeneratedTextField[scopedTestUser, string](scopedUserCountry))
@@ -92,7 +92,7 @@ func TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testin
 	}
 }
 
-func TestP6ScopedAuditContainsStableInventoryAndFingerprintsOnly(t *testing.T) {
+func TestScopedAuditContainsStableInventoryAndFingerprintsOnly(t *testing.T) {
 	posts := GeneratedScope[scopedTestPost](scopedPostModel)
 	author := LeftJoin(posts, GeneratedToOne[scopedTestPost, scopedTestUser](scopedPostAuthor, scopedAuthorRelation, scopedUserModel))
 	country := GeneratedScopedTextField(author, GeneratedTextField[scopedTestUser, string](scopedUserCountry))
@@ -116,7 +116,7 @@ func TestP6ScopedAuditContainsStableInventoryAndFingerprintsOnly(t *testing.T) {
 	}
 }
 
-func TestP6ScopedAuditShapeExcludesValuesButIncludesSignedPaging(t *testing.T) {
+func TestScopedAuditShapeExcludesValuesButIncludesSignedPaging(t *testing.T) {
 	freeze := func(operand string, take, skip int) FrozenScopedQuery {
 		posts := GeneratedScope[scopedTestPost](scopedPostModel)
 		title := GeneratedScopedTextField(posts, GeneratedTextField[scopedTestPost, string](scopedPostTitle))
@@ -140,7 +140,7 @@ func TestP6ScopedAuditShapeExcludesValuesButIncludesSignedPaging(t *testing.T) {
 	}
 }
 
-func TestP8ScopedAuditForUnfreezableInputDoesNotInventZeroModel(t *testing.T) {
+func TestScopedAuditForUnfreezableInputDoesNotInventZeroModel(t *testing.T) {
 	record := RuntimeScopedAuditRecord(FrozenScopedQuery{}, "audit-user", 1, false, SQLite, "", 0, 0, ScopedOutcomeRefused)
 	if models := record.Models(); len(models) != 0 {
 		t.Fatalf("unfreezable scoped audit models=%v want empty", models)

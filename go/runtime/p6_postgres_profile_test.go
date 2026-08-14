@@ -9,7 +9,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 )
 
-func TestP6PostgreSQLProfilesAreLiveDistinctAndCollationVerified(t *testing.T) {
+func TestPostgreSQLProfilesAreLiveDistinctAndCollationVerified(t *testing.T) {
 	cDSN := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	linguisticDSN := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if cDSN == "" || linguisticDSN == "" {

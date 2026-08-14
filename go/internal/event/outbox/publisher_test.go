@@ -117,7 +117,7 @@ func (observer *publisherCaptureObserver) ObserveEvent(_ context.Context, observ
 	observer.observations = append(observer.observations, observation)
 }
 
-func TestP7PublisherReportsSanitizedAttemptAndAcknowledgement(t *testing.T) {
+func TestPublisherReportsSanitizedAttemptAndAcknowledgement(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	coordinator := &publisherTestCoordinator{renewed: true}
 	observer := &publisherCaptureObserver{}
@@ -138,7 +138,7 @@ func TestP7PublisherReportsSanitizedAttemptAndAcknowledgement(t *testing.T) {
 	}
 }
 
-func TestP7PublisherRunOwnershipAndShutdownGrace(t *testing.T) {
+func TestPublisherRunOwnershipAndShutdownGrace(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	coordinator := &publisherTestCoordinator{renewed: true}
 	entered := make(chan struct{})
@@ -184,7 +184,7 @@ func (transport *captureTransport) Publish(_ context.Context, batch eventvalue.E
 	return err
 }
 
-func TestP7PublisherRejectsOrdinalAndDuplicatedColumnCorruptionBeforeTransport(t *testing.T) {
+func TestPublisherRejectsOrdinalAndDuplicatedColumnCorruptionBeforeTransport(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	valid := publisherValidLease(t, fixture)
 	for name, mutate := range map[string]func(*eventprovider.Lease){
@@ -208,7 +208,7 @@ func TestP7PublisherRejectsOrdinalAndDuplicatedColumnCorruptionBeforeTransport(t
 	}
 }
 
-func TestP7PublisherReusesIdenticalCausalBatchAfterAmbiguousAcceptanceWindows(t *testing.T) {
+func TestPublisherReusesIdenticalCausalBatchAfterAmbiguousAcceptanceWindows(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := publisherValidLease(t, fixture)
 	for _, test := range []struct {
@@ -247,7 +247,7 @@ func TestP7PublisherReusesIdenticalCausalBatchAfterAmbiguousAcceptanceWindows(t 
 	}
 }
 
-func TestP7PublisherRenewalLossCancelsContextRespectingTransportWithinGrace(t *testing.T) {
+func TestPublisherRenewalLossCancelsContextRespectingTransportWithinGrace(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := publisherValidLease(t, fixture)
 	coordinator := &publisherTestCoordinator{renewed: false}
@@ -274,7 +274,7 @@ func TestP7PublisherRenewalLossCancelsContextRespectingTransportWithinGrace(t *t
 	}
 }
 
-func TestP7PublisherRunOwnershipAndCancellationLifecycle(t *testing.T) {
+func TestPublisherRunOwnershipAndCancellationLifecycle(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	coordinator := &publisherRunCoordinator{entered: make(chan struct{})}
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})

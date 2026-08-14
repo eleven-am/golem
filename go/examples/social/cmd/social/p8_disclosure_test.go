@@ -13,7 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/provider/sqlite"
 )
 
-func TestP8HealthEndpointSafeShape(t *testing.T) {
+func TestHealthEndpointSafeShape(t *testing.T) {
 	const canary = "P8_HEALTH_DSN_CREDENTIAL_SCHEMA_BACKLOG_PRINCIPAL_RAW_ERROR"
 	root := socialHostRoot(t)
 	dsn := "file:" + filepath.Join(t.TempDir(), canary+".sqlite")

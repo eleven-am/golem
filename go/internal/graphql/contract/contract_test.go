@@ -156,7 +156,7 @@ func hasDiagnostic(values []ir.Diagnostic, code string) bool {
 	return false
 }
 
-func TestP7ContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *testing.T) {
+func TestContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *testing.T) {
 	id := ir.FieldID("10000000000000000000000000000001")
 	title := ir.FieldID("10000000000000000000000000000002")
 	relation := ir.FieldID("10000000000000000000000000000003")
@@ -199,7 +199,7 @@ func TestP7ContractNormalizesSubscriptionsRootsIdentitiesSnapshotsAndLimits(t *t
 	}
 }
 
-func TestP7ContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing.T) {
+func TestContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing.T) {
 	makeModel := func(modelID ir.ModelID, key bool, mode ir.FieldMode) (ir.ModelDeclIR, ir.ModelContractIR) {
 		fieldID := ir.FieldID(string(modelID)[:31] + "f")
 		logical := ir.ModelDeclIR{ID: modelID, Fields: []ir.FieldIR{{ID: fieldID, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}}}}
@@ -254,7 +254,7 @@ func TestP7ContractRejectsHiddenKeylessCollidingAndUncapturableModels(t *testing
 	}
 }
 
-func TestP7EventSchemaDigestIgnoresGraphQLOnlyChangesButTracksLogicalEventShape(t *testing.T) {
+func TestEventSchemaDigestIgnoresGraphQLOnlyChangesButTracksLogicalEventShape(t *testing.T) {
 	id := ir.FieldID("10000000000000000000000000000001")
 	modelID := ir.ModelID("10000000000000000000000000000010")
 	logical := ir.ModelDeclIR{ID: modelID, Fields: []ir.FieldIR{{ID: id, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}}}, PrimaryKey: &ir.KeyIR{ID: "10000000000000000000000000000011", Kind: ir.KeyPrimary, Fields: []ir.FieldID{id}}}

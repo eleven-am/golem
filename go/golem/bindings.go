@@ -397,18 +397,6 @@ func SetCreate[M, V any](request *CreateHookRequest[M], field CreateFieldCapabil
 	return nil
 }
 
-func RuntimeCreateHookResult[M any](row Row[M]) CreateHookResult[M] {
-	return CreateHookResult[M]{row: cloneRow(row)}
-}
-
-func RuntimeUpdateHookResult[M any](before, after Row[M]) UpdateHookResult[M] {
-	return UpdateHookResult[M]{before: cloneRow(before), after: cloneRow(after)}
-}
-
-func RuntimeDeleteHookResult[M any](before Row[M]) DeleteHookResult[M] {
-	return DeleteHookResult[M]{before: cloneRow(before)}
-}
-
 func RuntimeUpdateManyHookResult[M any](count int64) UpdateManyHookResult[M] {
 	return UpdateManyHookResult[M]{count: count}
 }

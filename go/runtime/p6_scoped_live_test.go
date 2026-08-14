@@ -17,7 +17,7 @@ func scopedPostTitles() (golem.ScopedQuery[p5social.Post], golem.ScopedResult[st
 	return golem.From(posts).Where(title.EndsWith("-open")).Select(title).OrderBy(title.Asc()), title
 }
 
-func TestP6ScopedSystemAndTransactionParity(t *testing.T) {
+func TestScopedSystemAndTransactionParity(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -67,7 +67,7 @@ func TestP6ScopedSystemAndTransactionParity(t *testing.T) {
 	}
 }
 
-func TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testing.T) {
+func TestScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -113,7 +113,7 @@ func TestP6ScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testin
 	}
 }
 
-func TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *testing.T) {
+func TestScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -143,7 +143,7 @@ func TestP6ScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *
 	}
 }
 
-func TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *testing.T) {
+func TestScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *testing.T) {
 	h := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	caller, err := h.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
 	if err != nil {
@@ -160,7 +160,7 @@ func TestP6ScopedRuntimeForgeryAndMixedRootCorpusTouchesDatabaseZeroTimes(t *tes
 	}
 }
 
-func TestP6ScopedAuditStartupRequirements(t *testing.T) {
+func TestScopedAuditStartupRequirements(t *testing.T) {
 	h := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	_, err := p5social.Open(context.Background(), p5social.Config[p5social.Principal]{
 		Database:         h.handle,
@@ -171,7 +171,7 @@ func TestP6ScopedAuditStartupRequirements(t *testing.T) {
 	}
 }
 
-func TestP6ScopedAuditSuccessFailureCancellationAndTx(t *testing.T) {
+func TestScopedAuditSuccessFailureCancellationAndTx(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -230,7 +230,7 @@ func TestP6ScopedAuditSuccessFailureCancellationAndTx(t *testing.T) {
 	}
 }
 
-func TestP6ConcurrentAuditPrincipalIsolation(t *testing.T) {
+func TestConcurrentAuditPrincipalIsolation(t *testing.T) {
 	h := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	h.audits.reset()
 	query, _ := scopedPostTitles()
@@ -267,7 +267,7 @@ func TestP6ConcurrentAuditPrincipalIsolation(t *testing.T) {
 	}
 }
 
-func TestP6ScopedLimitAndCancellationCorpus(t *testing.T) {
+func TestScopedLimitAndCancellationCorpus(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

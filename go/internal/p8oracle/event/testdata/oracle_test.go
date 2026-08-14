@@ -95,7 +95,6 @@ func (blocker *displayBlocker) ObservePostDisplayCodeLoad(ctx context.Context, _
 }
 
 func (observer *eventObservation) ObserveGolem(_ context.Context, value observe.Observation) {
-	recordObservationCoverage(value.Provider(), value.Operation())
 	if value.Operation() == observe.OperationSubscriptionMembership && value.Outcome() == observe.OutcomeSuccess {
 		observer.membership.Add(1)
 	}
@@ -116,28 +115,6 @@ func (observer *eventObservation) ObserveGolem(_ context.Context, value observe.
 	if value.Operation() == observe.OperationSubscriptionOverflow {
 		observer.overflows.Add(1)
 		observer.once.Do(func() { close(observer.overflow) })
-	}
-}
-
-var observationCoverageMu sync.Mutex
-
-func recordObservationCoverage(provider golem.Provider, operation observe.Operation) {
-	path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE")
-	if path == "" {
-		return
-	}
-	observationCoverageMu.Lock()
-	defer observationCoverageMu.Unlock()
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		panic("open observation coverage sink")
-	}
-	if _, err := fmt.Fprintln(file, provider, operation); err != nil {
-		_ = file.Close()
-		panic("write observation coverage sink")
-	}
-	if err := file.Close(); err != nil {
-		panic("close observation coverage sink")
 	}
 }
 

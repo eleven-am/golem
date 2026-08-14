@@ -29,7 +29,7 @@ func (executor p7SecretSubscriptionExecutor) Subscribe(context.Context, int, pub
 	return nil, errors.New(executor.secret)
 }
 
-func TestP7PublisherSubscriptionAndWebSocketErrorsAreSanitized(t *testing.T) {
+func TestPublisherSubscriptionAndWebSocketErrorsAreSanitized(t *testing.T) {
 	const secret = "postgres://alice:private-password@internal-db/customer"
 
 	publisherApp := &App[struct{}, struct{}]{

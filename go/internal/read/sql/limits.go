@@ -23,10 +23,6 @@ const (
 	MaxStatementAliases = 2_048
 )
 
-func enforceStatementParameterLimit(model policyir.ModelID, args []any) error {
-	return enforceStatementParameterLimitWith(model, args, MaxStatementParameters)
-}
-
 func enforceStatementParameterLimitWith(model policyir.ModelID, args []any, maximum int) error {
 	if maximum > 0 && maximum <= MaxStatementParameters && len(args) <= maximum {
 		return nil

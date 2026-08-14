@@ -52,7 +52,7 @@ func p5ExtensionProviderProfiles() []p5ExtensionProviderProfile {
 	}
 }
 
-func TestP5GeneratedGraphQLExtensionsUseOneCallerAndOperationLocalLoadersAcrossProviders(t *testing.T) {
+func TestGeneratedGraphQLExtensionsUseOneCallerAndOperationLocalLoadersAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -106,7 +106,7 @@ func TestP5GeneratedGraphQLExtensionsUseOneCallerAndOperationLocalLoadersAcrossP
 	}
 }
 
-func TestP5GeneratedCustomMutationTransactionAndWriteInvalidationAcrossProviders(t *testing.T) {
+func TestGeneratedCustomMutationTransactionAndWriteInvalidationAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -171,7 +171,7 @@ func TestP5GeneratedCustomMutationTransactionAndWriteInvalidationAcrossProviders
 	}
 }
 
-func TestP5GeneratedGraphQLPrincipalRefusalsIssueZeroSQLAcrossProviders(t *testing.T) {
+func TestGeneratedGraphQLPrincipalRefusalsIssueZeroSQLAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -235,7 +235,7 @@ func TestSILENT_PAGE_TRUNCATIONGeneratedGraphQLDefaultPageNeverSilentlyTruncates
 	}
 }
 
-func TestP5GeneratedGraphQLComputedBatchLimitBoundsActiveResolverSQLite(t *testing.T) {
+func TestGeneratedGraphQLComputedBatchLimitBoundsActiveResolverSQLite(t *testing.T) {
 	profile := p5ExtensionProviderProfile{name: "sqlite", provider: golem.SQLite}
 	server, database, _, _ := newP5ExtensionTracedProviderFixtureWithLimits(t, profile, p5extensions.GraphQLLimits{MaxComputedBatchSize: 1})
 	seedP5ExtensionUsers(t, database, profile.provider)
@@ -250,7 +250,7 @@ func TestP5GeneratedGraphQLComputedBatchLimitBoundsActiveResolverSQLite(t *testi
 	}
 }
 
-func TestP5GeneratedGraphQLOperationStateIsPrincipalLocalUnderConcurrencySQLite(t *testing.T) {
+func TestGeneratedGraphQLOperationStateIsPrincipalLocalUnderConcurrencySQLite(t *testing.T) {
 	profile := p5ExtensionProviderProfile{name: "sqlite", provider: golem.SQLite}
 	server, database, resolutions := newP5ExtensionProviderFixture(t, profile)
 	seedP5ExtensionUsers(t, database, profile.provider)
@@ -313,7 +313,7 @@ func TestP5GeneratedGraphQLOperationStateIsPrincipalLocalUnderConcurrencySQLite(
 	}
 }
 
-func TestP5GeneratedBatchedComputedCancellationReachesLoaderAcrossProviders(t *testing.T) {
+func TestGeneratedBatchedComputedCancellationReachesLoaderAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

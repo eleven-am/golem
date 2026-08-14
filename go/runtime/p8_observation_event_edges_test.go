@@ -81,7 +81,7 @@ func (transport p8CoveragePublisherTransport) Publish(context.Context, eventvalu
 	return transport.failure
 }
 
-func TestP8ObservationCoverageEventFaultEdges(t *testing.T) {
+func TestObservationCoverageEventFaultEdges(t *testing.T) {
 	collector := &p8ObservationCollector{}
 	fixture := newP7EventRuntimeFixture(t)
 	lease := p7ObserverLease(t, fixture)
@@ -186,7 +186,6 @@ func TestP8ObservationCoverageEventFaultEdges(t *testing.T) {
 			t.Fatalf("depth operation %s observations=%v want statements=%d aggregate=%d", operation, values, want.statements, want.aggregate)
 		}
 	}
-	p8AppendDynamicCoverage(t, collector.values)
 }
 
 type p8CoverageStream struct {

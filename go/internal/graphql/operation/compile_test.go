@@ -186,7 +186,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	}
 }
 
-func TestP7CompilerLowersExactlyOneSubscriptionRootToFullFrozenRead(t *testing.T) {
+func TestCompilerLowersExactlyOneSubscriptionRootToFullFrozenRead(t *testing.T) {
 	compilation := social(t)
 	var postModel *compilerir.ModelDeclIR
 	for index := range compilation.Model.Models {
@@ -267,7 +267,7 @@ func TestP7CompilerLowersExactlyOneSubscriptionRootToFullFrozenRead(t *testing.T
 	}
 }
 
-func TestP6GraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys(t *testing.T) {
+func TestGraphQLSelectionDrivesMeasuresAndRejectsUngroupedKeys(t *testing.T) {
 	compilation := p6AnalyticsSocial(t, social(t))
 	document, err := graphqlschema.Build(compilation)
 	if err != nil {

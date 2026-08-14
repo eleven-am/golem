@@ -149,7 +149,7 @@ func (h p5PostgresGraphQLHarness) seed(t *testing.T) {
 	}
 }
 
-func TestP5IndependentSocialGraphQLOraclePostgreSQLProfiles(t *testing.T) {
+func TestIndependentSocialGraphQLOraclePostgreSQLProfiles(t *testing.T) {
 	profiles := []struct{ name, environment string }{
 		{name: "c", environment: "GOLEM_TEST_POSTGRES_DSN"},
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},

@@ -25,7 +25,7 @@ const (
 	p6CountryID  compilerir.FieldID    = "88888888888888888888888888888888"
 )
 
-func TestP6ContractNormalizationMaterializesOperationsAllowlistsPathsLimitsAndScopedRoots(t *testing.T) {
+func TestContractNormalizationMaterializesOperationsAllowlistsPathsLimitsAndScopedRoots(t *testing.T) {
 	compilation := p6ContractFixture()
 	dimensions := []compilerir.FieldID{p6AuthorID}
 	measures := []compilerir.FieldID{p6ViewsID}
@@ -101,7 +101,7 @@ func TestAnalyticsOnlyChangesContractFingerprintAndNeverModelOrMigration(t *test
 	}
 }
 
-func TestP6ContractRejectsNamesTypesPathsLimitsAndCollisions(t *testing.T) {
+func TestContractRejectsNamesTypesPathsLimitsAndCollisions(t *testing.T) {
 	compilation := p6ContractFixture()
 	emptyDimensions := []compilerir.FieldID{}
 	emptyMeasures := []compilerir.FieldID{}
@@ -135,7 +135,7 @@ func TestP6ContractRejectsNamesTypesPathsLimitsAndCollisions(t *testing.T) {
 	}
 }
 
-func TestP6ContractRejectsAnalyticsLimitsAboveFrozenHardMaxima(t *testing.T) {
+func TestContractRejectsAnalyticsLimitsAboveFrozenHardMaxima(t *testing.T) {
 	for _, test := range []struct {
 		name       string
 		graphql    uint32
@@ -166,7 +166,7 @@ func TestP6ContractRejectsAnalyticsLimitsAboveFrozenHardMaxima(t *testing.T) {
 	}
 }
 
-func TestP6RelationDeclarationRejectsToManyReverseAndMultiplePaths(t *testing.T) {
+func TestRelationDeclarationRejectsToManyReverseAndMultiplePaths(t *testing.T) {
 	patch := func(paths ...[]compilerir.RelationID) []ModelPatch {
 		dimensions := make([]compilerir.RelationDimensionContractIR, len(paths))
 		for index, path := range paths {

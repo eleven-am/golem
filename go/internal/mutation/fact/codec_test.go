@@ -341,7 +341,7 @@ func TestDeleteSnapshotCanBeUnconfiguredAndAbsent(t *testing.T) {
 	}
 }
 
-func TestP7FactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
+func TestFactV1HistoricalAndV2EventSchemaCodecMatrix(t *testing.T) {
 	fixture := schematest.NewIndexedExact(t)
 	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{7}, "private", 101))
 	digest := golem.SchemaDigest{1, 2, 3, 4}

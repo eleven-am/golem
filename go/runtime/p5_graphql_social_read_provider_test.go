@@ -8,7 +8,7 @@ import (
 	publicgraphql "github.com/eleven-am/golem/go/graphql"
 )
 
-func TestP5CompleteSocialGraphQLReadAcrossSQLiteAndPostgreSQLProfiles(t *testing.T) {
+func TestCompleteSocialGraphQLReadAcrossSQLiteAndPostgreSQLProfiles(t *testing.T) {
 	t.Run("sqlite", func(t *testing.T) {
 		assertP5CompleteSocialGraphQLRead(t, newSocialMutationFixture(t, golem.ModelID{}, nil))
 	})

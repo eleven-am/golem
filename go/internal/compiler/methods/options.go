@@ -340,15 +340,6 @@ func (in *interpreter) finishSemantic() {
 	// completed compilation, where both tag- and method-authored keys exist.
 }
 
-func semanticIdentityType(kind ir.LogicalTypeKind) bool {
-	switch kind {
-	case ir.TypeString, ir.TypeUUID, ir.TypeInt16, ir.TypeInt32, ir.TypeInt64:
-		return true
-	default:
-		return false
-	}
-}
-
 func semanticField(model ir.ModelDeclIR, fieldID ir.FieldID) (ir.FieldIR, bool) {
 	for _, field := range model.Fields {
 		if field.ID == fieldID {

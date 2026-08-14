@@ -30,14 +30,14 @@ func TestHistoricalBundleRoutesModelV1ThroughFrozenDecoderOnly(t *testing.T) {
 	if len(registry.Providers()) != 2 {
 		t.Fatalf("historical registry providers = %v", registry.Providers())
 	}
-	if _, err := New(historical); err == nil || !strings.Contains(err.Error(), "unsupported format/canonical versions 1/1") {
+	if _, err := New(historical); !isSchemaFailure(err, CodeDocument, "model", "unsupported format/canonical versions 1/1") {
 		t.Fatalf("active registry accepted historical ModelIR v1: %v", err)
 	}
 	wrongFingerprint := digest(t, string(v1Fingerprint))
 	wrongFingerprint[0] ^= 0xff
 	wrongDocument := golem.GeneratedSchemaDocument(1, uint32(compilerir.CanonicalFormatVersion), wrongFingerprint, v1Payload)
 	wrongBundle := golem.GeneratedSchemaBundle(current.GenerationDigest(), current.GeneratorVersion(), current.TemplateABIVersion(), wrongDocument, current.Contract(), current.Providers()...)
-	if _, err := NewHistorical(wrongBundle); err == nil || !strings.Contains(err.Error(), "fingerprint mismatch") {
+	if _, err := NewHistorical(wrongBundle); !isSchemaFailure(err, CodeFingerprint, "model", "fingerprint mismatch") {
 		t.Fatalf("historical registry accepted wrong original ModelIR-v1 fingerprint: %v", err)
 	}
 

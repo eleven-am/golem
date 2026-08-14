@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -470,7 +469,7 @@ func (context renderContext) compileCondition(condition policyir.Condition, offs
 	for index, value := range args {
 		bindings[index] = Binding{kind: StaticBinding, value: value}
 	}
-	return renderedFragment{text: rebasePlaceholders(fragment.SQL(), offset, context.provider), bindings: bindings}, nil
+	return renderedFragment{text: policysql.RebasePlaceholders(fragment.SQL(), offset, context.provider), bindings: bindings}, nil
 }
 
 func (context renderContext) postconditionStatement(source uint32, conditions []policyir.Condition) (Statement, bool, error) {
@@ -763,33 +762,6 @@ func validRootIdentityBehavior(operation mutationir.Operation, behavior mutation
 	default:
 		return false
 	}
-}
-
-func rebasePlaceholders(value string, offset int, provider policyir.Provider) string {
-	if offset == 0 {
-		return value
-	}
-	marker := byte('$')
-	if provider == policyir.ProviderSQLite {
-		marker = '?'
-	}
-	var result strings.Builder
-	for index := 0; index < len(value); {
-		if value[index] != marker || index+1 >= len(value) || value[index+1] < '0' || value[index+1] > '9' {
-			result.WriteByte(value[index])
-			index++
-			continue
-		}
-		end := index + 1
-		for end < len(value) && value[end] >= '0' && value[end] <= '9' {
-			end++
-		}
-		position, _ := strconv.Atoi(value[index+1 : end])
-		result.WriteByte(marker)
-		result.WriteString(strconv.Itoa(position + offset))
-		index = end
-	}
-	return result.String()
 }
 
 func sameType(left, right policyir.TypeRef) bool {

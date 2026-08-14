@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -158,7 +157,7 @@ func (context renderContext) compile(condition policyir.Condition, offset int) (
 	for index := range args {
 		bindings[index] = Binding{value: args[index]}
 	}
-	return fragment{text: rebasePlaceholders(result.SQL(), offset, context.provider), bindings: bindings}, nil
+	return fragment{text: policysql.RebasePlaceholders(result.SQL(), offset, context.provider), bindings: bindings}, nil
 }
 
 func (context renderContext) completeColumns() ([]string, []ResultColumn, error) {
@@ -194,33 +193,6 @@ func providerDialect(provider policyir.Provider) (policysql.Dialect, Transaction
 	default:
 		return nil, 0, fmt.Errorf("unknown provider %d", provider)
 	}
-}
-
-func rebasePlaceholders(text string, offset int, provider policyir.Provider) string {
-	if offset == 0 {
-		return text
-	}
-	marker := byte('$')
-	if provider == policyir.ProviderSQLite {
-		marker = '?'
-	}
-	var result strings.Builder
-	for index := 0; index < len(text); {
-		if text[index] != marker || index+1 >= len(text) || text[index+1] < '0' || text[index+1] > '9' {
-			result.WriteByte(text[index])
-			index++
-			continue
-		}
-		end := index + 1
-		for end < len(text) && text[end] >= '0' && text[end] <= '9' {
-			end++
-		}
-		position, _ := strconv.Atoi(text[index+1 : end])
-		result.WriteByte(marker)
-		result.WriteString(strconv.Itoa(position + offset))
-		index = end
-	}
-	return result.String()
 }
 
 func toPolicyFields(values []golem.FieldID) []policyir.FieldID {

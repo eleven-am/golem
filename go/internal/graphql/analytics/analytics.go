@@ -961,11 +961,6 @@ func (c *Compiler) encodeLogical(logical compilerir.LogicalTypeIR, value any) (a
 	return nil, fmt.Errorf("analytics value %T does not match %s", value, logical.Kind)
 }
 
-type expandedField struct {
-	*ast.Field
-	selection ast.SelectionSet
-}
-
 func expand(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, stack map[string]bool) ([]*ast.Field, error) {
 	var result []*ast.Field
 	byResponse := map[string]int{}

@@ -11,7 +11,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -520,18 +519,6 @@ func canonicalEmpty(desired physical.PhysicalSchema) physical.PhysicalSchema {
 	return value
 }
 
-func snapshotBytes(value physical.PhysicalSchema) ([]byte, error) {
-	normalized, err := physical.Normalize(value)
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := json.MarshalIndent(normalized, "", "  ")
-	if err != nil {
-		return nil, err
-	}
-	return append(encoded, '\n'), nil
-}
-
 func historicalSnapshotBytes(value physical.PhysicalSchema) ([]byte, error) {
 	return physical.MarshalHistoricalSnapshotJSON(value)
 }
@@ -689,10 +676,6 @@ func canonicalRoot(value string) (string, error) {
 
 func migrationArtifactKind(kind codegenmanifest.ArtifactKind) bool {
 	return kind == codegenmanifest.ArtifactMigrationManifest || kind == codegenmanifest.ArtifactMigrationSQL || kind == codegenmanifest.ArtifactMigrationSnapshot
-}
-
-func equalProvider(left, right physical.ProviderManifest) bool {
-	return reflect.DeepEqual(left, right)
 }
 
 func equalStrings(left, right []string) bool {

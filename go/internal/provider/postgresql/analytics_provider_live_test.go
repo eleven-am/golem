@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestP6PostgreSQLExactNumericAndBinaryAnalyticsProfiles(t *testing.T) {
+func TestPostgreSQLExactNumericAndBinaryAnalyticsProfiles(t *testing.T) {
 	profiles := []struct {
 		name string
 		env  string

@@ -32,7 +32,7 @@ func (capture *p7AllObservationCapture) ObserveEvent(_ context.Context, value ev
 	capture.mu.Unlock()
 }
 
-func TestP7PrivateSnapshotAbsentFromGoGraphQLErrorsObserversAndNoticeMetadata(t *testing.T) {
+func TestPrivateSnapshotAbsentFromGoGraphQLErrorsObserversAndNoticeMetadata(t *testing.T) {
 	const secret = "private-delete-token=never-public"
 	fixture := newP7EventRuntimeFixture(t)
 	observations := &p7AllObservationCapture{}

@@ -16,6 +16,7 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     env:
+      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
       GOLEM_POLICY_PG_URL: postgresql://postgres:golem@127.0.0.1:55432/golem
       GOLEM_POLICY_PG_C_URL: postgresql://postgres:golem@127.0.0.1:55433/golem
       GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable

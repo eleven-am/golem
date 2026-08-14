@@ -24,7 +24,7 @@ import (
 	modzip "golang.org/x/mod/zip"
 )
 
-func TestP8ReleaseTagAndVersionAgreement(t *testing.T) {
+func TestReleaseTagAndVersionAgreement(t *testing.T) {
 	commit := strings.Repeat("a", 40)
 	manifest := compatibility.DevelopmentManifest()
 	manifest.Release = compatibility.Release{Version: "v1.2.3", Tag: "go/v1.2.3", Commit: commit}
@@ -148,7 +148,7 @@ func TestP8ReleaseTagAndVersionAgreement(t *testing.T) {
 	}
 }
 
-func TestP8CompatibilityBaselineSelectsGreatestSignedLowerTagAndClosesCompetitors(t *testing.T) {
+func TestCompatibilityBaselineSelectsGreatestSignedLowerTagAndClosesCompetitors(t *testing.T) {
 	repository, _, allowed := signedCandidateRepository(t)
 	ctx := context.Background()
 
@@ -200,7 +200,7 @@ func TestP8CompatibilityBaselineSelectsGreatestSignedLowerTagAndClosesCompetitor
 	})
 }
 
-func TestP8SignedCandidateRejectsMissingTamperedAndNonregularLicenseEvidence(t *testing.T) {
+func TestSignedCandidateRejectsMissingTamperedAndNonregularLicenseEvidence(t *testing.T) {
 	for _, test := range []struct {
 		name   string
 		mutate func(*testing.T, string)
@@ -260,7 +260,7 @@ func TestP8SignedCandidateRejectsMissingTamperedAndNonregularLicenseEvidence(t *
 	}
 }
 
-func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMinorTransition(t *testing.T) {
+func TestExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMinorTransition(t *testing.T) {
 	const historicalManifestSHA256 = "59bd82177890ff594f053ab0cc06f4d1a0b15567d85e673ae6ca563602062c1c"
 	fixture, err := os.ReadFile(filepath.Join(moduleRoot(t), "internal", "compatibility", "testdata", "go-v0.0.2-compatibility-manifest-v1.json"))
 	if err != nil {
@@ -345,7 +345,7 @@ func TestP8ExactGoV002HistoricalManifestAndCorporaAuthorizeReviewedPreStableMino
 	}
 }
 
-func TestP8MigrationGuideTransitionRejectsFirstReleaseAndEverySignedAuthorityTamper(t *testing.T) {
+func TestMigrationGuideTransitionRejectsFirstReleaseAndEverySignedAuthorityTamper(t *testing.T) {
 	t.Run("first-release-prior-bound-guide", func(t *testing.T) {
 		repository, moduleDir, allowed, _ := signedFirstTransitionRepository(t, false, true)
 		allowedBytes, err := os.ReadFile(allowed)
@@ -440,7 +440,7 @@ func configureCandidateSigningOnHistoricalRepository(t *testing.T, base, reposit
 	return allowed
 }
 
-func TestP8FirstReleaseStillRequiresDigestBoundCanonicalCurrentEvidence(t *testing.T) {
+func TestFirstReleaseStillRequiresDigestBoundCanonicalCurrentEvidence(t *testing.T) {
 	repository, moduleDir, allowed, trusted := signedMissingEvidenceRepository(t)
 	allowedBytes, err := os.ReadFile(allowed)
 	if err != nil {
@@ -486,7 +486,7 @@ func TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry(t
 	}
 }
 
-func TestP8PatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
+func TestPatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
 	repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
 	runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "patch candidate")
 	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "patch candidate")
@@ -506,7 +506,7 @@ func TestP8PatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
 	}
 }
 
-func TestP8HistoricalGuideRetentionRefusesNewReleaseLineAndAuthorityDrift(t *testing.T) {
+func TestHistoricalGuideRetentionRefusesNewReleaseLineAndAuthorityDrift(t *testing.T) {
 	t.Run("new-release-line", func(t *testing.T) {
 		repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
 		runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "new minor candidate")
@@ -551,7 +551,7 @@ func TestP8HistoricalGuideRetentionRefusesNewReleaseLineAndAuthorityDrift(t *tes
 	})
 }
 
-func TestP8SoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
+func TestSoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
 	for _, tamper := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bound", true: "tampered"}[tamper], func(t *testing.T) {
 			repository, moduleDir, allowed, trusted := signedFirstTransitionRepository(t, tamper, false)
@@ -574,7 +574,7 @@ func TestP8SoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
 	}
 }
 
-func TestP8CLIAndObservationClassificationsRouteThroughReleasePolicy(t *testing.T) {
+func TestCLIAndObservationClassificationsRouteThroughReleasePolicy(t *testing.T) {
 	observationBytes, err := os.ReadFile(filepath.Join(moduleRoot(t), "observe", "telemetry-manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -643,7 +643,7 @@ func TestP8CLIAndObservationClassificationsRouteThroughReleasePolicy(t *testing.
 	}
 }
 
-func TestP8CleanConsumerModuleResolutionAndGoInstall(t *testing.T) {
+func TestCleanConsumerModuleResolutionAndGoInstall(t *testing.T) {
 	if testing.Short() {
 		t.Fatal("row-22 clean consumer evidence cannot be skipped in short mode")
 	}
@@ -665,7 +665,7 @@ func TestP8CleanConsumerModuleResolutionAndGoInstall(t *testing.T) {
 	assertNoCleanConsumerRoots(t, temporaryParent)
 }
 
-func TestP8GoModuleSourceCarriesExactLicenseAndThirdPartyNotices(t *testing.T) {
+func TestGoModuleSourceCarriesExactLicenseAndThirdPartyNotices(t *testing.T) {
 	archivePath := filepath.Join(t.TempDir(), "module.zip")
 	archive, err := os.Create(archivePath)
 	if err != nil {
@@ -916,7 +916,7 @@ func TestInstalledCLIVersionDocumentIsStrictAndBindsCandidateABI(t *testing.T) {
 	}
 }
 
-func TestP8ReleaseArtifactReproducibility(t *testing.T) {
+func TestReleaseArtifactReproducibility(t *testing.T) {
 	if testing.Short() {
 		t.Fatal("row-22 reproducibility evidence cannot be skipped in short mode")
 	}
@@ -973,7 +973,7 @@ func TestP8ReleaseArtifactReproducibility(t *testing.T) {
 	}
 }
 
-func TestP8ExistingVersionArtifactReplacementRefused(t *testing.T) {
+func TestExistingVersionArtifactReplacementRefused(t *testing.T) {
 	candidate := testCandidate(t)
 	staged := filepath.Join(t.TempDir(), "staged")
 	writeTestFile(t, filepath.Join(staged, "golem.tar.gz"), "immutable artifact")

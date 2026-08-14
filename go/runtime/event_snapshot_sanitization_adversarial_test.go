@@ -12,7 +12,7 @@ type secretPrincipalSnapshotError string
 
 func (failure secretPrincipalSnapshotError) Error() string { return string(failure) }
 
-func TestP7SnapshotPrincipalFailureIsSanitizedBeforePublicStreamReturn(t *testing.T) {
+func TestSnapshotPrincipalFailureIsSanitizedBeforePublicStreamReturn(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "alice"})
 	if err != nil {
@@ -38,7 +38,7 @@ func TestP7SnapshotPrincipalFailureIsSanitizedBeforePublicStreamReturn(t *testin
 type p7MutablePrincipalSecret struct{ Token string }
 type p7MutablePrincipal struct{ Session *p7MutablePrincipalSecret }
 
-func TestP7DefaultMutablePrincipalValidationIsSanitized(t *testing.T) {
+func TestDefaultMutablePrincipalValidationIsSanitized(t *testing.T) {
 	const secret = "postgres-password=do-not-leak"
 	principal := p7MutablePrincipal{Session: &p7MutablePrincipalSecret{Token: secret}}
 	_, err := snapshotEventPrincipal(principal, nil)

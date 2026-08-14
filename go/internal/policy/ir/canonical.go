@@ -57,13 +57,6 @@ func CanonicalPolicy(policy Policy) ([]byte, error) {
 	}
 	return encoder.buffer.Bytes(), nil
 }
-func PolicyFingerprint(policy Policy) (Fingerprint, error) {
-	encoded, err := CanonicalPolicy(policy)
-	if err != nil {
-		return Fingerprint{}, err
-	}
-	return hashCanonical(policyFingerprintDomain, encoded), nil
-}
 func hashCanonical(domain string, encoded []byte) Fingerprint {
 	hash := sha256.New()
 	_, _ = hash.Write([]byte(domain))

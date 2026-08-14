@@ -11,7 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestP7ScalarCompositeIdentityAndDeleteSnapshotRoundTrip(t *testing.T) {
+func TestScalarCompositeIdentityAndDeleteSnapshotRoundTrip(t *testing.T) {
 	t.Run("scalar", func(t *testing.T) {
 		fixture := schematest.NewIndexedExact(t)
 		before := mustRow(t, fixture, postCells(t, fixture, [16]byte{7}, "private", 101))

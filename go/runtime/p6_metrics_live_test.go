@@ -242,7 +242,7 @@ func p6MustTime(t *testing.T, value string) golem.Time {
 	return result
 }
 
-func TestP6GeneratedMetricExactNullAndScalarMatrixAcrossProviders(t *testing.T) {
+func TestGeneratedMetricExactNullAndScalarMatrixAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -543,7 +543,7 @@ func TestP6GeneratedMetricExactNullAndScalarMatrixAcrossProviders(t *testing.T) 
 	}
 }
 
-func TestP6AggregateScalarResultMatrixProviderAgreement(t *testing.T) {
+func TestAggregateScalarResultMatrixProviderAgreement(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -570,7 +570,7 @@ func TestP6AggregateScalarResultMatrixProviderAgreement(t *testing.T) {
 	}
 }
 
-func TestP6EmptyAndAllNullAggregateCells(t *testing.T) {
+func TestEmptyAndAllNullAggregateCells(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -610,7 +610,7 @@ func TestP6EmptyAndAllNullAggregateCells(t *testing.T) {
 	}
 }
 
-func TestP6ExactIntegerDecimalAndTemporalNeverPassThroughFloat(t *testing.T) {
+func TestExactIntegerDecimalAndTemporalNeverPassThroughFloat(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -639,7 +639,7 @@ func TestP6ExactIntegerDecimalAndTemporalNeverPassThroughFloat(t *testing.T) {
 	}
 }
 
-func TestP6GeneratedMetricSignedPagingAndCompleteTiesAcrossProviders(t *testing.T) {
+func TestGeneratedMetricSignedPagingAndCompleteTiesAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -686,7 +686,7 @@ func TestP6GeneratedMetricSignedPagingAndCompleteTiesAcrossProviders(t *testing.
 	}
 }
 
-func TestP6LocalGroupByCompleteSemanticOracle(t *testing.T) {
+func TestLocalGroupByCompleteSemanticOracle(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -717,7 +717,7 @@ func TestP6LocalGroupByCompleteSemanticOracle(t *testing.T) {
 	}
 }
 
-func TestP6NullKeyAndNullableMeasureGroups(t *testing.T) {
+func TestNullKeyAndNullableMeasureGroups(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -747,7 +747,7 @@ func TestP6NullKeyAndNullableMeasureGroups(t *testing.T) {
 	}
 }
 
-func TestP6HavingAndOrderPrivateMeasureIsAuthorizedButNotReturned(t *testing.T) {
+func TestHavingAndOrderPrivateMeasureIsAuthorizedButNotReturned(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -774,7 +774,7 @@ func TestP6HavingAndOrderPrivateMeasureIsAuthorizedButNotReturned(t *testing.T) 
 	}
 }
 
-func TestP6SignedTakeSkipAndCanonicalTieBreakAgreement(t *testing.T) {
+func TestSignedTakeSkipAndCanonicalTieBreakAgreement(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -800,7 +800,7 @@ func TestP6SignedTakeSkipAndCanonicalTieBreakAgreement(t *testing.T) {
 	}
 }
 
-func TestP6BinaryAnalyticalStringSemanticsAcrossProviderCollations(t *testing.T) {
+func TestBinaryAnalyticalStringSemanticsAcrossProviderCollations(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -825,7 +825,7 @@ func TestP6BinaryAnalyticalStringSemanticsAcrossProviderCollations(t *testing.T)
 	}
 }
 
-func TestP6TextWhereStillUsesDeclaredP2ComparisonMode(t *testing.T) {
+func TestTextWhereStillUsesDeclaredP2ComparisonMode(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -856,7 +856,7 @@ func TestP6TextWhereStillUsesDeclaredP2ComparisonMode(t *testing.T) {
 	}
 }
 
-func TestP6TextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders(t *testing.T) {
+func TestTextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -898,7 +898,7 @@ func TestP6TextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders(t *testing
 	}
 }
 
-func TestP6GraphQLTextMeasureHavingComparisonModesAcrossProviders(t *testing.T) {
+func TestGraphQLTextMeasureHavingComparisonModesAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -923,7 +923,7 @@ func TestP6GraphQLTextMeasureHavingComparisonModesAcrossProviders(t *testing.T) 
 	}
 }
 
-func TestP6StringNullAndUnicodeCorpus(t *testing.T) {
+func TestStringNullAndUnicodeCorpus(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -952,7 +952,7 @@ func TestP6StringNullAndUnicodeCorpus(t *testing.T) {
 	}
 }
 
-func TestP6ContributionAndIntermediateOverflowReturnNoRows(t *testing.T) {
+func TestContributionAndIntermediateOverflowReturnNoRows(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1004,7 +1004,7 @@ func TestP6ContributionAndIntermediateOverflowReturnNoRows(t *testing.T) {
 	}
 }
 
-func TestP6Programmatic34424GroupsAreComplete(t *testing.T) {
+func TestProgrammatic34424GroupsAreComplete(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1038,7 +1038,7 @@ func TestP6Programmatic34424GroupsAreComplete(t *testing.T) {
 	}
 }
 
-func TestP6ForwardToOneRelationGroupProviderOracle(t *testing.T) {
+func TestForwardToOneRelationGroupProviderOracle(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1076,7 +1076,7 @@ func TestP6ForwardToOneRelationGroupProviderOracle(t *testing.T) {
 	}
 }
 
-func TestP6RelationAbsentAndInvisibleTargetsAreIndistinguishable(t *testing.T) {
+func TestRelationAbsentAndInvisibleTargetsAreIndistinguishable(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1111,7 +1111,7 @@ func TestP6RelationAbsentAndInvisibleTargetsAreIndistinguishable(t *testing.T) {
 	}
 }
 
-func TestP6RelationHopPolicyAndConditionalTerminalDischarge(t *testing.T) {
+func TestRelationHopPolicyAndConditionalTerminalDischarge(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1143,7 +1143,7 @@ func TestP6RelationHopPolicyAndConditionalTerminalDischarge(t *testing.T) {
 	}
 }
 
-func TestP6RelationAverageUsesOneSQLContributionSet(t *testing.T) {
+func TestRelationAverageUsesOneSQLContributionSet(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -1171,7 +1171,7 @@ func TestP6RelationAverageUsesOneSQLContributionSet(t *testing.T) {
 	}
 }
 
-func TestP6RelationDepthLimitRefusesBeforeSQL(t *testing.T) {
+func TestRelationDepthLimitRefusesBeforeSQL(t *testing.T) {
 	h := newP6MetricsHarness(t, p5ExtensionProviderProfiles()[0], golemruntime.AnalyticsLimits{MaxRelationDepth: 1})
 	caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{CategoryPrefix: "public-"})
 	if err != nil {
@@ -1221,11 +1221,11 @@ func (h *p6MetricsHarness) insertScaleGroups(t *testing.T, total int) {
 	h.trace.reset()
 }
 
-func TestP6IndependentSocialAnalyticsOracleSQLite(t *testing.T) {
+func TestIndependentSocialAnalyticsOracleSQLite(t *testing.T) {
 	runP6IndependentProviderOracle(t, p5ExtensionProviderProfiles()[0])
 }
 
-func TestP6IndependentSocialAnalyticsOraclePostgreSQLProfiles(t *testing.T) {
+func TestIndependentSocialAnalyticsOraclePostgreSQLProfiles(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles()[1:] {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

@@ -4,7 +4,6 @@ package sql
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -181,7 +180,7 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	countColumns := make([]CountColumn, len(renderedCounts))
 	countArgs := make([]any, 0)
 	for index, count := range renderedCounts {
-		countExpressions[index] = rebasePlaceholders(count.expression, len(cursorArgs)+len(countArgs), provider)
+		countExpressions[index] = policysql.RebasePlaceholders(count.expression, len(cursorArgs)+len(countArgs), provider)
 		countColumns[index] = count.column
 		countArgs = append(countArgs, count.args...)
 	}
@@ -189,11 +188,11 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	correlatedColumns := make([]CorrelatedColumn, len(renderedRelations))
 	relationArgs := make([]any, 0)
 	for index, relation := range renderedRelations {
-		relationExpressions[index] = rebasePlaceholders(relation.expression, len(cursorArgs)+len(countArgs)+len(relationArgs), provider)
+		relationExpressions[index] = policysql.RebasePlaceholders(relation.expression, len(cursorArgs)+len(countArgs)+len(relationArgs), provider)
 		correlatedColumns[index] = relation.column
 		relationArgs = append(relationArgs, relation.args...)
 	}
-	rootWhere = rebasePlaceholders(rootWhere, len(cursorArgs)+len(countArgs)+len(relationArgs), provider)
+	rootWhere = policysql.RebasePlaceholders(rootWhere, len(cursorArgs)+len(countArgs)+len(relationArgs), provider)
 	args := make([]any, 0, len(cursorArgs)+len(countArgs)+len(relationArgs)+len(rootArgs)+2)
 	args = append(args, cursorArgs...)
 	args = append(args, countArgs...)
@@ -419,35 +418,6 @@ func cursorBoundary(orders []readir.Order, roots map[policyir.FieldID]string, cu
 	// cursor row, matching the TypeScript/Prisma contract.
 	terms = append(terms, "("+strings.Join(equalPrefix, " AND ")+")")
 	return strings.Join(terms, " OR ")
-}
-
-func rebasePlaceholders(sql string, offset int, provider policyir.Provider) string {
-	if offset == 0 {
-		return sql
-	}
-	marker := byte('$')
-	if provider == policyir.ProviderSQLite {
-		marker = '?'
-	} else if provider != policyir.ProviderPostgreSQL {
-		return sql
-	}
-	var result strings.Builder
-	for index := 0; index < len(sql); {
-		if sql[index] != marker || index+1 >= len(sql) || sql[index+1] < '0' || sql[index+1] > '9' {
-			result.WriteByte(sql[index])
-			index++
-			continue
-		}
-		end := index + 1
-		for end < len(sql) && sql[end] >= '0' && sql[end] <= '9' {
-			end++
-		}
-		value, _ := strconv.Atoi(sql[index+1 : end])
-		result.WriteByte(marker)
-		result.WriteString(strconv.Itoa(value + offset))
-		index = end
-	}
-	return result.String()
 }
 
 func renderOrders(orders []readir.Order, fields []readplan.Field, columns map[policyir.FieldID]string, dialect policysql.Dialect, provider policyir.Provider, reverse bool) (string, string, error) {

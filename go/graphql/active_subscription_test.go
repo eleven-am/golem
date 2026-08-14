@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	gqlgengraphql "github.com/99designs/gqlgen/graphql"
 	"github.com/eleven-am/golem/go/graphql"
 	p7gqlgen "github.com/eleven-am/golem/go/graphql/testdata/p7subscription/golemgqlgen"
 	"github.com/gorilla/websocket"
@@ -31,26 +32,41 @@ func (stream *activeSubscriptionStream) Recv(context.Context) (graphql.Response,
 	}
 	stream.sent = true
 	return graphql.Response{Data: map[string]any{"payload": graphql.PreparedObject{
-		"kind": "UPDATED", "entity": graphql.PreparedObject{"renamed": int32(9)},
+		"kind": "UPDATED", "eventID": "unprojected-event-id",
+		"entity": graphql.PreparedObject{"renamed": int32(9)},
 	}}}, nil
 }
 func (*activeSubscriptionStream) Close() error { return nil }
 
-func TestP7ActiveGQLGenSerializesSubscriptionAliasesDirectivesEnumsAndObjects(t *testing.T) {
-	assertP7ActiveGQLGenSubscriptionEncoding(t)
+func TestGQLGenExecutableProjectsSubscriptionAliasesDirectivesEnumsAndFragments(t *testing.T) {
+	next := subscribeActiveFrame(t, p7gqlgen.NewExecutableSchema(p7gqlgen.Config{Resolvers: &p7gqlgen.Resolver{}}))
+	var payload struct {
+		Data map[string]map[string]any `json:"data"`
+	}
+	if err := json.Unmarshal(next.Payload, &payload); err != nil {
+		t.Fatal(err)
+	}
+	entity, _ := payload.Data["payload"]["entity"].(map[string]any)
+	if next.Type != "next" || payload.Data["payload"]["kind"] != "UPDATED" || entity["renamed"] != float64(9) {
+		t.Fatalf("active gqlgen frame = %s", next.Payload)
+	}
+	if strings.Contains(string(next.Payload), "unprojected-event-id") {
+		t.Fatalf("skipped selection survived gqlgen projection: %s", next.Payload)
+	}
 }
 
-func TestP7GQLGenSerializesAliasesFragmentsDirectivesScalarsRelationsAndComputedFields(t *testing.T) {
-	assertP7ActiveGQLGenSubscriptionEncoding(t)
+func TestSubscriptionFramesAreEncodedOnlyByTheGQLGenExecutable(t *testing.T) {
+	next := subscribeActiveFrame(t, nil)
+	if next.Type != "next" {
+		t.Fatalf("frame type = %q", next.Type)
+	}
+	if !strings.Contains(string(next.Payload), "unprojected-event-id") {
+		t.Fatalf("a second event encoder projected the frame without a gqlgen executable: %s", next.Payload)
+	}
 }
 
-func TestP7NoSecondGraphQLEventEncoder(t *testing.T) {
-	assertP7ActiveGQLGenSubscriptionEncoding(t)
-}
-
-func assertP7ActiveGQLGenSubscriptionEncoding(t *testing.T) {
+func subscribeActiveFrame(t *testing.T, executable gqlgengraphql.ExecutableSchema) activeFrame {
 	t.Helper()
-	executable := p7gqlgen.NewExecutableSchema(p7gqlgen.Config{Resolvers: &p7gqlgen.Resolver{}})
 	server, err := graphql.NewServer(p7gqlgenSchema, graphql.Config[int]{
 		PrincipalFromContext: func(context.Context) (int, bool) { return 1, true },
 		ReportInternalError:  func(context.Context, error) {},
@@ -76,19 +92,10 @@ func assertP7ActiveGQLGenSubscriptionEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	next := readActiveFrame(t, connection)
-	var payload struct {
-		Data map[string]map[string]any `json:"data"`
-	}
-	if err := json.Unmarshal(next.Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	entity, _ := payload.Data["payload"]["entity"].(map[string]any)
-	if next.Type != "next" || payload.Data["payload"]["kind"] != "UPDATED" || entity["renamed"] != float64(9) || strings.Contains(string(next.Payload), "eventID") {
-		t.Fatalf("active gqlgen frame = %s", next.Payload)
-	}
 	if complete := readActiveFrame(t, connection); complete.Type != "complete" {
 		t.Fatalf("complete frame = %#v", complete)
 	}
+	return next
 }
 
 type activeFrame struct {

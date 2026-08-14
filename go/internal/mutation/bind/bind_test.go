@@ -75,15 +75,6 @@ func TestOptimisticConcurrencyFieldHasOneClosedRuntimeOwner(t *testing.T) {
 }
 
 func TestMutationBinderRejectsForgedZeroAndDuplicateValues(t *testing.T) {
-	testMutationBinderRejectsForgedZeroAndDuplicateValues(t)
-}
-
-func TestM8MutationBinderRejectsUnknownAndForgedFacts(t *testing.T) {
-	testMutationBinderRejectsForgedZeroAndDuplicateValues(t)
-}
-
-func testMutationBinderRejectsForgedZeroAndDuplicateValues(t *testing.T) {
-	t.Helper()
 	fixture := schematest.New(t)
 	title := golem.GeneratedTextField[bindPost, string](fixture.PostTitle)
 

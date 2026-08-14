@@ -9,7 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
 
-func TestP6AnalyticsStatementCountIsOneAndNoContributionRowsAreDecoded(t *testing.T) {
+func TestAnalyticsStatementCountIsOneAndNoContributionRowsAreDecoded(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

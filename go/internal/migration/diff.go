@@ -1408,10 +1408,6 @@ func containsField(values []ir.FieldID, field ir.FieldID) bool {
 	return false
 }
 
-func fragment(value any) (Digest, error) {
-	return fragmentVersion(value, physical.CanonicalFormatVersion)
-}
-
 func fragmentVersion(value any, version uint32) (Digest, error) {
 	if value == nil {
 		return "", nil

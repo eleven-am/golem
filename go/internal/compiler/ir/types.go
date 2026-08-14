@@ -719,10 +719,6 @@ type FieldContractIR struct {
 	Modes       []FieldMode `json:"modes"`
 }
 
-// FieldModeIR remains a source-compatible alias during the compiler bootstrap;
-// new code uses FieldContractIR and the ModelContractIR.Fields destination.
-type FieldModeIR = FieldContractIR
-
 // SelectorContractIR is transport-facing identity metadata. KeyID is its
 // stable identity, Name is its stable generated API name, and Fields preserve
 // the primary/unique component order.

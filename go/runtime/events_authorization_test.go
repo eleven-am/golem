@@ -78,7 +78,7 @@ type p7EventRuntimeFixture struct {
 	resolves   *atomic.Int64
 }
 
-func TestP7SQLiteFreshSubscriptionAuthorizationDeleteAndDuplicateOracle(t *testing.T) {
+func TestSQLiteFreshSubscriptionAuthorizationDeleteAndDuplicateOracle(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -223,7 +223,7 @@ deleteFiltered:
 	}
 }
 
-func TestP7DeleteSuppressionDistinguishesDeniedFromUnverifiable(t *testing.T) {
+func TestDeleteSuppressionDistinguishesDeniedFromUnverifiable(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -266,7 +266,7 @@ func receiveP7Suppression(t testing.TB, observations <-chan observe.Observation)
 	}
 }
 
-func TestP7InitialReadRefusalStartsNoHubOrTransport(t *testing.T) {
+func TestInitialReadRefusalStartsNoHubOrTransport(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	fixture.allow.Store(false)
 	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "denied"})

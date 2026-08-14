@@ -166,22 +166,6 @@ func eraseGeneratedRows[M, R any](value R) any {
 
 type GeneratedCustomArgumentConversion func(any) (any, error)
 
-func BindGeneratedCustomQuery[C, A, R any](spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	return bindGeneratedCustom(CustomQuery, spec, resolver, func(value R) any { return value }, conversions)
-}
-
-func BindGeneratedCustomMutation[C, A, R any](spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	return bindGeneratedCustom(CustomMutation, spec, resolver, func(value R) any { return value }, conversions)
-}
-
-func BindGeneratedCustomQueryModel[M, C, A, R any](spec CustomBindingSpec, _ golem.ModelDescriptor[M], resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	return bindGeneratedCustom(CustomQuery, spec, resolver, func(value R) any { return eraseGeneratedRows[M](value) }, conversions)
-}
-
-func BindGeneratedCustomMutationModel[M, C, A, R any](spec CustomBindingSpec, _ golem.ModelDescriptor[M], resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	return bindGeneratedCustom(CustomMutation, spec, resolver, func(value R) any { return eraseGeneratedRows[M](value) }, conversions)
-}
-
 // The Contract variants are emitted by golem generate. They recursively
 // normalize typed Go results against the canonical result tree before the
 // strict custom registry validates them; no JSON or floating conversion is

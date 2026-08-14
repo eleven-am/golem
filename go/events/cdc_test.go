@@ -7,7 +7,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7CDCAdapterInventoryIsBoundedProviderExactAndUnique(t *testing.T) {
+func TestCDCAdapterInventoryIsBoundedProviderExactAndUnique(t *testing.T) {
 	valid := stubCDCAdapter{identity: CDCIdentity{Name: "wal-reader", Version: "1.0.0+build", Provider: golem.PostgreSQL}}
 	identities, err := ValidateCDCAdapters(golem.PostgreSQL, []CDCAdapter{valid})
 	if err != nil || len(identities) != 1 {
@@ -37,7 +37,7 @@ func TestP7CDCAdapterInventoryIsBoundedProviderExactAndUnique(t *testing.T) {
 	}
 }
 
-func TestP7CDCIdentityRejectsAmbiguousOrUnknownValues(t *testing.T) {
+func TestCDCIdentityRejectsAmbiguousOrUnknownValues(t *testing.T) {
 	for _, identity := range []CDCIdentity{
 		{},
 		{Name: "bad:name", Version: "1", Provider: golem.PostgreSQL},

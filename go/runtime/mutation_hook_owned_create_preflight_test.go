@@ -16,7 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/observe"
 )
 
-func TestP8CallerCreatePreHookDefersOnlyGeneratedHookOwnedFields(t *testing.T) {
+func TestCallerCreatePreHookDefersOnlyGeneratedHookOwnedFields(t *testing.T) {
 	ctx := context.Background()
 	missingAuthor := func(fixture mutationResultFixture, id byte, title ...string) golem.CreateInput[mutationResultPost] {
 		values := []golem.CreateValue[mutationResultPost]{
@@ -113,7 +113,7 @@ func TestP8CallerCreatePreHookDefersOnlyGeneratedHookOwnedFields(t *testing.T) {
 	})
 }
 
-func TestP8CallerNestedCreatePreHookDefersHookOwnedRootAndRemainsStrictAfterHook(t *testing.T) {
+func TestCallerNestedCreatePreHookDefersHookOwnedRootAndRemainsStrictAfterHook(t *testing.T) {
 	ctx := context.Background()
 	schema := withGraphHookOwnedPostAuthor(t, schematest.NewSubscribedGraph(t))
 	var before atomic.Int64

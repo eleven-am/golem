@@ -138,18 +138,6 @@ func comparePredicateMetadata(input, normalized ir.SchemaPredicateIR) []ir.Diagn
 	return nil
 }
 
-func CanonicalExpression(engine *Engine, input ir.SchemaExprIR) ([]byte, []ir.Diagnostic) {
-	normalized, diagnostics := engine.ValidateExpression(input)
-	if hasErrors(diagnostics) {
-		return nil, diagnostics
-	}
-	encoded, err := json.Marshal(normalized)
-	if err != nil {
-		return nil, []ir.Diagnostic{schemaError("P1_SCHEMA_CANONICAL_ENCODING", err.Error())}
-	}
-	return encoded, diagnostics
-}
-
 func CanonicalPredicate(engine *Engine, input ir.SchemaPredicateIR) ([]byte, []ir.Diagnostic) {
 	normalized, diagnostics := engine.ValidatePredicate(input)
 	if hasErrors(diagnostics) {

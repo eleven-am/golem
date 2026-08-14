@@ -384,14 +384,6 @@ func typedListHas(values []any, wanted any, typ policyListType) bool {
 	}
 	return false
 }
-func validTypedList(values []any, typ policyListType) bool {
-	for _, value := range values {
-		if !validTypedElement(value, typ) {
-			return false
-		}
-	}
-	return true
-}
 func typedListElementEqual(left, right any, typ policyListType) bool {
 	if !validTypedElement(left, typ) || !validTypedElement(right, typ) {
 		return false

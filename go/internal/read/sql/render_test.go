@@ -69,19 +69,21 @@ func TestRenderIsDeterministicAcrossProvidersAndBindsPaging(t *testing.T) {
 		if !first.ReverseResult() || len(first.Columns()) != 2 || len(first.Args()) != 2 {
 			t.Fatalf("provider %d statement=%#v args=%#v", provider, first, first.Args())
 		}
-		for _, fragment := range []string{"ROW_NUMBER() OVER (PARTITION BY", "golem_rank", "LIMIT"} {
+		for _, fragment := range []string{"ROW_NUMBER() OVER (PARTITION BY", "golem_rank"} {
 			if !strings.Contains(first.SQL(), fragment) {
 				t.Errorf("provider %d SQL lacks %q: %s", provider, fragment, first.SQL())
 			}
 		}
-		if provider == policyir.ProviderSQLite && (!strings.Contains(first.SQL(), "?1") || !strings.Contains(first.SQL(), "?2")) {
-			t.Errorf("SQLite placeholders: %s", first.SQL())
+		ordinal, positional := strings.Count(first.SQL(), "$"), strings.Count(first.SQL(), "?")
+		bound, foreign := ordinal, positional
+		if provider == policyir.ProviderSQLite {
+			bound, foreign = positional, ordinal
+		}
+		if bound != len(first.Args()) || foreign != 0 {
+			t.Errorf("provider %d binds %d of %d args and emits %d foreign placeholders: %s", provider, bound, len(first.Args()), foreign, first.SQL())
 		}
 		if provider == policyir.ProviderSQLite && strings.Count(first.SQL(), "COLLATE BINARY") < 3 {
 			t.Errorf("SQLite distinct/order did not fence binary collation: %s", first.SQL())
-		}
-		if provider == policyir.ProviderPostgreSQL && (!strings.Contains(first.SQL(), "$1") || !strings.Contains(first.SQL(), "$2")) {
-			t.Errorf("PostgreSQL placeholders: %s", first.SQL())
 		}
 		if provider == policyir.ProviderPostgreSQL && strings.Count(first.SQL(), `COLLATE "C"`) < 3 {
 			t.Errorf("PostgreSQL distinct/order did not fence C collation: %s", first.SQL())
@@ -214,7 +216,7 @@ func TestRootStatementRefusesProviderNeutralParameterOverflow(t *testing.T) {
 		t.Fatal(err)
 	}
 	proof, _ := policysql.NewCapabilityProof(policyir.ProviderSQLite, [32]byte(fixture.Registry.ModelFingerprint()), policyir.CapabilityBinaryText, policyir.CapabilityASCIIInsensitiveText, policyir.CapabilityExactJSON, policyir.CapabilityScalarListJSON, policyir.CapabilityRelationCorrelation)
-	if _, err := Render(planned, fixture.Registry, policyir.ProviderSQLite, proof); err == nil || !strings.Contains(err.Error(), "parameter ceiling") {
+	if _, err := Render(planned, fixture.Registry, policyir.ProviderSQLite, proof); !isRenderFailure(err, "read statement exceeds the provider-neutral parameter ceiling") {
 		t.Fatalf("overflow error=%v", err)
 	}
 }

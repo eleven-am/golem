@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestP8ProspectivePackageResolutionSupportsNestedExternalWorkspace(t *testing.T) {
+func TestProspectivePackageResolutionSupportsNestedExternalWorkspace(t *testing.T) {
 	root := t.TempDir()
 	consumer := filepath.Join(root, "consumer")
 	if err := os.MkdirAll(consumer, 0o755); err != nil {

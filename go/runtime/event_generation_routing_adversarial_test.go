@@ -20,7 +20,7 @@ func (transport *p7SignalledTransport) TransportCapabilities() events.TransportC
 	return events.CapabilitiesOf(transport.EventTransport)
 }
 
-func TestP7PendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
+func TestPendingV2FactSurvivesGraphQLOnlyRegeneration(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	historicalGeneration := golem.SchemaDigest{31: 99}
 	historicalBundle := golem.GeneratedSchemaBundle(

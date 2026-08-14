@@ -8,7 +8,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7OperatorResumeAndRetireAreCausationSpecificAndAudited(t *testing.T) {
+func TestOperatorResumeAndRetireAreCausationSpecificAndAudited(t *testing.T) {
 	first := golem.CausationID{0: 1, 15: 11}
 	second := golem.CausationID{0: 2, 15: 22}
 	coordinator := &p7CausationSpecificCoordinator{}
