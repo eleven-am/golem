@@ -509,7 +509,7 @@ func verifyCompatibilityTransition(ctx context.Context, repository, modulePrefix
 	if err != nil {
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
-	guide, err := verifyMigrationGuideTransition(ctx, repository, modulePrefix, previousTag, previousCommit, current)
+	guide, err := verifyMigrationGuideTransition(ctx, repository, modulePrefix, previousTag, previousCommit, current, config.AllowedSignersFile)
 	if err != nil {
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
@@ -526,7 +526,7 @@ func verifyCompatibilityTransition(ctx context.Context, repository, modulePrefix
 	return guide, nil
 }
 
-func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefix, previousTag, previousCommit string, current compatibility.Manifest) (releaseMigrationGuide, error) {
+func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefix, previousTag, previousCommit string, current compatibility.Manifest, allowedSignersFile string) (releaseMigrationGuide, error) {
 	hasAction := containsString(current.RequiredActions, "migration-guide.execute")
 	if current.MigrationGuide == nil {
 		if hasAction {
@@ -543,11 +543,37 @@ func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefi
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	guide, err := compatibility.ParseMigrationGuide(encoded, authority.SHA256)
-	if err != nil || compatibility.ValidateMigrationGuideTransition(guide, authority, previousTag, previousCommit, current.Release.Tag, current.Release.Version, current.RequiredActions) != nil {
+	if err != nil || semver.Compare(authority.ToVersion, current.Release.Version) > 0 {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	sourceTag := authority.FromTag
+	sourceCommit, err := output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+sourceTag+"^{commit}")
+	if err != nil || !commitPattern.MatchString(sourceCommit) || verifySignedReleaseTag(ctx, repository, sourceTag, allowedSignersFile) != nil || run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", sourceCommit, current.Release.Commit) != nil {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+	}
+	targetTag := "go/" + authority.ToVersion
+	targetCommit := current.Release.Commit
+	if authority.ToVersion == current.Release.Version {
+		if sourceTag != previousTag || sourceCommit != previousCommit || targetTag != current.Release.Tag {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+	} else {
+		targetCommit, err = output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+targetTag+"^{commit}")
+		if err != nil || !commitPattern.MatchString(targetCommit) || verifySignedReleaseTag(ctx, repository, targetTag, allowedSignersFile) != nil ||
+			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", sourceCommit, targetCommit) != nil ||
+			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", targetCommit, current.Release.Commit) != nil {
+			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
+		}
+	}
+	if compatibility.ValidateMigrationGuideTransition(guide, authority, sourceTag, sourceCommit, targetTag, authority.ToVersion, current.RequiredActions) != nil {
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	for _, corpus := range guide.Corpora {
-		for _, commit := range []string{previousCommit, current.Release.Commit} {
+		commits := []string{sourceCommit, targetCommit, current.Release.Commit}
+		for index, commit := range commits {
+			if index > 0 && commit == commits[index-1] {
+				continue
+			}
 			object := commit + ":" + modulePrefix + corpus.Path
 			actual, resolveErr := output(ctx, repository, nil, "git", "rev-parse", "--verify", object)
 			kind, typeErr := output(ctx, repository, nil, "git", "cat-file", "-t", object)

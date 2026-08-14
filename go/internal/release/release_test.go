@@ -486,6 +486,26 @@ func TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry(t
 	}
 }
 
+func TestP8PatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
+	repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
+	runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "patch candidate")
+	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "patch candidate")
+	allowedBytes, err := os.ReadFile(allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.1", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
+	candidate, err := inspectCandidate(context.Background(), config, trusted)
+	if err != nil || validateCandidate(candidate) != nil {
+		t.Fatalf("patch release did not retain the signed historical guide: %v repository=%s", err, repository)
+	}
+
+	runTestCommand(t, repository, "git", "tag", "-d", "go/v0.1.0")
+	if _, err := inspectCandidate(context.Background(), config, trusted); errorCode(err) != CodeInvalidCandidate {
+		t.Fatalf("patch release without signed historical target error=%v repository=%s", err, repository)
+	}
+}
+
 func TestP8SoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
 	for _, tamper := range []bool{false, true} {
 		t.Run(map[bool]string{false: "bound", true: "tampered"}[tamper], func(t *testing.T) {
