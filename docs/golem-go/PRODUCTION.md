@@ -291,6 +291,20 @@ build application and CLI from one version
 source, and the generation manifest in version control. Do not edit an applied
 migration or generated file. Create a new reviewed migration and regenerate.
 
+A reviewed PostgreSQL backfill is a maintenance-window operation, not an online
+or zero-downtime one. `golem migration apply` runs the whole entry inside one
+database transaction with a single commit: the advisory migration lock, the
+`ADD COLUMN`, the reviewed `UPDATE`, the generated no-NULL postcondition, the
+`SET NOT NULL`, the final fingerprint check, and the ledger write. PostgreSQL
+takes an `ACCESS EXCLUSIVE` lock on the target table at the first `ALTER TABLE`
+and holds it until that commit, so every other reader and writer of that table
+blocks for the full duration of the backfill. Golem sets no `lock_timeout` or
+`statement_timeout`; the only bound is the deadline on the context given to the
+command. The backfill is not chunked, resumable, or concurrent. Size the window
+against the target table, schedule it while traffic is drained, and rehearse
+the migration against a restored copy of production data to measure how long
+the table will be held.
+
 ## Events, subscriptions, and CDC
 
 Accepted mutations write durable, lossless outbox facts in the same database

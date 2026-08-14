@@ -1,16 +1,19 @@
 # Human-readable migration plans implementation contract
 
-Status: **implementation active; typed report, backfill attach, read-only
-prospective/reviewed command, and checked-social journey complete locally;
-compatibility and release evidence pending**.
+Status: **implemented; typed report, backfill attach, read-only
+prospective/reviewed command, social journey, and machine-JSON compatibility
+freeze pass; three named acceptance gates and fresh external module release
+evidence pending**.
 
 Current implementation boundary: the provider-neutral immutable report,
 Diff-owned non-persisted snapshot evidence, shared plan-shape validation,
 prospective/reviewed adapters, report-before-publication backfill attach path,
 shared all-provider preview, complete-chain validation before filtering, and
 read-only `migration plan` command are implemented and mutation-tested. The
-checked-social prospective and reviewed journeys pass without rewriting old
-history. Compatibility freeze and integrated release evidence remain open.
+social prospective and reviewed journeys pass without rewriting old history,
+and `migration-plan` is frozen in the digest-pinned CLI machine-JSON
+compatibility inventory. Gates 4, 9, and 10 of section 10 are not written yet,
+so integrated release evidence remains open.
 
 Audience: the engineer implementing the feature and the reviewer deciding
 whether it is complete. This file is self-contained and covers presentation of
@@ -321,6 +324,15 @@ the final plan before sealing. That reuse must not let `migration plan` write.
 8. `TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags`
 9. `TestMigrationPlanPublicJSONFormatIsClosedVersionedAndBounded`
 10. `TestMigrationPlanFreshExternalModuleCommandCorpus`
+
+Gates 1, 2, 3, 5, 6, 7, and 8 exist in `cmd/golem` and pass, together with
+`TestMigrationPlanOwnedBuildWorkspaceStaysOutsideModuleAndCleansEveryExit` and
+`TestMigrationPlanActiveWorkspaceIsCopiedAndReadOnly`. Gates 4, 9, and 10 do
+not exist. The per-operation facts required by gate 4 and the closed enum,
+version, and hard-bound behavior required by gate 9 are currently proven only
+inside `internal/migration/explain` and by the digest-pinned CLI machine-JSON
+compatibility inventory, not by a command-level gate. `golem migration plan` is
+also absent from the documented quickstart command corpus.
 
 The external gate uses a clean `example.com` module and covers SQLite plus
 PostgreSQL reviewed histories. It must not require live databases because this

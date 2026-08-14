@@ -1,21 +1,21 @@
 # Golem for Go roadmap
 
-Status: **post-P8 product direction; not a claim of released functionality**.
-An entry marked *implemented* has landed in the module and carries its own
-acceptance evidence; it is still not a release claim, because the Go module as a
-whole remains unreleased. Every other entry is direction only.
+Status: **post-P8 product direction**. An entry marked *implemented* has landed
+in the module and carries its own acceptance evidence. Every other entry is
+direction only and is not a claim of released functionality.
 
-The completed P0–P8 plans remain the controlling record for the first Go
-release. This document records deliberately accepted follow-up direction so a
-future implementation begins from an explicit product decision rather than
-quietly expanding the core.
+The published public ABI contracts and the compatibility manifest listed in
+[`README.md`](./README.md) are the controlling record for the Go module. This
+document records deliberately accepted follow-up direction so a future
+implementation begins from an explicit product decision rather than quietly
+expanding the core.
 
-## Official cross-process event transport: NATS
+## Official cross-process event transport: NATS — implemented
 
-Golem will provide one maintained NATS client adapter for the existing public
-`events.EventTransport` contract on the PostgreSQL deployment profile. The
-NATS server is external deployment infrastructure; Golem will not embed,
-start, configure, or administer a NATS server.
+Golem provides one maintained NATS client adapter at `events/nats` for the
+existing public `events.EventTransport` contract on the PostgreSQL deployment
+profile. The NATS server is external deployment infrastructure; Golem does not
+embed, start, configure, or administer a NATS server.
 
 The adapter is deliberately unavailable when the application database provider
 is SQLite. Golem's PostgreSQL outbox remains the durable source of accepted
@@ -34,6 +34,10 @@ The adapter must preserve the existing transport boundaries:
 - keep queues, payloads, and concurrency bounded;
 - expose only closed, redacted observations; and
 - never turn broker delivery into an exactly-once claim.
+
+The adapter's conformance, refusal, reconnection, bound, and redaction gates
+live beside it in `events/nats`. Release verification requires a live broker
+rather than skipping when one is absent.
 
 ## Deployment topology remains explicit
 
@@ -62,7 +66,7 @@ database. Configuring the maintained NATS adapter with SQLite must fail
 explicitly rather than silently falling back or pretending the topology is
 supported.
 
-## Public policy testing kit — implementation in progress
+## Public policy testing kit — implemented
 
 Golem exposes a small public `golemtest` package for database-free,
 actor-specific policy inspection. It returns the effective row constraint,
@@ -71,28 +75,30 @@ adapting the existing production policy kernel. It does not introduce a second
 policy evaluator, mock relation database, auth/session framework, string-based
 field authority, or runtime bypass.
 
-The ten mandatory acceptance gates named in the contract exist. The remaining
-completion boundary is executable mutation evidence plus the final generated
-application and compatibility rerun after the concurrent physical-format
-transition settles. Until that evidence is green, this roadmap does not call
-the kit implemented.
+The ten mandatory acceptance gates named in the contract exist and pass,
+including the external generated-application gate under `-race` against SQLite
+and both mandatory PostgreSQL collation profiles. The kit's public surface is
+inside the frozen public Go API corpus.
 
 The complete implementation and acceptance contract, including its recorded
 limitations, is [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md). Application
 usage is documented in [`QUICKSTART.md`](./QUICKSTART.md) and
 [`PRODUCTION.md`](./PRODUCTION.md).
 
-## SQLite WAL and reviewed PostgreSQL data evolution
+## SQLite WAL and reviewed PostgreSQL data evolution — implemented
 
-SQLite will use provider-owned, verified WAL with full synchronous durability
-for persistent writable files, while remaining an explicitly single-node
-profile. PostgreSQL will accept only a closed set of value-preserving type
-widenings and one narrow checksummed transactional backfill workflow for new
-required columns. “Safe widening” means value-preserving, not lock-free or
-rewrite-free.
+SQLite uses provider-owned, verified WAL with full synchronous durability for
+persistent writable files, while remaining an explicitly single-node profile.
+PostgreSQL accepts only a closed set of value-preserving type widenings and one
+narrow checksummed transactional backfill workflow for new required columns.
+“Safe widening” means value-preserving, not lock-free or rewrite-free, and a
+reviewed backfill holds its target table for one transaction rather than
+running online.
 
-The exact lifecycle, allowlist, backfill boundary, crash behavior, and
-acceptance gates are in
+The eighteen mandatory acceptance gates named in the contract exist and pass,
+with the live PostgreSQL gates running on both mandatory collation profiles
+without skips. The exact lifecycle, allowlist, backfill boundary, crash
+behavior, and acceptance gates are in
 [`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md).
 
 ## Human-readable migration plans
