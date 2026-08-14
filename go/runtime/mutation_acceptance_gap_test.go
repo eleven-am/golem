@@ -39,6 +39,23 @@ import (
 var mutationBoundaryDriverSequence atomic.Uint64
 var mutationOutboxNamespaceSequence atomic.Uint64
 
+type synchronizedTestBuffer struct {
+	mu     sync.Mutex
+	buffer bytes.Buffer
+}
+
+func (buffer *synchronizedTestBuffer) Write(value []byte) (int, error) {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.Write(value)
+}
+
+func (buffer *synchronizedTestBuffer) String() string {
+	buffer.mu.Lock()
+	defer buffer.mu.Unlock()
+	return buffer.buffer.String()
+}
+
 type mutationBoundaryCounts struct {
 	begins  atomic.Int64
 	queries atomic.Int64
@@ -1738,7 +1755,7 @@ func TestUpsertSameSelectorMultiConnectionAndProcess(t *testing.T) {
 	fixture := newMutationResultFixtureWithHooksAndDatabaseMode(t, MutationLimits{}, nil, nil, database, true)
 	startPath := filepath.Join(root, "start")
 	commands := make([]*exec.Cmd, 2)
-	outputs := make([]bytes.Buffer, len(commands))
+	outputs := make([]synchronizedTestBuffer, len(commands))
 	for worker := range commands {
 		readyPath := filepath.Join(root, fmt.Sprintf("ready-%d", worker))
 		command := exec.Command(os.Args[0], "-test.run=^TestUpsertSameSelectorMultiConnectionAndProcess$", "-test.v")
