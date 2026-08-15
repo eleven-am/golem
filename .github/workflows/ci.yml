@@ -64,11 +64,12 @@ jobs:
           echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
           sudo apt-get update
           sudo apt-get install -y postgresql-client-17
-          pg_dump --version
+          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
       - name: Verify documented commands and snippets
-        run: >-
-          go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem
-          -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
+        run: |
+          pg_dump --version
+          go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem \
+            -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
       - name: Vet Go policy kernel
         run: go vet ./...
       - name: Check Go formatting
