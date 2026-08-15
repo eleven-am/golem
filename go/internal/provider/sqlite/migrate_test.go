@@ -23,7 +23,7 @@ import (
 func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
 	readSnapshot := func(name string) physical.PhysicalSchema {
 		t.Helper()
-		raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial." + name + ".snapshot.json")
+		raw, err := os.ReadFile("testdata/historical-v1/0001_initial." + name + ".snapshot.json")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -71,7 +71,7 @@ func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealed
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/sqlite/0001_initial.sql")
+	want, err := os.ReadFile("testdata/historical-v1/0001_initial.sql")
 	if err != nil {
 		t.Fatal(err)
 	}

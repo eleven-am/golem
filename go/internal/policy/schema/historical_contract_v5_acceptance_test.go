@@ -68,17 +68,13 @@ func TestHistoricalRegistryLoadsExactReleasedSocialV1V4PhysicalV1BundleOnly(t *t
 	}
 }
 
-// frozenP7GeneratedSchemaBundle reads the exact released registry expression
-// without compiling or rewriting the immutable P7 source/generated corpus. The
-// two directories intentionally form one historical package only after the
-// external compatibility harness assembles them.
 func frozenP7GeneratedSchemaBundle(t *testing.T) golem.SchemaBundle {
 	t.Helper()
 	_, source, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate historical acceptance test")
 	}
-	path := filepath.Join(filepath.Dir(source), "..", "..", "compatibility", "testdata", "p7", "generated", "zz_golem_registry.gen.go")
+	path := filepath.Join(filepath.Dir(source), "testdata", "p7", "zz_golem_registry.gen.go")
 	file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
 	if err != nil {
 		t.Fatalf("parse exact frozen P7 registry: %v", err)

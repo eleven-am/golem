@@ -111,7 +111,7 @@ func TestPlanIncrementalInitializesEveryConcurrencyValueToExactlyOne(t *testing.
 func TestHistoricalV1ReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
 	readSnapshot := func(name string) physical.PhysicalSchema {
 		t.Helper()
-		raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial." + name + ".snapshot.json")
+		raw, err := os.ReadFile("testdata/historical-v1/0001_initial." + name + ".snapshot.json")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,7 +159,7 @@ func TestHistoricalV1ReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial.sql")
+	want, err := os.ReadFile("testdata/historical-v1/0001_initial.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,7 +188,7 @@ func TestHistoricalV1ReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(
 }
 
 func TestHistoricalV1PostgreSQLIncrementalRunnerRetainsClosedBaseline(t *testing.T) {
-	raw, err := os.ReadFile("../../compatibility/testdata/p7/p8-corpus-migrations/postgresql/0001_initial.after.snapshot.json")
+	raw, err := os.ReadFile("testdata/historical-v1/0001_initial.after.snapshot.json")
 	if err != nil {
 		t.Fatal(err)
 	}
