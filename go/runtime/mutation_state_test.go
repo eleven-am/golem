@@ -397,3 +397,47 @@ func runtimeStateRow(state *mutationState, ordinal int64, metadata []byte) mutat
 		RecordedAt:            time.Unix(1_700_000_000+ordinal, 123_456_789),
 	}
 }
+
+func TestCausalDeliveryInsertIsIdempotentAcrossReplay(t *testing.T) {
+	forEachMutationResultProvider(t, MutationLimits{}, assertCausalDeliveryReplayKeepsOneRow)
+}
+
+func assertCausalDeliveryReplayKeepsOneRow(t testing.TB, fixture mutationResultFixture) {
+	t.Helper()
+	ctx := context.Background()
+	publicProvider := golem.SQLite
+	if fixture.app.provider == policyir.ProviderPostgreSQL {
+		publicProvider = golem.PostgreSQL
+	}
+	namespace, ok := fixture.app.registry.PhysicalSystemNamespace(publicProvider)
+	if !ok {
+		t.Fatal("system namespace is unavailable")
+	}
+	causation := mutationResultUUIDText(0x5c)
+	row := mutationfact.OutboxRow{
+		EventID:               mutationResultUUIDText(0x5d),
+		FactVersion:           int64(mutationfact.FormatVersionV1),
+		CodecIdentity:         mutationfact.CodecIdentityV1,
+		GenerationFingerprint: "replayfingerprint",
+		ModelID:               "Post",
+		Action:                "created",
+		CausationID:           causation,
+		TransactionOrdinal:    1,
+		Metadata:              []byte("{}"),
+		RecordedAt:            time.Unix(1_700_000_000, 0).UTC(),
+	}
+	delivery, err := mutationfact.RenderDeliveryInsertAt(fixture.app.provider, string(namespace), []mutationfact.OutboxRow{row})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for attempt := range 2 {
+		if _, err := fixture.app.database.ExecContext(ctx, delivery.SQL(), delivery.Args()...); err != nil {
+			t.Fatalf("replayed causal delivery insert %d failed instead of deduplicating: %v", attempt, err)
+		}
+	}
+	count := 0
+	query := fixture.app.database.Rebind(`SELECT COUNT(*) FROM ` + nestedAcceptanceOutboxDelivery(fixture.app) + ` WHERE "causation_id"=?`)
+	if err := fixture.app.database.Get(&count, query, causation); err != nil || count != 1 {
+		t.Fatalf("causal delivery rows=%d err=%v; want exactly one", count, err)
+	}
+}
