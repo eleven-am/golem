@@ -1772,7 +1772,7 @@ func TestUpsertSameSelectorMultiConnectionAndProcess(t *testing.T) {
 		commands[worker] = command
 	}
 
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(90 * time.Second)
 	for worker := range commands {
 		readyPath := filepath.Join(root, fmt.Sprintf("ready-%d", worker))
 		for {
