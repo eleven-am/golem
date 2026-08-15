@@ -366,8 +366,9 @@ func runDocumentationProcess(t *testing.T, directory, executable string, argumen
 	command := exec.Command(executable, arguments...)
 	command.Dir = directory
 	command.Env = os.Environ()
-	if _, err := command.CombinedOutput(); err != nil {
-		t.Fatalf("%s recovery command failed: %v", filepath.Base(executable), err)
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s recovery command failed: %v\n%s", filepath.Base(executable), err, output)
 	}
 }
 
