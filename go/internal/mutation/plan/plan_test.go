@@ -91,7 +91,7 @@ func TestSystemPlansOmitPoliciesAndHooksButRetainFactsAndValidation(t *testing.T
 	}
 }
 
-func TestP7DeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
+func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	predicate := boundBatchPredicate(t, fixture)
@@ -145,7 +145,7 @@ func TestP7DeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 	}
 }
 
-func TestP7DeleteWithoutCompilerInventoryIsExplicitlyUnverifiable(t *testing.T) {
+func TestDeleteWithoutCompilerInventoryIsExplicitlyUnverifiable(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
@@ -193,15 +193,7 @@ func TestBuildRootCoversEverySystemScalarMutationShape(t *testing.T) {
 	}
 }
 
-func TestM4WriteFilterDischargeUsesCompleteSelectingConstraint(t *testing.T) {
-	assertWriteDischargeCases(t)
-}
-
-func TestM5WriteFieldImplicationCannotFailOpenOrRefuseEverything(t *testing.T) {
-	assertWriteDischargeCases(t)
-}
-
-func TestM11WriteDischargeUsesCanonicalConstraintIdentity(t *testing.T) {
+func TestWriteDischargeUsesCanonicalConstraintIdentity(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	model, field := policyir.ModelID(fixture.Post), policyir.FieldID(fixture.AuthorID)
@@ -220,8 +212,7 @@ func TestM11WriteDischargeUsesCanonicalConstraintIdentity(t *testing.T) {
 	}
 }
 
-func assertWriteDischargeCases(t testing.TB) {
-	t.Helper()
+func TestWriteDischargeRefusesWriteWiderThanReadAndAcceptsNarrower(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	mine := uuidEqual(t, policyir.ModelID(fixture.Post), policyir.FieldID(fixture.AuthorID), [16]byte{9})
@@ -297,7 +288,7 @@ func TestMutationClassificationCoversEveryValueInfluencingPositionBeforeTransact
 	}
 }
 
-func TestM6MutationClassifierFailsClosedForUnknownPositions(t *testing.T) {
+func TestMutationClassifierFailsClosedForUnknownPositions(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	spy := &emptyClassifier{}
@@ -309,7 +300,7 @@ func TestM6MutationClassifierFailsClosedForUnknownPositions(t *testing.T) {
 	}
 }
 
-func TestM9RefusedMutationClassifiesBeforeTransactionCompilationOrProbe(t *testing.T) {
+func TestRefusedMutationClassifiesBeforeTransactionCompilationOrProbe(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	spy := &emptyClassifier{}
@@ -326,7 +317,7 @@ func TestM9RefusedMutationClassifiesBeforeTransactionCompilationOrProbe(t *testi
 	}
 }
 
-func TestM10SingleMutationUniqueSelectorsAreClassified(t *testing.T) {
+func TestSingleMutationUniqueSelectorsAreClassified(t *testing.T) {
 	fixture := schematest.New(t)
 	inputs := boundInputs(t, fixture)
 	model := policyir.ModelID(fixture.Post)

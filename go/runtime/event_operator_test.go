@@ -11,7 +11,7 @@ import (
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 )
 
-func TestP7RuntimeOperatorSanitizesDeliveryAndAuditsDecisions(t *testing.T) {
+func TestRuntimeOperatorSanitizesDeliveryAndAuditsDecisions(t *testing.T) {
 	cause := golem.CausationID{15: 7}
 	coordinator := &operatorTestCoordinator{delivery: eventprovider.Delivery{
 		CausationID: eventCausationText(cause), Status: eventprovider.StatusBlocked,
@@ -56,7 +56,7 @@ func TestP7RuntimeOperatorSanitizesDeliveryAndAuditsDecisions(t *testing.T) {
 	}
 }
 
-func TestP7RuntimeOperatorSanitizesFailuresAndAuditPanicIsNeutral(t *testing.T) {
+func TestRuntimeOperatorSanitizesFailuresAndAuditPanicIsNeutral(t *testing.T) {
 	cause := golem.CausationID{15: 8}
 	coordinator := &operatorTestCoordinator{resumeErr: errors.New("driver secret"), retireChanged: true}
 	operator, err := newRuntimeEventOperator(coordinator, func(context.Context, events.OperatorAuditRecord) { panic("audit panic") }, observerPanic{})

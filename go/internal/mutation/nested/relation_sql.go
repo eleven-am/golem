@@ -441,7 +441,7 @@ func (context relationRenderContext) compile(condition policyir.Condition, offse
 	if err != nil {
 		return relationFragment{}, fmt.Errorf("P4_NESTED_SQL_RENDER: condition cannot compile: %w", err)
 	}
-	return relationFragment{text: rebaseRelationPlaceholders(fragment.SQL(), offset, context.provider), args: fragment.Args()}, nil
+	return relationFragment{text: policysql.RebasePlaceholders(fragment.SQL(), offset, context.provider), args: fragment.Args()}, nil
 }
 
 func (context relationRenderContext) qualified(column physical.PhysicalName) string {
@@ -519,34 +519,6 @@ func encodeRelationValue(dialect policysql.Dialect, resolver policysql.Resolver,
 		bound.EnumWires = []string{wire}
 	}
 	return dialect.Encode(bound)
-}
-
-func rebaseRelationPlaceholders(text string, offset int, provider policyir.Provider) string {
-	if offset == 0 {
-		return text
-	}
-	marker := byte('$')
-	if provider == policyir.ProviderSQLite {
-		marker = '?'
-	}
-	var output strings.Builder
-	for index := 0; index < len(text); {
-		if text[index] != marker || index+1 >= len(text) || text[index+1] < '0' || text[index+1] > '9' {
-			output.WriteByte(text[index])
-			index++
-			continue
-		}
-		end := index + 1
-		position := 0
-		for end < len(text) && text[end] >= '0' && text[end] <= '9' {
-			position = position*10 + int(text[end]-'0')
-			end++
-		}
-		output.WriteByte(marker)
-		output.WriteString(fmt.Sprintf("%d", position+offset))
-		index = end
-	}
-	return output.String()
 }
 
 func cloneRelationArgs(values []any) []any {

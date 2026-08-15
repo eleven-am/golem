@@ -31,7 +31,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func TestP8ExternalSocialApplicationSQLiteJourney(t *testing.T) {
+func TestExternalSocialApplicationSQLiteJourney(t *testing.T) {
 	root := socialHostRoot(t)
 	dsn := "file:" + t.TempDir() + "/social.sqlite"
 	applyReviewedSQLiteMigration(t, root, dsn)
@@ -202,7 +202,7 @@ func awaitP8DeliveredFact(t *testing.T, dsn string, pending restartFactState) {
 	t.Fatal("restart publisher did not durably deliver the pending fact")
 }
 
-func TestP8ExternalSocialApplicationPostgreSQLJourney(t *testing.T) {
+func TestExternalSocialApplicationPostgreSQLJourney(t *testing.T) {
 	profiles := []struct {
 		name string
 		env  string

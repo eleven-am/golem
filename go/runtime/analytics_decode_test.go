@@ -12,7 +12,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
-func TestP6AggregateScalarResultMatrixAndStableOverflowDecode(t *testing.T) {
+func TestAggregateScalarResultMatrixAndStableOverflowDecode(t *testing.T) {
 	scale := uint16(2)
 	decimalType := compilerir.LogicalTypeIR{Kind: compilerir.TypeDecimal, Scale: &scale}
 	canonicalUUID := "00000000-0000-0000-0000-000000000007"
@@ -103,7 +103,7 @@ func TestP6AggregateScalarResultMatrixAndStableOverflowDecode(t *testing.T) {
 	}
 }
 
-func TestP6ScopedIntegerDecodeRejectsFractionalNonFiniteAndNarrowingOverflow(t *testing.T) {
+func TestScopedIntegerDecodeRejectsFractionalNonFiniteAndNarrowingOverflow(t *testing.T) {
 	for _, raw := range []any{1.5, math.NaN(), math.Inf(1), float64(9223372036854775808.0)} {
 		if _, err := scopedInt64(raw); err == nil {
 			t.Fatalf("scopedInt64(%v) accepted an invalid integer", raw)
@@ -128,7 +128,7 @@ func TestP6ScopedIntegerDecodeRejectsFractionalNonFiniteAndNarrowingOverflow(t *
 	}
 }
 
-func TestP6AggregateOverflowIsStableAndNeverCoerced(t *testing.T) {
+func TestAggregateOverflowIsStableAndNeverCoerced(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		raw  any

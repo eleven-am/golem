@@ -13,7 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-func TestP7CorruptFactBlocksAndRemainsInspectable(t *testing.T) {
+func TestCorruptFactBlocksAndRemainsInspectable(t *testing.T) {
 	ctx := context.Background()
 	fixture := schematest.NewSubscribedIndexed(t)
 	provider := sqlite.New()

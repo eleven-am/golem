@@ -3,8 +3,6 @@
 package event
 
 import (
-	"path/filepath"
-
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 )
@@ -24,11 +22,4 @@ type File struct {
 	PackageName string
 	Path        string
 	Source      []byte
-}
-
-func (file File) resolvedPath() string {
-	if file.Path != "" {
-		return file.Path
-	}
-	return filepath.Join(file.ImportPath, Filename)
 }

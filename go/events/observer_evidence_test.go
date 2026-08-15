@@ -15,7 +15,7 @@ func (capture *p7ObservationCapture) ObserveEvent(_ context.Context, observation
 	capture.values = append(capture.values, observation)
 }
 
-func TestP7ObserverShapeContainsOnlyClosedSafeLabels(t *testing.T) {
+func TestObserverShapeContainsOnlyClosedSafeLabels(t *testing.T) {
 	kinds := []ObservationKind{
 		ObservationPublisherClaim, ObservationPublisherAttempt, ObservationPublisherAck,
 		ObservationPublisherRetry, ObservationPublisherBlock, ObservationRetention,

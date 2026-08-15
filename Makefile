@@ -9,8 +9,9 @@ TS_DIR := typescript
 GO_BINARY := $(GO_DIR)/bin/golem
 GO_TAG_PREFIX := go/v
 
-GOLEM_TEST_POSTGRES_DSN ?= postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
-GOLEM_TEST_POSTGRES_LINGUISTIC_DSN ?= postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable
+export GOLEM_P8_REQUIRE_POSTGRESQL ?= 1
+export GOLEM_TEST_POSTGRES_DSN ?= postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
+export GOLEM_TEST_POSTGRES_LINGUISTIC_DSN ?= postgresql://postgres@127.0.0.1:55432/golem?sslmode=disable
 
 .PHONY: help install build test check \
 	ts-install ts-build ts-test ts-benchmark \
@@ -52,10 +53,10 @@ go-build: ## Build the Golem CLI
 go-install: ## Install the Golem CLI into GOBIN
 	cd $(GO_DIR) && GOWORK=off $(GO) install ./cmd/golem
 
-go-test: ## Run the serial Go suite
+go-test: postgres-check ## Run the serial Go suite
 	cd $(GO_DIR) && GOWORK=off $(GO) test -p=1 -count=1 -timeout=45m ./...
 
-go-race: ## Run the serial Go race suite (long)
+go-race: postgres-check ## Run the serial Go race suite (long)
 	cd $(GO_DIR) && GOWORK=off $(GO) test -race -p=1 -count=1 -timeout=45m ./...
 
 go-quality: ## Check Go formatting, whitespace, and vet
@@ -115,7 +116,7 @@ _release:
 		key="$${SIGNING_KEY:-$$(git config --get user.signingkey || true)}"; \
 		test -n "$$key" || { echo "configure user.signingkey or pass SIGNING_KEY=..." >&2; exit 1; }; \
 		$(MAKE) --no-print-directory go-quality; \
-		cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 ./internal/release ./internal/compatibility ./internal/workflowaudit; \
+		cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 -timeout=30m ./internal/release ./internal/compatibility; \
 		cd ..; \
 		git tag -s -u "$$key" "$$tag" -m "Golem Go v$$major.$$minor.$$patch"; \
 		git push origin "refs/tags/$$tag"; \

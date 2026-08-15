@@ -12,7 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 )
 
-func TestP7ContractRenameNeverProducesApplicationMigration(t *testing.T) {
+func TestContractRenameNeverProducesApplicationMigration(t *testing.T) {
 	before := gentest.SocialCompilationIR()
 	after := before
 	after.Contract.Models = append([]ir.ModelContractIR(nil), before.Contract.Models...)
@@ -80,7 +80,7 @@ func TestP7ContractRenameNeverProducesApplicationMigration(t *testing.T) {
 	}
 }
 
-func TestP7SubscriptionToggleChangesContractNotModelOrApplicationDDL(t *testing.T) {
+func TestSubscriptionToggleChangesContractNotModelOrApplicationDDL(t *testing.T) {
 	after := gentest.SocialCompilationIR()
 	before := after
 	before.Contract.Models = append([]ir.ModelContractIR(nil), after.Contract.Models...)

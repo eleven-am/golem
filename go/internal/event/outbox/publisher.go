@@ -502,13 +502,6 @@ func parseUUID[T ~[16]byte](value string) (T, error) {
 // retention. It cannot read fact bytes or mutate application data.
 type Operator struct{ coordinator eventprovider.Coordinator }
 
-func NewOperator(coordinator eventprovider.Coordinator) (Operator, error) {
-	if coordinator == nil {
-		return Operator{}, fmt.Errorf("P7_OPERATOR_CONFIG: coordinator is required")
-	}
-	return Operator{coordinator: coordinator}, nil
-}
-
 func (operator Operator) Inspect(ctx context.Context, causation string) (eventprovider.Delivery, error) {
 	return operator.coordinator.Inspect(ctx, causation)
 }

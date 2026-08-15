@@ -9,7 +9,7 @@ import (
 	releasetool "github.com/eleven-am/golem/go/internal/release"
 )
 
-func TestP8ReleaseCommandEveryFailureIsClosedVersionedJSON(t *testing.T) {
+func TestReleaseCommandEveryFailureIsClosedVersionedJSON(t *testing.T) {
 	t.Setenv("GOLEM_RELEASE_ALLOWED_SIGNERS", "")
 	t.Setenv("GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256", "")
 	const canary = "postgresql://token@private.example/secret-path"
@@ -36,7 +36,7 @@ func TestP8ReleaseCommandEveryFailureIsClosedVersionedJSON(t *testing.T) {
 	}
 }
 
-func TestP8ReleaseCommandSuccessShapeIsClosedAndDigestBound(t *testing.T) {
+func TestReleaseCommandSuccessShapeIsClosedAndDigestBound(t *testing.T) {
 	value := output{
 		FormatVersion: 1, Mode: "build", Status: "PASS", Module: releasetool.ModulePath, Version: "v1.2.3", Tag: "go/v1.2.3", Commit: strings.Repeat("a", 40),
 		ManifestSHA256: strings.Repeat("b", 64), SourceSHA256: strings.Repeat("c", 64), SignersSHA256: strings.Repeat("d", 64), InventorySHA: strings.Repeat("e", 64),

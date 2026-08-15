@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestP6ExactNumbersCanonicalEnvelope(t *testing.T) {
+func TestExactNumbersCanonicalEnvelope(t *testing.T) {
 	for input, want := range map[string]string{
 		"0": "0", "-0": "0", "00042": "42", "-00042": "-42",
 	} {
@@ -34,7 +34,7 @@ func TestP6ExactNumbersCanonicalEnvelope(t *testing.T) {
 	}
 }
 
-func TestP6TextMeasureHavingFunctionsFreezeExactModeAndOperator(t *testing.T) {
+func TestTextMeasureHavingFunctionsFreezeExactModeAndOperator(t *testing.T) {
 	model, field := ModelID{1}, FieldID{2}
 	measure := GeneratedMeasure[struct{}, string, string](model, GeneratedOrderedField[struct{}, string](field), AggregateMinimum)
 	dimension := GeneratedDimension[struct{}](model, GeneratedOrderedField[struct{}, string](field), false)
@@ -66,7 +66,7 @@ func TestP6TextMeasureHavingFunctionsFreezeExactModeAndOperator(t *testing.T) {
 	}
 }
 
-func TestP6FrozenRequestRejectsForeignDuplicateAndMalformedTerms(t *testing.T) {
+func TestFrozenRequestRejectsForeignDuplicateAndMalformedTerms(t *testing.T) {
 	model := ModelID{1}
 	foreign := ModelID{2}
 	field := FieldID{3}
@@ -89,7 +89,7 @@ func TestP6FrozenRequestRejectsForeignDuplicateAndMalformedTerms(t *testing.T) {
 	}
 	otherDimension := Dimension[struct{}, int64]{identity: aggregateIdentity{model: model, field: FieldID{4}}}
 	ungrouped := GeneratedGroupBy(model, GeneratedGroupDimensions(dimension), GeneratedGroupHaving(otherDimension.Eq(1)))
-	if _, err := RuntimeFreezeGroupRequest(ungrouped); err == nil || !strings.Contains(err.Error(), "dimension is not grouped") {
+	if _, err := RuntimeFreezeGroupRequest(ungrouped); err == nil || !strings.Contains(err.Error(), "P6_ANALYTICS_HAVING: dimension is not grouped") {
 		t.Fatalf("ungrouped having dimension error = %v", err)
 	}
 	zero := AggregateRequest[struct{}]{model: model, measures: []aggregateIdentity{{model: model, operator: AggregateSum}}}
@@ -98,7 +98,7 @@ func TestP6FrozenRequestRejectsForeignDuplicateAndMalformedTerms(t *testing.T) {
 	}
 }
 
-func TestP6FrozenRequestClonesMutableValuesAndRejectsForeignSchemaNodes(t *testing.T) {
+func TestFrozenRequestClonesMutableValuesAndRejectsForeignSchemaNodes(t *testing.T) {
 	model := ModelID{1}
 	field := FieldID{2}
 	dimension := Dimension[struct{}, int64]{identity: aggregateIdentity{model: model, field: field}}
@@ -143,7 +143,7 @@ func TestP6FrozenRequestClonesMutableValuesAndRejectsForeignSchemaNodes(t *testi
 	}
 }
 
-func TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
+func TestRelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
 	model := ModelID{1}
 	forgedMeasure := Measure[struct{}, int64]{identity: aggregateIdentity{
 		model:    model,
@@ -151,7 +151,7 @@ func TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
 		operator: AggregateCountField,
 		relation: "authorName",
 	}}
-	if _, err := RuntimeFreezeAggregateRequest(GeneratedAggregate(model, GeneratedAggregateSelect(forgedMeasure))); err == nil || !strings.Contains(err.Error(), "measures over related models are not supported") {
+	if _, err := RuntimeFreezeAggregateRequest(GeneratedAggregate(model, GeneratedAggregateSelect(forgedMeasure))); err == nil || !strings.Contains(err.Error(), "P6_ANALYTICS_RELATION: measures over related models are not supported") {
 		t.Fatalf("forged relation measure error = %v", err)
 	}
 	for _, test := range []struct {

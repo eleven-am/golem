@@ -9,7 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/observe"
 )
 
-func TestP7IdentityOnlyEventStillReauthorizes(t *testing.T) {
+func TestIdentityOnlyEventStillReauthorizes(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

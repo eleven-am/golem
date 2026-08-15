@@ -69,7 +69,7 @@ func TestGeneratedMigrationManifestDocumentIsBoundAndCopyIsolated(t *testing.T) 
 	}
 }
 
-func TestP8MigrationManifestPublicABIInventory(t *testing.T) {
+func TestMigrationManifestPublicABIInventory(t *testing.T) {
 	if SchemaBundleFormatVersion != 2 {
 		t.Fatalf("SchemaBundleFormatVersion = %d, want 2", SchemaBundleFormatVersion)
 	}

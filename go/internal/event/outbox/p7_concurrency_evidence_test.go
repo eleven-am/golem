@@ -17,7 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestP7PartialTransportAcceptanceRetriesWholeBatch(t *testing.T) {
+func TestPartialTransportAcceptanceRetriesWholeBatch(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := p7EvidenceLease(t, fixture, 31, time.Unix(31, 0).UTC(), 3)
 	coordinator := &publisherTestCoordinator{renewed: true}
@@ -38,7 +38,7 @@ func TestP7PartialTransportAcceptanceRetriesWholeBatch(t *testing.T) {
 	}
 }
 
-func TestP7TransientFailureNeverDropsAtArbitraryAttemptCount(t *testing.T) {
+func TestTransientFailureNeverDropsAtArbitraryAttemptCount(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	lease := p7EvidenceLease(t, fixture, 32, time.Unix(32, 0).UTC(), 2)
 	lease.Delivery.AttemptCount = 9_000_000_000
@@ -54,7 +54,7 @@ func TestP7TransientFailureNeverDropsAtArbitraryAttemptCount(t *testing.T) {
 	}
 }
 
-func TestP7ConcurrentCausationsMayInterleaveWithoutCorruption(t *testing.T) {
+func TestConcurrentCausationsMayInterleaveWithoutCorruption(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	first := p7EvidenceLease(t, fixture, 41, time.Unix(41, 0).UTC(), 3)
 	second := p7EvidenceLease(t, fixture, 42, time.Unix(42, 0).UTC(), 2)
@@ -89,7 +89,7 @@ func TestP7ConcurrentCausationsMayInterleaveWithoutCorruption(t *testing.T) {
 	}
 }
 
-func TestP7RecordedAtIsNeverUsedAsCommitTimestampOrGlobalOrder(t *testing.T) {
+func TestRecordedAtIsNeverUsedAsCommitTimestampOrGlobalOrder(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	older := p7EvidenceLease(t, fixture, 51, time.Unix(1, 0).UTC(), 1)
 	newer := p7EvidenceLease(t, fixture, 52, time.Unix(9_999, 0).UTC(), 1)

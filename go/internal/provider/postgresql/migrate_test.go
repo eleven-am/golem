@@ -475,7 +475,7 @@ func TestSystemUpsertGuardV1IncrementalPlanPostgreSQLHasNoRelationDDL(t *testing
 	}
 }
 
-func TestP7DeliverySystemObjectUpgradePlanPostgreSQL(t *testing.T) {
+func TestDeliverySystemObjectUpgradePlanPostgreSQL(t *testing.T) {
 	provider := New()
 	after, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "reviewed"})
 	if err != nil {

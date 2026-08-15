@@ -41,7 +41,7 @@ func (capture *p8SlogCapture) Handle(_ context.Context, record standardslog.Reco
 func (capture *p8SlogCapture) WithAttrs([]standardslog.Attr) standardslog.Handler { return capture }
 func (capture *p8SlogCapture) WithGroup(string) standardslog.Handler              { return capture }
 
-func TestP8SlogAndOpenTelemetryAdapterAgreement(t *testing.T) {
+func TestSlogAndOpenTelemetryAdapterAgreement(t *testing.T) {
 	runMutationProviderAcceptanceProfiles(t, func(t *testing.T, acceptance mutationProviderAcceptanceFixture) {
 		assertP8AdapterAgreement(t, acceptance.fixture)
 	})
@@ -186,7 +186,7 @@ func (observer p8ObserverFunc) ObserveGolem(ctx context.Context, value observe.O
 	observer(ctx, value)
 }
 
-func TestP8ObserverPanicBlockAndOutageCannotAlterCorrectness(t *testing.T) {
+func TestObserverPanicBlockAndOutageCannotAlterCorrectness(t *testing.T) {
 	runMutationProviderAcceptanceProfiles(t, func(t *testing.T, acceptance mutationProviderAcceptanceFixture) {
 		fixture := acceptance.fixture
 		t.Run("panic", func(t *testing.T) {

@@ -15,7 +15,7 @@ import (
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
 )
 
-func TestP7CDCCommonAdapterConformance(t *testing.T) {
+func TestCDCCommonAdapterConformance(t *testing.T) {
 	store := &checkpointStore{value: []byte("start")}
 	input := validBatch(t)
 	cdctest.Run(t, cdctest.Fixture{
@@ -29,7 +29,7 @@ func TestP7CDCCommonAdapterConformance(t *testing.T) {
 	})
 }
 
-func TestP7CDCReplayDerivesStableEventIDs(t *testing.T) {
+func TestCDCReplayDerivesStableEventIDs(t *testing.T) {
 	transport := &captureTransport{}
 	emitter := testEmitter(t, transport, &fakeEncoder{}, &fakeCorrelator{})
 	input := validBatch(t)
@@ -65,7 +65,7 @@ func TestP7CDCReplayDerivesStableEventIDs(t *testing.T) {
 	}
 }
 
-func TestP7CDCCheckpointAdvancesOnlyAfterTransportAcceptance(t *testing.T) {
+func TestCDCCheckpointAdvancesOnlyAfterTransportAcceptance(t *testing.T) {
 	store := &checkpointStore{value: []byte("old")}
 	input := validBatch(t)
 	transport := &captureTransport{failure: errors.New("private broker failure")}
@@ -86,7 +86,7 @@ func TestP7CDCCheckpointAdvancesOnlyAfterTransportAcceptance(t *testing.T) {
 	}
 }
 
-func TestP7CDCGolemTransactionCorrelationAvoidsSecondEvent(t *testing.T) {
+func TestCDCGolemTransactionCorrelationAvoidsSecondEvent(t *testing.T) {
 	transport := &captureTransport{}
 	encoder := &fakeEncoder{}
 	correlator := &fakeCorrelator{correlated: true}
@@ -99,7 +99,7 @@ func TestP7CDCGolemTransactionCorrelationAvoidsSecondEvent(t *testing.T) {
 	}
 }
 
-func TestP7CDCValidatesOrdinalsActionsModelsAndImagesBeforeEncoding(t *testing.T) {
+func TestCDCValidatesOrdinalsActionsModelsAndImagesBeforeEncoding(t *testing.T) {
 	base := validBatch(t)
 	foreign, _ := golem.RuntimeModelReadRow(golem.ModelID{9})
 	tests := map[string]func(*events.CDCBatchInput){
@@ -132,7 +132,7 @@ func TestP7CDCValidatesOrdinalsActionsModelsAndImagesBeforeEncoding(t *testing.T
 	}
 }
 
-func TestP7CDCEmitterOwnsCursorAndChangeSlices(t *testing.T) {
+func TestCDCEmitterOwnsCursorAndChangeSlices(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
 	correlator := &fakeCorrelator{entered: entered, release: release}
 	encoder := &fakeEncoder{}
@@ -154,7 +154,7 @@ func TestP7CDCEmitterOwnsCursorAndChangeSlices(t *testing.T) {
 	}
 }
 
-func TestP7CDCRejectsEncoderMetadataMismatch(t *testing.T) {
+func TestCDCRejectsEncoderMetadataMismatch(t *testing.T) {
 	encoder := &fakeEncoder{wrongEventID: true}
 	transport := &captureTransport{}
 	err := testEmitter(t, transport, encoder, &fakeCorrelator{}).Emit(context.Background(), validBatch(t))
@@ -163,7 +163,7 @@ func TestP7CDCRejectsEncoderMetadataMismatch(t *testing.T) {
 	}
 }
 
-func TestP7CDCExactImageValidationFailureFromSharedEncoderStopsPublication(t *testing.T) {
+func TestCDCExactImageValidationFailureFromSharedEncoderStopsPublication(t *testing.T) {
 	encoder := &fakeEncoder{failure: errors.New("missing required schema field")}
 	transport := &captureTransport{}
 	err := testEmitter(t, transport, encoder, &fakeCorrelator{}).Emit(context.Background(), validBatch(t))
@@ -172,7 +172,7 @@ func TestP7CDCExactImageValidationFailureFromSharedEncoderStopsPublication(t *te
 	}
 }
 
-func TestP7CDCDisabledCapabilitiesAreExplicit(t *testing.T) {
+func TestCDCDisabledCapabilitiesAreExplicit(t *testing.T) {
 	identities, observed, err := events.CDCAdapterCapabilities(golem.PostgreSQL, nil)
 	if err != nil {
 		t.Fatal(err)

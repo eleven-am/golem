@@ -65,33 +65,6 @@ func AuthoredFields(registry *schema.Registry, before, after Row, authored []pol
 	return result, nil
 }
 
-// AuthoredCreateFields validates and normalizes the explicit create-field
-// inventory. It uses the persisted after image for ownership and completeness,
-// but default/generated fields are not mislabeled as caller-authored.
-func AuthoredCreateFields(registry *schema.Registry, after Row, authored []policyir.FieldID) ([]policyir.FieldID, error) {
-	if registry == nil || after.model == (policyir.ModelID{}) {
-		return nil, fmt.Errorf("P4_MUTATION_DIFF: active registry and after image are required")
-	}
-	seen := make(map[policyir.FieldID]struct{}, len(authored))
-	result := make([]policyir.FieldID, 0, len(authored))
-	for _, fieldID := range authored {
-		if _, duplicate := seen[fieldID]; duplicate {
-			return nil, fmt.Errorf("P4_MUTATION_DIFF: authored field %x appears more than once", fieldID)
-		}
-		seen[fieldID] = struct{}{}
-		field, ok := registry.Field(golem.ModelID(after.model), golem.FieldID(fieldID))
-		_, persisted := after.Cell(fieldID)
-		if !ok || field.Kind() == compilerir.FieldRelation || !persisted {
-			return nil, fmt.Errorf("P4_MUTATION_DIFF: authored create field %x is absent, foreign, or relational", fieldID)
-		}
-		if !databaseOwned(field) {
-			result = append(result, fieldID)
-		}
-	}
-	sort.Slice(result, func(i, j int) bool { return string(result[i][:]) < string(result[j][:]) })
-	return result, nil
-}
-
 func databaseOwned(field schema.Field) bool {
 	if field.DatabaseReadOnly() || field.Updated() {
 		return true

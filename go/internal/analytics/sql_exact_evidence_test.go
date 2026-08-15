@@ -12,7 +12,7 @@ import (
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
-func TestP6SQLiteDecimalAverageNeverUsesReal(t *testing.T) {
+func TestSQLiteDecimalAverageNeverUsesReal(t *testing.T) {
 	statement := renderP6ExactAggregateEvidence(t, policyir.ProviderSQLite)
 	sql := statement.SQL()
 
@@ -28,7 +28,7 @@ func TestP6SQLiteDecimalAverageNeverUsesReal(t *testing.T) {
 	}
 }
 
-func TestP6PostgreSQLExactNumericRenderer(t *testing.T) {
+func TestPostgreSQLExactNumericRenderer(t *testing.T) {
 	statement := renderP6ExactAggregateEvidence(t, policyir.ProviderPostgreSQL)
 	sql := statement.SQL()
 

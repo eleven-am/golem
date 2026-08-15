@@ -60,7 +60,7 @@ func (execution p5ReadProviderExecution) ExecuteFrozenRead(ctx context.Context, 
 	return execution.caller.ExecuteFrozenRead(ctx, request)
 }
 
-func TestP5GraphQLReadMasksPositionsOccurrencesAndSQLAcrossProviders(t *testing.T) {
+func TestGraphQLReadMasksPositionsOccurrencesAndSQLAcrossProviders(t *testing.T) {
 	for _, profile := range p5ReadProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

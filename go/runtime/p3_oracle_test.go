@@ -126,7 +126,7 @@ func (h oracleHarness) seedPost(t *testing.T, id, authorID, title string) {
 	}
 }
 
-func TestP3ReadOraclePolicyPrecedesPagingAndPrimaryKeyBreaksTies(t *testing.T) {
+func TestReadOraclePolicyPrecedesPagingAndPrimaryKeyBreaksTies(t *testing.T) {
 	h := newOracleHarness(t)
 	for _, seed := range [][2]string{
 		{"00000000-0000-0000-0000-000000000001", "hidden-a"},
@@ -169,7 +169,7 @@ func TestP3ReadOraclePolicyPrecedesPagingAndPrimaryKeyBreaksTies(t *testing.T) {
 	}
 }
 
-func TestP3ReadOracleRelationTargetPolicyPrecedesPerParentPaging(t *testing.T) {
+func TestReadOracleRelationTargetPolicyPrecedesPerParentPaging(t *testing.T) {
 	h := newOracleHarness(t)
 	h.seedUser(t, "00000000-0000-0000-0000-000000000001", "alpha")
 	h.seedUser(t, "00000000-0000-0000-0000-000000000002", "beta")
@@ -221,7 +221,7 @@ func TestP3ReadOracleRelationTargetPolicyPrecedesPerParentPaging(t *testing.T) {
 	}
 }
 
-func TestP3ReadOracleConcurrentPrincipalIsolation(t *testing.T) {
+func TestReadOracleConcurrentPrincipalIsolation(t *testing.T) {
 	h := newOracleHarness(t)
 	for index := 0; index < 8; index++ {
 		h.seedUser(t, fmt.Sprintf("00000000-0000-0000-0000-%012d", index+1), fmt.Sprintf("alpha-%02d", index))
@@ -267,7 +267,7 @@ func TestP3ReadOracleConcurrentPrincipalIsolation(t *testing.T) {
 	wait.Wait()
 }
 
-func TestP3ReadOracleInvisibleAndMissingUniqueHaveSamePublicDisclosure(t *testing.T) {
+func TestReadOracleInvisibleAndMissingUniqueHaveSamePublicDisclosure(t *testing.T) {
 	h := newOracleHarness(t)
 	h.seedUser(t, "00000000-0000-0000-0000-000000000001", "hidden-user")
 	caller, err := h.app.ForPrincipal(context.Background(), oraclePrincipal{UserPrefix: "visible-"})

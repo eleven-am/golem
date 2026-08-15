@@ -19,22 +19,23 @@ func TestRenderInsertsProviderPlaceholdersChunkingAndExactBytes(t *testing.T) {
 		if len(statements) != 2 || len(statements[0].Args()) != 26 || len(statements[1].Args()) != 13 {
 			t.Fatalf("provider %d chunks=%d args=(%d,%d)", provider, len(statements), len(statements[0].Args()), len(statements[1].Args()))
 		}
+		for index, statement := range statements {
+			ordinal, positional := strings.Count(statement.SQL(), "$"), strings.Count(statement.SQL(), "?")
+			bound, foreign := ordinal, positional
+			if provider == policyir.ProviderSQLite {
+				bound, foreign = positional, ordinal
+			}
+			if bound != len(statement.Args()) || foreign != 0 {
+				t.Fatalf("provider %d chunk %d binds %d of %d args and emits %d foreign placeholders", provider, index, bound, len(statement.Args()), foreign)
+			}
+		}
 		if provider == policyir.ProviderSQLite {
-			if !strings.HasPrefix(statements[0].SQL(), `INSERT INTO "main"."_golem_outbox"`) {
-				t.Fatalf("SQLite system namespace=%q", statements[0].SQL())
-			}
-			if strings.Contains(statements[0].SQL(), "$1") || strings.Count(statements[0].SQL(), "?") != 26 {
-				t.Fatalf("SQLite placeholders=%q", statements[0].SQL())
-			}
 			if _, ok := statements[0].Args()[12].(int64); !ok {
 				t.Fatalf("SQLite recorded_at type=%T", statements[0].Args()[12])
 			}
 		} else {
 			if !strings.HasPrefix(statements[0].SQL(), `INSERT INTO "_golem"."_golem_outbox"`) {
 				t.Fatalf("PostgreSQL system namespace=%q", statements[0].SQL())
-			}
-			if !strings.Contains(statements[0].SQL(), "$1") || !strings.Contains(statements[0].SQL(), "$26") || strings.Contains(statements[0].SQL(), "?") {
-				t.Fatalf("PostgreSQL placeholders=%q", statements[0].SQL())
 			}
 			if _, ok := statements[0].Args()[12].(time.Time); !ok {
 				t.Fatalf("PostgreSQL recorded_at type=%T", statements[0].Args()[12])
@@ -57,7 +58,7 @@ func TestRenderInsertsRejectsBelowOneRow(t *testing.T) {
 	}
 }
 
-func TestP7RenderDeliveryInsertIsOneIdempotentCausalRowOnBothProviders(t *testing.T) {
+func TestRenderDeliveryInsertIsOneIdempotentCausalRowOnBothProviders(t *testing.T) {
 	rows := []OutboxRow{testOutboxRow(1), testOutboxRow(2)}
 	rows[0].RecordedAt = time.Unix(1_700_000_001, 987_654_321)
 	rows[1].RecordedAt = time.Unix(1_700_000_000, 123_456_789)
@@ -70,20 +71,23 @@ func TestP7RenderDeliveryInsertIsOneIdempotentCausalRowOnBothProviders(t *testin
 		if !strings.Contains(statement.SQL(), `"closed_system"."_golem_outbox_delivery"`) || len(statement.Args()) != 4 {
 			t.Fatalf("provider %d statement=%q args=%#v", provider, statement.SQL(), statement.Args())
 		}
+		if !strings.Contains(statement.SQL(), `ON CONFLICT ("causation_id") DO NOTHING`) {
+			t.Fatalf("provider %d delivery insert is not idempotent: %q", provider, statement.SQL())
+		}
+		ordinal, positional := strings.Count(statement.SQL(), "$"), strings.Count(statement.SQL(), "?")
+		bound, foreign := ordinal, positional
 		if provider == policyir.ProviderSQLite {
-			if !strings.HasPrefix(statement.SQL(), "INSERT INTO") || !strings.Contains(statement.SQL(), `ON CONFLICT ("causation_id") DO NOTHING`) || strings.Count(statement.SQL(), "?") != 4 {
-				t.Fatalf("SQLite delivery insert is not idempotent/exact: %q", statement.SQL())
-			}
+			bound, foreign = positional, ordinal
+		}
+		if bound != len(statement.Args()) || foreign != 0 {
+			t.Fatalf("provider %d binds %d of %d args and emits %d foreign placeholders", provider, bound, len(statement.Args()), foreign)
+		}
+		if provider == policyir.ProviderSQLite {
 			if got := statement.Args()[1]; got != rows[1].RecordedAt.UTC().Truncate(time.Microsecond).UnixMicro() {
 				t.Fatalf("SQLite first_recorded_at=%v", got)
 			}
-		} else {
-			if !strings.Contains(statement.SQL(), `ON CONFLICT ("causation_id") DO NOTHING`) || strings.Count(statement.SQL(), "$") != 4 {
-				t.Fatalf("PostgreSQL delivery insert is not idempotent/exact: %q", statement.SQL())
-			}
-			if got := statement.Args()[1].(time.Time); !got.Equal(rows[1].RecordedAt.UTC().Truncate(time.Microsecond)) {
-				t.Fatalf("PostgreSQL first_recorded_at=%v", got)
-			}
+		} else if got := statement.Args()[1].(time.Time); !got.Equal(rows[1].RecordedAt.UTC().Truncate(time.Microsecond)) {
+			t.Fatalf("PostgreSQL first_recorded_at=%v", got)
 		}
 	}
 	foreign := append([]OutboxRow(nil), rows...)

@@ -13,7 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8PostgreSQLPublicOpenConfiguresEveryPooledConnection(t *testing.T) {
+func TestPostgreSQLPublicOpenConfiguresEveryPooledConnection(t *testing.T) {
 	profiles := []struct {
 		name string
 		env  string
@@ -112,7 +112,7 @@ current_setting('standard_conforming_strings')`).Scan(&timezone, &dateStyle, &in
 	}
 }
 
-func TestP8PostgreSQLOpenFailureClosesAllResourcesAndRedactsDSN(t *testing.T) {
+func TestPostgreSQLOpenFailureClosesAllResourcesAndRedactsDSN(t *testing.T) {
 	const secret = "p8-postgresql-password-canary"
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -134,7 +134,7 @@ func TestP8PostgreSQLOpenFailureClosesAllResourcesAndRedactsDSN(t *testing.T) {
 	}
 }
 
-func TestP8PostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
+func TestPostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
 	for _, profile := range []struct {
 		name string
 		env  string

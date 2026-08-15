@@ -602,7 +602,7 @@ func (f *fixture) assertCDCWorkerBound(baseline int) {
 	done := make(chan error, 1)
 	go func() { done <- app.RunEventPublisher(ctx) }()
 	deadline := time.Now().Add(5 * time.Second)
-	for counts.starts.Load() != 3 && time.Now().Before(deadline) {
+	for (counts.starts.Load() != 3 || counts.peak.Load() != 3) && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	if counts.starts.Load() != 3 || counts.peak.Load() != 3 {

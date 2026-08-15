@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestP7ExternalCodeCannotForgeEventMetadataRuntimeCapability(t *testing.T) {
+func TestExternalCodeCannotForgeEventMetadataRuntimeCapability(t *testing.T) {
 	module, err := filepath.Abs("..")
 	if err != nil {
 		t.Fatal(err)

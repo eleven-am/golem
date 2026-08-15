@@ -22,7 +22,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -53,7 +52,6 @@ const (
 	CodeInvalidCandidate ErrorCode = "P8_RELEASE_INVALID_CANDIDATE"
 	CodeUnsignedTag      ErrorCode = "P8_RELEASE_UNSIGNED_TAG"
 	CodeBuild            ErrorCode = "P8_RELEASE_BUILD"
-	CodeNonReproducible  ErrorCode = "P8_RELEASE_NON_REPRODUCIBLE"
 	CodeReplacement      ErrorCode = "P8_RELEASE_REPLACEMENT_REFUSED"
 	CodeConsumer         ErrorCode = "P8_RELEASE_CLEAN_CONSUMER"
 )
@@ -153,127 +151,10 @@ type Digest struct {
 	SHA256 string `json:"sha256"`
 }
 
-type sourceSBOM struct {
-	SPDXVersion       string                 `json:"spdxVersion"`
-	DataLicense       string                 `json:"dataLicense"`
-	SPDXID            string                 `json:"SPDXID"`
-	Name              string                 `json:"name"`
-	DocumentNamespace string                 `json:"documentNamespace"`
-	CreationInfo      spdxCreation           `json:"creationInfo"`
-	DocumentDescribes []string               `json:"documentDescribes"`
-	Packages          []spdxPackage          `json:"packages"`
-	Relationships     []spdxRelationship     `json:"relationships"`
-	ExtractedLicenses []spdxExtractedLicense `json:"hasExtractedLicensingInfos"`
-}
-
-type sourceUnit struct {
-	Path            string
-	Version         string
-	Checksum        string
-	LicenseDeclared string
-}
-
 type archiveEntry struct {
 	Name    string
 	Mode    fs.FileMode
 	Content []byte
-}
-
-type binarySBOM struct {
-	SPDXVersion       string                 `json:"spdxVersion"`
-	DataLicense       string                 `json:"dataLicense"`
-	SPDXID            string                 `json:"SPDXID"`
-	Name              string                 `json:"name"`
-	DocumentNamespace string                 `json:"documentNamespace"`
-	CreationInfo      spdxCreation           `json:"creationInfo"`
-	DocumentDescribes []string               `json:"documentDescribes"`
-	Packages          []spdxPackage          `json:"packages"`
-	Relationships     []spdxRelationship     `json:"relationships"`
-	ExtractedLicenses []spdxExtractedLicense `json:"hasExtractedLicensingInfos"`
-}
-
-type spdxCreation struct {
-	Created            string   `json:"created"`
-	Creators           []string `json:"creators"`
-	LicenseListVersion string   `json:"licenseListVersion"`
-}
-
-type spdxChecksum struct {
-	Algorithm     string `json:"algorithm"`
-	ChecksumValue string `json:"checksumValue"`
-}
-
-type spdxPackage struct {
-	SPDXID           string         `json:"SPDXID"`
-	Name             string         `json:"name"`
-	VersionInfo      string         `json:"versionInfo"`
-	DownloadLocation string         `json:"downloadLocation"`
-	FilesAnalyzed    bool           `json:"filesAnalyzed"`
-	LicenseConcluded string         `json:"licenseConcluded"`
-	LicenseDeclared  string         `json:"licenseDeclared"`
-	CopyrightText    string         `json:"copyrightText"`
-	Checksums        []spdxChecksum `json:"checksums"`
-}
-
-type spdxRelationship struct {
-	SPDXElementID      string `json:"spdxElementId"`
-	RelationshipType   string `json:"relationshipType"`
-	RelatedSPDXElement string `json:"relatedSpdxElement"`
-}
-
-type spdxExtractedLicense struct {
-	LicenseID     string `json:"licenseId"`
-	ExtractedText string `json:"extractedText"`
-	Name          string `json:"name"`
-}
-
-type inTotoStatement struct {
-	Type          string          `json:"_type"`
-	Subject       []inTotoSubject `json:"subject"`
-	PredicateType string          `json:"predicateType"`
-	Predicate     slsaPredicate   `json:"predicate"`
-}
-
-type inTotoSubject struct {
-	Name   string            `json:"name"`
-	Digest map[string]string `json:"digest"`
-}
-
-type slsaPredicate struct {
-	BuildDefinition slsaBuildDefinition `json:"buildDefinition"`
-	RunDetails      slsaRunDetails      `json:"runDetails"`
-}
-
-type slsaBuildDefinition struct {
-	BuildType            string                   `json:"buildType"`
-	ExternalParameters   slsaExternalParameters   `json:"externalParameters"`
-	InternalParameters   map[string]any           `json:"internalParameters"`
-	ResolvedDependencies []slsaResolvedDependency `json:"resolvedDependencies"`
-}
-
-type slsaExternalParameters struct {
-	Module    string   `json:"module"`
-	Version   string   `json:"version"`
-	Tag       string   `json:"tag"`
-	Commit    string   `json:"commit"`
-	Platforms []string `json:"platforms"`
-}
-
-type slsaResolvedDependency struct {
-	URI    string            `json:"uri"`
-	Digest map[string]string `json:"digest"`
-}
-
-type slsaRunDetails struct {
-	Builder  slsaBuilder  `json:"builder"`
-	Metadata slsaMetadata `json:"metadata"`
-}
-
-type slsaBuilder struct {
-	ID string `json:"id"`
-}
-type slsaMetadata struct {
-	InvocationID string `json:"invocationId"`
 }
 
 func VersionFromTag(tag string) (string, error) {
@@ -282,12 +163,6 @@ func VersionFromTag(tag string) (string, error) {
 		return "", fail(CodeInvalidCandidate)
 	}
 	return match[1], nil
-}
-
-// InspectCandidate proves tag/module/manifest agreement and verifies the signed
-// annotated tag before any build work begins.
-func InspectCandidate(ctx context.Context, moduleDir, tag string) (Candidate, error) {
-	return Candidate{}, fail(CodeUnsignedTag)
 }
 
 // InspectCandidateWithConfig uses a pinned SSH allowed-signers file as the
@@ -433,21 +308,8 @@ func releaseLicenseEvidenceAt(ctx context.Context, repository, modulePrefix, com
 }
 
 func dependencyLicenseVersionsMatch(moduleFile *modfile.File, authority compatibility.DependencyLicenseAuthority) bool {
-	expected := []compatibility.DependencyLicense{
-		{Module: "github.com/klauspost/compress", Version: "v1.18.5"},
-		{Module: "github.com/nats-io/nats.go", Version: "v1.52.0"},
-		{Module: "github.com/nats-io/nkeys", Version: "v0.4.15"},
-		{Module: "github.com/nats-io/nuid", Version: "v1.0.1"},
-		{Module: "golang.org/x/crypto", Version: "v0.49.0"},
-		{Module: "golang.org/x/sys", Version: "v0.47.0"},
-	}
-	if len(authority.Dependencies) != len(expected) {
+	if len(authority.Dependencies) == 0 {
 		return false
-	}
-	for index := range expected {
-		if authority.Dependencies[index].Module != expected[index].Module || authority.Dependencies[index].Version != expected[index].Version {
-			return false
-		}
 	}
 	selected := make(map[string]string, len(moduleFile.Require))
 	for _, requirement := range moduleFile.Require {
@@ -544,7 +406,7 @@ func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefi
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	guide, err := compatibility.ParseMigrationGuide(encoded, authority.SHA256)
-	if err != nil || semver.Compare(authority.ToVersion, current.Release.Version) > 0 {
+	if err != nil || authority.ToVersion != current.Release.Version {
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	sourceTag := authority.FromTag
@@ -553,39 +415,14 @@ func verifyMigrationGuideTransition(ctx context.Context, repository, modulePrefi
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	targetTag := "go/" + authority.ToVersion
-	targetCommit := current.Release.Commit
-	if authority.ToVersion == current.Release.Version {
-		if sourceTag != previousTag || sourceCommit != previousCommit || targetTag != current.Release.Tag {
-			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
-		}
-	} else {
-		if semver.MajorMinor(authority.ToVersion) != semver.MajorMinor(current.Release.Version) {
-			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
-		}
-		targetCommit, err = output(ctx, repository, nil, "git", "rev-parse", "--verify", "refs/tags/"+targetTag+"^{commit}")
-		if err != nil || !commitPattern.MatchString(targetCommit) || verifySignedReleaseTag(ctx, repository, targetTag, allowedSignersFile) != nil ||
-			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", sourceCommit, targetCommit) != nil ||
-			run(ctx, repository, nil, "git", "merge-base", "--is-ancestor", targetCommit, current.Release.Commit) != nil {
-			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
-		}
-		target, targetErr := developmentManifestAt(ctx, repository, modulePrefix, targetCommit)
-		if targetErr != nil || target.MigrationGuide == nil || *target.MigrationGuide != authority || !slices.Equal(target.RequiredActions, current.RequiredActions) {
-			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
-		}
-		targetGuide, targetGuideErr := commandOutput(ctx, repository, nil, "git", "show", targetCommit+":"+modulePrefix+authority.Path)
-		if targetGuideErr != nil || !bytes.Equal(targetGuide, encoded) {
-			return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
-		}
+	if sourceTag != previousTag || sourceCommit != previousCommit || targetTag != current.Release.Tag {
+		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	if compatibility.ValidateMigrationGuideTransition(guide, authority, sourceTag, sourceCommit, targetTag, authority.ToVersion, current.RequiredActions) != nil {
 		return releaseMigrationGuide{}, fail(CodeInvalidCandidate)
 	}
 	for _, corpus := range guide.Corpora {
-		commits := []string{sourceCommit, targetCommit, current.Release.Commit}
-		for index, commit := range commits {
-			if index > 0 && commit == commits[index-1] {
-				continue
-			}
+		for _, commit := range []string{sourceCommit, current.Release.Commit} {
 			object := commit + ":" + modulePrefix + corpus.Path
 			actual, resolveErr := output(ctx, repository, nil, "git", "rev-parse", "--verify", object)
 			kind, typeErr := output(ctx, repository, nil, "git", "cat-file", "-t", object)
@@ -626,7 +463,7 @@ func greatestLowerReleaseTag(ctx context.Context, repository, currentTag, curren
 			foundCurrent = true
 			continue
 		}
-		if verifySignedReleaseTag(ctx, repository, candidate, allowedSignersFile) != nil || semver.Compare(version, currentVersion) >= 0 {
+		if semver.Compare(version, currentVersion) >= 0 {
 			return "", "", false, fail(CodeInvalidCandidate)
 		}
 		if bestVersion == "" || semver.Compare(version, bestVersion) > 0 {
@@ -638,6 +475,9 @@ func greatestLowerReleaseTag(ctx context.Context, repository, currentTag, curren
 	}
 	if bestTag == "" {
 		return "", "", true, nil
+	}
+	if verifySignedReleaseTag(ctx, repository, bestTag, allowedSignersFile) != nil {
+		return "", "", false, fail(CodeInvalidCandidate)
 	}
 	return bestTag, bestVersion, false, nil
 }
@@ -744,26 +584,9 @@ func Build(ctx context.Context, config BuildConfig) (Inventory, error) {
 			_ = os.RemoveAll(config.OutputDir)
 		}
 	}()
-	modules, err := sourceModules(ctx, config.ModuleDir, goBinary)
-	if err != nil {
-		return Inventory{}, atStage(err, "source-modules")
-	}
-	for index := range modules {
-		if modules[index].Path == ModulePath {
-			modules[index].Checksum = config.Candidate.SourceTreeSHA256
-		}
-	}
 	licenseAuthority, err := compatibility.ParseDependencyLicenseAuthority(config.Candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
-	if err != nil || compatibility.ValidateDependencyLicenseFiles(licenseAuthority, config.Candidate.projectLicense, config.Candidate.thirdPartyNotices) != nil || !applySourceModuleLicenses(modules, licenseAuthority) {
+	if err != nil || compatibility.ValidateDependencyLicenseFiles(licenseAuthority, config.Candidate.projectLicense, config.Candidate.thirdPartyNotices) != nil {
 		return Inventory{}, fail(CodeInvalidCandidate)
-	}
-	goVersion, err := output(ctx, config.ModuleDir, cleanGoEnvironment(os.Environ(), false, ""), goBinary, "env", "GOVERSION")
-	if err != nil || goVersion == "" {
-		return Inventory{}, &Error{Code: CodeBuild, stage: "go-version"}
-	}
-	source := newSourceSBOM(config.Candidate, modules, licenseAuthority)
-	if err := writeCanonicalJSON(filepath.Join(config.OutputDir, "golem_source.spdx.json"), source); err != nil {
-		return Inventory{}, err
 	}
 	if err := os.WriteFile(filepath.Join(config.OutputDir, "compatibility-manifest.json"), config.Candidate.Manifest, 0o644); err != nil {
 		return Inventory{}, fail(CodeBuild)
@@ -785,21 +608,9 @@ func Build(ctx context.Context, config BuildConfig) (Inventory, error) {
 		return Inventory{}, fail(CodeBuild)
 	}
 	for _, platform := range platforms {
-		if err := buildPlatform(ctx, config, goBinary, goVersion, platform); err != nil {
+		if err := buildPlatform(ctx, config, goBinary, platform); err != nil {
 			return Inventory{}, atStage(err, "build-"+platform.ID())
 		}
-	}
-	subjects, err := digestDirectory(config.OutputDir, nil)
-	if err != nil {
-		return Inventory{}, err
-	}
-	platformIDs := make([]string, len(platforms))
-	for index, platform := range platforms {
-		platformIDs[index] = platform.ID()
-	}
-	statement := newProvenance(config.Candidate, platformIDs, subjects)
-	if err := writeCanonicalJSON(filepath.Join(config.OutputDir, "provenance.json"), statement); err != nil {
-		return Inventory{}, err
 	}
 	checksummed, err := digestDirectory(config.OutputDir, map[string]bool{"SHA256SUMS": true, "release-inventory.json": true})
 	if err != nil {
@@ -824,7 +635,7 @@ func Build(ctx context.Context, config BuildConfig) (Inventory, error) {
 	return inventory, nil
 }
 
-func buildPlatform(ctx context.Context, config BuildConfig, goBinary, goVersion string, platform Platform) error {
+func buildPlatform(ctx context.Context, config BuildConfig, goBinary string, platform Platform) error {
 	stage, err := os.MkdirTemp("", "golem-release-binary-")
 	if err != nil {
 		return fail(CodeBuild)
@@ -863,74 +674,6 @@ func buildPlatform(ctx context.Context, config BuildConfig, goBinary, goVersion 
 	}
 	if err != nil {
 		return &Error{Code: CodeBuild, stage: "archive"}
-	}
-	licenseAuthority, parseErr := compatibility.ParseDependencyLicenseAuthority(config.Candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
-	if parseErr != nil {
-		return &Error{Code: CodeBuild, stage: "binary-license-authority"}
-	}
-	sbom := newBinarySBOM(config.Candidate, platform, digest(binaryBytes), goVersion, licenseAuthority.Project.LicenseDeclared)
-	if err := writeCanonicalJSON(filepath.Join(config.OutputDir, base+".spdx.json"), sbom); err != nil {
-		return &Error{Code: CodeBuild, stage: "binary-sbom"}
-	}
-	return nil
-}
-
-func VerifyReproducible(ctx context.Context, config BuildConfig) error {
-	first, err := os.MkdirTemp("", "golem-release-first-")
-	if err != nil {
-		return fail(CodeBuild)
-	}
-	defer os.RemoveAll(first)
-	second, err := os.MkdirTemp("", "golem-release-second-")
-	if err != nil {
-		return fail(CodeBuild)
-	}
-	defer os.RemoveAll(second)
-	_ = os.Remove(first)
-	_ = os.Remove(second)
-	left, right := config, config
-	left.OutputDir, right.OutputDir = first, second
-	if _, err := Build(ctx, left); err != nil {
-		return err
-	}
-	if _, err := Build(ctx, right); err != nil {
-		return err
-	}
-	equal, err := equalDirectories(first, second)
-	if err != nil || !equal {
-		return fail(CodeNonReproducible)
-	}
-	return nil
-}
-
-// Publish installs a fully built candidate exactly once. An existing version is
-// accepted only when every relative path and byte is identical.
-func Publish(staged, releases string, candidate Candidate) error {
-	if validateCandidate(candidate) != nil || staged == "" || releases == "" {
-		return fail(CodeInvalidCandidate)
-	}
-	if err := verifyBuiltMigrationGuide(staged, candidate); err != nil {
-		return err
-	}
-	if err := verifyBuiltLicenseEvidence(staged, candidate); err != nil {
-		return err
-	}
-	target := filepath.Join(releases, candidate.Version)
-	if _, err := os.Stat(target); err == nil {
-		equal, compareErr := equalDirectories(staged, target)
-		if compareErr != nil || !equal {
-			return fail(CodeReplacement)
-		}
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fail(CodeReplacement)
-	}
-	if err := os.MkdirAll(releases, 0o755); err != nil {
-		return fail(CodeBuild)
-	}
-	if err := copyDirectory(staged, target); err != nil {
-		_ = os.RemoveAll(target)
-		return fail(CodeBuild)
 	}
 	return nil
 }
@@ -1221,57 +964,6 @@ func writeCandidateMigrationGuide(root string, candidate Candidate) error {
 	return nil
 }
 
-func verifyBuiltMigrationGuide(root string, candidate Candidate) error {
-	if len(candidate.migrationGuide) == 0 {
-		return nil
-	}
-	if !safeReleaseRelativePath(candidate.migrationGuidePath) {
-		return fail(CodeInvalidCandidate)
-	}
-	target := filepath.Join(root, filepath.FromSlash(candidate.migrationGuidePath))
-	if !regularFileBelowRoot(root, candidate.migrationGuidePath) {
-		return fail(CodeInvalidCandidate)
-	}
-	encoded, err := os.ReadFile(target)
-	if err != nil || !bytes.Equal(encoded, candidate.migrationGuide) || digest(encoded) != candidate.migrationGuideSHA256 {
-		return fail(CodeInvalidCandidate)
-	}
-	return nil
-}
-
-func verifyBuiltLicenseEvidence(root string, candidate Candidate) error {
-	for relative, expected := range map[string][]byte{
-		compatibility.ProjectLicensePath:    candidate.projectLicense,
-		compatibility.ThirdPartyNoticesPath: candidate.thirdPartyNotices,
-	} {
-		if !regularFileBelowRoot(root, relative) {
-			return fail(CodeInvalidCandidate)
-		}
-		encoded, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(relative)))
-		if err != nil || !bytes.Equal(encoded, expected) {
-			return fail(CodeInvalidCandidate)
-		}
-	}
-	return nil
-}
-
-func regularFileBelowRoot(root, relative string) bool {
-	current := filepath.Clean(root)
-	elements := strings.Split(relative, "/")
-	for index, element := range elements {
-		current = filepath.Join(current, element)
-		info, err := os.Lstat(current)
-		if err != nil || info.Mode()&os.ModeSymlink != 0 {
-			return false
-		}
-		last := index == len(elements)-1
-		if last != info.Mode().IsRegular() || !last && !info.IsDir() {
-			return false
-		}
-	}
-	return true
-}
-
 func buildReleaseNotes(candidate Candidate) ([]byte, error) {
 	manifest, err := compatibility.Parse(candidate.Manifest, compatibility.Digest(candidate.Manifest))
 	if err != nil || ValidateAgreement(candidate.Module, candidate.Tag, candidate.Commit, manifest) != nil {
@@ -1325,95 +1017,6 @@ func canonicalPlatforms(platforms []Platform) bool {
 	return true
 }
 
-func sourceModules(ctx context.Context, directory, goBinary string) ([]sourceUnit, error) {
-	encoded, err := commandOutput(ctx, directory, append(os.Environ(), "GOWORK=off"), goBinary, "list", "-m", "-json", "all")
-	if err != nil {
-		return nil, fail(CodeBuild)
-	}
-	decoder := json.NewDecoder(bytes.NewReader(encoded))
-	var result []sourceUnit
-	for {
-		var value struct {
-			Path, Version, Sum string
-			Replace            *json.RawMessage
-		}
-		if err := decoder.Decode(&value); errors.Is(err, io.EOF) {
-			break
-		} else if err != nil || value.Path == "" || value.Replace != nil {
-			return nil, fail(CodeInvalidCandidate)
-		}
-		checksum := ""
-		if value.Path == ModulePath {
-			value.Version = "devel"
-			moduleBytes, readErr := os.ReadFile(filepath.Join(directory, "go.mod"))
-			if readErr != nil {
-				return nil, fail(CodeBuild)
-			}
-			checksum = digest(moduleBytes)
-		} else {
-			if value.Sum == "" {
-				value.Sum, err = downloadModuleSum(ctx, directory, goBinary, value.Path, value.Version)
-				if err != nil {
-					return nil, fail(CodeBuild)
-				}
-			}
-			checksum, err = moduleChecksum(value.Sum)
-			if err != nil {
-				return nil, fail(CodeBuild)
-			}
-		}
-		result = append(result, sourceUnit{Path: value.Path, Version: value.Version, Checksum: checksum})
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Path < result[j].Path })
-	return result, nil
-}
-
-func applySourceModuleLicenses(modules []sourceUnit, authority compatibility.DependencyLicenseAuthority) bool {
-	found := make(map[string]bool, len(authority.Dependencies)+1)
-	for index := range modules {
-		declared, ok := authority.LicenseFor(modules[index].Path, modules[index].Version)
-		if ok {
-			modules[index].LicenseDeclared = declared
-			found[modules[index].Path] = true
-		}
-	}
-	if !found[authority.Project.Module] {
-		return false
-	}
-	for _, dependency := range authority.Dependencies {
-		if !found[dependency.Module] {
-			return false
-		}
-	}
-	return true
-}
-
-func downloadModuleSum(ctx context.Context, directory, goBinary, path, version string) (string, error) {
-	encoded, err := commandOutput(ctx, directory, append(os.Environ(), "GOWORK=off"), goBinary, "mod", "download", "-json", path+"@"+version)
-	if err != nil {
-		return "", err
-	}
-	var result struct {
-		Sum   string
-		Error string
-	}
-	if err := json.Unmarshal(encoded, &result); err != nil || result.Error != "" || result.Sum == "" {
-		return "", fail(CodeBuild)
-	}
-	return result.Sum, nil
-}
-
-func moduleChecksum(sum string) (string, error) {
-	if !strings.HasPrefix(sum, "h1:") {
-		return "", fail(CodeBuild)
-	}
-	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(sum, "h1:"))
-	if err != nil || len(decoded) != sha256.Size {
-		return "", fail(CodeBuild)
-	}
-	return hex.EncodeToString(decoded), nil
-}
-
 func validateAllowedSigners(path, expectedDigest string) (string, error) {
 	if !digestPattern.MatchString(expectedDigest) {
 		return "", fail(CodeUnsignedTag)
@@ -1444,86 +1047,6 @@ func validateAllowedSigners(path, expectedDigest string) (string, error) {
 		}
 	}
 	return actual, nil
-}
-
-func newSourceSBOM(candidate Candidate, modules []sourceUnit, authority compatibility.DependencyLicenseAuthority) sourceSBOM {
-	packages := make([]spdxPackage, len(modules))
-	relationships := make([]spdxRelationship, len(modules))
-	describes := make([]string, 0, 1)
-	for index, module := range modules {
-		id := fmt.Sprintf("SPDXRef-Package-%d", index+1)
-		declared := module.LicenseDeclared
-		if declared == "" {
-			declared = "NOASSERTION"
-		}
-		packages[index] = spdxPackage{SPDXID: id, Name: module.Path, VersionInfo: module.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: declared, CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: module.Checksum}}}
-		relationships[index] = spdxRelationship{SPDXElementID: "SPDXRef-DOCUMENT", RelationshipType: "DESCRIBES", RelatedSPDXElement: id}
-		if module.Path == ModulePath {
-			describes = append(describes, id)
-		}
-	}
-	extracted := []spdxExtractedLicense{{LicenseID: authority.Project.LicenseDeclared, ExtractedText: string(candidate.projectLicense), Name: "Golem GPLv3 text; only/or-later unspecified"}}
-	for _, dependency := range authority.Dependencies {
-		if !strings.HasPrefix(dependency.LicenseDeclared, "LicenseRef-") {
-			continue
-		}
-		license, ok := compatibility.DependencyLicenseText(candidate.thirdPartyNotices, dependency)
-		if !ok {
-			continue
-		}
-		extracted = append(extracted, spdxExtractedLicense{LicenseID: dependency.LicenseDeclared, ExtractedText: string(license), Name: dependency.Module + " composite license text"})
-	}
-	return sourceSBOM{
-		SPDXVersion: "SPDX-2.3", DataLicense: "CC0-1.0", SPDXID: "SPDXRef-DOCUMENT", Name: "golem-source-" + candidate.Version,
-		DocumentNamespace: "https://eleven-am.github.io/golem/spdx/" + candidate.Version + "/source",
-		CreationInfo:      spdxCreation{Created: time.Unix(candidate.SourceDateEpoch, 0).UTC().Format(time.RFC3339), Creators: []string{"Tool: github.com/eleven-am/golem/go/internal/release@v1"}, LicenseListVersion: "3.25"},
-		DocumentDescribes: describes, Packages: packages, Relationships: relationships, ExtractedLicenses: extracted,
-	}
-}
-
-func newBinarySBOM(candidate Candidate, platform Platform, binarySHA, goVersion, licenseDeclared string) binarySBOM {
-	id := "SPDXRef-Package-golem"
-	return binarySBOM{
-		SPDXVersion: "SPDX-2.3", DataLicense: "CC0-1.0", SPDXID: "SPDXRef-DOCUMENT", Name: "golem-" + candidate.Version + "-" + platform.ID(),
-		DocumentNamespace: "https://eleven-am.github.io/golem/spdx/" + candidate.Version + "/" + platform.ID(),
-		CreationInfo:      spdxCreation{Created: time.Unix(candidate.SourceDateEpoch, 0).UTC().Format(time.RFC3339), Creators: []string{"Tool: github.com/eleven-am/golem/go/internal/release@v1", "Tool: " + goVersion}, LicenseListVersion: "3.25"},
-		DocumentDescribes: []string{id},
-		Packages:          []spdxPackage{{SPDXID: id, Name: "golem", VersionInfo: candidate.Version, DownloadLocation: "NOASSERTION", FilesAnalyzed: false, LicenseConcluded: "NOASSERTION", LicenseDeclared: licenseDeclared, CopyrightText: "NOASSERTION", Checksums: []spdxChecksum{{Algorithm: "SHA256", ChecksumValue: binarySHA}}}},
-		Relationships:     []spdxRelationship{{SPDXElementID: "SPDXRef-DOCUMENT", RelationshipType: "DESCRIBES", RelatedSPDXElement: id}},
-		ExtractedLicenses: []spdxExtractedLicense{{LicenseID: licenseDeclared, ExtractedText: string(candidate.projectLicense), Name: "Golem GPLv3 text; only/or-later unspecified"}},
-	}
-}
-
-func newProvenance(candidate Candidate, platforms []string, subjects []Digest) inTotoStatement {
-	inTotoSubjects := make([]inTotoSubject, len(subjects))
-	for index, subject := range subjects {
-		inTotoSubjects[index] = inTotoSubject{Name: subject.Name, Digest: map[string]string{"sha256": subject.SHA256}}
-	}
-	invocation := digest([]byte(candidate.Tag + "\x00" + candidate.Commit + "\x00" + strings.Join(platforms, ",")))
-	dependencies := []slsaResolvedDependency{
-		{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag, Digest: map[string]string{"gitCommit": candidate.Commit}},
-		{URI: "git+https://github.com/eleven-am/golem.git@" + candidate.Tag + "#subdirectory=go", Digest: map[string]string{"sha256": candidate.SourceTreeSHA256}},
-		{URI: "file:compatibility/manifest.json", Digest: map[string]string{"sha256": candidate.TemplateSHA256}},
-		{URI: "urn:golem:release-allowed-signers", Digest: map[string]string{"sha256": candidate.SignersSHA256}},
-		{URI: "file:" + compatibility.DependencyLicenseAuthorityPath, Digest: map[string]string{"sha256": compatibility.DependencyLicenseAuthoritySHA256}},
-		{URI: "file:" + compatibility.ProjectLicensePath, Digest: map[string]string{"sha256": digest(candidate.projectLicense)}},
-		{URI: "file:" + compatibility.ThirdPartyNoticesPath, Digest: map[string]string{"sha256": digest(candidate.thirdPartyNotices)}},
-	}
-	if len(candidate.migrationGuide) != 0 {
-		dependencies = append(dependencies, slsaResolvedDependency{URI: "file:" + candidate.migrationGuidePath, Digest: map[string]string{"sha256": candidate.migrationGuideSHA256}})
-	}
-	return inTotoStatement{
-		Type: "https://in-toto.io/Statement/v1", Subject: inTotoSubjects, PredicateType: "https://slsa.dev/provenance/v1",
-		Predicate: slsaPredicate{
-			BuildDefinition: slsaBuildDefinition{
-				BuildType:            "https://github.com/eleven-am/golem/go/internal/release@v1",
-				ExternalParameters:   slsaExternalParameters{Module: candidate.Module, Version: candidate.Version, Tag: candidate.Tag, Commit: candidate.Commit, Platforms: append([]string(nil), platforms...)},
-				InternalParameters:   map[string]any{},
-				ResolvedDependencies: dependencies,
-			},
-			RunDetails: slsaRunDetails{Builder: slsaBuilder{ID: "https://github.com/eleven-am/golem/go/internal/release@v1"}, Metadata: slsaMetadata{InvocationID: "urn:sha256:" + invocation}},
-		},
-	}
 }
 
 func cleanBuildEnvironment(environment []string, platform Platform) []string {
@@ -1644,60 +1167,6 @@ func digestDirectory(root string, excluded map[string]bool) ([]Digest, error) {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].Name < result[j].Name })
 	return result, nil
-}
-
-func equalDirectories(left, right string) (bool, error) {
-	leftFiles, err := readDirectory(left)
-	if err != nil {
-		return false, err
-	}
-	rightFiles, err := readDirectory(right)
-	if err != nil || len(leftFiles) != len(rightFiles) {
-		return false, err
-	}
-	for name, content := range leftFiles {
-		if !bytes.Equal(content, rightFiles[name]) {
-			return false, nil
-		}
-	}
-	return true, nil
-}
-
-func readDirectory(root string) (map[string][]byte, error) {
-	result := map[string][]byte{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil || entry.IsDir() {
-			return err
-		}
-		relative, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		result[filepath.ToSlash(relative)], err = os.ReadFile(path)
-		return err
-	})
-	return result, err
-}
-
-func copyDirectory(source, target string) error {
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		relative, err := filepath.Rel(source, path)
-		if err != nil {
-			return err
-		}
-		destination := filepath.Join(target, relative)
-		if entry.IsDir() {
-			return os.MkdirAll(destination, 0o755)
-		}
-		content, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		return os.WriteFile(destination, content, 0o644)
-	})
 }
 
 func repositoryRoot(ctx context.Context, directory string) (string, error) {

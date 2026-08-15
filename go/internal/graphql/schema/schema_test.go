@@ -174,16 +174,7 @@ func TestGraphQLHookOwnedRefusesAuthoredRootWithNoClientCreatePosition(t *testin
 	}
 }
 
-func TestP7SubscriptionSDLUsesClosedEventABI(t *testing.T) {
-	assertP7GeneratedGraphQLSubscriptionSDLGolden(t)
-}
-
-func TestP7GeneratedGraphQLSubscriptionSDLGolden(t *testing.T) {
-	assertP7GeneratedGraphQLSubscriptionSDLGolden(t)
-}
-
-func assertP7GeneratedGraphQLSubscriptionSDLGolden(t *testing.T) {
-	t.Helper()
+func TestGeneratedSubscriptionSDLMatchesClosedEventABIGolden(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
 		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
@@ -257,14 +248,14 @@ func assertP7GeneratedGraphQLSubscriptionSDLGolden(t *testing.T) {
 	}
 }
 
-func TestP7SubscriptionDoesNotManufactureMissingQueryRoot(t *testing.T) {
+func TestSubscriptionDoesNotManufactureMissingQueryRoot(t *testing.T) {
 	compilation := compilerir.CompilationIR{Contract: compilerir.ContractIR{GraphQLABIVersion: 1}}
 	if _, err := Build(compilation); err == nil || !strings.Contains(err.Error(), "at least one enabled query root") {
 		t.Fatalf("subscription/no-query schema error = %v", err)
 	}
 }
 
-func TestP6GeneratedGraphQLAnalyticsSDLGolden(t *testing.T) {
+func TestGeneratedGraphQLAnalyticsSDLGolden(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
 		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)
@@ -309,7 +300,7 @@ func TestP6GeneratedGraphQLAnalyticsSDLGolden(t *testing.T) {
 	}
 }
 
-func TestP6GraphQLAnalyticsRejectsHiddenAllowlistsTerminalsAndNameCollisions(t *testing.T) {
+func TestGraphQLAnalyticsRejectsHiddenAllowlistsTerminalsAndNameCollisions(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
 		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)

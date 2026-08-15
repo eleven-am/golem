@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func TestP6PublicABICapabilityCompileMatrix(t *testing.T) {
+func TestPublicABICapabilityCompileMatrix(t *testing.T) {
 	_, filename, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("locate module")

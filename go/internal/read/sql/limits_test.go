@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -12,13 +13,13 @@ func TestStatementComplexityBoundsAreExactAndProviderNeutral(t *testing.T) {
 	if err := enforceStatementComplexity(model, strings.Repeat("x", MaxStatementBytes)); err != nil {
 		t.Fatalf("exact byte ceiling rejected: %v", err)
 	}
-	if err := enforceStatementComplexity(model, strings.Repeat("x", MaxStatementBytes+1)); err == nil || !strings.Contains(err.Error(), "byte ceiling") {
+	if err := enforceStatementComplexity(model, strings.Repeat("x", MaxStatementBytes+1)); !isRenderFailure(err, "read statement exceeds the provider-neutral byte ceiling") {
 		t.Fatalf("byte overflow error=%v", err)
 	}
 	if err := enforceStatementComplexity(model, strings.Repeat(" AS x", MaxStatementAliases)); err != nil {
 		t.Fatalf("exact alias ceiling rejected: %v", err)
 	}
-	if err := enforceStatementComplexity(model, strings.Repeat(" AS x", MaxStatementAliases+1)); err == nil || !strings.Contains(err.Error(), "alias ceiling") {
+	if err := enforceStatementComplexity(model, strings.Repeat(" AS x", MaxStatementAliases+1)); !isRenderFailure(err, "read statement exceeds the provider-neutral alias ceiling") {
 		t.Fatalf("alias overflow error=%v", err)
 	}
 }
@@ -43,4 +44,9 @@ func TestConfiguredStatementBoundsAcceptExactBoundaryAndRefuseOverflow(t *testin
 	if err := enforceStatementComplexityWith(model, "x AS y AS z AS q", 20, 2); err == nil {
 		t.Fatal("configured alias overflow accepted")
 	}
+}
+
+func isRenderFailure(err error, detail string) bool {
+	var failure *Error
+	return errors.As(err, &failure) && failure.Code == CodeRender && failure.Detail == detail
 }

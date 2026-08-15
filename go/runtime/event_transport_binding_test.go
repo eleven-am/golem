@@ -10,7 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestP7RuntimeTransportBindingDecodesOnlyCanonicalHistoricalEvents(t *testing.T) {
+func TestRuntimeTransportBindingDecodesOnlyCanonicalHistoricalEvents(t *testing.T) {
 	fixture := schematest.NewSubscribedIndexed(t)
 	encoder, history := testCDCEventEncoder(t, fixture)
 	after := testCDCPostRow(t, fixture, false, "broker")

@@ -385,7 +385,7 @@ func TestGeneratedGraphQLUsesPinnedExecutableSchemaAsActiveServerPath(t *testing
 	}
 }
 
-func TestP7GeneratedGraphQLBindsTypedEventsAndNativeSubscriptionResolver(t *testing.T) {
+func TestGeneratedGraphQLBindsTypedEventsAndNativeSubscriptionResolver(t *testing.T) {
 	compiled := compile.Compile(context.Background(), compile.Config{Dir: "../../compiler/compile/testdata/social", Pattern: "."})
 	if len(compiled.Diagnostics) != 0 || compiled.Compilation == nil {
 		t.Fatalf("compile diagnostics = %#v", compiled.Diagnostics)

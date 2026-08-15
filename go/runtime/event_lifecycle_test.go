@@ -44,7 +44,7 @@ func (adapter *lifecycleAdapter) Run(ctx context.Context, _ events.CDCEmitter) e
 	return nil
 }
 
-func TestP7RunEventPublisherOwnsLifecycleRejectsDuplicateAndReportsDynamicCapability(t *testing.T) {
+func TestRunEventPublisherOwnsLifecycleRejectsDuplicateAndReportsDynamicCapability(t *testing.T) {
 	publisher := &lifecyclePublisher{started: make(chan struct{})}
 	adapter := &lifecycleAdapter{started: make(chan struct{})}
 	app := &App[struct{}, struct{}]{
@@ -86,7 +86,7 @@ func TestP7RunEventPublisherOwnsLifecycleRejectsDuplicateAndReportsDynamicCapabi
 	}
 }
 
-func TestP7RunEventPublisherCancellationGraceDoesNotBlockOnHostileAdapter(t *testing.T) {
+func TestRunEventPublisherCancellationGraceDoesNotBlockOnHostileAdapter(t *testing.T) {
 	release := make(chan struct{})
 	publisher := &lifecyclePublisher{started: make(chan struct{})}
 	adapter := &lifecycleAdapter{started: make(chan struct{}), release: release}
@@ -139,14 +139,14 @@ func (crossProcessWithoutBinding) MaxEncodedEventBytes() int {
 }
 func (crossProcessWithoutBinding) TransportAvailable() bool { return true }
 
-func TestP7CrossProcessTransportWithoutRuntimeBindingIsRejected(t *testing.T) {
+func TestCrossProcessTransportWithoutRuntimeBindingIsRejected(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	_, err := validateEventConfiguration(Config[p7EventPrincipal, p7EventActor]{
 		Descriptors:   fixture.app.descriptors,
 		EventRegistry: fixture.app.eventRegistry, EventFactories: fixture.app.eventFactories,
 		EventTransport: crossProcessWithoutBinding{}, ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 	}, fixture.app.registry, golem.PostgreSQL)
-	if err == nil || !strings.Contains(err.Error(), "cross-process event transport requires runtime binding") {
+	if err == nil || !strings.Contains(err.Error(), "GOLEM_EVENT_CONFIG: cross-process event transport requires runtime binding") {
 		t.Fatalf("cross-process transport without runtime binding error = %v", err)
 	}
 }
@@ -177,7 +177,7 @@ func (transport *lifecycleBindableTransport) BindEventRuntime(binding events.Run
 	return nil
 }
 
-func TestP7EventRuntimeBindsCrossProcessTransportExactlyOnce(t *testing.T) {
+func TestEventRuntimeBindsCrossProcessTransportExactlyOnce(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	transport := &lifecycleBindableTransport{EventTransport: fixture.app.eventTransport}
 	app := &App[p7EventPrincipal, p7EventActor]{

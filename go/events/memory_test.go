@@ -9,7 +9,7 @@ import (
 	internalvalue "github.com/eleven-am/golem/go/internal/event/value"
 )
 
-func TestP7TransportCausalBatchConformance(t *testing.T) {
+func TestTransportCausalBatchConformance(t *testing.T) {
 	generation, model, causation := golem.SchemaDigest{1}, golem.ModelID{2}, golem.CausationID{3}
 	notices := []Notice{
 		mustNotice(t, golem.EventID{1}, generation, model, causation, 1, []byte("first")),
@@ -46,7 +46,7 @@ func TestP7TransportCausalBatchConformance(t *testing.T) {
 	}
 }
 
-func TestP7RetryReusesExactIDsAndBytes(t *testing.T) {
+func TestRetryReusesExactIDsAndBytes(t *testing.T) {
 	generation, model, causation := golem.SchemaDigest{1}, golem.ModelID{2}, golem.CausationID{3}
 	encoded := []byte{9, 8, 7}
 	notice := mustNotice(t, golem.EventID{4}, generation, model, causation, 1, encoded)
@@ -83,7 +83,7 @@ func TestP7RetryReusesExactIDsAndBytes(t *testing.T) {
 	}
 }
 
-func TestP7MemoryTransportRoutesCompatibleHistoricalGenerationByEventSchema(t *testing.T) {
+func TestMemoryTransportRoutesCompatibleHistoricalGenerationByEventSchema(t *testing.T) {
 	activeGeneration := golem.SchemaDigest{1}
 	historicalGeneration := golem.SchemaDigest{2}
 	eventSchema := golem.EventSchemaDigest{3}
@@ -115,7 +115,7 @@ func TestP7MemoryTransportRoutesCompatibleHistoricalGenerationByEventSchema(t *t
 	}
 }
 
-func TestP7MemoryTransportIsBoundedAndCapabilityIsProcessLocal(t *testing.T) {
+func TestMemoryTransportIsBoundedAndCapabilityIsProcessLocal(t *testing.T) {
 	generation, model, causation := golem.SchemaDigest{1}, golem.ModelID{2}, golem.CausationID{3}
 	notice := mustNotice(t, golem.EventID{4}, generation, model, causation, 1, []byte{1})
 	batch, _ := internalvalue.NewEventBatch(causation, []Notice{notice})
@@ -147,7 +147,7 @@ func TestP7MemoryTransportIsBoundedAndCapabilityIsProcessLocal(t *testing.T) {
 	}
 }
 
-func TestP7TransportCapabilitiesRequireCanonicalIdentityAndClosedScope(t *testing.T) {
+func TestTransportCapabilitiesRequireCanonicalIdentityAndClosedScope(t *testing.T) {
 	valid, err := NewTransportCapabilities("acme.kafka-v2", TransportScopeCrossProcess, true)
 	if err != nil {
 		t.Fatal(err)
@@ -172,7 +172,7 @@ func TestP7TransportCapabilitiesRequireCanonicalIdentityAndClosedScope(t *testin
 	}
 }
 
-func TestP7ExternalTransportRuntimeBindingSPIFreezesDecoderCapability(t *testing.T) {
+func TestExternalTransportRuntimeBindingSPIFreezesDecoderCapability(t *testing.T) {
 	var _ RuntimeBindableTransport = (*bindingProbeTransport)(nil)
 	var _ RuntimeBinding = bindingProbeDecoder{}
 	transport := &bindingProbeTransport{}
@@ -188,7 +188,7 @@ func TestP7ExternalTransportRuntimeBindingSPIFreezesDecoderCapability(t *testing
 	}
 }
 
-func TestP7MemoryTransportRejectsPartialCausalBatchAtBoundary(t *testing.T) {
+func TestMemoryTransportRejectsPartialCausalBatchAtBoundary(t *testing.T) {
 	generation, model, causation := golem.SchemaDigest{1}, golem.ModelID{2}, golem.CausationID{3}
 	first := mustNotice(t, golem.EventID{1}, generation, model, causation, 1, []byte{1})
 	second := mustNotice(t, golem.EventID{2}, generation, model, causation, 2, []byte{2})
@@ -210,7 +210,7 @@ func TestP7MemoryTransportRejectsPartialCausalBatchAtBoundary(t *testing.T) {
 	}
 }
 
-func TestP7MemoryTransportCancellationClosesMembership(t *testing.T) {
+func TestMemoryTransportCancellationClosesMembership(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	transport, _ := NewMemoryTransport(MemoryLimits{Buffer: 1})
 	subscription, _ := internalvalue.NewSubscription(golem.SchemaDigest{1}, golem.ModelID{2})
@@ -227,7 +227,7 @@ func TestP7MemoryTransportCancellationClosesMembership(t *testing.T) {
 	}
 }
 
-func TestP8MemoryStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
+func TestMemoryStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
 	for _, closeFirst := range []bool{false, true} {
 		name := "install-before-close"
 		if closeFirst {
@@ -272,7 +272,7 @@ func TestP8MemoryStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
 	}
 }
 
-func TestP7LimitsRejectInsteadOfClamping(t *testing.T) {
+func TestLimitsRejectInsteadOfClamping(t *testing.T) {
 	if _, err := NormalizeLimits(Limits{SubscriberQueue: 4097}); errorCode(t, err) != CodeEventConfig {
 		t.Fatal("oversize subscriber queue accepted")
 	}

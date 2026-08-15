@@ -1,9 +1,12 @@
 # Safe query-plan visibility implementation contract
 
-Status: **implementation active; public report, renderer identity maps, bounded
-SQLite/PostgreSQL capture, provider-neutral typed assembly, Caller runtime
-orchestration, and observation complete locally; generated Caller surfaces,
-compatibility, and mandatory live PostgreSQL evidence pending**.
+Status: **implemented locally; the public report, renderer identity maps,
+bounded SQLite/PostgreSQL capture, provider-neutral typed assembly, Caller
+runtime orchestration, generated Caller surfaces, observation, the public
+compatibility inventory, and the mandatory live SQLite/PostgreSQL external
+evidence all exist and pass; operator documentation, live correlated-relation,
+deferred-batch, and non-primary-key PostgreSQL fixtures, and integrated release
+evidence pending**.
 
 Audience: the engineer implementing the diagnostic and the reviewer deciding
 whether it is complete. This contract covers a sanitized, explicitly requested
@@ -372,24 +375,73 @@ Documentation must state:
 
 ## 12. Mandatory acceptance gates
 
-1. `TestQueryPlanGeneratedCallerSurfaceIsReadOnlyAndExact`
-2. `TestQueryPlanAuthorizationHooksAndFieldPoliciesMatchExecutionPreparation`
-3. `TestQueryPlanSQLiteMapsFullPrimaryAndOrdinaryIndexWithoutRawDetail`
-4. `TestQueryPlanPostgreSQLMapsScanJoinSortAndIndexWithoutRawJSON`
-5. `TestQueryPlanCorrelatedAndDeferredBatchStatementsAreTruthful`
-6. `TestQueryPlanAnalyticsGroupAndScopedShapesAreClosedAndBounded`
-7. `TestQueryPlanNeverExecutesDataQueryOrReturnsRows`
-8. `TestQueryPlanCanaryCorpusNeverLeaksSQLValuesNamesDSNsCostsOrActor`
-9. `TestQueryPlanUnknownAndOversizedProviderNodesFailClosed`
-10. `TestQueryPlanObservationCountsResourcesAndPanicIsolation`
-11. `TestQueryPlanSQLiteAndPostgreSQLExternalGeneratedApplication`
-12. `TestQueryPlanPublicAPIContainsNoInternalOrProviderAuthority`
+The generated Caller surface is read-only and exact:
+
+1. `TestQueryPlanDeclarationDiscoverySupersetAndFinalExactRegistryBothCompile`
+   and the surface assertions inside
+   `TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted`
+
+Authorization, hooks, and field policies match execution preparation:
+
+2. `TestQueryPlanAuthorizationHooksAndExecutionPreparationAreOneBoundary`,
+   `TestQueryPlanHookVetoAndTransformedFieldDenialExecuteZeroProviderStatements`,
+   and `TestQueryPlanInvalidOriginalInputRunsNoHookAndNoProviderStatement`
+
+Provider mapping discards raw detail:
+
+3. `TestQueryPlanSQLiteMapsFullPrimaryAndOrdinaryIndexWithoutRawDetail` and
+   `TestQueryPlanSQLiteDerivedAliasCannotBecomePhysicalAccess`
+4. `TestQueryPlanPostgreSQLMapsScanJoinSortAndIndexWithoutRawJSON` and
+   `TestQueryPlanPostgreSQLDerivedAliasCannotBecomePhysicalAccess`
+
+Correlated, deferred, analytics, group, and scoped shapes are truthful, closed,
+and bounded:
+
+5. `TestCorrelatedProviderFactAndDeferredNestedHydrationAreTruthful`,
+   `TestDeferredBatchZeroParentAndUnboundedParentRefusalReturnNoPartialReport`,
+   and `TestBuildDeferredBatchFactsBoundsAndNoProviderClaim`
+6. `TestAnalyticsAndScopedTypedPlansOwnOperationRootAndPrimaryPurpose` and
+   `TestBuildRequiresTheExactPrimaryPurposeForEachOperation`
+
+The data query never runs and no report leaks provider input:
+
+7. `TestQueryPlanSQLiteNeverExecutesDataQueryAndClosesRows` and
+   `TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution`
+8. `TestTypedAssemblyBoundaryContainsNoSQLOrProviderVocabulary`,
+   `TestProducerInputVocabularyContainsOnlyClosedSanitizedFacts`, and the
+   bind/name/value canary corpus inside
+   `TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted`
+
+Unknown and oversized provider input fails closed:
+
+9. `TestQueryPlanSQLiteUnknownAliasAndOversizeFailClosed`,
+   `TestQueryPlanSQLiteOversizeAndProviderFailureAreSanitized`,
+   `TestQueryPlanPostgreSQLUnknownOversizeAndDepthFailClosed`, and
+   `TestBuildEnforcesExactComplexityLimits`
+
+Observation counts resources and isolates the observer:
+
+10. `TestQueryPlanReleasesMaxOpenOneConnectionBeforeBlockingOrPanickingObserver`
+    and `TestQueryPlanProviderFailureIsClosedAndReturnsNoPartialReport`
+
+The external application and the public API stay closed:
+
+11. `TestQueryPlanSQLiteAndPostgreSQLExternalGeneratedApplication`, which drives
+    `TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted`
+12. `TestQueryPlanPublicCoreSurfaceMatchesAcceptedContract` and
+    `TestQueryPlanPublicAPIContainsOnlyAcceptedTypesConstantsAndAccessors`
 
 Live evidence runs SQLite, PostgreSQL C, and PostgreSQL linguistic profiles.
 Fixtures must force primary-key lookup, ordinary index lookup, full scan,
 temporary sort, join, correlated relation, deferred batch, aggregate, and
-scoped plans. PostgreSQL tests must prove `ANALYZE` never ran; SQLite tests must
-prove the data statement never ran. Mandatory mode permits zero skips.
+scoped plans. Live SQLite fixtures force full scan, primary-key lookup,
+ordinary index lookup, and temporary sort; live PostgreSQL fixtures force
+primary-key lookup; the external application forces join, aggregate, group, and
+scoped plans on both providers. Correlated-relation and deferred-batch shapes
+are proven only in typed assembly, and non-primary-key PostgreSQL access only
+through captured provider JSON, so those live fixtures are still owed.
+PostgreSQL tests must prove `ANALYZE` never ran; SQLite tests must prove the
+data statement never ran. Mandatory mode permits zero skips.
 
 Run the external generated-app gate under `-race` and prove all plan rows,
 connections, hook contexts, and observer callbacks are released.

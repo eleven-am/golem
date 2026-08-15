@@ -16,7 +16,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 )
 
-func TestP5GraphQLMutationAndNestedOraclePostgreSQLProfiles(t *testing.T) {
+func TestGraphQLMutationAndNestedOraclePostgreSQLProfiles(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

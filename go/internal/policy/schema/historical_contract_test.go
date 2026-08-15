@@ -69,13 +69,13 @@ func TestHistoricalContractV5IsOriginalFingerprintBoundAndActiveClosed(t *testin
 	if decoded.FormatVersion != compilerir.ContractFormatVersion || decoded.GraphQLABIVersion != 4 || len(decoded.Models) != 0 {
 		t.Fatalf("historical v5 projection = %#v", decoded)
 	}
-	if _, err := decodeContract(document, false); err == nil || !strings.Contains(err.Error(), "unsupported format/canonical versions 5/1") {
+	if _, err := decodeContract(document, false); !isSchemaFailure(err, CodeDocument, "contract", "unsupported format/canonical versions 5/1") {
 		t.Fatalf("active contract path accepted v5: %v", err)
 	}
 
 	wrong := historicalContractDigest(payload)
 	wrong[0] ^= 0xff
-	if _, err := decodeContract(historicalContractDocument(5, payload, wrong), true); err == nil || !strings.Contains(err.Error(), "fingerprint mismatch") {
+	if _, err := decodeContract(historicalContractDocument(5, payload, wrong), true); !isSchemaFailure(err, CodeFingerprint, "contract", "fingerprint mismatch") {
 		t.Fatalf("historical v5 accepted wrong original fingerprint: %v", err)
 	}
 

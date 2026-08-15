@@ -1,9 +1,10 @@
 # First-class optimistic concurrency implementation contract
 
-Status: **implementation active; public claim/declaration, compiler ownership,
-ContractIR v6 with frozen v5, and physical v3 with frozen v2/provider-owned
-initialization complete locally; runtime CAS, generated/GraphQL surfaces, and
-release evidence pending**.
+Status: **implemented locally; the public claim/declaration, compiler ownership,
+ContractIR v6 with frozen v5, physical v3 with frozen v2/provider-owned
+initialization, runtime CAS, the generated Go and GraphQL surfaces, conflict
+observation, and the mandatory live SQLite/PostgreSQL external race evidence all
+exist and pass; integrated release evidence pending**.
 
 Audience: the engineer implementing optimistic concurrency and the reviewer
 deciding whether it is complete. This contract covers an explicit version-token
@@ -123,11 +124,10 @@ The signatures apply equally to `Caller`, `System`, `CallerTx`, and `SystemTx`.
 There is no privileged System bypass. A trusted maintenance process reads the
 current token and supplies it like every other writer.
 
-Transaction-after hook executors are write clients too. Their single-row
-update, delete, and upsert operations require the same typed expectations when
-the target model is concurrency-enabled. Existing generic executor calls and
-its update-many/delete-many helpers must fail closed against a versioned model;
-they are not an internal authority bypass.
+Transaction-after hook executors are write clients too. Their model-erased
+runtime ABI carries no expectation in version 1, so their update, delete,
+upsert, update-many, and delete-many operations all fail closed against a
+versioned model; they are not an internal authority bypass.
 
 Create takes no expectation and initializes version 1.
 
@@ -165,20 +165,21 @@ requires a separate proposal.
 ### 4.3 Nested mutations and relations
 
 Every nested operation that writes a versioned row must carry an exact
-expectation for that row:
+expectation for that row. The generated nested grammar has nowhere to name one,
+so version 1 omits every such operation:
 
-- nested update/delete use `ExistingVersion`;
-- nested upsert uses `ConcurrencyExpectation`;
-- connect/disconnect/set operations that update a versioned foreign-key owner
-  require that owner's existing version; and
-- recursive writes apply the rule independently at every versioned node.
+- nested update, delete, and upsert against a versioned target are not
+  generated;
+- connect/disconnect/set operations that would update a versioned foreign-key
+  owner are not generated;
+- relation values are create-only on a versioned root, so a source-side
+  relation change cannot reuse the root expectation; and
+- the rule applies independently at every versioned node, so a non-versioned
+  parent cannot mutate a versioned target either.
 
-A source-side relation change may reuse the root expectation only when the
-versioned root row is the sole foreign-key owner being changed. An inverse or
-to-many `set` that could disconnect unnamed existing owners is omitted in
-version 1; it cannot prove expectations for rows absent from its desired set.
-Targetless inverse operations are likewise omitted unless every affected owner
-is explicitly named with its expectation.
+An inverse or to-many `set` that could disconnect unnamed existing owners is
+omitted in version 1; it cannot prove expectations for rows absent from its
+desired set. Targetless inverse operations are likewise omitted.
 
 If the generated nested grammar cannot name every affected row and expected
 version, that operation is omitted/refused for the versioned relation. It must
@@ -357,18 +358,61 @@ transactions.
 
 ## 12. Mandatory acceptance gates
 
-1. `TestOptimisticConcurrencyDeclarationAndGeneratedSurfaceAreExact`
-2. `TestOptimisticConcurrencyCreateUpdateDeleteAndUpsertCAS`
-3. `TestOptimisticConcurrencyMissingInvisibleAndStaleAreIndistinguishableAsSpecified`
-4. `TestOptimisticConcurrencyConflictRollsBackHooksFactsEventsAndRelations`
+The declaration and the generated surface are exact:
+
+1. `TestOptimisticConcurrencyDeclarationAndGeneratedSurfaceAreExact`,
+   `TestOptimisticConcurrencyDeclarationPublishesExactModelIRFieldOwner`, and
+   `TestApplyRejectsEveryIneligibleConcurrencyFieldFact`
+
+Create, update, delete, and upsert are compare-and-swap, and stale, missing,
+and invisible rows stay indistinguishable as specified:
+
+2. `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite` and
+   `TestVersionedOptimisticConcurrencySQLIsExactCAS`
+3. the visible-conflict and invisible-not-found corpora inside
+   `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite` and
+   `TestOptimisticConcurrencyPostgreSQLCrossConnectionRaces`
+
+A conflict rolls back hooks, facts, events, and relations:
+
+4. `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite` and
+   `TestOptimisticConcurrencyRollbackFailureCannotMasqueradeAsUniqueCollision`
 5. `TestOptimisticConcurrencyNestedEveryWrittenRowRequiresExpectation`
-6. `TestOptimisticConcurrencyBatchBypassSurfacesAreAbsent`
-7. `TestOptimisticConcurrencyCallerSystemTransactionAndGraphQLParity`
-8. `TestOptimisticConcurrencySQLiteAndPostgreSQLConcurrentWritersHaveOneWinner`
-9. `TestOptimisticConcurrencyVersionOverflowAndInvalidInputTouchNoDatabase`
-10. `TestOptimisticConcurrencyReviewedUpgradeBackfillsExistingRows`
-11. `TestOptimisticConcurrencyObservationCountsAndRedaction`
-12. `TestOptimisticConcurrencyExternalGeneratedApplicationRaceOracle`
+
+No batch, System, custom-GraphQL, or model-erased path bypasses the token:
+
+6. `TestOptimisticConcurrencyModelAuthoredBatchAndUnsafeNestedSurfacesAreAbsent`,
+   `TestOptimisticConcurrencyGraphQLSchemaIsExactAndUnsafeSurfacesAreAbsent`,
+   and `TestOptimisticConcurrencyCustomUpdateManyInputIsRejectedThroughLists`
+7. `TestOptimisticConcurrencyRuntimeABIIsTypedAndExplicit`,
+   `TestOptimisticConcurrencyGraphQLClaimsFreezeIntoExactRuntimeRequests`,
+   `TestOptimisticConcurrencyCallerGraphQLRuntimeDispatchUsesClosedClaims`, and
+   `TestNonVersionedGraphQLRuntimeRejectsForgedConcurrencyClaim`
+
+Concurrent writers have exactly one winner, and invalid or exhausted tokens
+change nothing:
+
+8. `TestOptimisticConcurrencyPostgreSQLCrossConnectionRaces`, the competing
+   SQLite writers inside
+   `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite`, and
+   `TestExternalGeneratedApplicationOptimisticConcurrencyRaces`
+9. `TestOptimisticConcurrencyExpectationsRetainOnlyClosedImmutableState`,
+   `TestConcurrencyExpectationDistinguishesAbsentExistingAndInvalid`,
+   `TestOptimisticConcurrencyGraphQLExpectationOneOfRejectsEveryInvalidShape`,
+   and the `MaxInt64` and invalid-expectation corpora inside
+   `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite`
+
+Reviewed upgrades initialize every existing row, and observation stays truthful
+and redacted:
+
+10. `TestOptimisticConcurrencyPhysicalUpgradeHasExactClosedInitializationGraph`,
+    `TestPlanIncrementalInitializesEveryConcurrencyValueToExactlyOne`,
+    `TestSQLiteIncrementalInitializesConcurrencyWithProviderLiteralOne`, and
+    `TestOptimisticConcurrencyCannotAdoptRemoveOrSwitchField`
+11. the `outcome=refused`, `reason=conflict`, and statement-count assertions
+    inside `TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite`
+12. `TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication`,
+    which drives `TestExternalGeneratedApplicationOptimisticConcurrencyRaces`
 
 The concurrent-writer gate launches real competing goroutines/connections with
 the same expected version. Exactly one commits; every loser receives

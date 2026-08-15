@@ -10,7 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestP7StoredFactCrossChecksEveryDuplicatedColumn(t *testing.T) {
+func TestStoredFactCrossChecksEveryDuplicatedColumn(t *testing.T) {
 	fixture := schematest.NewIndexedExact(t)
 	before := mustRow(t, fixture, postCells(t, fixture, [16]byte{7}, "private", 101))
 	digest := golem.SchemaDigest{1, 2, 3, 4}

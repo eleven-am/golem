@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-func TestP8RuntimeRequiresExactReviewedMigrationLedgerSQLite(t *testing.T) {
+func TestRuntimeRequiresExactReviewedMigrationLedgerSQLite(t *testing.T) {
 	hash := func(character string) migration.Digest { return migration.Digest(strings.Repeat(character, 64)) }
 	first := migration.ManifestEntry{
 		ID: "0001_initial", ChainHash: hash("1"), Files: []migration.FileChecksum{{Path: "sqlite/0001.sql", SHA256: hash("a")}},
@@ -68,7 +68,7 @@ func TestP8RuntimeRequiresExactReviewedMigrationLedgerSQLite(t *testing.T) {
 	}
 }
 
-func TestP8ReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabaseWork(t *testing.T) {
+func TestReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabaseWork(t *testing.T) {
 	expected, err := physical.Normalize(physical.PhysicalSchema{
 		Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion,
 		Provider: physical.SQLiteManifest(), Namespace: physical.Namespace{Name: "main"},
@@ -90,7 +90,7 @@ func TestP8ReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabase
 	copy(systemDigest[:], decodedSystem)
 	missing := golem.GeneratedSchemaBundle(generation, "generator", "p8-go-abi-v5", model, contract,
 		golem.GeneratedProviderSchemaDocument(golem.SQLite, systemDigest, physicalDocument))
-	if _, err := prepareReviewedMigrationStartup(nil, missing, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "manifest is missing") {
+	if _, err := prepareReviewedMigrationStartup(nil, missing, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "P8_RUNTIME_MIGRATION: provider sqlite reviewed migration manifest is missing or does not match the generated application") {
 		t.Fatalf("missing preflight error = %v", err)
 	}
 
@@ -105,14 +105,14 @@ func TestP8ReviewedMigrationPreflightRejectsMissingEmptyAndForeignBeforeDatabase
 	emptyDocument := golem.GeneratedMigrationManifestDocument(generation, golem.SQLite, emptyBytes)
 	empty := golem.GeneratedSchemaBundle(generation, "generator", "p8-go-abi-v5", model, contract,
 		golem.GeneratedProviderSchemaDocumentWithMigration(golem.SQLite, systemDigest, physicalDocument, emptyDocument))
-	if _, err := prepareReviewedMigrationStartup(nil, empty, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "manifest is empty") {
+	if _, err := prepareReviewedMigrationStartup(nil, empty, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "P8_RUNTIME_MIGRATION: reviewed migration manifest is empty") {
 		t.Fatalf("empty preflight error = %v", err)
 	}
 
 	foreignDocument := golem.GeneratedMigrationManifestDocument(golem.SchemaDigest{9}, golem.SQLite, emptyBytes)
 	foreign := golem.GeneratedSchemaBundle(generation, "generator", "p8-go-abi-v5", model, contract,
 		golem.GeneratedProviderSchemaDocumentWithMigration(golem.SQLite, systemDigest, physicalDocument, foreignDocument))
-	if _, err := prepareReviewedMigrationStartup(nil, foreign, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "does not match") {
+	if _, err := prepareReviewedMigrationStartup(nil, foreign, golem.SQLite, expected); err == nil || !strings.Contains(err.Error(), "P8_RUNTIME_MIGRATION: provider sqlite reviewed migration manifest is missing or does not match the generated application") {
 		t.Fatalf("foreign preflight error = %v", err)
 	}
 }

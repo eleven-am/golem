@@ -35,7 +35,7 @@ func validDispatcherValue() internalvalue.Value {
 	}
 }
 
-func TestP8ObservationCardinalityAndBoundedDispatcher(t *testing.T) {
+func TestObservationCardinalityAndBoundedDispatcher(t *testing.T) {
 	before := runtime.NumGoroutine()
 	target := &blockingTarget{entered: make(chan struct{}, 1), release: make(chan struct{})}
 	dispatcher, err := NewDispatcher(target, DispatcherConfig{QueueCapacity: 2})

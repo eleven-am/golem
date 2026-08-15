@@ -138,10 +138,3 @@ func validatePreviewHeadLength(headLength int) error {
 	}
 	return nil
 }
-
-// LoadReviewed verifies the complete immutable publication, every provider
-// manifest, chain, snapshot, and artifact without requiring current source or
-// provider renderers.
-func LoadReviewed(ctx context.Context, moduleDir, root string) (State, error) {
-	return loadReviewedState(ctx, moduleDir, root)
-}

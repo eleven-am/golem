@@ -14,7 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
 
-func TestP6GraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle(t *testing.T) {
+func TestGraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -91,7 +91,7 @@ func TestP6GraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle(t *testing.T) {
 	}
 }
 
-func TestP6GraphQLErrorSanitizationAndPrincipalIsolation(t *testing.T) {
+func TestGraphQLErrorSanitizationAndPrincipalIsolation(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	owner := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
 	other := p5social.Principal{Valid: true, UserID: golem.UUID{15: 2}}
@@ -149,7 +149,7 @@ func TestP6GraphQLErrorSanitizationAndPrincipalIsolation(t *testing.T) {
 	}
 }
 
-func TestP6GraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps(t *testing.T) {
+func TestGraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -207,7 +207,7 @@ func TestP6GraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps(t *testing.
 	}
 }
 
-func TestP6ProgrammaticGroupLimitIsIndependentOfGraphQL(t *testing.T) {
+func TestProgrammaticGroupLimitIsIndependentOfGraphQL(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -241,7 +241,7 @@ func TestP6ProgrammaticGroupLimitIsIndependentOfGraphQL(t *testing.T) {
 	}
 }
 
-func TestP6LocalAggregateAndGroupUseAuthorizedSingleStatementsAcrossProviders(t *testing.T) {
+func TestLocalAggregateAndGroupUseAuthorizedSingleStatementsAcrossProviders(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
@@ -335,7 +335,7 @@ func TestP6LocalAggregateAndGroupUseAuthorizedSingleStatementsAcrossProviders(t 
 	}
 }
 
-func TestP6PostTagExplicitJoinModelAnalytics(t *testing.T) {
+func TestPostTagExplicitJoinModelAnalytics(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -380,7 +380,7 @@ func TestP6PostTagExplicitJoinModelAnalytics(t *testing.T) {
 	}
 }
 
-func TestP6InvalidProgrammaticRequestCorpusTouchesDatabaseZeroTimes(t *testing.T) {
+func TestInvalidProgrammaticRequestCorpusTouchesDatabaseZeroTimes(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	userID, err := golem.ParseUUID(p5SocialID(1))
 	if err != nil {
@@ -432,7 +432,7 @@ func TestP6InvalidProgrammaticRequestCorpusTouchesDatabaseZeroTimes(t *testing.T
 	}
 }
 
-func TestP6AnalyticsCallerSystemAndTransactionParity(t *testing.T) {
+func TestAnalyticsCallerSystemAndTransactionParity(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	userID, err := golem.ParseUUID(p5SocialID(1))
 	if err != nil {
@@ -478,7 +478,7 @@ func TestP6AnalyticsCallerSystemAndTransactionParity(t *testing.T) {
 	}
 }
 
-func TestP6ConditionalMeasureDimensionHavingAndOrderDischarge(t *testing.T) {
+func TestConditionalMeasureDimensionHavingAndOrderDischarge(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	userID, err := golem.ParseUUID(p5SocialID(1))
 	if err != nil {
@@ -558,7 +558,7 @@ func TestP6ConditionalMeasureDimensionHavingAndOrderDischarge(t *testing.T) {
 	}
 }
 
-func TestP6UndischargedFieldRefusesByLogicalNameBeforeSQL(t *testing.T) {
+func TestUndischargedFieldRefusesByLogicalNameBeforeSQL(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	caller, err := harness.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
 	if err != nil {
@@ -576,7 +576,7 @@ func TestP6UndischargedFieldRefusesByLogicalNameBeforeSQL(t *testing.T) {
 	}
 }
 
-func TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
+func TestRelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
 	harness := newP5SocialGeneratedHarness(t, p5ExtensionProviderProfiles()[0])
 	caller, err := harness.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
 	if err != nil {
@@ -602,7 +602,7 @@ func TestP6RelationRequestRejectsRelatedMeasuresAndForeignPaths(t *testing.T) {
 	}
 }
 
-func TestP6ClassificationPositionSpyCoversWhereCountMeasureDimensionHavingOrderAndGraphQLSelection(t *testing.T) {
+func TestClassificationPositionSpyCoversWhereCountMeasureDimensionHavingOrderAndGraphQLSelection(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

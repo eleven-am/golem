@@ -18,23 +18,23 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-func TestP8GeneratedAppOpenUsesVerifiedDatabaseHandle(t *testing.T) {
+func TestGeneratedAppOpenUsesVerifiedDatabaseHandleInExternalModule(t *testing.T) {
 	p8RunExternalGeneratedStartupCase(t, "TestGeneratedAppOpenUsesVerifiedDatabaseHandle", true)
 }
 
-func TestP8AppOpenIsReadOnlyAndStartsNoBackgroundWork(t *testing.T) {
+func TestAppOpenIsReadOnlyAndStartsNoBackgroundWorkInExternalModule(t *testing.T) {
 	p8RunExternalGeneratedStartupCase(t, "TestAppOpenIsReadOnlyAndStartsNoBackgroundWork", true)
 }
 
-func TestP8AppOpenRefusesClosedStaleCapabilityAndSchemaMismatch(t *testing.T) {
+func TestAppOpenRefusesClosedStaleCapabilityAndSchemaMismatchInExternalModule(t *testing.T) {
 	p8RunExternalGeneratedStartupCase(t, "TestAppOpenRefusals", false)
 }
 
-func TestP8ApplicationNeverClosesBorrowedDatabase(t *testing.T) {
+func TestApplicationNeverClosesBorrowedDatabaseInExternalModule(t *testing.T) {
 	p8RunExternalGeneratedStartupCase(t, "TestApplicationNeverClosesBorrowedDatabase", true)
 }
 
-func TestP8GeneratedAppOpenRejectsEveryPoisonedPoolSlotAcrossProviders(t *testing.T) {
+func TestGeneratedAppOpenRejectsEveryPoisonedPoolSlotInExternalModule(t *testing.T) {
 	p8RunExternalGeneratedStartupCase(t, "TestGeneratedAppOpenRejectsEveryPoisonedPoolSlot", true)
 }
 

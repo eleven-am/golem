@@ -19,7 +19,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
-func TestP8EveryMachineJSONDocumentCarriesExactFormatVersion(t *testing.T) {
+func TestEveryMachineJSONDocumentCarriesExactFormatVersion(t *testing.T) {
 	tests := []struct {
 		name  string
 		want  uint16
@@ -56,7 +56,7 @@ const (
 	p8PersistedCorpusSHA256 = "b63e73e98aad59a15aa34931143e550961015c110e39703102ca0668fa5fd62c"
 )
 
-func TestP8CLIJSONAndPersistedFormatCompatibilityGate(t *testing.T) {
+func TestCLIJSONAndPersistedFormatCompatibilityGate(t *testing.T) {
 	cli := currentCLICompatibilityInventory(t)
 	cliBytes, err := compatibility.EncodeCLIInventory(cli)
 	if err != nil {

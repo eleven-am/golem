@@ -20,7 +20,7 @@ import (
 	"github.com/eleven-am/golem/go/provider/sqlite"
 )
 
-func TestP8SocialHostOpensExactConfigAndServesLifecycle(t *testing.T) {
+func TestSocialHostOpensExactConfigAndServesLifecycle(t *testing.T) {
 	root := socialHostRoot(t)
 	databasePath := filepath.Join(t.TempDir(), "social.sqlite")
 	dataSourceName := "file:" + databasePath
@@ -94,7 +94,7 @@ func TestP8SocialHostOpensExactConfigAndServesLifecycle(t *testing.T) {
 	}
 }
 
-func TestP8DevelopmentPrincipalAuditIDsRemainDistinct(t *testing.T) {
+func TestDevelopmentPrincipalAuditIDsRemainDistinct(t *testing.T) {
 	first, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
 	if err != nil {
 		t.Fatal(err)
@@ -110,7 +110,7 @@ func TestP8DevelopmentPrincipalAuditIDsRemainDistinct(t *testing.T) {
 	}
 }
 
-func TestP8SocialHostPostgreSQLOpensReviewedApplication(t *testing.T) {
+func TestSocialHostPostgreSQLOpensReviewedApplication(t *testing.T) {
 	dataSourceName := strings.TrimSpace(os.Getenv("GOLEM_P8_SOCIAL_POSTGRES_DSN"))
 	if dataSourceName == "" {
 		t.Skip("GOLEM_P8_SOCIAL_POSTGRES_DSN is not configured")

@@ -175,8 +175,6 @@ WHERE n.nspname=$1 AND ct.relname=$2 AND ci.relname=$3`, namespace, vectorTable,
 
 import (
   "context"
-  "fmt"
-  "os"
   "strings"
   "sync"
   "testing"
@@ -223,18 +221,7 @@ type observationTrace struct {
   values []observed
 }
 
-var observationCoverageMu sync.Mutex
-
 func (trace *observationTrace) ObserveGolem(_ context.Context, value observe.Observation) {
-  if path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE"); path != "" {
-    observationCoverageMu.Lock()
-    file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-    if err != nil { observationCoverageMu.Unlock(); panic("open observation coverage sink") }
-    _, writeErr := fmt.Fprintln(file, value.Provider(), value.Operation())
-    closeErr := file.Close()
-    observationCoverageMu.Unlock()
-    if writeErr != nil || closeErr != nil { panic("write observation coverage sink") }
-  }
   if value.Kind() != observe.KindSemantic { return }
   if value.Outcome() != observe.OutcomeSuccess || value.Reason() != observe.ReasonNone { panic("unexpected semantic observation outcome") }
   trace.mu.Lock()

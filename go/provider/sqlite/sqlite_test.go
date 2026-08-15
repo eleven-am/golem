@@ -13,7 +13,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8SQLitePublicOpenAppliesInvariantToEveryPooledConnection(t *testing.T) {
+func TestSQLitePublicOpenAppliesInvariantToEveryPooledConnection(t *testing.T) {
 	profiles := map[string]string{
 		"file":         "file:" + filepath.Join(t.TempDir(), "p8_sqlite_public.sqlite"),
 		"named-memory": "file:p8_sqlite_public?mode=memory&cache=shared",
@@ -78,7 +78,7 @@ func assertSQLitePublicPoolProfile(t *testing.T, dataSourceName string) {
 	}
 }
 
-func TestP8SQLiteRefusesPrivateMemoryAndProviderPragmaOverride(t *testing.T) {
+func TestSQLiteRefusesPrivateMemoryAndProviderPragmaOverride(t *testing.T) {
 	for _, dataSourceName := range []string{
 		":memory:",
 		"file:p8_private?mode=memory",
@@ -117,7 +117,7 @@ func TestP8SQLiteRefusesPrivateMemoryAndProviderPragmaOverride(t *testing.T) {
 	}
 }
 
-func TestP8SQLitePublicOpenUsesImmediateWriteTransactions(t *testing.T) {
+func TestSQLitePublicOpenUsesImmediateWriteTransactions(t *testing.T) {
 	databasePath := filepath.Join(t.TempDir(), "p8_sqlite_immediate.sqlite")
 	assertSQLiteImmediateWriteMode(t, "file:"+databasePath)
 }
@@ -179,7 +179,7 @@ func TestSQLiteImmediateLockSubprocessHelper(t *testing.T) {
 	}
 }
 
-func TestP8SQLiteOpenFailureClosesAllResourcesAndRedactsDSN(t *testing.T) {
+func TestSQLiteOpenFailureClosesAllResourcesAndRedactsDSN(t *testing.T) {
 	const secret = "p8-sqlite-password-canary"
 	for _, dataSourceName := range []string{
 		"file:p8_redaction?_pragma=foreign_keys(0)&password=" + secret,

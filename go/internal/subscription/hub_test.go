@@ -13,7 +13,7 @@ import (
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
 )
 
-func TestP7EquivalentSubscriberGroupingOracle(t *testing.T) {
+func TestEquivalentSubscriberGroupingOracle(t *testing.T) {
 	source := newFakeSource()
 	var evaluations atomic.Int64
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 2, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, func(_ context.Context, notice events.Notice, _ SubscriberKey) (Evaluation[golem.EventID], error) {
@@ -38,11 +38,11 @@ func TestP7EquivalentSubscriberGroupingOracle(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7DifferentPrincipalsNeverShareEvaluation(t *testing.T) {
+func TestDifferentPrincipalsNeverShareEvaluation(t *testing.T) {
 	assertDifferentDimensionDoesNotShare(t, func(input *keyStrings) { input.principal = "another-principal" })
 }
 
-func TestP7DifferentSelectionFilterOrPolicyVersionNeverShareResult(t *testing.T) {
+func TestDifferentSelectionFilterOrPolicyVersionNeverShareResult(t *testing.T) {
 	tests := map[string]func(*keyStrings){
 		"policy":       func(input *keyStrings) { input.policy = "policy-v2" },
 		"filter":       func(input *keyStrings) { input.filter = "other-filter" },
@@ -55,13 +55,13 @@ func TestP7DifferentSelectionFilterOrPolicyVersionNeverShareResult(t *testing.T)
 	}
 }
 
-func TestP7AuditPrincipalCollisionDoesNotAuthorizeSharing(t *testing.T) {
+func TestAuditPrincipalCollisionDoesNotAuthorizeSharing(t *testing.T) {
 	// SubscriberKey intentionally has no audit-principal field. Two equal audit
 	// labels therefore cannot erase the distinct retained-principal identities.
 	assertDifferentDimensionDoesNotShare(t, func(input *keyStrings) { input.principal = "different-snapshot-same-audit-label" })
 }
 
-func TestP7NonShareableEvaluationIncludesMembershipIdentity(t *testing.T) {
+func TestNonShareableEvaluationIncludesMembershipIdentity(t *testing.T) {
 	source := newFakeSource()
 	var evaluations atomic.Int64
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 2, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, func(_ context.Context, notice events.Notice, _ SubscriberKey) (Evaluation[golem.EventID], error) {
@@ -79,7 +79,7 @@ func TestP7NonShareableEvaluationIncludesMembershipIdentity(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7StatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing.T) {
+func TestStatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing.T) {
 	source := newFakeSource()
 	state := &struct{ marker string }{marker: "owned"}
 	seen := make(chan any, 1)
@@ -134,7 +134,7 @@ func TestP7StatefulMembershipOwnsStateUntilRemovalAndDropsExactlyOnce(t *testing
 	shutdown(t, hub)
 }
 
-func TestP7StatefulSubscriptionRefusesShareableKeyBeforeSourceStart(t *testing.T) {
+func TestStatefulSubscriptionRefusesShareableKeyBeforeSourceStart(t *testing.T) {
 	var starts atomic.Int64
 	hub, err := NewModelHub(Config[golem.EventID]{
 		Generation: golem.SchemaDigest{1}, Model: golem.ModelID{2}, Limits: events.Limits{},
@@ -159,7 +159,7 @@ func TestP7StatefulSubscriptionRefusesShareableKeyBeforeSourceStart(t *testing.T
 	shutdown(t, hub)
 }
 
-func TestP8SubscriptionStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
+func TestSubscriptionStreamStopInstallerHandlesBothCloseOrderings(t *testing.T) {
 	for _, closeFirst := range []bool{false, true} {
 		name := "install-before-close"
 		if closeFirst {
@@ -205,7 +205,7 @@ func TestP8SubscriptionStreamStopInstallerHandlesBothCloseOrderings(t *testing.T
 	}
 }
 
-func TestP7StateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) {
+func TestStateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) {
 	source := newFakeSource()
 	hub, err := NewModelHub(Config[golem.EventID]{
 		Generation: golem.SchemaDigest{1}, Model: golem.ModelID{2},
@@ -275,7 +275,7 @@ func TestP7StateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T
 	shutdown(t, hub)
 }
 
-func TestP7SharedEvaluationStillOwnsEachSubscriberResult(t *testing.T) {
+func TestSharedEvaluationStillOwnsEachSubscriberResult(t *testing.T) {
 	source := newFakeSource()
 	var evaluations atomic.Int64
 	hub, err := NewModelHub(Config[[]byte]{
@@ -305,7 +305,7 @@ func TestP7SharedEvaluationStillOwnsEachSubscriberResult(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7SubscriberQueueExactBoundaryAndOverflowDisconnect(t *testing.T) {
+func TestSubscriberQueueExactBoundaryAndOverflowDisconnect(t *testing.T) {
 	source := newFakeSource()
 	evaluated := make(chan golem.EventID, 3)
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, func(_ context.Context, notice events.Notice, _ SubscriberKey) (Evaluation[golem.EventID], error) {
@@ -330,7 +330,7 @@ func TestP7SubscriberQueueExactBoundaryAndOverflowDisconnect(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7EvaluationConcurrencyHardBound(t *testing.T) {
+func TestEvaluationConcurrencyHardBound(t *testing.T) {
 	source := newFakeSource()
 	release := make(chan struct{})
 	started := make(chan struct{}, 8)
@@ -380,7 +380,7 @@ func TestP7EvaluationConcurrencyHardBound(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7CancelDuringEvaluationUnwinds(t *testing.T) {
+func TestCancelDuringEvaluationUnwinds(t *testing.T) {
 	source := newFakeSource()
 	started, stopped := make(chan struct{}), make(chan struct{})
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, func(ctx context.Context, _ events.Notice, _ SubscriberKey) (Evaluation[int], error) {
@@ -407,7 +407,7 @@ func TestP7CancelDuringEvaluationUnwinds(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7CancellationDoesNotStartQueuedEvaluation(t *testing.T) {
+func TestCancellationDoesNotStartQueuedEvaluation(t *testing.T) {
 	source := newFakeSource()
 	started := make(chan struct{})
 	var calls atomic.Int64
@@ -434,7 +434,7 @@ func TestP7CancellationDoesNotStartQueuedEvaluation(t *testing.T) {
 	}
 }
 
-func TestP7TransportReconnectPreservesSubscriber(t *testing.T) {
+func TestTransportReconnectPreservesSubscriber(t *testing.T) {
 	first, second := newFakeSource(), newFakeSource()
 	factory := sequentialFactory(first, second)
 	hub := newTestHub(t, factory, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
@@ -453,7 +453,7 @@ func TestP7TransportReconnectPreservesSubscriber(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7HubPreservesAtLeastOnceDuplicates(t *testing.T) {
+func TestHubPreservesAtLeastOnceDuplicates(t *testing.T) {
 	source := newFakeSource()
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 2, HubInputQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
@@ -473,7 +473,7 @@ func TestP7HubPreservesAtLeastOnceDuplicates(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7TerminalSourceCloseDisconnectsWithSanitizedCode(t *testing.T) {
+func TestTerminalSourceCloseDisconnectsWithSanitizedCode(t *testing.T) {
 	source := newFakeSource()
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
@@ -486,7 +486,7 @@ func TestP7TerminalSourceCloseDisconnectsWithSanitizedCode(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7ImmediateTerminalSourceFailureCannotOrphanFirstMember(t *testing.T) {
+func TestImmediateTerminalSourceFailureCannotOrphanFirstMember(t *testing.T) {
 	factory := func(context.Context, events.Subscription) (events.Stream, error) {
 		return nil, events.Failure(events.CodeEventSourceClosed)
 	}
@@ -500,7 +500,7 @@ func TestP7ImmediateTerminalSourceFailureCannotOrphanFirstMember(t *testing.T) {
 	shutdown(t, hub)
 }
 
-func TestP7SourceCloseLastMemberAndApplicationShutdownNoLeak(t *testing.T) {
+func TestSourceCloseLastMemberAndApplicationShutdownNoLeak(t *testing.T) {
 	source := newFakeSource()
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 2, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	first := subscribe(t, hub, testKey(t, "p1", "v", "f", "s", "d", "e", "m1", true))
@@ -525,7 +525,7 @@ func TestP7SourceCloseLastMemberAndApplicationShutdownNoLeak(t *testing.T) {
 	}
 }
 
-func TestP7ObserverPanicIsCorrectnessNeutral(t *testing.T) {
+func TestObserverPanicIsCorrectnessNeutral(t *testing.T) {
 	source := newFakeSource()
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, panicObserver{})
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))

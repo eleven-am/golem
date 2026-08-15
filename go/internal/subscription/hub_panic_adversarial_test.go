@@ -17,7 +17,7 @@ const p7HubPanicChild = "GOLEM_P7_HUB_PANIC_CHILD"
 // A panic in this path would normally terminate the entire go test process.
 // Run every adversarial callback in a child copy of the test binary so the
 // parent can distinguish containment from a process crash.
-func TestP7HubPanicBoundaryContainsEvaluateEvaluateStateCloneAndPolicyFactory(t *testing.T) {
+func TestHubPanicBoundaryContainsEvaluateEvaluateStateCloneAndPolicyFactory(t *testing.T) {
 	if scenario := os.Getenv(p7HubPanicChild); scenario != "" {
 		runP7HubPanicChild(t, scenario)
 		return
@@ -26,7 +26,7 @@ func TestP7HubPanicBoundaryContainsEvaluateEvaluateStateCloneAndPolicyFactory(t 
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			command := exec.CommandContext(ctx, os.Args[0], "-test.run", "^TestP7HubPanicBoundaryContainsEvaluateEvaluateStateCloneAndPolicyFactory$")
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run", "^TestHubPanicBoundaryContainsEvaluateEvaluateStateCloneAndPolicyFactory$")
 			command.Env = append(os.Environ(), p7HubPanicChild+"="+scenario)
 			if output, err := command.CombinedOutput(); err != nil {
 				t.Fatalf("%s panic escaped the hub worker: %v\n%s", scenario, err, output)

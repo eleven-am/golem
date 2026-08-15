@@ -14,7 +14,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8DatabaseCloseFailureIsStableClosedAndRedacted(t *testing.T) {
+func TestDatabaseCloseFailureIsStableClosedAndRedactedThroughPublicAPI(t *testing.T) {
 	const canary = "public-raw-driver-close-canary"
 	raw := sql.OpenDB(publicCloseFailureConnector{message: canary})
 	if err := raw.PingContext(context.Background()); err != nil {

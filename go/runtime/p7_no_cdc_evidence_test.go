@@ -9,7 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 )
 
-func TestP7CapabilitiesReportExternalWritesObservedFalse(t *testing.T) {
+func TestCapabilitiesReportExternalWritesObservedFalse(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	capabilities := fixture.app.EventCapabilities()
 	if capabilities.ExternalWritesObserved() || len(capabilities.CDCAdapterIdentities()) != 0 {
@@ -20,7 +20,7 @@ func TestP7CapabilitiesReportExternalWritesObservedFalse(t *testing.T) {
 	}
 }
 
-func TestP7ExternalInsertUpdateDeleteInvisibleWithoutCDC(t *testing.T) {
+func TestExternalInsertUpdateDeleteInvisibleWithoutCDC(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

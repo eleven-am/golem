@@ -8,7 +8,7 @@ import (
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
 
-func TestP6CountAndAggregateCountAuthorizedScopeOracle(t *testing.T) {
+func TestCountAndAggregateCountAuthorizedScopeOracle(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -45,7 +45,7 @@ func TestP6CountAndAggregateCountAuthorizedScopeOracle(t *testing.T) {
 	}
 }
 
-func TestP6CountFieldClassifiesNullDistributionButCountAllDoesNot(t *testing.T) {
+func TestCountFieldClassifiesNullDistributionButCountAllDoesNot(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -93,7 +93,7 @@ func TestP6CountFieldClassifiesNullDistributionButCountAllDoesNot(t *testing.T) 
 	}
 }
 
-func TestP6CountMissingInvisibleAndSystemStances(t *testing.T) {
+func TestCountMissingInvisibleAndSystemStances(t *testing.T) {
 	for _, profile := range p5ExtensionProviderProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

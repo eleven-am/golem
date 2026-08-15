@@ -77,11 +77,7 @@ func TestMutationStateFactAndByteLimitsAcceptBoundaryRejectBoundaryPlusOne(t *te
 	}
 }
 
-func TestMutationDataAndFactCommitOrRollbackTogether(t *testing.T) {
-	forEachMutationResultProvider(t, MutationLimits{}, assertMutationDataAndFactAtomic)
-}
-
-func TestP7DataFactsAndCausalDeliveryCommitOrRollbackTogether(t *testing.T) {
+func TestMutationDataFactsAndCausalDeliveryCommitOrRollbackTogether(t *testing.T) {
 	forEachMutationResultProvider(t, MutationLimits{}, assertMutationDataAndFactAtomic)
 }
 

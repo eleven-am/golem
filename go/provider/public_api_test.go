@@ -14,7 +14,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-func TestP8PublicProviderAPICompilesFromCleanExternalModule(t *testing.T) {
+func TestPublicProviderAPICompilesFromCleanExternalModule(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve provider test path")
@@ -91,7 +91,7 @@ func compileFrozenProviderAPI(ctx context.Context, database *provider.Database) 
 	}
 }
 
-func TestP8PublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
+func TestPublicPackageInventoryHasNoInternalTypeLeak(t *testing.T) {
 	_, file, _, ok := runtime.Caller(0)
 	if !ok {
 		t.Fatal("resolve provider test path")

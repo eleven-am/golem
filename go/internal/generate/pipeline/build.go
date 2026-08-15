@@ -785,15 +785,6 @@ func prospectiveOwnedWorkspace(ctx context.Context, moduleDir string, environmen
 	return result, nil
 }
 
-// prospectiveModfile gives go/packages an isolated dependency workspace. A
-// freshly authored consumer module often has no go.sum entries for Golem's
-// transitive runtime drivers yet; prospective compilation may resolve those
-// dependencies, but must not mutate the user's go.mod/go.sum during inspect,
-// check, or a failed publication.
-func prospectiveModfile(moduleDir string) (string, func(), error) {
-	return prospectiveModfileIn(moduleDir, "")
-}
-
 func prospectiveModfileIn(moduleDir, ownedDir string) (string, func(), error) {
 	content, err := os.ReadFile(filepath.Join(moduleDir, "go.mod"))
 	if err != nil {

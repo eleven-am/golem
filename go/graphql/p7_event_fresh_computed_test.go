@@ -80,7 +80,7 @@ func (stream *p7ComputedEventStream) Close() error {
 	return nil
 }
 
-func TestP7SecondAndFiveHundredthEventSeeFreshComputedValues(t *testing.T) {
+func TestSecondAndFiveHundredthEventSeeFreshComputedValues(t *testing.T) {
 	fixture, eventSchema := p7ComputedSubscriptionFixture(t)
 	var version atomic.Int64
 	batch := fixture.batchBinding(t, nil, func(_ context.Context, parents []ComputedBatchParent, _ []ComputedArgument) (map[string]ComputedBatchResult, error) {
@@ -132,7 +132,7 @@ func TestP7SecondAndFiveHundredthEventSeeFreshComputedValues(t *testing.T) {
 	}
 }
 
-func TestP7GraphQLAndCallerEventEvaluationPolicySQLAndPayloadOracle(t *testing.T) {
+func TestGraphQLAndCallerEventEvaluationPolicySQLAndPayloadOracle(t *testing.T) {
 	fixture, eventSchema := p7ComputedSubscriptionFixture(t)
 	requestChannel := make(chan golem.FrozenReadRequest, 1)
 	selectedChannel := make(chan bool, 1)

@@ -14,7 +14,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8PostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
+func TestPostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
 	defaults, err := normalizePostgreSQLPool(PostgreSQLPoolConfig{})
 	if err != nil {
 		t.Fatal(err)
@@ -38,7 +38,7 @@ func TestP8PostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
 	}
 }
 
-func TestP8PostgreSQLConnectionIdentityNeverFallsBackToAmbientEnvironment(t *testing.T) {
+func TestPostgreSQLConnectionIdentityNeverFallsBackToAmbientEnvironment(t *testing.T) {
 	t.Setenv("PGHOST", "ambient-host")
 	t.Setenv("PGUSER", "ambient-user")
 	t.Setenv("PGDATABASE", "ambient-database")
@@ -67,7 +67,7 @@ func TestP8PostgreSQLConnectionIdentityNeverFallsBackToAmbientEnvironment(t *tes
 	}
 }
 
-func TestP8PostgreSQLRefusesCallerOwnedSessionOverrides(t *testing.T) {
+func TestPostgreSQLRefusesCallerOwnedSessionOverrides(t *testing.T) {
 	for _, value := range []string{
 		"postgresql://golem@localhost/golem?options=-c%20timezone%3DEurope%2FParis",
 		"postgresql://golem@localhost/golem?opt%69ons=-c%20datestyle%3DSQL%2CDMY",

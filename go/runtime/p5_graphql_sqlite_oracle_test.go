@@ -339,7 +339,7 @@ func TestGraphQLMissingAndInvisibleUniqueHaveIdenticalDisclosure(t *testing.T) {
 	}
 }
 
-func TestP5IndependentSocialGraphQLOracleSQLite(t *testing.T) {
+func TestIndependentSocialGraphQLOracleSQLite(t *testing.T) {
 	h := newP5OracleHarness(t, false)
 	users := [][2]string{{"00000000-0000-0000-0000-000000000001", "zed-closed"}, {"00000000-0000-0000-0000-000000000002", "amy-open"}}
 	posts := [][3]string{{"00000000-0000-0000-0000-000000000011", users[0][0], "allowed-second"}, {"00000000-0000-0000-0000-000000000012", users[0][0], "blocked"}, {"00000000-0000-0000-0000-000000000013", users[1][0], "allowed-first"}}

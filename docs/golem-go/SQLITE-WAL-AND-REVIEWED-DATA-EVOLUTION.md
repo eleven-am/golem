@@ -1,9 +1,12 @@
 # SQLite WAL and reviewed PostgreSQL data evolution
 
-Status: **implemented locally through public SQLite checkpoint, frozen-v1
-reviewed evolution, native PostgreSQL widening, reviewed backfill attach/apply,
-report-before-publication, and checked-social reviewed physical-v2 publication;
-integrated release evidence pending**.
+Status: **implemented through public SQLite checkpoint, frozen-v1 reviewed
+evolution, native PostgreSQL widening, reviewed backfill attach/apply,
+report-before-publication, and checked-social reviewed physical-v2
+publication**. All eighteen mandatory gates in §5 exist and pass. The live
+PostgreSQL gates run on both mandatory C and linguistic profiles with no skips,
+because repository-wide verification enables the mandatory PostgreSQL mode
+rather than allowing a provider-required gate to skip.
 
 Audience: the engineer implementing this database-hardening slice and the
 reviewer deciding whether it is complete. This file covers exactly three

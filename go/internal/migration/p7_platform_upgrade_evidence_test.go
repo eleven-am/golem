@@ -7,7 +7,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
-func TestP7PlatformUpgradeAddsOnlyDeliverySystemObject(t *testing.T) {
+func TestPlatformUpgradeAddsOnlyDeliverySystemObject(t *testing.T) {
 	before := schema()
 	before.System = physical.SystemSchema{Version: 1, Namespace: physical.Namespace{Name: "main"}, Objects: []physical.SystemObject{
 		{ID: physical.MigrationLedgerObjectIDV1, Kind: physical.SystemMigrationLedger, Version: 1, Name: "_golem_migrations"},

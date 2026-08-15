@@ -15,7 +15,7 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 )
 
-func TestP8StaleArtifactAndCompatibilityManifestRejection(t *testing.T) {
+func TestStaleArtifactAndCompatibilityManifestRejection(t *testing.T) {
 	t.Run("tampered generated publication manifest", func(t *testing.T) {
 		fingerprint := compilerir.Fingerprint(strings.Repeat("1", 64))
 		built, err := manifest.Build(manifest.Request{

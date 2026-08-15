@@ -22,7 +22,7 @@ const (
 	testFriendKey      ir.KeyID   = "14141414141414141414141414141414"
 )
 
-func TestP7GeneratedArtifactsByteIdenticalAcrossShuffleAndRepeat(t *testing.T) {
+func TestGeneratedArtifactsByteIdenticalAcrossShuffleAndRepeat(t *testing.T) {
 	request := eventRequest(t, "example.test/models", t.TempDir())
 	first, err := Emit(request)
 	if err != nil {

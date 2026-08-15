@@ -126,11 +126,11 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	countExpressions := make([]string, len(context.counts))
 	countColumns := make([]CountColumn, len(context.counts))
 	for index, count := range context.counts {
-		countExpressions[index] = rebasePlaceholders(count.expression, len(args), provider)
+		countExpressions[index] = policysql.RebasePlaceholders(count.expression, len(args), provider)
 		args = append(args, count.args...)
 		countColumns[index] = count.column
 	}
-	whereSQL := rebasePlaceholders(context.whereSQL, len(args), provider)
+	whereSQL := policysql.RebasePlaceholders(context.whereSQL, len(args), provider)
 	args = append(args, context.whereArgs...)
 	if err := enforceStatementParameterLimitWith(plan.ModelID(), args, plan.Limits().MaxStatementParameters); err != nil {
 		return BatchStatement{}, err

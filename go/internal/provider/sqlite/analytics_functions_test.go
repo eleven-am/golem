@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestP6SQLiteExactAggregateCapabilityProbeAndLoss(t *testing.T) {
+func TestSQLiteExactAggregateCapabilityProbeAndLoss(t *testing.T) {
 	database, report, err := New().Open(context.Background(), "file:"+filepath.Join(t.TempDir(), "analytics.db"))
 	if err != nil {
 		t.Fatal(err)

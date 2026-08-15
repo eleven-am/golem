@@ -11,7 +11,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestP8SQLiteAllocatedProbeFailureClosesConnection(t *testing.T) {
+func TestSQLiteAllocatedProbeFailureClosesConnection(t *testing.T) {
 	var connects, closes atomic.Int64
 	raw := sql.OpenDB(sqliteCleanupConnector{connects: &connects, closes: &closes})
 	database := sqlx.NewDb(raw, "p8-cleanup")

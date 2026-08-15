@@ -48,16 +48,7 @@ func TestEveryNestedWriteExpandsToTypedMutationNodes(t *testing.T) {
 	}
 }
 
-func TestM3NestedWritePositionsAreClassifiedBeforeTransaction(t *testing.T) {
-	testNestedMutationClassificationRecursesEveryAcceptedOperation(t)
-}
-
 func TestNestedMutationClassificationRecursesEveryAcceptedOperation(t *testing.T) {
-	testNestedMutationClassificationRecursesEveryAcceptedOperation(t)
-}
-
-func testNestedMutationClassificationRecursesEveryAcceptedOperation(t *testing.T) {
-	t.Helper()
 	fixture := schematest.New(t)
 	policies := allowPolicies(t, fixture)
 	spy := &classificationSpy{refuseAt: 4}

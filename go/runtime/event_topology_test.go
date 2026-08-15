@@ -91,7 +91,7 @@ func TestOrder7SQLiteRejectsCrossProcessTransportBeforeRuntimeBinding(t *testing
 	transport := &topologyBindableTransport{EventTransport: fixture.app.eventTransport, available: true, payloadLimit: events.MaximumLimits().MaxEncodedEventBytes}
 
 	_, err := validateEventConfiguration(topologyEventConfig(fixture, transport), fixture.app.registry, golem.SQLite)
-	if err == nil || !strings.Contains(err.Error(), "cross-process event transport requires PostgreSQL") {
+	if err == nil || !strings.Contains(err.Error(), "GOLEM_EVENT_CONFIG: cross-process event transport requires PostgreSQL") {
 		t.Fatalf("SQLite cross-process transport error = %v", err)
 	}
 	if bindings := transport.bindingCount(); bindings != 0 {
@@ -134,7 +134,7 @@ func TestOrder7UnavailableCrossProcessTransportRefusesBeforeRuntimeBinding(t *te
 	transport := &topologyBindableTransport{EventTransport: fixture.app.eventTransport, payloadLimit: events.MaximumLimits().MaxEncodedEventBytes}
 
 	_, err := validateEventConfiguration(topologyEventConfig(fixture, transport), fixture.app.registry, golem.PostgreSQL)
-	if err == nil || !strings.Contains(err.Error(), "event transport is unavailable") {
+	if err == nil || !strings.Contains(err.Error(), "GOLEM_EVENT_CONFIG: required event transport is unavailable") {
 		t.Fatalf("unavailable PostgreSQL transport error = %v", err)
 	}
 	if bindings := transport.bindingCount(); bindings != 0 {
@@ -175,7 +175,7 @@ func TestOrder7CrossProcessPayloadLimitBelowConfiguredMaximumRefusesBeforeBindin
 	config := topologyEventConfig(fixture, transport)
 
 	_, err := validateEventConfiguration(config, fixture.app.registry, golem.PostgreSQL)
-	if err == nil || !strings.Contains(err.Error(), "payload limit is below MaxEncodedEventBytes") {
+	if err == nil || !strings.Contains(err.Error(), "GOLEM_EVENT_CONFIG: cross-process event transport payload limit is below MaxEncodedEventBytes") {
 		t.Fatalf("undersized cross-process payload limit error = %v", err)
 	}
 	if bindings := transport.bindingCount(); bindings != 0 {
@@ -189,7 +189,7 @@ func TestOrder7CrossProcessTransportWithoutPayloadLimitRefusesBeforeBinding(t *t
 	config := topologyEventConfig(fixture, transport)
 
 	_, err := validateEventConfiguration(config, fixture.app.registry, golem.PostgreSQL)
-	if err == nil || !strings.Contains(err.Error(), "must report a positive encoded payload limit") {
+	if err == nil || !strings.Contains(err.Error(), "GOLEM_EVENT_CONFIG: cross-process event transport must report a positive encoded payload limit") {
 		t.Fatalf("missing cross-process payload limit error = %v", err)
 	}
 	if transport.bindings != 0 {

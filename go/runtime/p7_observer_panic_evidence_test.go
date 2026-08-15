@@ -24,7 +24,7 @@ func (p7AlwaysPanicObserver) ObserveEvent(context.Context, events.Observation) {
 	panic("hostile observer secret")
 }
 
-func TestP7ObserverPanicDoesNotStopPublisherOrSubscriber(t *testing.T) {
+func TestObserverPanicDoesNotStopPublisherOrSubscriber(t *testing.T) {
 	t.Run("publisher-acknowledges", func(t *testing.T) {
 		fixture := newP7EventRuntimeFixture(t)
 		lease := p7ObserverLease(t, fixture)

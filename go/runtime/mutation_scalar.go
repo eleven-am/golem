@@ -94,7 +94,7 @@ type scalarMutationPrepareRequest struct {
 // prepareCallerScalarProgram is the single pre-transaction caller path for
 // root scalar Create, Update, and Delete. Binding, selector/read
 // classification, policy resolution, plan construction, and SQL rendering all
-// finish before executeCallerScalarProgram can begin or join a transaction.
+// finish before any execution can begin or join a transaction.
 func prepareCallerScalarProgram[P, A any](caller *Caller[P, A], request scalarMutationPrepareRequest) (mutationsql.Program, error) {
 	if caller == nil || caller.app == nil || caller.policies == nil {
 		return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "caller mutation preparation is unavailable", nil)
@@ -246,39 +246,11 @@ func (failure *scalarMutationFailure) Unwrap() error {
 	return failure.cause
 }
 
-// executeCallerScalarProgram begins a transaction for an ordinary caller or
-// joins the transaction carried by a generated CallerTx client. Planning and
-// SQL rendering have already completed, so this function performs no Go policy
-// evaluation and cannot weaken the database predicates in the program.
-func executeCallerScalarProgram[P, A any](ctx context.Context, caller *Caller[P, A], model policyir.ModelID, program mutationsql.Program) (scalarMutationExecution, error) {
-	if caller == nil || caller.app == nil || caller.policies == nil || caller.executor == nil {
-		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "caller mutation execution is unavailable", nil)
-	}
-	return executeScalarMutationProgramConfigured(ctx, caller.app.database, caller.app.provider, caller.app.registry, model, caller.executor, program, mutationConfig(caller.app, caller.executor), nil)
-}
-
-// executeCallerTxScalarProgram is intentionally only a capability unwrap. The
-// shared executor below observes the already-bound sqlx.Tx and never begins or
-// commits an inner transaction.
-func executeCallerTxScalarProgram[P, A any](ctx context.Context, transaction *CallerTx[P, A], model policyir.ModelID, program mutationsql.Program) (scalarMutationExecution, error) {
-	if transaction == nil || transaction.caller == nil {
-		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "caller transaction mutation execution is unavailable", nil)
-	}
-	return executeCallerScalarProgram(ctx, transaction.caller, model, program)
-}
-
 func executeSystemScalarProgram[P, A any](ctx context.Context, system System[P, A], model policyir.ModelID, program mutationsql.Program) (scalarMutationExecution, error) {
 	if system.app == nil || system.executor == nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "system mutation execution is unavailable", nil)
 	}
 	return executeScalarMutationProgramConfigured(ctx, system.app.database, system.app.provider, system.app.registry, model, system.executor, program, mutationConfig(system.app, system.executor), nil)
-}
-
-func executeSystemTxScalarProgram[P, A any](ctx context.Context, transaction *SystemTx[P, A], model policyir.ModelID, program mutationsql.Program) (scalarMutationExecution, error) {
-	if transaction == nil || transaction.system.app == nil {
-		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "system transaction mutation execution is unavailable", nil)
-	}
-	return executeSystemScalarProgram(ctx, transaction.system, model, program)
 }
 
 // executeScalarMutationProgram executes the complete ordered program on one
@@ -289,11 +261,6 @@ func executeSystemTxScalarProgram[P, A any](ctx context.Context, transaction *Sy
 func executeScalarMutationProgram(ctx context.Context, database *sqlx.DB, provider policyir.Provider, registry *schema.Registry, model policyir.ModelID, binding *executionBinding, program mutationsql.Program) (result scalarMutationExecution, err error) {
 	limits, _ := normalizeMutationLimits(MutationLimits{})
 	return executeScalarMutationProgramConfigured(ctx, database, provider, registry, model, binding, program, executionMutationConfig{enabled: true, provider: provider, limits: limits}, nil)
-}
-
-func executeScalarMutationProgramObserved(ctx context.Context, database *sqlx.DB, provider policyir.Provider, registry *schema.Registry, model policyir.ModelID, binding *executionBinding, program mutationsql.Program, observer scalarMutationStatementObserver) (result scalarMutationExecution, err error) {
-	limits, _ := normalizeMutationLimits(MutationLimits{})
-	return executeScalarMutationProgramConfigured(ctx, database, provider, registry, model, binding, program, executionMutationConfig{enabled: true, provider: provider, limits: limits}, observer)
 }
 
 func executeScalarMutationProgramConfigured(ctx context.Context, database *sqlx.DB, provider policyir.Provider, registry *schema.Registry, model policyir.ModelID, binding *executionBinding, program mutationsql.Program, config executionMutationConfig, observer scalarMutationStatementObserver) (result scalarMutationExecution, err error) {
@@ -391,10 +358,6 @@ func validateScalarProgramProvider(provider policyir.Provider, program mutations
 	return nil
 }
 
-func executeScalarProgramOnTransaction(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver) (scalarMutationExecution, error) {
-	return executeScalarProgramOnTransactionObserved(ctx, transaction, binding, registry, model, provider, program, observer, nil)
-}
-
 func executeScalarProgramOnTransactionObserved(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (scalarMutationExecution, error) {
 	if transaction == nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction is required", nil)
@@ -418,14 +381,6 @@ func executeScalarProgramOnQueryer(ctx context.Context, queryer sqlx.QueryerCont
 
 func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
 	return executeScalarProgramOnQueryerObservedMode(ctx, queryer, binding, registry, model, provider, program, observer, verified, false)
-}
-
-// executeVersionedScalarProgramOnQueryerObserved is reachable only after the
-// CAS kernel has locked the authorized pre-image and validated the closed
-// expectation. Keeping this as a separate private call makes a program's own
-// observed version insufficient authority to execute it.
-func executeVersionedScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
-	return executeScalarProgramOnQueryerObservedMode(ctx, queryer, binding, registry, model, provider, program, observer, verified, true)
 }
 
 func executeScalarProgramOnQueryerObservedMode(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver, concurrencyPrechecked bool) (execution scalarMutationExecution, executionErr error) {

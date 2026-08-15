@@ -156,7 +156,7 @@ func TestRegistryOptimisticConcurrencyRequiresExactThreeWayAgreement(t *testing.
 		t.Fatal(err)
 	}
 	forgedContract := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(contractFingerprint)), contractBytes)
-	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), forgedContract, bundle.Providers()...)); err == nil || !strings.Contains(err.Error(), "ModelIR and ContractIR") {
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), forgedContract, bundle.Providers()...)); !isSchemaFailure(err, CodeContract, ".optimisticConcurrency", "ModelIR and ContractIR optimistic-concurrency identities disagree") {
 		t.Fatalf("contract omission error = %v", err)
 	}
 
@@ -171,7 +171,7 @@ func TestRegistryOptimisticConcurrencyRequiresExactThreeWayAgreement(t *testing.
 		}
 	}
 	providers[0] = providerDocument(t, providers[0].Provider(), decoded)
-	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)); err == nil || !strings.Contains(err.Error(), "ModelIR and physical") {
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), bundle.Contract(), providers...)); !isSchemaFailure(err, CodePhysical, ".optimisticConcurrency", "ModelIR and physical optimistic-concurrency identities disagree") {
 		t.Fatalf("physical omission error = %v", err)
 	}
 
@@ -195,7 +195,7 @@ func TestRegistryOptimisticConcurrencyRequiresExactThreeWayAgreement(t *testing.
 		t.Fatal(err)
 	}
 	invalidModeDocument := golem.GeneratedSchemaDocument(uint32(compilerir.ContractFormatVersion), uint32(compilerir.CanonicalFormatVersion), digest(t, string(invalidModeFingerprint)), invalidModeBytes)
-	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), invalidModeDocument, bundle.Providers()...)); err == nil || !strings.Contains(err.Error(), "exact ordinary visible contract mode") {
+	if _, err := New(golem.GeneratedSchemaBundle(bundle.GenerationDigest(), bundle.GeneratorVersion(), bundle.TemplateABIVersion(), bundle.Model(), invalidModeDocument, bundle.Providers()...)); !isSchemaFailure(err, CodeContract, ".optimisticConcurrency", "optimistic-concurrency field requires the exact ordinary visible contract mode") {
 		t.Fatalf("non-visible concurrency contract mode error = %v", err)
 	}
 }
@@ -582,3 +582,11 @@ func mustRelationID(t *testing.T, value compilerir.RelationID) golem.RelationID 
 	return result
 }
 func testID(value int) string { return fmt.Sprintf("%032x", value) }
+
+func isSchemaFailure(err error, code ErrorCode, pathSuffix, detail string) bool {
+	var failure *Error
+	if !errors.As(err, &failure) {
+		return false
+	}
+	return failure.Code == code && strings.HasSuffix(failure.Path, pathSuffix) && failure.Detail == detail
+}

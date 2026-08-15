@@ -387,11 +387,7 @@ func TestTransactionCommitClearsOnceAcrossEveryWriteEntryPoint(t *testing.T) {
 	})
 }
 
-func TestMutationOracleInvisibleAndMissingUniqueHaveSamePublicDisclosure(t *testing.T) {
-	runMutationProviderAcceptanceProfiles(t, runInvisibleMissingMutationOracle)
-}
-
-func TestSingleMutationTargetUsesActionConstraintAndLockedImage(t *testing.T) {
+func TestUnauthorizedAndMissingMutationTargetsShareOnePublicErrorAndLeaveRowsUnchanged(t *testing.T) {
 	runMutationProviderAcceptanceProfiles(t, runInvisibleMissingMutationOracle)
 }
 

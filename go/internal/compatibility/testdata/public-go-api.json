@@ -6703,13 +6703,6 @@
           "methods": []
         },
         {
-          "name": "RuntimeCreateHookResult",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[M any](row github.com/eleven-am/golem/go/golem.Row[M]) github.com/eleven-am/golem/go/golem.CreateHookResult[M]",
-          "methods": []
-        },
-        {
           "name": "RuntimeCreateMutationHookRequest",
           "kind": "func",
           "typeKind": "",
@@ -6747,13 +6740,6 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[M any](target github.com/eleven-am/golem/go/golem.MutationTarget[M]) *github.com/eleven-am/golem/go/golem.DeleteHookRequest[M]",
-          "methods": []
-        },
-        {
-          "name": "RuntimeDeleteHookResult",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[M any](before github.com/eleven-am/golem/go/golem.Row[M]) github.com/eleven-am/golem/go/golem.DeleteHookResult[M]",
           "methods": []
         },
         {
@@ -7937,13 +7923,6 @@
           "kind": "func",
           "typeKind": "",
           "signature": "func[M any](target github.com/eleven-am/golem/go/golem.MutationTarget[M], input github.com/eleven-am/golem/go/golem.UpdateInput[M]) *github.com/eleven-am/golem/go/golem.UpdateHookRequest[M]",
-          "methods": []
-        },
-        {
-          "name": "RuntimeUpdateHookResult",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[M any](before github.com/eleven-am/golem/go/golem.Row[M], after github.com/eleven-am/golem/go/golem.Row[M]) github.com/eleven-am/golem/go/golem.UpdateHookResult[M]",
           "methods": []
         },
         {
@@ -9820,24 +9799,10 @@
           "methods": []
         },
         {
-          "name": "BindGeneratedCustomMutation",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[C, A, R any](spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
-          "methods": []
-        },
-        {
           "name": "BindGeneratedCustomMutationContract",
           "kind": "func",
           "typeKind": "",
           "signature": "func[C, A, R any](bundle github.com/eleven-am/golem/go/golem.SchemaBundle, spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
-          "methods": []
-        },
-        {
-          "name": "BindGeneratedCustomMutationModel",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[M, C, A, R any](spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, _ github.com/eleven-am/golem/go/golem.ModelDescriptor[M], resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
           "methods": []
         },
         {
@@ -9848,24 +9813,10 @@
           "methods": []
         },
         {
-          "name": "BindGeneratedCustomQuery",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[C, A, R any](spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
-          "methods": []
-        },
-        {
           "name": "BindGeneratedCustomQueryContract",
           "kind": "func",
           "typeKind": "",
           "signature": "func[C, A, R any](bundle github.com/eleven-am/golem/go/golem.SchemaBundle, spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
-          "methods": []
-        },
-        {
-          "name": "BindGeneratedCustomQueryModel",
-          "kind": "func",
-          "typeKind": "",
-          "signature": "func[M, C, A, R any](spec github.com/eleven-am/golem/go/graphql.CustomBindingSpec, _ github.com/eleven-am/golem/go/golem.ModelDescriptor[M], resolver func(context.Context, C, A) (R, error), conversions ...github.com/eleven-am/golem/go/graphql.GeneratedCustomArgumentConversion) (github.com/eleven-am/golem/go/graphql.CustomBinding, error)",
           "methods": []
         },
         {

@@ -178,34 +178,11 @@ type fixture struct {
 }
 
 func (fixture *fixture) ObserveGolem(_ context.Context, value observe.Observation) {
-	recordObservationCoverage(value.Provider(), value.Operation())
 	fixture.mu.Lock()
 	fixture.observations = append(fixture.observations, observedOperation{
 		Kind: value.Kind(), Operation: value.Operation(), Outcome: value.Outcome(), Statements: value.StatementCount(), Aggregate: value.AggregateCount(),
 	})
 	fixture.mu.Unlock()
-}
-
-var observationCoverageMu sync.Mutex
-
-func recordObservationCoverage(provider golem.Provider, operation observe.Operation) {
-	path := os.Getenv("P8_OBSERVATION_COVERAGE_FILE")
-	if path == "" {
-		return
-	}
-	observationCoverageMu.Lock()
-	defer observationCoverageMu.Unlock()
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		panic("open observation coverage sink")
-	}
-	if _, err := fmt.Fprintln(file, provider, operation); err != nil {
-		_ = file.Close()
-		panic("write observation coverage sink")
-	}
-	if err := file.Close(); err != nil {
-		panic("close observation coverage sink")
-	}
 }
 
 func TestP8ExternalOracleScenario(t *testing.T) {

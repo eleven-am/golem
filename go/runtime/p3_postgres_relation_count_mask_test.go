@@ -32,7 +32,7 @@ func postgresAcceptanceProfiles() []postgresAcceptanceProfile {
 	}
 }
 
-func TestP3PostgreSQLImmediateBatchedChildOwnsAuthorizedRelationCount(t *testing.T) {
+func TestPostgreSQLImmediateBatchedChildOwnsAuthorizedRelationCount(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -49,10 +49,10 @@ func TestP3PostgreSQLImmediateBatchedChildOwnsAuthorizedRelationCount(t *testing
 	}
 }
 
-// TestP3PostgreSQLConditionalMaskPrivateDependencies proves on both live
+// TestPostgreSQLConditionalMaskPrivateDependencies proves on both live
 // PostgreSQL collation profiles that relation predicates used only to decide a
 // field mask remain private and are evaluated through the target row policy.
-func TestP3PostgreSQLConditionalMaskPrivateDependencies(t *testing.T) {
+func TestPostgreSQLConditionalMaskPrivateDependencies(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestP3PostgreSQLConditionalMaskPrivateDependencies(t *testing.T) {
 // MASK_THE_BATCH_KEY is a mutation-shaped test: masking AuthorID before the
 // loader partitions children would detach or misattach rows. The exact key is
 // private until attachment and only then receives its public field mask.
-func TestP3PostgreSQLMASK_THE_BATCH_KEY(t *testing.T) {
+func TestPostgreSQLMASK_THE_BATCH_KEY(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
@@ -121,7 +121,7 @@ func TestP3PostgreSQLMASK_THE_BATCH_KEY(t *testing.T) {
 // is not selected, but its conditional mask still makes SQL distinct unsafe;
 // the planner must refuse it instead of grouping on data the caller cannot
 // uniformly read.
-func TestP3PostgreSQLMASK_THE_DISTINCT_KEY(t *testing.T) {
+func TestPostgreSQLMASK_THE_DISTINCT_KEY(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {

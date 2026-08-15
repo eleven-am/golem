@@ -65,14 +65,6 @@ func TestGeneratedMutationSurfaceEmitsEveryCallerAndSystemMethod(t *testing.T) {
 	}
 }
 
-func TestGeneratedMutationSurfaceExecutesEveryCallerAndSystemOperationFromFreshModule(t *testing.T) {
-	testGeneratedMutationAndTransactionSurfaceFromFreshModule(t)
-}
-
-func TestGeneratedTransactionClientsExecuteReadsAndWritesFromFreshModule(t *testing.T) {
-	testGeneratedMutationAndTransactionSurfaceFromFreshModule(t)
-}
-
 func TestGeneratedMutationSurfaceAcceptsLegalPrograms(t *testing.T) {
 	artifacts := buildReadSurfaceArtifacts(t)
 	files := cloneSourceFiles(artifacts.files)
@@ -122,8 +114,7 @@ var _ models.UserUpdateInput = models.Users.Update(
 	runFreshReadSurfaceModule(t, files, false, nil)
 }
 
-func testGeneratedMutationAndTransactionSurfaceFromFreshModule(t *testing.T) {
-	t.Helper()
+func TestGeneratedMutationAndTransactionSurfacesExecuteFromFreshModule(t *testing.T) {
 	artifacts := buildReadSurfaceArtifacts(t)
 	ctx := context.Background()
 	databasePath := filepath.Join(t.TempDir(), "generated-read-surface.db")

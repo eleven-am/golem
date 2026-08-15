@@ -48,13 +48,6 @@ type migrationNewOutput struct {
 	Draft         string                `json:"draft,omitempty"`
 }
 
-type migrationBackfillAttachOutput struct {
-	FormatVersion uint16                `json:"formatVersion"`
-	MigrationID   migration.MigrationID `json:"migrationId"`
-	Provider      ir.Provider           `json:"provider"`
-	Changed       []string              `json:"changed"`
-}
-
 type migrationApplyOutput struct {
 	FormatVersion uint16                  `json:"formatVersion"`
 	Provider      ir.Provider             `json:"provider"`

@@ -148,10 +148,10 @@ func renderCorrelatedRelation(parent readplan.Plan, relation readplan.Relation, 
 	}
 	args := make([]any, 0)
 	for _, count := range counts {
-		innerSelects = append(innerSelects, rebasePlaceholders(count.expression, len(args), provider))
+		innerSelects = append(innerSelects, policysql.RebasePlaceholders(count.expression, len(args), provider))
 		args = append(args, count.args...)
 	}
-	whereSQL := rebasePlaceholders(whereFragment.SQL(), len(args), provider)
+	whereSQL := policysql.RebasePlaceholders(whereFragment.SQL(), len(args), provider)
 	args = append(args, whereFragment.Args()...)
 
 	pair := endpoint.Correlation()[0]
@@ -273,7 +273,7 @@ func renderCorrelatedCursor(plan readplan.Plan, cursor readir.Cursor, registry *
 		return "", nil, "", PlanMap{}, err
 	}
 	planMap.mergePolicy(fragment.PolicyRelationAliases())
-	fragmentSQL := rebasePlaceholders(fragment.SQL(), offset, provider)
+	fragmentSQL := policysql.RebasePlaceholders(fragment.SQL(), offset, provider)
 	anchorCorrelation := dialect.Quote(anchorAlias) + "." + dialect.Quote(childField.Column) + " = " + dialect.Quote(parentAlias) + "." + dialect.Quote(parentField.Column)
 	anchorWhere := "(" + fragmentSQL + ") AND (" + anchorCorrelation + ")"
 	orders := plan.OrderBy()

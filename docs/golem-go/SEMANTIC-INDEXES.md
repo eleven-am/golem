@@ -241,8 +241,8 @@ their native physical strategy:
   through Golem's public SQLite provider so the embedded extension and required
   connection invariants are installed and probed on every connection.
 - **PostgreSQL:** reviewed migrations require the `vector` extension, create
-  managed `vector(N)` shadow columns, and create HNSW indexes with
-  `vector_cosine_ops`. The database operator must make pgvector 0.8.0 or newer
+  managed shadow tables holding a `vector(N)` column, and create HNSW indexes
+  with `vector_cosine_ops`. The database operator must make pgvector 0.8.0 or newer
   available to the target PostgreSQL installation before applying the migration.
   Migration uses `CREATE EXTENSION IF NOT EXISTS vector`; the migration
   principal therefore needs permission to install it or an operator must

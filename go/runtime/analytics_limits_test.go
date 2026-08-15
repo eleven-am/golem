@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-func TestP6AnalyticsLimitsFrozenDefaultsAndHardMaxima(t *testing.T) {
+func TestAnalyticsLimitsFrozenDefaultsAndHardMaxima(t *testing.T) {
 	defaults, err := normalizeAnalyticsLimits(AnalyticsLimits{})
 	if err != nil {
 		t.Fatalf("normalize zero limits: %v", err)
@@ -64,7 +64,7 @@ func TestP6AnalyticsLimitsFrozenDefaultsAndHardMaxima(t *testing.T) {
 	}
 }
 
-func TestP6AnalyticsLimitsRejectEveryNegativeField(t *testing.T) {
+func TestAnalyticsLimitsRejectEveryNegativeField(t *testing.T) {
 	tests := []struct {
 		name   string
 		limits AnalyticsLimits

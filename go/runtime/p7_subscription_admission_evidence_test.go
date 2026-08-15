@@ -9,7 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/observe"
 )
 
-func TestP7InvalidForeignOrForgedEventOptionsTouchHubZeroTimes(t *testing.T) {
+func TestInvalidForeignOrForgedEventOptionsTouchHubZeroTimes(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "alice"})
 	if err != nil {
@@ -40,7 +40,7 @@ func TestP7InvalidForeignOrForgedEventOptionsTouchHubZeroTimes(t *testing.T) {
 	}
 }
 
-func TestP7SubscriptionFilterSelectionClassificationBeforeSourceWork(t *testing.T) {
+func TestSubscriptionFilterSelectionClassificationBeforeSourceWork(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "alice"})
 	if err != nil {
@@ -71,7 +71,7 @@ func TestP7SubscriptionFilterSelectionClassificationBeforeSourceWork(t *testing.
 	}
 }
 
-func TestP7CallerAndGraphQLSubscribeAuthorizeReadBeforeRegistration(t *testing.T) {
+func TestCallerAndGraphQLSubscribeAuthorizeReadBeforeRegistration(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	fixture.allow.Store(false)
 	caller, err := fixture.app.ForPrincipal(context.Background(), p7EventPrincipal{Subject: "denied"})
@@ -112,7 +112,7 @@ func TestP7CallerAndGraphQLSubscribeAuthorizeReadBeforeRegistration(t *testing.T
 	}
 }
 
-func TestP7FreshPrincipalActorPolicyAndExecutionPerEvent(t *testing.T) {
+func TestFreshPrincipalActorPolicyAndExecutionPerEvent(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -148,7 +148,7 @@ func TestP7FreshPrincipalActorPolicyAndExecutionPerEvent(t *testing.T) {
 	}
 }
 
-func TestP7RevocationSuppressesNextEventAndGrantPermitsNext(t *testing.T) {
+func TestRevocationSuppressesNextEventAndGrantPermitsNext(t *testing.T) {
 	fixture := newP7EventRuntimeFixture(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
