@@ -114,15 +114,9 @@
     ],
     "principalSnapshotCodecs": []
   },
-  "migrationGuide": {
-    "path": "compatibility/migration-guide-go-v0.0.2-to-v0.1.0.json",
-    "sha256": "6fff0894d4ac402e0b2eb5bbbd722d560e1e775b661f0305467aed066d4ec142",
-    "fromTag": "go/v0.0.2",
-    "toVersion": "v0.1.0"
-  },
+  "migrationGuide": null,
   "requiredActions": [
     "migrate.database",
-    "migration-guide.execute",
     "regenerate.generated"
   ],
   "knownBoundaries": [

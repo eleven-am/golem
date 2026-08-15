@@ -55,12 +55,11 @@ func TestOptimisticConcurrencyCompatibilitySourceAuthority(t *testing.T) {
 	if !reflect.DeepEqual(manifest.HistoricalDecode, wantHistory) {
 		t.Fatalf("development manifest retained inventories are stale: %#v", manifest.HistoricalDecode)
 	}
-	if !reflect.DeepEqual(manifest.RequiredActions, []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}) {
-		t.Fatalf("compatibility actions=%v; want exact migration/guide/regeneration actions", manifest.RequiredActions)
+	if !reflect.DeepEqual(manifest.RequiredActions, []string{"migrate.database", "regenerate.generated"}) {
+		t.Fatalf("compatibility actions=%v; want exact migration/regeneration actions", manifest.RequiredActions)
 	}
-	wantGuide := &MigrationGuideAuthority{Path: "compatibility/migration-guide-go-v0.0.2-to-v0.1.0.json", SHA256: "6fff0894d4ac402e0b2eb5bbbd722d560e1e775b661f0305467aed066d4ec142", FromTag: "go/v0.0.2", ToVersion: "v0.1.0"}
-	if !reflect.DeepEqual(manifest.MigrationGuide, wantGuide) {
-		t.Fatalf("compatibility migration guide authority=%#v; want %#v", manifest.MigrationGuide, wantGuide)
+	if manifest.MigrationGuide != nil {
+		t.Fatalf("compatibility migration guide authority=%#v; want none", manifest.MigrationGuide)
 	}
 	if manifest.Digests.Observation != "914a495c1b7832491e7aa32a17e31efb82bf249d338de376c1a7608013132803" {
 		t.Fatalf("observation inventory digest=%s", manifest.Digests.Observation)

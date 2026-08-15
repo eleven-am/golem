@@ -1515,9 +1515,12 @@ func writeCurrentCompatibilityAuthority(t *testing.T, moduleDir string, includeG
 		writeTestFile(t, filepath.Join(moduleDir, filepath.FromSlash(relative)), string(encoded))
 	}
 	value := compatibility.DevelopmentManifest()
-	if !includeGuide {
-		value.MigrationGuide = nil
-		value.RequiredActions = []string{"migrate.database", "regenerate.generated"}
+	if includeGuide {
+		value.MigrationGuide = &compatibility.MigrationGuideAuthority{
+			Path: compatibility.MigrationGuidePath, SHA256: compatibility.MigrationGuideSHA256,
+			FromTag: "go/v0.0.2", ToVersion: "v0.1.0",
+		}
+		value.RequiredActions = []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}
 	}
 	for target, relative := range map[*string]string{
 		&value.Digests.PublicGoAPI:    "internal/compatibility/testdata/public-go-api.json",
@@ -1722,9 +1725,12 @@ func writeTransitionEvidence(t *testing.T, moduleDir, generatedSignature string,
 	value.Digests.GraphQLABI = compatibility.Digest(graphQL)
 	value.Digests.CLIJSON = cliDigest
 	value.Digests.Observation = compatibility.Digest(observation)
-	if !guide {
-		value.MigrationGuide = nil
-		value.RequiredActions = []string{"migrate.database", "regenerate.generated"}
+	if guide {
+		value.MigrationGuide = &compatibility.MigrationGuideAuthority{
+			Path: compatibility.MigrationGuidePath, SHA256: compatibility.MigrationGuideSHA256,
+			FromTag: "go/v0.0.2", ToVersion: "v0.1.0",
+		}
+		value.RequiredActions = []string{"migrate.database", "migration-guide.execute", "regenerate.generated"}
 	}
 	manifestBytes, err := compatibility.Encode(value)
 	if err != nil {
