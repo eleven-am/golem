@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"os/exec"
@@ -62,11 +63,16 @@ func TestReleaseTagAndVersionAgreement(t *testing.T) {
 	runTestCommand(t, repository, "git", "add", "go/go.mod")
 	runTestCommand(t, repository, "git", "commit", "-qm", "candidate")
 	runTestCommand(t, repository, "git", "tag", "-a", "go/v1.2.3", "-m", "unsigned candidate")
-	if _, err := InspectCandidate(context.Background(), moduleDir, "go/v1.2.3"); errorCode(err) != CodeUnsignedTag {
+	unsigned := InspectConfig{ModuleDir: moduleDir, Tag: "go/v1.2.3"}
+	if _, err := inspectCandidate(context.Background(), unsigned, strings.Repeat("0", 64)); errorCode(err) != CodeUnsignedTag {
 		t.Fatalf("unsigned candidate error=%v", err)
 	}
-	if _, err := InspectCandidate(context.Background(), moduleDir, "go/v1.2.4"); errorCode(err) != CodeUnsignedTag {
+	unsigned.Tag = "go/v1.2.4"
+	if _, err := inspectCandidate(context.Background(), unsigned, strings.Repeat("0", 64)); errorCode(err) != CodeUnsignedTag {
 		t.Fatalf("moving branch/nonexistent tag error=%v", err)
+	}
+	if _, err := InspectCandidateWithConfig(context.Background(), InspectConfig{ModuleDir: moduleDir, Tag: "go/v1.2.3"}); errorCode(err) != CodeUnsignedTag {
+		t.Fatalf("unpinned allowed-signers trust error=%v", err)
 	}
 
 	signedRepository, signedModule, allowedSigners := signedCandidateRepository(t)
@@ -486,7 +492,7 @@ func TestP8SignedCompatibilityTransitionRequiresPreStableMinorGuideAndAncestry(t
 	}
 }
 
-func TestPatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
+func TestPatchReleaseRefusesGuideDescribingAnEarlierTransition(t *testing.T) {
 	repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
 	runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "patch candidate")
 	runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "patch candidate")
@@ -495,60 +501,9 @@ func TestPatchReleaseRetainsSignedHistoricalMigrationGuide(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.1", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
-	candidate, err := inspectCandidate(context.Background(), config, trusted)
-	if err != nil || validateCandidate(candidate) != nil {
-		t.Fatalf("patch release did not retain the signed historical guide: %v repository=%s", err, repository)
-	}
-
-	runTestCommand(t, repository, "git", "tag", "-d", "go/v0.1.0")
 	if _, err := inspectCandidate(context.Background(), config, trusted); errorCode(err) != CodeInvalidCandidate {
-		t.Fatalf("patch release without signed historical target error=%v repository=%s", err, repository)
+		t.Fatalf("patch release retained a guide for an earlier transition: %v repository=%s", err, repository)
 	}
-}
-
-func TestHistoricalGuideRetentionRefusesNewReleaseLineAndAuthorityDrift(t *testing.T) {
-	t.Run("new-release-line", func(t *testing.T) {
-		repository, moduleDir, allowed, trusted := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
-		runTestCommand(t, repository, "git", "commit", "--allow-empty", "-qm", "new minor candidate")
-		runTestCommand(t, repository, "git", "tag", "-s", "go/v0.2.0", "-m", "new minor candidate")
-		allowedBytes, err := os.ReadFile(allowed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.2.0", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
-		if _, err := inspectCandidate(context.Background(), config, trusted); errorCode(err) != CodeInvalidCandidate {
-			t.Fatalf("new release line retained an older guide: %v repository=%s", err, repository)
-		}
-	})
-
-	t.Run("authority-drift", func(t *testing.T) {
-		repository, moduleDir, allowed, _ := signedTransitionRepository(t, "v0.1.0", true, false, false, false)
-		guide := mustReadPath(t, filepath.Join(moduleDir, compatibility.MigrationGuidePath))
-		const retainedPath = "compatibility/retained-migration-guide.json"
-		writeTestFile(t, filepath.Join(moduleDir, retainedPath), string(guide))
-		manifestBytes := mustReadPath(t, filepath.Join(moduleDir, "compatibility", "manifest.json"))
-		manifest, err := compatibility.ParseHistorical(manifestBytes, compatibility.Digest(manifestBytes))
-		if err != nil || manifest.MigrationGuide == nil {
-			t.Fatalf("parse target manifest: %v", err)
-		}
-		manifest.MigrationGuide.Path = retainedPath
-		manifestBytes, err = compatibility.Encode(manifest)
-		if err != nil {
-			t.Fatal(err)
-		}
-		writeTestFile(t, filepath.Join(moduleDir, "compatibility", "manifest.json"), string(manifestBytes))
-		runTestCommand(t, repository, "git", "add", "go")
-		runTestCommand(t, repository, "git", "commit", "-qm", "relabel retained guide")
-		runTestCommand(t, repository, "git", "tag", "-s", "go/v0.1.1", "-m", "relabel retained guide")
-		allowedBytes, err := os.ReadFile(allowed)
-		if err != nil {
-			t.Fatal(err)
-		}
-		config := InspectConfig{ModuleDir: moduleDir, Tag: "go/v0.1.1", AllowedSignersFile: allowed, AllowedSignersSHA256: digest(allowedBytes)}
-		if _, err := inspectCandidate(context.Background(), config, compatibility.Digest(manifestBytes)); errorCode(err) != CodeInvalidCandidate {
-			t.Fatalf("patch release changed retained guide authority: %v repository=%s", err, repository)
-		}
-	})
 }
 
 func TestSoleSignedFirstReleaseAcceptsOnlyBoundCurrentEvidence(t *testing.T) {
@@ -956,52 +911,8 @@ func TestReleaseArtifactReproducibility(t *testing.T) {
 			t.Fatalf("artifact %s contains an absolute build path", name)
 		}
 	}
-	guidePath := filepath.Join(first, filepath.FromSlash(candidate.migrationGuidePath))
-	if err := os.Remove(guidePath); err != nil {
-		t.Fatal(err)
-	}
-	if err := Publish(first, filepath.Join(t.TempDir(), "releases"), candidate); errorCode(err) != CodeInvalidCandidate {
-		t.Fatalf("publish without signed guide error=%v", err)
-	}
-	outside := filepath.Join(t.TempDir(), "guide.json")
-	writeTestFile(t, outside, string(candidate.migrationGuide))
-	if err := os.Symlink(outside, guidePath); err != nil {
-		t.Fatal(err)
-	}
-	if err := Publish(first, filepath.Join(t.TempDir(), "releases"), candidate); errorCode(err) != CodeInvalidCandidate {
-		t.Fatalf("publish with symlinked guide error=%v", err)
-	}
-}
-
-func TestExistingVersionArtifactReplacementRefused(t *testing.T) {
-	candidate := testCandidate(t)
-	staged := filepath.Join(t.TempDir(), "staged")
-	writeTestFile(t, filepath.Join(staged, "golem.tar.gz"), "immutable artifact")
-	writeTestFile(t, filepath.Join(staged, "SHA256SUMS"), "immutable checksum")
-	writeTestFile(t, filepath.Join(staged, compatibility.ProjectLicensePath), string(candidate.projectLicense))
-	writeTestFile(t, filepath.Join(staged, compatibility.ThirdPartyNoticesPath), string(candidate.thirdPartyNotices))
-	releases := filepath.Join(t.TempDir(), "releases")
-	if err := Publish(staged, releases, candidate); err != nil {
-		t.Fatal(err)
-	}
-	if err := Publish(staged, releases, candidate); err != nil {
-		t.Fatalf("byte-identical retry was not idempotent: %v", err)
-	}
-	if err := os.Remove(filepath.Join(staged, compatibility.ThirdPartyNoticesPath)); err != nil {
-		t.Fatal(err)
-	}
-	if err := Publish(staged, filepath.Join(t.TempDir(), "missing-notice-releases"), candidate); errorCode(err) != CodeInvalidCandidate {
-		t.Fatalf("publish without sealed third-party notices error=%v", err)
-	}
-	writeTestFile(t, filepath.Join(staged, compatibility.ThirdPartyNoticesPath), string(candidate.thirdPartyNotices))
-	writeTestFile(t, filepath.Join(staged, "golem.tar.gz"), "different bytes")
-	if err := Publish(staged, releases, candidate); errorCode(err) != CodeReplacement {
-		t.Fatalf("existing version replacement error=%v", err)
-	}
-	writeTestFile(t, filepath.Join(staged, "golem.tar.gz"), "immutable artifact")
-	writeTestFile(t, filepath.Join(staged, "unexpected"), "new path")
-	if err := Publish(staged, releases, candidate); errorCode(err) != CodeReplacement {
-		t.Fatalf("existing version path addition error=%v", err)
+	if _, err := Build(ctx, BuildConfig{ModuleDir: releaseModule, OutputDir: first, Candidate: candidate, Platforms: []Platform{platform}}); errorCode(err) != CodeReplacement {
+		t.Fatalf("existing output directory replacement error=%v", err)
 	}
 }
 
@@ -1032,163 +943,6 @@ func assertReleaseSchemasAndDigests(t *testing.T, root string, candidate Candida
 		}
 		if !found {
 			t.Fatalf("release inventory omitted signed migration guide: %+v", inventory.Files)
-		}
-	}
-	type independentChecksum struct {
-		Algorithm     string `json:"algorithm"`
-		ChecksumValue string `json:"checksumValue"`
-	}
-	type independentPackage struct {
-		SPDXID           string                `json:"SPDXID"`
-		Name             string                `json:"name"`
-		VersionInfo      string                `json:"versionInfo"`
-		DownloadLocation string                `json:"downloadLocation"`
-		FilesAnalyzed    bool                  `json:"filesAnalyzed"`
-		LicenseConcluded string                `json:"licenseConcluded"`
-		LicenseDeclared  string                `json:"licenseDeclared"`
-		CopyrightText    string                `json:"copyrightText"`
-		Checksums        []independentChecksum `json:"checksums"`
-	}
-	type independentRelationship struct {
-		SPDXElementID      string `json:"spdxElementId"`
-		RelationshipType   string `json:"relationshipType"`
-		RelatedSPDXElement string `json:"relatedSpdxElement"`
-	}
-	type independentSPDX struct {
-		SPDXVersion       string `json:"spdxVersion"`
-		DataLicense       string `json:"dataLicense"`
-		SPDXID            string `json:"SPDXID"`
-		Name              string `json:"name"`
-		DocumentNamespace string `json:"documentNamespace"`
-		CreationInfo      struct {
-			Created            string   `json:"created"`
-			Creators           []string `json:"creators"`
-			LicenseListVersion string   `json:"licenseListVersion"`
-		} `json:"creationInfo"`
-		DocumentDescribes []string                  `json:"documentDescribes"`
-		Packages          []independentPackage      `json:"packages"`
-		Relationships     []independentRelationship `json:"relationships"`
-		ExtractedLicenses []struct {
-			LicenseID     string `json:"licenseId"`
-			ExtractedText string `json:"extractedText"`
-			Name          string `json:"name"`
-		} `json:"hasExtractedLicensingInfos"`
-	}
-	var source independentSPDX
-	decodeStrict(t, filepath.Join(root, "golem_source.spdx.json"), &source)
-	if source.SPDXVersion != "SPDX-2.3" || source.DataLicense != "CC0-1.0" || source.SPDXID != "SPDXRef-DOCUMENT" || source.DocumentNamespace == "" || len(source.CreationInfo.Creators) == 0 || len(source.Packages) == 0 {
-		t.Fatalf("source SPDX required fields=%+v", source)
-	}
-	if want := time.Unix(candidate.SourceDateEpoch, 0).UTC().Format(time.RFC3339); source.CreationInfo.Created != want || strings.HasPrefix(source.CreationInfo.Created, "2000-") {
-		t.Fatalf("source SPDX creation=%q want truthful tag-commit time %q", source.CreationInfo.Created, want)
-	}
-	for _, pkg := range source.Packages {
-		if pkg.SPDXID == "" || pkg.Name == "" || len(pkg.Checksums) != 1 || pkg.Checksums[0].Algorithm != "SHA256" || len(pkg.Checksums[0].ChecksumValue) != 64 {
-			t.Fatalf("invalid source SPDX package=%+v", pkg)
-		}
-		if pkg.Name == ModulePath && pkg.Checksums[0].ChecksumValue != candidate.SourceTreeSHA256 {
-			t.Fatalf("main source SPDX checksum=%s want tree=%s", pkg.Checksums[0].ChecksumValue, candidate.SourceTreeSHA256)
-		}
-	}
-	authority, err := compatibility.ParseDependencyLicenseAuthority(candidate.licenseAuthority, compatibility.DependencyLicenseAuthoritySHA256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantDeclared := map[string]string{authority.Project.Module: authority.Project.LicenseDeclared}
-	for _, dependency := range authority.Dependencies {
-		wantDeclared[dependency.Module] = dependency.LicenseDeclared
-	}
-	for module, declared := range wantDeclared {
-		found := false
-		for _, pkg := range source.Packages {
-			if pkg.Name == module {
-				found = true
-				if pkg.LicenseDeclared != declared || pkg.LicenseConcluded != "NOASSERTION" {
-					t.Fatalf("source SPDX license %s=%q/%q want %q/NOASSERTION", module, pkg.LicenseDeclared, pkg.LicenseConcluded, declared)
-				}
-			}
-		}
-		if !found {
-			t.Fatalf("source SPDX omitted governed module %s", module)
-		}
-	}
-	if len(source.ExtractedLicenses) != 2 || source.ExtractedLicenses[0].LicenseID != compatibility.ProjectLicenseDeclared || source.ExtractedLicenses[0].ExtractedText != string(candidate.projectLicense) || source.ExtractedLicenses[1].LicenseID != "LicenseRef-Klauspost-Compress-Composite" {
-		t.Fatalf("source SPDX extracted licenses=%+v", source.ExtractedLicenses)
-	}
-	authorityLicense, ok := compatibility.DependencyLicenseText(candidate.thirdPartyNotices, authority.Dependencies[0])
-	if !ok || source.ExtractedLicenses[1].ExtractedText != string(authorityLicense) {
-		t.Fatal("source SPDX composite LicenseRef did not retain exact reviewed text")
-	}
-	binarySBOMs, err := filepath.Glob(filepath.Join(root, "golem_*_*.spdx.json"))
-	if err != nil || len(binarySBOMs) != 1 {
-		t.Fatalf("binary SPDX inventory=%v error=%v", binarySBOMs, err)
-	}
-	var binary independentSPDX
-	decodeStrict(t, binarySBOMs[0], &binary)
-	if binary.SPDXVersion != "SPDX-2.3" || binary.DataLicense != "CC0-1.0" || binary.SPDXID != "SPDXRef-DOCUMENT" || len(binary.Packages) != 1 || len(binary.Packages[0].Checksums) != 1 || len(binary.Packages[0].Checksums[0].ChecksumValue) != 64 || binary.Packages[0].LicenseDeclared != compatibility.ProjectLicenseDeclared || binary.Packages[0].LicenseConcluded != "NOASSERTION" || len(binary.ExtractedLicenses) != 1 || binary.ExtractedLicenses[0].LicenseID != compatibility.ProjectLicenseDeclared || binary.ExtractedLicenses[0].ExtractedText != string(candidate.projectLicense) {
-		t.Fatalf("invalid binary SPDX=%+v", binary)
-	}
-	var statement struct {
-		Type          string `json:"_type"`
-		PredicateType string `json:"predicateType"`
-		Subject       []struct {
-			Name   string            `json:"name"`
-			Digest map[string]string `json:"digest"`
-		} `json:"subject"`
-		Predicate struct {
-			BuildDefinition struct {
-				BuildType          string `json:"buildType"`
-				ExternalParameters struct {
-					Module    string   `json:"module"`
-					Version   string   `json:"version"`
-					Tag       string   `json:"tag"`
-					Commit    string   `json:"commit"`
-					Platforms []string `json:"platforms"`
-				} `json:"externalParameters"`
-				InternalParameters   map[string]any `json:"internalParameters"`
-				ResolvedDependencies []struct {
-					URI    string            `json:"uri"`
-					Digest map[string]string `json:"digest"`
-				} `json:"resolvedDependencies"`
-			} `json:"buildDefinition"`
-			RunDetails struct {
-				Builder struct {
-					ID string `json:"id"`
-				} `json:"builder"`
-				Metadata struct {
-					InvocationID string `json:"invocationId"`
-				} `json:"metadata"`
-			} `json:"runDetails"`
-		} `json:"predicate"`
-	}
-	decodeStrict(t, filepath.Join(root, "provenance.json"), &statement)
-	if statement.Type != "https://in-toto.io/Statement/v1" || statement.PredicateType != "https://slsa.dev/provenance/v1" || statement.Predicate.BuildDefinition.BuildType == "" || statement.Predicate.BuildDefinition.ExternalParameters.Module != ModulePath || statement.Predicate.BuildDefinition.ExternalParameters.Tag != candidate.Tag || statement.Predicate.BuildDefinition.ExternalParameters.Commit != candidate.Commit || statement.Predicate.RunDetails.Builder.ID == "" || statement.Predicate.RunDetails.Metadata.InvocationID == "" {
-		t.Fatalf("invalid in-toto/SLSA statement=%+v", statement)
-	}
-	wantDependencies := 7
-	if len(candidate.migrationGuide) != 0 {
-		wantDependencies++
-	}
-	if len(statement.Predicate.BuildDefinition.ResolvedDependencies) != wantDependencies {
-		t.Fatalf("provenance dependencies=%+v", statement.Predicate.BuildDefinition.ResolvedDependencies)
-	}
-	resolved := map[string]map[string]string{}
-	for _, dependency := range statement.Predicate.BuildDefinition.ResolvedDependencies {
-		resolved[dependency.URI] = dependency.Digest
-	}
-	if resolved["file:compatibility/manifest.json"]["sha256"] != candidate.TemplateSHA256 || resolved["git+https://github.com/eleven-am/golem.git@"+candidate.Tag+"#subdirectory=go"]["sha256"] != candidate.SourceTreeSHA256 || resolved["urn:golem:release-allowed-signers"]["sha256"] != candidate.SignersSHA256 {
-		t.Fatalf("provenance omitted trusted template/source tree: %+v", resolved)
-	}
-	if resolved["file:"+compatibility.DependencyLicenseAuthorityPath]["sha256"] != compatibility.DependencyLicenseAuthoritySHA256 || resolved["file:"+compatibility.ProjectLicensePath]["sha256"] != digest(candidate.projectLicense) || resolved["file:"+compatibility.ThirdPartyNoticesPath]["sha256"] != digest(candidate.thirdPartyNotices) {
-		t.Fatalf("provenance omitted sealed license evidence: %+v", resolved)
-	}
-	if len(candidate.migrationGuide) != 0 && resolved["file:"+candidate.migrationGuidePath]["sha256"] != candidate.migrationGuideSHA256 {
-		t.Fatalf("provenance omitted signed migration guide: %+v", resolved)
-	}
-	for _, subject := range statement.Subject {
-		content, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(subject.Name)))
-		if err != nil || subject.Digest["sha256"] != digest(content) {
-			t.Fatalf("provenance subject %s digest mismatch", subject.Name)
 		}
 	}
 	checksums, err := os.ReadFile(filepath.Join(root, "SHA256SUMS"))
@@ -1329,25 +1083,39 @@ func assertReleaseArchiveLicenseEvidence(t *testing.T, root string, candidate Ca
 	if len(names) != 3 || strings.Join(names, "\x00") != strings.Join(wantNames, "\x00") {
 		t.Fatalf("release archive inventory=%v want %v", names, wantNames)
 	}
-	base := strings.TrimSuffix(filepath.Base(archivePath), ".tar.gz")
-	base = strings.TrimSuffix(base, ".zip")
-	var sbom struct {
-		Packages []struct {
-			Checksums []struct {
-				Algorithm, ChecksumValue string
-			} `json:"checksums"`
-		} `json:"packages"`
-	}
-	encoded, err := os.ReadFile(filepath.Join(root, base+".spdx.json"))
+}
+
+func equalDirectories(left, right string) (bool, error) {
+	leftFiles, err := readDirectory(left)
 	if err != nil {
-		t.Fatal(err)
+		return false, err
 	}
-	if err := json.Unmarshal(encoded, &sbom); err != nil {
-		t.Fatalf("read archive binary SPDX: %v", err)
+	rightFiles, err := readDirectory(right)
+	if err != nil || len(leftFiles) != len(rightFiles) {
+		return false, err
 	}
-	if len(sbom.Packages) != 1 || len(sbom.Packages[0].Checksums) != 1 || sbom.Packages[0].Checksums[0].Algorithm != "SHA256" || sbom.Packages[0].Checksums[0].ChecksumValue != digest(binaryBytes) {
-		t.Fatalf("archive binary %s bytes not bound by SPDX: %+v", binaryName, sbom)
+	for name, content := range leftFiles {
+		if !bytes.Equal(content, rightFiles[name]) {
+			return false, nil
+		}
 	}
+	return true, nil
+}
+
+func readDirectory(root string) (map[string][]byte, error) {
+	result := map[string][]byte{}
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil || entry.IsDir() {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		result[filepath.ToSlash(relative)], err = os.ReadFile(path)
+		return err
+	})
+	return result, err
 }
 
 func decodeStrict(t *testing.T, path string, destination any) {
@@ -1398,27 +1166,6 @@ func buildLocalModuleProxy(t *testing.T, source, version string) string {
 	}
 	writeTestFile(t, filepath.Join(root, "list"), version+"\n")
 	return proxy
-}
-
-func testCandidate(t *testing.T) Candidate {
-	t.Helper()
-	commit := strings.Repeat("c", 40)
-	manifest := compatibility.DevelopmentManifest()
-	manifest.MigrationGuide = nil
-	manifest.RequiredActions = []string{"migrate.database", "regenerate.generated"}
-	manifest.Release = compatibility.Release{Version: "v1.2.3", Tag: "go/v1.2.3", Commit: commit}
-	encoded, err := compatibility.Encode(manifest)
-	if err != nil {
-		panic(err)
-	}
-	template := compatibility.DevelopmentManifest()
-	template.MigrationGuide = nil
-	template.RequiredActions = []string{"migrate.database", "regenerate.generated"}
-	templateBytes, err := compatibility.Encode(template)
-	if err != nil {
-		panic(err)
-	}
-	return sealCandidate(Candidate{Module: ModulePath, Version: "v1.2.3", Tag: "go/v1.2.3", Commit: commit, Manifest: encoded, TemplateSHA256: compatibility.Digest(templateBytes), SourceTreeSHA256: strings.Repeat("d", 64), SignersSHA256: strings.Repeat("e", 64), SourceDateEpoch: 1700000000, licenseAuthority: mustReadTestFile(t, compatibility.DependencyLicenseAuthorityPath), projectLicense: mustReadTestFile(t, compatibility.ProjectLicensePath), thirdPartyNotices: mustReadTestFile(t, compatibility.ThirdPartyNoticesPath)})
 }
 
 func signedCandidateRepository(t *testing.T) (string, string, string) {

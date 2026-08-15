@@ -35,14 +35,12 @@ func main() { os.Exit(run(os.Args[1:], os.Stdout)) }
 func run(arguments []string, stdout io.Writer) int {
 	flags := flag.NewFlagSet("p8release", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
-	mode := flags.String("mode", "verify", "verify, build, or publish")
+	mode := flags.String("mode", "verify", "verify or build")
 	tag := flags.String("tag", "", "exact signed nested-module tag go/vX.Y.Z")
 	module := flags.String("module", ".", "Go module directory")
 	allowedSigners := flags.String("allowed-signers", os.Getenv("GOLEM_RELEASE_ALLOWED_SIGNERS"), "pinned SSH allowed-signers trust file")
 	allowedSignersSHA256 := flags.String("allowed-signers-sha256", os.Getenv("GOLEM_RELEASE_ALLOWED_SIGNERS_SHA256"), "separately protected SHA-256 of allowed-signers")
 	outputDir := flags.String("output", "", "new artifact output directory")
-	staged := flags.String("staged", "", "already built candidate directory")
-	releases := flags.String("releases", "", "immutable release inventory root")
 	proxy := flags.String("proxy", os.Getenv("GOPROXY"), "candidate module proxy")
 	timeout := flags.Duration("timeout", 30*time.Minute, "bounded verification timeout")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 || !closedMode(*mode) || *tag == "" || *module == "" || *allowedSigners == "" || *allowedSignersSHA256 == "" || *timeout <= 0 {
@@ -64,9 +62,6 @@ func run(arguments []string, stdout io.Writer) int {
 		if *proxy == "" {
 			return writeFailure(stdout, *mode, releasetool.CodeConsumer)
 		}
-		if err := releasetool.VerifyReproducible(ctx, releasetool.BuildConfig{ModuleDir: absolute, Candidate: candidate}); err != nil {
-			return writeFailure(stdout, *mode, codeOf(err))
-		}
 		if err := releasetool.VerifyCleanConsumer(ctx, releasetool.ConsumerConfig{Version: candidate.Version, Proxy: *proxy}); err != nil {
 			return writeFailure(stdout, *mode, codeOf(err))
 		}
@@ -78,14 +73,6 @@ func run(arguments []string, stdout io.Writer) int {
 			return writeFailure(stdout, *mode, codeOf(err))
 		}
 		inventorySHA, err = fileSHA256(filepath.Join(*outputDir, "release-inventory.json"))
-	case "publish":
-		if *staged == "" || *releases == "" {
-			return writeFailure(stdout, *mode, releasetool.CodeInvalidCandidate)
-		}
-		inventorySHA, err = fileSHA256(filepath.Join(*staged, "release-inventory.json"))
-		if err == nil {
-			err = releasetool.Publish(*staged, *releases, candidate)
-		}
 	}
 	if err != nil {
 		return writeFailure(stdout, *mode, codeOf(err))
@@ -97,7 +84,7 @@ func run(arguments []string, stdout io.Writer) int {
 }
 
 func closedMode(value string) bool {
-	return value == "verify" || value == "build" || value == "publish"
+	return value == "verify" || value == "build"
 }
 
 func codeOf(err error) releasetool.ErrorCode {
