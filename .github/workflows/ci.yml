@@ -57,6 +57,14 @@ jobs:
         run: go test -p=1 -count=1 -timeout=30m ./...
       - name: Race-check concurrent Go runtime surfaces
         run: go test -p=1 -race -count=1 -timeout=30m ./events/... ./provider/... ./runtime
+      - name: Install PostgreSQL client matching the service version
+        run: |
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client-17
+          pg_dump --version
       - name: Verify documented commands and snippets
         run: >-
           go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem
