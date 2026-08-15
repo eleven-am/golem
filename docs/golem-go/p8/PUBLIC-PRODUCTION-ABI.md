@@ -649,26 +649,6 @@ a migration.
 
 ## 10. Compatibility contract
 
-Every release publishes a machine-readable compatibility manifest containing:
-
-```text
-module/version/tag/commit
-minimum Go version
-supported provider/version profiles
-public API digest
-generated ABI versions
-GraphQL ABI version
-ModelIR/ContractIR/physical format versions
-migration manifest/ledger versions
-fact/event/principal snapshot codec versions
-supported historical decode versions
-required regeneration/migration/operator actions
-known intentional boundaries
-```
-
-The manifest contains digests and closed identifiers, not source or schema
-contents.
-
 Compatibility rules are:
 
 - **patch**: no breaking handwritten Go, generated Go, GraphQL, persisted format,
@@ -676,40 +656,28 @@ Compatibility rules are:
 - **minor**: additive API/schema behavior only; required regeneration or
   migration is explicit and old persisted versions remain decoded or fail with
   a documented migration path;
-- **major**: breaking changes require an executable migration guide and a
-  machine-detectable incompatibility, never silent reinterpretation.
+- **major**: breaking changes require a machine-detectable incompatibility,
+  never silent reinterpretation.
 
-Generated runtime mismatch, unsupported persisted version, or migration history
-mismatch fails at generate/check/doctor/open before serving a request.
+Before v1.0.0 a minor bump carries the meaning a major bump carries afterwards,
+as ordinary Go module versioning implies.
+
+These rules are enforced where they are observable rather than by a release
+gate. Generated artifacts carry their own digests and format versions, so a
+generated runtime mismatch, an unsupported persisted version, or a migration
+history mismatch fails at generate, check, doctor, or open before serving a
+request. Regenerating a fixture that no longer matches its committed bytes
+fails in the repository's own test suite.
 
 ## 11. Release artifacts
 
-A Go release contains:
+A Go release is the signed `go/vX.Y.Z` tag and the module source it resolves to.
+Consumers obtain it with `go get github.com/eleven-am/golem/go@vX.Y.Z` and the
+CLI with `go install github.com/eleven-am/golem/go/cmd/golem@vX.Y.Z`; both are
+served from the Go module proxy, which resolves the tag directly.
 
-- the signed `go/vX.Y.Z` tag;
-- resolvable Go module source;
-- `golem` CLI archives for declared platforms;
-- SHA-256 checksums;
-- source and binary SBOMs;
-- build provenance tied to the tag commit;
-- compatibility manifest;
-- changelog, migration guide, known boundaries, and security reporting process;
-  and
-- exact evidence summary linking the hosted workflow run.
-
-The release workflow creates artifacts once. A retry verifies and reuses
-byte-identical artifacts or fails; it does not silently replace an artifact for
-an existing tag/version.
-
-The tracked `compatibility/manifest.json` is the canonical development template,
-with `development: true`, version `devel`, an empty tag, and a zero commit. It
-does not and cannot embed the hash of the commit that contains it. Release
-tooling verifies the template through its separately compiled trusted digest,
-copies it, and changes only the release object to the candidate version,
-`go/vX.Y.Z` tag, and already-resolved tag-target commit. That canonical copy is
-the published compatibility-manifest asset; it is not written back into tagged
-source. Signed provenance binds the checked-template digest, published-manifest
-digest, tag commit, and all released artifact subjects.
+Module versions are immutable once the proxy has observed them. A published
+version is never replaced; a defect is corrected by a later version.
 
 ## 12. Explicit non-claims
 

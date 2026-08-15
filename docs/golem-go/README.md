@@ -13,7 +13,6 @@ migrations, events, and operational limits.
 - [GraphQL](./p5/PUBLIC-GRAPHQL-ABI.md)
 - [Analytics](./p6/PUBLIC-ANALYTICS-ABI.md)
 - [Events and subscriptions](./p7/PUBLIC-EVENT-ABI.md)
-- [Compatibility manifest](./p8/COMPATIBILITY-MANIFEST.md)
 
 ## Focused guides
 

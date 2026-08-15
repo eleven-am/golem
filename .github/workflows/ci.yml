@@ -57,6 +57,10 @@ jobs:
         run: go test -p=1 -count=1 -timeout=30m ./...
       - name: Race-check concurrent Go runtime surfaces
         run: go test -p=1 -race -count=1 -timeout=30m ./events/... ./provider/... ./runtime
+      - name: Verify documented commands and snippets
+        run: >-
+          go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem
+          -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
       - name: Vet Go policy kernel
         run: go vet ./...
       - name: Check Go formatting
