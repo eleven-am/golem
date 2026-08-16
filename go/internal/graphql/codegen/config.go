@@ -429,6 +429,14 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 			}
 			contract := contracts[modelName]
 			resolver, err = renderSemanticSearchResolver(operation, model, contract, qualify)
+		} else if graphqlextension.IsSemanticSimilarOperation(*compilation, operation) {
+			modelName := resultModelName(operation.Result)
+			model, ok := models[modelName]
+			if !ok {
+				return nil, fmt.Errorf("GraphQL semantic similar result model %s is absent", modelName)
+			}
+			contract := contracts[modelName]
+			resolver, err = renderSemanticSimilarResolver(operation, model, contract, qualify)
 		} else {
 			resolver, err = renderCallable(operation.Resolver, qualify)
 		}
@@ -500,6 +508,22 @@ func renderSemanticSearchResolver(operation ir.CustomOperationContractIR, model 
 		modelType = alias + "." + modelType
 	}
 	return fmt.Sprintf("func(ctx context.Context, caller *Caller[P], args struct { Query string; Take *int32; Where *golem.Predicate[%[1]s] }) ([]golem.Row[%[1]s], error) { if args.Take == nil { return nil, fmt.Errorf(\"semantic search take is unavailable\") }; take := int(*args.Take); where := make([]golem.Predicate[%[1]s], 0, 1); if args.Where != nil { where = append(where, *args.Where) }; ranked, err := caller.%[2]s.Search%[3]s(ctx, args.Query, take, where...); if err != nil { return nil, err }; rows := make([]golem.Row[%[1]s], len(ranked)); for index := range ranked { rows[index] = ranked[index].Row() }; return rows, nil }", modelType, plural(model.LogicalName), exported), nil
+}
+
+func renderSemanticSimilarResolver(operation ir.CustomOperationContractIR, model ir.ModelDeclIR, _ ir.ModelContractIR, qualify func(string, string) string) (string, error) {
+	if operation.Operation != ir.CustomOperationQuery || operation.Resolver.Name == "" || operation.Resolver.Kind != "customquery" {
+		return "", fmt.Errorf("GraphQL semantic similar operation %s is invalid", operation.Name)
+	}
+	exported, ok := semanticcontract.ExportedIndexName(operation.Resolver.Name)
+	if !ok {
+		return "", fmt.Errorf("GraphQL semantic similar index %q cannot form a Go method", operation.Resolver.Name)
+	}
+	alias := qualify(model.Go.PackagePath, "golemmodels")
+	modelType := model.Go.Name
+	if alias != "" {
+		modelType = alias + "." + modelType
+	}
+	return fmt.Sprintf("func(ctx context.Context, caller *Caller[P], args struct { Source golem.UniqueSelectorValue[%[1]s]; Take *int32; Where *golem.Predicate[%[1]s] }) ([]golem.Row[%[1]s], error) { if args.Take == nil { return nil, fmt.Errorf(\"semantic search take is unavailable\") }; take := int(*args.Take); where := make([]golem.Predicate[%[1]s], 0, 1); if args.Where != nil { where = append(where, *args.Where) }; ranked, err := caller.%[2]s.Similar%[3]s(ctx, args.Source, take, where...); if err != nil { return nil, err }; rows := make([]golem.Row[%[1]s], len(ranked)); for index := range ranked { rows[index] = ranked[index].Row() }; return rows, nil }", modelType, plural(model.LogicalName), exported), nil
 }
 
 type eventBinding struct {

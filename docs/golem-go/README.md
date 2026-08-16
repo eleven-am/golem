@@ -17,6 +17,7 @@ migrations, events, and operational limits.
 ## Focused guides
 
 - [Semantic indexes](./SEMANTIC-INDEXES.md)
+- [Similarity search](./SIMILARITY.md)
 - [Semantic search design](./SEMANTIC-SEARCH-DESIGN.md)
 - [Frontend hosting and link previews](./RENDER.md)
 - [Durable job queue](./QUEUE.md)

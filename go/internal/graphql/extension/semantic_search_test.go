@@ -25,7 +25,7 @@ func TestAddSemanticSearchOperationsCreatesOneProviderNeutralCallerQuery(t *test
 	if diagnostics := AddSemanticSearchOperations(&compilation); hasErrors(diagnostics) {
 		t.Fatalf("semantic search diagnostics = %#v", diagnostics)
 	}
-	if len(compilation.Contract.CustomOperations) != 1 {
+	if len(compilation.Contract.CustomOperations) != 2 {
 		t.Fatalf("semantic operations = %#v", compilation.Contract.CustomOperations)
 	}
 	operation := compilation.Contract.CustomOperations[0]
@@ -77,5 +77,67 @@ func TestAddSemanticSearchOperationsSkipsHiddenModel(t *testing.T) {
 	}
 	if len(compilation.Contract.CustomOperations) != 0 {
 		t.Fatalf("hidden model gained GraphQL operations = %#v", compilation.Contract.CustomOperations)
+	}
+}
+
+func TestAddSemanticSearchOperationsSynthesizesTheSimilarityRoot(t *testing.T) {
+	compilation := extensionFixture()
+	compilation.Model.Schema.PackagePath = "example/social"
+	compilation.Contract.Models[0].GraphQLPlural = "accounts"
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related_posts", Space: "content", Dimensions: 3, Fields: []string{"user-name"}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index, provider := range []ir.Provider{ir.SQLite, ir.PostgreSQL} {
+		compilation.Model.Extensions = append(compilation.Model.Extensions, ir.ProviderExtensionIR{
+			ID: ir.ExtensionID(strings.Repeat(string(rune('1'+index)), 32)), Provider: provider, Version: 1,
+			Owner: ir.ObjectID("user"), Kind: semanticcontract.IndexKind, Payload: payload,
+		})
+	}
+	if diagnostics := AddSemanticSearchOperations(&compilation); hasErrors(diagnostics) {
+		t.Fatalf("semantic diagnostics = %#v", diagnostics)
+	}
+	search, similar := compilation.Contract.CustomOperations[0], compilation.Contract.CustomOperations[1]
+	if similar.Name != "similarAccountsByRelatedPosts" || similar.Operation != ir.CustomOperationQuery || similar.Capability != ir.CustomOperationCallerOnly {
+		t.Fatalf("similar operation = %#v", similar)
+	}
+	if similar.ExtensionID == search.ExtensionID {
+		t.Fatal("search and similar operations share a GraphQL identity")
+	}
+	if len(similar.Arguments) != 3 || similar.Arguments[0].Name != "source" || similar.Arguments[0].Type.Kind != ir.GraphQLTypeSelector || similar.Arguments[0].Type.Nullable {
+		t.Fatalf("similar arguments = %#v", similar.Arguments)
+	}
+	if similar.Arguments[1].Name != "take" || !similar.Arguments[1].Type.Nullable || similar.Arguments[2].Name != "where" || similar.Arguments[2].Type.Kind != ir.GraphQLTypePredicate {
+		t.Fatalf("similar arguments = %#v", similar.Arguments)
+	}
+	if !IsSemanticSimilarOperation(compilation, similar) {
+		t.Fatal("generated similar operation does not match its index authority")
+	}
+	if IsSemanticSimilarOperation(compilation, search) || IsSemanticSearchOperation(compilation, similar) {
+		t.Fatal("the two semantic roots are not distinguished by their authorities")
+	}
+	for _, perturbation := range []func(ir.CustomOperationContractIR) ir.CustomOperationContractIR{
+		func(operation ir.CustomOperationContractIR) ir.CustomOperationContractIR {
+			operation.Name = "similarAccountsBySomethingElse"
+			return operation
+		},
+		func(operation ir.CustomOperationContractIR) ir.CustomOperationContractIR {
+			operation.Capability = ir.CustomOperationCapability("systemOnly")
+			return operation
+		},
+		func(operation ir.CustomOperationContractIR) ir.CustomOperationContractIR {
+			arguments := append([]ir.GraphQLArgumentContractIR(nil), operation.Arguments...)
+			arguments[0].Type.Kind = ir.GraphQLTypeScalar
+			operation.Arguments = arguments
+			return operation
+		},
+		func(operation ir.CustomOperationContractIR) ir.CustomOperationContractIR {
+			operation.ExtensionID = search.ExtensionID
+			return operation
+		},
+	} {
+		if IsSemanticSimilarOperation(compilation, perturbation(similar)) {
+			t.Fatal("a perturbed similar operation matched its index authority")
+		}
 	}
 }

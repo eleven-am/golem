@@ -60,6 +60,13 @@ func AddSemanticSearchOperations(compilation *ir.CompilationIR) []ir.Diagnostic 
 			}
 			identities[identity] = true
 			operations = append(operations, semanticSearchOperation(contract, index, identity, exportedPlural, exported, compilation.Model.Schema.PackagePath))
+			similarIdentity := semanticSimilarIdentity(model.ID, index.Name)
+			if identities[similarIdentity] {
+				diagnostics = append(diagnostics, ir.NewError("P9_SEMANTIC_GRAPHQL_IDENTITY", fmt.Sprintf("semantic index %q has a duplicate GraphQL identity", index.Name), ir.SourceSpan{}))
+				continue
+			}
+			identities[similarIdentity] = true
+			operations = append(operations, semanticSimilarOperation(contract, index, similarIdentity, exportedPlural, exported, compilation.Model.Schema.PackagePath))
 		}
 	}
 	if len(diagnostics) == 0 {

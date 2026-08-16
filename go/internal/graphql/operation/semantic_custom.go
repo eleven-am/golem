@@ -23,7 +23,7 @@ type semanticCustomRoot struct {
 }
 
 func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationContractIR, arguments map[string]any, explicit bool) (bool, error) {
-	if c == nil || !graphqlextension.IsSemanticSearchOperation(c.compilation, operation) {
+	if c == nil || !(graphqlextension.IsSemanticSearchOperation(c.compilation, operation) || graphqlextension.IsSemanticSimilarOperation(c.compilation, operation)) {
 		return false, nil
 	}
 	contract, ok := c.modelContractByGraphQLName(customResultModelName(operation.Result))
@@ -61,7 +61,7 @@ func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationCo
 }
 
 func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationContractIR, modelID compilerir.ModelID, selected []readir.Selection) (*semanticCustomRoot, error) {
-	if !graphqlextension.IsSemanticSearchOperation(c.compilation, operation) {
+	if !graphqlextension.IsSemanticSearchOperation(c.compilation, operation) && !graphqlextension.IsSemanticSimilarOperation(c.compilation, operation) {
 		return nil, fmt.Errorf("semantic search contract is not authoritative")
 	}
 	model, ok := c.modelByID(modelID)

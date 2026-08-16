@@ -275,6 +275,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		emitQueryPlanClientMethods(source, model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, queryplanAlias, descriptor, contractHasRelationDimensions(contract), contract.ScopedReads)
 		for _, index := range semantic[model.ID] {
 			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		if contract.Subscriptions {
 			eventType := model.Go.Name + "Event"
@@ -295,6 +296,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func (client System%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
 		for _, index := range semantic[model.ID] {
 			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		emitAnalyticsClientMethods(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
@@ -470,11 +472,12 @@ func validateSemanticMethodNames(indexes map[ir.ModelID][]semanticcontract.Index
 			if _, ok := semanticcontract.ExportedIndexName(index.Name); !ok {
 				return fmt.Errorf("registry codegen: semantic index name %q cannot form a Go method", index.Name)
 			}
-			method := semanticSearchMethodName(index.Name)
-			if previous, collision := methods[method]; collision && previous != index.Name {
-				return fmt.Errorf("registry codegen: semantic index names %q and %q collide in Go", previous, index.Name)
+			for _, method := range []string{semanticSearchMethodName(index.Name), semanticSimilarMethodName(index.Name)} {
+				if previous, collision := methods[method]; collision && previous != index.Name {
+					return fmt.Errorf("registry codegen: semantic index names %q and %q collide in Go", previous, index.Name)
+				}
+				methods[method] = index.Name
 			}
-			methods[method] = index.Name
 		}
 	}
 	return nil
@@ -483,6 +486,11 @@ func validateSemanticMethodNames(indexes map[ir.ModelID][]semanticcontract.Index
 func semanticSearchMethodName(name string) string {
 	exported, _ := semanticcontract.ExportedIndexName(name)
 	return "Search" + exported
+}
+
+func semanticSimilarMethodName(name string) string {
+	exported, _ := semanticcontract.ExportedIndexName(name)
+	return "Similar" + exported
 }
 
 type preparedDocument struct {

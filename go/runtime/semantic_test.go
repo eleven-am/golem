@@ -7,6 +7,7 @@ import (
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 )
 
@@ -19,10 +20,13 @@ func TestSemanticCandidateLimitPrecedesReadableIdentityExtraction(t *testing.T) 
 		context.Background(),
 		(*App[string, struct{}])(nil),
 		golem.ModelDescriptor[struct{}]{},
-		"related",
-		"query",
 		1,
 		rows,
+		"",
+		func(context.Context, ir.ModelID, []string) ([]semanticruntime.Rank, error) {
+			t.Fatal("ranking ran despite an exceeded candidate ceiling")
+			return nil, nil
+		},
 	)
 	if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeInvalidInput {
 		t.Fatalf("candidate overflow error=%v code=%q ok=%t", err, code, ok)

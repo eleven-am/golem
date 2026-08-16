@@ -36,7 +36,48 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err := caller.app.semantic.Refresh(ctx, model, indexName); err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, indexName, query, take, rows)
+	return rankSemanticRows(ctx, caller.app, descriptor, take, rows, "", func(ctx context.Context, model ir.ModelID, keys []string) ([]semanticruntime.Rank, error) {
+		return caller.app.semantic.Query(ctx, model, indexName, query, keys, take)
+	})
+}
+
+// CallerSimilar ranks authorized rows against the stored vector of a source row
+// the caller is authorized to read. Resolving the source through an ordinary
+// authorized unique read is what keeps the neighbourhood of a hidden row from
+// becoming a readable projection of it.
+func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if caller == nil || caller.app == nil || ctx == nil {
+		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "similar", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+	}
+	options, err := semanticCandidateOptions(predicates, take)
+	if err != nil {
+		return nil, err
+	}
+	sourceRow, err := CallerFindUnique(ctx, caller, descriptor, source)
+	if err != nil {
+		return nil, err
+	}
+	sourceKey, err := semanticSourceKey(descriptor, sourceRow)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := CallerFindMany(ctx, caller, descriptor, options...)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSemanticCandidateCount(len(rows)); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return []golem.SemanticResult[M]{}, nil
+	}
+	model := semanticModelID(descriptor.Metadata())
+	if err := caller.app.semantic.Refresh(ctx, model, indexName); err != nil {
+		return nil, err
+	}
+	return rankSemanticRows(ctx, caller.app, descriptor, take, rows, sourceKey, func(ctx context.Context, model ir.ModelID, keys []string) ([]semanticruntime.Rank, error) {
+		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, keys, take)
+	})
 }
 
 func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
@@ -61,15 +102,59 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err := system.app.semantic.Refresh(ctx, model, indexName); err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, indexName, query, take, rows)
+	return rankSemanticRows(ctx, system.app, descriptor, take, rows, "", func(ctx context.Context, model ir.ModelID, keys []string) ([]semanticruntime.Rank, error) {
+		return system.app.semantic.Query(ctx, model, indexName, query, keys, take)
+	})
+}
+
+func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if system.app == nil || ctx == nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_RUNTIME: system execution is unavailable")
+	}
+	options, err := semanticCandidateOptions(predicates, take)
+	if err != nil {
+		return nil, err
+	}
+	sourceRow, err := SystemFindUnique(ctx, system, descriptor, source)
+	if err != nil {
+		return nil, err
+	}
+	sourceKey, err := semanticSourceKey(descriptor, sourceRow)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := SystemFindMany(ctx, system, descriptor, options...)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateSemanticCandidateCount(len(rows)); err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return []golem.SemanticResult[M]{}, nil
+	}
+	model := semanticModelID(descriptor.Metadata())
+	if err := system.app.semantic.Refresh(ctx, model, indexName); err != nil {
+		return nil, err
+	}
+	return rankSemanticRows(ctx, system.app, descriptor, take, rows, sourceKey, func(ctx context.Context, model ir.ModelID, keys []string) ([]semanticruntime.Rank, error) {
+		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, keys, take)
+	})
 }
 
 func semanticReadOptions[M any](predicates []golem.Predicate[M], query string, take int) ([]golem.ReadOption[M], error) {
-	if query == "" || take < 1 || take > semanticruntime.MaximumResults || len(predicates) > 1 {
+	if query == "" {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query, result limit, or predicate is invalid"))
 	}
 	if _, err := embedding.NewInput("query", query); err != nil {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	}
+	return semanticCandidateOptions(predicates, take)
+}
+
+func semanticCandidateOptions[M any](predicates []golem.Predicate[M], take int) ([]golem.ReadOption[M], error) {
+	if take < 1 || take > semanticruntime.MaximumResults || len(predicates) > 1 {
+		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query, result limit, or predicate is invalid"))
 	}
 	options := make([]golem.ReadOption[M], 0, 2)
 	if len(predicates) == 1 {
@@ -81,7 +166,33 @@ func semanticReadOptions[M any](predicates []golem.Predicate[M], query string, t
 	return options, nil
 }
 
-func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, rows []golem.Row[M]) ([]golem.SemanticResult[M], error) {
+func semanticPrimaryIdentity[M any](descriptor golem.ModelDescriptor[M]) ([]golem.FieldID, error) {
+	for _, identity := range descriptor.Metadata().Identities() {
+		if identity.Kind() == golem.PrimaryIdentity {
+			return identity.Fields(), nil
+		}
+	}
+	return nil, fmt.Errorf("P9_SEMANTIC_SCHEMA: model has no primary identity")
+}
+
+// semanticSourceKey reports the source row's record key, and refuses with the
+// findUnique refusal when the row cannot carry a semantic identity. A masked
+// primary key must not be a distinguishable third state: search skips such rows
+// as candidates, but a source that cannot be identified is indistinguishable
+// from a source the caller may not read.
+func semanticSourceKey[M any](descriptor golem.ModelDescriptor[M], row golem.Row[M]) (string, error) {
+	primary, err := semanticPrimaryIdentity(descriptor)
+	if err != nil {
+		return "", err
+	}
+	key, err := golem.RuntimeSemanticRecordKey(row, primary)
+	if err != nil {
+		return "", golem.RuntimeReadError(golem.CodeNotFound, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "record not found", nil)
+	}
+	return key, nil
+}
+
+func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], take int, rows []golem.Row[M], exclude string, rank func(ctx context.Context, model ir.ModelID, keys []string) ([]semanticruntime.Rank, error)) ([]golem.SemanticResult[M], error) {
 	// The read deliberately requests one row past the portable ceiling. Enforce
 	// that ceiling before extracting readable identities: a conditionally masked
 	// primary key must not turn an oversized authorized universe into an
@@ -89,15 +200,9 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err := validateSemanticCandidateCount(len(rows)); err != nil {
 		return nil, err
 	}
-	var primary []golem.FieldID
-	for _, identity := range descriptor.Metadata().Identities() {
-		if identity.Kind() == golem.PrimaryIdentity {
-			primary = identity.Fields()
-			break
-		}
-	}
-	if len(primary) == 0 {
-		return nil, fmt.Errorf("P9_SEMANTIC_SCHEMA: model has no primary identity")
+	primary, err := semanticPrimaryIdentity(descriptor)
+	if err != nil {
+		return nil, err
 	}
 	byKey := make(map[string]golem.Row[M], len(rows))
 	keys := make([]string, 0, len(rows))
@@ -106,13 +211,22 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		if err != nil {
 			continue
 		}
+		// Dropping the excluded identity from both the key list and the row map
+		// keeps the source out of its own results regardless of predicate, and
+		// leaves the escape invariant below to reject a backend that returns it.
+		if key == exclude {
+			continue
+		}
 		if _, duplicate := byKey[key]; duplicate {
 			continue
 		}
 		byKey[key] = row
 		keys = append(keys, key)
 	}
-	ranks, err := app.semantic.Query(ctx, semanticModelID(descriptor.Metadata()), indexName, query, keys, take)
+	if len(keys) == 0 {
+		return []golem.SemanticResult[M]{}, nil
+	}
+	ranks, err := rank(ctx, semanticModelID(descriptor.Metadata()), keys)
 	if err != nil {
 		return nil, err
 	}

@@ -154,26 +154,103 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 		if err != nil {
 			return nil, embedding.NewError(embedding.CodeProvider, err)
 		}
+		return manager.rankVector(ctx, selected, encoded, unique, take)
+	}
+	vector, _ := manager.vectorValue(vectors[0])
+	return manager.rankVector(ctx, selected, vector, unique, take)
+}
+
+// QueryByKey ranks candidates against a stored vector rather than an embedded
+// query. The source vector is read from managed storage, so a similarity
+// request performs no embedding-provider call and compares vectors that were
+// produced under the same canonical document framing.
+func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, candidateKeys []string, take int) (result []Rank, resultErr error) {
+	if manager == nil {
+		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	}
+	invalidContext := ctx == nil
+	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
+	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
+	if invalidContext || name == "" || sourceKey == "" || take < 1 || take > MaximumResults || len(candidateKeys) > MaximumCandidates {
+		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	}
+	if len(candidateKeys) == 0 {
+		return []Rank{}, nil
+	}
+	selected, ok := manager.index(model, name)
+	if !ok {
+		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
+	}
+	unique := make([]string, 0, len(candidateKeys))
+	seen := make(map[string]bool, len(candidateKeys))
+	for _, key := range candidateKeys {
+		if key == "" || key == sourceKey || seen[key] {
+			continue
+		}
+		seen[key] = true
+		unique = append(unique, key)
+	}
+	if len(unique) == 0 {
+		return []Rank{}, nil
+	}
+	rankSpan.SetAggregateCount(int64(len(unique)))
+	vector, err := manager.sourceVector(ctx, selected, sourceKey)
+	if err != nil {
+		return nil, err
+	}
+	return manager.rankVector(ctx, selected, vector, unique, take)
+}
+
+func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string) (any, error) {
+	unavailable := fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector is unavailable")
+	statePlaceholder, vectorProjection := "?", "embedding"
+	if manager.provider == ir.PostgreSQL {
+		statePlaceholder, vectorProjection = "$1", "embedding::text"
+	}
+	var status string
+	observeexec.RecordStatement(ctx)
+	if err := manager.database.GetContext(ctx, &status, "SELECT status FROM "+manager.hidden(index, "_state")+" WHERE record_key="+statePlaceholder, sourceKey); err != nil {
+		return nil, unavailable
+	}
+	if status != "ready" {
+		return nil, unavailable
+	}
+	statement := "SELECT " + vectorProjection + " FROM " + manager.hidden(index, "_vec") + " WHERE record_key=" + statePlaceholder
+	observeexec.RecordStatement(ctx)
+	if manager.provider == ir.SQLite {
+		var encoded []byte
+		if err := manager.database.GetContext(ctx, &encoded, statement, sourceKey); err != nil || len(encoded) == 0 {
+			return nil, unavailable
+		}
+		return encoded, nil
+	}
+	var text string
+	if err := manager.database.GetContext(ctx, &text, statement, sourceKey); err != nil || text == "" {
+		return nil, unavailable
+	}
+	return text, nil
+}
+
+func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, unique []string, take int) ([]Rank, error) {
+	if manager.provider == ir.SQLite {
 		placeholders := make([]string, len(unique))
 		arguments := make([]any, 0, len(unique)+2)
-		arguments = append(arguments, encoded)
+		arguments = append(arguments, vector)
 		for position, key := range unique {
 			placeholders[position] = "?"
 			arguments = append(arguments, key)
 		}
 		arguments = append(arguments, take)
-		statement := "SELECT record_key,vec_distance_cosine(embedding,?) AS distance FROM " + manager.hidden(selected, "_vec") + " WHERE record_key IN (" + strings.Join(placeholders, ",") + ") ORDER BY distance,record_key LIMIT ?"
+		statement := "SELECT record_key,vec_distance_cosine(embedding,?) AS distance FROM " + manager.hidden(index, "_vec") + " WHERE record_key IN (" + strings.Join(placeholders, ",") + ") ORDER BY distance,record_key LIMIT ?"
 		observeexec.RecordStatement(ctx)
 		rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
 		if err != nil {
 			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: SQLite ranking failed")
 		}
 		defer rows.Close()
-		result, err = decodeRanks(rows, take)
-		return result, err
+		return decodeRanks(rows, take)
 	}
-	vector, _ := manager.vectorValue(vectors[0])
-	return manager.queryPostgreSQL(ctx, selected, vector, unique, take)
+	return manager.queryPostgreSQL(ctx, index, vector, unique, take)
 }
 
 func decodeRanks(rows *sqlx.Rows, capacity int) ([]Rank, error) {

@@ -325,18 +325,13 @@ func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
-	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", `"related_posts"`} {
+	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", "func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", `"related_posts"`} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("semantic generated surface missing %q:\n%s", fragment, source)
 		}
 	}
-	for _, obsolete := range []string{"SimilarRelatedPosts(", "CallerSimilar", "SystemSimilar"} {
-		if strings.Contains(source, obsolete) {
-			t.Fatalf("semantic generated surface retained obsolete %q:\n%s", obsolete, source)
-		}
-	}
-	if strings.Count(source, "SearchRelatedPosts(") != 2 {
-		t.Fatalf("provider definitions duplicated semantic method:\n%s", source)
+	if strings.Count(source, "SearchRelatedPosts(") != 2 || strings.Count(source, "SimilarRelatedPosts(") != 2 {
+		t.Fatalf("provider definitions duplicated semantic methods:\n%s", source)
 	}
 }
 

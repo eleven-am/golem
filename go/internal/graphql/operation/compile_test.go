@@ -736,7 +736,7 @@ func semanticSocial(t *testing.T) compilerir.CompilationIR {
 	if diagnostics := graphqlextension.AddSemanticSearchOperations(&compilation); len(diagnostics) != 0 {
 		t.Fatalf("semantic diagnostics = %#v", diagnostics)
 	}
-	if len(compilation.Contract.CustomOperations) != 1 {
+	if len(compilation.Contract.CustomOperations) != 2 {
 		t.Fatalf("semantic operations = %#v", compilation.Contract.CustomOperations)
 	}
 	return compilation

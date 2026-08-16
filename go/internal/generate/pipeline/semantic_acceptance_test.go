@@ -248,6 +248,44 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     success(observe.OperationSemanticProvider, 0, 1),
     success(observe.OperationSemanticRank, 1, 2),
   )
+  sourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
+  if err != nil { t.Fatal(err) }
+  beforeSimilar := provider.count()
+  similar, err := caller.Posts.SimilarRelated(ctx, models.Posts.ByID.Value(sourceID), 10)
+  if err != nil { t.Fatal(err) }
+  if provider.count() != beforeSimilar {
+    t.Fatalf("similarity embedded a query: calls=%%d want=%%d", provider.count(), beforeSimilar)
+  }
+  if len(similar) != 1 { t.Fatalf("similar rows=%%#v", similar) }
+  for _, item := range similar {
+    title, _ := golem.Value(item.Row(), models.Posts.Title).Get()
+    if title == "public alpha" { t.Fatalf("source row returned in its own similarity results") }
+    if strings.Contains(title, "private") { t.Fatalf("similarity disclosed an unauthorized row: %%q", title) }
+  }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticRank, 3, 1),
+  )
+  hiddenID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000002")
+  if err != nil { t.Fatal(err) }
+  missingID, err := golem.ParseUUID("10000000-0000-0000-0000-0000000000ff")
+  if err != nil { t.Fatal(err) }
+  var hiddenFailure *golem.Error
+  if _, err := caller.Posts.SimilarRelated(ctx, models.Posts.ByID.Value(hiddenID), 10); !errors.As(err, &hiddenFailure) || hiddenFailure.Code != golem.CodeNotFound {
+    t.Fatalf("similarity for an unreadable source error=%%v", err)
+  }
+  var missingFailure *golem.Error
+  if _, err := caller.Posts.SimilarRelated(ctx, models.Posts.ByID.Value(missingID), 10); !errors.As(err, &missingFailure) || missingFailure.Code != golem.CodeNotFound {
+    t.Fatalf("similarity for an absent source error=%%v", err)
+  }
+  if hiddenFailure.Error() != missingFailure.Error() {
+    t.Fatalf("unreadable source is distinguishable from absent: %%q vs %%q", hiddenFailure.Error(), missingFailure.Error())
+  }
+  if provider.count() != beforeSimilar {
+    t.Fatalf("refused similarity embedded a query: calls=%%d", provider.count())
+  }
+  assertSemanticTrace(t, observations)
+
   trusted, err := application.System().Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if len(trusted) != 3 || provider.count() != 5 {

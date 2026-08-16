@@ -321,6 +321,31 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 3},
   )
 
+  similarSourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
+  if err != nil { t.Fatal(err) }
+  beforeSimilar := provider.count()
+  similar, err := caller.Posts.SimilarRelated(ctx, models.Posts.ByID.Value(similarSourceID), 10)
+  if err != nil { t.Fatal(err) }
+  if provider.count() != beforeSimilar {
+    t.Fatalf("pgvector similarity embedded a query: calls=%d want=%d", provider.count(), beforeSimilar)
+  }
+  if len(similar) != 2 { t.Fatalf("pgvector similar rows=%#v", similar) }
+  similarFirst, _ := golem.Value(similar[0].Row(), models.Posts.Title).Get()
+  similarSecond, _ := golem.Value(similar[1].Row(), models.Posts.Title).Get()
+  if similarFirst != "public alpha twin" || similarSecond != "public beta" {
+    t.Fatalf("pgvector similar titles=%q,%q", similarFirst, similarSecond)
+  }
+  if similar[0].Distance() != 0 {
+    t.Fatalf("pgvector stored-vector distance=%v want=0", similar[0].Distance())
+  }
+  if strings.Contains(similarFirst+similarSecond, "private") || similarFirst == "public alpha" || similarSecond == "public alpha" {
+    t.Fatalf("pgvector similarity leaked source or private row: %q,%q", similarFirst, similarSecond)
+  }
+  assertTrace(t, observations,
+    observed{operation: observe.OperationSemanticRefresh, statements: 2},
+    observed{operation: observe.OperationSemanticRank, statements: 4, aggregate: 2},
+  )
+
   tx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
   if err != nil { t.Fatal(err) }
   defer tx.Rollback()
