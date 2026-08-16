@@ -9,7 +9,33 @@ permissions:
   contents: read
 
 jobs:
-  go:
+  go-fast:
+    name: Go gate and database-free packages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Check Go formatting
+        run: |
+          test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
+          git diff --check
+      - name: Vet Go policy kernel
+        run: go vet ./...
+      - name: Gate generated-tree drift and byte identity
+        run: make -C .. gate
+      - name: Verify every database-free package in parallel
+        run: make -C .. go-test-fast
+
+  go-cmd:
+    name: Go CLI and harness
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -53,10 +79,236 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - name: Verify Go policy kernel
-        run: go test -p=1 -count=1 -timeout=30m ./...
+      - name: Verify the CLI and external harness
+        run: go test -p=1 -count=1 -timeout=30m ./cmd/golem ./golemtest
+
+  go-db:
+    name: Go database-bound packages
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
+      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
+      GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres:golem@127.0.0.1:55434/golem?sslmode=disable
+      GOLEM_REQUIRE_PGVECTOR: "1"
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres-c:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      pgvector:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+        ports:
+          - 55434:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Verify the pgvector acceptance surface
+        run: go test -p=1 -count=1 -timeout=30m ./internal/generate/pipeline -run 'Semantic'
+      - name: Verify database-bound packages
+        run: |
+          go test -p=1 -count=1 -timeout=30m \
+            ./runtime ./internal/provider/postgresql ./internal/read/decode \
+            ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
+
+  go-oracle:
+    name: Go external oracles
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: mutation-and-load
+            packages: ./internal/p8oracle/mutation ./internal/p8oracle/load ./internal/p8oracle/analytics
+          - shard: failure-and-event
+            packages: ./internal/p8oracle/failure ./internal/p8oracle/event ./internal/p8oracle/natslive
+          - shard: read-and-diagnostics
+            packages: ./internal/p8oracle ./internal/p8oracle/disclosure ./internal/p8oracle/rejection ./internal/p8oracle/diagnostic
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
+      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres-c:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
+      - name: Pull the pinned Core NATS image
+        if: matrix.shard == 'failure-and-event'
+        run: docker pull "nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
+      - name: Verify external oracle shard ${{ matrix.shard }}
+        env:
+          GOLEM_P8_REQUIRE_NATS: ${{ matrix.shard == 'failure-and-event' && '1' || '0' }}
+        run: go test -p=1 -count=1 -timeout=30m ${{ matrix.packages }}
+
+  go-race:
+    name: Go race detector
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
+      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres-c:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - name: Race-check concurrent Go runtime surfaces
-        run: go test -p=1 -race -count=1 -timeout=30m ./events/... ./provider/... ./runtime
+        run: |
+          go test -race -p=1 -count=1 -timeout=30m \
+            ./events/... ./provider/... ./runtime ./queue \
+            ./internal/event/outbox ./internal/event/cdc \
+            ./internal/queue/worker ./internal/subscription
+
+  go-release:
+    name: Go documented commands and snippets
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: go
+    env:
+      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
+      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
+      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      postgres-c:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golem
+          POSTGRES_INITDB_ARGS: --locale=C
+        ports:
+          - 55433:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go/go.mod
+          cache-dependency-path: go/go.sum
       - name: Install PostgreSQL client matching the service version
         run: |
           sudo install -d /usr/share/postgresql-common/pgdg
@@ -70,12 +322,23 @@ jobs:
           pg_dump --version
           go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem \
             -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
-      - name: Vet Go policy kernel
-        run: go vet ./...
-      - name: Check Go formatting
+
+  go-suite:
+    name: Go suite
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [go-fast, go-cmd, go-db, go-oracle, go-race, go-release]
+    steps:
+      - name: Fail if any Go job failed
         run: |
-          test -z "$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)"
-          git diff --check
+          results="${{ join(needs.*.result, ' ') }}"
+          echo "job results: $results"
+          for result in $results; do
+            if [ "$result" != "success" ]; then
+              echo "a Go job did not succeed" >&2
+              exit 1
+            fi
+          done
 
   typescript:
     runs-on: ubuntu-latest
