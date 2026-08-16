@@ -19,6 +19,8 @@ GO_RACE_PACKAGES := ./events/... ./provider/... ./runtime ./queue \
 	./internal/subscription
 
 GATE_IDENTITY_TESTS := TestP5GeneratedExtensionFixtureRegeneratesByteIdentically|TestP5GeneratedSocialFixtureRegeneratesByteIdentically|TestP6GeneratedMetricsFixtureRegeneratesByteIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat
+GATE_IDENTITY_COUNT := 4
+GATE_GOLDEN_TEST := TestInspectSocialGoldenAndDeterminism
 
 export GOLEM_P8_REQUIRE_POSTGRESQL ?= 1
 export GOLEM_TEST_POSTGRES_DSN ?= postgresql://postgres@127.0.0.1:55433/golem?sslmode=disable
@@ -28,7 +30,7 @@ export GOLEM_TEST_PGVECTOR_DSN ?= postgresql://postgres:golem@127.0.0.1:55434/go
 .PHONY: help install build test check \
 	ts-install ts-build ts-test ts-benchmark \
 	go-download go-build go-install go-test go-race go-quality go-vuln \
-	gate gate-work gate-check gate-full verify verify-quick go-test-fast go-test-db go-test-serial \
+	gate gate-work gate-check gate-names gate-full verify verify-quick go-test-fast go-test-db go-test-serial \
 	go-tier-check postgres-check
 
 help: ## Show available targets
@@ -73,8 +75,14 @@ gate-check: gate-work ## Prove the example's generated tree and migration head a
 	cd $(SOCIAL_DIR) && GOWORK=$(GATE_WORK) $(CURDIR)/$(GO_BINARY) check \
 		--schema ./social --app-out ./social --migrations migrations
 
-gate: gate-check ## Fast pre-push gate: drift and byte-identity, no database required
-	cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 -run 'TestInspectSocialGoldenAndDeterminism' ./cmd/golem
+gate-names: ## Fail if a gate filter no longer matches the tests it names
+	@cd $(GO_DIR) && matched=$$(GOWORK=off $(GO) test -list '$(GATE_IDENTITY_TESTS)' ./runtime | grep -c '^Test' || true); \
+	test "$$matched" -eq $(GATE_IDENTITY_COUNT) || { echo "gate identity filter matched $$matched tests; want $(GATE_IDENTITY_COUNT)" >&2; exit 1; }
+	@cd $(GO_DIR) && matched=$$(GOWORK=off $(GO) test -list '$(GATE_GOLDEN_TEST)' ./cmd/golem | grep -c '^Test' || true); \
+	test "$$matched" -eq 1 || { echo "gate golden filter matched $$matched tests; want 1" >&2; exit 1; }
+
+gate: gate-check gate-names ## Fast pre-push gate: drift and byte-identity, no database required
+	cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 -run '$(GATE_GOLDEN_TEST)' ./cmd/golem
 	cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 -run '$(GATE_IDENTITY_TESTS)' ./runtime
 	cd $(GO_DIR) && GOWORK=off $(GO) test -count=1 ./internal/migration/workflow ./internal/physical ./observe
 
