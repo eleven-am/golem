@@ -151,6 +151,7 @@ func assertPostgreSQLClaimDepthSnapshot(t *testing.T, dsn string) {
 	insertPostgreSQLDeliveryFact(t, database, crashCause, postgresqlDeliveryUUID(805), 1)
 	p8PostgreSQLMaterializeDelivery(t, coordinator.(*eventCoordinator), database)
 	p8RunPostgreSQLDepthCrash(t, dsn, crashCause)
+	p8AwaitPostgreSQLDeliveryUnlocked(t, database, coordinator.(*eventCoordinator).deliveryTable(), crashCause)
 	var rolledBack struct {
 		Status string         `db:"status"`
 		Token  sql.NullString `db:"lease_token"`
@@ -262,6 +263,25 @@ func p8PostgreSQLDepthSubprocessWorker(t *testing.T, dsn, output, mode, causatio
 	}
 	if err := os.WriteFile(output, contents, 0o600); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func p8AwaitPostgreSQLDeliveryUnlocked(t *testing.T, database *sqlx.DB, delivery, causation string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		var lockable string
+		err := database.GetContext(context.Background(), &lockable, `SELECT "causation_id" FROM `+delivery+` WHERE "causation_id"=$1 FOR UPDATE SKIP LOCKED`, causation)
+		if err == nil {
+			return
+		}
+		if !errors.Is(err, sql.ErrNoRows) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("crash worker transaction still holds the delivery row lock")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
