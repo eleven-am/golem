@@ -25,6 +25,8 @@ import (
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
+	queueworker "github.com/eleven-am/golem/go/internal/queue/worker"
 	readbind "github.com/eleven-am/golem/go/internal/read/bind"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
@@ -34,6 +36,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/subscription"
 	"github.com/eleven-am/golem/go/observe"
 	providerapi "github.com/eleven-am/golem/go/provider"
+	"github.com/eleven-am/golem/go/queue"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -66,6 +69,9 @@ type Config[P, A any] struct {
 	// caller snapshot shared by policy construction and hooks. When omitted,
 	// ForPrincipal accepts only deeply immutable value actors.
 	SnapshotActor func(A) (A, error)
+	// Queue enables the durable job queue. When omitted, no job storage is
+	// created and every queue entry point refuses with CodeConfigInvalid.
+	Queue *QueueConfig
 }
 
 // App contains immutable process-wide metadata only. No actor, policy set,
@@ -109,6 +115,11 @@ type App[P, A any] struct {
 	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
 	nextExecution     atomic.Uint64
 	semantic          *semanticruntime.Manager
+	queueStore        queueprovider.Store
+	queueWorker       *queueworker.Worker
+	queueOperator     queue.Operator
+	queueLimits       queue.Limits
+	queueRunning      atomic.Bool
 }
 
 // Caller is one principal-bound execution. Its policy set and identity are not
@@ -277,6 +288,9 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
+		return nil, err
+	}
+	if err := app.initializeQueueRuntime(ctx, config.Queue); err != nil {
 		return nil, err
 	}
 	return app, nil

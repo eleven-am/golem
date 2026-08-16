@@ -67,6 +67,7 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 			},
 		},
 	}
+	schema.Unmanaged = append(schema.Unmanaged, physical.QueueUnmanagedObjects()...)
 	models := append([]ir.ModelDeclIR(nil), model.Models...)
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
 	for _, declaration := range models {

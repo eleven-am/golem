@@ -33,6 +33,22 @@ type executionBinding struct {
 	mutation     executionMutationConfig
 	observation  *observeexec.Span
 	observer     observe.Observer
+	queueWake    atomic.Pointer[func()]
+}
+
+func (binding *executionBinding) queueEnqueued(wake func()) {
+	if binding != nil && wake != nil {
+		binding.queueWake.Store(&wake)
+	}
+}
+
+func (binding *executionBinding) notifyQueue() {
+	if binding == nil {
+		return
+	}
+	if wake := binding.queueWake.Load(); wake != nil {
+		(*wake)()
+	}
 }
 
 type executionMutationConfig struct {
@@ -336,6 +352,7 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}
 	commitMutationBinding(ctx, binding)
+	binding.notifyQueue()
 	return nil
 }
 

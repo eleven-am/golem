@@ -43,6 +43,7 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		Provider: provider.Manifest(), Namespace: physical.Namespace{Name: namespace},
 		System: systemSchema(),
 	}
+	schema.Unmanaged = append(schema.Unmanaged, physical.QueueUnmanagedObjects()...)
 	enums := make(map[ir.EnumID]ir.EnumIR, len(model.Enums))
 	for _, enum := range model.Enums {
 		enums[enum.ID] = enum

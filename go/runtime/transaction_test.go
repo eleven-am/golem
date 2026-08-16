@@ -49,6 +49,11 @@ type transactionFixture struct {
 
 func openTransactionFixture(t *testing.T) transactionFixture {
 	t.Helper()
+	return openTransactionFixtureWith(t, nil)
+}
+
+func openTransactionFixtureWith(t *testing.T, queueConfig *QueueConfig) transactionFixture {
+	t.Helper()
 	ctx := context.Background()
 	fixture := schematest.New(t)
 	database, _, err := sqlite.New().Open(ctx, "file:"+filepath.Join(t.TempDir(), "transactions.db"))
@@ -95,6 +100,7 @@ func openTransactionFixture(t *testing.T) transactionFixture {
 		ResolvePrincipal: func(_ context.Context, principal testPrincipal) (testActor, error) {
 			return testActor{Allow: principal.Allow}, nil
 		},
+		Queue: queueConfig,
 	})
 	if err != nil {
 		t.Fatal(err)

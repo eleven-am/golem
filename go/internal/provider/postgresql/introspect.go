@@ -323,7 +323,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 	if err = introspectIndexes(ctx, query, actual.Namespace.Name, expectedTables, tableByOID, columnsByAttnum); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	actual.System, err = introspectSystem(ctx, query, expectedNormalized.System)
+	actual.System, err = introspectSystem(ctx, query, expectedNormalized.System, allowed)
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
@@ -650,7 +650,7 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 	return nil
 }
 
-func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.SystemSchema) (physical.SystemSchema, error) {
+func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.SystemSchema, allowed map[string]bool) (physical.SystemSchema, error) {
 	if expected.Version == 0 {
 		return physical.SystemSchema{}, nil
 	}
@@ -664,6 +664,9 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		if err := rows.Scan(&name); err != nil {
 			rows.Close()
 			return physical.SystemSchema{}, err
+		}
+		if allowed["table\x00"+name] {
+			continue
 		}
 		names = append(names, name)
 	}
