@@ -1,0 +1,1665 @@
+{
+  "Version": 3,
+  "CanonicalVersion": 3,
+  "Provider": {
+    "Provider": "postgresql",
+    "Driver": {
+      "Module": "github.com/jackc/pgx/v5/stdlib",
+      "Adapter": "sqlx"
+    },
+    "MinimumVersion": {
+      "Major": 15,
+      "Minor": 0,
+      "Patch": 0
+    },
+    "Capabilities": [
+      {
+        "ID": "analytics.exact-arithmetic.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.ascii-insensitive-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.binary-text.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.exact-json.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "policy.relation-correlation.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.advanced_indexes",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.advisory_xact_lock",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      },
+      {
+        "ID": "postgresql.generated_columns",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "postgresql.jsonb",
+        "Version": 1,
+        "Verification": "version_floor"
+      },
+      {
+        "ID": "scalar-list.json-array.v1",
+        "Version": 1,
+        "Verification": "runtime_probe"
+      }
+    ]
+  },
+  "Namespace": {
+    "Name": "public"
+  },
+  "Tables": [
+    {
+      "ID": "364a3861c2d382ec0f02e83974f3b3c4",
+      "Name": "comments",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "a1b8335883c74028b9d15f7bba2d0f30",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "025be8ae0426b680839a18767fd00978",
+          "Name": "post_id",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "9a1015ac166c66934d347f7ec9daf925",
+          "Name": "author_id",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "7e12e57c54b9b4785a8928db1172ad00",
+          "Name": "parent_id",
+          "Ordinal": 3,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": true,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "74780c9d955be686287e3fac79a30eb2",
+          "Name": "body",
+          "Ordinal": 4,
+          "Storage": {
+            "Kind": "postgresql.text",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "93873b13a4b34c536891e08240918eb7",
+          "Name": "created_at",
+          "Ordinal": 5,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "57e8e4fe611eb12c6261a6077346cf5c",
+        "Name": "pk_comments",
+        "Columns": [
+          "a1b8335883c74028b9d15f7bba2d0f30"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [],
+      "ForeignKeys": [
+        {
+          "ID": "0b289ac87a91ab0b939c260eb88ddb1e",
+          "Name": "fk_comments_parent_id",
+          "Columns": [
+            "7e12e57c54b9b4785a8928db1172ad00"
+          ],
+          "ReferencedTable": "364a3861c2d382ec0f02e83974f3b3c4",
+          "ReferencedColumns": [
+            "a1b8335883c74028b9d15f7bba2d0f30"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "20f270cf987865089477fd4954db3d79",
+          "Name": "fk_comments_author_id",
+          "Columns": [
+            "9a1015ac166c66934d347f7ec9daf925"
+          ],
+          "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+          "ReferencedColumns": [
+            "184fbe94f719aa72470b6ab6b0eecfa1"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "8efb3b16d3aa3ff12f99fe4447bed086",
+          "Name": "fk_comments_post_id",
+          "Columns": [
+            "025be8ae0426b680839a18767fd00978"
+          ],
+          "ReferencedTable": "b11b75f11668a6f7019d05b1740d5118",
+          "ReferencedColumns": [
+            "e20069ceb3135c47447fc322989acceb"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        }
+      ],
+      "Checks": [],
+      "Indexes": [
+        {
+          "ID": "d66898568578c9181ee8eb4017e9de49",
+          "Name": "idx_comments_post_parent_created",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "025be8ae0426b680839a18767fd00978",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "7e12e57c54b9b4785a8928db1172ad00",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "93873b13a4b34c536891e08240918eb7",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "a1b8335883c74028b9d15f7bba2d0f30",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "b2a6fb289365ab32869f1b2862cc6b5b",
+      "Name": "post_tags",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "44075e35d88b9d06bdc3c011f32f8c73",
+          "Name": "post_id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "dc4c50eb34defbd52abb9d4fc5e51be2",
+          "Name": "tag_name",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 64,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "c86ed7ebd8270aeab98eb584f906c439",
+        "Name": "pk_post_tags",
+        "Columns": [
+          "44075e35d88b9d06bdc3c011f32f8c73",
+          "dc4c50eb34defbd52abb9d4fc5e51be2"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [],
+      "ForeignKeys": [
+        {
+          "ID": "7b7df9bded5e2529a8c8d18d400df54e",
+          "Name": "fk_post_tags_tag_name",
+          "Columns": [
+            "dc4c50eb34defbd52abb9d4fc5e51be2"
+          ],
+          "ReferencedTable": "80fe9aaf21426d7926ca36ad6e8a95df",
+          "ReferencedColumns": [
+            "927ba64decd704c758567b1b35e6c7fa"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "fae7acd008cdadf3660296730a3ecf88",
+          "Name": "fk_post_tags_post_id",
+          "Columns": [
+            "44075e35d88b9d06bdc3c011f32f8c73"
+          ],
+          "ReferencedTable": "b11b75f11668a6f7019d05b1740d5118",
+          "ReferencedColumns": [
+            "e20069ceb3135c47447fc322989acceb"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        }
+      ],
+      "Checks": [],
+      "Indexes": [
+        {
+          "ID": "7ca42b5e056007232b865485b54c2535",
+          "Name": "idx_post_tags_tag_post",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "dc4c50eb34defbd52abb9d4fc5e51be2",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "44075e35d88b9d06bdc3c011f32f8c73",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "b11b75f11668a6f7019d05b1740d5118",
+      "Name": "posts",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "e20069ceb3135c47447fc322989acceb",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "29224b6d31711950e2ef31749e0f3bd0",
+          "Name": "author_id",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "afce81771edaa185328ec949768aaff2",
+          "Name": "title",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 160,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "f8f2f3fcc4efbe5905f9ea29c949762a",
+          "Name": "body",
+          "Ordinal": 3,
+          "Storage": {
+            "Kind": "postgresql.text",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "d998a29c13569fe87d74f00b7f28a78f",
+          "Name": "published",
+          "Ordinal": 4,
+          "Storage": {
+            "Kind": "postgresql.boolean",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "bool",
+              "canonical": "false"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "d3b5a464f819a7f0ac93e1491a2279fe",
+          "Name": "reactions",
+          "Ordinal": 5,
+          "Storage": {
+            "Kind": "postgresql.smallint",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "integer",
+              "canonical": "0"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "3c205e617cd8c798bd907ff5fd8a2fb6",
+          "Name": "priority",
+          "Ordinal": 6,
+          "Storage": {
+            "Kind": "postgresql.integer",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "integer",
+              "canonical": "0"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "cdcefdcbcd9fbe3d0533d250541e159a",
+          "Name": "views",
+          "Ordinal": 7,
+          "Storage": {
+            "Kind": "postgresql.bigint",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "integer",
+              "canonical": "0"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "2ac2d0174bc2fc76b10167255ba2c0dc",
+          "Name": "momentum",
+          "Ordinal": 8,
+          "Storage": {
+            "Kind": "postgresql.real",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "float",
+              "canonical": "0"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "939477f819b14905043b736dcced5148",
+          "Name": "rating",
+          "Ordinal": 9,
+          "Storage": {
+            "Kind": "postgresql.double_precision",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "float",
+              "canonical": "0"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "5525976ba84c55e7ea0bdfb82d539695",
+          "Name": "budget",
+          "Ordinal": 10,
+          "Storage": {
+            "Kind": "postgresql.numeric",
+            "Precision": 18,
+            "Scale": 2,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "decimal",
+              "canonical": "0.00"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "ede0935e24386b508a62332396f6508b",
+          "Name": "live_date",
+          "Ordinal": 11,
+          "Storage": {
+            "Kind": "postgresql.date",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "84a84e6d04dbca50e5109e55b455a4f9",
+          "Name": "live_time",
+          "Ordinal": 12,
+          "Storage": {
+            "Kind": "postgresql.time",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "11f9c4adff40cc4daa268c6132ad36d8",
+          "Name": "metadata",
+          "Ordinal": 13,
+          "Storage": {
+            "Kind": "postgresql.jsonb",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": [
+            {
+              "Capability": "postgresql.jsonb",
+              "Owner": {
+                "Kind": "field",
+                "ModelID": "b11b75f11668a6f7019d05b1740d5118",
+                "FieldID": "11f9c4adff40cc4daa268c6132ad36d8",
+                "ObjectID": ""
+              }
+            }
+          ]
+        },
+        {
+          "ID": "99dba4ce733b9a849ddcc603c31b5c83",
+          "Name": "visibility",
+          "Ordinal": 14,
+          "Storage": {
+            "Kind": "postgresql.text",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "literal",
+            "Literal": {
+              "kind": "string",
+              "canonical": "PUBLIC"
+            },
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "464e7eb85629348cdcdb079a6ce847a8",
+          "Name": "topics",
+          "Ordinal": 15,
+          "Storage": {
+            "Kind": "postgresql.jsonb",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": [
+            {
+              "Capability": "postgresql.jsonb",
+              "Owner": {
+                "Kind": "field",
+                "ModelID": "b11b75f11668a6f7019d05b1740d5118",
+                "FieldID": "464e7eb85629348cdcdb079a6ce847a8",
+                "ObjectID": ""
+              }
+            }
+          ]
+        },
+        {
+          "ID": "62c5faa04f85a2985a6da0e2d755bed1",
+          "Name": "created_at",
+          "Ordinal": 16,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "ca003a48c4490b5e5891a02655b831d5",
+          "Name": "updated_at",
+          "Ordinal": 17,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "ad5ef8d08dc489b6b76c49de55317479",
+        "Name": "pk_posts",
+        "Columns": [
+          "e20069ceb3135c47447fc322989acceb"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [],
+      "ForeignKeys": [
+        {
+          "ID": "c5a005dd9ac0f876deb2fe9b548915e6",
+          "Name": "fk_posts_author_id",
+          "Columns": [
+            "29224b6d31711950e2ef31749e0f3bd0"
+          ],
+          "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+          "ReferencedColumns": [
+            "184fbe94f719aa72470b6ab6b0eecfa1"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        }
+      ],
+      "Checks": [
+        {
+          "ID": "1f8e4251522864292ffc1dbcaa05d54a",
+          "Name": "ck_json_array_1f8e42515228",
+          "Expression": {
+            "Kind": "operator",
+            "Type": {
+              "Kind": "postgresql.boolean",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Symbol": {
+              "Identity": "golem.schema.predicate.equal.v1",
+              "Kind": "operator",
+              "Version": 1,
+              "Provider": "portable"
+            },
+            "Column": null,
+            "Literal": null,
+            "Operands": [
+              {
+                "Kind": "function",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": {
+                  "Identity": "golem.postgresql.function.jsonb-typeof.v1",
+                  "Kind": "function",
+                  "Version": 1,
+                  "Provider": "postgresql"
+                },
+                "Column": null,
+                "Literal": null,
+                "Operands": [
+                  {
+                    "Kind": "column",
+                    "Type": {
+                      "Kind": "postgresql.jsonb",
+                      "Precision": 0,
+                      "Scale": 0,
+                      "Length": 0,
+                      "Symbol": null
+                    },
+                    "Nullable": false,
+                    "Symbol": null,
+                    "Column": "464e7eb85629348cdcdb079a6ce847a8",
+                    "Literal": null,
+                    "Operands": []
+                  }
+                ]
+              },
+              {
+                "Kind": "literal",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": null,
+                "Column": null,
+                "Literal": {
+                  "kind": "string",
+                  "canonical": "array"
+                },
+                "Operands": []
+              }
+            ]
+          },
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "eb9c2f1cf6eca9d1d3f77d8cc14a9f08",
+          "Name": "ck_enum_eb9c2f1cf6ec",
+          "Expression": {
+            "Kind": "operator",
+            "Type": {
+              "Kind": "postgresql.boolean",
+              "Precision": 0,
+              "Scale": 0,
+              "Length": 0,
+              "Symbol": null
+            },
+            "Nullable": false,
+            "Symbol": {
+              "Identity": "golem.schema.predicate.in.v1",
+              "Kind": "operator",
+              "Version": 1,
+              "Provider": "portable"
+            },
+            "Column": null,
+            "Literal": null,
+            "Operands": [
+              {
+                "Kind": "column",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": null,
+                "Column": "99dba4ce733b9a849ddcc603c31b5c83",
+                "Literal": null,
+                "Operands": []
+              },
+              {
+                "Kind": "literal",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": null,
+                "Column": null,
+                "Literal": {
+                  "kind": "string",
+                  "canonical": "PUBLIC"
+                },
+                "Operands": []
+              },
+              {
+                "Kind": "literal",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": null,
+                "Column": null,
+                "Literal": {
+                  "kind": "string",
+                  "canonical": "FOLLOWERS"
+                },
+                "Operands": []
+              },
+              {
+                "Kind": "literal",
+                "Type": {
+                  "Kind": "postgresql.text",
+                  "Precision": 0,
+                  "Scale": 0,
+                  "Length": 0,
+                  "Symbol": null
+                },
+                "Nullable": false,
+                "Symbol": null,
+                "Column": null,
+                "Literal": {
+                  "kind": "string",
+                  "canonical": "PRIVATE"
+                },
+                "Operands": []
+              }
+            ]
+          },
+          "RequiredCapabilities": null
+        }
+      ],
+      "Indexes": [
+        {
+          "ID": "28c22df0a265496faf6aa4a0fd0774ce",
+          "Name": "idx_posts_feed",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "d998a29c13569fe87d74f00b7f28a78f",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "62c5faa04f85a2985a6da0e2d755bed1",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "e20069ceb3135c47447fc322989acceb",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "f0500cb5bdb7cc06bb0f6f596178050e",
+          "Name": "idx_posts_author_created",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "29224b6d31711950e2ef31749e0f3bd0",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "62c5faa04f85a2985a6da0e2d755bed1",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "e20069ceb3135c47447fc322989acceb",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "9f0a32ff74e8340344dbde26a58ba9b2",
+      "Name": "sessions",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "230e5e19e0a2649a5fc5a304a7dbd158",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "e5c12c57b16ed638dbb0d9df456d3965",
+          "Name": "user_id",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "44933764614533b988c40e0a89b1c9aa",
+          "Name": "token_hash",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.bytea",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "42e3e2bd1988a04db96d90478750a7fb",
+          "Name": "expires_at",
+          "Ordinal": 3,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "fb3dcb5c417c3754b24dec493e09ed5b",
+          "Name": "created_at",
+          "Ordinal": 4,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "f261c97c2c9901331ca61b195b58dbe7",
+        "Name": "pk_sessions",
+        "Columns": [
+          "230e5e19e0a2649a5fc5a304a7dbd158"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [
+        {
+          "ID": "7a68c5c5360721307ab3a86124fb05dd",
+          "Name": "uq_sessions_token_hash",
+          "Columns": [
+            "44933764614533b988c40e0a89b1c9aa"
+          ],
+          "RequiredCapabilities": null
+        }
+      ],
+      "ForeignKeys": [
+        {
+          "ID": "459e935424153b30fdfae2474c33af69",
+          "Name": "fk_sessions_user_id",
+          "Columns": [
+            "e5c12c57b16ed638dbb0d9df456d3965"
+          ],
+          "ReferencedTable": "d5239ec6065febe61dad1b8d0b66bf07",
+          "ReferencedColumns": [
+            "184fbe94f719aa72470b6ab6b0eecfa1"
+          ],
+          "OnUpdate": "noAction",
+          "OnDelete": "cascade",
+          "Deferrable": "notDeferrable",
+          "RequiredCapabilities": null
+        }
+      ],
+      "Checks": [],
+      "Indexes": [
+        {
+          "ID": "7d9812e57dc863700c146b1bceb8568a",
+          "Name": "idx_sessions_user_expires",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "e5c12c57b16ed638dbb0d9df456d3965",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "42e3e2bd1988a04db96d90478750a7fb",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "80fe9aaf21426d7926ca36ad6e8a95df",
+      "Name": "tags",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "b5d7a5b516a8ed94b498d2363a247cf1",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "927ba64decd704c758567b1b35e6c7fa",
+          "Name": "name",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 64,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "0694442681975a158ae95164361a06a3",
+        "Name": "pk_tags",
+        "Columns": [
+          "b5d7a5b516a8ed94b498d2363a247cf1"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [
+        {
+          "ID": "21e8a4b720d18bbe29408664db144813",
+          "Name": "uq_tags_name",
+          "Columns": [
+            "927ba64decd704c758567b1b35e6c7fa"
+          ],
+          "RequiredCapabilities": null
+        }
+      ],
+      "ForeignKeys": [],
+      "Checks": [],
+      "Indexes": [],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "d5239ec6065febe61dad1b8d0b66bf07",
+      "Name": "users",
+      "OptimisticConcurrency": null,
+      "Columns": [
+        {
+          "ID": "184fbe94f719aa72470b6ab6b0eecfa1",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "572d5086401285786732c644f23928fd",
+          "Name": "handle",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 40,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "b16aa8e13cab4c3f4fcd1e40e940417a",
+          "Name": "email",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.varchar",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 255,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "d3b38a1584a601d5280c8456c574acf2",
+          "Name": "created_at",
+          "Ordinal": 3,
+          "Storage": {
+            "Kind": "postgresql.timestamptz",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 6,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "3851793d71591b5196fc7d8e636d77d2",
+        "Name": "pk_users",
+        "Columns": [
+          "184fbe94f719aa72470b6ab6b0eecfa1"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [
+        {
+          "ID": "4efeaffa9dd9390632a136d603942dd4",
+          "Name": "uq_users_handle",
+          "Columns": [
+            "572d5086401285786732c644f23928fd"
+          ],
+          "RequiredCapabilities": null
+        }
+      ],
+      "ForeignKeys": [],
+      "Checks": [],
+      "Indexes": [
+        {
+          "ID": "b4aadff0f57e36295c9027590f1c96a8",
+          "Name": "idx_users_created",
+          "Unique": false,
+          "Method": "btree",
+          "Keys": [
+            {
+              "Column": "d3b38a1584a601d5280c8456c574acf2",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            },
+            {
+              "Column": "184fbe94f719aa72470b6ab6b0eecfa1",
+              "Expression": null,
+              "Direction": "asc",
+              "Nulls": "default",
+              "Collation": null,
+              "OpClass": null
+            }
+          ],
+          "Include": null,
+          "Predicate": null,
+          "CreationMode": "transactional",
+          "RequiredCapabilities": null
+        }
+      ],
+      "RequiredCapabilities": null
+    },
+    {
+      "ID": "c3e1210586ec19f9c55a7b5f15728164",
+      "Name": "versioned_notes",
+      "OptimisticConcurrency": "019c5d089edd46d97fb11b7b6893bcaf",
+      "Columns": [
+        {
+          "ID": "c9b5e3b565cc624d5c431c99bbf2bf0c",
+          "Name": "id",
+          "Ordinal": 0,
+          "Storage": {
+            "Kind": "postgresql.uuid",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "119b733f77568cab2854d2a51c72c4f1",
+          "Name": "body",
+          "Ordinal": 1,
+          "Storage": {
+            "Kind": "postgresql.text",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        },
+        {
+          "ID": "019c5d089edd46d97fb11b7b6893bcaf",
+          "Name": "version",
+          "Ordinal": 2,
+          "Storage": {
+            "Kind": "postgresql.bigint",
+            "Precision": 0,
+            "Scale": 0,
+            "Length": 0,
+            "Symbol": null
+          },
+          "Nullable": false,
+          "Default": {
+            "Kind": "none",
+            "Literal": null,
+            "Expression": null
+          },
+          "Generated": null,
+          "Collation": null,
+          "RequiredCapabilities": null
+        }
+      ],
+      "PrimaryKey": {
+        "ID": "ad3a8c84961484b8fc4d1a2bc5c50162",
+        "Name": "pk_versioned_notes",
+        "Columns": [
+          "c9b5e3b565cc624d5c431c99bbf2bf0c"
+        ],
+        "RequiredCapabilities": null
+      },
+      "Uniques": [],
+      "ForeignKeys": [],
+      "Checks": [],
+      "Indexes": [],
+      "RequiredCapabilities": null
+    }
+  ],
+  "Extensions": [],
+  "System": {
+    "Version": 1,
+    "Namespace": {
+      "Name": "_golem"
+    },
+    "Objects": [
+      {
+        "ID": "076704f0bfb30b5fed47137811a6dd18",
+        "Kind": "upsert_guard",
+        "Version": 1,
+        "Name": "_golem_upsert_guard",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "14b2d0b9de583fe675fa72de1d1c78c8",
+        "Kind": "outbox",
+        "Version": 1,
+        "Name": "_golem_outbox",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "51aa5c96fd5d24e27e182ed85f7bcbf2",
+        "Kind": "outbox_delivery",
+        "Version": 1,
+        "Name": "_golem_outbox_delivery",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "cb3020cd708be72c384f431749769c98",
+        "Kind": "migration_ledger",
+        "Version": 1,
+        "Name": "_golem_migrations",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      },
+      {
+        "ID": "e28aeab0927ce864e8d65a1e1dc62fc9",
+        "Kind": "migration_lock",
+        "Version": 1,
+        "Name": "_golem_migration_lock",
+        "Attributes": [],
+        "RequiredCapabilities": null
+      }
+    ]
+  },
+  "Unmanaged": null
+}

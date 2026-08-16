@@ -4,9 +4,9 @@
   "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
   "contractFingerprint": "444f42fab517cb460becd86047c5d84361d22276b3c122fe187322b73805dbf5",
   "provider": "postgresql",
-  "physicalFingerprint": "b132c1dc42a13cd35ca3cb52761d721001cdd74d426b7a93d7485cf2ec78c83f",
+  "physicalFingerprint": "3f176282b5e416448e65b242fec58899897503834b561fb153049536603ae954",
   "systemFingerprint": "a8acfafea2807bf7220a2374057669178362f33eca8a9b1a3284159db81c4eb6",
-  "generationDigest": "8cc8ca4d9394e310f5483513f6f2ceb7b4d11d233b45f93dd8e28a82f689f5ce",
+  "generationDigest": "1d6b9a939a19378a22129fe33eb710e126765950d95fdbee40a7ba1661a30864",
   "generatorVersion": "p1-v1",
   "templateAbiVersion": "p8-go-abi-v7",
   "payload": {
@@ -1672,6 +1672,23 @@
         }
       ]
     },
-    "Unmanaged": null
+    "Unmanaged": [
+      {
+        "Kind": "index",
+        "Name": "golem_queue_claim"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_dedupe"
+      },
+      {
+        "Kind": "index",
+        "Name": "golem_queue_exclusive"
+      },
+      {
+        "Kind": "table",
+        "Name": "golem_queue"
+      }
+    ]
   }
 }
