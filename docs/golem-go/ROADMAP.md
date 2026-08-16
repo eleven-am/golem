@@ -5,7 +5,7 @@ in the module and carries its own acceptance evidence. Every other entry is
 direction only and is not a claim of released functionality.
 
 The published public ABI contracts and the compatibility manifest listed in
-[`README.md`](./README.md) are the controlling record for the Go module. This
+`README` are the controlling record for the Go module. This
 document records deliberately accepted follow-up direction so a future
 implementation begins from an explicit product decision rather than quietly
 expanding the core.
@@ -80,10 +80,8 @@ including the external generated-application gate under `-race` against SQLite
 and both mandatory PostgreSQL collation profiles. The kit's public surface is
 inside the frozen public Go API corpus.
 
-The complete implementation and acceptance contract, including its recorded
-limitations, is [`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md). Application
-usage is documented in [`QUICKSTART.md`](./QUICKSTART.md) and
-[`PRODUCTION.md`](./PRODUCTION.md).
+Application usage is documented in `QUICKSTART.md` and the `golemtest` package
+godoc.
 
 ## SQLite WAL and reviewed PostgreSQL data evolution — implemented
 
@@ -95,31 +93,26 @@ narrow checksummed transactional backfill workflow for new required columns.
 reviewed backfill holds its target table for one transaction rather than
 running online.
 
-The eighteen mandatory acceptance gates named in the contract exist and pass,
-with the live PostgreSQL gates running on both mandatory collation profiles
-without skips. The exact lifecycle, allowlist, backfill boundary, crash
-behavior, and acceptance gates are in
-[`SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md`](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md).
+Its gates pass with the live PostgreSQL gates running on both mandatory
+collation profiles without skips. Operator guidance for backup, recovery, and
+reviewed backfills is in `PRODUCTION.md`.
 
-## Human-readable migration plans
+## Human-readable migration plans — implemented
 
-Golem will provide a read-only human explanation of its existing typed,
-reviewed migration plan. The output will show ordered operations and phases,
+Golem provides a read-only human explanation of its existing typed,
+reviewed migration plan. The output shows ordered operations and phases,
 dependencies, provider, risk/approval requirements, value-preservation or
 data-loss classification, locking/rewrite/manual warnings, backfill
-postconditions, and immutable artifact checksums. It will have concise terminal
-text and versioned machine JSON.
+postconditions, and immutable artifact checksums. It has concise terminal text and
+versioned machine JSON.
 
 This is a presentation of the authoritative typed plan, not a second planner.
-It will not apply or modify a migration, approve risk, guess execution time,
+It does not apply or modify a migration, approve risk, guess execution time,
 generate AI prose, hide reviewed SQL, or promise zero downtime.
 
-The complete implementation and acceptance contract is
-[`HUMAN-READABLE-MIGRATION-PLANS.md`](./HUMAN-READABLE-MIGRATION-PLANS.md).
+## First-class optimistic concurrency — implemented
 
-## First-class optimistic concurrency
-
-Golem will support an explicit, opt-in model concurrency token. Generated
+Golem supports an explicit, opt-in model concurrency token. Generated
 update, delete, upsert, nested, Caller, transaction, and GraphQL paths will
 require the caller's expected token where the operation can overwrite existing
 state. A successful write advances the token atomically; a stale token changes
@@ -131,13 +124,10 @@ silently retry application closures, merge records, choose conflict winners,
 retain document history, or infer concurrency from timestamps or field names.
 Applications decide whether to reload, merge, retry, or report the conflict.
 
-The complete implementation and acceptance contract is
-[`OPTIMISTIC-CONCURRENCY.md`](./OPTIMISTIC-CONCURRENCY.md).
+## Safe query-plan visibility — implemented
 
-## Safe query-plan visibility
-
-Golem will expose a deliberately sanitized, read-only operator diagnostic for
-the execution plan of a typed Golem query. It will identify bounded structural
+Golem exposes a deliberately sanitized, read-only operator diagnostic for
+the execution plan of a typed Golem query. It identifies bounded structural
 facts such as provider, operation/model IDs, statement count, scan versus index
 strategy, join/relation strategy, sort/aggregate presence, bounded statement
 shape, and applicable Golem limits. It exists to catch accidental full scans,
@@ -149,9 +139,6 @@ physical names, unrestricted provider `EXPLAIN` output, database handles, or an
 application-facing query-hint/optimizer escape hatch. It must use the same
 authorization and typed planning boundary as execution, perform no mutation,
 and remain bounded and redacted on both providers.
-
-The complete implementation and acceptance contract is
-[`SAFE-QUERY-PLAN-VISIBILITY.md`](./SAFE-QUERY-PLAN-VISIBILITY.md).
 
 ## KISS boundaries
 

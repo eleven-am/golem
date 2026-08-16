@@ -151,7 +151,7 @@ And an explicit relation projection that omits a field some condition depends on
 makes the runtime refuse the statement rather than guess. Both are properties of
 the runtime, not of the kit, and both are covered by the kit's external
 generated-application evidence.
-[`POLICY-TESTING-KIT.md`](./POLICY-TESTING-KIT.md) records the full contract and
+The `golemtest` package documents the full contract and
 its recorded limitations.
 
 ## Hooks
