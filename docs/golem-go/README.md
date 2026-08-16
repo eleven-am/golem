@@ -17,11 +17,8 @@ migrations, events, and operational limits.
 ## Focused guides
 
 - [Semantic indexes](./SEMANTIC-INDEXES.md)
-- [Human-readable migration plans](./HUMAN-READABLE-MIGRATION-PLANS.md)
-- [Optimistic concurrency](./OPTIMISTIC-CONCURRENCY.md)
-- [Policy testing kit](./POLICY-TESTING-KIT.md)
-- [Safe query-plan visibility](./SAFE-QUERY-PLAN-VISIBILITY.md)
-- [SQLite WAL and reviewed data evolution](./SQLITE-WAL-AND-REVIEWED-DATA-EVOLUTION.md)
+- [Frontend hosting and link previews](./RENDER.md)
+- [Durable job queue](./QUEUE.md)
 
 Future product direction is tracked in [ROADMAP.md](./ROADMAP.md); it is not a
 claim of shipped functionality.
