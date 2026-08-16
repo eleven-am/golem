@@ -16,8 +16,6 @@ type LowerOptions struct {
 // a worker carries four names and no storage. The physical format stays at
 // version 3, no SystemObjectKind is introduced, and the store creates the
 // objects itself before its first claim.
-//
-// listed so introspection tolerates objects the queue store creates itself.
 func QueueUnmanagedObjects() []UnmanagedObject {
 	return []UnmanagedObject{
 		{Kind: "table", Name: "golem_queue"},
