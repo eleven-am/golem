@@ -144,7 +144,7 @@ func TestMigrationExplainProspectiveAdapterPreservesProviderExtensionRecreationR
 			{ID: identityID, Name: "private_id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
 			{ID: titleID, Name: "private_title", Ordinal: 1, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
 			{ID: bodyID, Name: "private_body", Ordinal: 2, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
-		}}},
+		}, PrimaryKey: &physical.PhysicalKey{ID: "85000000000000000000000000000006", Name: "pk_private_posts", Columns: []ir.FieldID{identityID}}}},
 	}
 	extension := func(dimensions uint16, fields ...ir.FieldID) physical.Extension {
 		values := make([]string, len(fields))
@@ -155,7 +155,7 @@ func TestMigrationExplainProspectiveAdapterPreservesProviderExtensionRecreationR
 		if err != nil {
 			t.Fatal(err)
 		}
-		value, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload})
+		value, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload}, base.Tables[0])
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -122,6 +122,23 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
 	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
 	index := physical.PhysicalName(string(descriptor.Storage) + "_hnsw")
+	if len(descriptor.Identity) == 0 {
+		return nil, fmt.Errorf("postgresql render semantic extension %s: identity projection is absent", extension.ID)
+	}
+	identityColumns := make([]string, len(descriptor.Identity))
+	identityKeys := make([]string, len(descriptor.Identity))
+	for position, column := range descriptor.Identity {
+		if !column.NotNull {
+			return nil, fmt.Errorf("postgresql render semantic extension %s: identity column %q is nullable", extension.ID, column.Name)
+		}
+		storage, storageErr := renderStorage(column.Storage)
+		if storageErr != nil {
+			return nil, fmt.Errorf("postgresql render semantic extension %s: %w", extension.ID, storageErr)
+		}
+		identityColumns[position] = ", " + quote(column.Name) + " " + storage + " NOT NULL"
+		identityKeys[position] = quote(column.Name)
+	}
+	names := semanticStateIndexNames(descriptor)
 	return []string{
 		"CREATE TABLE " + qualified(namespace, state) + " (" +
 			quote("record_key") + " text NOT NULL PRIMARY KEY, " +
@@ -130,12 +147,22 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 			quote("status") + " text NOT NULL CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
 			quote("attempt_count") + " integer NOT NULL DEFAULT 0 CHECK (" + quote("attempt_count") + " >= 0), " +
 			quote("error_code") + " text, " +
-			quote("updated_at") + " bigint NOT NULL CHECK (" + quote("updated_at") + " >= 0))",
+			quote("updated_at") + " bigint NOT NULL CHECK (" + quote("updated_at") + " >= 0)" +
+			strings.Join(identityColumns, "") + ")",
+		"CREATE INDEX " + quote(names[0]) + " ON " + qualified(namespace, state) + " (" + strings.Join(identityKeys, ", ") + ")",
+		"CREATE INDEX " + quote(names[1]) + " ON " + qualified(namespace, state) + " (" + quote("record_key") + ") WHERE " + quote("status") + " <> 'ready'",
 		"CREATE TABLE " + qualified(namespace, vectors) + " (" +
 			quote("record_key") + " text NOT NULL PRIMARY KEY, " +
 			quote("embedding") + " vector(" + strconv.Itoa(int(descriptor.Dimensions)) + ") NOT NULL)",
 		"CREATE INDEX " + quote(index) + " ON " + qualified(namespace, vectors) + " USING hnsw (" + quote("embedding") + " vector_cosine_ops)",
 	}, nil
+}
+
+func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
+	return []physical.PhysicalName{
+		physical.PhysicalName(string(descriptor.Storage) + "_state_identity"),
+		physical.PhysicalName(string(descriptor.Storage) + "_state_stale"),
+	}
 }
 
 type ddlRenderer struct {

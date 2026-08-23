@@ -92,13 +92,26 @@ func (provider *Provider) lower(_ context.Context, model ir.ModelIR, options phy
 		if extension.Kind != semanticcontract.IndexKind {
 			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
 		}
-		lowered, err := semanticstorage.Lower(extension)
+		owner, exists := semanticOwnerTable(schema.Tables, ir.ModelID(extension.Owner))
+		if !exists {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower extension %s: owner model %s is absent", extension.ID, extension.Owner)
+		}
+		lowered, err := semanticstorage.Lower(extension, owner)
 		if err != nil {
 			return physical.PhysicalSchema{}, fmt.Errorf("sqlite lower extension %s: %w", extension.ID, err)
 		}
 		schema.Extensions = append(schema.Extensions, lowered)
 	}
 	return physical.Normalize(schema)
+}
+
+func semanticOwnerTable(tables []physical.PhysicalTable, model ir.ModelID) (physical.PhysicalTable, bool) {
+	for _, table := range tables {
+		if table.ID == model {
+			return table, true
+		}
+	}
+	return physical.PhysicalTable{}, false
 }
 
 type lowerState struct {

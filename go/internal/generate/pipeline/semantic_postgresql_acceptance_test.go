@@ -318,7 +318,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticRefresh, statements: 2},
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 3},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 3},
   )
 
   similarSourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
@@ -343,7 +343,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticRefresh, statements: 2},
-    observed{operation: observe.OperationSemanticRank, statements: 4, aggregate: 2},
+    observed{operation: observe.OperationSemanticRank, statements: 3, aggregate: 2},
   )
 
   tx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
@@ -402,7 +402,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticRefresh, statements: 2},
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 3, aggregate: 1003},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 10},
   )
   plannerKeys := make([]string, 0, 1003)
   if err := database.UnsafeSQLX().Select(&plannerKeys, "SELECT record_key FROM \"{{NS}}\".\"{{VECTOR}}\" ORDER BY record_key"); err != nil { t.Fatal(err) }

@@ -1,35 +1,22 @@
 package runtime
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
-	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 )
 
-func TestSemanticCandidateLimitPrecedesReadableIdentityExtraction(t *testing.T) {
-	// Zero-value rows model a conditionally unreadable primary identity. The
-	// authorized row cardinality must still close the request before identity
-	// extraction can discard every row and evade the portable ceiling.
-	rows := make([]golem.Row[struct{}], semanticruntime.MaximumCandidates+2)
-	_, err := rankSemanticRows(
-		context.Background(),
-		(*App[string, struct{}])(nil),
-		golem.ModelDescriptor[struct{}]{},
-		1,
-		rows,
-		"",
-		func(context.Context, ir.ModelID, []string) ([]semanticruntime.Rank, error) {
-			t.Fatal("ranking ran despite an exceeded candidate ceiling")
-			return nil, nil
-		},
-	)
-	if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeInvalidInput {
-		t.Fatalf("candidate overflow error=%v code=%q ok=%t", err, code, ok)
+func TestSemanticRankedIdentityCannotEscapeAuthorizedCandidates(t *testing.T) {
+	// Ranking runs over a candidate subquery, but the ranked page is still read
+	// back through the ordinary authorized row statement. A ranked identity that
+	// statement did not return must close the request, never be skipped.
+	ranks := []semanticruntime.Rank{{Key: "foreign", Distance: 0}, {Key: "other-foreign", Distance: 1}}
+	result, err := assembleSemanticResults(ranks, map[string]golem.Row[struct{}]{})
+	if err == nil || err.Error() != "P9_SEMANTIC_QUERY: ranked identity escaped authorized candidates" || len(result) != 0 {
+		t.Fatalf("escaped identity result=%#v error=%v", result, err)
 	}
 }
 

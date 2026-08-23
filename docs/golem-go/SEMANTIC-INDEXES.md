@@ -151,9 +151,10 @@ scored-result object type.
 The optional final argument is one typed predicate—not arbitrary read options.
 Golem chooses the projection and candidate bound so pagination or an omitted
 identity cannot silently turn a global search into a search over an arbitrary
-page. A query considers at most 10,000 authorized candidates and returns at
-most 1,000 results; exceeding a hard bound fails closed before masked or
-unreadable identities are removed rather than truncating an arbitrary prefix.
+page. The authorized candidate set is unbounded—it is a subquery inside the
+ranking statement, never a materialized list—and a query returns at most 1,000
+results; exceeding a hard bound fails closed rather than truncating an
+arbitrary prefix.
 Query text and each canonical source document are valid UTF-8 and at most 16
 MiB. Spaces have 1..2,000 dimensions and a provider batch contains at most
 2,048 inputs. The provider's configured maximum may be lower.
@@ -223,7 +224,7 @@ cover source/state scans and executed vector/state writes or deletes, while its
 aggregate count is the number of dirty plus stale rows. Provider records have
 zero statements and expose only the input batch size. Rank counts the
 provider-native ranking statements actually executed and exposes only the
-deduplicated authorized-candidate count. The records never contain provider or
+number of ranked results. The records never contain provider or
 index names, source documents, database identities, provider input keys,
 vectors, or raw errors. Refresh records are delivered after the process-local
 refresh lock is released, so observer callbacks may not block another refresh

@@ -98,6 +98,19 @@ func renderSemanticExtension(extension physical.Extension) ([]string, error) {
 	}
 	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
 	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
+	if len(descriptor.Identity) == 0 {
+		return nil, fmt.Errorf("sqlite render semantic extension %s: identity projection is absent", extension.ID)
+	}
+	identityColumns := make([]string, len(descriptor.Identity))
+	identityKeys := make([]string, len(descriptor.Identity))
+	for index, column := range descriptor.Identity {
+		if !column.NotNull {
+			return nil, fmt.Errorf("sqlite render semantic extension %s: identity column %q is nullable", extension.ID, column.Name)
+		}
+		identityColumns[index] = quote(column.Name) + " " + renderStorage(column.Storage) + " NOT NULL, "
+		identityKeys[index] = quote(column.Name) + " ASC"
+	}
+	names := semanticStateIndexNames(descriptor)
 	return []string{
 		"CREATE TABLE " + quote(state) + " (" +
 			quote("record_key") + " TEXT NOT NULL, " +
@@ -107,14 +120,27 @@ func renderSemanticExtension(extension physical.Extension) ([]string, error) {
 			quote("attempt_count") + " INTEGER NOT NULL DEFAULT 0, " +
 			quote("error_code") + " TEXT, " +
 			quote("updated_at") + " INTEGER NOT NULL, " +
+			strings.Join(identityColumns, "") +
 			"PRIMARY KEY (" + quote("record_key") + "), " +
 			"CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
 			"CHECK (" + quote("attempt_count") + " >= 0), " +
 			"CHECK (" + quote("updated_at") + " >= 0)) STRICT",
+		"CREATE INDEX " + quote(names[0]) + " ON " + quote(state) + " (" + strings.Join(identityKeys, ", ") + ")",
+		"CREATE INDEX " + quote(names[1]) + " ON " + quote(state) + " (" + quote("record_key") + " ASC) WHERE " + quote("status") + " <> 'ready'",
 		"CREATE VIRTUAL TABLE " + quote(vectors) + " USING vec0(" +
 			"record_key TEXT PRIMARY KEY, " +
 			"embedding float[" + strconv.Itoa(int(descriptor.Dimensions)) + "] distance_metric=cosine)",
 	}, nil
+}
+
+// semanticStateIndexNames returns the identity and staleness index names of one
+// semantic shadow state table in the exact order renderSemanticExtension emits
+// their CREATE statements.
+func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
+	return []physical.PhysicalName{
+		physical.PhysicalName(string(descriptor.Storage) + "_state_identity"),
+		physical.PhysicalName(string(descriptor.Storage) + "_state_stale"),
+	}
 }
 
 func renderSystemObject(object physical.SystemObject) (string, error) {

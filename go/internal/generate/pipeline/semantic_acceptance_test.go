@@ -227,10 +227,15 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if err != nil { t.Fatal(err) }
   empty, err := caller.Posts.SearchRelated(ctx, "alpha", 10, models.Posts.Title.StartsWith("absent"))
   if err != nil { t.Fatal(err) }
-  if len(empty) != 0 || provider.count() != 0 {
+  if len(empty) != 0 || provider.count() != 4 {
     t.Fatalf("empty authorized search rows=%%d provider calls=%%d", len(empty), provider.count())
   }
-  assertSemanticTrace(t, observations)
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticProvider, 0, 3),
+    success(observe.OperationSemanticRefresh, 11, 3),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 0),
+  )
   ranked, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if len(ranked) != 2 || ranked[0].Distance() != 0 || ranked[0].Similarity() != 1 {
@@ -241,10 +246,9 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if first != "public alpha" || second != "public beta" || strings.Contains(first+second, "private") {
     t.Fatalf("authorized titles=%%q,%%q", first, second)
   }
-  if provider.count() != 4 { t.Fatalf("initial provider calls=%%d want=4", provider.count()) }
+  if provider.count() != 5 { t.Fatalf("initial provider calls=%%d want=5", provider.count()) }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticProvider, 0, 3),
-    success(observe.OperationSemanticRefresh, 11, 3),
+    success(observe.OperationSemanticRefresh, 2, 0),
     success(observe.OperationSemanticProvider, 0, 1),
     success(observe.OperationSemanticRank, 1, 2),
   )
@@ -288,7 +292,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 
   trusted, err := application.System().Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
-  if len(trusted) != 3 || provider.count() != 5 {
+  if len(trusted) != 3 || provider.count() != 6 {
     t.Fatalf("trusted ranks=%%d provider calls=%%d", len(trusted), provider.count())
   }
   assertSemanticTrace(t, observations,
@@ -297,30 +301,30 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     success(observe.OperationSemanticRank, 1, 3),
   )
   if _, err := caller.Posts.SearchRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
-  if provider.count() != 6 { t.Fatalf("unchanged rows were re-embedded: calls=%%d", provider.count()) }
+  if provider.count() != 7 { t.Fatalf("unchanged rows were re-embedded: calls=%%d", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticRefresh, 2, 0),
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 2),
+    success(observe.OperationSemanticRank, 1, 1),
   )
   if _, err := database.UnsafeSQLX().Exec("UPDATE \"posts\" SET \"body\"='alpha revised' WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
   if _, err := caller.Posts.SearchRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
-  if provider.count() != 8 { t.Fatalf("incremental refresh calls=%%d want=8", provider.count()) }
+  if provider.count() != 9 { t.Fatalf("incremental refresh calls=%%d want=9", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
     success(observe.OperationSemanticRefresh, 5, 1),
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 2),
+    success(observe.OperationSemanticRank, 1, 1),
   )
   if _, err := database.UnsafeSQLX().Exec("DELETE FROM \"posts\" WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
-  if provider.count() != 8 { t.Fatalf("delete cleanup unexpectedly embedded: calls=%%d", provider.count()) }
+  if provider.count() != 9 { t.Fatalf("delete cleanup unexpectedly embedded: calls=%%d", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticRefresh, 4, 1),
   )
   afterDelete, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
-  if len(afterDelete) != 1 || provider.count() != 9 {
+  if len(afterDelete) != 1 || provider.count() != 10 {
     t.Fatalf("delete cleanup rows=%%d provider calls=%%d", len(afterDelete), provider.count())
   }
   assertSemanticTrace(t, observations,
@@ -369,6 +373,66 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 	if !strings.Contains(overRuntimeLimitResponse.Body.String(), "\"errors\":[{") {
 		t.Fatalf("runtime-limited semantic GraphQL response=%%s", overRuntimeLimitResponse.Body.String())
 	}
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRank, 1, 1),
+  )
+
+  // The similarity root is compiled and bound by different code than search:
+  // its selector must decode into the same authorized unique read. Give the
+  // source a neighbour so an empty page cannot pass for a working resolver.
+  if _, err := database.UnsafeSQLX().Exec("INSERT INTO \"posts\" (\"id\",\"title\",\"body\") VALUES ('10000000-0000-0000-0000-000000000004','public alpha twin','shared topic')"); err != nil { t.Fatal(err) }
+  if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticProvider, 0, 1),
+    success(observe.OperationSemanticRefresh, 5, 1),
+  )
+  beforeSimilarGraphQL := provider.count()
+  similarRequest := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}, take: 10) { title } }\"}"))
+  similarRequest.Header.Set("Content-Type", "application/json")
+  similarResponse := httptest.NewRecorder()
+  server.Handler().ServeHTTP(similarResponse, similarRequest)
+  if similarResponse.Code != 200 { t.Fatalf("similarity GraphQL status=%%d body=%%s", similarResponse.Code, similarResponse.Body.String()) }
+  var similarEnvelope struct {
+    Data struct { Similar []struct { Title string `+"`json:\"title\"`"+` } `+"`json:\"similarPostsByRelated\"`"+` } `+"`json:\"data\"`"+`
+    Errors []json.RawMessage `+"`json:\"errors\"`"+`
+  }
+  if err := json.Unmarshal(similarResponse.Body.Bytes(), &similarEnvelope); err != nil { t.Fatal(err) }
+  if len(similarEnvelope.Errors) != 0 || len(similarEnvelope.Data.Similar) != 1 || similarEnvelope.Data.Similar[0].Title != "public alpha twin" {
+    t.Fatalf("similarity GraphQL response=%%s", similarResponse.Body.String())
+  }
+  for _, item := range similarEnvelope.Data.Similar {
+    if item.Title == "public alpha" { t.Fatal("similarity GraphQL returned its own source row") }
+    if strings.Contains(item.Title, "private") { t.Fatalf("similarity GraphQL disclosed an unauthorized row: %%q", item.Title) }
+  }
+  if provider.count() != beforeSimilarGraphQL {
+    t.Fatalf("similarity GraphQL embedded a query: calls=%%d want=%%d", provider.count(), beforeSimilarGraphQL)
+  }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticRank, 3, 1),
+  )
+
+  defaulted := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}) { title } }\"}"))
+  defaulted.Header.Set("Content-Type", "application/json")
+  defaultedResponse := httptest.NewRecorder()
+  server.Handler().ServeHTTP(defaultedResponse, defaulted)
+  var defaultedEnvelope struct {
+    Data struct { Similar []struct { Title string `+"`json:\"title\"`"+` } `+"`json:\"similarPostsByRelated\"`"+` } `+"`json:\"data\"`"+`
+    Errors []json.RawMessage `+"`json:\"errors\"`"+`
+  }
+  if err := json.Unmarshal(defaultedResponse.Body.Bytes(), &defaultedEnvelope); err != nil { t.Fatal(err) }
+  if defaultedResponse.Code != 200 || len(defaultedEnvelope.Errors) != 0 || len(defaultedEnvelope.Data.Similar) != 1 || defaultedEnvelope.Data.Similar[0].Title != "public alpha twin" {
+    t.Fatalf("defaulted-take similarity GraphQL response=%%s", defaultedResponse.Body.String())
+  }
+  if provider.count() != beforeSimilarGraphQL {
+    t.Fatalf("defaulted-take similarity GraphQL embedded a query: calls=%%d", provider.count())
+  }
+  assertSemanticTrace(t, observations,
+    success(observe.OperationSemanticRefresh, 2, 0),
+    success(observe.OperationSemanticRank, 3, 1),
+  )
 }
 `, "file:"+databasePath))
 	command := exec.Command("go", "test", "-mod=mod", "-count=1", "./...")

@@ -736,19 +736,30 @@ type preparedReadStatement struct {
 }
 
 func prepareCallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
-	if _, err := golem.FreezeFindMany(descriptor, options...); err != nil {
+	prepared, err := prepareCallerFindManyRead(ctx, caller, descriptor, options)
+	if err != nil {
 		return preparedReadStatement{}, err
+	}
+	return prepareReadStatement(caller.app, prepared)
+}
+
+// prepareCallerFindManyRead runs the ordinary findMany hook and authorization
+// admission without rendering a statement. Semantic ranking stops here because
+// its row statement is derived from the plan only after ranking.
+func prepareCallerFindManyRead[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (PreparedRead, error) {
+	if _, err := golem.FreezeFindMany(descriptor, options...); err != nil {
+		return PreparedRead{}, err
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookRequest := golem.RuntimeFindManyHookRequest(options)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
-		return preparedReadStatement{}, err
+		return PreparedRead{}, err
 	}
 	frozen, err := golem.FreezeFindMany(descriptor, hookRequest.Options()...)
 	if err != nil {
-		return preparedReadStatement{}, err
+		return PreparedRead{}, err
 	}
-	return prepareCallerReadStatement(caller, frozen)
+	return caller.Prepare(frozen)
 }
 
 func prepareCallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {

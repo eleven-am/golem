@@ -41,6 +41,9 @@ func TestSemanticIndexRendersPgvectorHNSWStorage(t *testing.T) {
 		`CREATE TABLE "social"."` + base + `_vec"`,
 		`"embedding" vector(384) NOT NULL`,
 		`CREATE INDEX "` + base + `_hnsw" ON "social"."` + base + `_vec" USING hnsw ("embedding" vector_cosine_ops)`,
+		`"updated_at" bigint NOT NULL CHECK ("updated_at" >= 0), "id" uuid NOT NULL)`,
+		`CREATE INDEX "` + base + `_state_identity" ON "social"."` + base + `_state" ("id")`,
+		`CREATE INDEX "` + base + `_state_stale" ON "social"."` + base + `_state" ("record_key") WHERE "status" <> 'ready'`,
 	} {
 		if !strings.Contains(script.SQL(), fragment) {
 			t.Fatalf("PostgreSQL semantic DDL missing %q:\n%s", fragment, script.SQL())

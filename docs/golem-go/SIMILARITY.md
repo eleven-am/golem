@@ -65,11 +65,11 @@ So `SimilarRelated` resolves the source through an ordinary authorized
   which would make similarity a second existence probe with different semantics
   than `findUnique` against the same selector.
 - **A readable row whose primary identity is masked also fails as not found.**
-  Search silently skips such rows as candidates; a source cannot be skipped, so
+  Search excludes such rows from candidacy; a source cannot be excluded, so
   it fails — with the same error, because "cannot participate in semantic
   identity" must not be a distinguishable third state.
 - **`System` clients see every row**, consistent with system search ranking over
-  a policy-free candidate read.
+  a policy-free candidate set.
 
 The GraphQL argument is the model's `WhereUniqueInput`, not an opaque record
 key. The record-key encoding is internal to managed semantic storage; exposing
@@ -91,7 +91,6 @@ a ranking backend that returns the source anyway.
 |---|---|
 | Source absent, unreadable, or identity masked | `CodeNotFound`, identical to `findUnique` |
 | `take` out of range, or more than one predicate | `embedding.CodeInvalidInput` |
-| Authorized candidate set exceeds the ceiling | `embedding.CodeInvalidInput`, fails closed |
 | Source vector absent or not `ready` after refresh | internal `P9_SEMANTIC_QUERY`, never an empty result |
 
 The last row matters: there is no fallback that composes field text and embeds

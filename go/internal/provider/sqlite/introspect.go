@@ -122,10 +122,17 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			}
 			stateName := string(descriptor.Storage) + "_state"
 			vectorName := string(descriptor.Storage) + "_vec"
+			indexNames := semanticStateIndexNames(descriptor)
+			if len(statements) != len(indexNames)+2 {
+				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect semantic statement registry mismatch for %s", extension.ID)
+			}
 			expectedObjects["table\x00"+stateName] = statements[0]
+			for index, name := range indexNames {
+				expectedObjects["index\x00"+string(name)] = statements[index+1]
+			}
 			vectorKey := "table\x00" + vectorName
 			vector, exists := actual[vectorKey]
-			if !exists || strings.TrimSpace(vector.SQL) != statements[1] {
+			if !exists || strings.TrimSpace(vector.SQL) != statements[len(statements)-1] {
 				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)
 			}
 			delete(actual, vectorKey)

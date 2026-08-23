@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -140,18 +141,18 @@ func TestSemanticObservationAndErrorRedactProviderCanary(t *testing.T) {
 		provider: ir.SQLite,
 		observer: collector,
 		indexes: []Index{{
-			Descriptor:    semanticstorage.Descriptor{ModelID: "post", Name: "related"},
+			Descriptor:    semanticstorage.Descriptor{ModelID: "post", Name: "related", Identity: textIdentity()},
 			Provider:      secretFailingProvider{specification: specification},
 			Specification: specification,
 		}},
 	}
-	_, err := manager.Query(context.Background(), "post", "related", "query canary", []string{"private-record-key"}, 1)
+	_, err := manager.Query(context.Background(), "post", "related", "query canary", textCandidates(`SELECT "id" AS "id" FROM "posts"`), 1)
 	if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeProvider || strings.Contains(err.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(err)), "canary") {
 		t.Fatalf("public provider failure was not closed: error=%v cause=%v", err, errors.Unwrap(err))
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticProvider, outcome: observe.OutcomeFailure, reason: observe.ReasonProvider, statements: 0, aggregate: 1},
-		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeFailure, reason: observe.ReasonProvider, statements: 0, aggregate: 1},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeFailure, reason: observe.ReasonProvider, statements: 0, aggregate: 0},
 	})
 }
 func (provider *deterministicProvider) calls() int {
@@ -177,9 +178,9 @@ func TestManagerSelectedRefreshNeverTouchesUnrelatedIndex(t *testing.T) {
 	if _, err := db.Exec(`
 CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "other" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
-CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT;
+CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
 CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
-CREATE TABLE "_golem_semantic_semantic-other-unrelated_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT;
+CREATE TABLE "_golem_semantic_semantic-other-unrelated_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
 CREATE VIRTUAL TABLE "_golem_semantic_semantic-other-unrelated_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
 INSERT INTO "posts" (id,title) VALUES ('a','alpha');
 INSERT INTO "other" (id,title) VALUES ('b','beta');`); err != nil {
@@ -213,11 +214,11 @@ INSERT INTO "other" (id,title) VALUES ('b','beta');`); err != nil {
 		database: db, provider: ir.SQLite, schema: schema,
 		indexes: []Index{
 			{
-				Descriptor: semanticstorage.Descriptor{ModelID: "post", Name: "related", Storage: "_golem_semantic_semantic-post-related", Fields: []ir.FieldID{"title"}},
+				Descriptor: semanticstorage.Descriptor{ModelID: "post", Name: "related", Storage: "_golem_semantic_semantic-post-related", Fields: []ir.FieldID{"title"}, Identity: textIdentity()},
 				Provider:   selected, Specification: specification,
 			},
 			{
-				Descriptor: semanticstorage.Descriptor{ModelID: "other", Name: "unrelated", Storage: "_golem_semantic_semantic-other-unrelated", Fields: []ir.FieldID{"other-title"}},
+				Descriptor: semanticstorage.Descriptor{ModelID: "other", Name: "unrelated", Storage: "_golem_semantic_semantic-other-unrelated", Fields: []ir.FieldID{"other-title"}, Identity: []semanticstorage.IdentityColumn{{Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, NotNull: true}}},
 				Provider:   unrelated, Specification: specification,
 			},
 		},
@@ -238,7 +239,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	db := sqlx.NewDb(database, "sqlite3")
-	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
@@ -298,7 +299,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 		t.Fatalf("nearest=%q", nearest)
 	}
 	betaKey, _ := semantickey.Encode([]any{"b"})
-	ranked, err := manager.Query(ctx, "post", "related", "alpha", []string{betaKey}, 1)
+	ranked, err := manager.Query(ctx, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "b"), 1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,7 +336,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	db := sqlx.NewDb(database, "sqlite3")
-	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine); INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine); INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 		t.Fatal(err)
 	}
 	schema := semanticSchema(t, 3)
@@ -380,8 +381,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 2, aggregate: 0},
 	})
 
-	betaKey, _ := semantickey.Encode([]any{"b"})
-	if _, err := manager.Query(ctx, "post", "related", "alpha", []string{betaKey}, 1); err != nil {
+	if _, err := manager.Query(ctx, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "b"), 1); err != nil {
 		t.Fatal(err)
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
@@ -394,5 +394,26 @@ func assertSemanticObservations(t *testing.T, got, want []semanticObservation) {
 	t.Helper()
 	if fmt.Sprintf("%#v", got) != fmt.Sprintf("%#v", want) {
 		t.Fatalf("semantic observations=%#v want=%#v", got, want)
+	}
+}
+
+type textIdentityScan struct{ id sql.NullString }
+
+func (scan *textIdentityScan) Destinations() []any { return []any{&scan.id} }
+func (scan *textIdentityScan) RawValues() []any {
+	if !scan.id.Valid {
+		return []any{nil}
+	}
+	return []any{scan.id.String}
+}
+
+func textIdentity() []semanticstorage.IdentityColumn {
+	return []semanticstorage.IdentityColumn{{Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, NotNull: true}}
+}
+
+func textCandidates(statement string, args ...any) Candidates {
+	return Candidates{
+		SQL: statement, Args: args, Columns: []string{"id"},
+		NewScan: func() IdentityScan { return &textIdentityScan{} },
 	}
 }

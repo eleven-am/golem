@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -19,6 +18,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/physical"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	"github.com/eleven-am/golem/go/observe"
@@ -37,14 +38,31 @@ type Manager struct {
 	mu       sync.Mutex
 }
 
-const (
-	MaximumCandidates = 10000
-	MaximumResults    = 1000
-)
+const MaximumResults = 1000
+
+// IdentityScan decodes one ranked row's owner identity columns. The caller owns
+// the typed scan slots so identity values mirrored into shadow storage decode
+// exactly like the same columns read from the owner table.
+type IdentityScan interface {
+	Destinations() []any
+	RawValues() []any
+}
+
+// Candidates is the authorized candidate subquery joined into one rank
+// statement through the owner's real identity columns. Columns names the
+// subquery projection in physical key order; ranking refuses any projection
+// that does not match the shadow table's identity contract.
+type Candidates struct {
+	SQL     string
+	Args    []any
+	Columns []string
+	NewScan func() IdentityScan
+}
 
 type Rank struct {
 	Key      string
 	Distance float64
+	Identity []any
 }
 
 func NewManager(database *sqlx.DB, provider ir.Provider, schema physical.PhysicalSchema, inventory Inventory, observers ...observe.Observer) (*Manager, error) {
@@ -111,94 +129,90 @@ func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
 	return Index{}, false
 }
 
-func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidateKeys []string, take int) (result []Rank, resultErr error) {
+func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidates Candidates, take int) (result []Rank, resultErr error) {
 	if manager == nil {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
 	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
-	if invalidContext || name == "" || query == "" || take < 1 || take > MaximumResults || len(candidateKeys) > MaximumCandidates {
+	if invalidContext || name == "" || query == "" || take < 1 || take > MaximumResults {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
-	}
-	if len(candidateKeys) == 0 {
-		return []Rank{}, nil
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
 	}
+	if err := validateCandidates(selected, candidates); err != nil {
+		return nil, err
+	}
 	input, err := embedding.NewInput("query", query)
 	if err != nil {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, err)
 	}
-	unique := make([]string, 0, len(candidateKeys))
-	seen := make(map[string]bool, len(candidateKeys))
-	for _, key := range candidateKeys {
-		if key == "" || seen[key] {
-			continue
-		}
-		seen[key] = true
-		unique = append(unique, key)
-	}
-	if len(unique) == 0 {
-		return []Rank{}, nil
-	}
-	rankSpan.SetAggregateCount(int64(len(unique)))
 	vectors, err := manager.embed(ctx, semanticObservationModel(model), selected.Provider, selected.Specification, []embedding.Input{input})
 	if err != nil {
 		return nil, err
 	}
-	if manager.provider == ir.SQLite {
-		encoded, err := sqlitevec.Serialize(vectors[0].Values(), vectors[0].Dimensions())
-		if err != nil {
-			return nil, embedding.NewError(embedding.CodeProvider, err)
-		}
-		return manager.rankVector(ctx, selected, encoded, unique, take)
+	vector, err := manager.vectorValue(vectors[0])
+	if err != nil {
+		return nil, embedding.NewError(embedding.CodeProvider, err)
 	}
-	vector, _ := manager.vectorValue(vectors[0])
-	return manager.rankVector(ctx, selected, vector, unique, take)
+	ranks, err := manager.rankVector(ctx, selected, vector, candidates, "", take)
+	if err != nil {
+		return nil, err
+	}
+	rankSpan.SetAggregateCount(int64(len(ranks)))
+	return ranks, nil
+}
+
+func validateCandidates(index Index, candidates Candidates) error {
+	invalid := embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	if candidates.SQL == "" || candidates.NewScan == nil || len(index.Descriptor.Identity) == 0 {
+		return invalid
+	}
+	if len(candidates.Columns) != len(index.Descriptor.Identity) {
+		return invalid
+	}
+	for position, column := range index.Descriptor.Identity {
+		if candidates.Columns[position] != string(column.Name) {
+			return invalid
+		}
+	}
+	return nil
 }
 
 // QueryByKey ranks candidates against a stored vector rather than an embedded
 // query. The source vector is read from managed storage, so a similarity
 // request performs no embedding-provider call and compares vectors that were
 // produced under the same canonical document framing.
-func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, candidateKeys []string, take int) (result []Rank, resultErr error) {
+func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, candidates Candidates, take int) (result []Rank, resultErr error) {
 	if manager == nil {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
 	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
-	if invalidContext || name == "" || sourceKey == "" || take < 1 || take > MaximumResults || len(candidateKeys) > MaximumCandidates {
+	if invalidContext || name == "" || sourceKey == "" || take < 1 || take > MaximumResults {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
-	}
-	if len(candidateKeys) == 0 {
-		return []Rank{}, nil
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
 		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
 	}
-	unique := make([]string, 0, len(candidateKeys))
-	seen := make(map[string]bool, len(candidateKeys))
-	for _, key := range candidateKeys {
-		if key == "" || key == sourceKey || seen[key] {
-			continue
-		}
-		seen[key] = true
-		unique = append(unique, key)
+	if err := validateCandidates(selected, candidates); err != nil {
+		return nil, err
 	}
-	if len(unique) == 0 {
-		return []Rank{}, nil
-	}
-	rankSpan.SetAggregateCount(int64(len(unique)))
 	vector, err := manager.sourceVector(ctx, selected, sourceKey)
 	if err != nil {
 		return nil, err
 	}
-	return manager.rankVector(ctx, selected, vector, unique, take)
+	ranks, err := manager.rankVector(ctx, selected, vector, candidates, sourceKey, take)
+	if err != nil {
+		return nil, err
+	}
+	rankSpan.SetAggregateCount(int64(len(ranks)))
+	return ranks, nil
 }
 
 func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string) (any, error) {
@@ -231,38 +245,89 @@ func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey
 	return text, nil
 }
 
-func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, unique []string, take int) ([]Rank, error) {
-	if manager.provider == ir.SQLite {
-		placeholders := make([]string, len(unique))
-		arguments := make([]any, 0, len(unique)+2)
-		arguments = append(arguments, vector)
-		for position, key := range unique {
-			placeholders[position] = "?"
-			arguments = append(arguments, key)
-		}
-		arguments = append(arguments, take)
-		statement := "SELECT record_key,vec_distance_cosine(embedding,?) AS distance FROM " + manager.hidden(index, "_vec") + " WHERE record_key IN (" + strings.Join(placeholders, ",") + ") ORDER BY distance,record_key LIMIT ?"
-		observeexec.RecordStatement(ctx)
-		rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
-		if err != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: SQLite ranking failed")
-		}
-		defer rows.Close()
-		return decodeRanks(rows, take)
+// rankVector ranks exactly the authorized candidate rows. The candidate
+// subquery is the row source, so an unreadable row can neither occupy a result
+// slot nor influence ordering. PostgreSQL adds +0.0 to the ordering distance:
+// the resulting expression no longer matches the HNSW pathkey, so the planner
+// must rank the joined candidates exactly instead of serving an approximate
+// neighbourhood. Ties order by the binary collation of the opaque record key,
+// matching the portable read ordering on every supported locale.
+func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+	statement := manager.rankStatement(index, candidates, exclude != "")
+	arguments := make([]any, 0, len(candidates.Args)+3)
+	arguments = append(arguments, vector)
+	arguments = append(arguments, candidates.Args...)
+	if exclude != "" {
+		arguments = append(arguments, exclude)
 	}
-	return manager.queryPostgreSQL(ctx, index, vector, unique, take)
+	arguments = append(arguments, take)
+	observeexec.RecordStatement(ctx)
+	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking failed")
+	}
+	defer rows.Close()
+	return decodeRanks(rows, take, candidates)
 }
 
-func decodeRanks(rows *sqlx.Rows, capacity int) ([]Rank, error) {
+// rankStatement binds the query vector first, the authorized candidate
+// subquery next, then the optional excluded source key and the page size.
+func (manager *Manager) rankStatement(index Index, candidates Candidates, exclude bool) string {
+	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
+	identity := make([]string, len(index.Descriptor.Identity))
+	joins := make([]string, len(index.Descriptor.Identity))
+	for position, column := range index.Descriptor.Identity {
+		identity[position] = "golem_ss." + manager.quote(column.Name)
+		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
+	}
+	distance := "vec_distance_cosine(golem_sv.embedding," + manager.placeholder(1) + ")"
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
+	order := "distance,golem_sv.record_key"
+	if manager.provider == ir.PostgreSQL {
+		distance = "(golem_sv.embedding <=> " + manager.placeholder(1) + "::vector)::double precision"
+		candidateSQL = policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
+		order = "(" + distance + " + 0.0),golem_sv.record_key COLLATE \"C\""
+	}
+	statement := "SELECT golem_sv.record_key," + distance + " AS distance," + strings.Join(identity, ",") +
+		" FROM " + vectors + " AS golem_sv" +
+		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
+		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
+	position := len(candidates.Args) + 1
+	if exclude {
+		position++
+		statement += " WHERE golem_sv.record_key<>" + manager.placeholder(position)
+	}
+	return statement + " ORDER BY " + order + " LIMIT " + manager.placeholder(position+1)
+}
+
+// placeholder mirrors the provider policy dialects, which both emit ordinal
+// placeholders. The rank statement reuses the query vector, so its binds cannot
+// be positional.
+func (manager *Manager) placeholder(position int) string {
+	if manager.provider == ir.PostgreSQL {
+		return "$" + strconv.Itoa(position)
+	}
+	return "?" + strconv.Itoa(position)
+}
+
+func decodeRanks(rows *sqlx.Rows, capacity int, candidates Candidates) ([]Rank, error) {
 	result := make([]Rank, 0, capacity)
 	for rows.Next() {
 		var rank Rank
-		if err := rows.Scan(&rank.Key, &rank.Distance); err != nil {
+		scan := candidates.NewScan()
+		destinations := make([]any, 0, len(candidates.Columns)+2)
+		destinations = append(destinations, &rank.Key, &rank.Distance)
+		destinations = append(destinations, scan.Destinations()...)
+		if len(destinations) != len(candidates.Columns)+2 {
+			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking identity projection mismatch")
+		}
+		if err := rows.Scan(destinations...); err != nil {
 			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking decode failed")
 		}
 		if math.IsNaN(rank.Distance) || math.IsInf(rank.Distance, 0) || rank.Distance < 0 || rank.Distance > 2.000001 {
 			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: invalid cosine distance")
 		}
+		rank.Identity = scan.RawValues()
 		result = append(result, rank)
 	}
 	if err := rows.Err(); err != nil {
@@ -271,115 +336,11 @@ func decodeRanks(rows *sqlx.Rows, capacity int) ([]Rank, error) {
 	return result, nil
 }
 
-func (manager *Manager) queryPostgreSQL(ctx context.Context, index Index, vector any, candidates []string, take int) ([]Rank, error) {
-	transaction, err := manager.database.BeginTxx(ctx, &sql.TxOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL ranking failed")
-	}
-	defer transaction.Rollback()
-	observeexec.RecordStatement(ctx)
-	if _, err := transaction.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan='strict_order'"); err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL ranking failed")
-	}
-	overfetch := take * 2
-	if minimum := take + 32; overfetch < minimum {
-		overfetch = minimum
-	}
-	if overfetch > len(candidates) {
-		overfetch = len(candidates)
-	}
-	statement := "SELECT record_key,(embedding <=> $1::vector)::double precision AS distance FROM " + manager.hidden(index, "_vec") + " WHERE record_key=ANY($2::text[]) ORDER BY embedding <=> $1::vector LIMIT $3"
-	observeexec.RecordStatement(ctx)
-	rows, err := transaction.QueryxContext(ctx, statement, vector, candidates, overfetch)
-	if err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL ranking failed")
-	}
-	ranks, decodeErr := decodeRanks(rows, overfetch)
-	closeErr := rows.Close()
-	if decodeErr != nil {
-		return nil, decodeErr
-	}
-	if closeErr != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
-	}
-	sortRanks(ranks)
-	expected := take
-	if expected > len(candidates) {
-		expected = len(candidates)
-	}
-	if len(ranks) < expected {
-		// A selective pgvector filtered scan may reach its bounded traversal cap
-		// before collecting enough authorized rows. Preserve authorized-result
-		// completeness with the exact bounded candidate scan in that case.
-		exact := "SELECT record_key,(embedding <=> $1::vector)::double precision AS distance FROM " + manager.hidden(index, "_vec") + " WHERE record_key=ANY($2::text[]) ORDER BY embedding <=> $1::vector,record_key LIMIT $3"
-		observeexec.RecordStatement(ctx)
-		exactRows, queryErr := transaction.QueryxContext(ctx, exact, vector, candidates, take)
-		if queryErr != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL exact fallback failed")
-		}
-		ranks, decodeErr = decodeRanks(exactRows, take)
-		closeErr = exactRows.Close()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
-		}
-		sortRanks(ranks)
-	} else if len(ranks) > take && take > 0 && ranks[take-1].Distance == ranks[len(ranks)-1].Distance && len(ranks) < len(candidates) {
-		// The ANN limit cut through the selected boundary distance. Resolve that
-		// one tie group exactly over the already-authorized, bounded identity set;
-		// the ANN neighbor set remains approximate, while its boundary ordering is
-		// deterministic by opaque record key.
-		boundary := ranks[take-1].Distance
-		ties := "SELECT record_key,(embedding <=> $1::vector)::double precision AS distance FROM " + manager.hidden(index, "_vec") + " WHERE record_key=ANY($2::text[]) AND (embedding <=> $1::vector)::double precision=$3 ORDER BY record_key"
-		observeexec.RecordStatement(ctx)
-		tieRows, queryErr := transaction.QueryxContext(ctx, ties, vector, candidates, boundary)
-		if queryErr != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL boundary resolution failed")
-		}
-		resolved, tieErr := decodeRanks(tieRows, len(candidates))
-		closeErr = tieRows.Close()
-		if tieErr != nil {
-			return nil, tieErr
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
-		}
-		seen := make(map[string]bool, len(ranks)+len(resolved))
-		merged := make([]Rank, 0, len(ranks)+len(resolved))
-		for _, rank := range append(ranks, resolved...) {
-			if seen[rank.Key] {
-				continue
-			}
-			seen[rank.Key] = true
-			merged = append(merged, rank)
-		}
-		ranks = merged
-		sortRanks(ranks)
-	}
-	if len(ranks) > take {
-		ranks = ranks[:take]
-	}
-	if err := transaction.Commit(); err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: PostgreSQL ranking failed")
-	}
-	return ranks, nil
-}
-
-func sortRanks(ranks []Rank) {
-	sort.Slice(ranks, func(left, right int) bool {
-		if ranks[left].Distance == ranks[right].Distance {
-			return ranks[left].Key < ranks[right].Key
-		}
-		return ranks[left].Distance < ranks[right].Distance
-	})
-}
-
 type sourceRecord struct {
-	key  string
-	text string
-	hash [32]byte
+	key      string
+	text     string
+	hash     [32]byte
+	identity []any
 }
 
 type stateRecord struct {
@@ -526,7 +487,7 @@ func (manager *Manager) scanSources(ctx context.Context, table physical.Physical
 			document.WriteString(text)
 		}
 		canonical := document.String()
-		result = append(result, sourceRecord{key: key, text: canonical, hash: sha256.Sum256([]byte(canonical))})
+		result = append(result, sourceRecord{key: key, text: canonical, hash: sha256.Sum256([]byte(canonical)), identity: keys})
 	}
 	return result, rows.Err()
 }
@@ -557,7 +518,16 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 		return err
 	}
 	defer transaction.Rollback()
+	columns, values, assignments := "", "", ""
+	for position, column := range index.Descriptor.Identity {
+		columns += "," + manager.quote(column.Name)
+		values += "," + manager.placeholder(position+5)
+		assignments += "," + manager.quote(column.Name) + "=excluded." + manager.quote(column.Name)
+	}
 	for position, record := range records {
+		if len(record.identity) != len(index.Descriptor.Identity) {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: identity width does not match the shadow contract")
+		}
 		vectorValue, err := manager.vectorValue(vectors[position])
 		if err != nil {
 			return err
@@ -572,7 +542,8 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 				return err
 			}
 			observeexec.RecordStatement(ctx)
-			if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at) VALUES (?,?,?,'ready',1,NULL,?) ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count=attempt_count+1,error_code=NULL,updated_at=excluded.updated_at", record.key, record.hash[:], fingerprint, time.Now().UTC().UnixMicro()); err != nil {
+			arguments := append([]any{record.key, record.hash[:], fingerprint, time.Now().UTC().UnixMicro()}, record.identity...)
+			if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at"+columns+") VALUES (?,?,?,'ready',1,NULL,?"+values+") ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count=attempt_count+1,error_code=NULL,updated_at=excluded.updated_at"+assignments, arguments...); err != nil {
 				return err
 			}
 		} else {
@@ -581,7 +552,8 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 				return err
 			}
 			observeexec.RecordStatement(ctx)
-			if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at) VALUES ($1,$2,$3,'ready',1,NULL,$4) ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count="+manager.hidden(index, "_state")+".attempt_count+1,error_code=NULL,updated_at=excluded.updated_at", record.key, record.hash[:], fingerprint, time.Now().UTC().UnixMicro()); err != nil {
+			arguments := append([]any{record.key, record.hash[:], fingerprint, time.Now().UTC().UnixMicro()}, record.identity...)
+			if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at"+columns+") VALUES ($1,$2,$3,'ready',1,NULL,$4"+values+") ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count="+manager.hidden(index, "_state")+".attempt_count+1,error_code=NULL,updated_at=excluded.updated_at"+assignments, arguments...); err != nil {
 				return err
 			}
 		}

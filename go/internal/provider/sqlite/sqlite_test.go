@@ -50,7 +50,7 @@ func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
 		if encodeErr != nil {
 			t.Fatal(encodeErr)
 		}
-		if _, err := database.Exec(`INSERT INTO "`+base+`_state" (record_key,source_hash,space_fingerprint,status,updated_at) VALUES (?,x'01','space-v1','ready',1)`, key); err != nil {
+		if _, err := database.Exec(`INSERT INTO "`+base+`_state" (record_key,source_hash,space_fingerprint,status,updated_at,"tenant_id","id") VALUES (?,x'01','space-v1','ready',1,?,?)`, key, "tenant-"+key, key); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := database.Exec(`INSERT INTO "`+base+`_vec" (record_key,embedding) VALUES (?,?)`, key, encoded); err != nil {
@@ -78,6 +78,19 @@ func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
+	}
+	script, err := provider.RenderInitial(schema)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		`"updated_at" INTEGER NOT NULL, "tenant_id" TEXT NOT NULL, "id" TEXT NOT NULL, PRIMARY KEY ("record_key")`,
+		`CREATE INDEX "` + base + `_state_identity" ON "` + base + `_state" ("tenant_id" ASC, "id" ASC)`,
+		`CREATE INDEX "` + base + `_state_stale" ON "` + base + `_state" ("record_key" ASC) WHERE "status" <> 'ready'`,
+	} {
+		if !strings.Contains(script.SQL(), fragment) {
+			t.Fatalf("semantic shadow DDL missing %q:\n%s", fragment, script.SQL())
+		}
 	}
 }
 
