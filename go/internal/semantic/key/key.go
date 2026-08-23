@@ -92,12 +92,19 @@ func encodeValue(value any) (string, error) {
 }
 
 func canonicalUUID(value string) (string, bool) {
-	compact := strings.ReplaceAll(strings.ToLower(value), "-", "")
-	if len(compact) != 32 {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
 		return "", false
 	}
-	if _, err := hex.DecodeString(compact); err != nil {
-		return "", false
+	compact := make([]byte, 0, 32)
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		digit := value[index]
+		if !(digit >= '0' && digit <= '9' || digit >= 'a' && digit <= 'f') {
+			return "", false
+		}
+		compact = append(compact, digit)
 	}
-	return compact, true
+	return string(compact), true
 }
