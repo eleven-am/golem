@@ -115,6 +115,8 @@ type App[P, A any] struct {
 	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
 	nextExecution     atomic.Uint64
 	semantic          *semanticruntime.Manager
+	semanticDrain     queue.Type[semanticJob]
+	semanticReconcile queue.Type[semanticJob]
 	queueStore        queueprovider.Store
 	queueWorker       *queueworker.Worker
 	queueOperator     queue.Operator
@@ -293,16 +295,33 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if err := app.initializeQueueRuntime(ctx, config.Queue); err != nil {
 		return nil, err
 	}
+	if err := app.startSemanticJobs(ctx); err != nil {
+		openReason = observe.ReasonCapability
+		return nil, err
+	}
 	return app, nil
 }
 
 // RefreshSemanticIndexes reconciles every declared semantic index with its
 // current source rows. Unchanged rows do not call the embedding provider.
+// Reconciliation reads the whole owner table, which is what lets it observe
+// writes Golem never saw: the raw handle, an attached backfill, another
+// service.
 func (app *App[P, A]) RefreshSemanticIndexes(ctx context.Context) error {
 	if app == nil || app.semantic == nil || ctx == nil {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application and context are required")
 	}
 	return app.semantic.RefreshAll(ctx)
+}
+
+// RefreshSemanticIndex reconciles one declared semantic index. Writes made
+// through Golem need no call here; they mark their own records and a drain job
+// carries them.
+func (app *App[P, A]) RefreshSemanticIndex(ctx context.Context, model golem.ModelID, name string) error {
+	if app == nil || app.semantic == nil || ctx == nil {
+		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application and context are required")
+	}
+	return app.semantic.Refresh(ctx, semanticIndexModel(model), name)
 }
 
 func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry, providerIdentity golem.Provider) (events.Limits, error) {

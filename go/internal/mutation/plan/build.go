@@ -20,6 +20,11 @@ func BuildRoot(request RootRequest) (mutationir.Plan, error) {
 	if err := validateRequest(request); err != nil {
 		return mutationir.Plan{}, err
 	}
+	facts, err := deriveFactInventory(request.Registry, request.Model)
+	if err != nil {
+		return mutationir.Plan{}, fail(CodeRequirements, request, policyir.FieldID{}, "durable capture requirements could not be derived", err)
+	}
+	request.facts = facts
 
 	var policy policyir.Policy
 	if request.Stance == mutationir.Caller {
@@ -45,9 +50,10 @@ func BuildRoot(request RootRequest) (mutationir.Plan, error) {
 	input := mutationir.PlanInput{
 		Stance: request.Stance, Graph: graph, Result: request.Result,
 		Providers: providers, Retry: request.Retry, Bounds: request.Bounds,
+		SemanticIndexed: request.facts.semantic,
 	}
-	if request.CaptureFacts {
-		codec := *request.FactCodec
+	if request.facts.capture {
+		codec := request.facts.codec
 		input.FactCodec = &codec
 	}
 	result, err := mutationir.NewPlan(input)
@@ -76,15 +82,6 @@ func validateRequest(request RootRequest) error {
 	if err := validateImageAgainstRegistry(request.Registry, request.Model, request.Result); err != nil {
 		return fail(CodeRequest, request, policyir.FieldID{}, "result requirements do not match active schema", err)
 	}
-	for _, field := range request.PrivateDeleteSnapshot {
-		metadata, present := request.Registry.Field(golem.ModelID(request.Model), golem.FieldID(field))
-		if !present {
-			return fail(CodeRequest, request, field, "private delete snapshot field is absent from model", nil)
-		}
-		if metadata.Kind() == compilerir.FieldRelation {
-			return fail(CodeRequest, request, field, "private delete snapshot may contain only stored scalar fields", nil)
-		}
-	}
 	if request.Stance == mutationir.Caller {
 		if request.Policies == nil || request.Policies.GenerationDigest() != request.Registry.GenerationDigest() {
 			return fail(CodePolicy, request, policyir.FieldID{}, "policy set is absent or belongs to another generation", nil)
@@ -93,16 +90,6 @@ func validateRequest(request RootRequest) error {
 		if err != nil || !providers.Contains(request.Policies.Provider()) {
 			return fail(CodePolicy, request, policyir.FieldID{}, "policy provider is not declared by schema", err)
 		}
-	}
-	if request.CaptureFacts {
-		if request.FactCodec == nil || request.FactCodec.Generation() != [32]byte(request.Registry.GenerationDigest()) {
-			return fail(CodeRequest, request, policyir.FieldID{}, "fact capture requires a codec for the active generation", nil)
-		}
-	} else if request.FactCodec != nil || request.EventSchema != ([32]byte{}) || len(request.PrivateDeleteSnapshot) != 0 {
-		return fail(CodeRequest, request, policyir.FieldID{}, "fact-only requirements were supplied while capture is disabled", nil)
-	}
-	if request.Operation != mutationir.Delete && request.Operation != mutationir.DeleteMany && len(request.PrivateDeleteSnapshot) != 0 {
-		return fail(CodeRequest, request, policyir.FieldID{}, "private delete snapshot is valid only for delete", nil)
 	}
 	if request.Operation == mutationir.Upsert {
 		if request.Retry != mutationir.EngineOwnedUpsertRetry && request.Retry != mutationir.CallerTransactionNoReplay {
@@ -547,7 +534,7 @@ func hooksFor(request RootRequest, operation mutationir.Operation) ([]mutationir
 }
 
 func factFor(request RootRequest, operation mutationir.Operation) (mutationir.FactRequirement, error) {
-	if !request.CaptureFacts {
+	if !request.facts.capture {
 		return mutationir.NoFact(), nil
 	}
 	model, _ := request.Registry.Model(golem.ModelID(request.Model))
@@ -574,19 +561,20 @@ func factFor(request RootRequest, operation mutationir.Operation) (mutationir.Fa
 	var fact mutationir.FactRequirement
 	var err error
 	if action == mutationir.FactDeleted {
+		snapshot := request.facts.deleteSnapshotFor(operation)
 		state := mutationir.DeleteSnapshotUnverifiable
-		if request.PrivateDeleteSnapshot != nil {
+		if snapshot != nil {
 			state = mutationir.DeleteSnapshotStoredScalars
 		}
-		fact, err = mutationir.NewDeleteFactRequirement(before, state, request.PrivateDeleteSnapshot)
+		fact, err = mutationir.NewDeleteFactRequirement(before, state, snapshot)
 	} else {
 		fact, err = mutationir.NewFactRequirement(action, before, after, nil)
 	}
 	if err != nil {
 		return mutationir.FactRequirement{}, fail(CodeIR, request, policyir.FieldID{}, "fact requirement is invalid", err)
 	}
-	if request.EventSchema != ([32]byte{}) {
-		fact, err = fact.WithEventSchema(request.EventSchema)
+	if request.facts.eventSchema != ([32]byte{}) {
+		fact, err = fact.WithEventSchema(request.facts.eventSchema)
 		if err != nil {
 			return mutationir.FactRequirement{}, fail(CodeIR, request, policyir.FieldID{}, "fact event schema is invalid", err)
 		}
@@ -653,7 +641,7 @@ func imagesFor(request RootRequest, node mutationir.NodeInput, row policyir.Cond
 		}
 	}
 	if node.Operation == mutationir.Delete || node.Operation == mutationir.DeleteMany {
-		before.addFields(request.PrivateDeleteSnapshot...)
+		before.addFields(request.facts.deleteSnapshotFor(node.Operation)...)
 	}
 	if node.Operation == mutationir.Delete {
 		if err := before.addImage(request.Result); err != nil {

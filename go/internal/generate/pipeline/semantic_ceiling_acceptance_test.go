@@ -164,6 +164,8 @@ import (
   "github.com/eleven-am/golem/go/embedding"
   "github.com/eleven-am/golem/go/golem"
   providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
+  "github.com/eleven-am/golem/go/queue"
+  golemruntime "github.com/eleven-am/golem/go/runtime"
 )
 
 type embedder struct {
@@ -206,9 +208,14 @@ func openApplication(t *testing.T) *app.App[string] {
   application, err := app.Open(ctx, app.Config[string]{
     Database: database,
     Embeddings: embeddings,
+    Queue: &golemruntime.QueueConfig{Registry: queue.NewRegistry()},
     ResolvePrincipal: func(_ context.Context, principal string) (actor.Actor, error) { return actor.Actor{Trusted: principal == "trusted"}, nil },
   })
   if err != nil { t.Fatal(err) }
+  // The corpus was seeded through raw SQL, so no drain knows about it. Search
+  // no longer refreshes, which leaves reconciliation as the only thing that
+  // can put these rows in the index.
+  if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   return application
 }
 

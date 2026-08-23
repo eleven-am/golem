@@ -240,13 +240,23 @@ and every accepted/refused execution emits the configured safe audit record.
 Semantic indexes are an optional generated Go-client capability. The schema
 declares an embedding space and ordered text projection; application startup
 registers a matching `embedding.Provider`. Generated caller and system clients
-then expose one `Similar<Name>` method per index. Similarity is not currently a
-generated GraphQL root and is not exposed on transaction clients because
-refresh and vector ranking are separate managed database operations.
+then expose one `Similar<Name>` method per index. Similarity is not exposed on
+transaction clients because vector ranking is a separate managed database
+operation.
+
+A schema that declares any semantic index requires the durable job queue, and
+an application that configures none is refused at `Open`. Golem registers its
+own `semantic.drain` and `semantic.reconcile` job types, marks the records each
+write touched, and keeps the index current from a worker. **Golem cannot verify
+that a worker is running**: the refusal proves the queue exists, not that any
+process calls `RunQueueWorker`. A deployment that never runs one serves
+increasingly stale vectors with no error anywhere, so treat running and
+monitoring the worker as part of operating a semantic index.
 
 Similarity first applies ordinary read authorization and hooks to fix a
-bounded candidate set. An empty or refused read performs no embedding work;
-otherwise Golem refreshes the durable index and ranks only that fixed set. The
+bounded candidate set. An empty or refused read performs no embedding work; a
+search embeds only the query string and a similarity call embeds nothing.
+Neither reads the owner table or maintains the index. The
 embedding provider is trusted
 infrastructure: it receives the exact query text and canonical documents for
 all indexed rows, including rows the current caller cannot read. Golem does not
@@ -257,10 +267,13 @@ every indexed field, make its `Embed` implementation concurrency-safe, and
 honor cancellation. Authorization protects returned rows; it does not make an
 external embedding service a data-loss-prevention boundary.
 
-Refresh scans all source rows to compute hashes but embeds only missing,
-changed, or provider-fingerprint-stale documents. Deleted-row vectors are
-removed during the next explicit or query-triggered refresh, not synchronously
-with the model delete. Provider batch writes are individually transactional and
+A drain reads only the records the write path marked and embeds only the
+documents whose content hash actually changed. A reconcile scans all source
+rows to compute hashes, which is what lets it observe writes Golem never saw:
+the raw handle, an attached backfill, another service. One reconcile per index
+is enqueued at `Open`, and `RefreshSemanticIndexes` runs one on demand.
+Deleted-row vectors are removed by a drain or reconcile, not synchronously with
+the model delete. Provider batch writes are individually transactional and
 retry-safe. See [`SEMANTIC-INDEXES.md`](./SEMANTIC-INDEXES.md) for limits, error
 codes, SQLite portability, pgvector prerequisites, and deletion/retention
 guidance.

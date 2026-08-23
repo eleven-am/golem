@@ -156,17 +156,6 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 			}
 		}
 	}
-	modelFact, _ := app.registry.Model(golem.ModelID(request.model))
-	if modelFact.SubscriptionsEnabled() {
-		factCodec, eventSchema, snapshot, err := mutationEventSchema(app.registry, request.model)
-		if err != nil {
-			return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvariant, 0, 0, "runtime fact codec requirement is invalid", err)
-		}
-		planning.CaptureFacts, planning.FactCodec, planning.EventSchema = true, &factCodec, eventSchema
-		if request.operation == mutationir.Delete {
-			planning.PrivateDeleteSnapshot = snapshot
-		}
-	}
 	switch request.operation {
 	case mutationir.Create:
 		if request.input == nil || request.target != nil {
@@ -300,12 +289,7 @@ func executeScalarMutationProgramWithObservers(ctx context.Context, database *sq
 	if beginErr != nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationProviderFailureKind(beginErr), 0, 0, "transaction could not begin", beginErr)
 	}
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			_ = transaction.Rollback()
-			panic(recovered)
-		}
-	}()
+	defer undoOnPanic(func() { _ = transaction.Rollback() })
 
 	transactionBinding := transactionExecution(database, transaction)
 	if err := transactionBinding.enableMutation(config); err != nil {
@@ -380,10 +364,6 @@ func executeScalarProgramOnQueryer(ctx context.Context, queryer sqlx.QueryerCont
 }
 
 func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver) (execution scalarMutationExecution, executionErr error) {
-	return executeScalarProgramOnQueryerObservedMode(ctx, queryer, binding, registry, model, provider, program, observer, verified, false)
-}
-
-func executeScalarProgramOnQueryerObservedMode(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, observer scalarMutationStatementObserver, verified scalarMutationVerifiedObserver, concurrencyPrechecked bool) (execution scalarMutationExecution, executionErr error) {
 	defer func() {
 		if executionErr == nil || binding == nil || !binding.mutation.enabled {
 			return
@@ -395,11 +375,8 @@ func executeScalarProgramOnQueryerObservedMode(ctx context.Context, queryer sqlx
 	if queryer == nil {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "transaction queryer is required", nil)
 	}
-	if program.RequiresConcurrencyPrecheck() && !concurrencyPrechecked {
+	if program.RequiresConcurrencyPrecheck() {
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "optimistic-concurrency program lacks a validated expectation", nil)
-	}
-	if concurrencyPrechecked && !program.RequiresConcurrencyPrecheck() {
-		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "concurrency precheck capability was supplied to an ordinary program", nil)
 	}
 	statements := program.Statements()
 	result := scalarMutationExecution{operation: program.Operation(), statements: make([]scalarMutationStatementResult, 0, len(statements))}
@@ -422,37 +399,8 @@ func executeScalarProgramOnQueryerObservedMode(ctx context.Context, queryer sqlx
 			}
 		}
 	}
-	if err := verifyScalarMutationIdentity(program, result.statements); err != nil {
+	if err := commitScalarMutationExecution(ctx, binding, registry, model, program, result, verified); err != nil {
 		return scalarMutationExecution{}, err
-	}
-	if err := verifyScalarMutationFieldAuthorizations(registry, program, result.statements); err != nil {
-		return scalarMutationExecution{}, err
-	}
-	if verified != nil {
-		if err := verified(ctx, binding, program, result); err != nil {
-			return scalarMutationExecution{}, err
-		}
-	}
-	if binding != nil && binding.mutation.enabled {
-		state, err := binding.mutationState()
-		if err != nil {
-			return scalarMutationExecution{}, err
-		}
-		if err := state.touch(1); err != nil {
-			state.poison(err)
-			return scalarMutationExecution{}, err
-		}
-		if requirement := program.FactRequirement(); requirement.Enabled() {
-			before, after, err := scalarMutationFactImages(registry, model, program, result)
-			if err != nil {
-				state.poison(err)
-				return scalarMutationExecution{}, err
-			}
-			if _, err := state.buildFact(registry, requirement, before, after, time.Now()); err != nil {
-				state.poison(err)
-				return scalarMutationExecution{}, err
-			}
-		}
 	}
 	return result, nil
 }
@@ -504,39 +452,57 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 			}
 		}
 	}
-	if err := verifyScalarMutationIdentity(program, result.statements); err != nil {
+	if err := commitScalarMutationExecution(ctx, binding, registry, model, program, result, verified); err != nil {
 		return scalarMutationExecution{}, err
 	}
+	return result, nil
+}
+
+// commitScalarMutationExecution is the single owner of everything a scalar
+// program must do after its statements have run. Both the ordinary kernel and
+// the optimistic-concurrency kernel reach it, so no scalar write can skip
+// identity verification, field authorization, row accounting, or fact capture.
+func commitScalarMutationExecution(ctx context.Context, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, program mutationsql.Program, result scalarMutationExecution, verified scalarMutationVerifiedObserver) error {
+	if err := verifyScalarMutationIdentity(program, result.statements); err != nil {
+		return err
+	}
 	if err := verifyScalarMutationFieldAuthorizations(registry, program, result.statements); err != nil {
-		return scalarMutationExecution{}, err
+		return err
 	}
 	if verified != nil {
 		if err := verified(ctx, binding, program, result); err != nil {
-			return scalarMutationExecution{}, err
+			return err
 		}
 	}
-	if binding != nil && binding.mutation.enabled {
-		state, err := binding.mutationState()
-		if err != nil {
-			return scalarMutationExecution{}, err
+	if binding == nil || !binding.mutation.enabled {
+		return nil
+	}
+	state, err := binding.mutationState()
+	if err != nil {
+		return err
+	}
+	if err := state.touch(1); err != nil {
+		state.poison(err)
+		return err
+	}
+	if requirement := program.FactRequirement(); requirement.Enabled() {
+		before, after, imageErr := scalarMutationFactImages(registry, model, program, result)
+		if imageErr != nil {
+			state.poison(imageErr)
+			return imageErr
 		}
-		if err := state.touch(1); err != nil {
-			state.poison(err)
-			return scalarMutationExecution{}, err
-		}
-		if requirement := program.FactRequirement(); requirement.Enabled() {
-			before, after, err := scalarMutationFactImages(registry, model, program, result)
-			if err != nil {
-				state.poison(err)
-				return scalarMutationExecution{}, err
-			}
-			if _, err := state.buildFact(registry, requirement, before, after, time.Now()); err != nil {
-				state.poison(err)
-				return scalarMutationExecution{}, err
-			}
+		if _, factErr := state.buildFact(registry, requirement, before, after, time.Now()); factErr != nil {
+			state.poison(factErr)
+			return factErr
 		}
 	}
-	return result, nil
+	if program.SemanticIndexed() {
+		if markErr := markScalarSemanticRecord(state, registry, model, program, result); markErr != nil {
+			state.poison(markErr)
+			return markErr
+		}
+	}
+	return nil
 }
 
 func scalarMutationFactImages(registry *schema.Registry, model policyir.ModelID, program mutationsql.Program, execution scalarMutationExecution) (*mutationdecode.Row, *mutationdecode.Row, error) {

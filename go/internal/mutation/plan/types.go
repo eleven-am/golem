@@ -61,10 +61,6 @@ type RootRequest struct {
 	Result mutationir.ImageRequirements
 	Hooks  HookInventory
 
-	CaptureFacts          bool
-	FactCodec             *mutationir.FactCodecRequirement
-	EventSchema           [32]byte
-	PrivateDeleteSnapshot []policyir.FieldID
 	// AuthorizedRuntimeFields are relation-owned correlation fields injected by
 	// the nested compiler. They require the parent action's field grant even
 	// though they are not caller-authored scalar values. Application defaults
@@ -79,4 +75,9 @@ type RootRequest struct {
 	Bounds mutationir.StatementBounds
 
 	Classifier Classifier
+
+	// facts is derived by BuildRoot from Registry and Operation. It is
+	// unexported so durable fact capture cannot be re-decided, disabled, or
+	// re-spelled at a call site.
+	facts factInventory
 }

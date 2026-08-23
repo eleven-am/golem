@@ -381,6 +381,7 @@ type Model struct {
 	equality              map[golem.FieldID]struct{}
 	maxTake               uint32
 	subscriptions         bool
+	semanticIndexed       bool
 	eventSchema           compilerir.Fingerprint
 	eventSnapshot         []golem.FieldID
 	analytics             *compilerir.AggregationContractIR
@@ -415,6 +416,11 @@ func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTak
 // SubscriptionsEnabled is the normalized contract decision controlling
 // durable mutation-fact capture for this model.
 func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
+
+// SemanticIndexed is the normalized compiler decision controlling durable
+// semantic record marking for this model. It reports that at least one
+// semantic index extension declares this model as its owner.
+func (model Model) SemanticIndexed() bool { return model.semanticIndexed }
 
 // EventSchema returns the compiler-validated logical schema fingerprint and
 // complete private pre-delete scalar inventory for a subscription-enabled

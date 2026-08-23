@@ -196,24 +196,28 @@ error_code         TEXT
 updated_at         INTEGER NOT NULL
 ```
 
-A record is re-embedded when any of four things is true
-(`manager.go:332`):
+A record is re-embedded when any of three things is true, in both the drain and
+the reconcile:
 
 ```go
-if !exists || state.status != "ready" || state.fingerprint != fingerprint ||
+if !exists || state.fingerprint != fingerprint ||
    !equalBytes(state.hash, record.hash[:]) {
     dirty = append(dirty, record)
 }
 ```
 
 - **`!exists`** — new row.
-- **`status != "ready"`** — a previous attempt failed or is incomplete. Failure
-  is durable, so a crash mid-refresh resumes rather than silently leaving a row
-  unindexed.
 - **`fingerprint` mismatch** — the *embedding space* changed: different model,
   revision, or dimensions. Every vector produced by the old space is invalid, and
   this catches all of them without tracking which model produced what.
 - **`hash` mismatch** — the source content changed.
+
+**`status` is deliberately not one of them.** The write path marks every write
+`pending` without knowing whether the embedded text changed, so treating a mark
+as proof of change would re-embed every recently written row. A marked record
+whose hash still matches is flipped back to `ready` with no provider call at
+all. That is what makes marking unconditionally affordable, and it is the only
+thing standing between a mark that lies and a wasted embedding.
 
 **Content-addressed, not timestamped.** An `updated_at` comparison would
 re-embed on every touch that didn't change the embedded text, and would miss a

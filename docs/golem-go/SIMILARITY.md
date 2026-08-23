@@ -91,7 +91,7 @@ a ranking backend that returns the source anyway.
 |---|---|
 | Source absent, unreadable, or identity masked | `CodeNotFound`, identical to `findUnique` |
 | `take` out of range, or more than one predicate | `embedding.CodeInvalidInput` |
-| Source vector absent or not `ready` after refresh | internal `P9_SEMANTIC_QUERY`, never an empty result |
+| Source has never been embedded, so it has no stored vector | internal `P9_SEMANTIC_QUERY`, never an empty result |
 
 The last row matters: there is no fallback that composes field text and embeds
 it, because composed text is the wrong encoding — the exact problem this feature
@@ -100,10 +100,15 @@ exists to eliminate.
 ## Storage and cost
 
 No new tables. Similarity reads the same `<storage>_vec` and `<storage>_state`
-that search maintains, and reuses the same refresh reconciliation. In steady
-state a similarity request costs two authorized reads and one vector ranking:
-no provider round trip, and no `semantic.provider` observation span — only
-`semantic.refresh` and `semantic.rank`, exactly as search emits.
+that the drain and reconcile jobs maintain. A similarity request costs two
+authorized reads and one vector ranking: no provider round trip, no index
+maintenance, and no `semantic.provider` or `semantic.refresh` observation span
+— only `semantic.rank`.
+
+A source whose record the write path has marked stale still resolves. It ranks
+its neighbourhood against the vector it was last embedded with, which is the
+same freshness tradeoff search makes; see
+[SEMANTIC-INDEXES.md](./SEMANTIC-INDEXES.md).
 
 See [SEMANTIC-INDEXES.md](./SEMANTIC-INDEXES.md) for declaring an index, and
 [SEMANTIC-SEARCH-DESIGN.md](./SEMANTIC-SEARCH-DESIGN.md) for why search

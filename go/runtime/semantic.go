@@ -11,10 +11,12 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
+	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
+	"github.com/eleven-am/golem/go/queue"
 )
 
 // semanticIdentityChunk bounds how many ranked identities one authorized row
@@ -184,9 +186,6 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic identity decoder could not be built", err)
 	}
 	model := semanticModelID(descriptor.Metadata())
-	if err := app.semantic.Refresh(ctx, model, indexName); err != nil {
-		return nil, err
-	}
 	identity := candidates.Columns()
 	columns := make([]string, len(identity))
 	for index, column := range identity {
@@ -349,6 +348,153 @@ func semanticIdentityCondition[P, A any](app *App[P, A], model policyir.ModelID,
 }
 
 func semanticModelID(metadata golem.ModelMetadata) ir.ModelID {
-	model := metadata.ModelID()
+	return semanticIndexModel(metadata.ModelID())
+}
+
+func semanticIndexModel(model golem.ModelID) ir.ModelID {
 	return ir.ModelID(hex.EncodeToString(model[:]))
+}
+
+const (
+	semanticDrainJobType     = semanticruntime.DrainJobType
+	semanticReconcileJobType = semanticruntime.ReconcileJobType
+)
+
+type semanticJob struct {
+	Model string `json:"model"`
+	Index string `json:"index"`
+}
+
+func semanticJobKey(prefix string, job semanticJob) string {
+	return prefix + ":" + job.Model + ":" + job.Index
+}
+
+// registerSemanticJobs publishes Golem's own job types into the application's
+// registry. Keeping the index current is Golem's obligation, not something an
+// application opts into, so the application never writes these handlers and
+// never names them.
+func (app *App[P, A]) registerSemanticJobs(registry *queue.Registry) error {
+	drain, err := queue.Register(registry, queue.Definition[semanticJob]{
+		Type:        semanticDrainJobType,
+		Handle:      app.runSemanticDrain,
+		ExclusiveBy: func(job semanticJob) string { return semanticJobKey(semanticDrainJobType, job) },
+	})
+	if err != nil {
+		return err
+	}
+	reconcile, err := queue.Register(registry, queue.Definition[semanticJob]{
+		Type:        semanticReconcileJobType,
+		Handle:      app.runSemanticReconcile,
+		ExclusiveBy: func(job semanticJob) string { return semanticJobKey(semanticReconcileJobType, job) },
+	})
+	if err != nil {
+		return err
+	}
+	app.semanticDrain, app.semanticReconcile = drain, reconcile
+	return nil
+}
+
+func (app *App[P, A]) runSemanticDrain(ctx context.Context, job queue.Job[semanticJob]) error {
+	if err := app.semanticJobTarget(job.Payload); err != nil {
+		return err
+	}
+	pending, err := app.semantic.Drain(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
+	if err != nil {
+		return err
+	}
+	if !pending {
+		return nil
+	}
+	// A mark committed while this job held its lease produced an enqueue the
+	// queue coalesced into this very job, so it carries no wakeup of its own.
+	// Chain a successor under a key this job cannot swallow.
+	chained := semanticJobKey(semanticDrainJobType, job.Payload) + ":" + string(job.ID)
+	return app.enqueueSemanticJob(ctx, nil, app.semanticDrain, job.Payload, chained)
+}
+
+func (app *App[P, A]) runSemanticReconcile(ctx context.Context, job queue.Job[semanticJob]) error {
+	if err := app.semanticJobTarget(job.Payload); err != nil {
+		return err
+	}
+	return app.semantic.Refresh(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
+}
+
+// semanticJobTarget refuses a job left behind by a schema that no longer
+// declares its index. Retrying cannot make the index reappear, so the attempt
+// budget is not spent on it.
+func (app *App[P, A]) semanticJobTarget(payload semanticJob) error {
+	for _, reference := range app.semantic.IndexRefs() {
+		if string(reference.Model) == payload.Model && reference.Name == payload.Index {
+			return nil
+		}
+	}
+	return queue.Terminal(queue.Fail(queue.CodePayloadInvalid, "semantic index is absent"))
+}
+
+// startSemanticJobs refuses an application that declares a semantic index
+// without a durable queue, then hands every index one reconcile. Golem can see
+// that no queue is configured; it cannot see whether a worker will ever run,
+// so this refusal covers the configuration only.
+func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
+	references := app.semantic.IndexRefs()
+	if len(references) == 0 {
+		return nil
+	}
+	if app.queueStore == nil {
+		return fmt.Errorf("P9_SEMANTIC_CONFIG: a semantic index requires the durable job queue; set Config.Queue")
+	}
+	for _, reference := range references {
+		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
+		if err := app.enqueueSemanticJob(ctx, nil, app.semanticReconcile, payload, semanticJobKey(semanticReconcileJobType, payload)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// enqueueSemanticDrains records one deduped drain per semantic index declared
+// on the mutated model. Passing a transaction executor is what makes the job
+// row commit and roll back with the write that marked the records.
+func (app *App[P, A]) enqueueSemanticDrains(ctx context.Context, executor queueprovider.Executor, model golem.ModelID) error {
+	if app == nil || app.semantic == nil {
+		return nil
+	}
+	identity := semanticIndexModel(model)
+	for _, reference := range app.semantic.IndexRefs() {
+		if reference.Model != identity {
+			continue
+		}
+		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
+		if err := app.enqueueSemanticJob(ctx, executor, app.semanticDrain, payload, semanticJobKey(semanticDrainJobType, payload)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (app *App[P, A]) semanticIndexed(model golem.ModelID) bool {
+	if app == nil || app.semantic == nil {
+		return false
+	}
+	identity := semanticIndexModel(model)
+	for _, reference := range app.semantic.IndexRefs() {
+		if reference.Model == identity {
+			return true
+		}
+	}
+	return false
+}
+
+func (app *App[P, A]) enqueueSemanticJob(ctx context.Context, executor queueprovider.Executor, jobType queue.Type[semanticJob], payload semanticJob, dedupe string) error {
+	pending, err := jobType.New(payload, queue.Dedupe(dedupe))
+	if err != nil {
+		return err
+	}
+	if _, err := app.enqueueOn(ctx, executor, pending); err != nil {
+		return err
+	}
+	if executor == nil {
+		app.queueWorker.Wake()
+	}
+	return nil
 }

@@ -126,7 +126,7 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 	if uint32(len(capture.bindings)) > plan.Bounds().MaxParameters() {
 		return Program{}, fail(CodeLimit, node.ModelID(), policyir.FieldID{}, "capture statement exceeds parameter bound", nil)
 	}
-	return Program{context: context, transaction: transaction, capture: capture, maxRows: plan.Bounds().MaxRows(), primary: primary}, nil
+	return Program{context: context, transaction: transaction, capture: capture, maxRows: plan.Bounds().MaxRows(), primary: primary, semantic: plan.SemanticIndexed()}, nil
 }
 
 type renderContext struct {

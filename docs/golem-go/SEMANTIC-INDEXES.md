@@ -81,7 +81,7 @@ declares an identity-bearing string field as indexed text, its value is part of
 the canonical document and is sent like any other declared field.
 Returned vectors must preserve input order, exactly match the declared
 dimensions, contain only finite `float32` values, and have a non-zero cosine
-norm. `Embed` may be called concurrently by independent queries and refreshes;
+norm. `Embed` may be called concurrently by independent queries and index jobs;
 providers must be concurrency-safe, must honor context cancellation, and should
 apply their own upstream timeout, retry, and rate-limit policy. Provider errors
 and panics cross the public boundary only as closed embedding errors.
@@ -97,12 +97,16 @@ ordinals rather than database identities; providers must not interpret or
 retain them.
 
 Changing the configured provider, model, revision, or maximum batch size
-changes the embedding-space fingerprint. Existing rows are then stale and are
-re-embedded before the next similarity query or explicit refresh. Changing the
-schema dimensions or an index's ordered source fields is a reviewed
-`RiskRewrite` migration: Golem drops and recreates only that index's derived
-state/vector tables under the same stable index identity, preserves the owner
-table, and lazily repopulates the empty index. The application build and
+changes the embedding-space fingerprint. Existing vectors are then invalid, and
+the reconcile enqueued at the next `Open` re-embeds every row. Until that
+reconcile completes, queries are embedded in the new space and ranked against
+vectors produced by the old one, which is a meaningless ordering rather than an
+error. Swap an embedding space during a window where that is acceptable, or
+drain the reconcile before serving traffic. Changing the schema
+dimensions or an index's ordered source fields is a reviewed `RiskRewrite`
+migration: Golem drops and recreates only that index's derived state/vector
+tables under the same stable index identity, preserves the owner table, and
+leaves the startup reconcile to repopulate the empty index. The application build and
 configured provider dimensions must change together with that migration.
 
 ## Search indexed rows
@@ -164,46 +168,114 @@ Only readable rows with readable primary identities are handed to the vector
 ranking query. A highly similar forbidden row is therefore absent, not masked
 after ranking. The generated `System` client has the corresponding trusted
 method. Semantic search methods are intentionally absent from `CallerTx` and
-`SystemTx`: refresh and provider-native vector ranking do not join an
-application mutation transaction.
+`SystemTx`: provider-native vector ranking does not join an application
+mutation transaction.
 
 ## Refresh lifecycle
 
-`application.RefreshSemanticIndexes(ctx)` explicitly reconciles every semantic
-index. A similarity query fixes its authorized candidate rows first and, when
-that set is non-empty, refreshes only the selected model/index before ranking.
-An unrelated embedding space cannot add work to or fail that query. A denied
-read, rejected read hook, or empty authorized set performs no embedding-provider
-work. Correctness does not depend on an application-maintained worker.
+Keeping the index current is background work, not read work. A search or
+similarity call is the ranking statement plus the ordinary authorized row
+fetch, and nothing else: it never scans the owner table and never calls the
+embedding provider for a source document. Search embeds only the query string;
+similarity embeds nothing at all.
 
-Refresh scans all current source rows, materializes their canonical documents,
-and computes stable source hashes. It embeds only missing or stale records,
-stores each batch transactionally, and removes vectors whose owner row was
-deleted. Incremental therefore describes provider work and durable writes, not
-the source scan or total refresh memory. Two refreshes in one application
-process are serialized. The embedding provider's declared maximum batch size
-is honored. If a later batch fails, earlier committed batches remain valid and
-the next refresh safely continues the reconciliation.
+### The queue is mandatory
 
-The authorized candidate rows are a fixed, operation-local snapshot, but the
-refresh and vector query do not join the caller's SQL transaction. A concurrent
-source update or delete can therefore become visible to vector storage between
-the authorized read and ranking, and the next similarity call reconciles the
-new state. Semantic search is read-authorized and eventually index-consistent;
-it is not a point-in-time transactional search API.
+A schema that declares any semantic index requires the durable job queue. An
+application that configures no `Queue` is refused at `Open`. There is no
+acknowledgement or opt-out, because Golem has no other place to record the work
+that keeps the index current.
 
-This v1 lifecycle favors correctness and a zero-worker deployment over write
-latency: the first query after a large import can perform substantial embedding
-work. Production applications should call the explicit refresh during a
-controlled job after bulk changes. Cross-process duplicate embedding calls are
-possible, but durable vector/state writes remain idempotent.
+Golem registers two job types of its own into the application's queue registry.
+Applications never write these handlers and never name them:
 
-Delete cleanup is refresh-driven rather than synchronous. A deleted owner row
+- `semantic.drain` advances one index by exactly the records the write path
+  marked. It probes the stale partial index on the shadow state table, reaches
+  those records' owner rows through the identity columns the state table
+  mirrors, recomputes each canonical document, and embeds only the documents
+  whose hash actually changed. A marked record whose document did not change is
+  flipped back to ready with no embedding-provider call at all; a marked record
+  whose owner row is gone has its vector and state rows deleted.
+- `semantic.reconcile` scans the whole owner table, diffs it against the shadow
+  state, and repairs whatever it finds. This is what observes writes Golem
+  cannot see.
+
+**Golem cannot verify that a worker is running.** The refusal at `Open` covers
+the configuration only: it proves the queue exists, not that any process ever
+calls `RunQueueWorker`. A deployment that configures the queue and never runs a
+worker will accept writes, mark records, enqueue jobs, and serve increasingly
+stale vectors indefinitely, with no error anywhere. Running a worker is the
+application's responsibility, and monitoring that it runs is part of operating a
+semantic index.
+
+### What each path observes
+
+A write made through Golem marks its own records and enqueues one deduped drain
+per index, inside the write's own transaction. Nothing else is required of the
+application.
+
+A write Golem never saw — the raw `UnsafeSQLX` handle, `golem migration backfill
+attach`, another service writing the same table — marks nothing, so no drain
+carries it. Only reconciliation observes such a write. Golem enqueues one
+deduped reconcile per index at `Open`, which bounds that staleness to a
+deployment cycle, and `application.RefreshSemanticIndexes(ctx)` reconciles every
+index on demand. The engine also exposes a single-index scope,
+`runtime.App.RefreshSemanticIndex(ctx, model, name)`, which the generated client
+does not yet surface. There is no per-record refresh call, because writing the
+row is the per-record request.
+
+### The freshness tradeoff
+
+A record marked stale keeps ranking, and keeps serving as a similarity source,
+on the vector it was last embedded with. It is not hidden and it is not an
+error; it is simply behind. A record that has never been embedded has no vector
+and is absent from results until a drain reaches it. Semantic search is
+read-authorized and eventually index-consistent; it is not a point-in-time
+transactional search API.
+
+A drain that finishes with records still marked hands its own successor
+forward, because the queue coalesces an enqueue against the job that is still
+holding its lease. Every write a pass makes — the unchanged flip, the stored
+vector, the removal of a vanished owner — is conditioned on the state row the
+pass actually read, so a mark that commits while the pass is running is never
+erased by it. The record simply stays marked, the pass's completion probe finds
+it, and the successor carries it. Only a mark that commits after that final
+probe waits for the next write to that index or the next reconcile.
+
+Both paths embed in provider batches with a durable commit per batch, honour the
+provider's declared maximum batch size, and are serialized within one process.
+If a later batch fails, earlier committed batches remain valid and the next
+drain or reconcile continues from there. Cross-process duplicate embedding calls
+are possible; durable vector and state writes remain idempotent.
+
+Delete cleanup is drain-driven rather than synchronous. A deleted owner row
 cannot appear in an authorized similarity result, but its managed vector and
-state row can remain at rest until the next successful refresh. Applications
-with a deletion or erasure SLA should refresh after the delete is committed and
+state row can remain at rest until a drain or reconcile removes them.
+Applications with a deletion or erasure SLA should confirm the drain ran and
 must separately enforce the configured embedding service's retention/deletion
 policy; Golem cannot erase data retained by that service.
+
+### A document the provider will not accept
+
+A provider that refuses a batch is retried one record at a time, so the refusal
+lands on the document that caused it rather than on the batch it happened to
+travel in. That record is quarantined — its state row records `failed`, a closed
+error code, and an incremented attempt count — while the rest of its batch and
+every later batch still embed. A quarantined record keeps its last stored vector,
+so it still ranks and still serves as a similarity source on whatever it was last
+embedded with.
+
+Quarantine is never retried on its own. The stale probe skips a failed record,
+because a drain chains a successor for as long as anything is marked, and a
+document the provider will never accept would otherwise be refused and chained
+for the life of the deployment. A quarantined record is retried when a write to
+it marks it again, or when a reconcile compares its document against the stored
+hash — so `application.RefreshSemanticIndexes(ctx)` and the reconcile Golem
+enqueues at `Open` are the deliberate retry. A provider outage refuses whatever
+was being drained rather than one document, and quarantines those records the
+same way; the next reconcile is what clears them. Failed records are an
+operational signal, visible in the index's state table, and they do not clear
+themselves.
 
 ## Limits and closed errors
 
@@ -219,9 +291,12 @@ the authorized candidate set.
 ## Observation
 
 The configured application observer receives closed `semantic.refresh`,
-`semantic.provider`, and `semantic.rank` records. Refresh statement counts
-cover source/state scans and executed vector/state writes or deletes, while its
-aggregate count is the number of dirty plus stale rows. Provider records have
+`semantic.provider`, and `semantic.rank` records. Both the drain and the
+reconcile report as `semantic.refresh`; a search or similarity call emits no
+`semantic.refresh` record at all. Refresh statement counts cover the stale
+probe or full source/state scan and the executed vector/state writes, flips, or
+deletes, while its aggregate count is the number of records acted on. Provider
+records have
 zero statements and expose only the input batch size. Rank counts the
 provider-native ranking statements actually executed and exposes only the
 number of ranked results. The records never contain provider or

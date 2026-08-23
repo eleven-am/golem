@@ -48,6 +48,7 @@ func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error
 type Config[P any] struct {
 	Database               *provider.Database
 	Embeddings             embedding.Registry
+	Queue                  *golemruntime.QueueConfig
 	ReadLimits             golemruntime.ReadLimits
 	MutationLimits         golemruntime.MutationLimits
 	AnalyticsLimits        golemruntime.AnalyticsLimits
@@ -482,7 +483,7 @@ func (client SystemTxCategoryClient[P]) DeleteMany(ctx context.Context, where go
 }
 
 func Open[P any](ctx context.Context, config Config[P]) (*App[P], error) {
-	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database})
+	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database, Queue: config.Queue})
 }
 
 func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemruntime.Config[P, Actor]) (*App[P], error) {
@@ -535,6 +536,12 @@ func (app *App[P]) RefreshSemanticIndexes(ctx context.Context) error {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application is required")
 	}
 	return app.runtime.RefreshSemanticIndexes(ctx)
+}
+func (app *App[P]) RunQueueWorker(ctx context.Context) error {
+	if app == nil {
+		return fmt.Errorf("P9_QUEUE_RUNTIME: application is required")
+	}
+	return app.runtime.RunQueueWorker(ctx)
 }
 func (app *App[P]) EventCapabilities() events.Capabilities {
 	if app == nil {

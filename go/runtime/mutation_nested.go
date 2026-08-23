@@ -176,9 +176,9 @@ func renderNestedScalarNode[P, A any](app *App[P, A], stance mutationir.Stance, 
 	if err != nil {
 		return mutationsql.Program{}, err
 	}
-	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds}
+	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds, SemanticIndexed: modelSemanticIndexed(app.registry, node.ModelID())}
 	if node.Fact().Enabled() {
-		codec, _, _, codecErr := mutationEventSchema(app.registry, node.ModelID())
+		codec, _, _, codecErr := mutationplan.ModelEventSchema(app.registry, node.ModelID())
 		if codecErr != nil {
 			return mutationsql.Program{}, codecErr
 		}
@@ -305,9 +305,9 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 		return mutationnested.ApplyResult{}, err
 	}
 	result, _ := mutationir.NewImageRequirements(node.ModelID(), nil, nil)
-	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds}
+	planInput := mutationir.PlanInput{Stance: stance, Graph: graph, Result: result, Providers: []mutationir.ProviderRequirement{requirement}, Retry: mutationir.NoRetry, Bounds: bounds, SemanticIndexed: modelSemanticIndexed(app.registry, node.ModelID())}
 	if node.Fact().Enabled() {
-		codec, _, _, codecErr := mutationEventSchema(app.registry, node.ModelID())
+		codec, _, _, codecErr := mutationplan.ModelEventSchema(app.registry, node.ModelID())
 		if codecErr != nil {
 			return mutationnested.ApplyResult{}, codecErr
 		}
@@ -356,6 +356,11 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	state, err := binding.mutationState()
 	if err != nil {
 		return mutationnested.ApplyResult{}, err
+	}
+	if program.SemanticIndexed() {
+		if markErr := markBatchSemanticRecords(state, node.ModelID(), program.PrimaryKey(), verification); markErr != nil {
+			return mutationnested.ApplyResult{}, markErr
+		}
 	}
 	if err := state.touch(int(verification.Count())); err != nil {
 		return mutationnested.ApplyResult{}, err
@@ -417,16 +422,6 @@ func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], pol
 	}
 	if stance == mutationir.Caller {
 		request.Hooks = mutationHookInventory(app.bindings, input.ModelID())
-	}
-	if model, ok := app.registry.Model(input.ModelID()); ok && model.SubscriptionsEnabled() {
-		codec, eventSchema, snapshot, codecErr := mutationEventSchema(app.registry, policyir.ModelID(input.ModelID()))
-		if codecErr != nil {
-			return mutationnested.Result{}, codecErr
-		}
-		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
-		if operation == mutationir.Delete {
-			request.PrivateDeleteSnapshot = snapshot
-		}
 	}
 	if operation == mutationir.Create {
 		ownedFields, ownedErr := nestedRootSourceOwnedFields(*input, app.registry)
@@ -1527,13 +1522,6 @@ func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplace
 	if err != nil {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
 	}
-	if metadata, present := transaction.app.registry.Model(transformed.ModelID()); present && metadata.SubscriptionsEnabled() {
-		codec, eventSchema, _, codecErr := mutationEventSchema(transaction.app.registry, policyir.ModelID(transformed.ModelID()))
-		if codecErr != nil {
-			return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, codecErr
-		}
-		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
-	}
 	plan, err := mutationplan.BuildRoot(request)
 	if err != nil {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
@@ -1622,15 +1610,6 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		Result: result, Retry: mutationir.NoRetry,
 		Hooks: mutationHookInventory(transaction.app.bindings, transformed.ModelID()),
 	}
-	var deleteSnapshot []policyir.FieldID
-	if metadata, ok := transaction.app.registry.Model(transformed.ModelID()); ok && metadata.SubscriptionsEnabled() {
-		codec, eventSchema, snapshot, codecErr := mutationEventSchema(transaction.app.registry, model)
-		if codecErr != nil {
-			return nil, mutationnested.SubtreeReplacement{}, codecErr
-		}
-		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &codec, eventSchema
-		deleteSnapshot = snapshot
-	}
 	request.Bounds, err = mutationir.NewStatementBounds(uint32(transaction.app.mutationLimits.statementParameters), uint32(transaction.app.mutationLimits.touchedRows))
 	if err != nil {
 		return nil, mutationnested.SubtreeReplacement{}, err
@@ -1659,7 +1638,6 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		relations = input.Relations()
 	case golem.HookDelete:
 		request.Operation = mutationir.Delete
-		request.PrivateDeleteSnapshot = deleteSnapshot
 	default:
 		return nil, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: exact replacement operation %q is unsupported", transformed.Operation())
 	}

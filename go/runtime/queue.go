@@ -31,6 +31,13 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	if err != nil {
 		return queue.Fail(queue.CodeConfigInvalid, "durable job storage is unavailable: %v", err)
 	}
+	// The worker snapshots its registry, so Golem's own job types must exist
+	// before it is built.
+	if len(app.semantic.IndexRefs()) > 0 {
+		if err := app.registerSemanticJobs(config.Registry); err != nil {
+			return err
+		}
+	}
 	worker, err := queueworker.New(store, config.Registry, config.Limits)
 	if err != nil {
 		return err

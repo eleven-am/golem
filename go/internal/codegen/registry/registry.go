@@ -223,6 +223,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
 	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tEmbeddings %s.Registry\n", embeddingAlias)
+	fmt.Fprintf(source, "\tQueue *%s.QueueConfig\n", runtimeAlias)
 	fmt.Fprintf(source, "\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n", runtimeAlias, runtimeAlias, runtimeAlias)
 	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tObserver %s.Observer\n", eventsAlias, eventsAlias, observeAlias)
 	fmt.Fprintf(source, "\tCDCAdapters []%s.CDCAdapter\n\tReportEventOperator %s.OperatorAudit\n", eventsAlias, eventsAlias)
@@ -325,7 +326,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		emitMutationClientMethods(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, createInput, updateInput, updateManyInput, versioned)
 	}
 	fmt.Fprintf(source, "\nfunc Open[P any](ctx %s.Context, config Config[P]) (*App[P], error) {\n", contextAlias)
-	fmt.Fprintf(source, "\treturn golemOpen(ctx, config, %s.Config[P, %s]{Database: config.Database})\n}\n", runtimeAlias, actorType)
+	fmt.Fprintf(source, "\treturn golemOpen(ctx, config, %s.Config[P, %s]{Database: config.Database, Queue: config.Queue})\n}\n", runtimeAlias, actorType)
 	fmt.Fprintf(source, "\nfunc golemOpen[P any](ctx %s.Context, config Config[P], engineConfig %s.Config[P, %s]) (*App[P], error) {\n", contextAlias, runtimeAlias, actorType)
 	source.WriteString("\tbindings, err := GolemGeneratedApplicationBindings()\n\tif err != nil { return nil, err }\n\tdescriptors, err := GolemGeneratedApplicationDescriptors()\n\tif err != nil { return nil, err }\n")
 	if hasSubscriptions(contracts) {
@@ -344,6 +345,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine, observer: config.Observer, provider: config.Database.Provider()}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) RefreshSemanticIndexes(ctx %s.Context) error { if app == nil { return %s.Errorf(\"P9_SEMANTIC_RUNTIME: application is required\") }; return app.runtime.RefreshSemanticIndexes(ctx) }\n", contextAlias, fmtAlias)
+	fmt.Fprintf(source, "func (app *App[P]) RunQueueWorker(ctx %s.Context) error { if app == nil { return %s.Errorf(\"P9_QUEUE_RUNTIME: application is required\") }; return app.runtime.RunQueueWorker(ctx) }\n", contextAlias, fmtAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventCapabilities() %s.Capabilities { if app == nil { return %s.Capabilities{} }; return app.runtime.EventCapabilities() }\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventOperator() %s.Operator { if app == nil { return nil }; return app.runtime.EventOperator() }\n", eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventLimits() %s.Limits { if app == nil { return %s.Limits{} }; return app.runtime.EventLimits() }\n", eventsAlias, eventsAlias)
