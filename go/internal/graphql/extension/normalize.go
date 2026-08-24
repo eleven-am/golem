@@ -241,11 +241,6 @@ type graphQLTypeContext struct {
 	versioned map[string]bool
 }
 
-var scalarNames = map[string]struct{}{
-	"Boolean": {}, "Int": {}, "Float": {}, "String": {}, "BigInt": {}, "Decimal": {},
-	"UUID": {}, "Date": {}, "Time": {}, "DateTime": {}, "Bytes": {}, "JSON": {},
-}
-
 func (context graphQLTypeContext) validate(value ir.GraphQLTypeIR, use typeUse, span ir.SourceSpan) []ir.Diagnostic {
 	if value.Kind == ir.GraphQLTypeList {
 		if value.Name != "" || value.Element == nil {
@@ -262,7 +257,7 @@ func (context graphQLTypeContext) validate(value ir.GraphQLTypeIR, use typeUse, 
 	known := false
 	switch value.Kind {
 	case ir.GraphQLTypeScalar:
-		_, known = scalarNames[value.Name]
+		known = ir.IsScalarGraphQLName(value.Name)
 	case ir.GraphQLTypeEnum:
 		_, known = context.enums[value.Name]
 	case ir.GraphQLTypeModel:

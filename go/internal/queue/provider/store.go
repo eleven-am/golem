@@ -32,6 +32,7 @@ const (
 	MaximumRetentionRows = 4096
 	MaximumPayloadBytes  = 1 << 20
 	MaximumKeyBytes      = 256
+	MaximumIdentityBytes = 64
 )
 
 // ErrNotFound reports an inspection of an absent job.
@@ -122,8 +123,8 @@ type Store interface {
 }
 
 func ValidateEnqueue(request EnqueueRequest) error {
-	if request.ID == "" || len(request.ID) > 64 {
-		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job identity must be within 1..64 bytes")
+	if request.ID == "" || len(request.ID) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job identity must be within 1..%d bytes", MaximumIdentityBytes)
 	}
 	if !canonicalName.MatchString(request.Type) {
 		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job type is not canonical")
@@ -179,12 +180,19 @@ func ValidateCode(code string) error {
 	return nil
 }
 
-func ValidateIdentity(id, token string) error {
-	if id == "" || len(id) > 64 {
-		return fmt.Errorf("QUEUE_IDENTITY: job identity must be within 1..64 bytes")
+func ValidateJobIdentity(id string) error {
+	if id == "" || len(id) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_IDENTITY: job identity must be within 1..%d bytes", MaximumIdentityBytes)
 	}
-	if token == "" || len(token) > 64 {
-		return fmt.Errorf("QUEUE_IDENTITY: lease token must be within 1..64 bytes")
+	return nil
+}
+
+func ValidateIdentity(id, token string) error {
+	if err := ValidateJobIdentity(id); err != nil {
+		return err
+	}
+	if token == "" || len(token) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_IDENTITY: lease token must be within 1..%d bytes", MaximumIdentityBytes)
 	}
 	return nil
 }

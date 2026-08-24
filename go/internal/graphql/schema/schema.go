@@ -342,9 +342,9 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		if hidden(fc.Modes) {
 			continue
 		}
-		readable := !hasMode(fc.Modes, ir.ModeWriteOnly)
-		writableCreate := !hasMode(fc.Modes, ir.ModeReadOnly)
-		writableUpdate := writableCreate && !hasMode(fc.Modes, ir.ModeImmutable)
+		readable := ir.ModesReadable(fc.Modes)
+		writableCreate := !ir.HasMode(fc.Modes, ir.ModeReadOnly)
+		writableUpdate := writableCreate && !ir.HasMode(fc.Modes, ir.ModeImmutable)
 		if field.Kind == ir.FieldRelation {
 			relation := relationForField(field, view.relations)
 			if relation == nil {
@@ -461,7 +461,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 		if len(selector.Fields) == 1 {
 			field := fieldByID(view.model, selector.Fields[0])
 			fc := view.fields[selector.Fields[0]]
-			if field == nil || field.Scalar == nil || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeWriteOnly) {
+			if field == nil || field.Scalar == nil || !ir.ModesReadable(fc.Modes) {
 				return nil, fmt.Errorf("selector %s.%s contains an unexposed field", name, selector.Name)
 			}
 			base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
@@ -476,7 +476,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			for _, id := range selector.Fields {
 				field := fieldByID(view.model, id)
 				fc := view.fields[id]
-				if field == nil || field.Scalar == nil || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeWriteOnly) {
+				if field == nil || field.Scalar == nil || !ir.ModesReadable(fc.Modes) {
 					return nil, fmt.Errorf("selector %s.%s contains an unexposed field", name, selector.Name)
 				}
 				base, _, _, err := scalarGraphQL(field.Scalar.Type, enums)
@@ -756,7 +756,7 @@ func allRelationFilterTypes(views []modelView, contracts map[ir.ModelID]ir.Model
 				continue
 			}
 			fc := view.fields[field.ID]
-			if hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeWriteOnly) {
+			if !ir.ModesReadable(fc.Modes) {
 				continue
 			}
 			relation := relationForField(field, view.relations)
@@ -941,7 +941,7 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 			continue
 		}
 		fc, ok := fieldContractByID(contract, field.ID)
-		if !ok || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeReadOnly) {
+		if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
 			continue
 		}
 		if field.Relation != nil {
@@ -976,7 +976,7 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 			fmt.Fprintf(&create, "  %s: %s%s\n", fc.GraphQLName, base, bang(required))
 			hasCreate = true
 		}
-		if !hasMode(fc.Modes, ir.ModeImmutable) && !relationUpdateFields[field.ID] {
+		if !ir.HasMode(fc.Modes, ir.ModeImmutable) && !relationUpdateFields[field.ID] {
 			fmt.Fprintf(&update, "  %s: %s\n", fc.GraphQLName, updateType)
 			hasUpdate = true
 		}
@@ -1039,7 +1039,7 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 			continue
 		}
 		fc := view.fields[field.ID]
-		if hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeReadOnly) {
+		if hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
 			continue
 		}
 		relation := relationForField(field, view.relations)
@@ -1223,12 +1223,12 @@ func relationMutationCapabilitiesFor(field ir.FieldIR, model ir.ModelDeclIR, con
 		return relationMutationCapabilities{}, nil
 	}
 	fc, ok := fieldContractByID(contract, field.ID)
-	if !ok || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeReadOnly) {
+	if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
 		return relationMutationCapabilities{}, nil
 	}
 	result := relationMutationCapabilities{
 		create:  true,
-		update:  !hasMode(fc.Modes, ir.ModeImmutable),
+		update:  !ir.HasMode(fc.Modes, ir.ModeImmutable),
 		many:    field.Relation.Kind == ir.RelationHasMany,
 		inverse: field.Relation.Role == ir.RelationInverse,
 	}
@@ -1287,7 +1287,7 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			continue
 		}
 		fc, ok := fieldContractByID(contract, field.ID)
-		if !ok || hidden(fc.Modes) || hasMode(fc.Modes, ir.ModeReadOnly) {
+		if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
 			continue
 		}
 		if field.Scalar != nil {
@@ -1300,7 +1300,7 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			if !hookOwnedCreateField(contract, field.ID) {
 				create = true
 			}
-			if !hasMode(fc.Modes, ir.ModeImmutable) {
+			if !ir.HasMode(fc.Modes, ir.ModeImmutable) {
 				update, updateMany = true, true
 			}
 			continue
@@ -1309,7 +1309,7 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			if !hookOwnedCreateRelation(field, model, contract, relations) {
 				create = true
 			}
-			if model.OptimisticConcurrency == nil && !hasMode(fc.Modes, ir.ModeImmutable) {
+			if model.OptimisticConcurrency == nil && !ir.HasMode(fc.Modes, ir.ModeImmutable) {
 				update = true
 			}
 		}
@@ -1359,31 +1359,10 @@ func fieldContractByID(contract ir.ModelContractIR, id ir.FieldID) (ir.FieldCont
 }
 
 func scalarGraphQL(logical ir.LogicalTypeIR, enums map[ir.EnumID]ir.EnumContractIR) (base, filter, update string, err error) {
+	if name, ok := ir.ScalarGraphQLName(logical.Kind); ok {
+		return name, name + "Filter", name + "UpdateOperationsInput", nil
+	}
 	switch logical.Kind {
-	case ir.TypeBool:
-		return "Boolean", "BooleanFilter", "BooleanUpdateOperationsInput", nil
-	case ir.TypeInt16, ir.TypeInt32:
-		return "Int", "IntFilter", "IntUpdateOperationsInput", nil
-	case ir.TypeInt64:
-		return "BigInt", "BigIntFilter", "BigIntUpdateOperationsInput", nil
-	case ir.TypeFloat32, ir.TypeFloat64:
-		return "Float", "FloatFilter", "FloatUpdateOperationsInput", nil
-	case ir.TypeDecimal:
-		return "Decimal", "DecimalFilter", "DecimalUpdateOperationsInput", nil
-	case ir.TypeString:
-		return "String", "StringFilter", "StringUpdateOperationsInput", nil
-	case ir.TypeBytes:
-		return "Bytes", "BytesFilter", "BytesUpdateOperationsInput", nil
-	case ir.TypeUUID:
-		return "UUID", "UUIDFilter", "UUIDUpdateOperationsInput", nil
-	case ir.TypeDate:
-		return "Date", "DateFilter", "DateUpdateOperationsInput", nil
-	case ir.TypeTime:
-		return "Time", "TimeFilter", "TimeUpdateOperationsInput", nil
-	case ir.TypeDateTime:
-		return "DateTime", "DateTimeFilter", "DateTimeUpdateOperationsInput", nil
-	case ir.TypeJSON:
-		return "JSON", "JSONFilter", "JSONUpdateOperationsInput", nil
 	case ir.TypeEnum:
 		if logical.EnumID == nil {
 			return "", "", "", fmt.Errorf("enum type has no identity")
@@ -1426,15 +1405,7 @@ func fieldByID(model ir.ModelDeclIR, id ir.FieldID) *ir.FieldIR {
 	}
 	return nil
 }
-func hasMode(values []ir.FieldMode, mode ir.FieldMode) bool {
-	for _, value := range values {
-		if value == mode {
-			return true
-		}
-	}
-	return false
-}
-func hidden(values []ir.FieldMode) bool { return hasMode(values, ir.ModeHidden) }
+func hidden(values []ir.FieldMode) bool { return ir.HasMode(values, ir.ModeHidden) }
 func exported(value string) string {
 	if value == "" {
 		return value

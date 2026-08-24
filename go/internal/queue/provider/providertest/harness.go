@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -343,4 +344,37 @@ func inspect(t testing.TB, fixture Fixture, identity string) queueprovider.Recor
 		t.Fatal(err)
 	}
 	return record
+}
+
+func IdentityBoundIsOwnedByTheQueueContract(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	if err := fixture.Store.EnsureSchema(ctx); err != nil {
+		t.Fatal(err)
+	}
+	longest := strings.Repeat("a", queueprovider.MaximumIdentityBytes)
+	overlong := strings.Repeat("a", queueprovider.MaximumIdentityBytes+1)
+
+	if _, err := fixture.Store.Cancel(ctx, overlong); err == nil {
+		t.Errorf("Cancel accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
+	}
+	if _, err := fixture.Store.Requeue(ctx, overlong); err == nil {
+		t.Errorf("Requeue accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
+	}
+	if _, err := fixture.Store.Release(ctx, overlong, longest); err == nil {
+		t.Errorf("Release accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
+	}
+	if _, err := fixture.Store.Enqueue(ctx, nil, queueprovider.EnqueueRequest{ID: overlong, Type: "gate.identity", Payload: []byte(`{}`), MaxAttempts: 1}); err == nil {
+		t.Errorf("Enqueue accepted a %d-byte identity beyond the %d-byte contract bound", len(overlong), queueprovider.MaximumIdentityBytes)
+	}
+
+	if _, err := fixture.Store.Cancel(ctx, longest); err != nil {
+		t.Errorf("Cancel rejected a %d-byte identity the contract permits: %v", len(longest), err)
+	}
+	if _, err := fixture.Store.Requeue(ctx, longest); err != nil {
+		t.Errorf("Requeue rejected a %d-byte identity the contract permits: %v", len(longest), err)
+	}
+	if _, err := fixture.Store.Enqueue(ctx, nil, queueprovider.EnqueueRequest{ID: longest, Type: "gate.identity", Payload: []byte(`{}`), MaxAttempts: 1}); err != nil {
+		t.Errorf("Enqueue rejected a %d-byte identity the contract permits: %v", len(longest), err)
+	}
 }

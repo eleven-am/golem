@@ -247,8 +247,8 @@ func (store *queueStore) Release(ctx context.Context, id, token string) (bool, e
 }
 
 func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
-	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is invalid")
+	if err := queueprovider.ValidateJobIdentity(id); err != nil {
+		return false, err
 	}
 	immediate, err := store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='pending'`, id)
 	if err != nil || immediate {
@@ -258,8 +258,8 @@ func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
 }
 
 func (store *queueStore) Requeue(ctx context.Context, id string) (bool, error) {
-	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is invalid")
+	if err := queueprovider.ValidateJobIdentity(id); err != nil {
+		return false, err
 	}
 	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status" IN ('failed','canceled')`, id)
 }

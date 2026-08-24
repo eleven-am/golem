@@ -145,3 +145,7 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 		t.Fatal("queue storage was tolerated without the unmanaged allowlist")
 	}
 }
+
+func TestIdentityBoundIsOwnedByTheQueueContract(t *testing.T) {
+	runQueueGate(t, providertest.IdentityBoundIsOwnedByTheQueueContract)
+}

@@ -537,14 +537,7 @@ func (field Field) Modes() []compilerir.FieldMode {
 // Visible reports whether the field belongs to the default public projection.
 // Empty modes are visible for source compatibility; hidden and write-only
 // explicitly remove a field from read output.
-func (field Field) Visible() bool {
-	for _, mode := range field.modes {
-		if mode == compilerir.ModeHidden || mode == compilerir.ModeWriteOnly {
-			return false
-		}
-	}
-	return true
-}
+func (field Field) Visible() bool { return compilerir.ModesReadable(field.modes) }
 func (field Field) RelationID() (golem.RelationID, bool) {
 	return field.relation, field.kind == compilerir.FieldRelation
 }

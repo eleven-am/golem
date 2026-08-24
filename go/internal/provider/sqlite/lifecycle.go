@@ -16,6 +16,8 @@ import (
 	"github.com/ncruces/go-sqlite3/driver"
 )
 
+const VerifiedPoolWidth = 4
+
 const (
 	journalModeWAL    = "wal"
 	journalModeMemory = "memory"
@@ -50,18 +52,18 @@ func initializeProviderConnection(connection *sqlite3.Conn) error {
 // evidence observe the real failed-probe path without adding a production or
 // public injection seam.
 func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
-	database.SetMaxOpenConns(4)
-	database.SetMaxIdleConns(4)
+	database.SetMaxOpenConns(VerifiedPoolWidth)
+	database.SetMaxIdleConns(VerifiedPoolWidth)
 	if err := establishJournalMode(ctx, database); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	report, err := provider.VerifyPool(ctx, database, 4)
+	report, err := provider.VerifyPool(ctx, database, VerifiedPoolWidth)
 	if err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	if err := verifyProviderOwnedDurability(ctx, database, 4); err != nil {
+	if err := verifyProviderOwnedDurability(ctx, database, VerifiedPoolWidth); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}

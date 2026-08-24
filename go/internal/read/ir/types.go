@@ -403,3 +403,10 @@ func (request Request) clone() Request {
 	result, _ := NewRequest(input)
 	return result
 }
+
+func NarrowCap(current, candidate int) int {
+	if candidate > 0 && (current == 0 || candidate < current) {
+		return candidate
+	}
+	return current
+}

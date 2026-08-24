@@ -216,7 +216,7 @@ func buildModelBinding(model compilerir.ModelDeclIR, contract compilerir.ModelCo
 	localNames := map[string]bool{}
 	for _, field := range model.Fields {
 		fc, visible := fieldContracts[field.ID]
-		if !visible || !readable(fc) || field.Scalar == nil || !groupable(field.Scalar.Type.Kind) {
+		if !visible || !available(fc) || field.Scalar == nil || !groupable(field.Scalar.Type.Kind) {
 			continue
 		}
 		localNames[fc.GraphQLName] = true
@@ -271,7 +271,7 @@ func buildModelBinding(model compilerir.ModelDeclIR, contract compilerir.ModelCo
 				break
 			}
 		}
-		if field.Scalar == nil || !readable(fc) || !groupable(field.Scalar.Type.Kind) {
+		if field.Scalar == nil || !available(fc) || !groupable(field.Scalar.Type.Kind) {
 			return result, fmt.Errorf("P6_GRAPHQL_ANALYTICS_RELATION: %s terminal field is unavailable", dimension.Name)
 		}
 		fieldID, idErr := publicFieldID(field.ID)
@@ -1138,13 +1138,8 @@ func identitySet(values []compilerir.FieldID) map[compilerir.FieldID]bool {
 	}
 	return result
 }
-func readable(value compilerir.FieldContractIR) bool {
-	for _, mode := range value.Modes {
-		if mode == compilerir.ModeHidden || mode == compilerir.ModeWriteOnly {
-			return false
-		}
-	}
-	return value.GraphQLName != ""
+func available(value compilerir.FieldContractIR) bool {
+	return compilerir.ModesReadable(value.Modes) && value.GraphQLName != ""
 }
 func publicModelID(value compilerir.ModelID) (golem.ModelID, error) {
 	var result golem.ModelID

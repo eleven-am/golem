@@ -240,7 +240,7 @@ func (registry *Registry) validateType(typ compilerir.GraphQLTypeIR, argument bo
 	}
 	switch typ.Kind {
 	case compilerir.GraphQLTypeScalar:
-		if !knownScalar(typ.Name) {
+		if !compilerir.IsScalarGraphQLName(typ.Name) {
 			return fmt.Errorf("scalar %q is unknown", typ.Name)
 		}
 	case compilerir.GraphQLTypeEnum:
@@ -367,15 +367,6 @@ func validateScalar(name string, value any) error {
 		return fmt.Errorf("%s requires its exact Go value, got %T", name, value)
 	}
 	return nil
-}
-
-func knownScalar(name string) bool {
-	switch name {
-	case "Boolean", "Int", "Float", "String", "BigInt", "Decimal", "UUID", "Date", "Time", "DateTime", "Bytes", "JSON":
-		return true
-	default:
-		return false
-	}
 }
 
 func cloneOperation(value compilerir.CustomOperationContractIR) compilerir.CustomOperationContractIR {
