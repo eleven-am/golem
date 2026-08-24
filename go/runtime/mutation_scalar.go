@@ -15,13 +15,11 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
+	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
-	ncrucsqlite "github.com/ncruces/go-sqlite3"
-	moderncsqlite "modernc.org/sqlite"
 )
 
 // scalarMutationExecution is the exact physical handoff between the closed
@@ -851,47 +849,16 @@ func cloneMutationPhysicalValue(value any) any {
 	}
 }
 
-// scalarMutationProviderFailureKind translates only stable provider classes.
-// Driver text, physical constraint names, SQL, and values remain exclusively
-// in the trusted cause. Unknown provider failures fail closed as BAD_USER_INPUT
-// at the public boundary rather than exposing or guessing their semantics.
+// scalarMutationProviderFailureKind translates only the faults the shared
+// provider classifier recognises. Driver text, physical constraint names, SQL,
+// and values remain exclusively in the trusted cause. Unknown provider failures
+// fail closed as BAD_USER_INPUT at the public boundary rather than exposing or
+// guessing their semantics.
 func scalarMutationProviderFailureKind(err error) scalarMutationFailureKind {
-	var postgres *pgconn.PgError
-	if errors.As(err, &postgres) {
-		switch postgres.Code {
-		case "23505", // unique_violation
-			"40001", // serialization_failure
-			"40P01", // deadlock_detected
-			"27000": // triggered_data_change_violation: captured target changed during the statement
-			return scalarMutationConflict
-		default:
-			return scalarMutationProvider
-		}
+	if mutationupsert.ClassifyProviderFault(err) == mutationupsert.ProviderFaultNone {
+		return scalarMutationProvider
 	}
-	var ncruces *ncrucsqlite.Error
-	if errors.As(err, &ncruces) {
-		switch ncruces.ExtendedCode() {
-		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
-			return scalarMutationConflict
-		}
-		switch ncruces.Code() {
-		case ncrucsqlite.BUSY, ncrucsqlite.LOCKED:
-			return scalarMutationConflict
-		default:
-			return scalarMutationProvider
-		}
-	}
-	var sqlite *moderncsqlite.Error
-	if errors.As(err, &sqlite) {
-		switch sqlite.Code() {
-		case 1555, 2067, // SQLITE_CONSTRAINT_PRIMARYKEY / UNIQUE
-			5, 6: // SQLITE_BUSY / LOCKED
-			return scalarMutationConflict
-		default:
-			return scalarMutationProvider
-		}
-	}
-	return scalarMutationProvider
+	return scalarMutationConflict
 }
 
 func rollbackScalarMutation(transaction *sqlx.Tx, cause error) error {

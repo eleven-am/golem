@@ -904,9 +904,8 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return fmt.Errorf("sqlite migration starting introspection: %w", err)
 	}
-	beforeFingerprint, err := physical.HistoricalPhysicalFingerprint(actualBefore)
-	if err != nil || migration.Digest(beforeFingerprint.String()) != entry.BeforePhysical {
-		return fmt.Errorf("sqlite migration starting physical fingerprint mismatch")
+	if err := physical.CompareFingerprintDigest(actualBefore, string(entry.BeforePhysical)); err != nil {
+		return fmt.Errorf("sqlite migration starting physical verification: %w", err)
 	}
 
 	for _, guard := range plan.guards {
@@ -940,14 +939,11 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return fmt.Errorf("sqlite migration final introspection: %w", err)
 	}
-	afterFingerprint, err := physical.HistoricalPhysicalFingerprint(actualAfter)
-	if err != nil || migration.Digest(afterFingerprint.String()) != entry.AfterPhysical {
-		return fmt.Errorf("sqlite migration final physical fingerprint mismatch")
+	if err := physical.CompareFingerprintDigest(actualAfter, string(entry.AfterPhysical)); err != nil {
+		return fmt.Errorf("sqlite migration final physical verification: %w", err)
 	}
-	wantSystem, _ := physical.HistoricalSystemFingerprint(entry.AfterSnapshot)
-	gotSystem, _ := physical.HistoricalSystemFingerprint(actualAfter)
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite migration final system fingerprint mismatch")
+	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
+		return fmt.Errorf("sqlite migration final verification: %w", err)
 	}
 
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
@@ -1033,9 +1029,8 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration starting introspection: %w", err)
 	}
-	beforeFingerprint, _ := physical.HistoricalPhysicalFingerprint(actualBefore)
-	if migration.Digest(beforeFingerprint.String()) != entry.BeforePhysical {
-		return fmt.Errorf("sqlite initial migration starting physical fingerprint mismatch")
+	if err := physical.CompareFingerprintDigest(actualBefore, string(entry.BeforePhysical)); err != nil {
+		return fmt.Errorf("sqlite initial migration starting physical verification: %w", err)
 	}
 	for index, statement := range script.statements {
 		if _, err := transaction.ExecContext(ctx, statement); err != nil {
@@ -1052,14 +1047,11 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err != nil {
 		return fmt.Errorf("sqlite initial migration final introspection: %w", err)
 	}
-	afterFingerprint, _ := physical.HistoricalPhysicalFingerprint(actualAfter)
-	if migration.Digest(afterFingerprint.String()) != entry.AfterPhysical {
-		return fmt.Errorf("sqlite initial migration final physical fingerprint mismatch")
+	if err := physical.CompareFingerprintDigest(actualAfter, string(entry.AfterPhysical)); err != nil {
+		return fmt.Errorf("sqlite initial migration final physical verification: %w", err)
 	}
-	wantSystem, _ := physical.HistoricalSystemFingerprint(entry.AfterSnapshot)
-	gotSystem, _ := physical.HistoricalSystemFingerprint(actualAfter)
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite initial migration final system fingerprint mismatch")
+	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
+		return fmt.Errorf("sqlite initial migration final verification: %w", err)
 	}
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writeTerminalLedger(ctx, transaction, manifest, 0, entry); err != nil {

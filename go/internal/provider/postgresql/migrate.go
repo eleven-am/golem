@@ -1033,7 +1033,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return fmt.Errorf("postgresql migration starting introspection: %w", err)
 	}
-	if err := compareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
+	if err := physical.CompareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
 		return fmt.Errorf("postgresql migration starting fingerprint: %w", err)
 	}
 	if err := executePostgreSQLIncrementalPlan(ctx, transaction, entry, files, plan); err != nil {
@@ -1043,7 +1043,7 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err != nil {
 		return fmt.Errorf("postgresql migration final introspection: %w", err)
 	}
-	if err := compareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
+	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("postgresql migration final fingerprint: %w", err)
 	}
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
@@ -1194,7 +1194,7 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration starting introspection: %w", err)
 	}
-	if err := compareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
+	if err := physical.CompareFingerprints(entry.BeforeSnapshot, actualBefore); err != nil {
 		return fmt.Errorf("postgresql initial migration starting fingerprint: %w", err)
 	}
 	for index, statement := range script.statements {
@@ -1206,7 +1206,7 @@ func (provider *Provider) applyBootstrapEntry(ctx context.Context, transaction *
 	if err != nil {
 		return fmt.Errorf("postgresql initial migration final introspection: %w", err)
 	}
-	if err := compareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
+	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("postgresql initial migration final fingerprint: %w", err)
 	}
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")

@@ -976,7 +976,7 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 	if err != nil {
 		return err
 	}
-	return compareFingerprints(expected, actual)
+	return physical.CompareFingerprints(expected, actual)
 }
 
 var (

@@ -310,27 +310,8 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 	if err != nil {
 		return err
 	}
-	want, err := physical.PhysicalFingerprint(expected)
-	if err != nil {
-		return err
-	}
-	got, err := physical.PhysicalFingerprint(actual)
-	if err != nil {
-		return err
-	}
-	if got != want {
-		return fmt.Errorf("sqlite verify: physical fingerprint mismatch got=%s want=%s", got, want)
-	}
-	wantSystem, err := physical.SystemFingerprint(expected.Provider, expected.System)
-	if err != nil {
-		return err
-	}
-	gotSystem, err := physical.SystemFingerprint(actual.Provider, actual.System)
-	if err != nil {
-		return err
-	}
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite verify: system fingerprint mismatch")
+	if err := physical.CompareFingerprints(expected, actual); err != nil {
+		return fmt.Errorf("sqlite verify: %w", err)
 	}
 	return nil
 }

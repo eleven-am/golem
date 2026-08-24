@@ -589,15 +589,8 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err != nil {
 		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
-	wantPhysical, _ := physical.PhysicalFingerprint(normalized)
-	gotPhysical, _ := physical.PhysicalFingerprint(actual)
-	if gotPhysical != wantPhysical {
-		return fmt.Errorf("sqlite initial apply precommit physical fingerprint mismatch")
-	}
-	wantSystem, _ := physical.SystemFingerprint(normalized.Provider, normalized.System)
-	gotSystem, _ := physical.SystemFingerprint(actual.Provider, actual.System)
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite initial apply precommit system fingerprint mismatch")
+	if err := physical.CompareFingerprints(normalized, actual); err != nil {
+		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("sqlite initial apply commit: %w", err)

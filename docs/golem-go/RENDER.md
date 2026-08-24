@@ -254,12 +254,24 @@ falls to the next:
 3. **Dotfiles.** A path containing any segment starting with `.` is `404`,
    whether or not a file exists.
 4. **Static files.** An existing regular file in the bundle at the request
-   path is served via `http.ServeContent` with:
-   - `Cache-Control: public, max-age=31536000, immutable` when the filename is
-     content-hashed — final `-` or `.` separated token of the stem, length ≥ 8,
-     `[A-Za-z0-9_]+`, and either all-hex or containing an uppercase letter,
-     digit, or underscore (ported heuristic);
-   - `Cache-Control: no-cache` otherwise.
+   path is served via `http.ServeContent` with `Cache-Control: no-cache`,
+   unconditionally. Response semantics are never inferred from a filename.
+   `render` cannot distinguish a bundler content hash from a version suffix,
+   a build date, or an uppercase slug — `logo-release01.svg` and
+   `data-20260101.json` are indistinguishable from `app-a1b2c3d4e5.js` by
+   shape — and a wrong guess pins stale bytes in every browser that saw them
+   for a year, with no way to recall them. `no-cache` permits storage and
+   requires revalidation, so a redeployed asset is picked up on the next
+   request. Whether revalidation is cheap depends on the bundle: `Dir`, and
+   any `fs.FS` whose files report a modification time, gets a `Last-Modified`
+   from `http.ServeContent` and an unchanged asset then costs a `304 Not
+   Modified` rather than its body. An `embed.FS` reports the zero time, so no
+   validator is sent and every request transfers the body — the price of
+   single-binary deployment, paid in bandwidth rather than in stale clients.
+   There is no configuration field to relax this. An
+   application that genuinely knows a prefix is content-hashed declares that
+   in the CDN or reverse proxy in front of this handler, where the claim can
+   be scoped to the paths the build actually hashes.
    Directories are never listed, never redirected, and never served; a
    directory path falls through to classification below. The index file's own
    request path (`/index.html`) is excluded from static serving and falls
