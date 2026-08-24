@@ -206,11 +206,85 @@ post, err := caller.Posts.Create(ctx,
 )
 ```
 
+### 5.1 Optimistic concurrency
+
+A model that declares `golem.OptimisticConcurrency` in P1 gets a different
+client family. Single-row `Update`, `Upsert`, and `Delete` take a required
+expectation argument, and the batch pair is absent entirely:
+
+```go
+func (c CallerPostClient[P]) Update(
+    ctx context.Context,
+    target golem.MutationTarget[social.Post],
+    expected golem.ExistingVersion,
+    input social.PostUpdateInput,
+    projection ...golem.Projection[social.Post],
+) (golem.Row[social.Post], error)
+
+func (c CallerPostClient[P]) Delete(
+    ctx context.Context,
+    target golem.MutationTarget[social.Post],
+    expected golem.ExistingVersion,
+    projection ...golem.Projection[social.Post],
+) (golem.Row[social.Post], error)
+
+func (c CallerPostClient[P]) Upsert(
+    ctx context.Context,
+    target golem.MutationTarget[social.Post],
+    expected golem.ConcurrencyExpectation,
+    create social.PostCreateInput,
+    update social.PostUpdateInput,
+    projection ...golem.Projection[social.Post],
+) (golem.Row[social.Post], error)
+```
+
+`Create` is unchanged: there is no prior row, so there is nothing to expect.
+The same shapes hold for `System`, `CallerTx`, and `SystemTx` clients.
+
+Callers construct expectations from a version they previously read. The token
+is an ordinary readable field, so it is selected and unwrapped like any other.
+An unselected or masked token yields `ok == false`, and there is no expectation
+to make:
+
+```go
+current, err := caller.Posts.FindUnique(ctx,
+    Posts.ByID.Value(postID),
+    Posts.Select(Posts.ID, Posts.Version),
+)
+version, ok := golem.Value(current, Posts.Version).Get()
+
+post, err := caller.Posts.Update(ctx,
+    Posts.ByID.Value(postID),
+    golem.ExpectVersion(version),
+    Posts.Update(Posts.Title.Set("Hello")),
+)
+```
+
+`ExpectVersion` names one existing version for update and delete. Upsert takes
+the wider `ConcurrencyExpectation`, because its two outcomes need two claims:
+`ExpectExisting(v)` permits only the update branch against version `v`, and
+`ExpectAbsent()` permits only the create branch. Both representations are
+closed, and their zero values are invalid; a forged or non-positive claim is
+`BAD_USER_INPUT` at the freeze boundary, before any database work.
+
+The claim is never authority. Selector authorization, the locked row, and the
+compare-and-swap own the proof, so a stale version is `CONFLICT` and a row the
+caller may not see remains `NOT_FOUND`.
+
+`UpdateMany` and `DeleteMany` are withheld, along with the `PostUpdateManyInput`
+alias, the `Posts.UpdateMany` input constructor, and the `UpdateMany`/
+`DeleteMany` hook requests. One expectation value cannot speak for a predicate
+matching many rows: it would either be checked against one arbitrary row, or
+ignored for the rest. Neither is a version check, so the batch pair does not
+exist for the model. A caller who needs to change many versioned rows reads
+them and issues single-row operations carrying their own expectations.
+
 ## 6. Nested relation surface
 
 Relation handles construct sealed parent-model input values. The generator
 removes methods that are impossible for relation direction, cardinality,
-requiredness, exposure, or target model input availability.
+requiredness, exposure, target model input availability, or an optimistic
+concurrency version token on either end of the relation (6.1).
 
 The accepted vocabulary is:
 
@@ -243,6 +317,57 @@ upsert, and delete require a target selector owned by the related model.
 is a real mutation node. `Set` computes exact relation membership removals and
 additions. Connect/disconnect/set authorize the model whose persisted foreign
 key changes; a relation grant alone never authorizes either endpoint.
+
+### 6.1 Version tokens withdraw nested writes
+
+A version token declared with `golem.OptimisticConcurrency` (5.1) is the sixth
+reason a nested method is absent, and the only one that originates on a model
+other than the one whose handle is being called. Every nested method except
+`Create` and `CreateMany` can be withdrawn by one: `Update`, `UpdateMany`,
+`Upsert`, `Delete`, `DeleteMany`, `Disconnect`, `Set`, `Connect`, and
+`ConnectOrCreate`. Only `Create` and `CreateMany` always survive, because a row
+that does not exist yet has no version to expect.
+
+The reason is that a nested write has nowhere to carry a per-row version
+expectation. A nested payload is a tree of operations against rows the caller
+has not necessarily read, and the root call site has room for one expectation
+about the root target. Extending the tree to carry expectations would mean
+either a token per nested row, which is unusable, or one token covering several
+rows, which is meaningless. Refusing the operation is more honest than silently
+skipping the check the token exists to enforce.
+
+Three positions decide which methods a handle keeps:
+
+- **The model declaring the handle carries a token.** Its entire relation update
+  vocabulary is withdrawn on every relation it declares, leaving only the create
+  half. Nested update operations reach this model as an already-existing row,
+  and the root `Update`/`Upsert`/`Delete` expectation covers the root target
+  only. The surviving handles construct `golem.NestedCreateValue[M]` rather than
+  `golem.NestedValue[M]`, so they are accepted in a create payload and rejected
+  in an update payload by the type system rather than at runtime.
+- **The relation target carries a token.** The methods that write existing
+  target rows are withdrawn from the handle pointing at it: to-one `Update`,
+  `Upsert`, and `Delete`, and to-many `Update`, `UpdateMany`, `Upsert`,
+  `Delete`, and `DeleteMany`. `Create`, `Connect`, and `ConnectOrCreate` remain,
+  because a newly created row has no prior version and connecting writes the
+  owner's foreign key, not the target.
+- **The relation owner carries a token and is not the root being expected.**
+  `Connect`, `ConnectOrCreate`, `Disconnect`, and `Set` are withdrawn, because
+  each rewrites the owner's persisted foreign key, which is an unchecked update
+  of a versioned row. When the owner is the declaring model's own outgoing
+  relation, the root expectation already covers that row and these methods
+  remain.
+
+The three positions are independent and combine. A to-many handle whose target
+and relation owner are the same versioned model keeps only `Create` and
+`CreateMany`, having lost the update half to the target and the connect half to
+the owner.
+
+The compile error is an ordinary Go "method does not exist" on the relation
+handle. If a nested method named in the vocabulary above is missing and
+direction, cardinality, requiredness, and exposure all permit it, look for a
+version token on the declaring model, on the relation target, or on the
+relation owner.
 
 ## 7. Closure transactions
 
@@ -381,6 +506,10 @@ must fail to compile programs that attempt any of the following:
 - null a non-null field;
 - apply numeric operations to non-numeric fields;
 - use relation operations forbidden by cardinality or requiredness;
+- omit the expectation argument on a versioned single-row update, upsert,
+  or delete, or call `UpdateMany`/`DeleteMany` on a versioned model;
+- use a nested relation write withdrawn by a version token on the declaring
+  model, the relation target, or the relation owner;
 - pass a to-many shape to a to-one relation or omit the required to-many target;
 - use a read option other than projection as a mutation projection;
 - pass a zero/ordinary struct as a generated input or target;

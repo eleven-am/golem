@@ -318,6 +318,43 @@ the generator follows this fixed single-command pipeline:
 No checked-in generated file is trusted as input. A stale generated file is
 excluded by its generated header. Users never need to generate twice.
 
+### 4.3 Optimistic concurrency version token
+
+One model-owned `int64` scalar may be nominated as the model's version token:
+
+```go
+func (Post) GolemModel() golem.ModelSpec[Post] {
+	return golem.DefineModel[Post](
+		golem.OptimisticConcurrency(Posts.Version),
+	)
+}
+```
+
+The token is a portable persistence fact. It cannot be provider-scoped, and a
+model declares at most one. The nominated handle must be a generated scalar
+field handle of the declaring model.
+
+The field itself must be stored, non-null, and logically `int64`. It may not be
+a primary-key or unique-key component, nor a local or remote foreign-key field,
+because identity and reference columns already carry a meaning that a rewritten
+version would corrupt. It may not carry an authored default, a generated-column
+expression, an `updated` producer, or database read-only ownership, since each
+of those is a competing writer for the same column. Exposure is constrained in
+both directions: the field may not be hidden or write-only, because a caller
+who cannot read the version can never supply the next expectation; and it may
+not be immutable or read-only, because the engine must rewrite it. Each failure
+has its own stable `P1_CONCURRENCY_*` diagnostic.
+
+Ownership of the column's value is total and belongs to the engine. Create
+installs the initial value, update advances it by one under a compare-and-swap
+on the expected value, and an application operation that authors the field is
+rejected rather than honored. The declaration is therefore not a hint the
+runtime may skip.
+
+What a caller passes, and which generated methods a declared token withdraws
+from the root and nested mutation surfaces, is the P4 contract; see
+[Mutations and transactions](../p4/PUBLIC-MUTATION-ABI.md).
+
 ---
 
 ## 5. Logical SQL type vocabulary
