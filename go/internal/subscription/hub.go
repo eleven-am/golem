@@ -105,8 +105,26 @@ func NewModelHub[T any](config Config[T]) (*ModelHub[T], error) {
 		config.EventSchema = golem.EventSchemaDigest(config.Generation)
 	}
 	limits, err := events.NormalizeLimits(config.Limits)
-	if err != nil || config.Generation == (golem.SchemaDigest{}) || config.EventSchema == (golem.EventSchemaDigest{}) || config.Model == (golem.ModelID{}) || config.Source == nil || (config.Evaluate == nil) == (config.EvaluateState == nil) || config.Clone == nil {
-		return nil, events.Failure(events.CodeEventConfig)
+	if err != nil {
+		return nil, err
+	}
+	if config.Generation == (golem.SchemaDigest{}) {
+		return nil, events.Failf(events.CodeEventConfig, "Generation must not be the zero digest")
+	}
+	if config.EventSchema == (golem.EventSchemaDigest{}) {
+		return nil, events.Failf(events.CodeEventConfig, "EventSchema must not be the zero digest")
+	}
+	if config.Model == (golem.ModelID{}) {
+		return nil, events.Failf(events.CodeEventConfig, "Model must not be the zero identifier")
+	}
+	if config.Source == nil {
+		return nil, events.Failf(events.CodeEventConfig, "Source must not be nil")
+	}
+	if (config.Evaluate == nil) == (config.EvaluateState == nil) {
+		return nil, events.Failf(events.CodeEventConfig, "exactly one of Evaluate and EvaluateState must be set")
+	}
+	if config.Clone == nil {
+		return nil, events.Failf(events.CodeEventConfig, "Clone must not be nil")
 	}
 	if config.ClassifySource == nil {
 		config.ClassifySource = defaultSourceClassifier

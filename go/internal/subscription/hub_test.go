@@ -3,6 +3,7 @@ package subscription
 import (
 	"bytes"
 	"context"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -477,10 +478,10 @@ func TestTerminalSourceCloseDisconnectsWithSanitizedCode(t *testing.T) {
 	source := newFakeSource()
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
-	source.fail(events.Failure(events.CodeEventSourceClosed))
+	source.fail(events.Failf(events.CodeEventSourceClosed, "broker.internal refused the subscription"))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionSourceClosed || err.Error() != string(events.CodeSubscriptionSourceClosed) {
+	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionSourceClosed || err.Error() != string(events.CodeSubscriptionSourceClosed) || strings.Contains(err.Error(), "broker.internal") {
 		t.Fatalf("terminal source error = %v", err)
 	}
 	shutdown(t, hub)
@@ -697,4 +698,46 @@ type panicObserver struct{}
 
 func (panicObserver) ObserveEvent(context.Context, events.Observation) {
 	panic("observer must be isolated")
+}
+
+func TestModelHubConfigErrorsNameTheViolatedField(t *testing.T) {
+	valid := func() Config[golem.EventID] {
+		return Config[golem.EventID]{
+			Generation: golem.SchemaDigest{1},
+			Model:      golem.ModelID{2},
+			Source:     sourceFactory(newFakeSource()),
+			Evaluate: func(_ context.Context, notice events.Notice, _ SubscriberKey) (Evaluation[golem.EventID], error) {
+				return Deliver(notice.EventID()), nil
+			},
+			Clone: func(value golem.EventID) (golem.EventID, error) { return value, nil },
+		}
+	}
+	for name, testCase := range map[string]struct {
+		mutate func(*Config[golem.EventID])
+		names  string
+	}{
+		"absent generation": {func(config *Config[golem.EventID]) { config.Generation = golem.SchemaDigest{} }, "Generation"},
+		"absent model":      {func(config *Config[golem.EventID]) { config.Model = golem.ModelID{} }, "Model"},
+		"absent source":     {func(config *Config[golem.EventID]) { config.Source = nil }, "Source"},
+		"absent clone":      {func(config *Config[golem.EventID]) { config.Clone = nil }, "Clone"},
+		"absent evaluator":  {func(config *Config[golem.EventID]) { config.Evaluate = nil }, "Evaluate"},
+		"both evaluators": {func(config *Config[golem.EventID]) {
+			config.EvaluateState = func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any) (Evaluation[golem.EventID], error) {
+				return Deliver(notice.EventID()), nil
+			}
+		}, "Evaluate"},
+		"invalid limits": {func(config *Config[golem.EventID]) { config.Limits = events.Limits{SubscriberQueue: -1} }, "SubscriberQueue"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			config := valid()
+			testCase.mutate(&config)
+			hub, err := NewModelHub(config)
+			if hub != nil || code(t, err) != events.CodeEventConfig {
+				t.Fatalf("hub=%v error=%v", hub, err)
+			}
+			if !strings.Contains(err.Error(), testCase.names) {
+				t.Fatalf("error %q does not name %s", err, testCase.names)
+			}
+		})
+	}
 }
