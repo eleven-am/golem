@@ -1389,3 +1389,71 @@ func TestSemanticMarkStaleOrdersAndDeduplicatesRows(t *testing.T) {
 		}
 	}
 }
+
+func TestSemanticSimilarityDistinguishesTheThreeSourceVectorStates(t *testing.T) {
+	ctx := context.Background()
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	sourceKey, err := semantickey.Encode([]any{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	absentKey, err := semantickey.Encode([]any{"never-embedded"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	absent := newDrainFixture(t)
+	_, absentErr := absent.manager.QueryByKey(ctx, "post", "related", absentKey, candidates, 10)
+	if absentErr == nil || absentErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
+		t.Fatalf("never embedded source: %v", absentErr)
+	}
+
+	broken := newDrainFixture(t)
+	if _, err := broken.db.Exec(`DROP TABLE "` + drainVectorTable + `"`); err != nil {
+		t.Fatal(err)
+	}
+	_, brokenErr := broken.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, 10)
+	if brokenErr == nil || brokenErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector read failed" {
+		t.Fatalf("storage read failure: %v", brokenErr)
+	}
+	if brokenErr.Error() == absentErr.Error() {
+		t.Fatal("a storage read failure reports as if the source was never embedded")
+	}
+
+	empty := newDrainFixture(t)
+	if _, err := empty.db.Exec(`DROP TABLE "` + drainVectorTable + `";
+CREATE TABLE "` + drainVectorTable + `" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := empty.db.Exec(`INSERT INTO "`+drainVectorTable+`" (record_key,embedding) VALUES (?,X'')`, sourceKey); err != nil {
+		t.Fatal(err)
+	}
+	_, emptyErr := empty.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, 10)
+	if emptyErr == nil || emptyErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector is empty" {
+		t.Fatalf("empty stored vector: %v", emptyErr)
+	}
+}
+
+func TestSemanticSimilaritySourceVectorFailureDisclosesNothing(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	sourceKey, err := semantickey.Encode([]any{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`DROP TABLE "` + drainVectorTable + `"`); err != nil {
+		t.Fatal(err)
+	}
+	_, failure := fixture.manager.QueryByKey(ctx, "post", "related", sourceKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if failure == nil {
+		t.Fatal("a dropped vector table did not fail")
+	}
+	for _, leak := range []string{sourceKey, drainVectorTable, "SELECT", "embedding", "no such table", "sqlite"} {
+		if strings.Contains(failure.Error(), leak) {
+			t.Fatalf("source vector failure %q discloses %q", failure.Error(), leak)
+		}
+	}
+	if errors.Unwrap(failure) != nil {
+		t.Fatalf("source vector failure carries an unwrappable cause: %v", errors.Unwrap(failure))
+	}
+}

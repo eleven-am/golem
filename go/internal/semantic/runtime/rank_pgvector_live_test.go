@@ -705,3 +705,42 @@ func TestPGVectorDrainQuarantinesTheDocumentAProviderRefuses(t *testing.T) {
 		t.Fatalf("a write to a quarantined record did not retry it: status=%q", status)
 	}
 }
+
+func TestPGVectorSourceVectorSeparatesAbsentFailedAndEmpty(t *testing.T) {
+	fixture := openPGVectorRankFixture(t)
+	fixture.seedRankRows(t, 4, "")
+	ctx := context.Background()
+	vectors := `"` + pgvectorRankNamespace + `"."` + fixture.storage + `_vec"`
+
+	if _, err := fixture.manager.sourceVector(ctx, fixture.index, "k000000"); err != nil {
+		t.Fatalf("an embedded source did not resolve: %v", err)
+	}
+	_, absent := fixture.manager.sourceVector(ctx, fixture.index, "k999999")
+	if absent == nil || absent.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
+		t.Fatalf("never embedded source: %v", absent)
+	}
+
+	if _, err := fixture.database.ExecContext(ctx, `ALTER TABLE `+vectors+` DROP COLUMN "embedding"`); err != nil {
+		t.Fatal(err)
+	}
+	_, failed := fixture.manager.sourceVector(ctx, fixture.index, "k000000")
+	if failed == nil || failed.Error() != "P9_SEMANTIC_QUERY: semantic source vector read failed" {
+		t.Fatalf("storage read failure: %v", failed)
+	}
+	if failed.Error() == absent.Error() {
+		t.Fatal("a storage read failure reports as if the source was never embedded")
+	}
+	for _, leak := range []string{"k000000", fixture.storage, "SELECT", "embedding", "column", "pq:", "SQLSTATE"} {
+		if strings.Contains(failed.Error(), leak) {
+			t.Fatalf("source vector failure %q discloses %q", failed.Error(), leak)
+		}
+	}
+
+	if _, err := fixture.database.ExecContext(ctx, `ALTER TABLE `+vectors+` ADD COLUMN "embedding" text NOT NULL DEFAULT ''`); err != nil {
+		t.Fatal(err)
+	}
+	_, empty := fixture.manager.sourceVector(ctx, fixture.index, "k000000")
+	if empty == nil || empty.Error() != "P9_SEMANTIC_QUERY: semantic source vector is empty" {
+		t.Fatalf("empty stored vector: %v", empty)
+	}
+}

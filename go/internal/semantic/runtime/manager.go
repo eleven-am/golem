@@ -199,24 +199,33 @@ func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
 
 func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidates Candidates, take int) (result []Rank, resultErr error) {
 	if manager == nil {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
 	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
-	if invalidContext || name == "" || query == "" || take < 1 || take > MaximumResults {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	if invalidContext {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query requires a non-nil context")
+	}
+	if name == "" {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query requires an index name")
+	}
+	if query == "" {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query text is empty")
+	}
+	if take < 1 || take > MaximumResults {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, MaximumResults)
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "model %q has no semantic index named %q", model, name)
 	}
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
 	}
 	input, err := embedding.NewInput("query", query)
 	if err != nil {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, err)
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query text of %d bytes is not a valid embedding input", len(query))
 	}
 	vectors, err := manager.embed(ctx, semanticObservationModel(model), selected.Provider, selected.Specification, []embedding.Input{input})
 	if err != nil {
@@ -224,7 +233,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	}
 	vector, err := manager.vectorValue(vectors[0])
 	if err != nil {
-		return nil, embedding.NewError(embedding.CodeProvider, err)
+		return nil, embedding.Failf(embedding.CodeProvider, err, "provider vector of %d dimensions could not be encoded for storage", vectors[0].Dimensions())
 	}
 	ranks, err := manager.rankVector(ctx, selected, vector, candidates, "", take)
 	if err != nil {
@@ -235,16 +244,21 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 }
 
 func validateCandidates(index Index, candidates Candidates) error {
-	invalid := embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
-	if candidates.SQL == "" || candidates.NewScan == nil || len(index.Descriptor.Identity) == 0 {
-		return invalid
+	if candidates.SQL == "" {
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set carries no SQL")
+	}
+	if candidates.NewScan == nil {
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set carries no row scanner")
+	}
+	if len(index.Descriptor.Identity) == 0 {
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic index %q declares no identity columns", index.Descriptor.Name)
 	}
 	if len(candidates.Columns) != len(index.Descriptor.Identity) {
-		return invalid
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set projects %d columns but index %q identifies rows by %d", len(candidates.Columns), index.Descriptor.Name, len(index.Descriptor.Identity))
 	}
 	for position, column := range index.Descriptor.Identity {
 		if candidates.Columns[position] != string(column.Name) {
-			return invalid
+			return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate column %d is %q but index %q identifies rows by %q", position, candidates.Columns[position], index.Descriptor.Name, column.Name)
 		}
 	}
 	return nil
@@ -256,17 +270,26 @@ func validateCandidates(index Index, candidates Candidates) error {
 // produced under the same canonical document framing.
 func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, candidates Candidates, take int) (result []Rank, resultErr error) {
 	if manager == nil {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
 	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
-	if invalidContext || name == "" || sourceKey == "" || take < 1 || take > MaximumResults {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+	if invalidContext {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic similarity search requires a non-nil context")
+	}
+	if name == "" {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic similarity search requires an index name")
+	}
+	if sourceKey == "" {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic similarity source key is empty")
+	}
+	if take < 1 || take > MaximumResults {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, MaximumResults)
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic index is absent"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "model %q has no semantic index named %q", model, name)
 	}
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
@@ -288,7 +311,6 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 // still serves as a similarity source, on the vector it was last embedded
 // with; a record that has never been embedded simply has no row here.
 func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string) (any, error) {
-	unavailable := fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector is unavailable")
 	statePlaceholder, vectorProjection := "?", "embedding"
 	if manager.provider == ir.PostgreSQL {
 		statePlaceholder, vectorProjection = "$1", "embedding::text"
@@ -297,16 +319,24 @@ func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey
 	observeexec.RecordStatement(ctx)
 	if manager.provider == ir.SQLite {
 		var encoded []byte
-		if err := manager.database.GetContext(ctx, &encoded, statement, sourceKey); err != nil || len(encoded) == 0 {
-			return nil, unavailable
-		}
-		return encoded, nil
+		err := manager.database.GetContext(ctx, &encoded, statement, sourceKey)
+		return classifySourceVector(encoded, err)
 	}
 	var text string
-	if err := manager.database.GetContext(ctx, &text, statement, sourceKey); err != nil || text == "" {
-		return nil, unavailable
+	err := manager.database.GetContext(ctx, &text, statement, sourceKey)
+	return classifySourceVector(text, err)
+}
+
+func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (any, error) {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector is unavailable")
+	case err != nil:
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector read failed")
+	case len(vector) == 0:
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector is empty")
 	}
-	return text, nil
+	return vector, nil
 }
 
 // rankVector ranks exactly the authorized candidate rows. The candidate
@@ -822,7 +852,7 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			// by Golem's private state and vector tables.
 			input, inputErr := embedding.NewInput("source-"+strconv.Itoa(position), record.text)
 			if inputErr != nil {
-				if err := manager.quarantine(ctx, index, record, embedding.NewError(embedding.CodeInvalidInput, inputErr)); err != nil {
+				if err := manager.quarantine(ctx, index, record, embedding.Failf(embedding.CodeInvalidInput, inputErr, "indexed document text of %d bytes is not a valid embedding input", len(record.text))); err != nil {
 					return err
 				}
 				continue
@@ -1290,7 +1320,7 @@ func (manager *Manager) embed(ctx context.Context, model golem.ModelID, provider
 		err = embedding.ValidateResult(specification, inputs, vectors)
 	}
 	if err != nil {
-		err = embedding.NewError(embedding.CodeProvider, err)
+		err = embedding.Failf(embedding.CodeProvider, err, "embedding provider did not return a valid result for a batch of %d inputs", len(inputs))
 	}
 	finishSemanticObservation(span, err)
 	return vectors, err

@@ -91,11 +91,15 @@ a ranking backend that returns the source anyway.
 |---|---|
 | Source absent, unreadable, or identity masked | `CodeNotFound`, identical to `findUnique` |
 | `take` out of range, or more than one predicate | `embedding.CodeInvalidInput` |
-| Source has never been embedded, so it has no stored vector | internal `P9_SEMANTIC_QUERY`, never an empty result |
+| Source has never been embedded, so it has no stored vector | internal `P9_SEMANTIC_QUERY: semantic source vector is unavailable`, never an empty result |
+| Reading the stored vector fails | internal `P9_SEMANTIC_QUERY: semantic source vector read failed`, closed over the statement, the record key, and the driver message |
+| The stored vector is there but empty | internal `P9_SEMANTIC_QUERY: semantic source vector is empty` |
 
-The last row matters: there is no fallback that composes field text and embeds
-it, because composed text is the wrong encoding — the exact problem this feature
-exists to eliminate.
+The never-embedded row matters: there is no fallback that composes field text
+and embeds it, because composed text is the wrong encoding — the exact problem
+this feature exists to eliminate. The last three are separate answers on
+purpose: a storage failure reported as "never embedded" would name the wrong
+cause, and a stored vector that cannot be ranked is neither of the other two.
 
 ## Storage and cost
 

@@ -127,17 +127,20 @@ func prepareSystemFindManyRead[P, A, M any](system System[P, A], descriptor gole
 
 func semanticReadOptions[M any](predicates []golem.Predicate[M], query string, take int) ([]golem.ReadOption[M], error) {
 	if query == "" {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query, result limit, or predicate is invalid"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query text is empty")
 	}
 	if _, err := embedding.NewInput("query", query); err != nil {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query is invalid"))
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query text of %d bytes is not a valid embedding input", len(query))
 	}
 	return semanticCandidateOptions(predicates, take)
 }
 
 func semanticCandidateOptions[M any](predicates []golem.Predicate[M], take int) ([]golem.ReadOption[M], error) {
-	if take < 1 || take > semanticruntime.MaximumResults || len(predicates) > 1 {
-		return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("semantic query, result limit, or predicate is invalid"))
+	if take < 1 || take > semanticruntime.MaximumResults {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, semanticruntime.MaximumResults)
+	}
+	if len(predicates) > 1 {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic search accepts at most one predicate, got %d", len(predicates))
 	}
 	options := make([]golem.ReadOption[M], 0, 1)
 	if len(predicates) == 1 {
