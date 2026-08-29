@@ -93,14 +93,20 @@ func NewSpecification(provider, model, revision string, dimensions, maximumBatch
 	provider = strings.TrimSpace(provider)
 	model = strings.TrimSpace(model)
 	revision = strings.TrimSpace(revision)
-	if !portableIdentity(provider) || !portableIdentity(model) || !portableIdentity(revision) {
-		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: provider, model, and revision must be closed portable identities")
+	if !portableIdentity(provider) {
+		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: provider is not a closed portable identity")
+	}
+	if !portableIdentity(model) {
+		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: model is not a closed portable identity")
+	}
+	if !portableIdentity(revision) {
+		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: revision is not a closed portable identity")
 	}
 	if dimensions < 1 || dimensions > MaximumDimensions {
-		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: dimensions must be between 1 and %d", MaximumDimensions)
+		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: dimensions is %d, outside 1..%d", dimensions, MaximumDimensions)
 	}
 	if maximumBatch < 1 || maximumBatch > MaximumBatchSize {
-		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: maximum batch must be between 1 and %d", MaximumBatchSize)
+		return Specification{}, fmt.Errorf("EMBEDDING_SPEC_INVALID: maximum batch is %d, outside 1..%d", maximumBatch, MaximumBatchSize)
 	}
 	return Specification{provider: provider, model: model, revision: revision, dimensions: dimensions, maximum: maximumBatch}, nil
 }
@@ -130,11 +136,23 @@ type Input struct {
 }
 
 func NewInput(key, text string) (Input, error) {
-	if key == "" || len(key) > 512 || strings.IndexByte(key, 0) >= 0 {
-		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: key must contain 1..512 non-NUL bytes")
+	if key == "" {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: key is empty")
 	}
-	if len(text) == 0 || len(text) > MaximumInputBytes || !utf8.ValidString(text) {
-		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: text must contain 1..%d bytes of UTF-8", MaximumInputBytes)
+	if len(key) > 512 {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: key is %d bytes, above the 512 byte limit", len(key))
+	}
+	if strings.IndexByte(key, 0) >= 0 {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: key contains a NUL byte")
+	}
+	if len(text) == 0 {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: text is empty")
+	}
+	if len(text) > MaximumInputBytes {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: text is %d bytes, above the %d byte limit", len(text), MaximumInputBytes)
+	}
+	if !utf8.ValidString(text) {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: text is not valid UTF-8")
 	}
 	return Input{key: key, text: text}, nil
 }
@@ -146,8 +164,11 @@ func (value Input) Text() string { return value.text }
 type Vector struct{ values []float32 }
 
 func NewVector(values []float32) (Vector, error) {
-	if len(values) == 0 || len(values) > MaximumDimensions {
-		return Vector{}, fmt.Errorf("EMBEDDING_VECTOR_INVALID: dimensions must be between 1 and %d", MaximumDimensions)
+	if len(values) == 0 {
+		return Vector{}, fmt.Errorf("EMBEDDING_VECTOR_INVALID: vector is empty")
+	}
+	if len(values) > MaximumDimensions {
+		return Vector{}, fmt.Errorf("EMBEDDING_VECTOR_INVALID: vector has %d dimensions, above the %d dimension limit", len(values), MaximumDimensions)
 	}
 	result := append([]float32(nil), values...)
 	for _, value := range result {
@@ -167,8 +188,11 @@ func ValidateResult(specification Specification, inputs []Input, vectors []Vecto
 	if err := specification.Validate(); err != nil {
 		return err
 	}
-	if len(inputs) == 0 || len(inputs) > specification.MaximumBatch() {
-		return fmt.Errorf("EMBEDDING_BATCH_INVALID: input count is outside the provider batch limit")
+	if len(inputs) == 0 {
+		return fmt.Errorf("EMBEDDING_BATCH_INVALID: input batch is empty")
+	}
+	if len(inputs) > specification.MaximumBatch() {
+		return fmt.Errorf("EMBEDDING_BATCH_INVALID: input count is %d, above the provider batch limit of %d", len(inputs), specification.MaximumBatch())
 	}
 	if len(vectors) != len(inputs) {
 		return fmt.Errorf("EMBEDDING_RESULT_INVALID: result count does not match input count")
@@ -203,18 +227,38 @@ const (
 )
 
 type Error struct {
-	code Code
-	err  error
+	code   Code
+	detail string
+	err    error
 }
 
 func NewError(code Code, cause error) error {
-	if code != CodeInvalidInput && code != CodeUnavailable && code != CodeProvider {
-		code = CodeProvider
-	}
-	return &Error{code: code, err: cause}
+	return &Error{code: closedCode(code), err: cause}
 }
 
-func (err *Error) Error() string { return string(err.code) }
+// Failf builds a closed embedding failure that names what was refused. The
+// formatted detail is printed, so it must carry only fields, bounds, and
+// lengths; cause stays available to errors.Is and errors.As but is never
+// printed, because application providers may put credentials, request bodies,
+// model names, or remote payloads in it.
+func Failf(code Code, cause error, format string, arguments ...any) error {
+	return &Error{code: closedCode(code), detail: fmt.Sprintf(format, arguments...), err: cause}
+}
+
+func closedCode(code Code) Code {
+	if code != CodeInvalidInput && code != CodeUnavailable && code != CodeProvider {
+		return CodeProvider
+	}
+	return code
+}
+
+func (err *Error) Error() string {
+	if err.detail == "" {
+		return string(err.code)
+	}
+	return string(err.code) + ": " + err.detail
+}
+
 func (err *Error) Unwrap() error { return err.err }
 
 func CodeOf(err error) (Code, bool) {
