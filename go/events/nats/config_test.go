@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -68,8 +69,13 @@ func TestOrder7ConfigIsClosedBoundedAndRedacted(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeConfig(config)
-			if eventCode(err) != events.CodeEventConfig || err.Error() != string(events.CodeEventConfig) {
+			if eventCode(err) != events.CodeEventConfig {
 				t.Fatalf("error=%v", err)
+			}
+			for _, secret := range []string{"nats://one,nats://two", "http://broker", "golem.>"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error %q echoed a configured value", err)
+				}
 			}
 		})
 	}

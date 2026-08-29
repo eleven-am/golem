@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"fmt"
 	"regexp"
 	"time"
 
@@ -67,13 +68,31 @@ const (
 var canonicalCDCIdentity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+/\-]*$`)
 
 func ValidateCDCIdentity(identity CDCIdentity) error {
-	if len(identity.Name) == 0 || len(identity.Name) > MaximumCDCIdentityBytes ||
-		len(identity.Version) == 0 || len(identity.Version) > MaximumCDCIdentityBytes ||
-		!canonicalCDCIdentity.MatchString(identity.Name) || !canonicalCDCIdentity.MatchString(identity.Version) ||
-		(identity.Provider != golem.SQLite && identity.Provider != golem.PostgreSQL) {
-		return Failure(CodeCDCInvalid)
+	if detail := cdcIdentityDefect(identity); detail != "" {
+		return Failf(CodeCDCInvalid, "%s", detail)
 	}
 	return nil
+}
+
+func cdcIdentityDefect(identity CDCIdentity) string {
+	for _, field := range []struct{ name, value string }{
+		{"Name", identity.Name},
+		{"Version", identity.Version},
+	} {
+		if len(field.value) == 0 {
+			return field.name + " must not be empty"
+		}
+		if len(field.value) > MaximumCDCIdentityBytes {
+			return fmt.Sprintf("%s must not exceed %d bytes", field.name, MaximumCDCIdentityBytes)
+		}
+		if !canonicalCDCIdentity.MatchString(field.value) {
+			return field.name + " must match " + canonicalCDCIdentity.String()
+		}
+	}
+	if identity.Provider != golem.SQLite && identity.Provider != golem.PostgreSQL {
+		return fmt.Sprintf("Provider must be %q or %q", golem.SQLite, golem.PostgreSQL)
+	}
+	return ""
 }
 
 func (identity CDCIdentity) CanonicalName() string {
@@ -85,21 +104,24 @@ func (identity CDCIdentity) CanonicalName() string {
 
 func ValidateCDCAdapters(provider golem.Provider, adapters []CDCAdapter) ([]CDCIdentity, error) {
 	if len(adapters) > MaximumCDCAdapters {
-		return nil, Failure(CodeEventConfig)
+		return nil, Failf(CodeEventConfig, "adapters must not exceed %d entries, got %d", MaximumCDCAdapters, len(adapters))
 	}
 	identities := make([]CDCIdentity, len(adapters))
 	seen := make(map[string]struct{}, len(adapters))
 	for index, adapter := range adapters {
 		if adapter == nil {
-			return nil, Failure(CodeCDCInvalid)
+			return nil, Failf(CodeCDCInvalid, "adapters[%d] must not be nil", index)
 		}
 		identity := adapter.Identity()
-		if ValidateCDCIdentity(identity) != nil || identity.Provider != provider {
-			return nil, Failure(CodeCDCInvalid)
+		if detail := cdcIdentityDefect(identity); detail != "" {
+			return nil, Failf(CodeCDCInvalid, "adapters[%d]: %s", index, detail)
+		}
+		if identity.Provider != provider {
+			return nil, Failf(CodeCDCInvalid, "adapters[%d] declares Provider %q, but the runtime provider is %q", index, identity.Provider, provider)
 		}
 		canonical := identity.CanonicalName()
 		if _, exists := seen[canonical]; exists {
-			return nil, Failure(CodeCDCInvalid)
+			return nil, Failf(CodeCDCInvalid, "adapters[%d] repeats the canonical identity %q of an earlier adapter", index, canonical)
 		}
 		seen[canonical] = struct{}{}
 		identities[index] = identity

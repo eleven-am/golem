@@ -46,48 +46,56 @@ func MaximumLimits() Limits { return maximumLimits }
 func NormalizeLimits(input Limits) (Limits, error) {
 	output := input
 	integers := []struct {
+		name              string
 		value             *int
 		fallback, maximum int
 	}{
-		{&output.ClaimRows, defaultLimits.ClaimRows, maximumLimits.ClaimRows},
-		{&output.PublisherConcurrency, defaultLimits.PublisherConcurrency, maximumLimits.PublisherConcurrency},
-		{&output.MaxEncodedEventBytes, defaultLimits.MaxEncodedEventBytes, maximumLimits.MaxEncodedEventBytes},
-		{&output.SubscriberQueue, defaultLimits.SubscriberQueue, maximumLimits.SubscriberQueue},
-		{&output.HubInputQueue, defaultLimits.HubInputQueue, maximumLimits.HubInputQueue},
-		{&output.EvaluationConcurrency, defaultLimits.EvaluationConcurrency, maximumLimits.EvaluationConcurrency},
-		{&output.MaxSubscriptionsPerConnection, defaultLimits.MaxSubscriptionsPerConnection, maximumLimits.MaxSubscriptionsPerConnection},
-		{&output.ConnectionInitBytes, defaultLimits.ConnectionInitBytes, maximumLimits.ConnectionInitBytes},
-		{&output.RetentionDeleteRows, defaultLimits.RetentionDeleteRows, maximumLimits.RetentionDeleteRows},
+		{"ClaimRows", &output.ClaimRows, defaultLimits.ClaimRows, maximumLimits.ClaimRows},
+		{"PublisherConcurrency", &output.PublisherConcurrency, defaultLimits.PublisherConcurrency, maximumLimits.PublisherConcurrency},
+		{"MaxEncodedEventBytes", &output.MaxEncodedEventBytes, defaultLimits.MaxEncodedEventBytes, maximumLimits.MaxEncodedEventBytes},
+		{"SubscriberQueue", &output.SubscriberQueue, defaultLimits.SubscriberQueue, maximumLimits.SubscriberQueue},
+		{"HubInputQueue", &output.HubInputQueue, defaultLimits.HubInputQueue, maximumLimits.HubInputQueue},
+		{"EvaluationConcurrency", &output.EvaluationConcurrency, defaultLimits.EvaluationConcurrency, maximumLimits.EvaluationConcurrency},
+		{"MaxSubscriptionsPerConnection", &output.MaxSubscriptionsPerConnection, defaultLimits.MaxSubscriptionsPerConnection, maximumLimits.MaxSubscriptionsPerConnection},
+		{"ConnectionInitBytes", &output.ConnectionInitBytes, defaultLimits.ConnectionInitBytes, maximumLimits.ConnectionInitBytes},
+		{"RetentionDeleteRows", &output.RetentionDeleteRows, defaultLimits.RetentionDeleteRows, maximumLimits.RetentionDeleteRows},
 	}
 	for _, item := range integers {
 		if *item.value == 0 {
 			*item.value = item.fallback
 		}
-		if *item.value < 0 || *item.value > item.maximum {
-			return Limits{}, Failure(CodeEventConfig)
+		if *item.value < 0 {
+			return Limits{}, Failf(CodeEventConfig, "%s must not be negative, got %d", item.name, *item.value)
+		}
+		if *item.value > item.maximum {
+			return Limits{}, Failf(CodeEventConfig, "%s must not exceed %d, got %d", item.name, item.maximum, *item.value)
 		}
 	}
 	durations := []struct {
+		name              string
 		value             *time.Duration
 		fallback, maximum time.Duration
 	}{
-		{&output.LeaseDuration, defaultLimits.LeaseDuration, maximumLimits.LeaseDuration},
-		{&output.PublishTimeout, defaultLimits.PublishTimeout, maximumLimits.PublishTimeout},
-		{&output.RetryBase, defaultLimits.RetryBase, maximumLimits.RetryBase},
-		{&output.RetryCap, defaultLimits.RetryCap, maximumLimits.RetryCap},
-		{&output.ConnectionInitTimeout, defaultLimits.ConnectionInitTimeout, maximumLimits.ConnectionInitTimeout},
-		{&output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
+		{"LeaseDuration", &output.LeaseDuration, defaultLimits.LeaseDuration, maximumLimits.LeaseDuration},
+		{"PublishTimeout", &output.PublishTimeout, defaultLimits.PublishTimeout, maximumLimits.PublishTimeout},
+		{"RetryBase", &output.RetryBase, defaultLimits.RetryBase, maximumLimits.RetryBase},
+		{"RetryCap", &output.RetryCap, defaultLimits.RetryCap, maximumLimits.RetryCap},
+		{"ConnectionInitTimeout", &output.ConnectionInitTimeout, defaultLimits.ConnectionInitTimeout, maximumLimits.ConnectionInitTimeout},
+		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
 	}
 	for _, item := range durations {
 		if *item.value == 0 {
 			*item.value = item.fallback
 		}
-		if *item.value < 0 || *item.value > item.maximum {
-			return Limits{}, Failure(CodeEventConfig)
+		if *item.value < 0 {
+			return Limits{}, Failf(CodeEventConfig, "%s must not be negative, got %s", item.name, *item.value)
+		}
+		if *item.value > item.maximum {
+			return Limits{}, Failf(CodeEventConfig, "%s must not exceed %s, got %s", item.name, item.maximum, *item.value)
 		}
 	}
 	if output.RetryBase > output.RetryCap {
-		return Limits{}, Failure(CodeEventConfig)
+		return Limits{}, Failf(CodeEventConfig, "RetryBase (%s) must not exceed RetryCap (%s)", output.RetryBase, output.RetryCap)
 	}
 	return output, nil
 }
@@ -98,8 +106,11 @@ func normalizeMemoryLimits(input MemoryLimits) (MemoryLimits, error) {
 	if input.Buffer == 0 {
 		input.Buffer = defaultLimits.HubInputQueue
 	}
-	if input.Buffer < 0 || input.Buffer > maximumLimits.HubInputQueue {
-		return MemoryLimits{}, Failure(CodeEventConfig)
+	if input.Buffer < 0 {
+		return MemoryLimits{}, Failf(CodeEventConfig, "Buffer must not be negative, got %d", input.Buffer)
+	}
+	if input.Buffer > maximumLimits.HubInputQueue {
+		return MemoryLimits{}, Failf(CodeEventConfig, "Buffer must not exceed %d, got %d", maximumLimits.HubInputQueue, input.Buffer)
 	}
 	return input, nil
 }
