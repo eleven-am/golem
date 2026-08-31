@@ -2,12 +2,10 @@ package failfdisclosure
 
 import (
 	"go/ast"
+	"go/constant"
 	"go/types"
-	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"testing"
 
 	"golang.org/x/tools/go/packages"
@@ -23,18 +21,8 @@ type exception struct {
 var declaredExceptions = []exception{
 	{"events/cdc.go", "ValidateCDCIdentity", "detail", "cdcIdentityDefect builds the detail from package-local field-name literals, bounds, and the canonical identity pattern"},
 	{"events/cdc.go", "ValidateCDCAdapters", "detail", "cdcIdentityDefect builds the detail from package-local field-name literals, bounds, and the canonical identity pattern"},
-	{"events/cdc.go", "ValidateCDCAdapters", "identity.Provider", "the adapter's own declared provider identity, echoed back to the application that configured it"},
-	{"events/cdc.go", "ValidateCDCAdapters", "provider", "the runtime provider identity the application configured, not provider or record content"},
-	{"events/cdc.go", "ValidateCDCAdapters", "canonical", "CanonicalName is empty unless every field matched canonicalCDCIdentity within MaximumCDCIdentityBytes"},
 	{"events/limits.go", "NormalizeLimits", "item.name", "a package-local table of string-literal field names"},
 	{"events/nats/config.go", "normalizeConfig", "item.name", "a package-local table of string-literal field names"},
-	{"internal/semantic/runtime/manager.go", "(*Manager).Query", "model", "the caller's own model identity, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "(*Manager).Query", "name", "the caller's own index name, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "(*Manager).QueryByKey", "model", "the caller's own model identity, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "(*Manager).QueryByKey", "name", "the caller's own index name, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "validateCandidates", "index.Descriptor.Name", "a compiled schema index name, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "validateCandidates", "candidates.Columns[position]", "a caller-projected column name, not provider output or indexed document text"},
-	{"internal/semantic/runtime/manager.go", "validateCandidates", "column.Name", "a compiled schema column name, not provider output or indexed document text"},
 }
 
 var failfOwners = map[string]bool{
@@ -44,14 +32,10 @@ var failfOwners = map[string]bool{
 
 func TestFailfDetailNeverCarriesCallerSuppliedStrings(t *testing.T) {
 	root := moduleRoot(t)
-	patterns := callingPatterns(t, root)
-	if len(patterns) == 0 {
-		t.Fatal("no package in the module calls Failf")
-	}
 	loaded, err := packages.Load(&packages.Config{
 		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports | packages.NeedDeps,
 		Dir:  root,
-	}, patterns...)
+	}, "./...")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,23 +55,34 @@ func TestFailfDetailNeverCarriesCallerSuppliedStrings(t *testing.T) {
 		for _, file := range loadedPackage.Syntax {
 			name := relativePath(root, loadedPackage.Fset.Position(file.Pos()).Filename)
 			for _, declaration := range file.Decls {
-				function, ok := declaration.(*ast.FuncDecl)
-				if !ok {
-					continue
+				enclosing := "<package>"
+				if function, ok := declaration.(*ast.FuncDecl); ok {
+					enclosing = functionName(function)
 				}
-				enclosing := functionName(function)
-				ast.Inspect(function, func(node ast.Node) bool {
+				direct := make(map[*ast.Ident]bool)
+				ast.Inspect(declaration, func(node ast.Node) bool {
 					call, ok := node.(*ast.CallExpr)
 					if !ok {
 						return true
 					}
-					owner, signature := failfTarget(loadedPackage.TypesInfo, call)
+					identifier, owner, signature := failfTarget(loadedPackage.TypesInfo, call)
 					if signature == nil {
 						return true
 					}
+					direct[identifier] = true
 					calls++
 					owners[owner] = true
 					inspectDetail(t, loadedPackage.TypesInfo, call, signature, name, enclosing, allowed, used)
+					return true
+				})
+				ast.Inspect(declaration, func(node ast.Node) bool {
+					identifier, ok := node.(*ast.Ident)
+					if !ok || direct[identifier] {
+						return true
+					}
+					if owner, _ := failfReference(loadedPackage.TypesInfo, identifier); owner != "" {
+						t.Errorf("%s: %s takes %s.Failf as a function value; the disclosure guard only permits direct calls", name, enclosing, owner)
+					}
 					return true
 				})
 			}
@@ -125,10 +120,7 @@ func inspectDetail(t *testing.T, info *types.Info, call *ast.CallExpr, signature
 	for _, argument := range call.Args[first:] {
 		value, known := info.Types[argument]
 		text := types.ExprString(argument)
-		if known && value.Value != nil {
-			continue
-		}
-		if known && !carriesText(value.Type) {
+		if known && safeDetailArgument(value) {
 			continue
 		}
 		key := exception{file: file, function: enclosing, argument: text}
@@ -140,50 +132,34 @@ func inspectDetail(t *testing.T, info *types.Info, call *ast.CallExpr, signature
 	}
 }
 
-func carriesText(typ types.Type) bool {
-	return carriesTextWithin(typ, map[types.Type]bool{})
+func safeDetailArgument(value types.TypeAndValue) bool {
+	if basic, ok := value.Type.(*types.Basic); ok {
+		return basic.Info()&types.IsString == 0 || value.Value != nil
+	}
+	named, ok := value.Type.(*types.Named)
+	return ok && named.Obj().Pkg() != nil && named.Obj().Pkg().Path() == "time" && named.Obj().Name() == "Duration"
 }
 
-func carriesTextWithin(typ types.Type, seen map[types.Type]bool) bool {
-	if typ == nil {
-		return true
+func TestSafeDetailArgumentUsesAClosedTypeSet(t *testing.T) {
+	if !safeDetailArgument(types.TypeAndValue{Type: types.Typ[types.Int]}) {
+		t.Fatal("a plain integer was rejected")
 	}
-	if seen[typ] {
-		return false
+	if !safeDetailArgument(types.TypeAndValue{Type: types.Typ[types.UntypedString], Value: constant.MakeString("field")}) {
+		t.Fatal("a plain string constant was rejected")
 	}
-	seen[typ] = true
-	switch underlying := typ.Underlying().(type) {
-	case *types.Basic:
-		return underlying.Info()&types.IsString != 0
-	case *types.Interface:
-		return true
-	case *types.Slice:
-		return elementCarriesText(underlying.Elem(), seen)
-	case *types.Array:
-		return elementCarriesText(underlying.Elem(), seen)
-	case *types.Map:
-		return carriesTextWithin(underlying.Key(), seen) || carriesTextWithin(underlying.Elem(), seen)
-	case *types.Struct:
-		for field := 0; field < underlying.NumFields(); field++ {
-			if carriesTextWithin(underlying.Field(field).Type(), seen) {
-				return true
-			}
-		}
-		return false
-	case *types.Pointer:
-		return carriesTextWithin(underlying.Elem(), seen)
-	default:
-		return false
+	if safeDetailArgument(types.TypeAndValue{Type: types.Typ[types.String]}) {
+		t.Fatal("a dynamic string was accepted")
 	}
-}
-
-func elementCarriesText(element types.Type, seen map[types.Type]bool) bool {
-	if basic, ok := element.Underlying().(*types.Basic); ok {
-		if basic.Kind() == types.Byte || basic.Kind() == types.Rune {
-			return true
-		}
+	pkg := types.NewPackage("example.com/private", "private")
+	named := types.NewNamed(types.NewTypeName(0, pkg, "SecretNumber", nil), types.Typ[types.Int], nil)
+	if safeDetailArgument(types.TypeAndValue{Type: named, Value: constant.MakeInt64(1)}) {
+		t.Fatal("a typed constant with a customisable formatter was accepted")
 	}
-	return carriesTextWithin(element, seen)
+	timePackage := types.NewPackage("time", "time")
+	duration := types.NewNamed(types.NewTypeName(0, timePackage, "Duration", nil), types.Typ[types.Int64], nil)
+	if !safeDetailArgument(types.TypeAndValue{Type: duration}) {
+		t.Fatal("time.Duration was rejected")
+	}
 }
 
 func describe(typ types.Type) string {
@@ -193,7 +169,7 @@ func describe(typ types.Type) string {
 	return typ.String()
 }
 
-func failfTarget(info *types.Info, call *ast.CallExpr) (string, *types.Signature) {
+func failfTarget(info *types.Info, call *ast.CallExpr) (*ast.Ident, string, *types.Signature) {
 	var identifier *ast.Ident
 	switch target := call.Fun.(type) {
 	case *ast.Ident:
@@ -201,13 +177,18 @@ func failfTarget(info *types.Info, call *ast.CallExpr) (string, *types.Signature
 	case *ast.SelectorExpr:
 		identifier = target.Sel
 	default:
-		return "", nil
+		return nil, "", nil
 	}
-	if identifier.Name != "Failf" {
-		return "", nil
+	owner, signature := failfReference(info, identifier)
+	if signature == nil {
+		return nil, "", nil
 	}
+	return identifier, owner, signature
+}
+
+func failfReference(info *types.Info, identifier *ast.Ident) (string, *types.Signature) {
 	function, ok := info.Uses[identifier].(*types.Func)
-	if !ok || function.Pkg() == nil || !failfOwners[function.Pkg().Path()] {
+	if !ok || function.Name() != "Failf" || function.Pkg() == nil || !failfOwners[function.Pkg().Path()] {
 		return "", nil
 	}
 	signature, ok := function.Type().(*types.Signature)
@@ -242,49 +223,4 @@ func relativePath(root, path string) string {
 		return filepath.ToSlash(path)
 	}
 	return filepath.ToSlash(relative)
-}
-
-func callingPatterns(t *testing.T, root string) []string {
-	t.Helper()
-	found := make(map[string]bool)
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			if name := entry.Name(); path != root && (strings.HasPrefix(name, ".") || name == "testdata" || name == "node_modules") {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		source, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		if !strings.Contains(string(source), "Failf(") {
-			return nil
-		}
-		found["./"+filepath.ToSlash(mustRelative(root, filepath.Dir(path)))] = true
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	patterns := make([]string, 0, len(found))
-	for pattern := range found {
-		patterns = append(patterns, pattern)
-	}
-	sort.Strings(patterns)
-	return patterns
-}
-
-func mustRelative(root, path string) string {
-	relative, err := filepath.Rel(root, path)
-	if err != nil {
-		return path
-	}
-	return relative
 }

@@ -59,7 +59,7 @@ func NewTransportCapabilities(identity string, scope TransportScope, durable boo
 		return TransportCapabilities{}, Failf(CodeEventConfig, "identity must match %s", canonicalTransportIdentityPattern)
 	}
 	if scope != TransportScopeProcessLocal && scope != TransportScopeCrossProcess {
-		return TransportCapabilities{}, Failf(CodeEventConfig, "scope must be %q or %q", TransportScopeProcessLocal, TransportScopeCrossProcess)
+		return TransportCapabilities{}, Failf(CodeEventConfig, "scope must be \"process-local\" or \"cross-process\"")
 	}
 	return TransportCapabilities{identity: identity, scope: scope, durable: durable}, nil
 }

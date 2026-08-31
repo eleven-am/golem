@@ -132,14 +132,15 @@ go-vuln: ## Run govulncheck (install it separately first)
 	cd $(GO_DIR) && GOWORK=off govulncheck ./...
 
 postgres-check:
-	@test -n "$(GOLEM_TEST_POSTGRES_DSN)" || { echo "GOLEM_TEST_POSTGRES_DSN is required" >&2; exit 1; }
-	@test -n "$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)" || { echo "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN is required" >&2; exit 1; }
-	@test -n "$(GOLEM_TEST_PGVECTOR_DSN)" || { echo "GOLEM_TEST_PGVECTOR_DSN is required" >&2; exit 1; }
-	@test "$(GOLEM_TEST_POSTGRES_DSN)" != "$(GOLEM_TEST_POSTGRES_LINGUISTIC_DSN)" || { echo "PostgreSQL C and linguistic DSNs must differ" >&2; exit 1; }
+	@for name in GOLEM_TEST_POSTGRES_DSN GOLEM_TEST_POSTGRES_LINGUISTIC_DSN GOLEM_TEST_PGVECTOR_DSN; do \
+		dsn="$${!name:-}"; \
+		test -n "$$dsn" || { echo "$$name is required" >&2; exit 1; }; \
+	done
+	@test "$${GOLEM_TEST_POSTGRES_DSN}" != "$${GOLEM_TEST_POSTGRES_LINGUISTIC_DSN}" || { echo "PostgreSQL C and linguistic DSNs must differ" >&2; exit 1; }
 	@command -v pg_isready >/dev/null || { echo "pg_isready is required to confirm the test servers accept connections" >&2; exit 1; }
 	@down=""; \
 	for name in GOLEM_TEST_POSTGRES_DSN GOLEM_TEST_POSTGRES_LINGUISTIC_DSN GOLEM_TEST_PGVECTOR_DSN; do \
-		eval "dsn=\$$$$name"; \
+		dsn="$${!name}"; \
 		pg_isready -d "$$dsn" -t 5 >/dev/null 2>&1 || down="$$down\n  $$name"; \
 	done; \
 	test -z "$$down" || { printf "these test servers are not accepting connections:%b\nA DSN may carry a password, so only the variable is named.\n" "$$down" >&2; exit 1; }

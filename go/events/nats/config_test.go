@@ -22,8 +22,18 @@ func TestOrder7OpenRejectsAbsentProviderBeforeDial(t *testing.T) {
 	if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig {
 		t.Fatalf("error=%v code=%q", err, code)
 	}
-	if got := err.Error(); got != string(events.CodeEventConfig) {
-		t.Fatalf("error leaked configuration: %q", got)
+	if got := err.Error(); !strings.Contains(got, "database must not be nil") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
+	}
+}
+
+func TestOrder7OpenRejectsNilContextBeforeConfiguration(t *testing.T) {
+	transport, err := Open(nil, nil, Config{URLs: []string{"nats://secret:credential@127.0.0.1:1"}, SubjectPrefix: "deployment"})
+	if transport != nil || eventCode(err) != events.CodeEventConfig {
+		t.Fatalf("transport=%v error=%v", transport, err)
+	}
+	if got := err.Error(); !strings.Contains(got, "context must not be nil") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
 	}
 }
 
@@ -49,6 +59,9 @@ func TestOrder7OpenRejectsSQLiteBeforeDial(t *testing.T) {
 	transport, err := Open(context.Background(), database, Config{URLs: []string{"nats://secret:credential@" + listener.Addr().String()}, SubjectPrefix: "deployment", ConnectTimeout: 30 * time.Second})
 	if transport != nil || eventCode(err) != events.CodeEventConfig {
 		t.Fatalf("transport=%v error=%v", transport, err)
+	}
+	if got := err.Error(); !strings.Contains(got, "database provider must be PostgreSQL") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
 	}
 	select {
 	case <-accepted:

@@ -1457,3 +1457,21 @@ func TestSemanticSimilaritySourceVectorFailureDisclosesNothing(t *testing.T) {
 		t.Fatalf("source vector failure carries an unwrappable cause: %v", errors.Unwrap(failure))
 	}
 }
+
+func TestSemanticSimilaritySourceVectorPreservesSafeCancellationCauses(t *testing.T) {
+	cancelledCause := fmt.Errorf("driver password: %w", context.Canceled)
+	_, cancelled := classifySourceVector("", cancelledCause)
+	if !errors.Is(cancelled, context.Canceled) || errors.Is(cancelled, context.DeadlineExceeded) || strings.Contains(cancelled.Error(), "password") {
+		t.Fatalf("cancelled read classification=%v", cancelled)
+	}
+	timedOutCause := fmt.Errorf("private statement: %w", context.DeadlineExceeded)
+	_, timedOut := classifySourceVector([]byte(nil), timedOutCause)
+	if !errors.Is(timedOut, context.DeadlineExceeded) || errors.Is(timedOut, context.Canceled) || strings.Contains(timedOut.Error(), "private statement") {
+		t.Fatalf("timed-out read classification=%v", timedOut)
+	}
+	private := errors.New("driver password and statement")
+	_, sealed := classifySourceVector("", private)
+	if errors.Unwrap(sealed) != nil || strings.Contains(sealed.Error(), private.Error()) {
+		t.Fatalf("driver failure was not sealed: %v", sealed)
+	}
+}

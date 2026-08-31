@@ -212,8 +212,17 @@ func (dialer *initialDialer) finish() {
 // Open proves that the supplied provider handle is PostgreSQL before it
 // validates or dials any NATS endpoint.
 func Open(ctx context.Context, database *provider.Database, config Config) (*Transport, error) {
-	if ctx == nil || database == nil || database.Provider() != golem.PostgreSQL || database.UnsafeSQLX() == nil {
-		return nil, events.Failure(events.CodeEventConfig)
+	if ctx == nil {
+		return nil, events.Failf(events.CodeEventConfig, "context must not be nil")
+	}
+	if database == nil {
+		return nil, events.Failf(events.CodeEventConfig, "database must not be nil")
+	}
+	if database.Provider() != golem.PostgreSQL {
+		return nil, events.Failf(events.CodeEventConfig, "database provider must be PostgreSQL")
+	}
+	if database.UnsafeSQLX() == nil {
+		return nil, events.Failf(events.CodeEventConfig, "database SQL handle is unavailable")
 	}
 	normalized, err := normalizeConfig(config)
 	if err != nil {

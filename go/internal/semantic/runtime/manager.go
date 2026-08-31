@@ -218,7 +218,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "model %q has no semantic index named %q", model, name)
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
 	}
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
@@ -251,14 +251,14 @@ func validateCandidates(index Index, candidates Candidates) error {
 		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set carries no row scanner")
 	}
 	if len(index.Descriptor.Identity) == 0 {
-		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic index %q declares no identity columns", index.Descriptor.Name)
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic index declares no identity columns")
 	}
 	if len(candidates.Columns) != len(index.Descriptor.Identity) {
-		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set projects %d columns but index %q identifies rows by %d", len(candidates.Columns), index.Descriptor.Name, len(index.Descriptor.Identity))
+		return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate set projects %d columns but the index identifies rows by %d", len(candidates.Columns), len(index.Descriptor.Identity))
 	}
 	for position, column := range index.Descriptor.Identity {
 		if candidates.Columns[position] != string(column.Name) {
-			return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate column %d is %q but index %q identifies rows by %q", position, candidates.Columns[position], index.Descriptor.Name, column.Name)
+			return embedding.Failf(embedding.CodeInvalidInput, nil, "semantic candidate column %d does not match the index identity column at that position", position)
 		}
 	}
 	return nil
@@ -289,7 +289,7 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 	}
 	selected, ok := manager.index(model, name)
 	if !ok {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "model %q has no semantic index named %q", model, name)
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
 	}
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
@@ -329,6 +329,10 @@ func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey
 
 func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (any, error) {
 	switch {
+	case errors.Is(err, context.Canceled):
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector read cancelled: %w", context.Canceled)
+	case errors.Is(err, context.DeadlineExceeded):
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector read timed out: %w", context.DeadlineExceeded)
 	case errors.Is(err, sql.ErrNoRows):
 		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: semantic source vector is unavailable")
 	case err != nil:

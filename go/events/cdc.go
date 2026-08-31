@@ -117,11 +117,11 @@ func ValidateCDCAdapters(provider golem.Provider, adapters []CDCAdapter) ([]CDCI
 			return nil, Failf(CodeCDCInvalid, "adapters[%d]: %s", index, detail)
 		}
 		if identity.Provider != provider {
-			return nil, Failf(CodeCDCInvalid, "adapters[%d] declares Provider %q, but the runtime provider is %q", index, identity.Provider, provider)
+			return nil, Failf(CodeCDCInvalid, "adapters[%d] declares a Provider that does not match the runtime provider", index)
 		}
 		canonical := identity.CanonicalName()
 		if _, exists := seen[canonical]; exists {
-			return nil, Failf(CodeCDCInvalid, "adapters[%d] repeats the canonical identity %q of an earlier adapter", index, canonical)
+			return nil, Failf(CodeCDCInvalid, "adapters[%d] repeats the canonical identity of an earlier adapter", index)
 		}
 		seen[canonical] = struct{}{}
 		identities[index] = identity
