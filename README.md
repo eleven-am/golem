@@ -1,10 +1,9 @@
 # Golem
 
 This README documents the released TypeScript/NestJS implementation. The Go
-implementation is a separate, unreleased module under [`go`](./go); its current
-capabilities, explicit non-claims, and release evidence are documented in
-[`docs/golem-go`](./docs/golem-go/README.md). A TypeScript package version or
-release note does not imply that a Go module version has been published.
+implementation is a separate module under [`go`](./go). A TypeScript package
+version or release note does not imply that a Go module version has been
+published.
 
 **Write your Prisma schema. The backend comes alive, and it defends itself.**
 
