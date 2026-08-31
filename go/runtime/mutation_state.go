@@ -379,6 +379,15 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 	return nil
 }
 
+func (state *mutationState) hasSemanticMarks() bool {
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return len(state.marks) != 0
+}
+
 func (state *mutationState) committed(ctx context.Context, report func(context.Context, golem.AfterCommitFailure)) {
 	if state == nil {
 		return

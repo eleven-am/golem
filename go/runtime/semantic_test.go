@@ -6,12 +6,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
+	readbind "github.com/eleven-am/golem/go/internal/read/bind"
+	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
@@ -43,6 +49,71 @@ func TestSemanticQueryEncodingFailsBeforeReadPlanning(t *testing.T) {
 		} else if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeInvalidInput {
 			t.Fatalf("invalid query error=%v code=%q ok=%t", err, code, ok)
 		}
+	}
+}
+
+type semanticLimitUser struct{}
+
+func TestSemanticResultLimitUsesReadCaps(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		modelTake uint32
+		appTake   int
+	}{
+		{name: "model", modelTake: 5},
+		{name: "application", appTake: 5},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := schematest.NewWithMaxTake(t, test.modelTake, 0)
+			descriptor := golem.GeneratedModelDescriptor[semanticLimitUser](fixture.User, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+			name := golem.GeneratedTextField[semanticLimitUser, string](fixture.UserName)
+			options, err := semanticCandidateOptions[semanticLimitUser](nil, 6)
+			if err != nil {
+				t.Fatal(err)
+			}
+			options = append(options, golem.Select[semanticLimitUser](name))
+			frozen, err := golem.FreezeFindMany(descriptor, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request, err := readbind.Request(frozen, fixture.Registry, policyir.PortableProviders())
+			if err != nil {
+				t.Fatal(err)
+			}
+			limits := readplan.DefaultLimits()
+			limits.MaxTake = test.appTake
+			if _, err := readplan.System(request, fixture.Registry, limits); err == nil {
+				t.Fatal("semantic result limit bypassed the read cap")
+			}
+		})
+	}
+}
+
+func TestSemanticIdentityChunkAccountsForExistingBinds(t *testing.T) {
+	fixture := schematest.New(t)
+	descriptor := golem.GeneratedModelDescriptor[semanticLimitUser](fixture.User, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+	name := golem.GeneratedTextField[semanticLimitUser, string](fixture.UserName)
+	options, err := semanticCandidateOptions[semanticLimitUser](nil, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options = append(options, golem.Select[semanticLimitUser](name))
+	frozen, err := golem.FreezeFindMany(descriptor, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := readbind.Request(frozen, fixture.Registry, policyir.PortableProviders())
+	if err != nil {
+		t.Fatal(err)
+	}
+	limits := readplan.DefaultLimits()
+	limits.MaxStatementParameters = 999
+	planned, err := readplan.System(request, fixture.Registry, limits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := semanticIdentityChunkSize(planned, 1, 951); got != 48 {
+		t.Fatalf("identity chunk=%d want=48", got)
 	}
 }
 
@@ -306,6 +377,55 @@ func TestSemanticDrainEnqueueIsDedupedPerIndex(t *testing.T) {
 	}
 	if got := fixture.jobs(t, semanticDrainJobType); got != 1 {
 		t.Fatalf("unrelated model enqueued a drain: jobs=%d", got)
+	}
+}
+
+func TestSemanticDrainLeasedCollisionCreatesTransactionalContinuation(t *testing.T) {
+	for _, commit := range []bool{false, true} {
+		name := "rollback"
+		if commit {
+			name = "commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			fixture := newSemanticJobFixture(t, nil)
+			payload := semanticJob{Model: string(semanticJobModelID()), Index: "related"}
+			base := semanticJobKey(semanticDrainJobType, payload)
+			if _, err := fixture.app.enqueueSemanticJob(ctx, nil, fixture.app.semanticDrain, payload, base); err != nil {
+				t.Fatal(err)
+			}
+			claimed, err := fixture.app.queueStore.Claim(ctx, queueprovider.ClaimOptions{Types: []string{semanticDrainJobType}, Limit: 1, LeaseDuration: 5 * time.Minute})
+			if err != nil || len(claimed) != 1 {
+				t.Fatalf("claim=%#v error=%v", claimed, err)
+			}
+			transaction, err := fixture.database.BeginTxx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := fixture.app.enqueueSemanticDrains(ctx, transaction, semanticJobModel); err != nil {
+				_ = transaction.Rollback()
+				t.Fatal(err)
+			}
+			if commit {
+				err = transaction.Commit()
+			} else {
+				err = transaction.Rollback()
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var active int
+			if err := fixture.database.Get(&active, `SELECT COUNT(*) FROM "golem_queue" WHERE "dedupe_key"=? AND "status" IN ('pending','leased')`, base+":"+claimed[0].ID); err != nil {
+				t.Fatal(err)
+			}
+			want := 0
+			if commit {
+				want = 1
+			}
+			if active != want {
+				t.Fatalf("active continuations=%d want=%d", active, want)
+			}
+		})
 	}
 }
 

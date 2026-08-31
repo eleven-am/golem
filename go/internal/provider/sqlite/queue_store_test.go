@@ -38,6 +38,10 @@ func TestTransactionalEnqueueIsAtomicWithCallerTransaction(t *testing.T) {
 	providertest.TransactionalEnqueueIsAtomicWithCallerTransaction(t, newQueueFixture(t))
 }
 
+func TestEnqueueReportsInsertedAndCoalescedState(t *testing.T) {
+	providertest.EnqueueReportsInsertedAndCoalescedState(t, newQueueFixture(t))
+}
+
 func TestQueueSchemaBootstrapIsIdempotent(t *testing.T) {
 	fixture := newQueueFixture(t)
 	if err := fixture.Store.EnsureSchema(context.Background()); err != nil {

@@ -58,6 +58,7 @@ type executionMutationConfig struct {
 	afterCommitError func(context.Context, golem.AfterCommitFailure)
 	invalidate       func()
 	outboxNamespace  string
+	queueWake        func()
 	// flushSemantic writes the transaction's semantic marks and schedules their
 	// drain on the same executor the outbox rows use. It is nil only for an
 	// execution that owns no application.
@@ -228,6 +229,7 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 		enabled: true, provider: app.provider, limits: app.mutationLimits,
 		afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution,
 		outboxNamespace: string(namespace), flushSemantic: app.flushSemanticMarks,
+		queueWake: app.queueWorker.Wake,
 	}
 }
 
@@ -367,7 +369,6 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}
 	commitMutationBinding(ctx, binding)
-	binding.notifyQueue()
 	return nil
 }
 
@@ -376,7 +377,13 @@ func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, bind
 	if err != nil {
 		return err
 	}
-	return state.flush(ctx, executor, binding.mutation)
+	if err := state.flush(ctx, executor, binding.mutation); err != nil {
+		return err
+	}
+	if state.hasSemanticMarks() {
+		binding.queueEnqueued(binding.mutation.queueWake)
+	}
+	return nil
 }
 
 func commitMutationBinding(ctx context.Context, binding *executionBinding) {
@@ -385,6 +392,7 @@ func commitMutationBinding(ctx context.Context, binding *executionBinding) {
 		return
 	}
 	state.committed(ctx, binding.mutation.afterCommitError)
+	binding.notifyQueue()
 }
 
 func rollbackTransaction(transaction *sqlx.Tx, cause error) error {

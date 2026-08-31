@@ -53,7 +53,7 @@ func (fixture *harness) enqueue(t *testing.T, pending queue.Pending) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return stored
+	return stored.ID
 }
 
 func (fixture *harness) inspect(t *testing.T, identity string) queueprovider.Record {

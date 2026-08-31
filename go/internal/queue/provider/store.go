@@ -74,6 +74,15 @@ type EnqueueRequest struct {
 	ExclusiveKey string
 }
 
+// EnqueueResult identifies the active job selected by an enqueue and whether
+// this request inserted it. State is the active row state observed while the
+// enqueue decision was serialized.
+type EnqueueResult struct {
+	ID       string
+	State    State
+	Inserted bool
+}
+
 // ClaimOptions bounds one claim. An empty Types list claims nothing, which is
 // how a worker whose every registered type is saturated stands down.
 type ClaimOptions struct {
@@ -108,7 +117,7 @@ type Executor interface {
 // mutate a row another worker now owns.
 type Store interface {
 	EnsureSchema(ctx context.Context) error
-	Enqueue(ctx context.Context, executor Executor, request EnqueueRequest) (string, error)
+	Enqueue(ctx context.Context, executor Executor, request EnqueueRequest) (EnqueueResult, error)
 	Claim(ctx context.Context, options ClaimOptions) ([]Record, error)
 	Renew(ctx context.Context, id, token string, duration time.Duration) (Renewal, error)
 	Succeed(ctx context.Context, id, token, code string) (bool, error)

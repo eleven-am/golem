@@ -433,7 +433,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		}
 	}
 	if !outerState {
-		if err := state.flush(ctx, scope.execer, activeBinding.mutation); err != nil {
+		if err := flushMutationBinding(ctx, scope.execer, activeBinding); err != nil {
 			return 0, publicBatchExecutionError(program, err)
 		}
 	}
@@ -445,7 +445,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if !outerState {
-		state.committed(ctx, app.afterCommitError)
+		commitMutationBinding(ctx, activeBinding)
 	}
 	done = true
 	return verification.Count(), nil

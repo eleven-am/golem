@@ -142,10 +142,11 @@ func semanticCandidateOptions[M any](predicates []golem.Predicate[M], take int) 
 	if len(predicates) > 1 {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic search accepts at most one predicate, got %d", len(predicates))
 	}
-	options := make([]golem.ReadOption[M], 0, 1)
+	options := make([]golem.ReadOption[M], 0, 2)
 	if len(predicates) == 1 {
 		options = append(options, golem.Where(predicates[0]))
 	}
+	options = append(options, golem.Take[M](take))
 	return options, nil
 }
 
@@ -180,6 +181,9 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
 	}
+	if err := validateSemanticPlanTake(prepared, planned, take); err != nil {
+		return nil, err
+	}
 	candidates, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
@@ -204,11 +208,34 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if len(ranks) == 0 {
 		return []golem.SemanticResult[M]{}, nil
 	}
-	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, decoder, candidates.Fields(), ranks)
+	base, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
+	if err != nil {
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+	}
+	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, decoder, candidates.Fields(), len(base.Args()), ranks)
 	if err != nil {
 		return nil, err
 	}
 	return assembleSemanticResults(ranks, rows)
+}
+
+func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, requested int) error {
+	maximum := 0
+	if limit := planned.ResultLimit(); limit > 0 {
+		maximum = limit
+	}
+	if take, present := planned.Take(); present {
+		if take < 0 {
+			take = -take
+		}
+		if maximum == 0 || take < maximum {
+			maximum = take
+		}
+	}
+	if maximum > 0 && requested > maximum {
+		return golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic result limit exceeds the planned row maximum", nil)
+	}
+	return nil
 }
 
 // assembleSemanticResults returns the ranked page in distance order. A ranked
@@ -234,12 +261,12 @@ func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[strin
 // authorized row statement. Ranking already restricted candidacy to the
 // authorized predicate; reading the projected rows through the same plan is
 // what keeps masks, relations, and row policy identical to a plain findMany.
-func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, decoder readdecode.Decoder, fields []policyir.FieldID, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
+func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
 	primary, err := semanticPrimaryIdentity(descriptor)
 	if err != nil {
 		return nil, err
 	}
-	chunk := semanticIdentityChunkSize(planned, len(fields))
+	chunk := semanticIdentityChunkSize(planned, len(fields), baseArguments)
 	if chunk < 1 {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
 	}
@@ -292,12 +319,15 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 }
 
 // semanticIdentityChunkSize keeps one ranked page inside both the plan's own
-// row ceiling and the provider-neutral statement parameter ceiling. Half the
-// parameter budget is reserved for the authorized predicate itself.
-func semanticIdentityChunkSize(planned readplan.Plan, width int) int {
+// row ceiling and the provider-neutral statement parameter ceiling.
+func semanticIdentityChunkSize(planned readplan.Plan, width, baseArguments int) int {
 	chunk := semanticIdentityChunk
 	if width > 0 {
-		if capacity := planned.Limits().MaxStatementParameters / (2 * width); capacity < chunk {
+		remaining := planned.Limits().MaxStatementParameters - baseArguments
+		if remaining < 0 {
+			remaining = 0
+		}
+		if capacity := remaining / width; capacity < chunk {
 			chunk = capacity
 		}
 	}
@@ -412,7 +442,8 @@ func (app *App[P, A]) runSemanticDrain(ctx context.Context, job queue.Job[semant
 	// queue coalesced into this very job, so it carries no wakeup of its own.
 	// Chain a successor under a key this job cannot swallow.
 	chained := semanticJobKey(semanticDrainJobType, job.Payload) + ":" + string(job.ID)
-	return app.enqueueSemanticJob(ctx, nil, app.semanticDrain, job.Payload, chained)
+	_, err = app.enqueueSemanticJob(ctx, nil, app.semanticDrain, job.Payload, chained)
+	return err
 }
 
 func (app *App[P, A]) runSemanticReconcile(ctx context.Context, job queue.Job[semanticJob]) error {
@@ -448,7 +479,7 @@ func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
 	}
 	for _, reference := range references {
 		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
-		if err := app.enqueueSemanticJob(ctx, nil, app.semanticReconcile, payload, semanticJobKey(semanticReconcileJobType, payload)); err != nil {
+		if _, err := app.enqueueSemanticJob(ctx, nil, app.semanticReconcile, payload, semanticJobKey(semanticReconcileJobType, payload)); err != nil {
 			return err
 		}
 	}
@@ -468,8 +499,15 @@ func (app *App[P, A]) enqueueSemanticDrains(ctx context.Context, executor queuep
 			continue
 		}
 		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
-		if err := app.enqueueSemanticJob(ctx, executor, app.semanticDrain, payload, semanticJobKey(semanticDrainJobType, payload)); err != nil {
+		base := semanticJobKey(semanticDrainJobType, payload)
+		stored, err := app.enqueueSemanticJob(ctx, executor, app.semanticDrain, payload, base)
+		if err != nil {
 			return err
+		}
+		if !stored.Inserted && stored.State == queueprovider.StateLeased {
+			if _, err := app.enqueueSemanticJob(ctx, executor, app.semanticDrain, payload, base+":"+stored.ID); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -488,16 +526,17 @@ func (app *App[P, A]) semanticIndexed(model golem.ModelID) bool {
 	return false
 }
 
-func (app *App[P, A]) enqueueSemanticJob(ctx context.Context, executor queueprovider.Executor, jobType queue.Type[semanticJob], payload semanticJob, dedupe string) error {
+func (app *App[P, A]) enqueueSemanticJob(ctx context.Context, executor queueprovider.Executor, jobType queue.Type[semanticJob], payload semanticJob, dedupe string) (queueprovider.EnqueueResult, error) {
 	pending, err := jobType.New(payload, queue.Dedupe(dedupe))
 	if err != nil {
-		return err
+		return queueprovider.EnqueueResult{}, err
 	}
-	if _, err := app.enqueueOn(ctx, executor, pending); err != nil {
-		return err
+	stored, err := app.enqueueOn(ctx, executor, pending)
+	if err != nil {
+		return queueprovider.EnqueueResult{}, err
 	}
 	if executor == nil {
 		app.queueWorker.Wake()
 	}
-	return nil
+	return stored, nil
 }

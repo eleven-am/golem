@@ -254,6 +254,37 @@ func DedupeCoalescesActiveAndReleasesOnTerminal(t testing.TB, fixture Fixture) {
 	}
 }
 
+func EnqueueReportsInsertedAndCoalescedState(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	firstRequest := newRequest(t, "gate.enqueue-result", request{dedupe: "enqueue-result-key"})
+	first, err := fixture.Store.Enqueue(ctx, nil, firstRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !first.Inserted || first.ID != firstRequest.ID || first.State != queueprovider.StatePending {
+		t.Fatalf("insert result=%#v", first)
+	}
+	pending, err := fixture.Store.Enqueue(ctx, nil, newRequest(t, "gate.enqueue-result", request{dedupe: "enqueue-result-key"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Inserted || pending.ID != first.ID || pending.State != queueprovider.StatePending {
+		t.Fatalf("pending collision result=%#v", pending)
+	}
+	leased := claimOne(t, fixture, "gate.enqueue-result", longLease)
+	collision, err := fixture.Store.Enqueue(ctx, nil, newRequest(t, "gate.enqueue-result", request{dedupe: "enqueue-result-key"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collision.Inserted || collision.ID != first.ID || collision.State != queueprovider.StateLeased {
+		t.Fatalf("leased collision result=%#v", collision)
+	}
+	if changed, err := fixture.Store.Succeed(ctx, leased.ID, leased.LeaseToken, "done"); err != nil || !changed {
+		t.Fatalf("succeed changed=%t error=%v", changed, err)
+	}
+}
+
 // TransactionalEnqueueIsAtomicWithCallerTransaction proves the insert runs on
 // the caller's executor rather than escaping to the pool.
 func TransactionalEnqueueIsAtomicWithCallerTransaction(t testing.TB, fixture Fixture) {
@@ -312,11 +343,11 @@ func newRequest(t testing.TB, jobType string, options request) queueprovider.Enq
 
 func enqueue(t testing.TB, fixture Fixture, jobType string, options request) string {
 	t.Helper()
-	identity, err := fixture.Store.Enqueue(context.Background(), nil, newRequest(t, jobType, options))
+	stored, err := fixture.Store.Enqueue(context.Background(), nil, newRequest(t, jobType, options))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return identity
+	return stored.ID
 }
 
 func claim(t testing.TB, fixture Fixture, jobType string, lease time.Duration, limit int) []queueprovider.Record {

@@ -39,6 +39,10 @@ func TestTransactionalEnqueueIsAtomicWithCallerTransaction(t *testing.T) {
 	runQueueGate(t, providertest.TransactionalEnqueueIsAtomicWithCallerTransaction)
 }
 
+func TestEnqueueReportsInsertedAndCoalescedState(t *testing.T) {
+	runQueueGate(t, providertest.EnqueueReportsInsertedAndCoalescedState)
+}
+
 func TestQueueSchemaBootstrapIsIdempotent(t *testing.T) {
 	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
 		if err := fixture.Store.EnsureSchema(context.Background()); err != nil {

@@ -65,37 +65,40 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (string, error) {
+func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (queueprovider.EnqueueResult, error) {
 	if err := queueprovider.ValidateEnqueue(request); err != nil {
-		return "", err
+		return queueprovider.EnqueueResult{}, err
 	}
 	if executor == nil {
 		executor = store.database
 	}
 	var now time.Time
 	if err := executor.QueryRowContext(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
-		return "", fmt.Errorf("QUEUE_POSTGRESQL_STORE: read database time: %w", err)
-	}
-	result, err := executor.ExecContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8) ON CONFLICT DO NOTHING`,
-		request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now)
-	if err != nil {
-		return "", fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert job: %w", err)
-	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return "", fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert result: %w", err)
-	}
-	if inserted == 1 {
-		return request.ID, nil
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: read database time: %w", err)
 	}
 	if request.DedupeKey == "" {
-		return "", fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is already durable")
+		result, err := executor.ExecContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8) ON CONFLICT DO NOTHING`,
+			request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now)
+		if err != nil {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert job: %w", err)
+		}
+		inserted, err := result.RowsAffected()
+		if err != nil {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert result: %w", err)
+		}
+		if inserted != 1 {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is already durable")
+		}
+		return queueprovider.EnqueueResult{ID: request.ID, State: queueprovider.StatePending, Inserted: true}, nil
 	}
-	var existing string
-	if err := executor.QueryRowContext(ctx, `SELECT "id" FROM `+store.table()+` WHERE "dedupe_key"=$1 AND "status" IN ('pending','leased')`, request.DedupeKey).Scan(&existing); err != nil {
-		return "", fmt.Errorf("QUEUE_POSTGRESQL_STORE: resolve coalesced job: %w", err)
+	var stored queueprovider.EnqueueResult
+	err := executor.QueryRowContext(ctx, `INSERT INTO `+store.table()+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES ($1,$2,$3,'pending',0,$4,$5,$6,$7,$8,$8) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=EXCLUDED."dedupe_key" RETURNING "id","status"`,
+		request.ID, request.Type, request.Payload, request.MaxAttempts, now.Add(request.Delay), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now).Scan(&stored.ID, &stored.State)
+	if err != nil {
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: insert or coalesce job: %w", err)
 	}
-	return existing, nil
+	stored.Inserted = stored.ID == request.ID
+	return stored, nil
 }
 
 func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {

@@ -41,6 +41,8 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 		frozen, err = golem.FreezeCount(descriptor)
 	case "paged":
 		frozen, err = golem.FreezeFindMany(descriptor, golem.Select[candidateUser](name), golem.Skip[candidateUser](1))
+	case "taken":
+		frozen, err = golem.FreezeFindMany(descriptor, golem.Select[candidateUser](name), golem.Take[candidateUser](3))
 	default:
 		frozen, err = golem.FreezeFindMany(descriptor, golem.Select[candidateUser](name))
 	}
@@ -68,7 +70,7 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 // authorized predicate an ordinary read executes. It carries no row ceiling.
 func TestRenderSemanticCandidatesProjectsIdentityUnderTheAuthorizedPredicate(t *testing.T) {
 	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
-		planned, fixture, proof := semanticCandidateFixture(t, provider, "findMany")
+		planned, fixture, proof := semanticCandidateFixture(t, provider, "taken")
 		candidates, err := RenderSemanticCandidates(planned, fixture.Registry, provider, proof)
 		if err != nil {
 			t.Fatal(err)
