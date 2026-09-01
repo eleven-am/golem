@@ -396,29 +396,22 @@ func TestSemanticStartupDoesNotScheduleFullScansByDefault(t *testing.T) {
 	}
 }
 
-func TestSemanticReconcileSchedulesItsDurableSuccessor(t *testing.T) {
+func TestSemanticReconcileReschedulesItsStableDurableJob(t *testing.T) {
 	ctx := context.Background()
 	fixture := newSemanticJobFixture(t, nil)
 	fixture.app.semanticReconcileInterval = time.Minute
 	payload := semanticJob{Model: string(semanticJobModelID()), Index: "related"}
-	if err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-current", Payload: payload}); err != nil {
-		t.Fatal(err)
+	err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-current", Payload: payload})
+	outcome := queue.Classify(err)
+	if outcome.Resolution != queue.ResolutionRetry || outcome.Delay != time.Minute || !outcome.Uncounted {
+		t.Fatalf("periodic reconcile outcome=%#v", outcome)
 	}
-	var row struct {
-		Dedupe      string `db:"dedupe_key"`
-		AvailableAt int64  `db:"available_at"`
-		EnqueuedAt  int64  `db:"enqueued_at"`
-	}
-	if err := fixture.database.Get(&row, `SELECT "dedupe_key","available_at","enqueued_at" FROM "golem_queue" WHERE "type"=?`, semanticReconcileJobType); err != nil {
-		t.Fatal(err)
-	}
-	want := semanticJobKey(semanticReconcileJobType, payload) + ":reconcile-current"
-	if row.Dedupe != want || row.AvailableAt-row.EnqueuedAt != time.Minute.Microseconds() {
-		t.Fatalf("scheduled reconcile=%#v want key=%q", row, want)
+	if got := fixture.jobs(t, semanticReconcileJobType); got != 0 {
+		t.Fatalf("periodic reconcile created %d successor rows", got)
 	}
 }
 
-func TestSemanticReconcileFailureSchedulesOneSuccessorWithoutRetry(t *testing.T) {
+func TestSemanticReconcileFailureReschedulesTheSameJobWithoutConsumingAnAttempt(t *testing.T) {
 	ctx := context.Background()
 	fixture := newSemanticJobFixture(t, nil)
 	fixture.app.semanticReconcileInterval = time.Minute
@@ -430,11 +423,11 @@ func TestSemanticReconcileFailureSchedulesOneSuccessorWithoutRetry(t *testing.T)
 	if err == nil {
 		t.Fatal("failed refresh returned success")
 	}
-	if outcome := queue.Classify(err); outcome.Resolution != queue.ResolutionFailed {
-		t.Fatalf("failed periodic refresh resolution=%s want=%s", outcome.Resolution, queue.ResolutionFailed)
+	if outcome := queue.Classify(err); outcome.Resolution != queue.ResolutionRetry || outcome.Delay != time.Minute || !outcome.Uncounted {
+		t.Fatalf("failed periodic refresh outcome=%#v", outcome)
 	}
-	if got := fixture.jobs(t, semanticReconcileJobType); got != 1 {
-		t.Fatalf("scheduled successors after refresh failure=%d want=1", got)
+	if got := fixture.jobs(t, semanticReconcileJobType); got != 0 {
+		t.Fatalf("failed periodic refresh created %d successor rows", got)
 	}
 }
 

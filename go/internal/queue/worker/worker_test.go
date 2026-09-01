@@ -102,9 +102,10 @@ func (fixture *harness) startObserved(t *testing.T, store queueprovider.Store, r
 
 type stubStore struct {
 	queueprovider.Store
-	renew   func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error)
-	claim   func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error)
-	succeed func(context.Context, string, string, string) (bool, error)
+	renew     func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error)
+	claim     func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error)
+	succeed   func(context.Context, string, string, string) (bool, error)
+	retention func(context.Context, queueprovider.RetentionPolicy) (int, error)
 }
 
 func (stub stubStore) Renew(ctx context.Context, id, token string, duration time.Duration) (queueprovider.Renewal, error) {
@@ -126,6 +127,13 @@ func (stub stubStore) Succeed(ctx context.Context, id, token, code string) (bool
 		return stub.succeed(ctx, id, token, code)
 	}
 	return stub.Store.Succeed(ctx, id, token, code)
+}
+
+func (stub stubStore) RunRetention(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {
+	if stub.retention != nil {
+		return stub.retention(ctx, policy)
+	}
+	return stub.Store.RunRetention(ctx, policy)
 }
 
 type queueObserverFunc func(context.Context, observe.Observation)
@@ -693,6 +701,26 @@ func TestEnqueueWakesIdleWorker(t *testing.T) {
 	fixture.enqueue(t, newPending(t, jobType))
 	worker.Wake()
 	awaitSignal(t, executed, "the woken worker to claim")
+	stop()
+}
+
+func TestRetentionFailureDoesNotBlockDispatch(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	executed := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.retention-independent",
+		Handle: func(context.Context, queue.Job[gatePayload]) error {
+			close(executed)
+			return nil
+		},
+	})
+	fixture.enqueue(t, newPending(t, jobType))
+	store := stubStore{Store: fixture.store, retention: func(context.Context, queueprovider.RetentionPolicy) (int, error) {
+		return 0, errors.New("retention storage unavailable")
+	}}
+	_, stop := fixture.start(t, store, registry, gateLimits())
+	awaitSignal(t, executed, "job dispatch despite retention failure")
 	stop()
 }
 

@@ -182,7 +182,8 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 	}()
 
 	nextDepth := time.Time{}
-	nextRetention := time.Now().Add(publisher.limits.RetentionEvery)
+	nextRetention := time.Time{}
+	retentionFailures := int64(0)
 	loopFailures := int64(0)
 	for {
 		if err := ctx.Err(); err != nil {
@@ -198,14 +199,13 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			retained, retentionErr := publisher.coordinator.RunRetention(ctx, eventprovider.RetentionPolicy{OlderThan: now.Add(-publisher.limits.RetentionAge), MaxRows: publisher.limits.RetentionRows})
 			if retentionErr != nil {
 				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationRetention, events.OutcomeFailure, "", 0, 0, publisher.limits.RetentionRows, time.Since(started), 0)
-				loopFailures++
-				if !waitContext(ctx, retryDelay(publisher.retryKey+":retention", loopFailures, publisher.limits.RetryBase, publisher.limits.RetryCap)) {
-					return nil
-				}
-				continue
+				retentionFailures++
+				nextRetention = now.Add(retryDelay(publisher.retryKey+":retention", retentionFailures, publisher.limits.RetryBase, publisher.limits.RetryCap))
+			} else {
+				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationRetention, events.OutcomeSuccess, "", 0, 0, publisher.limits.RetentionRows, time.Since(started), int64(retained.Facts))
+				retentionFailures = 0
+				nextRetention = now.Add(publisher.limits.RetentionEvery)
 			}
-			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationRetention, events.OutcomeSuccess, "", 0, 0, publisher.limits.RetentionRows, time.Since(started), int64(retained.Facts))
-			nextRetention = now.Add(publisher.limits.RetentionEvery)
 		}
 		if coordinator, ok := publisher.coordinator.(eventprovider.ClaimDepthCoordinator); ok && !now.Before(nextDepth) {
 			var snapshot eventprovider.ClaimSnapshot

@@ -202,6 +202,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		return queue.Fail(queue.CodeStoreFailure, "durable job storage is unavailable: %v", err)
 	}
 	storeFailures := 0
+	retentionFailures := 0
 	nextRetention := time.Time{}
 	for {
 		if ctx.Err() != nil {
@@ -210,18 +211,22 @@ func (worker *Worker) Run(ctx context.Context) error {
 		}
 		var claimed int
 		var err error
-		if !time.Now().Before(nextRetention) {
-			_, err = worker.store.RunRetention(ctx, queueprovider.RetentionPolicy{
-				OlderThan: time.Now().Add(-worker.limits.RetentionAge), MaxRows: worker.limits.RetentionRows,
+		now := time.Now()
+		if !now.Before(nextRetention) {
+			_, retentionErr := worker.store.RunRetention(ctx, queueprovider.RetentionPolicy{
+				OlderThan: now.Add(-worker.limits.RetentionAge), MaxRows: worker.limits.RetentionRows,
 				States: []queueprovider.State{queueprovider.StateSucceeded, queueprovider.StateFailed, queueprovider.StateCanceled},
 			})
-			if err == nil {
-				nextRetention = time.Now().Add(worker.limits.RetentionEvery)
+			if retentionErr != nil {
+				retentionFailures++
+				delay := worker.limits.PollInterval + (queue.Backoff{Base: worker.limits.PollInterval, Cap: 30 * time.Second}).Delay(retentionFailures)
+				nextRetention = now.Add(delay)
+			} else {
+				retentionFailures = 0
+				nextRetention = now.Add(worker.limits.RetentionEvery)
 			}
 		}
-		if err == nil {
-			claimed, err = worker.dispatch(ctx, handlerContext, runObserver, &handlers)
-		}
+		claimed, err = worker.dispatch(ctx, handlerContext, runObserver, &handlers)
 		if err == nil && claimed != 0 {
 			storeFailures = 0
 			continue

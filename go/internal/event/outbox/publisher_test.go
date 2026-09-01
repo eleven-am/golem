@@ -108,6 +108,12 @@ type transientAcknowledgeCoordinator struct {
 	continued chan struct{}
 }
 
+type retentionFailureCoordinator struct {
+	publisherTestCoordinator
+	claimed chan struct{}
+	once    sync.Once
+}
+
 func (coordinator *transientClaimCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
 	if coordinator.calls.Add(1) == 1 {
 		return nil, errors.New("temporary database outage")
@@ -136,6 +142,16 @@ func (coordinator *transientAcknowledgeCoordinator) Claim(ctx context.Context, _
 
 func (coordinator *transientAcknowledgeCoordinator) Acknowledge(context.Context, string, string) (bool, error) {
 	return false, errors.New("temporary acknowledgement outage")
+}
+
+func (*retentionFailureCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
+	return eventprovider.RetentionResult{}, errors.New("retention storage unavailable")
+}
+
+func (coordinator *retentionFailureCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	coordinator.once.Do(func() { close(coordinator.claimed) })
+	<-ctx.Done()
+	return nil, ctx.Err()
 }
 
 func (coordinator *publisherRunCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
@@ -229,6 +245,28 @@ func TestPublisherRetriesTransientClaimFailure(t *testing.T) {
 	case <-time.After(time.Second):
 		cancel()
 		t.Fatal("publisher did not retry its failed claim")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublisherClaimsDespiteRetentionFailure(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &retentionFailureCoordinator{
+		publisherTestCoordinator: publisherTestCoordinator{renewed: true},
+		claimed:                  make(chan struct{}),
+	}
+	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- publisher.Run(ctx) }()
+	select {
+	case <-coordinator.claimed:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("retention failure blocked publisher claims")
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
