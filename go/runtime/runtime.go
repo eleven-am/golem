@@ -666,56 +666,53 @@ func SystemFindFirst[P, A, M any](ctx context.Context, system System[P, A], desc
 }
 
 func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
+	_, resultRow, resultErr = callerFindUniqueExecuted(ctx, caller, descriptor, selector, options...)
+	return resultRow, resultErr
+}
+
+func callerFindUniqueExecuted[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
 	if caller == nil || caller.app == nil {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	prepared, err := prepareCallerFindUnique(ctx, caller, descriptor, selector, options)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	rows, err := executePreparedRows(ctx, caller.app, prepared, descriptor)
+	executed, row, err := executePreparedUnique(ctx, caller.app, prepared, descriptor)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	if len(rows) == 0 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "record not found", nil)
-	}
-	if len(rows) != 1 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
-	}
-	row := rows[0]
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	result := golem.RuntimeFindOneHookResult(row)
-	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, result); err != nil {
-		return golem.Row[M]{}, err
+	hookResult := golem.RuntimeFindOneHookResult(row)
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, hookResult); err != nil {
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	return row, nil
+	return executed, row, nil
 }
 
 func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
+	_, resultRow, resultErr = systemFindUniqueExecuted(ctx, system, descriptor, selector, options...)
+	return resultRow, resultErr
+}
+
+func systemFindUniqueExecuted[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
 	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindUnique(descriptor, selector, options...)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
 	prepared, err := system.Prepare(frozen)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	rows, err := executeRows(ctx, system.app, prepared, descriptor)
+	statement, err := prepareReadStatement(system.app, prepared)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	if len(rows) == 0 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", frozen.ModelID(), golem.FieldID{}, "record not found", nil)
-	}
-	if len(rows) != 1 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", frozen.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
-	}
-	return rows[0], nil
+	return executePreparedUnique(ctx, system.app, statement, descriptor)
 }
 
 func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {
@@ -885,6 +882,24 @@ func executePreparedRows[P, A, M any](ctx context.Context, app *App[P, A], prepa
 		}
 	}
 	return result, nil
+}
+
+func executePreparedUnique[P, A, M any](ctx context.Context, app *App[P, A], prepared preparedReadStatement, descriptor golem.ModelDescriptor[M]) (executedRow, golem.Row[M], error) {
+	executed, err := executeRenderedPlan(ctx, app, prepared.prepared.executor, prepared.prepared.Operation(), prepared.plan, prepared.statement)
+	if err != nil {
+		return executedRow{}, golem.Row[M]{}, err
+	}
+	if len(executed) == 0 {
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "record not found", nil)
+	}
+	if len(executed) != 1 {
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(executed)))
+	}
+	row, err := golem.RuntimeTypedReadRow(descriptor, executed[0].row)
+	if err != nil {
+		return executedRow{}, golem.Row[M]{}, err
+	}
+	return executed[0], row, nil
 }
 
 type executedRow struct {

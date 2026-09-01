@@ -13,6 +13,7 @@ import (
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
+	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
@@ -658,5 +659,64 @@ func TestSemanticMarkUsesThePrimaryKeyNotTheVerifiedIdentityFields(t *testing.T)
 	}
 	if status == "ready" || hashLength != 0 {
 		t.Fatalf("shadow row status=%q hash=%d bytes", status, hashLength)
+	}
+}
+
+func TestSemanticSimilarityResolvesHiddenPrimaryIdentity(t *testing.T) {
+	ctx := context.Background()
+	embedder := &semanticMarkEmbedder{}
+	schema := schematest.NewSemanticIndexedUniqueAuthorIDWithContractModes(t, schematest.ContractModes{
+		PostID: []compilerir.FieldMode{compilerir.ModeHidden},
+	})
+	fixture := openConfiguredMutationResultFixture(t, schema, MutationLimits{}, nil, nil, nil, true, configureSemanticApp(t, embedder))
+	if _, err := fixture.app.database.ExecContext(ctx, `INSERT INTO "users"("id","name") VALUES (?,?)`, mutationResultUUIDText(3), "carol"); err != nil {
+		t.Fatal(err)
+	}
+	for index, title := range []string{"first", "second", "third"} {
+		if _, err := fixture.app.database.ExecContext(ctx, `INSERT INTO "posts" ("id","author_id","title") VALUES (?,?,?)`, mutationResultUUIDText(byte(90+index)), mutationResultUUIDText(byte(1+index)), title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fixture.app.RefreshSemanticIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	model, ok := schema.Registry.Model(schema.Post)
+	if !ok {
+		t.Fatal("semantic post model is absent")
+	}
+	var authorKey golem.KeyID
+	for _, identity := range model.Identities() {
+		fields := identity.Fields()
+		if len(fields) == 1 && fields[0] == schema.AuthorID {
+			authorKey = identity.KeyID()
+		}
+	}
+	if authorKey == (golem.KeyID{}) {
+		t.Fatal("semantic post author identity is absent")
+	}
+	primary := golem.GeneratedIdentityMetadata(schema.Post, schema.PostKey, golem.PrimaryIdentity, schema.PostID)
+	uniqueAuthor := golem.GeneratedIdentityMetadata(schema.Post, authorKey, golem.UniqueIdentity, schema.AuthorID)
+	descriptor := golem.GeneratedModelDescriptor[mutationResultPost](schema.Post, golem.GeneratedDescriptorShape(
+		[]golem.FieldID{schema.PostID, schema.AuthorID, schema.PostTitle}, nil, []golem.IdentityMetadata{primary, uniqueAuthor}, nil,
+	))
+	selector := golem.GeneratedUniqueSelectorValue[mutationResultPost](schema.Post, authorKey, golem.GeneratedSelectorComponent(schema.AuthorID, golem.UUID{15: 1}))
+	caller := mustMutationResultCaller(t, fixture)
+	callerRows, err := CallerSimilar(ctx, caller, descriptor, schematest.SemanticIndexName, selector, 10)
+	if err != nil {
+		t.Fatalf("caller similarity: %s", errorChainText(err))
+	}
+	systemRows, err := SystemSimilar(ctx, fixture.app.System(), descriptor, schematest.SemanticIndexName, selector, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, rows := range map[string][]golem.SemanticResult[mutationResultPost]{"caller": callerRows, "system": systemRows} {
+		if len(rows) != 2 {
+			t.Fatalf("%s similar rows=%d want=2", name, len(rows))
+		}
+		for _, item := range rows {
+			if _, present := golem.Value(item.Row(), fixture.postID).Get(); present {
+				t.Fatalf("%s similarity exposed the hidden primary key", name)
+			}
+		}
 	}
 }

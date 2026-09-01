@@ -42,21 +42,32 @@ func NewSemanticIndexedUniqueTitle(t testing.TB) Fixture {
 	return WithSemanticIndex(t, withUniqueTitle(t, NewSubscribedIndexed(t)))
 }
 
+// NewSemanticIndexedUniqueAuthorIDWithContractModes declares a semantic Post
+// index with a unique visible author selector and caller-selected field modes.
+func NewSemanticIndexedUniqueAuthorIDWithContractModes(t testing.TB, modes ContractModes) Fixture {
+	fixture := NewWithContractModes(t, modes)
+	authorID := compilerir.FieldID(hex.EncodeToString(fixture.AuthorID[:]))
+	return WithSemanticIndex(t, withUniquePostField(t, fixture, authorID, "uq_posts_author_id"))
+}
+
 func withUniqueTitle(t testing.TB, fixture Fixture) Fixture {
+	return withUniquePostField(t, fixture, compilerir.FieldID(hex.EncodeToString(fixture.PostTitle[:])), "uq_posts_title")
+}
+
+func withUniquePostField(t testing.TB, fixture Fixture, field compilerir.FieldID, physicalName compilerir.SQLIdentifier) Fixture {
 	t.Helper()
 	modelDocument := fixture.Bundle.Model()
 	var model compilerir.ModelIR
 	if err := json.Unmarshal(modelDocument.Bytes(), &model); err != nil {
 		t.Fatal(err)
 	}
-	title := compilerir.FieldID(hex.EncodeToString(fixture.PostTitle[:]))
 	for index := range model.Models {
 		if model.Models[index].ID != compilerir.ModelID(hex.EncodeToString(fixture.Post[:])) {
 			continue
 		}
 		model.Models[index].Uniques = []compilerir.KeyIR{{
 			ID: compilerir.KeyID(id(62)), Kind: compilerir.KeyUnique,
-			PhysicalName: "uq_posts_title", Fields: []compilerir.FieldID{title},
+			PhysicalName: physicalName, Fields: []compilerir.FieldID{field},
 		}}
 	}
 	fixture.Bundle = golem.GeneratedSchemaBundle(

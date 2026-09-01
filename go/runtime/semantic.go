@@ -59,11 +59,11 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	sourceRow, err := CallerFindUnique(ctx, caller, descriptor, source)
+	sourceRow, _, err := callerFindUniqueExecuted(ctx, caller, descriptor, source)
 	if err != nil {
 		return nil, err
 	}
-	sourceKey, err := semanticSourceKey(descriptor, sourceRow)
+	sourceKey, err := semanticSourceKey(descriptor, sourceRow.values)
 	if err != nil {
 		return nil, err
 	}
@@ -101,11 +101,11 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	sourceRow, err := SystemFindUnique(ctx, system, descriptor, source)
+	sourceRow, _, err := systemFindUniqueExecuted(ctx, system, descriptor, source)
 	if err != nil {
 		return nil, err
 	}
-	sourceKey, err := semanticSourceKey(descriptor, sourceRow)
+	sourceKey, err := semanticSourceKey(descriptor, sourceRow.values)
 	if err != nil {
 		return nil, err
 	}
@@ -160,17 +160,20 @@ func semanticPrimaryIdentity[M any](descriptor golem.ModelDescriptor[M]) ([]gole
 	return nil, fmt.Errorf("P9_SEMANTIC_SCHEMA: model has no primary identity")
 }
 
-// semanticSourceKey reports the source row's record key, and refuses with the
-// findUnique refusal when the row cannot carry a semantic identity. A masked
-// primary key must not be a distinguishable third state: search excludes such
-// rows from candidacy, but a source that cannot be identified is
-// indistinguishable from a source the caller may not read.
-func semanticSourceKey[M any](descriptor golem.ModelDescriptor[M], row golem.Row[M]) (string, error) {
+// semanticSourceKey reports the source row's record key from the executor's
+// private decoded cells, and refuses with the findUnique refusal when the row
+// cannot carry a semantic identity. The key remains internal; the public row
+// still excludes hidden, write-only, and masked primary fields.
+func semanticSourceKey[M any](descriptor golem.ModelDescriptor[M], values map[policyir.FieldID]readdecode.Cell) (string, error) {
 	primary, err := semanticPrimaryIdentity(descriptor)
 	if err != nil {
 		return "", err
 	}
-	key, err := golem.RuntimeSemanticRecordKey(row, primary)
+	fields := make([]policyir.FieldID, len(primary))
+	for index, field := range primary {
+		fields[index] = policyir.FieldID(field)
+	}
+	key, err := semanticHydrationRecordKey(values, fields)
 	if err != nil {
 		return "", golem.RuntimeReadError(golem.CodeNotFound, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "record not found", nil)
 	}
