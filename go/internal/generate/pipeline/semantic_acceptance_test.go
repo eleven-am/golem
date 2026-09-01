@@ -234,7 +234,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   workerDone := make(chan error, 1)
   go func() { workerDone <- application.RunQueueWorker(worker) }()
   deadline := time.Now().Add(60 * time.Second)
-  for provider.count() < 3 && time.Now().Before(deadline) { time.Sleep(5 * time.Millisecond) }
+  for len(observations.snapshot()) < 2 && time.Now().Before(deadline) { time.Sleep(5 * time.Millisecond) }
   stopWorker()
   <-workerDone
   if provider.count() != 3 {

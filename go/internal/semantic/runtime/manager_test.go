@@ -142,12 +142,35 @@ func (provider secretFailingProvider) Embed(context.Context, []embedding.Input) 
 	return nil, fmt.Errorf("credential=semantic-provider-canary")
 }
 
+type unavailableProvider struct {
+	specification embedding.Specification
+	calls         int
+}
+
+func (provider *unavailableProvider) Specification() embedding.Specification {
+	return provider.specification
+}
+
+func (provider *unavailableProvider) Embed(context.Context, []embedding.Input) ([]embedding.Vector, error) {
+	provider.calls++
+	return nil, embedding.NewError(embedding.CodeUnavailable, fmt.Errorf("credential=semantic-unavailable-canary"))
+}
+
 func TestManagerRedactsEmbeddingProviderErrorCause(t *testing.T) {
 	specification, _ := embedding.NewSpecification("test", "private-model", "v1", 3, 8)
 	_, privateErr := callEmbeddingProvider(context.Background(), secretFailingProvider{specification: specification}, []embedding.Input{{}})
 	publicErr := embedding.NewError(embedding.CodeProvider, privateErr)
 	if privateErr == nil || strings.Contains(publicErr.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(publicErr)), "canary") {
 		t.Fatalf("provider error crossed private boundary: %v cause=%v", publicErr, errors.Unwrap(publicErr))
+	}
+}
+
+func TestManagerPreservesUnavailableCodeAcrossProviderRedaction(t *testing.T) {
+	specification, _ := embedding.NewSpecification("test", "private-model", "v1", 3, 8)
+	provider := &unavailableProvider{specification: specification}
+	_, err := callEmbeddingProvider(context.Background(), provider, []embedding.Input{{}})
+	if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeUnavailable || strings.Contains(err.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(err)), "canary") {
+		t.Fatalf("unavailable provider failure was not closed: error=%v cause=%v", err, errors.Unwrap(err))
 	}
 }
 
@@ -929,6 +952,68 @@ func TestSemanticDrainQuarantinesTheDocumentAProviderRefuses(t *testing.T) {
 	}
 	if fixture.status(t, poisoned) != "ready" {
 		t.Fatalf("a write to a quarantined record did not retry it: status=%q", fixture.status(t, poisoned))
+	}
+}
+
+func TestSemanticDrainRetriesUnavailableProviderWithoutQuarantine(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	if _, err := fixture.db.Exec(`UPDATE "posts" SET title=title||' revised'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "a", "b")
+	unavailable := &unavailableProvider{specification: fixture.embedder.specification}
+	fixture.manager.indexes[0].Provider = unavailable
+	if _, err := fixture.manager.Drain(ctx, "post", "related"); err == nil {
+		t.Fatal("unavailable provider did not fail the drain")
+	} else if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeUnavailable || strings.Contains(err.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(err)), "canary") {
+		t.Fatalf("unavailable drain error=%v cause=%v", err, errors.Unwrap(err))
+	}
+	if unavailable.calls != 1 {
+		t.Fatalf("unavailable batch calls=%d want=1", unavailable.calls)
+	}
+	if fixture.status(t, "a") != "pending" || fixture.status(t, "b") != "pending" {
+		t.Fatalf("unavailable records were quarantined: a=%q b=%q", fixture.status(t, "a"), fixture.status(t, "b"))
+	}
+	fixture.manager.indexes[0].Provider = fixture.embedder
+	if _, err := fixture.manager.Drain(ctx, "post", "related"); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.status(t, "a") != "ready" || fixture.status(t, "b") != "ready" {
+		t.Fatalf("retry did not settle records: a=%q b=%q", fixture.status(t, "a"), fixture.status(t, "b"))
+	}
+}
+
+func TestSemanticReconcileQuarantinesAnUnseenRefusedRecord(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES ('c','poison c')`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.embedder.rejectText = "poison"
+	if err := fixture.manager.Refresh(ctx, "post", "related"); err != nil {
+		t.Fatal(err)
+	}
+	status, code, attempts := fixture.failure(t, "c")
+	if status != "failed" || !code.Valid || code.String != string(embedding.CodeProvider) || attempts != 1 {
+		t.Fatalf("unseen quarantine status=%q code=%#v attempts=%d", status, code, attempts)
+	}
+	if hash := fixture.hash(t, "c"); len(hash) != 0 {
+		t.Fatalf("unseen quarantine stored a successful source hash: %x", hash)
+	}
+	if fixture.count(t, drainVectorTable) != 2 {
+		t.Fatalf("unseen refused record acquired a vector")
+	}
+	fixture.embedder.rejectText = ""
+	if _, err := fixture.db.Exec(`UPDATE "posts" SET title='gamma c' WHERE id='c'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "c")
+	if _, err := fixture.manager.Drain(ctx, "post", "related"); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.status(t, "c") != "ready" || fixture.count(t, drainVectorTable) != 3 {
+		t.Fatalf("repaired unseen record did not recover: status=%q vectors=%d", fixture.status(t, "c"), fixture.count(t, drainVectorTable))
 	}
 }
 

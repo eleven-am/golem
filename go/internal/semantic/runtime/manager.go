@@ -872,6 +872,9 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			if ctx.Err() != nil {
 				return embedErr
 			}
+			if code, ok := embedding.CodeOf(embedErr); ok && code == embedding.CodeUnavailable {
+				return embedErr
+			}
 			if len(batch) > 1 {
 				for _, record := range batch {
 					if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}); err != nil {
@@ -903,6 +906,26 @@ func (manager *Manager) quarantine(ctx context.Context, index Index, record sour
 	code := string(embedding.CodeProvider)
 	if value, ok := embedding.CodeOf(cause); ok {
 		code = string(value)
+	}
+	if record.updatedAt == semanticUnobserved {
+		columns := ""
+		values := ""
+		arguments := []any{record.key, []byte{}, hex.EncodeToString(index.SpaceFingerprint[:]), code, time.Now().UTC().UnixMicro()}
+		for position, column := range index.Descriptor.Identity {
+			columns += "," + manager.quote(column.Name)
+			arguments = append(arguments, record.identity[position])
+			values += "," + manager.placeholder(len(arguments))
+		}
+		statement := "INSERT INTO " + manager.hidden(index, "_state") +
+			" (" + manager.quote("record_key") + "," + manager.quote("source_hash") + "," + manager.quote("space_fingerprint") + "," +
+			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + ")" +
+			" VALUES (" + manager.placeholder(1) + "," + manager.placeholder(2) + "," + manager.placeholder(3) + ",'failed',1," + manager.placeholder(4) + "," + manager.placeholder(5) + values + ")" +
+			" ON CONFLICT(" + manager.quote("record_key") + ") DO NOTHING"
+		observeexec.RecordStatement(ctx)
+		if _, err := manager.database.ExecContext(ctx, statement, arguments...); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: quarantine failed")
+		}
+		return nil
 	}
 	statement := "UPDATE " + manager.hidden(index, "_state") +
 		" SET " + manager.quote("status") + "='failed'," + manager.quote("error_code") + "=" + manager.placeholder(1) + "," +
@@ -1311,7 +1334,11 @@ func callEmbeddingProvider(ctx context.Context, provider embedding.Provider, inp
 		// Provider implementations are private application infrastructure. Their
 		// errors may contain credentials, request bodies, model names, or remote
 		// payloads, so even embedding.Error.Unwrap must see only this closed cause.
-		return nil, fmt.Errorf("embedding provider failed")
+		code := embedding.CodeProvider
+		if classified, ok := embedding.CodeOf(err); ok {
+			code = classified
+		}
+		return nil, embedding.NewError(code, fmt.Errorf("embedding provider failed"))
 	}
 	return vectors, nil
 }
@@ -1324,7 +1351,11 @@ func (manager *Manager) embed(ctx context.Context, model golem.ModelID, provider
 		err = embedding.ValidateResult(specification, inputs, vectors)
 	}
 	if err != nil {
-		err = embedding.Failf(embedding.CodeProvider, err, "embedding provider did not return a valid result for a batch of %d inputs", len(inputs))
+		code := embedding.CodeProvider
+		if classified, ok := embedding.CodeOf(err); ok {
+			code = classified
+		}
+		err = embedding.Failf(code, err, "embedding provider did not return a valid result for a batch of %d inputs", len(inputs))
 	}
 	finishSemanticObservation(span, err)
 	return vectors, err

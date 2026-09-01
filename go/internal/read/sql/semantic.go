@@ -37,9 +37,12 @@ func (statement SemanticCandidates) Fields() []policyir.FieldID {
 // over the owner table. The masks are mandatory: a masked primary identity was
 // previously dropped in Go while extracting record keys, and candidacy is now
 // decided entirely in SQL.
-func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (SemanticCandidates, error) {
+func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, enclosingParameters int) (SemanticCandidates, error) {
 	if registry == nil || plan.ModelID() == (policyir.ModelID{}) {
 		return SemanticCandidates{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "plan and registry are required", nil)
+	}
+	if enclosingParameters < 0 {
+		return SemanticCandidates{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "enclosing parameter count cannot be negative", nil)
 	}
 	dialect, err := providerDialect(provider)
 	if err != nil {
@@ -109,7 +112,8 @@ func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, pro
 		return SemanticCandidates{}, fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "authorized semantic candidate predicate did not render", err)
 	}
 	args := fragment.Args()
-	if err := enforceStatementParameterLimitWith(plan.ModelID(), args, plan.Limits().MaxStatementParameters); err != nil {
+	parameters := make([]any, len(args)+enclosingParameters)
+	if err := enforceStatementParameterLimitWith(plan.ModelID(), parameters, plan.Limits().MaxStatementParameters); err != nil {
 		return SemanticCandidates{}, err
 	}
 	text := "SELECT " + strings.Join(projection, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(semanticCandidateAlias) + " WHERE " + fragment.SQL()

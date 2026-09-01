@@ -226,6 +226,28 @@ func TestSemanticMarkAtEveryMutationOperationKind(t *testing.T) {
 	}
 }
 
+func TestSemanticPrimaryKeyUpdateMarksOldAndNewRecords(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSemanticMarkFixture(t)
+	if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(39, golem.UUID{15: 1}, "seeded")); err != nil {
+		t.Fatal(err)
+	}
+	update := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
+		golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.postID, golem.UUID{15: 40}),
+	)
+	var marks []string
+	if err := SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+		if _, err := SystemTxUpdate(ctx, transaction, fixture.postDescriptor, fixture.target(39), update); err != nil {
+			return err
+		}
+		marks = semanticMarkKeys(t, transaction.system.executor)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	assertSemanticMarkKeys(t, marks, []byte{39, 40})
+}
+
 // TestSemanticMarkOnVersionedWrites is the reason the scalar kernel tail had to
 // be extracted. Every optimistic-concurrency path runs the second executor, so
 // without one shared owner these writes would silently skip marking.

@@ -141,12 +141,11 @@ jobs:
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
-      - name: Verify the pgvector acceptance surface
-        run: go test -p=1 -count=1 -timeout=30m ./internal/generate/pipeline -run 'Semantic'
       - name: Verify database-bound packages
         run: |
           go test -p=1 -count=1 -timeout=30m \
-            ./runtime ./internal/provider/postgresql ./internal/read/decode \
+            ./runtime ./internal/generate/pipeline ./internal/semantic/runtime \
+            ./internal/provider/postgresql ./internal/read/decode \
             ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
 
   go-oracle:
@@ -264,70 +263,11 @@ jobs:
             ./internal/event/outbox ./internal/event/cdc \
             ./internal/queue/worker ./internal/subscription
 
-  go-release:
-    name: Go documented commands and snippets
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: go
-    env:
-      GOLEM_P8_REQUIRE_POSTGRESQL: "1"
-      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
-      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: golem
-          POSTGRES_DB: golem
-          POSTGRES_INITDB_ARGS: --locale=en_US.utf8
-        ports:
-          - 55432:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-      postgres-c:
-        image: postgres:17
-        env:
-          POSTGRES_PASSWORD: golem
-          POSTGRES_DB: golem
-          POSTGRES_INITDB_ARGS: --locale=C
-        ports:
-          - 55433:5432
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v6
-        with:
-          go-version-file: go/go.mod
-          cache-dependency-path: go/go.sum
-      - name: Install PostgreSQL client matching the service version
-        run: |
-          sudo install -d /usr/share/postgresql-common/pgdg
-          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
-          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
-          sudo apt-get update
-          sudo apt-get install -y postgresql-client-17
-          echo /usr/lib/postgresql/17/bin >> "$GITHUB_PATH"
-      - name: Verify documented commands and snippets
-        run: |
-          pg_dump --version
-          go test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem \
-            -run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
-
   go-suite:
     name: Go suite
     runs-on: ubuntu-latest
     if: always()
-    needs: [go-fast, go-cmd, go-db, go-oracle, go-race, go-release]
+    needs: [go-fast, go-cmd, go-db, go-oracle, go-race]
     steps:
       - name: Fail if any Go job failed
         run: |

@@ -10,8 +10,8 @@ GO_BINARY := $(GO_DIR)/bin/golem
 GATE_WORK := $(CURDIR)/$(GO_DIR)/bin/gate.work
 SOCIAL_DIR := $(GO_DIR)/examples/social
 
-GO_DB_PATTERNS := ./cmd/golem ./golemtest ./internal/p7oracle ./internal/p8oracle/... \
-	./internal/policy/oracle ./internal/provider/postgresql ./internal/read/decode \
+GO_DB_PATTERNS := ./cmd/golem ./golemtest ./internal/generate/pipeline ./internal/p7oracle ./internal/p8oracle/... \
+	./internal/policy/oracle ./internal/provider/postgresql ./internal/read/decode ./internal/semantic/runtime \
 	./provider/postgresql ./runtime
 
 GO_RACE_PACKAGES := ./events/... ./provider/... ./runtime ./queue \
@@ -97,7 +97,7 @@ verify-quick: postgres-check ## verify without the race and documentation passes
 go-tier-check: ## Fail if a package opens a database outside the declared serial tier
 	@cd $(GO_DIR) && declared="$$(GOWORK=off $(GO) list -f '{{.Dir}}' $(GO_DB_PATTERNS))"; \
 	status=0; \
-	for file in $$(grep -rl 'GOLEM_TEST_POSTGRES_DSN\|GOLEM_TEST_POSTGRES_LINGUISTIC_DSN' --include='*.go' .); do \
+	for file in $$(grep -rl 'GOLEM_TEST_POSTGRES_DSN\|GOLEM_TEST_POSTGRES_LINGUISTIC_DSN\|GOLEM_TEST_PGVECTOR_DSN' --include='*.go' .); do \
 		directory="$$(cd "$$(dirname "$$file")" && pwd)"; \
 		case "$$directory" in "$$(pwd)/examples/"*) continue;; esac; \
 		covered=0; \

@@ -47,23 +47,31 @@ type semanticMarkIdentity struct {
 // written and would refuse an ordinary update of a unique indexed field.
 func markScalarSemanticRecord(state *mutationState, registry *schema.Registry, model policyir.ModelID, program mutationsql.Program, result scalarMutationExecution) error {
 	verification := program.IdentityVerification()
-	statement, ok := result.statement(verification.AfterStatement())
-	if !ok {
-		return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, verification.AfterStatement(), "semantic identity statement is absent", nil)
-	}
 	primary, err := semanticPrimaryKeyFields(registry, model)
 	if err != nil {
 		return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, verification.AfterStatement(), "semantic primary identity is absent", err)
 	}
-	identity, err := semanticIdentityFromCells(primary, statement.cells)
-	if err != nil {
-		return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, verification.AfterStatement(), "semantic record identity could not be projected", err)
+	mark := func(statementIndex uint32) error {
+		statement, ok := result.statement(statementIndex)
+		if !ok {
+			return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, statementIndex, "semantic identity statement is absent", nil)
+		}
+		identity, identityErr := semanticIdentityFromCells(primary, statement.cells)
+		if identityErr != nil {
+			return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, statementIndex, "semantic record identity could not be projected", identityErr)
+		}
+		key, keyErr := semantickey.Encode(identity)
+		if keyErr != nil {
+			return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, statementIndex, "semantic record key could not be encoded", keyErr)
+		}
+		return state.markSemantic(golem.ModelID(model), key, identity)
 	}
-	key, err := semantickey.Encode(identity)
-	if err != nil {
-		return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, verification.AfterStatement(), "semantic record key could not be encoded", err)
+	if before, ok := verification.BeforeStatement(); ok {
+		if err := mark(before); err != nil {
+			return err
+		}
 	}
-	return state.markSemantic(golem.ModelID(model), key, identity)
+	return mark(verification.AfterStatement())
 }
 
 // semanticPrimaryKeyFields is the one ordering that matters. Shadow storage
@@ -91,20 +99,22 @@ func semanticPrimaryKeyFields(registry *schema.Registry, model policyir.ModelID)
 // the drain job it schedules stays one per index per transaction.
 func markBatchSemanticRecords(state *mutationState, model policyir.ModelID, primary []policyir.FieldID, verification mutationbatch.Verification) error {
 	for _, row := range verification.Rows() {
-		image := row.Before()
+		images := []mutationdecode.Row{row.Before()}
 		if after, present := row.After(); present {
-			image = after
+			images = append(images, after)
 		}
-		identity, err := semanticIdentityFromRow(primary, image)
-		if err != nil {
-			return err
-		}
-		key, err := semantickey.Encode(identity)
-		if err != nil {
-			return err
-		}
-		if err := state.markSemantic(golem.ModelID(model), key, identity); err != nil {
-			return err
+		for _, image := range images {
+			identity, err := semanticIdentityFromRow(primary, image)
+			if err != nil {
+				return err
+			}
+			key, err := semantickey.Encode(identity)
+			if err != nil {
+				return err
+			}
+			if err := state.markSemantic(golem.ModelID(model), key, identity); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

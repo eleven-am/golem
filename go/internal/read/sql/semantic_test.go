@@ -16,7 +16,7 @@ import (
 
 type candidateUser struct{}
 
-func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operation string) (readplan.Plan, schematest.Fixture, policysql.CapabilityProof) {
+func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operation string, maximumParameters int) (readplan.Plan, schematest.Fixture, policysql.CapabilityProof) {
 	t.Helper()
 	fixture := schematest.New(t)
 	descriptor := golem.GeneratedModelDescriptor[candidateUser](fixture.User, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
@@ -53,7 +53,9 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 	if err != nil {
 		t.Fatal(err)
 	}
-	planned, err := readplan.Caller(request, fixture.Registry, renderPolicySet{policyir.ModelID(fixture.User): policy}, readplan.DefaultLimits())
+	limits := readplan.DefaultLimits()
+	limits.MaxStatementParameters = maximumParameters
+	planned, err := readplan.Caller(request, fixture.Registry, renderPolicySet{policyir.ModelID(fixture.User): policy}, limits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +72,8 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 // authorized predicate an ordinary read executes. It carries no row ceiling.
 func TestRenderSemanticCandidatesProjectsIdentityUnderTheAuthorizedPredicate(t *testing.T) {
 	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
-		planned, fixture, proof := semanticCandidateFixture(t, provider, "taken")
-		candidates, err := RenderSemanticCandidates(planned, fixture.Registry, provider, proof)
+		planned, fixture, proof := semanticCandidateFixture(t, provider, "taken", MaxStatementParameters)
+		candidates, err := RenderSemanticCandidates(planned, fixture.Registry, provider, proof, 2)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -105,15 +107,37 @@ func TestRenderSemanticCandidatesProjectsIdentityUnderTheAuthorizedPredicate(t *
 // fail-closed: a plan that does not carry every primary-key field cannot be
 // turned into a candidate set with a partially known identity.
 func TestRenderSemanticCandidatesRefusesAnAbsentIdentityProjection(t *testing.T) {
-	planned, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "count")
-	if _, err := RenderSemanticCandidates(planned, fixture.Registry, policyir.ProviderSQLite, proof); err == nil {
+	planned, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "count", MaxStatementParameters)
+	if _, err := RenderSemanticCandidates(planned, fixture.Registry, policyir.ProviderSQLite, proof, 2); err == nil {
 		t.Fatal("candidate rendering accepted a plan without the primary identity")
 	}
-	if _, err := RenderSemanticCandidates(planned, nil, policyir.ProviderSQLite, proof); err == nil {
+	if _, err := RenderSemanticCandidates(planned, nil, policyir.ProviderSQLite, proof, 2); err == nil {
 		t.Fatal("candidate rendering accepted an absent registry")
 	}
-	paged, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "paged")
-	if _, err := RenderSemanticCandidates(paged, fixture.Registry, policyir.ProviderSQLite, proof); err == nil {
+	paged, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "paged", MaxStatementParameters)
+	if _, err := RenderSemanticCandidates(paged, fixture.Registry, policyir.ProviderSQLite, proof, 2); err == nil {
 		t.Fatal("candidate rendering accepted a paginated plan")
+	}
+}
+
+func TestRenderSemanticCandidatesAccountsForEnclosingRankParameters(t *testing.T) {
+	for _, provider := range []policyir.Provider{policyir.ProviderSQLite, policyir.ProviderPostgreSQL} {
+		search, fixture, proof := semanticCandidateFixture(t, provider, "taken", 3)
+		if _, err := RenderSemanticCandidates(search, fixture.Registry, provider, proof, 2); err != nil {
+			t.Fatalf("provider %d rejected exact search parameter budget: %v", provider, err)
+		}
+		if _, err := RenderSemanticCandidates(search, fixture.Registry, provider, proof, 3); err == nil {
+			t.Fatalf("provider %d accepted search parameter overflow", provider)
+		}
+		similar, fixture, proof := semanticCandidateFixture(t, provider, "taken", 4)
+		if _, err := RenderSemanticCandidates(similar, fixture.Registry, provider, proof, 3); err != nil {
+			t.Fatalf("provider %d rejected exact similarity parameter budget: %v", provider, err)
+		}
+		if _, err := RenderSemanticCandidates(similar, fixture.Registry, provider, proof, 4); err == nil {
+			t.Fatalf("provider %d accepted similarity parameter overflow", provider)
+		}
+		if _, err := RenderSemanticCandidates(similar, fixture.Registry, provider, proof, -1); err == nil {
+			t.Fatalf("provider %d accepted a negative enclosing parameter count", provider)
+		}
 	}
 }

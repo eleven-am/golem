@@ -41,7 +41,7 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -70,7 +70,7 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -87,7 +87,7 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -112,7 +112,7 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -176,7 +176,7 @@ func semanticSourceKey[M any](descriptor golem.ModelDescriptor[M], row golem.Row
 	return key, nil
 }
 
-func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, indexName string, take int, rank semanticRanker) ([]golem.SemanticResult[M], error) {
+func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, indexName string, take, rankParameters int, rank semanticRanker) ([]golem.SemanticResult[M], error) {
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
@@ -184,7 +184,7 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err := validateSemanticPlanTake(prepared, planned, take); err != nil {
 		return nil, err
 	}
-	candidates, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities)
+	candidates, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities, rankParameters)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
 	}
