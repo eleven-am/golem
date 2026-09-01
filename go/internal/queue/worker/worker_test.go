@@ -345,6 +345,17 @@ func TestCancellation(t *testing.T) {
 			t.Fatalf("cancel changed=%t error=%v", changed, err)
 		}
 		record := awaitState(t, fixture, identity, queueprovider.StateCanceled)
+		var startedObservation, canceledObservation observe.Observation
+		select {
+		case startedObservation = <-records:
+		case <-time.After(time.Second):
+			t.Fatal("running cancel start observation was not delivered")
+		}
+		select {
+		case canceledObservation = <-records:
+		case <-time.After(time.Second):
+			t.Fatal("running cancel terminal observation was not delivered")
+		}
 		stop()
 		if record.LastCode != codeCanceled {
 			t.Fatalf("running cancel recorded %#v", record)
@@ -352,10 +363,6 @@ func TestCancellation(t *testing.T) {
 		if cause, _ := causes.Load().(error); !errors.Is(cause, ErrCanceled) {
 			t.Fatalf("handler observed cancellation cause %v", cause)
 		}
-		if len(records) != 2 {
-			t.Fatalf("running cancel observations=%d", len(records))
-		}
-		startedObservation, canceledObservation := <-records, <-records
 		if startedObservation.Phase() != observe.PhaseStart || canceledObservation.Phase() != observe.PhaseCancel || canceledObservation.Outcome() != observe.OutcomeCancelled {
 			t.Fatalf("running cancel observations=%#v %#v", startedObservation, canceledObservation)
 		}
