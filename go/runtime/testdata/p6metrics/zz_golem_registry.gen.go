@@ -484,7 +484,7 @@ func (client SystemTxCategoryClient[P]) DeleteMany(ctx context.Context, where go
 }
 
 func Open[P any](ctx context.Context, config Config[P]) (*App[P], error) {
-	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database})
+	return golemOpen(ctx, config, golemruntime.Config[P, Actor]{Database: config.Database, Queue: config.Queue})
 }
 
 func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemruntime.Config[P, Actor]) (*App[P], error) {
@@ -502,7 +502,6 @@ func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemr
 	engineConfig.Bindings = bindings
 	engineConfig.Descriptors = descriptors
 	engineConfig.Embeddings = config.Embeddings
-	engineConfig.Queue = config.Queue
 	engineConfig.ReadLimits = config.ReadLimits
 	engineConfig.MutationLimits = config.MutationLimits
 	engineConfig.AnalyticsLimits = config.AnalyticsLimits

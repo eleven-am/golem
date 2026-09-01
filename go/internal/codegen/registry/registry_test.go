@@ -288,7 +288,7 @@ func TestEmitApplicationRegistryDeterministic(t *testing.T) {
 	if strings.Index(source, `"example.test/models/a"`) > strings.Index(source, `"example.test/models/z"`) {
 		t.Fatal("model accessors are not ordered by import path")
 	}
-	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "*provider.Database", "Embeddings", "embedding.Registry", "Queue", "*golemruntime.QueueConfig", "engineConfig.Queue = config.Queue", "func (app *App[P]) RunQueueWorker", "func (app *App[P]) Enqueue", "func (app *App[P]) QueueOperator", "func (transaction *CallerTx[P]) Enqueue", "func (transaction *SystemTx[P]) Enqueue", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "Observer", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "engineConfig.Embeddings = config.Embeddings", "engineConfig.ReadLimits = config.ReadLimits", "engineConfig.MutationLimits = config.MutationLimits", "engineConfig.EventLimits = config.EventLimits", "engineConfig.EventTransport = config.EventTransport", "engineConfig.Observer = config.Observer", "engineConfig.CDCAdapters = config.CDCAdapters", "engineConfig.ReportEventOperator = config.ReportEventOperator", "engineConfig.AfterCommitError = config.AfterCommitError", "engineConfig.AuditPrincipal = config.AuditPrincipal", "engineConfig.ReportScopedQuery = config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) RefreshSemanticIndexes", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "engineConfig.SnapshotActor = config.SnapshotActor", "Golem generation digest:"} {
+	for _, fragment := range []string{"func golemGeneratedGenerationDigest() golem.SchemaDigest", "func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[actorpkg.Actor], error)", "golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),", "models.GolemGeneratedBindings()", "models2.GolemGeneratedBindings()", "func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error)", "golem.GeneratedApplicationDescriptors(golemGeneratedGenerationDigest(),", "models.GolemGeneratedDescriptors()", "models2.GolemGeneratedDescriptors()", "func GolemGeneratedSchemaBundle()", "*provider.Database", "Embeddings", "embedding.Registry", "Queue", "*golemruntime.QueueConfig", "Queue: config.Queue", "func (app *App[P]) RunQueueWorker", "func (app *App[P]) Enqueue", "func (app *App[P]) QueueOperator", "func (transaction *CallerTx[P]) Enqueue", "func (transaction *SystemTx[P]) Enqueue", "ReadLimits", "MutationLimits", "EventLimits", "EventTransport", "Observer", "CDCAdapters", "ReportEventOperator", "HistoricalEventBundles", "AfterCommitError", "AuditPrincipal", "ReportScopedQuery", "engineConfig.Embeddings = config.Embeddings", "engineConfig.ReadLimits = config.ReadLimits", "engineConfig.MutationLimits = config.MutationLimits", "engineConfig.EventLimits = config.EventLimits", "engineConfig.EventTransport = config.EventTransport", "engineConfig.Observer = config.Observer", "engineConfig.CDCAdapters = config.CDCAdapters", "engineConfig.ReportEventOperator = config.ReportEventOperator", "engineConfig.AfterCommitError = config.AfterCommitError", "engineConfig.AuditPrincipal = config.AuditPrincipal", "engineConfig.ReportScopedQuery = config.ReportScopedQuery", "func (app *App[P]) RunEventPublisher", "func (app *App[P]) RefreshSemanticIndexes", "func (app *App[P]) EventCapabilities", "func (app *App[P]) EventOperator", "func (app *App[P]) EventLimits", "type CallerTx[P any] struct", "type SystemTx[P any] struct", "func (caller *Caller[P]) Transaction(", "func (system System[P]) Transaction(", "SnapshotPrincipal", "SnapshotActor", "engineConfig.SnapshotActor = config.SnapshotActor", "Golem generation digest:"} {
 		if !strings.Contains(source, fragment) {
 			t.Errorf("source missing %q:\n%s", fragment, source)
 		}
@@ -325,18 +325,13 @@ func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
-	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", `"related_posts"`} {
+	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", "func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", `"related_posts"`} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("semantic generated surface missing %q:\n%s", fragment, source)
 		}
 	}
-	for _, obsolete := range []string{"SimilarRelatedPosts(", "CallerSimilar", "SystemSimilar"} {
-		if strings.Contains(source, obsolete) {
-			t.Fatalf("semantic generated surface retained obsolete %q:\n%s", obsolete, source)
-		}
-	}
-	if strings.Count(source, "SearchRelatedPosts(") != 2 {
-		t.Fatalf("provider definitions duplicated semantic method:\n%s", source)
+	if strings.Count(source, "SearchRelatedPosts(") != 2 || strings.Count(source, "SimilarRelatedPosts(") != 2 {
+		t.Fatalf("provider definitions duplicated semantic methods:\n%s", source)
 	}
 }
 

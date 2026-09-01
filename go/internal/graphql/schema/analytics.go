@@ -107,7 +107,7 @@ func localAnalyticsFields(view modelView, allow []ir.FieldID, explicit bool) ([]
 	var result []analyticsField
 	for _, field := range view.model.Fields {
 		contract, ok := view.fields[field.ID]
-		if !ok || hidden(contract.Modes) || hasMode(contract.Modes, ir.ModeWriteOnly) || field.Scalar == nil || !analyticsGroupable(field.Scalar.Type.Kind) {
+		if !ok || !ir.ModesReadable(contract.Modes) || field.Scalar == nil || !analyticsGroupable(field.Scalar.Type.Kind) {
 			continue
 		}
 		if !all && !allowed[field.ID] {
@@ -126,7 +126,7 @@ func relationAnalyticsFields(view modelView, models map[ir.ModelID]ir.ModelDeclI
 	var result []analyticsField
 	reserved := map[string]bool{}
 	for _, contract := range view.fields {
-		if contract.GraphQLName != "" && !hidden(contract.Modes) && !hasMode(contract.Modes, ir.ModeWriteOnly) {
+		if contract.GraphQLName != "" && ir.ModesReadable(contract.Modes) {
 			reserved[contract.GraphQLName] = true
 		}
 	}
@@ -150,7 +150,7 @@ func relationAnalyticsFields(view modelView, models map[ir.ModelID]ir.ModelDeclI
 		}
 		field := fieldByID(model, configured.TerminalField)
 		fieldContract, exposed := fieldContractByID(contract, configured.TerminalField)
-		if field == nil || field.Scalar == nil || !exposed || hidden(fieldContract.Modes) || hasMode(fieldContract.Modes, ir.ModeWriteOnly) || !analyticsGroupable(field.Scalar.Type.Kind) {
+		if field == nil || field.Scalar == nil || !exposed || !ir.ModesReadable(fieldContract.Modes) || !analyticsGroupable(field.Scalar.Type.Kind) {
 			return nil, fmt.Errorf("model %s relation dimension %s has an unavailable terminal field", view.contract.GraphQLName, configured.Name)
 		}
 		result = append(result, analyticsField{id: configured.TerminalField, name: configured.Name, typ: field.Scalar.Type, nullable: field.Scalar.Nullable})

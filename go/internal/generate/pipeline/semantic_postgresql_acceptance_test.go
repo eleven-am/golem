@@ -178,6 +178,7 @@ import (
   "strings"
   "sync"
   "testing"
+  "time"
 
   "example.com/semanticpgapp/actor"
   "example.com/semanticpgapp/app"
@@ -186,6 +187,8 @@ import (
   "github.com/eleven-am/golem/go/golem"
   "github.com/eleven-am/golem/go/observe"
   providerpostgresql "github.com/eleven-am/golem/go/provider/postgresql"
+  "github.com/eleven-am/golem/go/queue"
+  golemruntime "github.com/eleven-am/golem/go/runtime"
 )
 
 type embedder struct {
@@ -268,6 +271,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     Database: database,
     Embeddings: embeddings,
     Observer: observations,
+    Queue: &golemruntime.QueueConfig{Registry: queue.NewRegistry()},
     ResolvePrincipal: func(_ context.Context, principal string) (actor.Actor, error) { return actor.Actor{Private: principal == "private"}, nil },
   })
   if err != nil { t.Fatal(err) }
@@ -316,9 +320,32 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("authorized titles=%q,%q", first, second)
   }
   assertTrace(t, observations,
-    observed{operation: observe.OperationSemanticRefresh, statements: 2},
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 3},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 3},
+  )
+
+  similarSourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
+  if err != nil { t.Fatal(err) }
+  beforeSimilar := provider.count()
+  similar, err := caller.Posts.SimilarRelated(ctx, models.Posts.ByID.Value(similarSourceID), 10)
+  if err != nil { t.Fatal(err) }
+  if provider.count() != beforeSimilar {
+    t.Fatalf("pgvector similarity embedded a query: calls=%d want=%d", provider.count(), beforeSimilar)
+  }
+  if len(similar) != 2 { t.Fatalf("pgvector similar rows=%#v", similar) }
+  similarFirst, _ := golem.Value(similar[0].Row(), models.Posts.Title).Get()
+  similarSecond, _ := golem.Value(similar[1].Row(), models.Posts.Title).Get()
+  if similarFirst != "public alpha twin" || similarSecond != "public beta" {
+    t.Fatalf("pgvector similar titles=%q,%q", similarFirst, similarSecond)
+  }
+  if similar[0].Distance() != 0 {
+    t.Fatalf("pgvector stored-vector distance=%v want=0", similar[0].Distance())
+  }
+  if strings.Contains(similarFirst+similarSecond, "private") || similarFirst == "public alpha" || similarSecond == "public alpha" {
+    t.Fatalf("pgvector similarity leaked source or private row: %q,%q", similarFirst, similarSecond)
+  }
+  assertTrace(t, observations,
+    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 2},
   )
 
   tx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
@@ -347,10 +374,14 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
     observed{operation: observe.OperationSemanticRefresh, statements: 4, aggregate: 1},
   )
+  // Writing a non-indexed field still marks the record: the write path cannot
+  // know whether the embedded document changed. Reconciliation settles it with
+  // the content hash and flips the record back to ready — one extra statement,
+  // one record acted on, and no embedding-provider call.
   if _, err := application.System().Posts.Update(ctx, models.Posts.ByID.Value(ids[2]), models.Posts.Update(models.Posts.Published.Set(false))); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 6 { t.Fatalf("non-indexed field caused re-embedding: calls=%d", provider.count()) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 2})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 3, aggregate: 1})
   if _, err := application.System().Posts.Delete(ctx, models.Posts.ByID.Value(ids[1])); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 4, aggregate: 1})
@@ -375,9 +406,8 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     if !strings.HasPrefix(title, "public ") || strings.Contains(title, "private") { t.Fatalf("generated HNSW authorization escaped: %q", title) }
   }
   assertTrace(t, observations,
-    observed{operation: observe.OperationSemanticRefresh, statements: 2},
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 3, aggregate: 1003},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 10},
   )
   plannerKeys := make([]string, 0, 1003)
   if err := database.UnsafeSQLX().Select(&plannerKeys, "SELECT record_key FROM \"{{NS}}\".\"{{VECTOR}}\" ORDER BY record_key"); err != nil { t.Fatal(err) }
@@ -407,6 +437,67 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if err := database.UnsafeSQLX().Get(&vectorCount, "SELECT count(*) FROM \"{{NS}}\".\"{{VECTOR}}\""); err != nil { t.Fatal(err) }
   if err := database.UnsafeSQLX().Get(&stateCount, "SELECT count(*) FROM \"{{NS}}\".\"{{STATE}}\""); err != nil { t.Fatal(err) }
   if vectorCount != 3 || stateCount != 3 { t.Fatalf("planner cleanup vectors=%d states=%d", vectorCount, stateCount) }
+
+  // The whole loop, with nothing explicit in it: an ordinary write marks its
+  // own record and enqueues a drain inside its transaction, a worker runs the
+  // drain, and the new document is what search ranks. No RefreshSemanticIndexes
+  // anywhere below this line.
+  observations.take()
+  var queueSchema string
+  if err := database.UnsafeSQLX().Get(&queueSchema, "SELECT table_schema FROM information_schema.tables WHERE table_name='golem_queue' LIMIT 1"); err != nil { t.Fatal(err) }
+  activeDrains := func() int {
+    var count int
+    if err := database.UnsafeSQLX().Get(&count, "SELECT count(*) FROM \""+queueSchema+"\".\"golem_queue\" WHERE \"type\"='semantic.drain' AND \"status\" IN ('pending','leased')"); err != nil { t.Fatal(err) }
+    return count
+  }
+  runWorkerUntil := func(done func() bool) {
+    workerContext, stop := context.WithCancel(ctx)
+    finished := make(chan error, 1)
+    go func() { finished <- application.RunQueueWorker(workerContext) }()
+    limit := time.Now().Add(60 * time.Second)
+    for !done() && time.Now().Before(limit) { time.Sleep(10 * time.Millisecond) }
+    stop()
+    <-finished
+  }
+  // Quiesce the drains the earlier writes left behind, so the only drain job
+  // that can exist after the next write is the one that write enqueues. Without
+  // this the assertion below would pass on a leftover job.
+  runWorkerUntil(func() bool { return activeDrains() == 0 })
+  if remaining := activeDrains(); remaining != 0 { t.Fatalf("queue did not quiesce: %d drain jobs still active", remaining) }
+  beforeDrain := provider.count()
+  if _, err := application.System().Posts.Update(ctx, models.Posts.ByID.Value(ids[3]), models.Posts.Update(models.Posts.Body.Set("beta rewritten by the write path"))); err != nil { t.Fatal(err) }
+  if enqueued := activeDrains(); enqueued != 1 {
+    t.Fatalf("the write enqueued %d drain jobs in its own transaction, want 1", enqueued)
+  }
+  // Wait for the durable outcome, not for the provider counter: the count rises
+  // inside the embed, before the vector and the flip commit, and cancelling
+  // there would abort the drain's own transaction.
+  drained := -1
+  runWorkerUntil(func() bool {
+    if err := database.UnsafeSQLX().Get(&drained, "SELECT count(*) FROM \"{{NS}}\".\"{{STATE}}\" WHERE status<>'ready'"); err != nil { t.Fatal(err) }
+    return drained == 0 && provider.count() > beforeDrain
+  })
+  if provider.count() != beforeDrain+1 {
+    t.Fatalf("drain job embedded=%d want=1: the write path's mark never reached a worker", provider.count()-beforeDrain)
+  }
+  if drained != 0 { t.Fatalf("records left marked after the drain: %d", drained) }
+  // Before the drain this record's document carried no "beta" and ranked a full
+  // unit away from that query. Ranking it at distance zero is the new vector,
+  // and nothing but the drain could have stored it.
+  rewritten, err := caller.Posts.SearchRelated(ctx, "beta", 10)
+  if err != nil { t.Fatal(err) }
+  drainedRanked := false
+  for _, item := range rewritten {
+    title, _ := golem.Value(item.Row(), models.Posts.Title).Get()
+    if title != "public alpha twin" { continue }
+    if item.Distance() != 0 {
+      t.Fatalf("drained record ranks at distance %v against its own new document", item.Distance())
+    }
+    drainedRanked = true
+  }
+  if !drainedRanked {
+    t.Fatalf("the drained record did not rank against its new document: %d results", len(rewritten))
+  }
 }
 `
 	acceptance = strings.NewReplacer(

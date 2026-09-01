@@ -279,6 +279,33 @@ func (scan *Scan) Decode() ([]Cell, error) {
 	return result, nil
 }
 
+// Values decodes one already-scanned row of provider-facing scalar values in
+// this decoder's exact field order, with nil meaning NULL. Statements that
+// carry owner columns through managed shadow storage reuse the ordinary
+// logical decode this way instead of re-deriving provider value semantics.
+func (decoder Decoder) Values(raw []any) ([]Cell, error) {
+	if len(raw) != decoder.fieldCount() {
+		return nil, &Error{Detail: "scanned value count does not match the decoder projection"}
+	}
+	result := make([]Cell, len(raw))
+	for index, value := range raw {
+		field := decoder.field(index)
+		if value == nil {
+			if !field.Nullable() {
+				return nil, &Error{Field: field.FieldID(), Detail: "database returned NULL for a non-null logical field"}
+			}
+			result[index] = Cell{field: field.FieldID(), public: field.Public(), runtime: golem.RuntimeNullReadCell(golem.FieldID(field.FieldID())), evaluator: evaluate.NullField(field.FieldID()), null: true}
+			continue
+		}
+		cell, err := decodeValue(decoder.registry, decoder.provider, decoder.model, field, value)
+		if err != nil {
+			return nil, &Error{Field: field.FieldID(), Detail: "logical value decode failed", Cause: err}
+		}
+		result[index] = cell
+	}
+	return result, nil
+}
+
 func scanKind(provider policyir.Provider, kind compilerir.LogicalTypeKind) slotKind {
 	switch kind {
 	case compilerir.TypeBool:

@@ -88,13 +88,26 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		if extension.Kind != semanticcontract.IndexKind {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
 		}
-		lowered, err := semanticstorage.Lower(extension)
+		owner, exists := semanticOwnerTable(schema.Tables, ir.ModelID(extension.Owner))
+		if !exists {
+			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower extension %s: owner model %s is absent", extension.ID, extension.Owner)
+		}
+		lowered, err := semanticstorage.Lower(extension, owner)
 		if err != nil {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower extension %s: %w", extension.ID, err)
 		}
 		schema.Extensions = append(schema.Extensions, lowered)
 	}
 	return physical.Normalize(schema)
+}
+
+func semanticOwnerTable(tables []physical.PhysicalTable, model ir.ModelID) (physical.PhysicalTable, bool) {
+	for _, table := range tables {
+		if table.ID == model {
+			return table, true
+		}
+	}
+	return physical.PhysicalTable{}, false
 }
 
 func lowerTable(model ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR) (physical.PhysicalTable, error) {

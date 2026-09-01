@@ -70,13 +70,11 @@ func TestBuildRootCoversCallerScalarMutationShapes(t *testing.T) {
 }
 
 func TestSystemPlansOmitPoliciesAndHooksButRetainFactsAndValidation(t *testing.T) {
-	fixture := schematest.New(t)
+	fixture := schematest.NewSubscribedIndexed(t)
 	inputs := boundInputs(t, fixture)
 	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Update)
 	request.Target, request.Update = &inputs.target, &inputs.update
 	request.Hooks.Update = []mutationir.HookPhase{mutationir.BeforeHook, mutationir.AfterCommitHook}
-	request.CaptureFacts = true
-	request.FactCodec = factCodec(t, fixture)
 
 	planned, err := BuildRoot(request)
 	if err != nil {
@@ -92,7 +90,7 @@ func TestSystemPlansOmitPoliciesAndHooksButRetainFactsAndValidation(t *testing.T
 }
 
 func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
-	fixture := schematest.New(t)
+	fixture := schematest.NewSubscribedIndexed(t)
 	inputs := boundInputs(t, fixture)
 	predicate := boundBatchPredicate(t, fixture)
 	policy := allowAllPolicy(t, policyir.ModelID(fixture.Post))
@@ -118,8 +116,6 @@ func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 				policies = policySet(fixture, policy)
 			}
 			request := baseRequest(t, fixture, policies, test.stance, test.operation)
-			request.CaptureFacts, request.FactCodec = true, factCodec(t, fixture)
-			request.PrivateDeleteSnapshot = append([]policyir.FieldID(nil), allStored...)
 			test.configure(&request)
 			plan, err := BuildRoot(request)
 			if err != nil {
@@ -138,25 +134,35 @@ func TestDeleteSnapshotInventoryReachesRootBatchAndSystemPlans(t *testing.T) {
 	}
 
 	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
-	request.Target, request.CaptureFacts, request.FactCodec = &inputs.target, true, factCodec(t, fixture)
-	request.PrivateDeleteSnapshot = []policyir.FieldID{policyir.FieldID(fixture.PostAuthor)}
-	if _, err := BuildRoot(request); err == nil {
-		t.Fatal("relation field was accepted as a private stored-scalar snapshot")
-	}
-}
-
-func TestDeleteWithoutCompilerInventoryIsExplicitlyUnverifiable(t *testing.T) {
-	fixture := schematest.New(t)
-	inputs := boundInputs(t, fixture)
-	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
-	request.Target, request.CaptureFacts, request.FactCodec = &inputs.target, true, factCodec(t, fixture)
+	request.Target = &inputs.target
 	plan, err := BuildRoot(request)
 	if err != nil {
 		t.Fatal(err)
 	}
 	root, _ := plan.Graph().Root()
-	if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotUnverifiable || len(root.Fact().PrivateDeleteSnapshot()) != 0 {
-		t.Fatal("missing compiler inventory was not represented as unverifiable")
+	for _, field := range root.Fact().PrivateDeleteSnapshot() {
+		if field == policyir.FieldID(fixture.PostAuthor) {
+			t.Fatal("relation field entered the private stored-scalar snapshot")
+		}
+	}
+}
+
+// TestSubscribedDeleteAlwaysCarriesTheCompilerInventory holds the consequence
+// of deriving capture from the registry: a subscription-enabled delete can no
+// longer be planned without its complete stored-scalar snapshot, so an
+// unverifiable root delete snapshot is unreachable rather than merely unused.
+func TestSubscribedDeleteAlwaysCarriesTheCompilerInventory(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	inputs := boundInputs(t, fixture)
+	request := baseRequest(t, fixture, nil, mutationir.System, mutationir.Delete)
+	request.Target = &inputs.target
+	plan, err := BuildRoot(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, _ := plan.Graph().Root()
+	if root.Fact().DeleteSnapshotState() != mutationir.DeleteSnapshotStoredScalars || len(root.Fact().PrivateDeleteSnapshot()) == 0 {
+		t.Fatalf("subscribed delete snapshot state=%d fields=%x", root.Fact().DeleteSnapshotState(), root.Fact().PrivateDeleteSnapshot())
 	}
 }
 
@@ -419,11 +425,10 @@ func TestBatchWhereFieldsAreClassifiedThroughReadLens(t *testing.T) {
 }
 
 func TestPlannerDerivesImagesProvidersRetryLimitsAndFacts(t *testing.T) {
-	fixture := schematest.New(t)
+	fixture := schematest.NewSubscribedIndexed(t)
 	inputs := boundInputs(t, fixture)
 	request := baseRequest(t, fixture, policySet(fixture, allowAllPolicy(t, policyir.ModelID(fixture.Post))), mutationir.Caller, mutationir.Update)
 	request.Target, request.Update = &inputs.target, &inputs.update
-	request.CaptureFacts, request.FactCodec = true, factCodec(t, fixture)
 	planned, err := BuildRoot(request)
 	if err != nil {
 		t.Fatal(err)

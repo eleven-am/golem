@@ -12,6 +12,7 @@ import (
 	graphqlbind "github.com/eleven-am/golem/go/internal/graphql/bind"
 	graphqloperation "github.com/eleven-am/golem/go/internal/graphql/operation"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -154,14 +155,37 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 				data[root.ResponseName] = nil
 			} else {
 				value := result.Value()
-				request, order, semantic, hydrateErr := executor.compiler.PrepareSemanticCustomHydration(root, value)
+				hydration, semantic, hydrateErr := executor.compiler.PrepareSemanticCustomHydration(root, value)
 				if hydrateErr == nil && semantic {
 					value = []any{}
-					if len(order) != 0 {
-						var rows []golem.RuntimeModelRow
-						rows, hydrateErr = caller.ExecuteFrozenRead(customContext, request)
+					if hydration.Len() != 0 {
+						rows := make([]golem.RuntimeModelRow, 0, hydration.Len())
+						chunk := hydration.Len()
+						for start := 0; start < hydration.Len() && hydrateErr == nil; {
+							end := start + chunk
+							if end > hydration.Len() {
+								end = hydration.Len()
+							}
+							var request golem.FrozenReadRequest
+							request, hydrateErr = executor.compiler.SemanticCustomHydrationRequest(hydration, start, end)
+							if hydrateErr != nil {
+								break
+							}
+							var batch []golem.RuntimeModelRow
+							batch, hydrateErr = caller.ExecuteFrozenRead(customContext, request)
+							if hydrateErr != nil {
+								reduced, retry := reduceSemanticHydrationChunk(start, end, hydrateErr)
+								if retry {
+									chunk, hydrateErr = reduced-start, nil
+									continue
+								}
+								break
+							}
+							rows = append(rows, batch...)
+							start = end
+						}
 						if hydrateErr == nil {
-							value, hydrateErr = executor.compiler.FinishSemanticCustomHydration(root, order, rows)
+							value, hydrateErr = executor.compiler.FinishSemanticCustomHydration(root, hydration.Order(), rows)
 						}
 					}
 				}
@@ -208,6 +232,13 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 		response.Errors = appendComputedFailures(ctx, response.Errors, failures, executor.report)
 	}
 	return response
+}
+
+func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {
+	if end-start <= 1 || !readsql.StatementCapacityExceeded(err) {
+		return end, false
+	}
+	return start + (end-start)/2, true
 }
 
 func (executor *generatedExecutor[P]) executeMutationOrder(ctx context.Context, compiled graphqloperation.Result, mutationCaller CallerMutationExecution, custom *CallerCustomExecution, computed *computedExecution) Response {

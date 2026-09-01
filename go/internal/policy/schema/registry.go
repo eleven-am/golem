@@ -381,6 +381,7 @@ type Model struct {
 	equality              map[golem.FieldID]struct{}
 	maxTake               uint32
 	subscriptions         bool
+	semanticIndexed       bool
 	eventSchema           compilerir.Fingerprint
 	eventSnapshot         []golem.FieldID
 	analytics             *compilerir.AggregationContractIR
@@ -415,6 +416,11 @@ func (model Model) MaxTake() (uint32, bool) { return model.maxTake, model.maxTak
 // SubscriptionsEnabled is the normalized contract decision controlling
 // durable mutation-fact capture for this model.
 func (model Model) SubscriptionsEnabled() bool { return model.subscriptions }
+
+// SemanticIndexed is the normalized compiler decision controlling durable
+// semantic record marking for this model. It reports that at least one
+// semantic index extension declares this model as its owner.
+func (model Model) SemanticIndexed() bool { return model.semanticIndexed }
 
 // EventSchema returns the compiler-validated logical schema fingerprint and
 // complete private pre-delete scalar inventory for a subscription-enabled
@@ -531,14 +537,7 @@ func (field Field) Modes() []compilerir.FieldMode {
 // Visible reports whether the field belongs to the default public projection.
 // Empty modes are visible for source compatibility; hidden and write-only
 // explicitly remove a field from read output.
-func (field Field) Visible() bool {
-	for _, mode := range field.modes {
-		if mode == compilerir.ModeHidden || mode == compilerir.ModeWriteOnly {
-			return false
-		}
-	}
-	return true
-}
+func (field Field) Visible() bool { return compilerir.ModesReadable(field.modes) }
 func (field Field) RelationID() (golem.RelationID, bool) {
 	return field.relation, field.kind == compilerir.FieldRelation
 }

@@ -1,6 +1,9 @@
 package events
 
-import "errors"
+import (
+	"errors"
+	"fmt"
+)
 
 type ErrorCode string
 
@@ -20,13 +23,19 @@ const (
 	CodeCDCUnavailable           ErrorCode = "GOLEM_CDC_UNAVAILABLE"
 )
 
-type Error struct{ code ErrorCode }
+type Error struct {
+	code   ErrorCode
+	detail string
+}
 
 func (failure *Error) Error() string {
 	if failure == nil {
 		return ""
 	}
-	return string(failure.code)
+	if failure.detail == "" {
+		return string(failure.code)
+	}
+	return string(failure.code) + ": " + failure.detail
 }
 func (failure *Error) Code() ErrorCode {
 	if failure == nil {
@@ -40,6 +49,13 @@ func (failure *Error) Is(target error) bool {
 }
 
 func Failure(code ErrorCode) error { return &Error{code: code} }
+
+// Failf builds a classified events failure that also names the field and the
+// bound it violated. Classification stays code-only: Is, CodeOf and every
+// caller that switches on ErrorCode are unaffected by the detail.
+func Failf(code ErrorCode, format string, arguments ...any) error {
+	return &Error{code: code, detail: fmt.Sprintf(format, arguments...)}
+}
 
 func CodeOf(err error) (ErrorCode, bool) {
 	var failure *Error

@@ -18,7 +18,7 @@ func (*Provider) renderInitial(schema physical.PhysicalSchema) (Script, error) {
 	if err != nil {
 		return Script{}, err
 	}
-	return renderNormalizedInitial(normalized)
+	return renderNormalizedInitial(normalized, false)
 }
 
 type reviewedInitialSnapshot struct{ schema physical.PhysicalSchema }
@@ -41,10 +41,10 @@ func (*Provider) renderReviewedInitialSnapshot(reviewed reviewedInitialSnapshot)
 	if err != nil {
 		return Script{}, err
 	}
-	return renderNormalizedInitial(normalized)
+	return renderNormalizedInitial(normalized, true)
 }
 
-func renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error) {
+func renderNormalizedInitial(normalized physical.PhysicalSchema, reviewedReplay bool) (Script, error) {
 	if normalized.Provider.Provider != ir.SQLite {
 		return Script{}, fmt.Errorf("sqlite render: physical provider is %s", normalized.Provider.Provider)
 	}
@@ -82,7 +82,7 @@ func renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error)
 		}
 	}
 	for _, extension := range normalized.Extensions {
-		rendered, renderErr := renderSemanticExtension(extension)
+		rendered, renderErr := renderSemanticExtension(extension, reviewedReplay)
 		if renderErr != nil {
 			return Script{}, renderErr
 		}
@@ -91,14 +91,27 @@ func renderNormalizedInitial(normalized physical.PhysicalSchema) (Script, error)
 	return Script{statements: statements}, nil
 }
 
-func renderSemanticExtension(extension physical.Extension) ([]string, error) {
+func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) ([]string, error) {
 	descriptor, err := semanticstorage.Decode(extension)
 	if err != nil {
 		return nil, fmt.Errorf("sqlite render semantic extension %s: %w", extension.ID, err)
 	}
 	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
 	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
-	return []string{
+	if len(descriptor.Identity) == 0 && !reviewedReplay {
+		return nil, fmt.Errorf("sqlite render semantic extension %s: identity projection is absent", extension.ID)
+	}
+	identityColumns := make([]string, len(descriptor.Identity))
+	identityKeys := make([]string, len(descriptor.Identity))
+	for index, column := range descriptor.Identity {
+		if !column.NotNull {
+			return nil, fmt.Errorf("sqlite render semantic extension %s: identity column %q is nullable", extension.ID, column.Name)
+		}
+		identityColumns[index] = quote(column.Name) + " " + renderStorage(column.Storage) + " NOT NULL, "
+		identityKeys[index] = quote(column.Name) + " ASC"
+	}
+	names := semanticStateIndexNames(descriptor)
+	statements := []string{
 		"CREATE TABLE " + quote(state) + " (" +
 			quote("record_key") + " TEXT NOT NULL, " +
 			quote("source_hash") + " BLOB NOT NULL, " +
@@ -107,14 +120,32 @@ func renderSemanticExtension(extension physical.Extension) ([]string, error) {
 			quote("attempt_count") + " INTEGER NOT NULL DEFAULT 0, " +
 			quote("error_code") + " TEXT, " +
 			quote("updated_at") + " INTEGER NOT NULL, " +
+			strings.Join(identityColumns, "") +
 			"PRIMARY KEY (" + quote("record_key") + "), " +
 			"CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
 			"CHECK (" + quote("attempt_count") + " >= 0), " +
 			"CHECK (" + quote("updated_at") + " >= 0)) STRICT",
-		"CREATE VIRTUAL TABLE " + quote(vectors) + " USING vec0(" +
-			"record_key TEXT PRIMARY KEY, " +
-			"embedding float[" + strconv.Itoa(int(descriptor.Dimensions)) + "] distance_metric=cosine)",
-	}, nil
+	}
+	if len(descriptor.Identity) != 0 {
+		statements = append(statements,
+			"CREATE INDEX "+quote(names[0])+" ON "+quote(state)+" ("+strings.Join(identityKeys, ", ")+")",
+			"CREATE INDEX "+quote(names[1])+" ON "+quote(state)+" ("+quote("record_key")+" ASC) WHERE "+quote("status")+" <> 'ready'",
+		)
+	}
+	statements = append(statements, "CREATE VIRTUAL TABLE "+quote(vectors)+" USING vec0("+
+		"record_key TEXT PRIMARY KEY, "+
+		"embedding float["+strconv.Itoa(int(descriptor.Dimensions))+"] distance_metric=cosine)")
+	return statements, nil
+}
+
+// semanticStateIndexNames returns the identity and staleness index names of one
+// semantic shadow state table in the exact order renderSemanticExtension emits
+// their CREATE statements.
+func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
+	return []physical.PhysicalName{
+		physical.PhysicalName(string(descriptor.Storage) + "_state_identity"),
+		physical.PhysicalName(string(descriptor.Storage) + "_state_stale"),
+	}
 }
 
 func renderSystemObject(object physical.SystemObject) (string, error) {

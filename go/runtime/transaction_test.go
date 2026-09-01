@@ -270,6 +270,49 @@ func TestTransactionCapabilitiesExpireAndKeepCallerSystemAuthorizationSeparate(t
 	assertSystemUserCount(t, fixture, 1)
 }
 
+func TestSemanticQueueWakeRunsOnlyAfterCommit(t *testing.T) {
+	fixture := openTransactionFixture(t)
+	var wakes atomic.Int64
+	config := executionMutationConfig{
+		enabled: true, provider: fixture.app.provider, limits: fixture.app.mutationLimits,
+		outboxNamespace: "main", queueWake: func() { wakes.Add(1) },
+		flushSemantic: func(context.Context, sqlx.ExecerContext, []semanticMark) error { return nil },
+	}
+	prepare := func(t *testing.T) *executionBinding {
+		t.Helper()
+		binding := databaseExecution(fixture.database)
+		if err := binding.enableMutation(config); err != nil {
+			t.Fatal(err)
+		}
+		state, err := binding.mutationState()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := state.markSemantic(golem.ModelID{1}, "record", []any{"record"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := flushMutationBinding(context.Background(), fixture.database, binding); err != nil {
+			t.Fatal(err)
+		}
+		return binding
+	}
+
+	committed := prepare(t)
+	if wakes.Load() != 0 {
+		t.Fatal("semantic queue woke before commit")
+	}
+	commitMutationBinding(context.Background(), committed)
+	if wakes.Load() != 1 {
+		t.Fatalf("committed semantic queue wakes=%d want=1", wakes.Load())
+	}
+
+	rolledBack := prepare(t)
+	rolledBack.discardMutation()
+	if wakes.Load() != 1 {
+		t.Fatalf("rolled-back semantic queue wakes=%d want=1", wakes.Load())
+	}
+}
+
 func assertSystemUserCount(t *testing.T, fixture transactionFixture, expected int64) {
 	t.Helper()
 	count, err := SystemCount(context.Background(), fixture.app.System(), fixture.userDescriptor)

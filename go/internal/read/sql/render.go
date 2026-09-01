@@ -113,7 +113,7 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 			return Statement{}, err
 		}
 		text := "SELECT COUNT(*) AS " + dialect.Quote("golem_count") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(rootAlias) + " WHERE " + fragment.SQL()
-		if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
+		if err := ValidateStatementComplexity(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 			return Statement{}, err
 		}
 		return Statement{text: text, args: rootArgs, planMap: planMap.freeze(), count: true}, nil
@@ -271,7 +271,7 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	if err := enforceStatementParameterLimitWith(plan.ModelID(), args, plan.Limits().MaxStatementParameters); err != nil {
 		return Statement{}, err
 	}
-	if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
+	if err := ValidateStatementComplexity(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 		return Statement{}, err
 	}
 	return Statement{text: text, args: cloneArgs(args), columns: columns, counts: countColumns, correlated: correlatedColumns, planMap: planMap.freeze(), reverse: reverse}, nil

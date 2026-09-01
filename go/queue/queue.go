@@ -158,6 +158,21 @@ func NewRegistry() *Registry {
 	return &Registry{types: make(map[string]Registration)}
 }
 
+// Clone returns an independent registry containing the same registrations.
+func (registry *Registry) Clone() *Registry {
+	result := NewRegistry()
+	if registry == nil {
+		return result
+	}
+	registry.mutex.RLock()
+	defer registry.mutex.RUnlock()
+	result.order = append(result.order, registry.order...)
+	for name, registration := range registry.types {
+		result.types[name] = registration
+	}
+	return result
+}
+
 // Lookup returns the registration for a type name.
 func (registry *Registry) Lookup(name string) (Registration, bool) {
 	if registry == nil {

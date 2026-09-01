@@ -2,6 +2,7 @@ package events
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -65,4 +66,76 @@ func codeForCDC(t testing.TB, err error) ErrorCode {
 		t.Fatalf("error = %v", err)
 	}
 	return code
+}
+
+func TestCDCIdentityErrorsNameTheViolatedField(t *testing.T) {
+	for name, testCase := range map[string]struct {
+		identity CDCIdentity
+		names    string
+	}{
+		"absent name":      {CDCIdentity{Version: "1", Provider: golem.PostgreSQL}, "Name"},
+		"oversized name":   {CDCIdentity{Name: strings.Repeat("a", MaximumCDCIdentityBytes+1), Version: "1", Provider: golem.PostgreSQL}, "Name"},
+		"malformed name":   {CDCIdentity{Name: ".wal", Version: "1", Provider: golem.PostgreSQL}, "Name"},
+		"absent version":   {CDCIdentity{Name: "wal", Provider: golem.PostgreSQL}, "Version"},
+		"oversized ver":    {CDCIdentity{Name: "wal", Version: strings.Repeat("1", MaximumCDCIdentityBytes+1), Provider: golem.PostgreSQL}, "Version"},
+		"malformed ver":    {CDCIdentity{Name: "wal", Version: "@1", Provider: golem.PostgreSQL}, "Version"},
+		"unknown provider": {CDCIdentity{Name: "wal", Version: "1", Provider: golem.Provider("mysql")}, "Provider"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			err := ValidateCDCIdentity(testCase.identity)
+			if codeForCDC(t, err) != CodeCDCInvalid {
+				t.Fatalf("code = %v", err)
+			}
+			if !strings.Contains(err.Error(), testCase.names) {
+				t.Fatalf("error %q does not name %s", err, testCase.names)
+			}
+		})
+	}
+}
+
+func TestCDCAdapterErrorsSeparateIdentityFromProvider(t *testing.T) {
+	tooMany := make([]CDCAdapter, MaximumCDCAdapters+1)
+	for index := range tooMany {
+		tooMany[index] = stubCDCAdapter{identity: CDCIdentity{Name: "wal", Version: "1", Provider: golem.PostgreSQL}}
+	}
+	_, err := ValidateCDCAdapters(golem.PostgreSQL, tooMany)
+	if codeForCDC(t, err) != CodeEventConfig || !strings.Contains(err.Error(), "adapters") {
+		t.Fatalf("inventory ceiling error = %v", err)
+	}
+	_, err = ValidateCDCAdapters(golem.PostgreSQL, []CDCAdapter{nil})
+	if codeForCDC(t, err) != CodeCDCInvalid || !strings.Contains(err.Error(), "adapters[0]") {
+		t.Fatalf("nil adapter error = %v", err)
+	}
+	_, err = ValidateCDCAdapters(golem.PostgreSQL, []CDCAdapter{stubCDCAdapter{identity: CDCIdentity{Version: "1", Provider: golem.PostgreSQL}}})
+	if codeForCDC(t, err) != CodeCDCInvalid || !strings.Contains(err.Error(), "Name") {
+		t.Fatalf("invalid identity error = %v", err)
+	}
+	_, err = ValidateCDCAdapters(golem.PostgreSQL, []CDCAdapter{stubCDCAdapter{identity: CDCIdentity{Name: "wal", Version: "1", Provider: golem.SQLite}}})
+	if codeForCDC(t, err) != CodeCDCInvalid || !strings.Contains(err.Error(), "Provider") || strings.Contains(err.Error(), "Name must") {
+		t.Fatalf("provider mismatch error = %v", err)
+	}
+	duplicate := stubCDCAdapter{identity: CDCIdentity{Name: "wal", Version: "1", Provider: golem.PostgreSQL}}
+	_, err = ValidateCDCAdapters(golem.PostgreSQL, []CDCAdapter{duplicate, duplicate})
+	if codeForCDC(t, err) != CodeCDCInvalid || !strings.Contains(err.Error(), "adapters[1]") {
+		t.Fatalf("duplicate error = %v", err)
+	}
+}
+
+func TestCDCProviderErrorNamesTheValidProvidersWithoutEchoingTheValue(t *testing.T) {
+	secret := "postgres://operator:s3cr3t@replica.internal/db"
+	err := ValidateCDCIdentity(CDCIdentity{Name: "wal", Version: "1", Provider: golem.Provider(secret)})
+	if codeForCDC(t, err) != CodeCDCInvalid {
+		t.Fatalf("code = %v", err)
+	}
+	if !strings.Contains(err.Error(), "Provider") {
+		t.Fatalf("error %q does not name Provider", err)
+	}
+	if !strings.Contains(err.Error(), string(golem.SQLite)) || !strings.Contains(err.Error(), string(golem.PostgreSQL)) {
+		t.Fatalf("error %q does not name the valid providers", err)
+	}
+	for _, leak := range []string{secret, "s3cr3t", "replica.internal", "operator"} {
+		if strings.Contains(err.Error(), leak) {
+			t.Fatalf("error %q echoed the caller-supplied provider", err)
+		}
+	}
 }

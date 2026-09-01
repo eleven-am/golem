@@ -16,6 +16,8 @@ import (
 	"github.com/ncruces/go-sqlite3/driver"
 )
 
+const VerifiedPoolWidth = 4
+
 const (
 	journalModeWAL    = "wal"
 	journalModeMemory = "memory"
@@ -50,18 +52,18 @@ func initializeProviderConnection(connection *sqlite3.Conn) error {
 // evidence observe the real failed-probe path without adding a production or
 // public injection seam.
 func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sqlx.DB) (*sqlx.DB, CapabilityReport, error) {
-	database.SetMaxOpenConns(4)
-	database.SetMaxIdleConns(4)
+	database.SetMaxOpenConns(VerifiedPoolWidth)
+	database.SetMaxIdleConns(VerifiedPoolWidth)
 	if err := establishJournalMode(ctx, database); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	report, err := provider.VerifyPool(ctx, database, 4)
+	report, err := provider.VerifyPool(ctx, database, VerifiedPoolWidth)
 	if err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
-	if err := verifyProviderOwnedDurability(ctx, database, 4); err != nil {
+	if err := verifyProviderOwnedDurability(ctx, database, VerifiedPoolWidth); err != nil {
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
@@ -589,15 +591,8 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err != nil {
 		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
-	wantPhysical, _ := physical.PhysicalFingerprint(normalized)
-	gotPhysical, _ := physical.PhysicalFingerprint(actual)
-	if gotPhysical != wantPhysical {
-		return fmt.Errorf("sqlite initial apply precommit physical fingerprint mismatch")
-	}
-	wantSystem, _ := physical.SystemFingerprint(normalized.Provider, normalized.System)
-	gotSystem, _ := physical.SystemFingerprint(actual.Provider, actual.System)
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite initial apply precommit system fingerprint mismatch")
+	if err := physical.CompareFingerprints(normalized, actual); err != nil {
+		return fmt.Errorf("sqlite initial apply precommit verification: %w", err)
 	}
 	if err := transaction.Commit(); err != nil {
 		return fmt.Errorf("sqlite initial apply commit: %w", err)

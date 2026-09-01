@@ -265,11 +265,24 @@ func newMutationResultFixtureWithHooksAndDatabase(t *testing.T, limits MutationL
 
 func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor], afterCommitError func(context.Context, golem.AfterCommitFailure), supplied *sqlx.DB, initialize bool, hookOwned ...bool) mutationResultFixture {
 	t.Helper()
-	ctx := context.Background()
 	schemaFixture := schematest.NewSubscribedIndexed(t)
 	if len(hookOwned) != 0 && hookOwned[0] {
 		schemaFixture = withMutationResultHookOwnedAuthor(t, schemaFixture)
 	}
+	return openMutationResultFixture(t, schemaFixture, limits, hookFactory, afterCommitError, supplied, initialize)
+}
+
+func openMutationResultFixture(t *testing.T, schemaFixture schematest.Fixture, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor], afterCommitError func(context.Context, golem.AfterCommitFailure), supplied *sqlx.DB, initialize bool) mutationResultFixture {
+	t.Helper()
+	return openConfiguredMutationResultFixture(t, schemaFixture, limits, hookFactory, afterCommitError, supplied, initialize, nil)
+}
+
+// openConfiguredMutationResultFixture exposes the engine config to the caller so
+// a fixture whose model declares a semantic index can supply the embedding
+// registry and durable queue that such a model now requires at Open.
+func openConfiguredMutationResultFixture(t *testing.T, schemaFixture schematest.Fixture, limits MutationLimits, hookFactory func(schematest.Fixture, golem.TextField[mutationResultPost, string]) []golem.HookBinding[mutationResultActor], afterCommitError func(context.Context, golem.AfterCommitFailure), supplied *sqlx.DB, initialize bool, configure func(*Config[mutationResultPrincipal, mutationResultActor])) mutationResultFixture {
+	t.Helper()
+	ctx := context.Background()
 	provider := sqlite.New()
 	database := supplied
 	if database == nil {
@@ -336,14 +349,18 @@ func newMutationResultFixtureWithHooksAndDatabaseMode(t *testing.T, limits Mutat
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+	engineConfig := withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		Database: p8RuntimeTestDatabase(database, golem.SQLite), Bundle: schemaFixture.Bundle, Bindings: bindings, Descriptors: descriptors,
 		MutationLimits:   limits,
 		AfterCommitError: afterCommitError,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	}))
+	})
+	if configure != nil {
+		configure(&engineConfig)
+	}
+	app, err := Open(ctx, engineConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

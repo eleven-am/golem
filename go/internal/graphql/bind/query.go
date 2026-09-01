@@ -95,7 +95,7 @@ func (s *inputState) where(model compilerir.ModelDeclIR, contract compilerir.Mod
 			conditions = append(conditions, condition)
 		default:
 			field, exists := fields[key]
-			if !exists || !readable(field.contract) {
+			if !exists || !compilerir.ModesReadable(field.contract.Modes) {
 				return policyir.Condition{}, fmt.Errorf("P5_BIND_FIELD: %s is unknown or not readable", joinPath(path, key))
 			}
 			condition, bindErr := s.fieldCondition(model, contract, field, rawChild, joinPath(path, key), depth+1)
@@ -509,7 +509,7 @@ func (s *inputState) selector(model compilerir.ModelDeclIR, contract compilerir.
 	conditions := make([]policyir.Condition, len(selector.Fields))
 	for index, id := range selector.Fields {
 		binding, ok := fieldByID(fields, id)
-		if !ok || !readable(binding.contract) || binding.model.Scalar == nil {
+		if !ok || !compilerir.ModesReadable(binding.contract.Modes) || binding.model.Scalar == nil {
 			return readir.Selector{}, policyir.Condition{}, fmt.Errorf("P5_BIND_SELECTOR: %s.%s contains an unavailable field", path, name)
 		}
 		fieldID, _ := policyFieldID(id)
@@ -559,7 +559,7 @@ func (s *inputState) orderBy(model compilerir.ModelDeclIR, contract compilerir.M
 		}
 		name := sortedKeys(entry)[0]
 		field, ok := fields[name]
-		if !ok || !readable(field.contract) || field.model.Scalar == nil {
+		if !ok || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil {
 			return nil, fmt.Errorf("P5_BIND_ORDER: %s[%d].%s is unavailable or relational", path, index, name)
 		}
 		if seen[field.model.ID] {
@@ -597,7 +597,7 @@ func (s *inputState) distinct(model compilerir.ModelDeclIR, contract compilerir.
 	for index, item := range items {
 		name, ok := item.(string)
 		field, exists := fields[name]
-		if !ok || !exists || !readable(field.contract) || field.model.Scalar == nil || seen[field.model.ID] {
+		if !ok || !exists || !compilerir.ModesReadable(field.contract.Modes) || field.model.Scalar == nil || seen[field.model.ID] {
 			return nil, fmt.Errorf("P5_BIND_DISTINCT: item %d is unknown, relational, or duplicate", index)
 		}
 		seen[field.model.ID] = true

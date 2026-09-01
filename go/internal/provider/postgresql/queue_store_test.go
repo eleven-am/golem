@@ -84,6 +84,10 @@ func TestTransactionalEnqueueIsAtomicWithCallerTransaction(t *testing.T) {
 	runQueueGate(t, providertest.TransactionalEnqueueIsAtomicWithCallerTransaction)
 }
 
+func TestEnqueueReportsInsertedAndCoalescedState(t *testing.T) {
+	runQueueGate(t, providertest.EnqueueReportsInsertedAndCoalescedState)
+}
+
 func TestQueueSchemaBootstrapIsIdempotent(t *testing.T) {
 	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
 		if err := fixture.Store.EnsureSchema(context.Background()); err != nil {
@@ -257,4 +261,8 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 	if err := provider.Verify(ctx, database, bare); err == nil {
 		t.Fatal("queue storage was tolerated without the unmanaged allowlist")
 	}
+}
+
+func TestIdentityBoundIsOwnedByTheQueueContract(t *testing.T) {
+	runQueueGate(t, providertest.IdentityBoundIsOwnedByTheQueueContract)
 }

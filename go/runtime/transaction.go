@@ -58,6 +58,11 @@ type executionMutationConfig struct {
 	afterCommitError func(context.Context, golem.AfterCommitFailure)
 	invalidate       func()
 	outboxNamespace  string
+	queueWake        func()
+	// flushSemantic writes the transaction's semantic marks and schedules their
+	// drain on the same executor the outbox rows use. It is nil only for an
+	// execution that owns no application.
+	flushSemantic func(context.Context, sqlx.ExecerContext, []semanticMark) error
 }
 
 func databaseExecution(database *sqlx.DB) *executionBinding {
@@ -220,7 +225,12 @@ func mutationConfig[P, A any](app *App[P, A], execution *executionBinding) execu
 		publicProvider = golem.PostgreSQL
 	}
 	namespace, _ := app.registry.PhysicalSystemNamespace(publicProvider)
-	return executionMutationConfig{enabled: true, provider: app.provider, limits: app.mutationLimits, afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution, outboxNamespace: string(namespace)}
+	return executionMutationConfig{
+		enabled: true, provider: app.provider, limits: app.mutationLimits,
+		afterCommitError: app.afterCommitError, invalidate: execution.invalidateExecution,
+		outboxNamespace: string(namespace), flushSemantic: app.flushSemanticMarks,
+		queueWake: app.queueWorker.Wake,
+	}
 }
 
 // CallerTx is the opaque caller authorization and transaction capability used
@@ -235,6 +245,30 @@ type CallerTx[P, A any] struct {
 type SystemTx[P, A any] struct {
 	system    System[P, A]
 	execution uint64
+}
+
+// undoOnPanic is the single owner of the runtime's panic contract for
+// transaction-owning execution. A recovered panic performs exactly the site's
+// own undo work and then re-raises the original value; a programmer panic is
+// never converted into a public error. It must be deferred directly so that
+// recover observes the panicking frame.
+func undoOnPanic(undo func()) {
+	if recovered := recover(); recovered != nil {
+		undo()
+		panic(recovered)
+	}
+}
+
+// finishObservationOrPanic is the single owner of outcome finalization for the
+// two public transaction entry points. A recovered panic closes the span as a
+// panic failure and re-raises; an ordinary return closes it against err.
+func finishObservationOrPanic(observation *observeexec.Span, observer *observeexec.DeferredObserver, err *error) {
+	observer.Flush()
+	if recovered := recover(); recovered != nil {
+		observeexec.Finish(observation, observe.OutcomeFailure, observe.ReasonPanic)
+		panic(recovered)
+	}
+	finishObservation(observation, *err)
 }
 
 // CallerTransaction owns the outer transaction around one generated caller
@@ -252,14 +286,7 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 	}
 	ctx, observation := beginObservation(ctx, caller.app, golem.ModelID{}, observe.KindTransaction, observe.OperationCallerTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(caller.app.observer)
-	defer func() {
-		deferredObserver.Flush()
-		if recovered := recover(); recovered != nil {
-			observeexec.Finish(observation, observe.OutcomeFailure, observe.ReasonPanic)
-			panic(recovered)
-		}
-		finishObservation(observation, err)
-	}()
+	defer finishObservationOrPanic(observation, deferredObserver, &err)
 	transaction, err := caller.app.database.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin caller transaction: %w", err)
@@ -297,14 +324,7 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	}
 	ctx, observation := beginObservation(ctx, system.app, golem.ModelID{}, observe.KindTransaction, observe.OperationSystemTransaction)
 	deferredObserver := observeexec.NewDeferredObserver(system.app.observer)
-	defer func() {
-		deferredObserver.Flush()
-		if recovered := recover(); recovered != nil {
-			observeexec.Finish(observation, observe.OutcomeFailure, observe.ReasonPanic)
-			panic(recovered)
-		}
-		finishObservation(observation, err)
-	}()
+	defer finishObservationOrPanic(observation, deferredObserver, &err)
 	transaction, err := system.app.database.BeginTxx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: begin system transaction: %w", err)
@@ -327,13 +347,10 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 
 func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, callback func() error) (err error) {
 	defer binding.close()
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			binding.discardMutation()
-			_ = transaction.Rollback()
-			panic(recovered)
-		}
-	}()
+	defer undoOnPanic(func() {
+		binding.discardMutation()
+		_ = transaction.Rollback()
+	})
 
 	if callbackErr := callback(); callbackErr != nil {
 		binding.discardMutation()
@@ -352,7 +369,6 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}
 	commitMutationBinding(ctx, binding)
-	binding.notifyQueue()
 	return nil
 }
 
@@ -361,7 +377,13 @@ func flushMutationBinding(ctx context.Context, executor sqlx.ExecerContext, bind
 	if err != nil {
 		return err
 	}
-	return state.flush(ctx, executor, binding.mutation.provider, binding.mutation.outboxNamespace)
+	if err := state.flush(ctx, executor, binding.mutation); err != nil {
+		return err
+	}
+	if state.hasSemanticMarks() {
+		binding.queueEnqueued(binding.mutation.queueWake)
+	}
+	return nil
 }
 
 func commitMutationBinding(ctx context.Context, binding *executionBinding) {
@@ -370,6 +392,7 @@ func commitMutationBinding(ctx context.Context, binding *executionBinding) {
 		return
 	}
 	state.committed(ctx, binding.mutation.afterCommitError)
+	binding.notifyQueue()
 }
 
 func rollbackTransaction(transaction *sqlx.Tx, cause error) error {

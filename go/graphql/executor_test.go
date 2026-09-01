@@ -3,13 +3,28 @@ package graphql
 import (
 	"context"
 	"encoding/hex"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 )
+
+func TestSemanticHydrationChunkReductionUsesReadCapacityErrors(t *testing.T) {
+	overflow := readsql.ValidateStatementComplexity(policyir.ModelID{1}, strings.Repeat("x", 2), 1, readsql.MaxStatementAliases)
+	wrapped := golem.RuntimeReadError(golem.CodeBadUserInput, "findMany", golem.ModelID{}, golem.FieldID{}, "read plan could not be rendered", overflow)
+	if end, retry := reduceSemanticHydrationChunk(2, 10, wrapped); !retry || end != 6 {
+		t.Fatalf("capacity error reduced to %d retry=%t", end, retry)
+	}
+	if end, retry := reduceSemanticHydrationChunk(2, 10, errors.New("read failed")); retry || end != 10 {
+		t.Fatalf("unrelated error reduced to %d retry=%t", end, retry)
+	}
+}
 
 type generatedTestCaller struct {
 	rows  []golem.RuntimeModelRow

@@ -214,7 +214,7 @@ func (in *compiler) compileModel(modelID compilerir.ModelID, set ast.SelectionSe
 			continue
 		}
 		binding, exists := fieldsByName[occurrence.field.Name]
-		if !exists || hidden(binding.contract.Modes) || hasMode(binding.contract.Modes, compilerir.ModeWriteOnly) {
+		if !exists || !compilerir.ModesReadable(binding.contract.Modes) {
 			return nil, nil, fmt.Errorf("P5_SELECT_FIELD: %s.%s is absent or not readable", contract.GraphQLName, occurrence.field.Name)
 		}
 		if binding.model.Kind != compilerir.FieldRelation {
@@ -288,7 +288,7 @@ func (in *compiler) compileCounts(modelID compilerir.ModelID, set ast.SelectionS
 	byName := map[string]compilerir.FieldIR{}
 	for _, field := range model.Fields {
 		fc := fieldContracts[field.ID]
-		if field.Kind == compilerir.FieldRelation && !hidden(fc.Modes) && !hasMode(fc.Modes, compilerir.ModeWriteOnly) {
+		if field.Kind == compilerir.FieldRelation && compilerir.ModesReadable(fc.Modes) {
 			byName[fc.GraphQLName] = field
 		}
 	}
@@ -631,16 +631,6 @@ func policyRelationID(value compilerir.RelationID) (policyir.RelationID, error) 
 	parsed, err := fixedID(string(value))
 	return policyir.RelationID(parsed), err
 }
-
-func hasMode(values []compilerir.FieldMode, mode compilerir.FieldMode) bool {
-	for _, value := range values {
-		if value == mode {
-			return true
-		}
-	}
-	return false
-}
-func hidden(values []compilerir.FieldMode) bool { return hasMode(values, compilerir.ModeHidden) }
 
 // StableSlots returns a detached response map ordered as GraphQL will encode it.
 func StableSlots(values []Slot) []Slot {

@@ -115,6 +115,8 @@ type App[P, A any] struct {
 	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
 	nextExecution     atomic.Uint64
 	semantic          *semanticruntime.Manager
+	semanticDrain     queue.Type[semanticJob]
+	semanticReconcile queue.Type[semanticJob]
 	queueStore        queueprovider.Store
 	queueWorker       *queueworker.Worker
 	queueOperator     queue.Operator
@@ -144,10 +146,11 @@ type System[P, A any] struct {
 // PreparedRead is an opaque, schema-bound request. Later P3 planning and
 // execution stages consume the private IR without reopening public identities.
 type PreparedRead struct {
-	request  readir.Request
-	policies *policyruntime.Set
-	system   bool
-	executor *executionBinding
+	request          readir.Request
+	policies         *policyruntime.Set
+	system           bool
+	executor         *executionBinding
+	semanticIdentity []golem.FieldID
 }
 
 func (prepared PreparedRead) ModelID() golem.ModelID {
@@ -293,16 +296,33 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	if err := app.initializeQueueRuntime(ctx, config.Queue); err != nil {
 		return nil, err
 	}
+	if err := app.startSemanticJobs(ctx); err != nil {
+		openReason = observe.ReasonCapability
+		return nil, err
+	}
 	return app, nil
 }
 
 // RefreshSemanticIndexes reconciles every declared semantic index with its
 // current source rows. Unchanged rows do not call the embedding provider.
+// Reconciliation reads the whole owner table, which is what lets it observe
+// writes Golem never saw: the raw handle, an attached backfill, another
+// service.
 func (app *App[P, A]) RefreshSemanticIndexes(ctx context.Context) error {
 	if app == nil || app.semantic == nil || ctx == nil {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application and context are required")
 	}
 	return app.semantic.RefreshAll(ctx)
+}
+
+// RefreshSemanticIndex reconciles one declared semantic index. Writes made
+// through Golem need no call here; they mark their own records and a drain job
+// carries them.
+func (app *App[P, A]) RefreshSemanticIndex(ctx context.Context, model golem.ModelID, name string) error {
+	if app == nil || app.semantic == nil || ctx == nil {
+		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application and context are required")
+	}
+	return app.semantic.Refresh(ctx, semanticIndexModel(model), name)
 }
 
 func validateEventConfiguration[P, A any](config Config[P, A], registry *schema.Registry, providerIdentity golem.Provider) (events.Limits, error) {
@@ -466,7 +486,7 @@ func (caller *Caller[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRe
 	if _, err := caller.executor.queryerFor(caller.app.database); err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
 	}
-	return PreparedRead{request: bound, policies: caller.policies, executor: caller.executor}, nil
+	return PreparedRead{request: bound, policies: caller.policies, executor: caller.executor, semanticIdentity: golem.RuntimeSemanticIdentityFields(request)}, nil
 }
 
 func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRead, error) {
@@ -480,7 +500,7 @@ func (system System[P, A]) Prepare(request golem.FrozenReadRequest) (PreparedRea
 	if _, err := system.executor.queryerFor(system.app.database); err != nil {
 		return PreparedRead{}, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read execution binding is unavailable", err)
 	}
-	return PreparedRead{request: bound, system: true, executor: system.executor}, nil
+	return PreparedRead{request: bound, system: true, executor: system.executor, semanticIdentity: golem.RuntimeSemanticIdentityFields(request)}, nil
 }
 
 // CallerExecuteFrozenRead is the model-erased P3 execution seam used by the
@@ -559,6 +579,17 @@ func executeRuntimeRows[P, A any](ctx context.Context, app *App[P, A], prepared 
 	rows := make([]golem.RuntimeModelRow, len(executed))
 	for index := range executed {
 		rows[index] = executed[index].row
+		if len(prepared.semanticIdentity) != 0 {
+			fields := make([]policyir.FieldID, len(prepared.semanticIdentity))
+			for fieldIndex, field := range prepared.semanticIdentity {
+				fields[fieldIndex] = policyir.FieldID(field)
+			}
+			key, keyErr := semanticHydrationRecordKey(executed[index].values, fields)
+			if keyErr != nil {
+				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "semantic hydration identity is unavailable", keyErr)
+			}
+			rows[index] = golem.RuntimeModelRowWithSemanticIdentity(rows[index], key)
+		}
 	}
 	return rows, nil
 }
@@ -647,56 +678,53 @@ func SystemFindFirst[P, A, M any](ctx context.Context, system System[P, A], desc
 }
 
 func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
+	_, resultRow, resultErr = callerFindUniqueExecuted(ctx, caller, descriptor, selector, options...)
+	return resultRow, resultErr
+}
+
+func callerFindUniqueExecuted[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
 	if caller == nil || caller.app == nil {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	prepared, err := prepareCallerFindUnique(ctx, caller, descriptor, selector, options)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	rows, err := executePreparedRows(ctx, caller.app, prepared, descriptor)
+	executed, row, err := executePreparedUnique(ctx, caller.app, prepared, descriptor)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	if len(rows) == 0 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "record not found", nil)
-	}
-	if len(rows) != 1 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
-	}
-	row := rows[0]
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	result := golem.RuntimeFindOneHookResult(row)
-	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, result); err != nil {
-		return golem.Row[M]{}, err
+	hookResult := golem.RuntimeFindOneHookResult(row)
+	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, hookResult); err != nil {
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	return row, nil
+	return executed, row, nil
 }
 
 func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
+	_, resultRow, resultErr = systemFindUniqueExecuted(ctx, system, descriptor, selector, options...)
+	return resultRow, resultErr
+}
+
+func systemFindUniqueExecuted[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
 	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindUnique(descriptor, selector, options...)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
 	prepared, err := system.Prepare(frozen)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	rows, err := executeRows(ctx, system.app, prepared, descriptor)
+	statement, err := prepareReadStatement(system.app, prepared)
 	if err != nil {
-		return golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, err
 	}
-	if len(rows) == 0 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", frozen.ModelID(), golem.FieldID{}, "record not found", nil)
-	}
-	if len(rows) != 1 {
-		return golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", frozen.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(rows)))
-	}
-	return rows[0], nil
+	return executePreparedUnique(ctx, system.app, statement, descriptor)
 }
 
 func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {
@@ -736,19 +764,30 @@ type preparedReadStatement struct {
 }
 
 func prepareCallerFindMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
-	if _, err := golem.FreezeFindMany(descriptor, options...); err != nil {
+	prepared, err := prepareCallerFindManyRead(ctx, caller, descriptor, options)
+	if err != nil {
 		return preparedReadStatement{}, err
+	}
+	return prepareReadStatement(caller.app, prepared)
+}
+
+// prepareCallerFindManyRead runs the ordinary findMany hook and authorization
+// admission without rendering a statement. Semantic ranking stops here because
+// its row statement is derived from the plan only after ranking.
+func prepareCallerFindManyRead[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (PreparedRead, error) {
+	if _, err := golem.FreezeFindMany(descriptor, options...); err != nil {
+		return PreparedRead{}, err
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookRequest := golem.RuntimeFindManyHookRequest(options)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindMany, golem.HookFindMany, golem.HookBefore, hookRequest); err != nil {
-		return preparedReadStatement{}, err
+		return PreparedRead{}, err
 	}
 	frozen, err := golem.FreezeFindMany(descriptor, hookRequest.Options()...)
 	if err != nil {
-		return preparedReadStatement{}, err
+		return PreparedRead{}, err
 	}
-	return prepareCallerReadStatement(caller, frozen)
+	return caller.Prepare(frozen)
 }
 
 func prepareCallerFindFirst[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (preparedReadStatement, error) {
@@ -855,6 +894,24 @@ func executePreparedRows[P, A, M any](ctx context.Context, app *App[P, A], prepa
 		}
 	}
 	return result, nil
+}
+
+func executePreparedUnique[P, A, M any](ctx context.Context, app *App[P, A], prepared preparedReadStatement, descriptor golem.ModelDescriptor[M]) (executedRow, golem.Row[M], error) {
+	executed, err := executeRenderedPlan(ctx, app, prepared.prepared.executor, prepared.prepared.Operation(), prepared.plan, prepared.statement)
+	if err != nil {
+		return executedRow{}, golem.Row[M]{}, err
+	}
+	if len(executed) == 0 {
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeNotFound, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "record not found", nil)
+	}
+	if len(executed) != 1 {
+		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeBadUserInput, "findUnique", prepared.prepared.ModelID(), golem.FieldID{}, "unique read returned an invalid cardinality", fmt.Errorf("rows=%d", len(executed)))
+	}
+	row, err := golem.RuntimeTypedReadRow(descriptor, executed[0].row)
+	if err != nil {
+		return executedRow{}, golem.Row[M]{}, err
+	}
+	return executed[0], row, nil
 }
 
 type executedRow struct {

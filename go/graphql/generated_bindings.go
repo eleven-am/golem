@@ -253,6 +253,13 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 		if !modelResult {
 			return nil, fmt.Errorf("custom model result lacks a generated descriptor witness")
 		}
+		if semantic, ok := value.(golem.SemanticResult[M]); ok {
+			row, err := golem.RuntimeSemanticRowFromResult(semantic)
+			if err != nil {
+				return nil, err
+			}
+			return row, nil
+		}
 		row, ok := value.(golem.Row[M])
 		if !ok {
 			return nil, fmt.Errorf("custom model result has value %T", value)

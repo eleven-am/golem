@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 	"testing/fstest"
+	"time"
 )
 
 const indexSource = `<html><head><title>Original</title><meta charset="utf-8"></head><body><div id="root"></div></body></html>`
@@ -22,6 +23,9 @@ func bundle() fstest.MapFS {
 		".env":                           {Data: []byte("SECRET=1")},
 		"sub/nested.txt":                 {Data: []byte("nested")},
 		"manifest-0123456789abcdef.json": {Data: []byte("{}")},
+		"logo-release01.svg":             {Data: []byte("<svg/>")},
+		"data-20260101.json":             {Data: []byte("{}")},
+		"assets/vendor.LMNOPQRS.js":      {Data: []byte("console.log(2)")},
 	}
 }
 
@@ -63,24 +67,56 @@ func body(t *testing.T, response *http.Response) string {
 	return string(content)
 }
 
-func TestAssetCacheControlFollowsHashHeuristic(t *testing.T) {
+func TestStaticFilesAlwaysRevalidateWhateverTheFilenameLooksLike(t *testing.T) {
 	renderer := newTestRenderer(t, Config{})
-	for _, testCase := range []struct {
-		target string
-		cache  string
-	}{
-		{"/assets/app-a1b2c3d4e5.js", "public, max-age=31536000, immutable"},
-		{"/manifest-0123456789abcdef.json", "public, max-age=31536000, immutable"},
-		{"/assets/style.css", "no-cache"},
-		{"/favicon.ico", "no-cache"},
+	for _, target := range []string{
+		"/logo-release01.svg",
+		"/data-20260101.json",
+		"/assets/app-a1b2c3d4e5.js",
+		"/assets/vendor.LMNOPQRS.js",
+		"/manifest-0123456789abcdef.json",
+		"/assets/style.css",
+		"/favicon.ico",
 	} {
-		response := get(t, renderer, testCase.target, nil)
+		response := get(t, renderer, target, nil)
 		if response.StatusCode != http.StatusOK {
-			t.Fatalf("%s status=%d", testCase.target, response.StatusCode)
+			t.Fatalf("%s status=%d", target, response.StatusCode)
 		}
-		if got := response.Header.Get("Cache-Control"); got != testCase.cache {
-			t.Fatalf("%s cache-control=%q want %q", testCase.target, got, testCase.cache)
+		cache := response.Header.Get("Cache-Control")
+		if cache != staticCacheControl {
+			t.Fatalf("%s cache-control=%q want %q", target, cache, staticCacheControl)
 		}
+		if strings.Contains(cache, "immutable") || strings.Contains(cache, "max-age") {
+			t.Fatalf("%s was served a freshness lifetime derived from its filename: %q", target, cache)
+		}
+	}
+}
+
+func TestStaticCacheControlDefaultIsPinned(t *testing.T) {
+	if staticCacheControl != "no-cache" {
+		t.Fatalf("static cache-control default changed to %q", staticCacheControl)
+	}
+}
+
+func TestRevalidationDependsOnTheBundleSupplyingAModificationTime(t *testing.T) {
+	stamped := newTestRenderer(t, Config{Files: fstest.MapFS{
+		"index.html":    {Data: []byte(indexSource)},
+		"assets/app.js": {Data: []byte("console.log(1)"), ModTime: time.Unix(1767322445, 0)},
+	}})
+	first := get(t, stamped, "/assets/app.js", nil)
+	modified := first.Header.Get("Last-Modified")
+	if modified == "" {
+		t.Fatal("a bundle with modification times served no validator")
+	}
+	conditional := get(t, stamped, "/assets/app.js", map[string]string{"If-Modified-Since": modified})
+	if conditional.StatusCode != http.StatusNotModified {
+		t.Fatalf("revalidation status=%d want %d", conditional.StatusCode, http.StatusNotModified)
+	}
+
+	zeroed := newTestRenderer(t, Config{})
+	response := get(t, zeroed, "/assets/style.css", nil)
+	if response.Header.Get("Last-Modified") != "" || response.Header.Get("ETag") != "" {
+		t.Fatal("a bundle without modification times gained a validator")
 	}
 }
 

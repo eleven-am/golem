@@ -49,6 +49,11 @@ type PlanInput struct {
 	Retry     RetryClass
 	Bounds    StatementBounds
 	FactCodec *FactCodecRequirement
+	// SemanticIndexed is the compiler decision that writes to this model must
+	// be recorded for semantic re-embedding. It is derived from the registry,
+	// never from the operation list, so a write to an indexed model is always
+	// marked whether or not an indexed field changed.
+	SemanticIndexed bool
 }
 
 type Plan struct {
@@ -59,6 +64,7 @@ type Plan struct {
 	retry     RetryClass
 	bounds    StatementBounds
 	factCodec *FactCodecRequirement
+	semantic  bool
 }
 
 func NewPlan(input PlanInput) (Plan, error) {
@@ -66,7 +72,7 @@ func NewPlan(input PlanInput) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	result := Plan{stance: input.Stance, graph: input.Graph.clone(), result: input.Result.clone(), providers: providers, retry: input.Retry, bounds: input.Bounds}
+	result := Plan{stance: input.Stance, graph: input.Graph.clone(), result: input.Result.clone(), providers: providers, retry: input.Retry, bounds: input.Bounds, semantic: input.SemanticIndexed}
 	if result.result.model == (policyir.ModelID{}) {
 		if root, ok := result.graph.Root(); ok {
 			result.result = emptyImage(root.model)
@@ -96,7 +102,8 @@ func (plan Plan) FactCodecRequirement() (FactCodecRequirement, bool) {
 	}
 	return *plan.factCodec, true
 }
-func (plan Plan) Validate() error { return plan.validate() }
+func (plan Plan) SemanticIndexed() bool { return plan.semantic }
+func (plan Plan) Validate() error       { return plan.validate() }
 
 func (plan Plan) validate() error {
 	if plan.stance != Caller && plan.stance != System {

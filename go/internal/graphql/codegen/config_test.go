@@ -39,13 +39,33 @@ func TestRenderSemanticSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(bindings) != 1 {
+	if len(bindings) != 2 {
 		t.Fatalf("semantic bindings = %#v", bindings)
 	}
-	for _, fragment := range []string{"*Caller[P]", "Take *int32", "Where *golem.Predicate[Record]", "args.Take == nil", "caller.Records.SearchContent", "ranked[index].Row()", "GeneratedCustomPredicateArgument"} {
-		if !strings.Contains(bindings[0], fragment) {
-			t.Fatalf("semantic binding missing %q:\n%s", fragment, bindings[0])
+	var searchBinding, similarBinding string
+	for _, binding := range bindings {
+		switch {
+		case strings.Contains(binding, "caller.Records.SearchContent"):
+			searchBinding = binding
+		case strings.Contains(binding, "caller.Records.SimilarContent"):
+			similarBinding = binding
 		}
+	}
+	if searchBinding == "" || similarBinding == "" {
+		t.Fatalf("semantic bindings = %#v", bindings)
+	}
+	for _, fragment := range []string{"*Caller[P]", "Query string", "Take *int32", "Where *golem.Predicate[Record]", "args.Take == nil", "[]golem.SemanticResult[Record]", "return caller.Records.SearchContent", "GeneratedCustomPredicateArgument"} {
+		if !strings.Contains(searchBinding, fragment) {
+			t.Fatalf("semantic search binding missing %q:\n%s", fragment, searchBinding)
+		}
+	}
+	for _, fragment := range []string{"*Caller[P]", "Source golem.UniqueSelectorValue[Record]", "Take *int32", "Where *golem.Predicate[Record]", "[]golem.SemanticResult[Record]", "return caller.Records.SimilarContent(ctx, args.Source, take, where...)", "GeneratedCustomSelectorArgument"} {
+		if !strings.Contains(similarBinding, fragment) {
+			t.Fatalf("semantic similar binding missing %q:\n%s", fragment, similarBinding)
+		}
+	}
+	if strings.Contains(similarBinding, "Query string") {
+		t.Fatalf("similar binding retained the search query argument:\n%s", similarBinding)
 	}
 }
 

@@ -164,14 +164,6 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if stance == mutationir.Caller {
 		planning.Hooks = mutationHookInventory(app.bindings, golem.ModelID(request.model))
 	}
-	modelFact, _ := app.registry.Model(golem.ModelID(request.model))
-	if modelFact.SubscriptionsEnabled() {
-		factCodec, eventSchema, _, err := mutationEventSchema(app.registry, request.model)
-		if err != nil {
-			return preparedRuntimeUpsert{}, err
-		}
-		planning.CaptureFacts, planning.FactCodec, planning.EventSchema = true, &factCodec, eventSchema
-	}
 	plan, err := mutationplan.BuildRoot(planning)
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
@@ -267,6 +259,7 @@ func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, 
 	branch, err := mutationir.NewPlan(mutationir.PlanInput{
 		Stance: parent.Stance(), Graph: graph, Result: parent.ResultRequirements(),
 		Providers: parent.ProviderRequirements(), Retry: mutationir.NoRetry, Bounds: parent.Bounds(),
+		SemanticIndexed: parent.SemanticIndexed(),
 		FactCodec: func() *mutationir.FactCodecRequirement {
 			codec, ok := parent.FactCodecRequirement()
 			if !ok {

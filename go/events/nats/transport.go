@@ -212,8 +212,17 @@ func (dialer *initialDialer) finish() {
 // Open proves that the supplied provider handle is PostgreSQL before it
 // validates or dials any NATS endpoint.
 func Open(ctx context.Context, database *provider.Database, config Config) (*Transport, error) {
-	if ctx == nil || database == nil || database.Provider() != golem.PostgreSQL || database.UnsafeSQLX() == nil {
-		return nil, events.Failure(events.CodeEventConfig)
+	if ctx == nil {
+		return nil, events.Failf(events.CodeEventConfig, "context must not be nil")
+	}
+	if database == nil {
+		return nil, events.Failf(events.CodeEventConfig, "database must not be nil")
+	}
+	if database.Provider() != golem.PostgreSQL {
+		return nil, events.Failf(events.CodeEventConfig, "database provider must be PostgreSQL")
+	}
+	if database.UnsafeSQLX() == nil {
+		return nil, events.Failf(events.CodeEventConfig, "database SQL handle is unavailable")
 	}
 	normalized, err := normalizeConfig(config)
 	if err != nil {
@@ -234,7 +243,7 @@ func Open(ctx context.Context, database *provider.Database, config Config) (*Tra
 	}
 	if client.MaxPayload() < int64(normalized.MaxInboundPayloadBytes) {
 		transport.abortOpen(client)
-		return nil, events.Failure(events.CodeEventConfig)
+		return nil, payloadCeilingFailure(client.MaxPayload(), normalized.MaxInboundPayloadBytes)
 	}
 	if !transport.installConnectedClient(coreConnection{connection: client}) {
 		client.Close()
@@ -310,10 +319,20 @@ func boundedConnectTimeout(ctx context.Context, configured time.Duration, server
 	return perServer, true
 }
 
+func payloadCeilingFailure(negotiated int64, configured int) error {
+	return events.Failf(events.CodeEventConfig, "MaxInboundPayloadBytes must not exceed the negotiated maximum payload of %d bytes, got %d", negotiated, configured)
+}
+
 func newTransportForTest(config Config, client connection) (*Transport, error) {
 	normalized, err := normalizeConfig(config)
-	if err != nil || client == nil || !client.IsConnected() || client.MaxPayload() < int64(normalized.MaxInboundPayloadBytes) {
+	if err != nil {
+		return nil, err
+	}
+	if client == nil || !client.IsConnected() {
 		return nil, events.Failure(events.CodeEventConfig)
+	}
+	if client.MaxPayload() < int64(normalized.MaxInboundPayloadBytes) {
+		return nil, payloadCeilingFailure(client.MaxPayload(), normalized.MaxInboundPayloadBytes)
 	}
 	transport := &Transport{config: normalized, client: client, streams: make(map[*stream]struct{})}
 	transport.available.Store(true)
@@ -340,12 +359,18 @@ func (transport *Transport) MaxEncodedEventBytes() int {
 }
 
 func (transport *Transport) BindEventRuntime(binding events.RuntimeBinding) error {
-	if transport == nil || binding == nil {
+	if transport == nil {
 		return events.Failure(events.CodeEventConfig)
+	}
+	if binding == nil {
+		return events.Failf(events.CodeEventConfig, "binding must not be nil")
 	}
 	transport.mu.Lock()
 	defer transport.mu.Unlock()
-	if transport.bound || transport.closed {
+	if transport.bound {
+		return events.Failf(events.CodeEventConfig, "a RuntimeBinding is already installed")
+	}
+	if transport.closed {
 		return events.Failure(events.CodeEventConfig)
 	}
 	transport.binding = binding

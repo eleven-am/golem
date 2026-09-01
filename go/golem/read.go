@@ -59,10 +59,12 @@ func (cell RuntimeReadCell) FieldID() FieldID { return cell.field }
 // before a generated model type is known. It remains model-ID checked when a
 // generated accessor turns it into Row[M].
 type RuntimeModelRow struct {
-	model       ModelID
-	cells       map[FieldID]readCell
-	counts      map[relationCountKey]readCell
-	occurrences map[runtimeOccurrenceKey]readCell
+	model             ModelID
+	cells             map[FieldID]readCell
+	counts            map[relationCountKey]readCell
+	occurrences       map[runtimeOccurrenceKey]readCell
+	semanticIdentity  RuntimeSemanticIdentityToken
+	semanticTransport *RuntimeSemanticRow
 	// cdcExact is set only by RuntimeCDCModelRow. Ordinary public/authorized
 	// rows deliberately cannot be reinterpreted as exact database images:
 	// ReadNull intentionally conflates stored NULL with authorization masking.
@@ -339,7 +341,15 @@ func cloneOccurrences(values map[runtimeOccurrenceKey]readCell) map[runtimeOccur
 }
 
 func cloneRuntimeModelRow(row RuntimeModelRow) RuntimeModelRow {
-	return RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), cdcExact: row.cdcExact}
+	result := RuntimeModelRow{model: row.model, cells: cloneReadCells(row.cells), counts: cloneReadCounts(row.counts), occurrences: cloneOccurrences(row.occurrences), semanticIdentity: row.semanticIdentity, cdcExact: row.cdcExact}
+	if row.semanticTransport != nil {
+		transport := *row.semanticTransport
+		transport.row = cloneRuntimeModelRow(transport.row)
+		transport.identity = cloneFrozenPredicate(transport.identity)
+		transport.identityFields = append([]FieldID(nil), transport.identityFields...)
+		result.semanticTransport = &transport
+	}
+	return result
 }
 
 func cloneRuntimeModelRows(rows []RuntimeModelRow) []RuntimeModelRow {
@@ -1151,18 +1161,19 @@ func (selection FrozenReadSelection) Request() (FrozenReadRequest, bool) {
 // FrozenReadRequest is a schema-agnostic immutable read request. The P3 binder
 // validates every identity against the active fingerprinted schema.
 type FrozenReadRequest struct {
-	operation  ReadOperation
-	model      ModelID
-	where      *FrozenPredicate
-	orders     []FrozenReadOrder
-	take       *int
-	skip       *int
-	distinct   []FieldID
-	selection  []FrozenReadSelection
-	projection ReadProjectionMode
-	omit       []FieldID
-	selector   *FrozenUniqueSelector
-	cursor     *FrozenReadCursor
+	operation        ReadOperation
+	model            ModelID
+	where            *FrozenPredicate
+	orders           []FrozenReadOrder
+	take             *int
+	skip             *int
+	distinct         []FieldID
+	selection        []FrozenReadSelection
+	projection       ReadProjectionMode
+	omit             []FieldID
+	selector         *FrozenUniqueSelector
+	cursor           *FrozenReadCursor
+	semanticIdentity []FieldID
 }
 
 type FrozenUniqueSelector struct {
@@ -1248,6 +1259,7 @@ func (request FrozenReadRequest) clone() FrozenReadRequest {
 	result.distinct = request.Distinct()
 	result.selection = request.Selection()
 	result.omit = request.Omitted()
+	result.semanticIdentity = append([]FieldID(nil), request.semanticIdentity...)
 	if request.take != nil {
 		value := *request.take
 		result.take = &value

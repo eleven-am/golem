@@ -124,6 +124,51 @@ func TestNewRejectsPayloadThatCannotRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRegistryCloneIsIndependentAndKeepsResolvedHandlers(t *testing.T) {
+	source := queue.NewRegistry()
+	seen := ""
+	if _, err := queue.Register(source, queue.Definition[payload]{
+		Type: "clone.first", MaxAttempts: 7, Timeout: time.Minute, MaxConcurrent: 2,
+		Backoff: queue.Backoff{Base: time.Second, Cap: time.Minute},
+		Handle: func(_ context.Context, job queue.Job[payload]) error {
+			seen = job.Payload.Address
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := queue.Register(source, queue.Definition[payload]{Type: "clone.second", Handle: handler}); err != nil {
+		t.Fatal(err)
+	}
+	clone := source.Clone()
+	registrations := clone.Registrations()
+	if len(registrations) != 2 || registrations[0].Type != "clone.first" || registrations[1].Type != "clone.second" {
+		t.Fatalf("cloned registrations=%#v", registrations)
+	}
+	first := registrations[0]
+	if first.MaxAttempts != 7 || first.Timeout != time.Minute || first.MaxConcurrent != 2 || first.Backoff != (queue.Backoff{Base: time.Second, Cap: time.Minute}) {
+		t.Fatalf("cloned resolved registration=%#v", first)
+	}
+	if err := first.Handle(context.Background(), []byte(`{"address":"clone@example.test"}`), queue.Meta{ID: "clone-job"}); err != nil {
+		t.Fatal(err)
+	}
+	if seen != "clone@example.test" {
+		t.Fatalf("cloned handler observed %q", seen)
+	}
+	if _, err := queue.Register(clone, queue.Definition[payload]{Type: "clone.only", Handle: handler}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := source.Lookup("clone.only"); found {
+		t.Fatal("clone registration mutated source")
+	}
+	if _, err := queue.Register(source, queue.Definition[payload]{Type: "source.only", Handle: handler}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found := clone.Lookup("source.only"); found {
+		t.Fatal("source registration mutated clone")
+	}
+}
+
 func TestPendingRefusesOversizedPayload(t *testing.T) {
 	registry := queue.NewRegistry()
 	jobType, err := queue.Register(registry, queue.Definition[payload]{Type: "email.welcome", Handle: handler})

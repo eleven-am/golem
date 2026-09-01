@@ -25,7 +25,15 @@ func semanticSchema(t *testing.T, dimensions uint16) physical.PhysicalSchema {
 	if err != nil {
 		t.Fatal(err)
 	}
-	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "semantic-post-related", Provider: ir.SQLite, Kind: semanticcontract.IndexKind, Version: 1, Owner: "post", Payload: payload})
+	owner := physical.PhysicalTable{
+		ID: "post", Name: "posts",
+		Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "title", Name: "title", Ordinal: 1, Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+		},
+		PrimaryKey: &physical.PhysicalKey{ID: "post-primary", Name: "pk_posts", Columns: []ir.FieldID{"id"}},
+	}
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "semantic-post-related", Provider: ir.SQLite, Kind: semanticcontract.IndexKind, Version: 1, Owner: "post", Payload: payload}, owner)
 	if err != nil {
 		t.Fatal(err)
 	}

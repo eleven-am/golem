@@ -34,20 +34,79 @@ type Limits struct {
 	MaxGroups                                                                              int
 }
 
-var defaultLimits = Limits{1 << 20, 512 << 10, 16_384, 8_192, 64, 12, 256, 128, 16, 8_192, 1_000, 10_000, 500, 64, 256, 10_000}
-var hardLimits = Limits{8 << 20, 4 << 20, 65_536, 32_768, 256, 32, 2_048, 1_024, 32, 32_768, 10_000, 100_000, 1_000, 256, 4_096, 10_000}
+var defaultLimits = Limits{
+	MaxRequestBytes:        1 << 20,
+	MaxVariableBytes:       512 << 10,
+	MaxTokens:              16_384,
+	MaxASTNodes:            8_192,
+	MaxFragments:           64,
+	MaxDepth:               12,
+	MaxSelectedFields:      256,
+	MaxAliases:             128,
+	MaxInputDepth:          16,
+	MaxInputNodes:          8_192,
+	MaxListItems:           1_000,
+	MaxComplexity:          10_000,
+	MaxPageSize:            500,
+	MaxResolverConcurrency: 64,
+	MaxComputedBatchSize:   256,
+	MaxGroups:              10_000,
+}
+
+var hardLimits = Limits{
+	MaxRequestBytes:        8 << 20,
+	MaxVariableBytes:       4 << 20,
+	MaxTokens:              65_536,
+	MaxASTNodes:            32_768,
+	MaxFragments:           256,
+	MaxDepth:               32,
+	MaxSelectedFields:      2_048,
+	MaxAliases:             1_024,
+	MaxInputDepth:          32,
+	MaxInputNodes:          32_768,
+	MaxListItems:           10_000,
+	MaxComplexity:          100_000,
+	MaxPageSize:            1_000,
+	MaxResolverConcurrency: 256,
+	MaxComputedBatchSize:   4_096,
+	MaxGroups:              10_000,
+}
+
+type limitBound struct {
+	name  string
+	field func(*Limits) *int
+}
+
+var limitBounds = []limitBound{
+	{"MaxRequestBytes", func(limits *Limits) *int { return &limits.MaxRequestBytes }},
+	{"MaxVariableBytes", func(limits *Limits) *int { return &limits.MaxVariableBytes }},
+	{"MaxTokens", func(limits *Limits) *int { return &limits.MaxTokens }},
+	{"MaxASTNodes", func(limits *Limits) *int { return &limits.MaxASTNodes }},
+	{"MaxFragments", func(limits *Limits) *int { return &limits.MaxFragments }},
+	{"MaxDepth", func(limits *Limits) *int { return &limits.MaxDepth }},
+	{"MaxSelectedFields", func(limits *Limits) *int { return &limits.MaxSelectedFields }},
+	{"MaxAliases", func(limits *Limits) *int { return &limits.MaxAliases }},
+	{"MaxInputDepth", func(limits *Limits) *int { return &limits.MaxInputDepth }},
+	{"MaxInputNodes", func(limits *Limits) *int { return &limits.MaxInputNodes }},
+	{"MaxListItems", func(limits *Limits) *int { return &limits.MaxListItems }},
+	{"MaxComplexity", func(limits *Limits) *int { return &limits.MaxComplexity }},
+	{"MaxPageSize", func(limits *Limits) *int { return &limits.MaxPageSize }},
+	{"MaxResolverConcurrency", func(limits *Limits) *int { return &limits.MaxResolverConcurrency }},
+	{"MaxComputedBatchSize", func(limits *Limits) *int { return &limits.MaxComputedBatchSize }},
+	{"MaxGroups", func(limits *Limits) *int { return &limits.MaxGroups }},
+}
 
 func NormalizeLimits(input Limits) (Limits, error) {
 	result := input
-	values := []*int{&result.MaxRequestBytes, &result.MaxVariableBytes, &result.MaxTokens, &result.MaxASTNodes, &result.MaxFragments, &result.MaxDepth, &result.MaxSelectedFields, &result.MaxAliases, &result.MaxInputDepth, &result.MaxInputNodes, &result.MaxListItems, &result.MaxComplexity, &result.MaxPageSize, &result.MaxResolverConcurrency, &result.MaxComputedBatchSize, &result.MaxGroups}
-	defaults := []int{defaultLimits.MaxRequestBytes, defaultLimits.MaxVariableBytes, defaultLimits.MaxTokens, defaultLimits.MaxASTNodes, defaultLimits.MaxFragments, defaultLimits.MaxDepth, defaultLimits.MaxSelectedFields, defaultLimits.MaxAliases, defaultLimits.MaxInputDepth, defaultLimits.MaxInputNodes, defaultLimits.MaxListItems, defaultLimits.MaxComplexity, defaultLimits.MaxPageSize, defaultLimits.MaxResolverConcurrency, defaultLimits.MaxComputedBatchSize, defaultLimits.MaxGroups}
-	maximums := []int{hardLimits.MaxRequestBytes, hardLimits.MaxVariableBytes, hardLimits.MaxTokens, hardLimits.MaxASTNodes, hardLimits.MaxFragments, hardLimits.MaxDepth, hardLimits.MaxSelectedFields, hardLimits.MaxAliases, hardLimits.MaxInputDepth, hardLimits.MaxInputNodes, hardLimits.MaxListItems, hardLimits.MaxComplexity, hardLimits.MaxPageSize, hardLimits.MaxResolverConcurrency, hardLimits.MaxComputedBatchSize, hardLimits.MaxGroups}
-	for index, value := range values {
+	defaults, maximums := defaultLimits, hardLimits
+	for _, bound := range limitBounds {
+		value := bound.field(&result)
+		maximum := *bound.field(&maximums)
 		if *value == 0 {
-			*value = defaults[index]
+			*value = *bound.field(&defaults)
 		}
-		if *value < 1 || *value > maximums[index] {
-			return Limits{}, fmt.Errorf("GraphQL limit %d is outside the portable range 1..%d", index, maximums[index])
+		if *value < 1 || *value > maximum {
+			return Limits{}, fmt.Errorf("GraphQL limit %s is %d, outside the portable range 1..%d", bound.name, *value, maximum)
 		}
 	}
 	return result, nil

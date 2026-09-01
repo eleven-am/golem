@@ -32,7 +32,13 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	if err != nil {
 		return queue.Fail(queue.CodeConfigInvalid, "durable job storage is unavailable: %v", err)
 	}
-	worker, err := queueworker.New(store, config.Registry, config.Limits, app.eventProvider, app.observer, config.Resources...)
+	registry := config.Registry.Clone()
+	if len(app.semantic.IndexRefs()) > 0 {
+		if err := app.registerSemanticJobs(registry); err != nil {
+			return err
+		}
+	}
+	worker, err := queueworker.New(store, registry, config.Limits, app.eventProvider, app.observer, config.Resources...)
 	if err != nil {
 		return err
 	}
@@ -97,12 +103,12 @@ func (app *App[P, A]) QueueOperator() queue.Operator {
 // Enqueue durably records one job on the application's connection pool and
 // nudges an idle in-process worker.
 func (app *App[P, A]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
-	identity, err := app.enqueueOn(ctx, nil, pending)
+	stored, err := app.enqueueOn(ctx, nil, pending)
 	if err != nil {
 		return "", err
 	}
 	app.queueWorker.Wake()
-	return identity, nil
+	return queue.JobID(stored.ID), nil
 }
 
 // CallerTxEnqueue records one job on the caller transaction's executor, so the
@@ -131,28 +137,28 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 	if err != nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")
 	}
-	identity, err := app.enqueueOn(ctx, executor, pending)
+	stored, err := app.enqueueOn(ctx, executor, pending)
 	if err != nil {
 		return "", err
 	}
 	binding.queueEnqueued(app.queueWorker.Wake)
-	return identity, nil
+	return queue.JobID(stored.ID), nil
 }
 
-func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Executor, pending queue.Pending) (queue.JobID, error) {
+func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Executor, pending queue.Pending) (queueprovider.EnqueueResult, error) {
 	if app == nil || ctx == nil || app.queueStore == nil {
-		return "", queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
+		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
 	}
 	if pending.TypeName() == "" {
-		return "", queue.Fail(queue.CodePayloadInvalid, "pending job was not constructed by a registered type")
+		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodePayloadInvalid, "pending job was not constructed by a registered type")
 	}
 	payload := pending.Payload()
 	if len(payload) > app.queueLimits.MaxPayloadBytes {
-		return "", queue.Fail(queue.CodePayloadInvalid, "job type %q payload is %d bytes, above %d", pending.TypeName(), len(payload), app.queueLimits.MaxPayloadBytes)
+		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodePayloadInvalid, "job type %q payload is %d bytes, above %d", pending.TypeName(), len(payload), app.queueLimits.MaxPayloadBytes)
 	}
 	identity, err := queueprovider.NewIdentifier()
 	if err != nil {
-		return "", queue.Fail(queue.CodeStoreFailure, "job identity: %v", err)
+		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodeStoreFailure, "job identity: %v", err)
 	}
 	stored, err := app.queueStore.Enqueue(ctx, executor, queueprovider.EnqueueRequest{
 		ID: identity, Type: pending.TypeName(), Payload: payload,
@@ -160,7 +166,7 @@ func (app *App[P, A]) enqueueOn(ctx context.Context, executor queueprovider.Exec
 		DedupeKey: pending.DedupeKey(), ExclusiveKey: pending.ExclusiveKey(),
 	})
 	if err != nil {
-		return "", queue.Fail(queue.CodeStoreFailure, "enqueue job type %q: %v", pending.TypeName(), err)
+		return queueprovider.EnqueueResult{}, queue.Fail(queue.CodeStoreFailure, "enqueue job type %q: %v", pending.TypeName(), err)
 	}
-	return queue.JobID(stored), nil
+	return stored, nil
 }

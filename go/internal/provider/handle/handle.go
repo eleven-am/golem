@@ -19,8 +19,6 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-const sqliteVerifiedPoolWidth = 4
-
 const (
 	postgreSQLDefaultMaximumOpen = 16
 	postgreSQLDefaultMaximumIdle = 4
@@ -278,7 +276,7 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 		"policy-scalar-list.v1",
 		"policy-relation.v1",
 		"analytics-exact.v1",
-	}, PoolStatus{maximumOpen: sqliteVerifiedPoolWidth, maximumIdle: sqliteVerifiedPoolWidth})
+	}, PoolStatus{maximumOpen: internalsqlite.VerifiedPoolWidth, maximumIdle: internalsqlite.VerifiedPoolWidth})
 	result.state.sqliteDataSourceName = dataSourceName
 	return result, nil
 }

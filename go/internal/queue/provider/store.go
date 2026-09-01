@@ -33,6 +33,7 @@ const (
 	MaximumPayloadBytes   = 1 << 20
 	MaximumKeyBytes       = 256
 	MaximumOperatorBatch  = 256
+	MaximumIdentityBytes  = 64
 	CodeAttemptsExhausted = "attempts_exhausted"
 	CodeCanceled          = "canceled"
 )
@@ -74,6 +75,15 @@ type EnqueueRequest struct {
 	Delay        time.Duration
 	DedupeKey    string
 	ExclusiveKey string
+}
+
+// EnqueueResult identifies the active job selected by an enqueue and whether
+// this request inserted it. State is the active row state observed while the
+// enqueue decision was serialized.
+type EnqueueResult struct {
+	ID       string
+	State    State
+	Inserted bool
 }
 
 // ClaimOptions bounds one claim. An empty Types list claims nothing, which is
@@ -202,7 +212,7 @@ type Executor interface {
 // mutate a row another worker now owns.
 type Store interface {
 	EnsureSchema(ctx context.Context) error
-	Enqueue(ctx context.Context, executor Executor, request EnqueueRequest) (string, error)
+	Enqueue(ctx context.Context, executor Executor, request EnqueueRequest) (EnqueueResult, error)
 	Claim(ctx context.Context, options ClaimOptions) ([]Record, error)
 	Renew(ctx context.Context, id, token string, duration time.Duration) (Renewal, error)
 	Succeed(ctx context.Context, id, token, code string) (bool, error)
@@ -222,8 +232,8 @@ type Store interface {
 }
 
 func ValidateEnqueue(request EnqueueRequest) error {
-	if request.ID == "" || len(request.ID) > 64 {
-		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job identity must be within 1..64 bytes")
+	if request.ID == "" || len(request.ID) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job identity must be within 1..%d bytes", MaximumIdentityBytes)
 	}
 	if !canonicalName.MatchString(request.Type) {
 		return fmt.Errorf("QUEUE_ENQUEUE_LIMIT: job type is not canonical")
@@ -311,12 +321,19 @@ func ValidateCode(code string) error {
 	return nil
 }
 
-func ValidateIdentity(id, token string) error {
-	if id == "" || len(id) > 64 {
-		return fmt.Errorf("QUEUE_IDENTITY: job identity must be within 1..64 bytes")
+func ValidateJobIdentity(id string) error {
+	if id == "" || len(id) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_IDENTITY: job identity must be within 1..%d bytes", MaximumIdentityBytes)
 	}
-	if token == "" || len(token) > 64 {
-		return fmt.Errorf("QUEUE_IDENTITY: lease token must be within 1..64 bytes")
+	return nil
+}
+
+func ValidateIdentity(id, token string) error {
+	if err := ValidateJobIdentity(id); err != nil {
+		return err
+	}
+	if token == "" || len(token) > MaximumIdentityBytes {
+		return fmt.Errorf("QUEUE_IDENTITY: lease token must be within 1..%d bytes", MaximumIdentityBytes)
 	}
 	return nil
 }

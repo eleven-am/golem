@@ -930,7 +930,7 @@ func cloneFailureTopics(value golem.List[string]) golem.List[string] {
 
 func testMigrationInterruption(t *testing.T, database *provider.Database, example string) {
 	t.Helper()
-	const reviewedSocialMigrationCount = 5
+	reviewedSocialMigrationCount := reviewedMigrationCount(t, example)
 	boundaries := []struct {
 		name      string
 		committed bool
@@ -994,6 +994,31 @@ func freshMigrationTarget(t *testing.T, database *provider.Database, index int) 
 		}
 	}
 	return parsed.String(), cleanup
+}
+
+func reviewedMigrationCount(t *testing.T, example string) int {
+	t.Helper()
+	directory := "postgresql"
+	if os.Getenv("P8_ORACLE_PROVIDER") == "sqlite" {
+		directory = "sqlite"
+	}
+	path := filepath.Join(example, "migrations", directory, "manifest.json")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest struct {
+		Entries []struct {
+			ID string `json:"id"`
+		} `json:"entries"`
+	}
+	if err := json.Unmarshal(raw, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manifest.Entries) == 0 {
+		t.Fatalf("reviewed manifest %s declares no migrations", path)
+	}
+	return len(manifest.Entries)
 }
 
 func migrationTargetState(t *testing.T, dsn string) (int, bool) {

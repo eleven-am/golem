@@ -35,7 +35,9 @@ const (
 
 const MaximumTransportIdentityBytes = 128
 
-var canonicalTransportIdentity = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+/\-]*$`)
+const canonicalTransportIdentityPattern = `^[A-Za-z0-9][A-Za-z0-9._+/\-]*$`
+
+var canonicalTransportIdentity = regexp.MustCompile(canonicalTransportIdentityPattern)
 
 type TransportCapabilities struct {
 	identity string
@@ -47,11 +49,17 @@ type TransportCapabilities struct {
 // by an EventTransport. Capabilities describe operational behavior only; they
 // do not grant access to a transport, decoder, database, or event payload.
 func NewTransportCapabilities(identity string, scope TransportScope, durable bool) (TransportCapabilities, error) {
-	if len(identity) == 0 || len(identity) > MaximumTransportIdentityBytes || !canonicalTransportIdentity.MatchString(identity) {
-		return TransportCapabilities{}, Failure(CodeEventConfig)
+	if len(identity) == 0 {
+		return TransportCapabilities{}, Failf(CodeEventConfig, "identity must not be empty")
+	}
+	if len(identity) > MaximumTransportIdentityBytes {
+		return TransportCapabilities{}, Failf(CodeEventConfig, "identity must not exceed %d bytes, got %d", MaximumTransportIdentityBytes, len(identity))
+	}
+	if !canonicalTransportIdentity.MatchString(identity) {
+		return TransportCapabilities{}, Failf(CodeEventConfig, "identity must match %s", canonicalTransportIdentityPattern)
 	}
 	if scope != TransportScopeProcessLocal && scope != TransportScopeCrossProcess {
-		return TransportCapabilities{}, Failure(CodeEventConfig)
+		return TransportCapabilities{}, Failf(CodeEventConfig, "scope must be \"process-local\" or \"cross-process\"")
 	}
 	return TransportCapabilities{identity: identity, scope: scope, durable: durable}, nil
 }
@@ -228,8 +236,14 @@ type RetentionResult struct {
 }
 
 func NewRetentionPolicy(olderThan time.Time, maxRows int) (RetentionPolicy, error) {
-	if olderThan.IsZero() || maxRows <= 0 || maxRows > maximumLimits.RetentionDeleteRows {
-		return RetentionPolicy{}, Failure(CodeEventConfig)
+	if olderThan.IsZero() {
+		return RetentionPolicy{}, Failf(CodeEventConfig, "OlderThan must not be the zero time")
+	}
+	if maxRows <= 0 {
+		return RetentionPolicy{}, Failf(CodeEventConfig, "MaxRows must be positive, got %d", maxRows)
+	}
+	if maxRows > maximumLimits.RetentionDeleteRows {
+		return RetentionPolicy{}, Failf(CodeEventConfig, "MaxRows must not exceed %d, got %d", maximumLimits.RetentionDeleteRows, maxRows)
 	}
 	return RetentionPolicy{olderThan: olderThan, maxRows: maxRows}, nil
 }
