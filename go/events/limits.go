@@ -120,8 +120,8 @@ func NormalizeLimits(input Limits) (Limits, error) {
 	if output.RetentionEvery < time.Minute {
 		return Limits{}, Failf(CodeEventConfig, "RetentionEvery must be at least 1m, got %s", output.RetentionEvery)
 	}
-	if output.WebSocketPongTimeout > output.WebSocketKeepAlive {
-		return Limits{}, Failf(CodeEventConfig, "WebSocketPongTimeout (%s) must not exceed WebSocketKeepAlive (%s)", output.WebSocketPongTimeout, output.WebSocketKeepAlive)
+	if output.WebSocketPongTimeout >= output.WebSocketKeepAlive {
+		return Limits{}, Failf(CodeEventConfig, "WebSocketPongTimeout (%s) must be below WebSocketKeepAlive (%s)", output.WebSocketPongTimeout, output.WebSocketKeepAlive)
 	}
 	return output, nil
 }
