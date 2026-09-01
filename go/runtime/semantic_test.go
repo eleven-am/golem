@@ -32,7 +32,7 @@ import (
 
 func TestSemanticRanksRemovedBeforeHydrationAreOmitted(t *testing.T) {
 	ranks := []semanticruntime.Rank{{Key: "foreign", Distance: 0}, {Key: "other-foreign", Distance: 1}}
-	result, err := assembleSemanticResults(ranks, map[string]golem.Row[struct{}]{})
+	result, err := assembleSemanticResults(ranks, map[string]semanticHydratedRow[struct{}]{})
 	if err != nil || len(result) != 0 {
 		t.Fatalf("removed ranks result=%#v error=%v", result, err)
 	}

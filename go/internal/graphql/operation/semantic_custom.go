@@ -8,7 +8,6 @@ import (
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	readir "github.com/eleven-am/golem/go/internal/read/ir"
-	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 )
 
@@ -17,8 +16,6 @@ type semanticCustomRoot struct {
 	publicModel    golem.ModelID
 	hydrate        bool
 	identityFields []golem.FieldID
-	identityNames  []string
-	identityTypes  []compilerir.LogicalTypeIR
 	selection      []readir.Selection
 }
 
@@ -101,8 +98,6 @@ func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationCon
 			return nil, fmt.Errorf("semantic search primary identity is unavailable")
 		}
 		result.identityFields = append(result.identityFields, public)
-		result.identityNames = append(result.identityNames, field.GraphQLName)
-		result.identityTypes = append(result.identityTypes, modelField.Scalar.Type)
 		policyField := policyir.FieldID(public)
 		if !selectedFields[policyField] {
 			selection, selectionErr := readir.NewScalarSelection(policyField)
@@ -118,18 +113,18 @@ func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationCon
 
 // SemanticCustomHydration retains ranked identities for bounded authorized reads.
 type SemanticCustomHydration struct {
-	model      policyir.ModelID
-	selection  []readir.Selection
-	conditions []policyir.Condition
-	order      []string
+	model     policyir.ModelID
+	selection []readir.Selection
+	rows      []golem.RuntimeSemanticRow
+	order     []golem.RuntimeSemanticIdentityToken
 }
 
 // Len reports the number of ranked identities awaiting hydration.
-func (hydration SemanticCustomHydration) Len() int { return len(hydration.conditions) }
+func (hydration SemanticCustomHydration) Len() int { return len(hydration.rows) }
 
 // Order returns the stable vector-ranked identity order.
-func (hydration SemanticCustomHydration) Order() []string {
-	return append([]string(nil), hydration.order...)
+func (hydration SemanticCustomHydration) Order() []golem.RuntimeSemanticIdentityToken {
+	return append([]golem.RuntimeSemanticIdentityToken(nil), hydration.order...)
 }
 
 // PrepareSemanticCustomHydration validates and retains identities for bounded reads.
@@ -144,78 +139,64 @@ func (c *Compiler) PrepareSemanticCustomHydration(root CustomRoot, value any) (S
 	if len(items) == 0 {
 		return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection}, true, nil
 	}
-	conditions := make([]policyir.Condition, len(items))
-	order := make([]string, len(items))
-	seen := make(map[string]bool, len(items))
+	rows := make([]golem.RuntimeSemanticRow, len(items))
+	order := make([]golem.RuntimeSemanticIdentityToken, len(items))
+	seen := make(map[golem.RuntimeSemanticIdentityToken]bool, len(items))
 	for index, item := range items {
-		row, ok := item.(golem.RuntimeModelRow)
-		if !ok || row.ModelID() != root.semantic.publicModel {
+		public, ok := item.(golem.RuntimeModelRow)
+		if !ok || public.ModelID() != root.semantic.publicModel {
 			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search result item %d is not the declared model", index)
 		}
-		values, key, err := semanticIdentity(row, root.semantic.identityFields)
-		if err != nil {
-			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search result item %d: %w", index, err)
+		row, ok := golem.RuntimeSemanticTransport(public)
+		if !ok {
+			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search result item %d has no retained identity", index)
 		}
-		if seen[key] {
+		token, fields := golem.RuntimeSemanticRowIdentity(row)
+		if token == (golem.RuntimeSemanticIdentityToken{}) || !sameSemanticFields(fields, root.semantic.identityFields) {
+			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search result item %d has no authoritative identity", index)
+		}
+		if seen[token] {
 			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search returned a duplicate identity")
 		}
-		seen[key], order[index] = true, key
-		where := make(map[string]any, len(values))
-		for component, name := range root.semantic.identityNames {
-			encoded, encodeErr := c.encodeLogical(root.semantic.identityTypes[component], values[component])
-			if encodeErr != nil {
-				return SemanticCustomHydration{}, true, fmt.Errorf("semantic search identity %d component %s: %w", index, name, encodeErr)
-			}
-			where[name] = map[string]any{"equals": encoded}
-		}
-		condition, bindErr := c.binder.MutationWhere(root.semantic.model, where)
-		if bindErr != nil {
-			return SemanticCustomHydration{}, true, fmt.Errorf("semantic search identity %d: %w", index, bindErr)
-		}
-		conditions[index] = condition
+		seen[token], order[index], rows[index] = true, token, row
 	}
-	return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection, conditions: conditions, order: order}, true, nil
+	return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection, rows: rows, order: order}, true, nil
 }
 
 // SemanticCustomHydrationRequest freezes one ranked identity slice.
 func (c *Compiler) SemanticCustomHydrationRequest(hydration SemanticCustomHydration, start, end int) (golem.FrozenReadRequest, error) {
-	if c == nil || start < 0 || end <= start || end > len(hydration.conditions) || hydration.model == (policyir.ModelID{}) {
+	if c == nil || start < 0 || end <= start || end > len(hydration.rows) || hydration.model == (policyir.ModelID{}) {
 		return golem.FrozenReadRequest{}, fmt.Errorf("semantic search hydration range is invalid")
 	}
-	conditions := hydration.conditions[start:end]
-	where := conditions[0]
-	if len(conditions) > 1 {
-		combined, err := policyir.NewLogical(hydration.model, policyir.LogicalOr, conditions)
-		if err != nil {
-			return golem.FrozenReadRequest{}, err
-		}
-		where = combined
-	}
-	take := len(conditions)
+	take := end - start
 	request, err := readir.NewRequest(readir.RequestInput{
-		Operation: readir.FindMany, Model: hydration.model, Where: &where,
+		Operation: readir.FindMany, Model: hydration.model,
 		Take: &take, Selection: hydration.selection, Projection: readir.ProjectionSelect,
 	})
 	if err != nil {
 		return golem.FrozenReadRequest{}, err
 	}
-	return c.freezeRequest(request)
+	base, err := c.freezeRequest(request)
+	if err != nil {
+		return golem.FrozenReadRequest{}, err
+	}
+	return golem.RuntimeSemanticHydrationRequest(base, hydration.rows[start:end])
 }
 
 // FinishSemanticCustomHydration restores vector rank after the provider read.
 // Concurrently removed or newly unauthorized rows are omitted.
-func (c *Compiler) FinishSemanticCustomHydration(root CustomRoot, order []string, rows []golem.RuntimeModelRow) (any, error) {
+func (c *Compiler) FinishSemanticCustomHydration(root CustomRoot, order []golem.RuntimeSemanticIdentityToken, rows []golem.RuntimeModelRow) (any, error) {
 	if c == nil || root.semantic == nil {
 		return nil, fmt.Errorf("semantic search hydration is unavailable")
 	}
-	byIdentity := make(map[string]golem.RuntimeModelRow, len(rows))
+	byIdentity := make(map[golem.RuntimeSemanticIdentityToken]golem.RuntimeModelRow, len(rows))
 	for index, row := range rows {
 		if row.ModelID() != root.semantic.publicModel {
 			return nil, fmt.Errorf("semantic search hydrated item %d is not the declared model", index)
 		}
-		_, key, err := semanticIdentity(row, root.semantic.identityFields)
-		if err != nil {
-			return nil, fmt.Errorf("semantic search hydrated item %d: %w", index, err)
+		key, present := golem.RuntimeSemanticHydratedIdentity(row)
+		if !present {
+			return nil, fmt.Errorf("semantic search hydrated item %d has no retained identity", index)
 		}
 		if _, duplicate := byIdentity[key]; duplicate {
 			return nil, fmt.Errorf("semantic search hydration returned a duplicate identity")
@@ -235,18 +216,16 @@ func (c *Compiler) FinishSemanticCustomHydration(root CustomRoot, order []string
 	return result, nil
 }
 
-func semanticIdentity(row golem.RuntimeModelRow, fields []golem.FieldID) ([]any, string, error) {
-	values := make([]any, len(fields))
-	for index, field := range fields {
-		cell := golem.RuntimeTransportField(row, field)
-		value, present := cell.Get()
-		if cell.State() != golem.ReadPresent || !present {
-			return nil, "", fmt.Errorf("authorized primary identity is unavailable")
-		}
-		values[index] = value
+func sameSemanticFields(left, right []golem.FieldID) bool {
+	if len(left) != len(right) {
+		return false
 	}
-	key, err := semantickey.Encode(values)
-	return values, key, err
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Compiler) modelByID(id compilerir.ModelID) (compilerir.ModelDeclIR, bool) {

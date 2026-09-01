@@ -148,9 +148,11 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	postFieldID, _ := publicFieldID(postModel.PrimaryKey.Fields[0])
 	firstIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 1)
 	secondIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 2)
-	firstRanked := runtimeRowForTest(t, postModelID, postFieldID, firstIdentity)
-	secondRanked := runtimeRowForTest(t, postModelID, postFieldID, secondIdentity)
-	if _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstRanked}); err != nil || active {
+	firstPublic := runtimeRowForTest(t, postModelID, postFieldID, firstIdentity)
+	secondPublic := runtimeRowForTest(t, postModelID, postFieldID, secondIdentity)
+	firstRanked := semanticRuntimeRowForTest(t, firstPublic, postFieldID, firstIdentity, "first")
+	secondRanked := semanticRuntimeRowForTest(t, secondPublic, postFieldID, secondIdentity, "second")
+	if _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstPublic}); err != nil || active {
 		t.Fatalf("scalar-only semantic search scheduled hydration: active=%t err=%v", active, err)
 	}
 	hydration, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{secondRanked, firstRanked})
@@ -178,13 +180,31 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	if !selectedRelation {
 		t.Fatal("semantic hydration request discarded the selected relation")
 	}
+	hiddenPublic, err := golem.RuntimeModelReadRow(postModelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hiddenRanked := semanticRuntimeRowForTest(t, hiddenPublic, postFieldID, firstIdentity, "hidden")
+	hiddenHydration, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{hiddenRanked})
+	if err != nil || !active {
+		t.Fatalf("private-identity semantic hydration active=%t err=%v", active, err)
+	}
+	hiddenRequest, err := compiler.SemanticCustomHydrationRequest(hiddenHydration, 0, 1)
+	if err != nil || len(golem.RuntimeSemanticIdentityFields(hiddenRequest)) != 1 {
+		t.Fatalf("private-identity semantic request fields=%d err=%v", len(golem.RuntimeSemanticIdentityFields(hiddenRequest)), err)
+	}
+	hiddenHydrated := golem.RuntimeModelRowWithSemanticIdentity(hiddenPublic, "hidden")
+	hiddenResult, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], hiddenHydration.Order(), []golem.RuntimeModelRow{hiddenHydrated})
+	if err != nil || len(hiddenResult.([]any)) != 1 {
+		t.Fatalf("private-identity semantic result=%#v err=%v", hiddenResult, err)
+	}
 
 	relationSlot := slotByFieldForTest(t, compiled.Custom[0].Slots, relationField.FieldID)
 	targetModelID := golemModelID(targetModel.ID)
 	targetFieldID, _ := publicFieldID(targetModel.PrimaryKey.Fields[0])
 	child := runtimeRowForTest(t, targetModelID, targetFieldID, semanticIdentityValue(t, generatedFieldByIDForTest(t, targetModel, targetModel.PrimaryKey.Fields[0]), 9))
-	firstHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child)
-	secondHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child)
+	firstHydrated := golem.RuntimeModelRowWithSemanticIdentity(runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child), "first")
+	secondHydrated := golem.RuntimeModelRowWithSemanticIdentity(runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child), "second")
 	hydrated, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], hydration.Order(), []golem.RuntimeModelRow{firstHydrated, secondHydrated})
 	if err != nil {
 		t.Fatal(err)
@@ -865,6 +885,46 @@ func semanticIdentityValue(t *testing.T, field compilerir.FieldIR, value byte) a
 		t.Fatalf("unsupported semantic identity type %s", field.Scalar.Type.Kind)
 		return nil
 	}
+}
+
+func semanticRuntimeRowForTest(t *testing.T, row golem.RuntimeModelRow, field golem.FieldID, identity any, key string) golem.RuntimeModelRow {
+	t.Helper()
+	kind := golem.FrozenValueKind(0)
+	switch identity.(type) {
+	case golem.UUID:
+		kind = golem.FrozenValueUUID
+	case string:
+		kind = golem.FrozenValueString
+	case int16:
+		kind = golem.FrozenValueInt16
+	case int32:
+		kind = golem.FrozenValueInt32
+	case int64:
+		kind = golem.FrozenValueInt64
+	default:
+		t.Fatalf("unsupported semantic identity value %T", identity)
+	}
+	predicate, err := golem.RuntimeFreezePredicate(row.ModelID(), golem.RuntimePredicateNode{
+		Kind: golem.FrozenConditionScalar, Operator: golem.FrozenOperatorEq, Mode: golem.FrozenComparisonSensitive, Field: field,
+		Operand: golem.RuntimePredicateOperand{Kind: golem.FrozenOperandOne, One: golem.RuntimePredicateValue{Kind: kind, Value: identity}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := golem.GeneratedModelDescriptor[struct{}](row.ModelID(), golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+	typed, err := golem.RuntimeTypedReadRow(descriptor, row)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := golem.RuntimeSemanticResultWithIdentity(typed, 0, predicate, []golem.FieldID{field}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport, err := golem.RuntimeSemanticRowFromResult(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transport
 }
 
 func runtimeRowForTest(t *testing.T, model golem.ModelID, field golem.FieldID, value any) golem.RuntimeModelRow {

@@ -36,8 +36,17 @@ import (
 type Post struct {
   _ struct{} §golem:"model;id=semantic.Post;table=posts"§
   ID golem.UUID §db:"id" golem:"id=semantic.Post.ID;pk"§
+  AuthorID golem.UUID §db:"author_id"§
   Title string §db:"title"§
   Body string §db:"body"§
+  Author *Author §db:"-" golem:"relation=belongs_to;fields=author_id;references=id"§
+}
+
+type Author struct {
+  _ struct{} §golem:"model;id=semantic.Author;table=authors"§
+  ID golem.UUID §db:"id" golem:"id=semantic.Author.ID;pk"§
+  Name string §db:"name"§
+  Posts []Post §db:"-" golem:"relation=has_many;fields=id;references=author_id"§
 }
 
 func (Post) GolemModel() golem.ModelSpec[Post] {
@@ -48,9 +57,13 @@ func (Post) DefinePolicy(rules *golem.Rules[Post], value actor.Actor) {
   if value.Denied { return }
   if value.Private {
     rules.CanRead(golem.All[Post]())
-    return
-  }
-  rules.CanRead(Posts.Title.StartsWith("public"))
+	} else {
+		rules.CanRead(Posts.Title.StartsWith("public"))
+	}
+}
+
+func (Author) DefinePolicy(rules *golem.Rules[Author], value actor.Actor) {
+  if !value.Denied { rules.CanRead(golem.All[Author]()) }
 }
 `, "§", "`")
 	writePipelineAcceptanceFile(t, root, "models/models.go", modelSource)
@@ -65,6 +78,7 @@ import (
 func DefineSchema(schema *golem.Schema) {
   golem.SchemaName(schema, "semantic_acceptance")
   golem.Actor[actor.Actor](schema)
+  golem.Model[models.Author](schema)
   golem.Model[models.Post](schema)
   golem.Providers(schema, golem.SQLite)
   golem.EmbeddingSpace(schema, "content", 3)
@@ -92,12 +106,15 @@ func DefineSchema(schema *golem.Schema) {
 		t.Fatal(err)
 	}
 	p8ApplyReviewedSQLiteHistory(t, context.Background(), database, reviewed.History)
+	if _, err := database.Exec(`INSERT INTO "authors" ("id","name") VALUES (?,?)`, "20000000-0000-0000-0000-000000000001", "Ada"); err != nil {
+		t.Fatal(err)
+	}
 	for _, row := range [][3]string{
 		{"10000000-0000-0000-0000-000000000001", "public alpha", "shared topic"},
 		{"10000000-0000-0000-0000-000000000002", "private alpha", "secret canary"},
 		{"10000000-0000-0000-0000-000000000003", "public beta", "other topic"},
 	} {
-		if _, err := database.Exec(`INSERT INTO "posts" ("id","title","body") VALUES (?,?,?)`, row[0], row[1], row[2]); err != nil {
+		if _, err := database.Exec(`INSERT INTO "posts" ("id","author_id","title","body") VALUES (?,?,?,?)`, row[0], "20000000-0000-0000-0000-000000000001", row[1], row[2]); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -360,17 +377,17 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 	ReportInternalError: func(context.Context, error) {},
   })
   if err != nil { t.Fatal(err) }
-  request := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 10) { title } }\"}"))
+  request := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 10) { title author { name } } }\"}"))
   request.Header.Set("Content-Type", "application/json")
   response := httptest.NewRecorder()
   server.Handler().ServeHTTP(response, request)
   if response.Code != 200 { t.Fatalf("semantic GraphQL status=%%d body=%%s", response.Code, response.Body.String()) }
   var envelope struct {
-    Data struct { Search []struct { Title string `+"`json:\"title\"`"+` } `+"`json:\"searchPostsByRelated\"`"+` } `+"`json:\"data\"`"+`
+    Data struct { Search []struct { Title string `+"`json:\"title\"`"+`; Author struct { Name string `+"`json:\"name\"`"+` } `+"`json:\"author\"`"+` } `+"`json:\"searchPostsByRelated\"`"+` } `+"`json:\"data\"`"+`
     Errors []json.RawMessage `+"`json:\"errors\"`"+`
   }
   if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil { t.Fatal(err) }
-  if len(envelope.Errors) != 0 || len(envelope.Data.Search) != 1 || envelope.Data.Search[0].Title != "public alpha" {
+  if len(envelope.Errors) != 0 || len(envelope.Data.Search) != 1 || envelope.Data.Search[0].Title != "public alpha" || envelope.Data.Search[0].Author.Name != "Ada" {
     t.Fatalf("semantic GraphQL response=%%s", response.Body.String())
   }
 
@@ -403,7 +420,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   // The similarity root is compiled and bound by different code than search:
   // its selector must decode into the same authorized unique read. Give the
   // source a neighbour so an empty page cannot pass for a working resolver.
-  if _, err := database.UnsafeSQLX().Exec("INSERT INTO \"posts\" (\"id\",\"title\",\"body\") VALUES ('10000000-0000-0000-0000-000000000004','public alpha twin','shared topic')"); err != nil { t.Fatal(err) }
+  if _, err := database.UnsafeSQLX().Exec("INSERT INTO \"posts\" (\"id\",\"author_id\",\"title\",\"body\") VALUES ('10000000-0000-0000-0000-000000000004','20000000-0000-0000-0000-000000000001','public alpha twin','shared topic')"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
