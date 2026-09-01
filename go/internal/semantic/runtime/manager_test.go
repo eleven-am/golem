@@ -1082,6 +1082,39 @@ func TestSemanticStaleRecordsStillRankOnTheirLastGoodVector(t *testing.T) {
 	}
 }
 
+func TestSemanticRankingUsesOnlyTheActiveEmbeddingSpace(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	betaKey, err := semantickey.Encode([]any{"b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fixture.db.Exec(`UPDATE "`+drainStateTable+`" SET space_fingerprint='old-space' WHERE record_key=?`, betaKey); err != nil {
+		t.Fatal(err)
+	}
+	ranked, err := fixture.manager.Query(ctx, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alphaKey, err := semantickey.Encode([]any{"a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranked) != 1 || ranked[0].Key != alphaKey {
+		t.Fatalf("mixed-space search=%#v", ranked)
+	}
+	if _, err := fixture.manager.QueryByKey(ctx, "post", "related", betaKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10); err == nil || err.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
+		t.Fatalf("old-space source error=%v", err)
+	}
+	similar, err := fixture.manager.QueryByKey(ctx, "post", "related", alphaKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(similar) != 0 {
+		t.Fatalf("mixed-space similarity=%#v", similar)
+	}
+}
+
 // TestSemanticReconcileFlipsMarkedRecordsAndSeesUnmarkedWrites is the division
 // of labour: reconciliation is the only thing that observes a write Golem never
 // saw, and it settles a mark that described no change for free.

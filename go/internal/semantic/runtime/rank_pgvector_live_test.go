@@ -2,7 +2,9 @@ package runtime
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strings"
@@ -78,8 +80,9 @@ func openPGVectorRankFixture(t *testing.T) pgvectorRankFixture {
 			Storage:  physical.PhysicalName(storage),
 			Identity: []semanticstorage.IdentityColumn{{Name: "id", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, NotNull: true}},
 		},
-		Provider:      &deterministicProvider{specification: specification},
-		Specification: specification,
+		Provider:         &deterministicProvider{specification: specification},
+		Specification:    specification,
+		SpaceFingerprint: sha256.Sum256([]byte(specification.FingerprintInput())),
 	}
 	manager := &Manager{
 		database: database, provider: ir.PostgreSQL,
@@ -100,7 +103,7 @@ func (fixture pgvectorRankFixture) seedRankRows(t *testing.T, count int, hidden 
 	if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","hidden") SELECT 'k'||lpad(value::text,6,'0'), 'k'||lpad(value::text,6,'0')=$1 FROM generate_series(0,$2) value`, hidden, count-1); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") SELECT 'k'||lpad(value::text,6,'0'), '\x01'::bytea, 'space-v1', 'ready', 1, 'k'||lpad(value::text,6,'0') FROM generate_series(0,$1) value`, count-1); err != nil {
+	if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") SELECT 'k'||lpad(value::text,6,'0'), '\x01'::bytea, $2, 'ready', 1, 'k'||lpad(value::text,6,'0') FROM generate_series(0,$1) value`, count-1, hex.EncodeToString(fixture.index.SpaceFingerprint[:])); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_vec" ("record_key","embedding") SELECT 'k'||lpad(value::text,6,'0'), ('[1,'||(($1-value)::double precision/20)||',0]')::vector FROM generate_series(0,$1) value`, count-1); err != nil {
@@ -187,6 +190,7 @@ func TestPGVectorRankIsExactAndNeverServedFromTheApproximateIndex(t *testing.T) 
 	candidates := authorizedRankCandidates()
 	statement := fixture.manager.rankStatement(fixture.index, candidates, false)
 	arguments := append([]any{"[1,0,0]"}, candidates.Args...)
+	arguments = append(arguments, hex.EncodeToString(fixture.index.SpaceFingerprint[:]))
 	arguments = append(arguments, 20)
 	rows, err := fixture.database.QueryxContext(ctx, "EXPLAIN (COSTS OFF) "+statement, arguments...)
 	if err != nil {
@@ -236,7 +240,7 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","hidden") VALUES ($1,false)`, key); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") VALUES ($1,'\x01'::bytea,'space-v1','ready',1,$1)`, key); err != nil {
+		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") VALUES ($1,'\x01'::bytea,$2,'ready',1,$1)`, key, hex.EncodeToString(fixture.index.SpaceFingerprint[:])); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"`+fixture.storage+`_vec" ("record_key","embedding") VALUES ($1,'[1,0,0]'::vector)`, key); err != nil {

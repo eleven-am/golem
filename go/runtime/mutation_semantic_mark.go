@@ -173,27 +173,35 @@ func semanticMarkValue(cell mutationdecode.Cell) (any, error) {
 	if !ok {
 		return nil, fmt.Errorf("P9_SEMANTIC_MARK: identity field %x has no exact value", cell.FieldID())
 	}
+	result, ok := semanticRecordKeyValue(value)
+	if !ok {
+		return nil, fmt.Errorf("P9_SEMANTIC_MARK: identity field %x has unsupported kind %d", cell.FieldID(), value.Kind())
+	}
+	return result, nil
+}
+
+func semanticRecordKeyValue(value policyir.Value) (any, bool) {
 	switch value.Kind() {
 	case policyir.ValueBool:
 		result, _ := value.Bool()
-		return result, nil
+		return result, true
 	case policyir.ValueInt16, policyir.ValueInt32, policyir.ValueInt64:
 		result, _ := value.Signed()
-		return result, nil
+		return result, true
 	case policyir.ValueString:
 		result, _ := value.Text()
-		return result, nil
+		return result, true
 	case policyir.ValueBytes:
 		result, _ := value.Bytes()
-		return result, nil
+		return result, true
 	case policyir.ValueUUID:
 		result, _ := value.UUID()
-		return result, nil
+		return result, true
 	case policyir.ValueDateTime:
 		seconds, nanos, _ := value.DateTime()
-		return time.Unix(seconds, int64(nanos)).UTC(), nil
+		return time.Unix(seconds, int64(nanos)).UTC(), true
 	default:
-		return nil, fmt.Errorf("P9_SEMANTIC_MARK: identity field %x has unsupported kind %d", cell.FieldID(), value.Kind())
+		return nil, false
 	}
 }
 

@@ -170,6 +170,46 @@ func TestSemanticHydrationKeysPrivateIdentityCells(t *testing.T) {
 	}
 }
 
+func TestSemanticRecordKeyValueCoversMutationIdentityKinds(t *testing.T) {
+	signed, err := policyir.SignedValue(policyir.ValueInt64, 42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text, err := policyir.StringValue("identity")
+	if err != nil {
+		t.Fatal(err)
+	}
+	instant, err := policyir.NewDateTimeValue(1_700_000_000, 123_456_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid := [16]byte{15: 1}
+	for _, test := range []struct {
+		name  string
+		value policyir.Value
+		want  any
+	}{
+		{name: "bool", value: policyir.BoolValue(true), want: true},
+		{name: "integer", value: signed, want: int64(42)},
+		{name: "string", value: text, want: "identity"},
+		{name: "bytes", value: policyir.BytesValue([]byte{1, 2, 3}), want: []byte{1, 2, 3}},
+		{name: "uuid", value: policyir.UUIDValue(uuid), want: uuid},
+		{name: "datetime", value: instant, want: time.Unix(1_700_000_000, 123_456_000).UTC()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := semanticRecordKeyValue(test.value)
+			if !ok {
+				t.Fatal("identity kind was rejected")
+			}
+			gotKey, gotErr := semantickey.Encode([]any{got})
+			wantKey, wantErr := semantickey.Encode([]any{test.want})
+			if gotErr != nil || wantErr != nil || gotKey != wantKey {
+				t.Fatalf("key=%q want=%q errors=%v/%v", gotKey, wantKey, gotErr, wantErr)
+			}
+		})
+	}
+}
+
 const semanticJobStateTable = "_golem_semantic_semantic-post-related_state"
 const semanticJobVectorTable = "_golem_semantic_semantic-post-related_vec"
 

@@ -313,21 +313,27 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 // sourceVector resolves a similarity source by its last stored vector, not by
 // its freshness. A record the write path has marked stale still ranks, and
 // still serves as a similarity source, on the vector it was last embedded
-// with; a record that has never been embedded simply has no row here.
+// with in the active embedding space; a record that has never been embedded in
+// that space simply has no row here.
 func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string) (any, error) {
-	statePlaceholder, vectorProjection := "?", "embedding"
+	vectorProjection := "golem_sv.embedding"
 	if manager.provider == ir.PostgreSQL {
-		statePlaceholder, vectorProjection = "$1", "embedding::text"
+		vectorProjection = "golem_sv.embedding::text"
 	}
-	statement := "SELECT " + vectorProjection + " FROM " + manager.hidden(index, "_vec") + " WHERE record_key=" + statePlaceholder
+	statement := "SELECT " + vectorProjection +
+		" FROM " + manager.hidden(index, "_vec") + " AS golem_sv" +
+		" JOIN " + manager.hidden(index, "_state") + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
+		" WHERE golem_sv.record_key=" + manager.placeholder(1) +
+		" AND golem_ss.space_fingerprint=" + manager.placeholder(2)
+	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	observeexec.RecordStatement(ctx)
 	if manager.provider == ir.SQLite {
 		var encoded []byte
-		err := manager.database.GetContext(ctx, &encoded, statement, sourceKey)
+		err := manager.database.GetContext(ctx, &encoded, statement, sourceKey, fingerprint)
 		return classifySourceVector(encoded, err)
 	}
 	var text string
-	err := manager.database.GetContext(ctx, &text, statement, sourceKey)
+	err := manager.database.GetContext(ctx, &text, statement, sourceKey, fingerprint)
 	return classifySourceVector(text, err)
 }
 
@@ -359,9 +365,10 @@ func (manager *Manager) rankVector(ctx context.Context, index Index, vector any,
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 	}
-	arguments := make([]any, 0, len(candidates.Args)+3)
+	arguments := make([]any, 0, len(candidates.Args)+4)
 	arguments = append(arguments, vector)
 	arguments = append(arguments, candidates.Args...)
+	arguments = append(arguments, hex.EncodeToString(index.SpaceFingerprint[:]))
 	if exclude != "" {
 		arguments = append(arguments, exclude)
 	}
@@ -376,7 +383,8 @@ func (manager *Manager) rankVector(ctx context.Context, index Index, vector any,
 }
 
 // rankStatement binds the query vector first, the authorized candidate
-// subquery next, then the optional excluded source key and the page size.
+// subquery next, then the active space, optional excluded source key, and page
+// size.
 func (manager *Manager) rankStatement(index Index, candidates Candidates, exclude bool) string {
 	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
 	identity := make([]string, len(index.Descriptor.Identity))
@@ -397,10 +405,11 @@ func (manager *Manager) rankStatement(index Index, candidates Candidates, exclud
 		" FROM " + vectors + " AS golem_sv" +
 		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
 		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
-	position := len(candidates.Args) + 1
+	position := len(candidates.Args) + 2
+	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position)
 	if exclude {
 		position++
-		statement += " WHERE golem_sv.record_key<>" + manager.placeholder(position)
+		statement += " AND golem_sv.record_key<>" + manager.placeholder(position)
 	}
 	return statement + " ORDER BY " + order + " LIMIT " + manager.placeholder(position+1)
 }

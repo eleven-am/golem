@@ -42,7 +42,7 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "search", indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -71,7 +71,7 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "similar", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -88,7 +88,7 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, "search", indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -113,7 +113,7 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, "similar", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -348,14 +348,8 @@ func semanticHydrationRecordKey(values map[policyir.FieldID]readdecode.Cell, fie
 		if !ok {
 			return "", fmt.Errorf("semantic hydration identity field %x is unavailable", field)
 		}
-		switch value.Kind() {
-		case policyir.ValueInt16, policyir.ValueInt32, policyir.ValueInt64:
-			identity[index], _ = value.Signed()
-		case policyir.ValueString:
-			identity[index], _ = value.Text()
-		case policyir.ValueUUID:
-			identity[index], _ = value.UUID()
-		default:
+		identity[index], ok = semanticRecordKeyValue(value)
+		if !ok {
 			return "", fmt.Errorf("semantic hydration identity field %x has unsupported kind %d", field, value.Kind())
 		}
 	}
