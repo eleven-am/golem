@@ -2,6 +2,7 @@ package sql
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -43,6 +44,20 @@ func TestConfiguredStatementBoundsAcceptExactBoundaryAndRefuseOverflow(t *testin
 	}
 	if err := ValidateStatementComplexity(model, "x AS y AS z AS q", 20, 2); err == nil {
 		t.Fatal("configured alias overflow accepted")
+	}
+}
+
+func TestStatementCapacityExceededRecognizesWrappedBindAndByteLimits(t *testing.T) {
+	model := policyir.ModelID{3}
+	parameter := enforceStatementParameterLimitWith(model, []any{1, 2}, 1)
+	bytes := ValidateStatementComplexity(model, "xx", 1, MaxStatementAliases)
+	for _, err := range []error{parameter, bytes, fmt.Errorf("wrapped: %w", parameter)} {
+		if !StatementCapacityExceeded(err) {
+			t.Fatalf("capacity error was not recognized: %v", err)
+		}
+	}
+	if StatementCapacityExceeded(errors.New("render failed")) {
+		t.Fatal("unrelated error was classified as capacity")
 	}
 }
 

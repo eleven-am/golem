@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"errors"
 	"strings"
 
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -47,4 +48,13 @@ func ValidateStatementComplexity(model policyir.ModelID, statement string, maxim
 		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral alias ceiling", nil)
 	}
 	return nil
+}
+
+// StatementCapacityExceeded reports whether a rendered read exceeded a bind or byte ceiling.
+func StatementCapacityExceeded(err error) bool {
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodeRender {
+		return false
+	}
+	return failure.Detail == "read statement exceeds the provider-neutral parameter ceiling" || failure.Detail == "read statement exceeds the provider-neutral byte ceiling"
 }

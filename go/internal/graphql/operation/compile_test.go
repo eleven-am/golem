@@ -150,15 +150,26 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	secondIdentity := semanticIdentityValue(t, generatedFieldByIDForTest(t, postModel, postModel.PrimaryKey.Fields[0]), 2)
 	firstRanked := runtimeRowForTest(t, postModelID, postFieldID, firstIdentity)
 	secondRanked := runtimeRowForTest(t, postModelID, postFieldID, secondIdentity)
-	if _, _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstRanked}); err != nil || active {
+	if _, active, err := limitCompiler.PrepareSemanticCustomHydration(limited.Custom[0], []any{firstRanked}); err != nil || active {
 		t.Fatalf("scalar-only semantic search scheduled hydration: active=%t err=%v", active, err)
 	}
-	request, order, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{secondRanked, firstRanked})
+	hydration, active, err := compiler.PrepareSemanticCustomHydration(compiled.Custom[0], []any{secondRanked, firstRanked})
 	if err != nil || !active {
 		t.Fatalf("prepare semantic hydration active=%t err=%v", active, err)
 	}
+	request, err := compiler.SemanticCustomHydrationRequest(hydration, 0, hydration.Len())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if take, ok := request.Take(); !ok || take != 2 || len(request.Selection()) < 2 {
 		t.Fatalf("semantic hydration request take/selection = %d/%t/%d", take, ok, len(request.Selection()))
+	}
+	sliced, err := compiler.SemanticCustomHydrationRequest(hydration, 1, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if take, ok := sliced.Take(); !ok || take != 1 {
+		t.Fatalf("semantic hydration slice take = %d/%t", take, ok)
 	}
 	selectedRelation := false
 	for _, selection := range request.Selection() {
@@ -174,7 +185,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	child := runtimeRowForTest(t, targetModelID, targetFieldID, semanticIdentityValue(t, generatedFieldByIDForTest(t, targetModel, targetModel.PrimaryKey.Fields[0]), 9))
 	firstHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, firstIdentity, relationField.FieldID, relationSlot, relation, child)
 	secondHydrated := runtimeRelationRowForTest(t, postModelID, postFieldID, secondIdentity, relationField.FieldID, relationSlot, relation, child)
-	hydrated, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], order, []golem.RuntimeModelRow{firstHydrated, secondHydrated})
+	hydrated, err := compiler.FinishSemanticCustomHydration(compiled.Custom[0], hydration.Order(), []golem.RuntimeModelRow{firstHydrated, secondHydrated})
 	if err != nil {
 		t.Fatal(err)
 	}

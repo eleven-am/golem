@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/embedding"
@@ -337,13 +336,8 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 	return result, nil
 }
 
-func semanticStatementExceedsByteLimit(err error) bool {
-	var failure *readsql.Error
-	return errors.As(err, &failure) && failure.Code == readsql.CodeRender && failure.Detail == "read statement exceeds the provider-neutral byte ceiling"
-}
-
 func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {
-	if end-start <= 1 || !semanticStatementExceedsByteLimit(err) {
+	if end-start <= 1 || !readsql.StatementCapacityExceeded(err) {
 		return end, false
 	}
 	return start + (end-start)/2, true
