@@ -4,6 +4,7 @@
 package key
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"reflect"
@@ -12,12 +13,15 @@ import (
 	"time"
 )
 
+const maximumInlineBytes = 512
+const keyPrefix = "golem-semantic-key:v1"
+
 func Encode(values []any) (string, error) {
 	if len(values) == 0 {
 		return "", fmt.Errorf("semantic key: identity is empty")
 	}
 	var result strings.Builder
-	result.WriteString("golem-semantic-key:v1")
+	result.WriteString(keyPrefix)
 	for _, value := range values {
 		encoded, err := encodeValue(value)
 		if err != nil {
@@ -26,8 +30,9 @@ func Encode(values []any) (string, error) {
 		fmt.Fprintf(&result, "|%d:", len(encoded))
 		result.WriteString(encoded)
 	}
-	if result.Len() > 512 {
-		return "", fmt.Errorf("semantic key: identity exceeds 512 bytes")
+	if result.Len() > maximumInlineBytes {
+		digest := sha256.Sum256([]byte(result.String()))
+		return keyPrefix + "|sha256:" + hex.EncodeToString(digest[:]), nil
 	}
 	return result.String(), nil
 }

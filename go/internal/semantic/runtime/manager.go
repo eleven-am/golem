@@ -658,6 +658,10 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 		empty = "''::bytea"
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+	generation := manager.quote("updated_at") + "+1"
+	if manager.provider == ir.PostgreSQL {
+		generation = manager.hidden(index, "_state") + "." + manager.quote("updated_at") + "+1"
+	}
 	chunk := semanticMarkChunk
 	if capacity := (semanticMarkBinds - 2) / (1 + width); capacity < chunk {
 		chunk = capacity
@@ -692,7 +696,7 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + ")" +
 			" VALUES " + strings.Join(tuples, ",") +
 			" ON CONFLICT(" + manager.quote("record_key") + ") DO UPDATE SET " +
-			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=excluded." + manager.quote("updated_at")
+			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=" + generation
 		observeexec.RecordStatement(ctx)
 		if _, err := executor.ExecContext(ctx, statement, arguments...); err != nil {
 			return fmt.Errorf("P9_SEMANTIC_MARK: stale mark failed")

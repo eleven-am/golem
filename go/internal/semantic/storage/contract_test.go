@@ -44,6 +44,24 @@ func TestLowerDecodeSemanticStorageRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLowerRejectsReservedShadowIdentityColumns(t *testing.T) {
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{"field-a"}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension := ir.ProviderExtensionIR{ID: "semantic-id", Provider: ir.SQLite, Kind: semanticcontract.IndexKind, Version: semanticcontract.Version, Owner: "model-id", Payload: payload}
+	for _, name := range []physicalpkg.PhysicalName{"record_key", "source_hash", "space_fingerprint", "status", "attempt_count", "error_code", "updated_at", "RECORD_KEY"} {
+		owner := physicalpkg.PhysicalTable{
+			ID: "model-id", Name: "models",
+			Columns:    []physicalpkg.PhysicalColumn{{ID: "key", Name: name, Storage: physicalpkg.StorageType{Kind: physicalpkg.StorageSQLiteText}}},
+			PrimaryKey: &physicalpkg.PhysicalKey{ID: "model-primary", Name: "pk_models", Columns: []ir.FieldID{"key"}},
+		}
+		if _, err := Lower(extension, owner); err == nil {
+			t.Fatalf("reserved identity column %q was accepted", name)
+		}
+	}
+}
+
 // TestDecodeAcceptsRetainedSixAttributeSnapshots keeps signed histories
 // replayable: snapshots written before the identity projection existed decode
 // with an empty Identity, while a current compile must carry it.

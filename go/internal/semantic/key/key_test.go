@@ -3,6 +3,7 @@ package key
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -95,5 +96,23 @@ func TestMarkTextConversionAgreesWithByteIdentity(t *testing.T) {
 	}
 	if fromSlice != fromBytes {
 		t.Fatalf("slice=%q bytes=%q", fromSlice, fromBytes)
+	}
+}
+
+func TestLongStringIdentitiesUseBoundedDistinctKeys(t *testing.T) {
+	first, err := Encode([]any{strings.Repeat("a", 600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Encode([]any{strings.Repeat("a", 600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Encode([]any{strings.Repeat("a", 599) + "b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first != again || first == second || len(first) > maximumInlineBytes || !strings.HasPrefix(first, keyPrefix+"|sha256:") {
+		t.Fatalf("long keys first=%q again=%q second=%q", first, again, second)
 	}
 }

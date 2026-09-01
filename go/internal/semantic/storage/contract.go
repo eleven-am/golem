@@ -57,6 +57,11 @@ var identityStorageKinds = map[physical.StorageKind]bool{
 	physical.StoragePostgreSQLJSONB: true,
 }
 
+var reservedIdentityColumns = map[string]bool{
+	"record_key": true, "source_hash": true, "space_fingerprint": true,
+	"status": true, "attempt_count": true, "error_code": true, "updated_at": true,
+}
+
 func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (physical.Extension, error) {
 	if extension.Kind != semanticcontract.IndexKind || extension.Version != semanticcontract.Version {
 		return physical.Extension{}, fmt.Errorf("semantic storage: unsupported extension kind=%q version=%d", extension.Kind, extension.Version)
@@ -107,6 +112,9 @@ func encodeIdentity(model ir.ModelID, owner physical.PhysicalTable) (string, err
 		}
 		if strings.ContainsAny(string(column.Name), ",:") || column.Name == "" {
 			return "", fmt.Errorf("semantic storage: primary identity column %s has an unencodable name", field)
+		}
+		if reservedIdentityColumns[strings.ToLower(string(column.Name))] {
+			return "", fmt.Errorf("semantic storage: primary identity column %s uses reserved shadow name %q", field, column.Name)
 		}
 		notNull := "0"
 		if !column.Nullable {

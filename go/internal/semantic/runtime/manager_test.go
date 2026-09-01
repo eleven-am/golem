@@ -1327,6 +1327,31 @@ func TestSemanticMarkStalePreservesTheHashOfAnIndexedRecord(t *testing.T) {
 	}
 }
 
+func TestSemanticMarkStaleAdvancesDatabaseGeneration(t *testing.T) {
+	ctx := context.Background()
+	fixture := newMarkFixture(t)
+	fixture.insertOwner(t, "alpha part")
+	key := markPartKey(t)
+	future := time.Now().UTC().Add(time.Hour).UnixMicro()
+	if _, err := fixture.db.Exec(`INSERT INTO "`+markStateTable+`" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at,"id","serial","tag") VALUES (?,x'',?,'ready',0,NULL,?,?,?,?)`,
+		key, fmt.Sprintf("%x", fixture.index.SpaceFingerprint), future, "10000000-0000-0000-0000-000000000001", int64(7), []byte{0xde, 0xad, 0xbe, 0xef}); err != nil {
+		t.Fatal(err)
+	}
+	mark := []MarkRecord{{Key: key, Identity: markPartIdentity()}}
+	for want := future + 1; want <= future+2; want++ {
+		if err := fixture.manager.MarkStale(ctx, fixture.db, "part", mark); err != nil {
+			t.Fatal(err)
+		}
+		var generation int64
+		if err := fixture.db.Get(&generation, `SELECT updated_at FROM "`+markStateTable+`" WHERE record_key=?`, key); err != nil {
+			t.Fatal(err)
+		}
+		if generation != want {
+			t.Fatalf("stale generation=%d want=%d", generation, want)
+		}
+	}
+}
+
 // TestSemanticMarkStaleRefusesAKeyThatDisagreesWithItsIdentity keeps a caller
 // that computes record keys by a different route from silently marking records
 // no drain can find.
