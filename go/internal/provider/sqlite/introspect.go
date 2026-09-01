@@ -112,7 +112,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	}
 	if normalized.Version != 1 || normalized.CanonicalVersion != 1 {
 		for _, extension := range normalized.Extensions {
-			statements, renderErr := renderSemanticExtension(extension)
+			statements, renderErr := renderSemanticExtension(extension, false)
 			if renderErr != nil {
 				return physical.PhysicalSchema{}, renderErr
 			}

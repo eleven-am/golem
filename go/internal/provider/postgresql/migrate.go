@@ -391,7 +391,7 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		if !exists {
 			return nil, fmt.Errorf("semantic extension target is absent")
 		}
-		statements, err := renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension)
+		statements, err := renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)
 		if err != nil {
 			return nil, err
 		}

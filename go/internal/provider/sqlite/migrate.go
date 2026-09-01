@@ -318,7 +318,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			if !exists {
 				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
 			}
-			statements, renderErr := renderSemanticExtension(extension)
+			statements, renderErr := renderSemanticExtension(extension, false)
 			if renderErr != nil {
 				return IncrementalPlan{}, renderErr
 			}

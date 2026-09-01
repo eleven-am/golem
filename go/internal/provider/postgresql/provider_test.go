@@ -51,6 +51,42 @@ func TestSemanticIndexRendersPgvectorHNSWStorage(t *testing.T) {
 	}
 }
 
+func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{id(29)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(73)), Provider: ir.PostgreSQL, Version: semanticcontract.Version, Owner: ir.ObjectID(id(2)), Kind: semanticcontract.IndexKind, Payload: payload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "social"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := schema
+	legacy.Extensions = append([]physical.Extension(nil), schema.Extensions...)
+	legacy.Extensions[0].Attributes = nil
+	for _, attribute := range schema.Extensions[0].Attributes {
+		if attribute.Name != "identity" {
+			legacy.Extensions[0].Attributes = append(legacy.Extensions[0].Attributes, attribute)
+		}
+	}
+	if _, err := provider.renderInitial(legacy); err == nil {
+		t.Fatal("ordinary rendering accepted a legacy semantic extension")
+	}
+	script, err := provider.renderReviewedInitialSnapshot(reviewedInitialSnapshot{schema: legacy})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_semantic_" + id(73)
+	if !strings.Contains(script.SQL(), `CREATE TABLE "social"."`+base+`_state"`) || !strings.Contains(script.SQL(), `CREATE TABLE "social"."`+base+`_vec"`) {
+		t.Fatalf("legacy semantic storage is absent:\n%s", script.SQL())
+	}
+	if strings.Contains(script.SQL(), base+"_state_identity") || strings.Contains(script.SQL(), base+"_state_stale") {
+		t.Fatalf("legacy replay invented current state indexes:\n%s", script.SQL())
+	}
+}
+
 func TestLowerPreservesPortablePostgreSQLSemantics(t *testing.T) {
 	provider := New()
 	schema, err := provider.Lower(context.Background(), fixtureModel(), physical.LowerOptions{Namespace: "social"})
