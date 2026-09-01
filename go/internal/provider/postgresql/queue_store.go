@@ -292,8 +292,8 @@ func (store *queueStore) leaseSelected(ctx context.Context, transaction *sqlx.Tx
 	}
 	arguments = append(arguments, duration.Microseconds())
 	returned := `job.` + strings.ReplaceAll(postgresqlQueueColumns, `,`, `,job.`)
-	expiry := `clock_timestamp()+$` + strconv.Itoa(len(arguments)) + `*interval '1 microsecond'`
-	statement := `UPDATE ` + store.table() + ` AS job SET "status"='leased',"attempt_count"=CASE WHEN job."attempt_count"<9223372036854775807 THEN job."attempt_count"+1 ELSE job."attempt_count" END,"lease_token"=claim.token,"available_at"=` + expiry + `,"lease_until"=` + expiry + `,"resource_name"=claim.resource_name,"resource_cost"=claim.resource_cost,"resource_capacity"=claim.resource_capacity,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(id,token,resource_name,resource_cost,resource_capacity) WHERE job."id"=claim.id AND ` + postgresqlQueueClaim + ` RETURNING ` + returned
+	deadline := `clock_timestamp()+$` + strconv.Itoa(len(arguments)) + `*interval '1 microsecond'`
+	statement := `WITH deadline AS (SELECT ` + deadline + ` AS expires_at) UPDATE ` + store.table() + ` AS job SET "status"='leased',"attempt_count"=CASE WHEN job."attempt_count"<9223372036854775807 THEN job."attempt_count"+1 ELSE job."attempt_count" END,"lease_token"=claim.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"resource_name"=claim.resource_name,"resource_cost"=claim.resource_cost,"resource_capacity"=claim.resource_capacity,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(id,token,resource_name,resource_cost,resource_capacity) CROSS JOIN deadline WHERE job."id"=claim.id AND ` + postgresqlQueueClaim + ` RETURNING ` + returned
 	var rows []postgresqlQueueRow
 	if err := transaction.SelectContext(ctx, &rows, statement, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: lease jobs: %w", err)
@@ -367,7 +367,7 @@ func (store *queueStore) Renew(ctx context.Context, id, token string, duration t
 		return queueprovider.Renewal{}, err
 	}
 	var requested sql.NullTime
-	err := store.database.QueryRowxContext(ctx, `UPDATE `+store.table()+` SET "available_at"=clock_timestamp()+$1*interval '1 microsecond',"lease_until"=clock_timestamp()+$1*interval '1 microsecond',"updated_at"=clock_timestamp() WHERE "id"=$2 AND "lease_token"=$3 AND "status"='leased' AND "lease_until">clock_timestamp() RETURNING "cancel_requested_at"`, duration.Microseconds(), id, token).Scan(&requested)
+	err := store.database.QueryRowxContext(ctx, `WITH deadline AS (SELECT clock_timestamp()+$1*interval '1 microsecond' AS expires_at) UPDATE `+store.table()+` SET "available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"updated_at"=clock_timestamp() FROM deadline WHERE "id"=$2 AND "lease_token"=$3 AND "status"='leased' AND "lease_until">clock_timestamp() RETURNING "cancel_requested_at"`, duration.Microseconds(), id, token).Scan(&requested)
 	if errors.Is(err, sql.ErrNoRows) {
 		return queueprovider.Renewal{}, nil
 	}

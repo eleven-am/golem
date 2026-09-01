@@ -276,7 +276,6 @@ func (state *wsConnection[P]) read() (wsMessage, error) {
 	if err != nil {
 		return wsMessage{}, err
 	}
-	_ = state.conn.SetReadDeadline(time.Time{})
 	if kind != websocket.TextMessage {
 		return wsMessage{}, errWSProtocolMessage
 	}

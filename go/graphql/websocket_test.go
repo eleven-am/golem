@@ -121,9 +121,31 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 		t.Fatalf("ack = %#v", message)
 	}
 	connection.SetPingHandler(func(string) error { return nil })
+	stopNoise := make(chan struct{})
+	defer close(stopNoise)
+	go func() {
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopNoise:
+				return
+			case <-ticker.C:
+				if err := connection.WriteJSON(wsMessage{Type: "ping"}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	started := time.Now()
 	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
-	if _, _, err := connection.ReadMessage(); err == nil {
-		t.Fatal("connection without a pong remained open")
+	for {
+		if _, _, err := connection.ReadMessage(); err != nil {
+			break
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+		t.Fatalf("application messages kept a pongless connection alive for %s", elapsed)
 	}
 }
 
