@@ -1,6 +1,10 @@
 package events
 
-import "time"
+import (
+	"time"
+
+	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
+)
 
 type Limits struct {
 	ClaimRows                     int
@@ -32,7 +36,7 @@ var defaultLimits = Limits{
 	SubscriberQueue: 64, HubInputQueue: 256, EvaluationConcurrency: 32,
 	MaxSubscriptionsPerConnection: 32, ConnectionInitBytes: 64 << 10,
 	ConnectionInitTimeout: 10 * time.Second, WebSocketKeepAlive: 30 * time.Second, WebSocketPongTimeout: 10 * time.Second, ShutdownGrace: 15 * time.Second,
-	RetentionDeleteRows: 256, RetentionAge: 30 * 24 * time.Hour, RetentionEvery: time.Minute,
+	RetentionDeleteRows: eventprovider.MaximumCausationFacts, RetentionAge: 30 * 24 * time.Hour, RetentionEvery: time.Minute,
 }
 
 var maximumLimits = Limits{

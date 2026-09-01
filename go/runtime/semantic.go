@@ -581,14 +581,19 @@ func (app *App[P, A]) runSemanticReconcile(ctx context.Context, job queue.Job[se
 	if err := app.semanticJobTarget(job.Payload); err != nil {
 		return err
 	}
+	refreshErr := app.semantic.Refresh(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
 	interval := app.semanticReconcileInterval
-	if interval != 0 {
-		chained := semanticJobKey(semanticReconcileJobType, job.Payload) + ":" + string(job.ID)
-		if _, err := app.enqueueSemanticJobWith(ctx, nil, app.semanticReconcile, job.Payload, chained, queue.After(interval)); err != nil {
-			return err
-		}
+	if interval == 0 {
+		return refreshErr
 	}
-	return app.semantic.Refresh(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
+	chained := semanticJobKey(semanticReconcileJobType, job.Payload) + ":" + string(job.ID)
+	if _, err := app.enqueueSemanticJobWith(ctx, nil, app.semanticReconcile, job.Payload, chained, queue.After(interval)); err != nil {
+		return err
+	}
+	if refreshErr != nil {
+		return queue.Terminal(refreshErr)
+	}
+	return nil
 }
 
 // semanticJobTarget refuses a job left behind by a schema that no longer

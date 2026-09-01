@@ -1,11 +1,15 @@
 package runtime
 
-import "fmt"
+import (
+	"fmt"
+
+	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
+)
 
 const (
 	MaxMutationNestedDepth         = 5
 	MaxMutationTouchedRows         = 1_000
-	MaxMutationFacts               = 1_000
+	MaxMutationFacts               = eventprovider.MaximumCausationFacts
 	MaxMutationOutboxBytes         = 1 << 20
 	MaxMutationStatementParameters = 999
 	MaxMutationUpsertAttempts      = 3

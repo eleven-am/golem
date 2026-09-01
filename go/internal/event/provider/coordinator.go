@@ -23,11 +23,12 @@ const (
 )
 
 const (
-	MaximumClaimGroups   = 1024
-	DefaultClaimBytes    = 16 << 20
-	MaximumClaimBytes    = 64 << 20
-	MaximumRetentionRows = 4096
-	MaximumFailureCode   = 128
+	MaximumClaimGroups    = 1024
+	DefaultClaimBytes     = 16 << 20
+	MaximumClaimBytes     = 64 << 20
+	MaximumCausationFacts = 1000
+	MaximumRetentionRows  = 4096
+	MaximumFailureCode    = 128
 )
 
 var failureCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)

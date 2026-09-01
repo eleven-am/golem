@@ -418,7 +418,7 @@ func TestSemanticReconcileSchedulesItsDurableSuccessor(t *testing.T) {
 	}
 }
 
-func TestSemanticReconcileSchedulesItsSuccessorBeforeRefreshFailure(t *testing.T) {
+func TestSemanticReconcileFailureSchedulesOneSuccessorWithoutRetry(t *testing.T) {
 	ctx := context.Background()
 	fixture := newSemanticJobFixture(t, nil)
 	fixture.app.semanticReconcileInterval = time.Minute
@@ -426,8 +426,12 @@ func TestSemanticReconcileSchedulesItsSuccessorBeforeRefreshFailure(t *testing.T
 		t.Fatal(err)
 	}
 	payload := semanticJob{Model: string(semanticJobModelID()), Index: "related"}
-	if err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-failed", Payload: payload}); err == nil {
+	err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-failed", Payload: payload})
+	if err == nil {
 		t.Fatal("failed refresh returned success")
+	}
+	if outcome := queue.Classify(err); outcome.Resolution != queue.ResolutionFailed {
+		t.Fatalf("failed periodic refresh resolution=%s want=%s", outcome.Resolution, queue.ResolutionFailed)
 	}
 	if got := fixture.jobs(t, semanticReconcileJobType); got != 1 {
 		t.Fatalf("scheduled successors after refresh failure=%d want=1", got)
