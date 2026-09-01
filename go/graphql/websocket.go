@@ -297,9 +297,9 @@ func (state *wsConnection[P]) startLiveness() func() {
 			case <-done:
 				return
 			case <-ticker.C:
+				state.writeMu.Lock()
 				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
 				_ = state.conn.SetReadDeadline(deadline)
-				state.writeMu.Lock()
 				err := state.conn.WriteControl(websocket.PingMessage, nil, deadline)
 				state.writeMu.Unlock()
 				if err != nil {
