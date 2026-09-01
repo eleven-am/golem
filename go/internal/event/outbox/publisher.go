@@ -110,7 +110,7 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.RetentionEvery < time.Minute || limits.RetentionEvery > events.MaximumLimits().RetentionEvery || limits.RetentionEvery%time.Microsecond != 0 {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention interval is invalid")
 	}
-	if limits.RetentionRows < 1 || limits.RetentionRows > events.MaximumLimits().RetentionDeleteRows {
+	if limits.RetentionRows < eventprovider.MaximumCausationFacts || limits.RetentionRows > events.MaximumLimits().RetentionDeleteRows {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention rows are invalid")
 	}
 	return limits, nil
@@ -182,7 +182,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 	}()
 
 	nextDepth := time.Time{}
-	nextRetention := time.Time{}
+	nextRetention := time.Now().Add(publisher.limits.RetentionEvery)
 	retentionFailures := int64(0)
 	loopFailures := int64(0)
 	for {

@@ -258,6 +258,7 @@ func TestPublisherClaimsDespiteRetentionFailure(t *testing.T) {
 		claimed:                  make(chan struct{}),
 	}
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	publisher.limits.RetentionEvery = time.Microsecond
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- publisher.Run(ctx) }()
@@ -270,6 +271,14 @@ func TestPublisherClaimsDespiteRetentionFailure(t *testing.T) {
 	}
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublisherRejectsRetentionBelowOneCausation(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	_, err := NewPublisher(&publisherTestCoordinator{}, publisherTestResolver{fixture.Registry}, &captureTransport{}, Limits{RetentionRows: eventprovider.MaximumCausationFacts - 1})
+	if err == nil {
+		t.Fatal("publisher accepted a retention batch below one legal causation")
 	}
 }
 

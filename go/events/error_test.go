@@ -94,6 +94,16 @@ func TestNormalizeLimitsRejectsPongTimeoutEqualToKeepalive(t *testing.T) {
 	}
 }
 
+func TestNormalizeLimitsRejectsRetentionBelowOneCausation(t *testing.T) {
+	_, err := NormalizeLimits(Limits{RetentionDeleteRows: 999})
+	if errorCode(t, err) != CodeEventConfig {
+		t.Fatalf("code = %v", err)
+	}
+	if !strings.Contains(err.Error(), "RetentionDeleteRows") || !strings.Contains(err.Error(), "1000") || !strings.Contains(err.Error(), "999") {
+		t.Fatalf("retention minimum error %q omits its field, bound, or value", err)
+	}
+}
+
 func TestRetentionPolicyNamesTheViolatedBound(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		olderThan time.Time
