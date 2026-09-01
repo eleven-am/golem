@@ -204,6 +204,27 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	}
 }
 
+func TestSemanticCustomSearchDefaultsToModelMaxTake(t *testing.T) {
+	compilation := semanticSocial(t)
+	post := contractNamed(t, compilation.Contract, "Post")
+	for index := range compilation.Contract.Models {
+		if compilation.Contract.Models[index].ModelID == post.ModelID {
+			compilation.Contract.Models[index].Limits.MaxTake = 1
+		}
+	}
+	compiler, err := New(compilation, Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, operation := range compilation.Contract.CustomOperations {
+		arguments := map[string]any{}
+		bound, bindErr := compiler.bindSemanticSearchTake(operation, arguments, false)
+		if bindErr != nil || !bound || arguments["take"] != int32(1) {
+			t.Fatalf("omitted %s take bound=%t arguments=%#v error=%v", operation.Name, bound, arguments, bindErr)
+		}
+	}
+}
+
 func TestCompilerLowersExactlyOneSubscriptionRootToFullFrozenRead(t *testing.T) {
 	compilation := social(t)
 	var postModel *compilerir.ModelDeclIR

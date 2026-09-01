@@ -30,13 +30,10 @@ func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationCo
 	if !ok {
 		return false, fmt.Errorf("semantic search result model is absent")
 	}
-	maximum := int(contract.Limits.MaxPageSize)
-	if maximum < 1 || maximum > semanticruntime.MaximumResults {
-		maximum = semanticruntime.MaximumResults
-	}
-	if c.limits.Bind.MaxPageSize > 0 && c.limits.Bind.MaxPageSize < maximum {
-		maximum = c.limits.Bind.MaxPageSize
-	}
+	maximum := semanticruntime.MaximumResults
+	maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxPageSize))
+	maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxTake))
+	maximum = readir.NarrowCap(maximum, c.limits.Bind.MaxPageSize)
 	value := int(contract.Limits.DefaultPageSize)
 	if value < 1 {
 		value = 50
