@@ -227,7 +227,7 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	ctx := context.Background()
 	namespace := `"` + pgvectorRankNamespace + `".`
-	for _, key := range []string{"a", "A"} {
+	for _, key := range []string{"a", "A", "B"} {
 		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","hidden") VALUES ($1,false)`, key); err != nil {
 			t.Fatal(err)
 		}
@@ -242,15 +242,41 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	if err := fixture.database.SelectContext(ctx, &linguistic, `SELECT "record_key" FROM `+namespace+`"`+fixture.storage+`_vec" ORDER BY "record_key"`); err != nil {
 		t.Fatal(err)
 	}
-	if len(linguistic) != 2 || linguistic[0] != "a" {
+	if len(linguistic) != 3 || linguistic[0] != "a" {
 		t.Skipf("database collation is not linguistic: %v", linguistic)
 	}
 	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[1,0,0]", authorizedRankCandidates(), "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ranks) != 2 || ranks[0].Key != "A" || ranks[1].Key != "a" {
-		t.Fatalf("tie order=%#v want binary collation A,a", ranks)
+	if len(ranks) != 2 || ranks[0].Key != "A" || ranks[1].Key != "B" {
+		t.Fatalf("tie page=%#v want binary collation A,B", ranks)
+	}
+}
+
+func TestPGVectorRankFallsBackWhenIterativeScanIsExhausted(t *testing.T) {
+	fixture := openPGVectorRankFixture(t)
+	fixture.seedRankRows(t, 2000, "")
+	ctx := context.Background()
+	namespace := `"` + pgvectorRankNamespace + `".`
+	if _, err := fixture.database.ExecContext(ctx, `UPDATE `+namespace+`"docs" SET "hidden"=true WHERE "id">='k000010'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.database.SetMaxOpenConns(1)
+	if _, err := fixture.database.ExecContext(ctx, `SET hnsw.max_scan_tuples = 1`); err != nil {
+		t.Fatal(err)
+	}
+	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[1,0,0]", authorizedRankCandidates(), "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 5 {
+		t.Fatalf("selective ranks=%d want=5", len(ranks))
+	}
+	for position, rank := range ranks {
+		if want := fmt.Sprintf("k%06d", 9-position); rank.Key != want {
+			t.Fatalf("rank[%d]=%q want=%q", position, rank.Key, want)
+		}
 	}
 }
 
