@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,13 @@ type payload struct {
 }
 
 func handler(context.Context, queue.Job[payload]) error { return nil }
+
+func TestOperatorStatusIsStructurallyPayloadFree(t *testing.T) {
+	typeOf := reflect.TypeOf(queue.Status{})
+	if _, exists := typeOf.FieldByName("Payload"); exists {
+		t.Fatal("operator status exposes payload")
+	}
+}
 
 func TestRegistrationRefusals(t *testing.T) {
 	rows := []struct {

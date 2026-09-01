@@ -31,11 +31,11 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	if err != nil {
 		return queue.Fail(queue.CodeConfigInvalid, "durable job storage is unavailable: %v", err)
 	}
-	worker, err := queueworker.New(store, config.Registry, config.Limits)
+	worker, err := queueworker.New(store, config.Registry, config.Limits, app.eventProvider, app.observer)
 	if err != nil {
 		return err
 	}
-	operator, err := queueworker.NewOperator(store)
+	operator, err := queueworker.NewOperator(store, app.eventProvider, app.observer)
 	if err != nil {
 		return err
 	}

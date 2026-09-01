@@ -23,6 +23,22 @@ func TestExpiredLeaseIsReclaimedByOrdinaryClaim(t *testing.T) {
 	runQueueGate(t, providertest.ExpiredLeaseIsReclaimedByOrdinaryClaim)
 }
 
+func TestExpiredFinalAttemptFailsWithoutReexecution(t *testing.T) {
+	runQueueGate(t, providertest.ExpiredFinalAttemptFailsWithoutReexecution)
+}
+
+func TestExpiredCanceledLeaseIsTerminalWithoutReexecution(t *testing.T) {
+	runQueueGate(t, providertest.ExpiredCanceledLeaseIsTerminalWithoutReexecution)
+}
+
+func TestFailedJobsCanBeDiscoveredAndRecovered(t *testing.T) {
+	runQueueGate(t, providertest.FailedJobsCanBeDiscoveredAndRecovered)
+}
+
+func TestCancellationIsDurableAndIdempotent(t *testing.T) {
+	runQueueGate(t, providertest.CancellationIsDurableAndIdempotent)
+}
+
 func TestExclusiveKeyBlocksOnlyLiveHolders(t *testing.T) {
 	runQueueGate(t, providertest.ExclusiveKeyBlocksOnlyLiveHolders)
 }

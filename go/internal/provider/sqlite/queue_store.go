@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 const (
 	sqliteQueueTable   = `"main"."golem_queue"`
 	sqliteQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
+	sqliteQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	sqliteQueueClaim   = `(("status"='pending' AND "available_at"<=?) OR ("status"='leased' AND "lease_until"<=?))`
 	sqliteQueueFence   = ` WHERE "id"=? AND "lease_token"=? AND "status"='leased'`
 )
@@ -113,13 +115,17 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		arguments = append(arguments, name)
 	}
 	arguments = append(arguments, now, options.Limit)
-	discovery := `SELECT "id","exclusive_key" FROM ` + sqliteQueueTable + ` AS job WHERE ` + sqliteQueueClaim +
+	discovery := `SELECT "id","status","attempt_count","max_attempts","cancel_requested_at","exclusive_key" FROM ` + sqliteQueueTable + ` AS job WHERE ` + sqliteQueueClaim +
 		` AND "type" IN (` + placeholders(len(options.Types)) + `)` +
 		` AND ("exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM ` + sqliteQueueTable + ` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">?))` +
 		` ORDER BY "available_at","id" LIMIT ?`
 	var candidates []struct {
-		ID           string         `db:"id"`
-		ExclusiveKey sql.NullString `db:"exclusive_key"`
+		ID              string         `db:"id"`
+		Status          string         `db:"status"`
+		Attempts        int64          `db:"attempt_count"`
+		MaxAttempts     int64          `db:"max_attempts"`
+		CancelRequested sql.NullInt64  `db:"cancel_requested_at"`
+		ExclusiveKey    sql.NullString `db:"exclusive_key"`
 	}
 	if err := connection.SelectContext(ctx, &candidates, discovery, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_SQLITE_STORE: discover claimable jobs: %w", err)
@@ -128,6 +134,36 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	held := make(map[string]struct{}, len(candidates))
 	records := make([]queueprovider.Record, 0, len(candidates))
 	for _, candidate := range candidates {
+		if candidate.Status == string(queueprovider.StateLeased) && candidate.CancelRequested.Valid {
+			result, updateErr := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"last_code"=?,"finished_at"=?,"updated_at"=? WHERE "id"=? AND "status"='leased' AND "lease_until"<=? AND "cancel_requested_at" IS NOT NULL`,
+				queueprovider.CodeCanceled, now, now, candidate.ID, now)
+			if updateErr != nil {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: cancel expired lease: %w", updateErr)
+			}
+			changed, resultErr := result.RowsAffected()
+			if resultErr != nil {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: expired cancellation result: %w", resultErr)
+			}
+			if changed != 1 {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: expired cancellation changed %d rows", changed)
+			}
+			continue
+		}
+		if candidate.Status == string(queueprovider.StateLeased) && candidate.Attempts >= candidate.MaxAttempts {
+			result, updateErr := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='failed',"lease_token"=NULL,"lease_until"=NULL,"last_code"=?,"finished_at"=?,"updated_at"=? WHERE "id"=? AND "status"='leased' AND "lease_until"<=? AND "attempt_count">="max_attempts"`,
+				queueprovider.CodeAttemptsExhausted, now, now, candidate.ID, now)
+			if updateErr != nil {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: fail exhausted lease: %w", updateErr)
+			}
+			changed, resultErr := result.RowsAffected()
+			if resultErr != nil {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: exhausted lease result: %w", resultErr)
+			}
+			if changed != 1 {
+				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: exhausted lease changed %d rows", changed)
+			}
+			continue
+		}
 		if candidate.ExclusiveKey.Valid {
 			if _, taken := held[candidate.ExclusiveKey.String]; taken {
 				continue
@@ -225,22 +261,34 @@ func (store *queueStore) Release(ctx context.Context, id, token string) (bool, e
 	return store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='pending',"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"updated_at"=`+sqliteDatabaseMicros+sqliteQueueFence, id, token)
 }
 
-func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
+func (store *queueStore) Cancel(ctx context.Context, id string) (queueprovider.CancelResult, error) {
 	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is invalid")
+		return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is invalid")
 	}
-	immediate, err := store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"finished_at"=`+sqliteDatabaseMicros+`,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='pending'`, id)
-	if err != nil || immediate {
-		return immediate, err
+	var typeName string
+	var attempt int64
+	err := store.database.QueryRowxContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"last_code"='canceled',"finished_at"=`+sqliteDatabaseMicros+`,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='pending' RETURNING "type","attempt_count"`, id).Scan(&typeName, &attempt)
+	if err == nil {
+		return queueprovider.CancelResult{Changed: true, Terminal: true, Type: typeName, AttemptCount: attempt}, nil
 	}
-	return store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "cancel_requested_at"=`+sqliteDatabaseMicros+`,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='leased'`, id)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: cancel pending job: %w", err)
+	}
+	err = store.database.QueryRowxContext(ctx, `UPDATE `+sqliteQueueTable+` SET "cancel_requested_at"=`+sqliteDatabaseMicros+`,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='leased' AND "cancel_requested_at" IS NULL RETURNING "type","attempt_count"`, id).Scan(&typeName, &attempt)
+	if err == nil {
+		return queueprovider.CancelResult{Changed: true, Type: typeName, AttemptCount: attempt}, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return queueprovider.CancelResult{}, nil
+	}
+	return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: request leased cancellation: %w", err)
 }
 
 func (store *queueStore) Requeue(ctx context.Context, id string) (bool, error) {
 	if id == "" || len(id) > 64 {
 		return false, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is invalid")
 	}
-	return store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='pending',"attempt_count"=0,"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"finished_at"=NULL,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status" IN ('failed','canceled')`, id)
+	return store.fenced(ctx, `UPDATE `+sqliteQueueTable+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status" IN ('failed','canceled') AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+sqliteQueueTable+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
 }
 
 func (store *queueStore) RunRetention(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {
@@ -264,6 +312,59 @@ func (store *queueStore) Inspect(ctx context.Context, id string) (queueprovider.
 		return queueprovider.Record{}, queueprovider.ErrNotFound
 	}
 	return record, err
+}
+
+func (store *queueStore) ListFailed(ctx context.Context, query queueprovider.FailedQuery) (queueprovider.FailedPage, error) {
+	if err := queueprovider.ValidateFailedQuery(query); err != nil {
+		return queueprovider.FailedPage{}, err
+	}
+	where := []string{`"status"='failed'`}
+	arguments := make([]any, 0, len(query.Types)+4)
+	if len(query.Types) != 0 {
+		where = append(where, `"type" IN (`+placeholders(len(query.Types))+`)`)
+		for _, name := range query.Types {
+			arguments = append(arguments, name)
+		}
+	}
+	if query.Before != nil {
+		finished := query.Before.FinishedAt.UTC().UnixMicro()
+		where = append(where, `("finished_at"<? OR ("finished_at"=? AND "id"<?))`)
+		arguments = append(arguments, finished, finished, query.Before.ID)
+	}
+	arguments = append(arguments, query.Limit+1)
+	var rows []sqliteQueueSummaryRow
+	statement := `SELECT ` + sqliteQueueSummary + ` FROM ` + sqliteQueueTable + ` WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY "finished_at" DESC,"id" DESC LIMIT ?`
+	if err := store.database.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return queueprovider.FailedPage{}, fmt.Errorf("QUEUE_SQLITE_STORE: list failed jobs: %w", err)
+	}
+	page := queueprovider.FailedPage{More: len(rows) > query.Limit}
+	if page.More {
+		rows = rows[:query.Limit]
+	}
+	page.Jobs = make([]queueprovider.Summary, len(rows))
+	for index, row := range rows {
+		page.Jobs[index] = row.summary()
+	}
+	return page, nil
+}
+
+func (store *queueStore) RequeueFailed(ctx context.Context, ids []string) (int, error) {
+	if err := queueprovider.ValidateOperatorIDs(ids); err != nil {
+		return 0, err
+	}
+	ordered := append([]string(nil), ids...)
+	sort.Strings(ordered)
+	changed := 0
+	for _, id := range ordered {
+		requeued, err := store.fenced(ctx, `UPDATE `+sqliteQueueTable+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='failed' AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+sqliteQueueTable+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
+		if err != nil {
+			return changed, err
+		}
+		if requeued {
+			changed++
+		}
+	}
+	return changed, nil
 }
 
 func (store *queueStore) fenced(ctx context.Context, statement string, arguments ...any) (bool, error) {
@@ -295,6 +396,29 @@ type sqliteQueueRow struct {
 	EnqueuedAt        int64          `db:"enqueued_at"`
 	FinishedAt        sql.NullInt64  `db:"finished_at"`
 	UpdatedAt         int64          `db:"updated_at"`
+}
+
+type sqliteQueueSummaryRow struct {
+	ID                string         `db:"id"`
+	Type              string         `db:"type"`
+	Status            string         `db:"status"`
+	AttemptCount      int64          `db:"attempt_count"`
+	MaxAttempts       int64          `db:"max_attempts"`
+	AvailableAt       int64          `db:"available_at"`
+	CancelRequestedAt sql.NullInt64  `db:"cancel_requested_at"`
+	LastCode          sql.NullString `db:"last_code"`
+	EnqueuedAt        int64          `db:"enqueued_at"`
+	FinishedAt        sql.NullInt64  `db:"finished_at"`
+}
+
+func (row sqliteQueueSummaryRow) summary() queueprovider.Summary {
+	return queueprovider.Summary{
+		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
+		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+		AvailableAt: time.UnixMicro(row.AvailableAt).UTC(), CancelRequested: row.CancelRequestedAt.Valid,
+		LastCode: row.LastCode.String, EnqueuedAt: time.UnixMicro(row.EnqueuedAt).UTC(),
+		FinishedAt: sqliteOptionalTime(row.FinishedAt),
+	}
 }
 
 func sqliteReadJob(ctx context.Context, queryer sqlx.QueryerContext, id string) (queueprovider.Record, error) {

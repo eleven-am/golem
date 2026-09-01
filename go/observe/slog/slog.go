@@ -71,5 +71,6 @@ func (target sink) ObserveGolem(ctx context.Context, value observe.Observation) 
 		standardslog.Int64(adapterinternal.AttributeNames[10], record.QueueDepth),
 		standardslog.Int64(adapterinternal.AttributeNames[11], record.QueueLimit),
 		standardslog.Int64(adapterinternal.AttributeNames[12], record.AggregateCount),
+		standardslog.String(adapterinternal.AttributeNames[13], record.QueueType),
 	)
 }

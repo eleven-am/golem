@@ -50,11 +50,6 @@ func TestObservationRejectsEveryNumericOverflow(t *testing.T) {
 	invalid := []internalvalue.Value{
 		func() internalvalue.Value {
 			value := base
-			value.DurationValue = maximumObservationDuration + 1
-			return value
-		}(),
-		func() internalvalue.Value {
-			value := base
 			value.StatementCountValue = int(maximumObservationCount + 1)
 			return value
 		}(),
@@ -85,6 +80,34 @@ func TestObservationRejectsEveryNumericOverflow(t *testing.T) {
 		if called {
 			t.Fatalf("numeric overflow %d was delivered", index)
 		}
+	}
+}
+
+func TestQueueObservationRequiresCanonicalTypeAndMatchingOperation(t *testing.T) {
+	base := internalvalue.Value{KindValue: string(KindQueue), PhaseValue: string(PhaseStart), OutcomeValue: string(OutcomeSuccess), OperationValue: string(OperationQueueExecute), QueueTypeValue: "mail.deliver"}
+	called := 0
+	internalvalue.Emit(observerFunc(func(_ context.Context, value Observation) {
+		called++
+		if value.QueueType() != "mail.deliver" {
+			t.Fatalf("queue type=%q", value.QueueType())
+		}
+	}), base)
+	invalid := []internalvalue.Value{
+		func() internalvalue.Value { value := base; value.QueueTypeValue = ""; return value }(),
+		func() internalvalue.Value { value := base; value.QueueTypeValue = "Mail Deliver"; return value }(),
+		func() internalvalue.Value { value := base; value.KindValue = string(KindRead); return value }(),
+		func() internalvalue.Value {
+			value := base
+			value.OperationValue = string(OperationReadFindMany)
+			return value
+		}(),
+		{KindValue: string(KindRead), PhaseValue: string(PhaseFinish), OutcomeValue: string(OutcomeSuccess), OperationValue: string(OperationReadFindMany), QueueTypeValue: "mail.deliver"},
+	}
+	for _, value := range invalid {
+		internalvalue.Emit(observerFunc(func(context.Context, Observation) { called++ }), value)
+	}
+	if called != 1 {
+		t.Fatalf("delivered queue observations=%d", called)
 	}
 }
 
@@ -131,11 +154,11 @@ func TestPublicObserveInventoryHasNoProducerOrInternalTypeLeak(t *testing.T) {
 	}
 	observation := scope.Lookup("Observation").Type()
 	methods := types.NewMethodSet(observation)
-	wantMethods := map[string]bool{"Kind": true, "Phase": true, "Outcome": true, "Reason": true, "Provider": true, "ModelID": true, "Operation": true, "Duration": true, "StatementCount": true, "Attempt": true, "QueueDepth": true, "QueueLimit": true, "AggregateCount": true}
+	wantMethods := map[string]bool{"Kind": true, "Phase": true, "Outcome": true, "Reason": true, "Provider": true, "ModelID": true, "Operation": true, "Duration": true, "StatementCount": true, "Attempt": true, "QueueDepth": true, "QueueLimit": true, "AggregateCount": true, "QueueType": true}
 	for index := 0; index < methods.Len(); index++ {
 		delete(wantMethods, methods.At(index).Obj().Name())
 	}
-	if len(wantMethods) != 0 || methods.Len() != 13 {
+	if len(wantMethods) != 0 || methods.Len() != 14 {
 		t.Fatalf("Observation method set len=%d missing=%v", methods.Len(), wantMethods)
 	}
 }

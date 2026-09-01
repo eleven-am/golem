@@ -14,6 +14,7 @@ import (
 	observe "github.com/eleven-am/golem/go/observe"
 	provider "github.com/eleven-am/golem/go/provider"
 	queryplan "github.com/eleven-am/golem/go/queryplan"
+	queue "github.com/eleven-am/golem/go/queue"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 )
 
@@ -48,6 +49,7 @@ func GolemGeneratedApplicationDescriptors() (golem.ApplicationDescriptors, error
 type Config[P any] struct {
 	Database               *provider.Database
 	Embeddings             embedding.Registry
+	Queue                  *golemruntime.QueueConfig
 	ReadLimits             golemruntime.ReadLimits
 	MutationLimits         golemruntime.MutationLimits
 	AnalyticsLimits        golemruntime.AnalyticsLimits
@@ -1236,6 +1238,7 @@ func golemOpen[P any](ctx context.Context, config Config[P], engineConfig golemr
 	engineConfig.Bindings = bindings
 	engineConfig.Descriptors = descriptors
 	engineConfig.Embeddings = config.Embeddings
+	engineConfig.Queue = config.Queue
 	engineConfig.ReadLimits = config.ReadLimits
 	engineConfig.MutationLimits = config.MutationLimits
 	engineConfig.AnalyticsLimits = config.AnalyticsLimits
@@ -1271,6 +1274,24 @@ func (app *App[P]) RefreshSemanticIndexes(ctx context.Context) error {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: application is required")
 	}
 	return app.runtime.RefreshSemanticIndexes(ctx)
+}
+func (app *App[P]) RunQueueWorker(ctx context.Context) error {
+	if app == nil {
+		return queue.Fail(queue.CodeConfigInvalid, "application is required")
+	}
+	return app.runtime.RunQueueWorker(ctx)
+}
+func (app *App[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if app == nil {
+		return "", queue.Fail(queue.CodeConfigInvalid, "application is required")
+	}
+	return app.runtime.Enqueue(ctx, pending)
+}
+func (app *App[P]) QueueOperator() queue.Operator {
+	if app == nil {
+		return nil
+	}
+	return app.runtime.QueueOperator()
 }
 func (app *App[P]) EventCapabilities() events.Capabilities {
 	if app == nil {
@@ -1336,6 +1357,12 @@ func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerT
 		return callback(result)
 	})
 }
+func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if transaction == nil {
+		return golemruntime.CallerTxEnqueue(ctx, (*golemruntime.CallerTx[P, Actor])(nil), pending)
+	}
+	return golemruntime.CallerTxEnqueue(ctx, transaction.runtime, pending)
+}
 
 func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error) error {
 	if callback == nil {
@@ -1351,4 +1378,10 @@ func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx
 		result.Comments = SystemTxCommentClient[P]{runtime: inner}
 		return callback(result)
 	})
+}
+func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if transaction == nil {
+		return golemruntime.SystemTxEnqueue(ctx, (*golemruntime.SystemTx[P, Actor])(nil), pending)
+	}
+	return golemruntime.SystemTxEnqueue(ctx, transaction.runtime, pending)
 }

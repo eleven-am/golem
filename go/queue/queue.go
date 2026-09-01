@@ -409,6 +409,29 @@ type Status struct {
 	FinishedAt      *time.Time
 }
 
+// MaximumOperatorBatch bounds one failed-job page or bulk recovery action.
+const MaximumOperatorBatch = 256
+
+// FailedCursor is the stable position immediately after one failed job.
+type FailedCursor struct {
+	FinishedAt time.Time
+	ID         JobID
+}
+
+// FailedQuery selects one bounded page of failed jobs. An empty Types list
+// includes every stored type.
+type FailedQuery struct {
+	Types  []string
+	Limit  int
+	Before *FailedCursor
+}
+
+// FailedPage is one payload-redacted page of failed jobs.
+type FailedPage struct {
+	Jobs []Status
+	Next *FailedCursor
+}
+
 // RetentionPolicy bounds one retention run over terminal rows.
 type RetentionPolicy struct {
 	OlderThan time.Time
@@ -416,11 +439,16 @@ type RetentionPolicy struct {
 }
 
 // Operator is the durable job control surface. Every method acts on state the
-// database owns; none of them reaches into a running handler.
+// database owns; none of them reaches into a running handler. Cancellation is
+// immediate for pending jobs and cooperative for leased jobs, so completion
+// may win before a worker observes the request. RequeueFailed is retry-safe and
+// may return a nonzero changed count together with an error.
 type Operator interface {
 	Inspect(ctx context.Context, id JobID) (Status, error)
+	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
 	Cancel(ctx context.Context, id JobID) (bool, error)
 	Requeue(ctx context.Context, id JobID) (bool, error)
+	RequeueFailed(ctx context.Context, ids []JobID) (int, error)
 	RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)
 }
 

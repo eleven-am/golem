@@ -66,7 +66,7 @@ func TestOTelAdapterEmitsFixedSpanMetricsAndClosedAttributes(t *testing.T) {
 	for _, value := range spans[0].Attributes() {
 		attributes[string(value.Key)] = value.Value.AsInterface()
 	}
-	if len(attributes) != 13 || attributes["golem.operation"] != "mutation.update" || attributes["golem.model_id"] != "00000000000000000000000000000009" || attributes["golem.duration_ns"] != int64(7*time.Millisecond) {
+	if len(attributes) != 14 || attributes["golem.operation"] != "mutation.update" || attributes["golem.model_id"] != "00000000000000000000000000000009" || attributes["golem.duration_ns"] != int64(7*time.Millisecond) || attributes["golem.queue.type"] != "" {
 		t.Fatalf("span attributes=%v", attributes)
 	}
 	var metrics metricdata.ResourceMetrics

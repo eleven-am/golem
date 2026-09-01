@@ -55,6 +55,8 @@ func EmitShell(request ShellRequest) (File, error) {
 	imports := newImports(request.AppPackage.ImportPath)
 	golemAlias := imports.qualify(request.GolemImportPath, "golem")
 	contextAlias := imports.qualify("context", "context")
+	queuePath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/queue"
+	queueAlias := imports.qualify(queuePath, "queue")
 	queryplanAlias := ""
 	if len(models) != 0 {
 		queryplanPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/queryplan"
@@ -89,6 +91,7 @@ func EmitShell(request ShellRequest) (File, error) {
 		emitShellClient(&source, "CallerTx", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
 	}
 	fmt.Fprintf(&source, "\nfunc (caller *Caller[P]) Transaction(_ %s.Context, _ func(*CallerTx[P]) error) error { return nil }\n", contextAlias)
+	fmt.Fprintf(&source, "func (transaction *CallerTx[P]) Enqueue(_ %s.Context, _ %s.Pending) (%s.JobID, error) { return \"\", nil }\n", contextAlias, queueAlias, queueAlias)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry bootstrap: format: %w\n%s", err, source.String())

@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"strconv"
 	"testing"
 	"time"
 )
@@ -68,5 +69,42 @@ func TestCloneRecordsOwnsItsPayload(t *testing.T) {
 	source[0].Payload[0] = 'X'
 	if cloned[0].Payload[0] != '{' {
 		t.Fatalf("clone aliased the provider buffer: %s", cloned[0].Payload)
+	}
+}
+
+func TestFailedOperatorValidationIsBoundedAndUnambiguous(t *testing.T) {
+	valid := FailedQuery{Types: []string{"email.welcome"}, Limit: 1}
+	if err := ValidateFailedQuery(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, query := range []FailedQuery{
+		{},
+		{Limit: MaximumOperatorBatch + 1},
+		{Types: []string{"Email"}, Limit: 1},
+		{Types: []string{"email.welcome", "email.welcome"}, Limit: 1},
+		{Limit: 1, Before: &FailedCursor{ID: "job"}},
+		{Limit: 1, Before: &FailedCursor{FinishedAt: time.Now()}},
+	} {
+		if err := ValidateFailedQuery(query); err == nil {
+			t.Fatalf("query was accepted: %#v", query)
+		}
+	}
+	if err := ValidateOperatorIDs([]string{"one", "two"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateOperatorIDs(nil); err != nil {
+		t.Fatalf("empty recovery batch: %v", err)
+	}
+	for _, ids := range [][]string{{""}, {"one", "one"}} {
+		if err := ValidateOperatorIDs(ids); err == nil {
+			t.Fatalf("identities were accepted: %#v", ids)
+		}
+	}
+	oversized := make([]string, MaximumOperatorBatch+1)
+	for index := range oversized {
+		oversized[index] = "job-" + strconv.Itoa(index)
+	}
+	if err := ValidateOperatorIDs(oversized); err == nil {
+		t.Fatal("oversized recovery batch was accepted")
 	}
 }

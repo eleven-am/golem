@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/eleven-am/golem/go/queue"
 )
 
@@ -66,8 +68,12 @@ func (fixture *harness) inspect(t *testing.T, identity string) queueprovider.Rec
 }
 
 func (fixture *harness) start(t *testing.T, store queueprovider.Store, registry *queue.Registry, limits queue.Limits) (*Worker, func()) {
+	return fixture.startObserved(t, store, registry, limits, "", nil)
+}
+
+func (fixture *harness) startObserved(t *testing.T, store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer) (*Worker, func()) {
 	t.Helper()
-	worker, err := New(store, registry, limits)
+	worker, err := New(store, registry, limits, provider, observer)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,8 +102,9 @@ func (fixture *harness) start(t *testing.T, store queueprovider.Store, registry 
 
 type stubStore struct {
 	queueprovider.Store
-	renew func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error)
-	claim func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error)
+	renew   func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error)
+	claim   func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error)
+	succeed func(context.Context, string, string, string) (bool, error)
 }
 
 func (stub stubStore) Renew(ctx context.Context, id, token string, duration time.Duration) (queueprovider.Renewal, error) {
@@ -112,6 +119,19 @@ func (stub stubStore) Claim(ctx context.Context, options queueprovider.ClaimOpti
 		return stub.claim(ctx, options)
 	}
 	return stub.Store.Claim(ctx, options)
+}
+
+func (stub stubStore) Succeed(ctx context.Context, id, token, code string) (bool, error) {
+	if stub.succeed != nil {
+		return stub.succeed(ctx, id, token, code)
+	}
+	return stub.Store.Succeed(ctx, id, token, code)
+}
+
+type queueObserverFunc func(context.Context, observe.Observation)
+
+func (observer queueObserverFunc) ObserveGolem(ctx context.Context, value observe.Observation) {
+	observer(ctx, value)
 }
 
 func register(t *testing.T, registry *queue.Registry, definition queue.Definition[gatePayload]) queue.Type[gatePayload] {
@@ -264,7 +284,9 @@ func TestCancellation(t *testing.T) {
 			Handle: func(context.Context, queue.Job[gatePayload]) error { return nil },
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType, queue.After(time.Hour)))
-		control, err := NewOperator(fixture.store)
+		records := make(chan observe.Observation, 2)
+		observer := queueObserverFunc(func(_ context.Context, value observe.Observation) { records <- value })
+		control, err := NewOperator(fixture.store, golem.SQLite, observer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -274,6 +296,13 @@ func TestCancellation(t *testing.T) {
 		}
 		if record := fixture.inspect(t, identity); record.State != queueprovider.StateCanceled || record.FinishedAt == nil {
 			t.Fatalf("pending cancel produced %#v", record)
+		}
+		if len(records) != 1 {
+			t.Fatalf("pending cancel observations=%d", len(records))
+		}
+		observation := <-records
+		if observation.Phase() != observe.PhaseCancel || observation.Outcome() != observe.OutcomeCancelled || observation.QueueType() != "gate.cancel.pending" || observation.Attempt() != 0 {
+			t.Fatalf("pending cancel observation=%#v", observation)
 		}
 	})
 
@@ -292,9 +321,11 @@ func TestCancellation(t *testing.T) {
 			},
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType))
-		_, stop := fixture.start(t, fixture.store, registry, gateLimits())
+		records := make(chan observe.Observation, 4)
+		observer := queueObserverFunc(func(_ context.Context, value observe.Observation) { records <- value })
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, observer)
 		awaitSignal(t, started, "the handler to start")
-		control, err := NewOperator(fixture.store)
+		control, err := NewOperator(fixture.store, golem.SQLite, observer)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -308,6 +339,13 @@ func TestCancellation(t *testing.T) {
 		}
 		if cause, _ := causes.Load().(error); !errors.Is(cause, ErrCanceled) {
 			t.Fatalf("handler observed cancellation cause %v", cause)
+		}
+		if len(records) != 2 {
+			t.Fatalf("running cancel observations=%d", len(records))
+		}
+		startedObservation, canceledObservation := <-records, <-records
+		if startedObservation.Phase() != observe.PhaseStart || canceledObservation.Phase() != observe.PhaseCancel || canceledObservation.Outcome() != observe.OutcomeCancelled {
+			t.Fatalf("running cancel observations=%#v %#v", startedObservation, canceledObservation)
 		}
 	})
 
@@ -327,7 +365,7 @@ func TestCancellation(t *testing.T) {
 		if err != nil || len(claimed) != 1 {
 			t.Fatalf("crashed owner claim %#v error=%v", claimed, err)
 		}
-		control, err := NewOperator(fixture.store)
+		control, err := NewOperator(fixture.store, "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -531,7 +569,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 			}
 			return records, err
 		}}
-		worker, err := New(store, registry, gateLimits())
+		worker, err := New(store, registry, gateLimits(), "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -566,7 +604,7 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 			},
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType))
-		worker, err := New(fixture.store, registry, gateLimits())
+		worker, err := New(fixture.store, registry, gateLimits(), "", nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -588,13 +626,269 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 			t.Fatalf("shutdown discarded a completed job's outcome: %#v", record)
 		}
 	})
+
+	t.Run("context-aware final attempt completes inside grace", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		started := make(chan struct{})
+		release := make(chan struct{})
+		canceled := make(chan error, 1)
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type:        "gate.shutdown.final",
+			MaxAttempts: 1,
+			Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+				close(started)
+				select {
+				case <-ctx.Done():
+					canceled <- context.Cause(ctx)
+					return ctx.Err()
+				case <-release:
+					return nil
+				}
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		limits := gateLimits()
+		limits.ShutdownGrace = 500 * time.Millisecond
+		worker, err := New(fixture.store, registry, limits, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- worker.Run(ctx) }()
+		awaitSignal(t, started, "the final-attempt handler to start")
+		cancel()
+		select {
+		case cause := <-canceled:
+			t.Fatalf("handler was canceled before grace expired: %v", cause)
+		case <-time.After(100 * time.Millisecond):
+		}
+		close(release)
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("worker did not stop after graceful completion")
+		}
+		record := fixture.inspect(t, identity)
+		if record.State != queueprovider.StateSucceeded || record.AttemptCount != 1 {
+			t.Fatalf("graceful shutdown damaged the final attempt: %#v", record)
+		}
+	})
+
+	t.Run("handler cancellation begins only after grace", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		started := make(chan struct{})
+		canceled := make(chan error, 1)
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type:        "gate.shutdown.expired",
+			MaxAttempts: 1,
+			Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+				close(started)
+				<-ctx.Done()
+				canceled <- context.Cause(ctx)
+				return ctx.Err()
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		limits := gateLimits()
+		limits.ShutdownGrace = 150 * time.Millisecond
+		worker, err := New(fixture.store, registry, limits, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan error, 1)
+		go func() { done <- worker.Run(ctx) }()
+		awaitSignal(t, started, "the handler to start")
+		startedShutdown := time.Now()
+		cancel()
+		select {
+		case cause := <-canceled:
+			t.Fatalf("handler was canceled before grace expired: %v", cause)
+		case <-time.After(75 * time.Millisecond):
+		}
+		select {
+		case cause := <-canceled:
+			if !errors.Is(cause, errShutdown) {
+				t.Fatalf("shutdown cause=%v", cause)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("handler was not canceled after grace expired")
+		}
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("worker did not stop after forced shutdown")
+		}
+		if elapsed := time.Since(startedShutdown); elapsed < limits.ShutdownGrace || elapsed > 3*limits.ShutdownGrace {
+			t.Fatalf("shutdown duration=%s grace=%s", elapsed, limits.ShutdownGrace)
+		}
+		record := fixture.inspect(t, identity)
+		if record.State != queueprovider.StateLeased || record.LastCode != "" {
+			t.Fatalf("forced shutdown recorded a handler failure: %#v", record)
+		}
+	})
+}
+
+func TestQueueLifecycleObservationsFollowDurableTransitions(t *testing.T) {
+	t.Run("retry then success", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.observe.retry", MaxAttempts: 2, Backoff: queue.Backoff{Base: time.Millisecond, Cap: time.Millisecond},
+			Handle: func(_ context.Context, job queue.Job[gatePayload]) error {
+				if job.Attempt == 1 {
+					return errors.New("private handler detail")
+				}
+				return nil
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		records := make(chan observe.Observation, 8)
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+			records <- value
+		}))
+		awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+		stop()
+		got := make([]observe.Observation, 0, len(records))
+		for len(records) != 0 {
+			got = append(got, <-records)
+		}
+		if len(got) != 4 {
+			t.Fatalf("observations=%d", len(got))
+		}
+		wantPhases := []observe.Phase{observe.PhaseStart, observe.PhaseRetry, observe.PhaseStart, observe.PhaseFinish}
+		wantOutcomes := []observe.Outcome{observe.OutcomeSuccess, observe.OutcomeRetrying, observe.OutcomeSuccess, observe.OutcomeSuccess}
+		wantAttempts := []int{1, 1, 2, 2}
+		for index, value := range got {
+			if value.Kind() != observe.KindQueue || value.Operation() != observe.OperationQueueExecute || value.QueueType() != "gate.observe.retry" || value.Provider() != golem.SQLite || value.Phase() != wantPhases[index] || value.Outcome() != wantOutcomes[index] || value.Attempt() != wantAttempts[index] || value.Reason() != observe.ReasonNone {
+				t.Fatalf("observation %d=%#v", index, value)
+			}
+		}
+	})
+
+	t.Run("attempt exhaustion", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.observe.exhausted", MaxAttempts: 1,
+			Handle: func(context.Context, queue.Job[gatePayload]) error { return errors.New("private handler detail") },
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		records := make(chan observe.Observation, 4)
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+			records <- value
+		}))
+		awaitState(t, fixture, identity, queueprovider.StateFailed)
+		stop()
+		if len(records) != 2 {
+			t.Fatalf("observations=%d", len(records))
+		}
+		<-records
+		finished := <-records
+		if finished.Phase() != observe.PhaseFinish || finished.Outcome() != observe.OutcomeFailure || finished.Reason() != observe.ReasonLimit || finished.Attempt() != 1 {
+			t.Fatalf("exhaustion observation=%#v", finished)
+		}
+	})
+
+	t.Run("timeout retry", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.observe.timeout", MaxAttempts: 2, Timeout: 20 * time.Millisecond,
+			Backoff: queue.Backoff{Base: time.Hour, Cap: time.Hour},
+			Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+				<-ctx.Done()
+				return errors.New("private timeout detail")
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		retried := make(chan struct{}, 1)
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+			if value.Phase() == observe.PhaseRetry && value.Reason() == observe.ReasonTimeout {
+				retried <- struct{}{}
+			}
+		}))
+		awaitRecord(t, fixture, identity, "retry after timeout", func(record queueprovider.Record) bool {
+			return record.State == queueprovider.StatePending && record.LastCode == codeRetry
+		})
+		awaitSignal(t, retried, "the timeout observation")
+		stop()
+	})
+
+	t.Run("lost fence emits no false finish", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		executed := make(chan struct{})
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type:   "gate.observe.fenced",
+			Handle: func(context.Context, queue.Job[gatePayload]) error { close(executed); return nil },
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		records := make(chan observe.Observation, 4)
+		store := stubStore{Store: fixture.store, succeed: func(context.Context, string, string, string) (bool, error) { return false, nil }}
+		_, stop := fixture.startObserved(t, store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+			records <- value
+		}))
+		awaitSignal(t, executed, "the fenced handler to execute")
+		time.Sleep(25 * time.Millisecond)
+		stop()
+		if len(records) != 1 || (<-records).Phase() != observe.PhaseStart {
+			t.Fatalf("lost fence observations=%d job=%#v", len(records), fixture.inspect(t, identity))
+		}
+	})
+
+	t.Run("observer panic is correctness-neutral", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		jobType := register(t, registry, queue.Definition[gatePayload]{Type: "gate.observe.panic", Handle: func(context.Context, queue.Job[gatePayload]) error { return nil }})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(context.Context, observe.Observation) { panic("observer") }))
+		awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+		stop()
+	})
+
+	t.Run("blocking observer cannot delay execution", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		entry := make(chan error, 1)
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.observe.blocking", Timeout: 50 * time.Millisecond,
+			Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+				entry <- ctx.Err()
+				return nil
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(ctx context.Context, _ observe.Observation) {
+			<-ctx.Done()
+		}))
+		select {
+		case err := <-entry:
+			if err != nil {
+				t.Fatalf("observer delayed handler past its deadline: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("blocking observer prevented handler start")
+		}
+		awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+		stop()
+	})
 }
 
 // TestOperatorSurface proves each operator action touches only the state it
 // owns.
 func TestOperatorSurface(t *testing.T) {
 	fixture := newHarness(t)
-	control, err := NewOperator(fixture.store)
+	control, err := NewOperator(fixture.store, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,8 +912,18 @@ func TestOperatorSurface(t *testing.T) {
 	if changed, err := fixture.store.Fail(ctx, failed, leased[0].LeaseToken, codeTerminal); err != nil || !changed {
 		t.Fatalf("fail changed=%t error=%v", changed, err)
 	}
-	if changed, err := control.Requeue(ctx, queue.JobID(failed)); err != nil || !changed {
-		t.Fatalf("requeue changed=%t error=%v", changed, err)
+	page, err := control.ListFailed(ctx, queue.FailedQuery{Types: []string{"gate.operator"}, Limit: 1})
+	if err != nil || len(page.Jobs) != 1 || page.Jobs[0].ID != queue.JobID(failed) || page.Jobs[0].State != queue.StateFailed || page.Jobs[0].FinishedAt == nil {
+		t.Fatalf("failed page=%#v error=%v", page, err)
+	}
+	if _, err := control.ListFailed(ctx, queue.FailedQuery{}); func() bool {
+		code, ok := queue.CodeOf(err)
+		return !ok || code != queue.CodeConfigInvalid
+	}() {
+		t.Fatalf("unbounded failed query returned %v", err)
+	}
+	if changed, err := control.RequeueFailed(ctx, []queue.JobID{queue.JobID(failed)}); err != nil || changed != 1 {
+		t.Fatalf("requeue failed changed=%d error=%v", changed, err)
 	}
 	status, err := control.Inspect(ctx, queue.JobID(failed))
 	if err != nil || status.State != queue.StatePending || status.Attempt != 0 || status.FinishedAt != nil {
@@ -673,7 +977,7 @@ func TestStartupValidation(t *testing.T) {
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
-			worker, err := New(row.store, row.registry, row.limits)
+			worker, err := New(row.store, row.registry, row.limits, "", nil)
 			if worker != nil {
 				t.Fatalf("refused configuration produced a worker")
 			}
@@ -682,7 +986,7 @@ func TestStartupValidation(t *testing.T) {
 			}
 		})
 	}
-	worker, err := New(fixture.store, populated, gateLimits())
+	worker, err := New(fixture.store, populated, gateLimits(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

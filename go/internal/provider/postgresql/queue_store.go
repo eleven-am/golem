@@ -6,17 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/eleven-am/golem/go/internal/physical"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
 
 const (
 	postgresqlQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
+	postgresqlQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	postgresqlQueueClaim   = `(("status"='pending' AND "available_at"<=clock_timestamp()) OR ("status"='leased' AND "lease_until"<=clock_timestamp()))`
 )
 
@@ -117,13 +120,17 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		names = append(names, "$"+strconv.Itoa(len(arguments)))
 	}
 	arguments = append(arguments, options.Limit)
-	discovery := `SELECT "id","exclusive_key" FROM ` + store.table() + ` AS job WHERE ` + postgresqlQueueClaim +
+	discovery := `SELECT "id","status","attempt_count","max_attempts","cancel_requested_at","exclusive_key" FROM ` + store.table() + ` AS job WHERE ` + postgresqlQueueClaim +
 		` AND "type" IN (` + strings.Join(names, ",") + `)` +
 		` AND ("exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM ` + store.table() + ` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">clock_timestamp()))` +
 		` ORDER BY "available_at","id" LIMIT $` + strconv.Itoa(len(arguments)) + ` FOR UPDATE OF job SKIP LOCKED`
 	var candidates []struct {
-		ID           string         `db:"id"`
-		ExclusiveKey sql.NullString `db:"exclusive_key"`
+		ID              string         `db:"id"`
+		Status          string         `db:"status"`
+		Attempts        int64          `db:"attempt_count"`
+		MaxAttempts     int64          `db:"max_attempts"`
+		CancelRequested sql.NullTime   `db:"cancel_requested_at"`
+		ExclusiveKey    sql.NullString `db:"exclusive_key"`
 	}
 	if err := transaction.SelectContext(ctx, &candidates, discovery, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: discover claimable jobs: %w", err)
@@ -131,6 +138,36 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	held := make(map[string]struct{}, len(candidates))
 	records := make([]queueprovider.Record, 0, len(candidates))
 	for _, candidate := range candidates {
+		if candidate.Status == string(queueprovider.StateLeased) && candidate.CancelRequested.Valid {
+			result, updateErr := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"last_code"=$1,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$2 AND "status"='leased' AND "lease_until"<=clock_timestamp() AND "cancel_requested_at" IS NOT NULL`,
+				queueprovider.CodeCanceled, candidate.ID)
+			if updateErr != nil {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: cancel expired lease: %w", updateErr)
+			}
+			changed, resultErr := result.RowsAffected()
+			if resultErr != nil {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired cancellation result: %w", resultErr)
+			}
+			if changed != 1 {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired cancellation changed %d rows", changed)
+			}
+			continue
+		}
+		if candidate.Status == string(queueprovider.StateLeased) && candidate.Attempts >= candidate.MaxAttempts {
+			result, updateErr := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='failed',"lease_token"=NULL,"lease_until"=NULL,"last_code"=$1,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$2 AND "status"='leased' AND "lease_until"<=clock_timestamp() AND "attempt_count">="max_attempts"`,
+				queueprovider.CodeAttemptsExhausted, candidate.ID)
+			if updateErr != nil {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: fail exhausted lease: %w", updateErr)
+			}
+			changed, resultErr := result.RowsAffected()
+			if resultErr != nil {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: exhausted lease result: %w", resultErr)
+			}
+			if changed != 1 {
+				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: exhausted lease changed %d rows", changed)
+			}
+			continue
+		}
 		if candidate.ExclusiveKey.Valid {
 			if _, taken := held[candidate.ExclusiveKey.String]; taken {
 				continue
@@ -246,22 +283,38 @@ func (store *queueStore) Release(ctx context.Context, id, token string) (bool, e
 	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='pending',"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "lease_token"=$2 AND "status"='leased'`, id, token)
 }
 
-func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
+func (store *queueStore) Cancel(ctx context.Context, id string) (queueprovider.CancelResult, error) {
 	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is invalid")
+		return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is invalid")
 	}
-	immediate, err := store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='pending'`, id)
-	if err != nil || immediate {
-		return immediate, err
+	var typeName string
+	var attempt int64
+	err := store.database.QueryRowxContext(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"last_code"='canceled',"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='pending' RETURNING "type","attempt_count"`, id).Scan(&typeName, &attempt)
+	if err == nil {
+		return queueprovider.CancelResult{Changed: true, Terminal: true, Type: typeName, AttemptCount: attempt}, nil
 	}
-	return store.fenced(ctx, `UPDATE `+store.table()+` SET "cancel_requested_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='leased'`, id)
+	if !errors.Is(err, sql.ErrNoRows) {
+		return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: cancel pending job: %w", err)
+	}
+	err = store.database.QueryRowxContext(ctx, `UPDATE `+store.table()+` SET "cancel_requested_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='leased' AND "cancel_requested_at" IS NULL RETURNING "type","attempt_count"`, id).Scan(&typeName, &attempt)
+	if err == nil {
+		return queueprovider.CancelResult{Changed: true, Type: typeName, AttemptCount: attempt}, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return queueprovider.CancelResult{}, nil
+	}
+	return queueprovider.CancelResult{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: request leased cancellation: %w", err)
 }
 
 func (store *queueStore) Requeue(ctx context.Context, id string) (bool, error) {
 	if id == "" || len(id) > 64 {
 		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: job identity is invalid")
 	}
-	return store.fenced(ctx, `UPDATE `+store.table()+` SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status" IN ('failed','canceled')`, id)
+	changed, err := store.fenced(ctx, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status" IN ('failed','canceled') AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
+	if postgresqlDedupeConflict(err) {
+		return false, nil
+	}
+	return changed, err
 }
 
 func (store *queueStore) RunRetention(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {
@@ -285,6 +338,70 @@ func (store *queueStore) Inspect(ctx context.Context, id string) (queueprovider.
 		return queueprovider.Record{}, queueprovider.ErrNotFound
 	}
 	return record, err
+}
+
+func (store *queueStore) ListFailed(ctx context.Context, query queueprovider.FailedQuery) (queueprovider.FailedPage, error) {
+	if err := queueprovider.ValidateFailedQuery(query); err != nil {
+		return queueprovider.FailedPage{}, err
+	}
+	where := []string{`"status"='failed'`}
+	arguments := make([]any, 0, len(query.Types)+4)
+	if len(query.Types) != 0 {
+		parameters := make([]string, len(query.Types))
+		for index, name := range query.Types {
+			arguments = append(arguments, name)
+			parameters[index] = "$" + strconv.Itoa(len(arguments))
+		}
+		where = append(where, `"type" IN (`+strings.Join(parameters, ",")+`)`)
+	}
+	if query.Before != nil {
+		finished := query.Before.FinishedAt.UTC().Truncate(time.Microsecond)
+		arguments = append(arguments, finished, finished, query.Before.ID)
+		first := len(arguments) - 2
+		where = append(where, `("finished_at"<$`+strconv.Itoa(first)+` OR ("finished_at"=$`+strconv.Itoa(first+1)+` AND "id"<$`+strconv.Itoa(first+2)+`))`)
+	}
+	arguments = append(arguments, query.Limit+1)
+	statement := `SELECT ` + postgresqlQueueSummary + ` FROM ` + store.table() + ` WHERE ` + strings.Join(where, ` AND `) + ` ORDER BY "finished_at" DESC,"id" DESC LIMIT $` + strconv.Itoa(len(arguments))
+	var rows []postgresqlQueueSummaryRow
+	if err := store.database.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return queueprovider.FailedPage{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: list failed jobs: %w", err)
+	}
+	page := queueprovider.FailedPage{More: len(rows) > query.Limit}
+	if page.More {
+		rows = rows[:query.Limit]
+	}
+	page.Jobs = make([]queueprovider.Summary, len(rows))
+	for index, row := range rows {
+		page.Jobs[index] = row.summary()
+	}
+	return page, nil
+}
+
+func (store *queueStore) RequeueFailed(ctx context.Context, ids []string) (int, error) {
+	if err := queueprovider.ValidateOperatorIDs(ids); err != nil {
+		return 0, err
+	}
+	ordered := append([]string(nil), ids...)
+	sort.Strings(ordered)
+	changed := 0
+	for _, id := range ordered {
+		requeued, err := store.fenced(ctx, `UPDATE `+store.table()+` AS job SET "status"='pending',"attempt_count"=0,"available_at"=clock_timestamp(),"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"last_code"=NULL,"finished_at"=NULL,"updated_at"=clock_timestamp() WHERE "id"=$1 AND "status"='failed' AND ("dedupe_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+store.table()+` AS active WHERE active."id"<>job."id" AND active."dedupe_key"=job."dedupe_key" AND active."status" IN ('pending','leased')))`, id)
+		if postgresqlDedupeConflict(err) {
+			continue
+		}
+		if err != nil {
+			return changed, err
+		}
+		if requeued {
+			changed++
+		}
+	}
+	return changed, nil
+}
+
+func postgresqlDedupeConflict(err error) bool {
+	var failure *pgconn.PgError
+	return errors.As(err, &failure) && failure.Code == "23505" && failure.ConstraintName == "golem_queue_dedupe"
 }
 
 func (store *queueStore) fenced(ctx context.Context, statement string, arguments ...any) (bool, error) {
@@ -316,6 +433,29 @@ type postgresqlQueueRow struct {
 	EnqueuedAt        time.Time      `db:"enqueued_at"`
 	FinishedAt        sql.NullTime   `db:"finished_at"`
 	UpdatedAt         time.Time      `db:"updated_at"`
+}
+
+type postgresqlQueueSummaryRow struct {
+	ID                string         `db:"id"`
+	Type              string         `db:"type"`
+	Status            string         `db:"status"`
+	AttemptCount      int64          `db:"attempt_count"`
+	MaxAttempts       int64          `db:"max_attempts"`
+	AvailableAt       time.Time      `db:"available_at"`
+	CancelRequestedAt sql.NullTime   `db:"cancel_requested_at"`
+	LastCode          sql.NullString `db:"last_code"`
+	EnqueuedAt        time.Time      `db:"enqueued_at"`
+	FinishedAt        sql.NullTime   `db:"finished_at"`
+}
+
+func (row postgresqlQueueSummaryRow) summary() queueprovider.Summary {
+	return queueprovider.Summary{
+		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
+		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+		AvailableAt: row.AvailableAt.UTC().Truncate(time.Microsecond), CancelRequested: row.CancelRequestedAt.Valid,
+		LastCode: row.LastCode.String, EnqueuedAt: row.EnqueuedAt.UTC().Truncate(time.Microsecond),
+		FinishedAt: postgresqlOptionalTime(row.FinishedAt),
+	}
 }
 
 func (store *queueStore) readJob(ctx context.Context, queryer sqlx.QueryerContext, id string) (queueprovider.Record, error) {

@@ -29,6 +29,7 @@ require (
 const externalApplicationGate = "TestExternalGeneratedApplicationPolicyKitMatchesCallerBehaviour"
 const externalQueryPlanApplicationGate = "TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted"
 const externalOptimisticConcurrencyApplicationGate = "TestExternalGeneratedApplicationOptimisticConcurrencyRaces"
+const externalQueueApplicationGate = "TestExternalGeneratedApplicationQueueIsUsable"
 
 var externalDatabasePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
@@ -56,6 +57,10 @@ func TestQueryPlanSQLiteAndPostgreSQLExternalGeneratedApplication(t *testing.T) 
 
 func TestOptimisticConcurrencySQLiteAndPostgreSQLExternalGeneratedApplication(t *testing.T) {
 	runExternalGeneratedApplication(t, externalOptimisticConcurrencyApplicationGate)
+}
+
+func TestQueueSQLiteAndPostgreSQLExternalGeneratedApplication(t *testing.T) {
+	runExternalGeneratedApplication(t, externalQueueApplicationGate)
 }
 
 func runExternalGeneratedApplication(t *testing.T, gate string) {
@@ -117,6 +122,7 @@ func externalApplicationConsumer(t *testing.T, moduleRoot string) string {
 		filepath.Join("gate", "gate_test.go"),
 		filepath.Join("gate", "queryplan_test.go"),
 		filepath.Join("gate", "optimistic_concurrency_test.go"),
+		filepath.Join("gate", "queue_test.go"),
 	}
 	for _, entry := range entries {
 		content, readErr := os.ReadFile(filepath.Join(source, entry))

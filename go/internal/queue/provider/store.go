@@ -27,11 +27,14 @@ const (
 )
 
 const (
-	MaximumClaimJobs     = 256
-	MaximumClaimTypes    = 256
-	MaximumRetentionRows = 4096
-	MaximumPayloadBytes  = 1 << 20
-	MaximumKeyBytes      = 256
+	MaximumClaimJobs      = 256
+	MaximumClaimTypes     = 256
+	MaximumRetentionRows  = 4096
+	MaximumPayloadBytes   = 1 << 20
+	MaximumKeyBytes       = 256
+	MaximumOperatorBatch  = 256
+	CodeAttemptsExhausted = "attempts_exhausted"
+	CodeCanceled          = "canceled"
 )
 
 // ErrNotFound reports an inspection of an absent job.
@@ -94,6 +97,48 @@ type RetentionPolicy struct {
 	MaxRows   int
 }
 
+// Summary is the payload-free projection used by queue operators.
+type Summary struct {
+	ID              string
+	Type            string
+	State           State
+	AttemptCount    int64
+	MaxAttempts     int64
+	AvailableAt     time.Time
+	CancelRequested bool
+	LastCode        string
+	EnqueuedAt      time.Time
+	FinishedAt      *time.Time
+}
+
+// FailedCursor is the stable position immediately after one failed job.
+type FailedCursor struct {
+	FinishedAt time.Time
+	ID         string
+}
+
+// FailedQuery selects one bounded page of failed jobs.
+type FailedQuery struct {
+	Types  []string
+	Limit  int
+	Before *FailedCursor
+}
+
+// FailedPage carries payload-free failed jobs and whether another page exists.
+type FailedPage struct {
+	Jobs []Summary
+	More bool
+}
+
+// CancelResult distinguishes immediate terminal cancellation from a durable
+// request observed later by the lease owner.
+type CancelResult struct {
+	Changed      bool
+	Terminal     bool
+	Type         string
+	AttemptCount int64
+}
+
 // Executor is the seam a transactional enqueue runs on. Both *sqlx.DB and
 // *sqlx.Tx satisfy it, so an enqueue can join the caller's transaction rather
 // than escaping to the pool.
@@ -116,8 +161,10 @@ type Store interface {
 	MarkCanceled(ctx context.Context, id, token, code string) (bool, error)
 	Release(ctx context.Context, id, token string) (bool, error)
 	Inspect(ctx context.Context, id string) (Record, error)
-	Cancel(ctx context.Context, id string) (bool, error)
+	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
+	Cancel(ctx context.Context, id string) (CancelResult, error)
 	Requeue(ctx context.Context, id string) (bool, error)
+	RequeueFailed(ctx context.Context, ids []string) (int, error)
 	RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)
 }
 
@@ -195,6 +242,48 @@ func ValidateRetention(policy RetentionPolicy) error {
 	}
 	if policy.MaxRows <= 0 || policy.MaxRows > MaximumRetentionRows {
 		return fmt.Errorf("QUEUE_RETENTION_LIMIT: retention rows must be within 1..%d", MaximumRetentionRows)
+	}
+	return nil
+}
+
+// ValidateFailedQuery refuses unbounded or unstable operator discovery.
+func ValidateFailedQuery(query FailedQuery) error {
+	if query.Limit <= 0 || query.Limit > MaximumOperatorBatch {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: page size must be within 1..%d", MaximumOperatorBatch)
+	}
+	if len(query.Types) > MaximumClaimTypes {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: query covers more than %d types", MaximumClaimTypes)
+	}
+	seen := make(map[string]struct{}, len(query.Types))
+	for _, name := range query.Types {
+		if !canonicalName.MatchString(name) {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job type is not canonical")
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job type is repeated")
+		}
+		seen[name] = struct{}{}
+	}
+	if query.Before != nil && (query.Before.FinishedAt.IsZero() || query.Before.ID == "" || len(query.Before.ID) > 64) {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: failed cursor is invalid")
+	}
+	return nil
+}
+
+// ValidateOperatorIDs refuses unbounded or ambiguous bulk recovery.
+func ValidateOperatorIDs(ids []string) error {
+	if len(ids) > MaximumOperatorBatch {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: recovery batch must contain at most %d jobs", MaximumOperatorBatch)
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" || len(id) > 64 {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job identity is invalid")
+		}
+		if _, exists := seen[id]; exists {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job identity is repeated")
+		}
+		seen[id] = struct{}{}
 	}
 	return nil
 }

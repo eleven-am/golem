@@ -35,6 +35,7 @@ var AttributeNames = [...]string{
 	"golem.queue_depth",
 	"golem.queue_limit",
 	"golem.aggregate_count",
+	"golem.queue.type",
 }
 
 type Record struct {
@@ -51,6 +52,7 @@ type Record struct {
 	QueueDepth     int64
 	QueueLimit     int64
 	AggregateCount int64
+	QueueType      string
 }
 
 func Normalize(value observe.Observation) Record {
@@ -69,5 +71,6 @@ func Normalize(value observe.Observation) Record {
 		QueueDepth:     int64(value.QueueDepth()),
 		QueueLimit:     int64(value.QueueLimit()),
 		AggregateCount: value.AggregateCount(),
+		QueueType:      value.QueueType(),
 	}
 }

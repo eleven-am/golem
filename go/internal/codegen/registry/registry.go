@@ -111,6 +111,8 @@ func Emit(request Request) (File, error) {
 	providerAlias := imports.qualify(providerPath, "provider")
 	embeddingPath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/embedding"
 	embeddingAlias := imports.qualify(embeddingPath, "embedding")
+	queuePath := strings.TrimSuffix(request.GolemImportPath, "/golem") + "/queue"
+	queueAlias := imports.qualify(queuePath, "queue")
 	contextAlias := imports.qualify("context", "context")
 	fmtAlias := imports.qualify("fmt", "fmt")
 	models := append([]ir.ModelDeclIR(nil), request.Schema.Model.Models...)
@@ -207,7 +209,7 @@ func Emit(request Request) (File, error) {
 		}
 		source.WriteString("\t)\n}\n")
 	}
-	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic)
+	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -219,10 +221,11 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index) {
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index) {
 	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
 	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tEmbeddings %s.Registry\n", embeddingAlias)
+	fmt.Fprintf(source, "\tQueue *%s.QueueConfig\n", runtimeAlias)
 	fmt.Fprintf(source, "\tReadLimits %s.ReadLimits\n\tMutationLimits %s.MutationLimits\n\tAnalyticsLimits %s.AnalyticsLimits\n", runtimeAlias, runtimeAlias, runtimeAlias)
 	fmt.Fprintf(source, "\tEventLimits %s.Limits\n\tEventTransport %s.EventTransport\n\tObserver %s.Observer\n", eventsAlias, eventsAlias, observeAlias)
 	fmt.Fprintf(source, "\tCDCAdapters []%s.CDCAdapter\n\tReportEventOperator %s.OperatorAudit\n", eventsAlias, eventsAlias)
@@ -333,6 +336,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	}
 	source.WriteString("\tengineConfig.Bundle = GolemGeneratedSchemaBundle()\n\tengineConfig.Bindings = bindings\n\tengineConfig.Descriptors = descriptors\n")
 	source.WriteString("\tengineConfig.Embeddings = config.Embeddings\n")
+	source.WriteString("\tengineConfig.Queue = config.Queue\n")
 	source.WriteString("\tengineConfig.ReadLimits = config.ReadLimits\n\tengineConfig.MutationLimits = config.MutationLimits\n\tengineConfig.AnalyticsLimits = config.AnalyticsLimits\n")
 	source.WriteString("\tengineConfig.EventRegistry = eventRegistry\n\tengineConfig.EventFactories = eventFactories\n\tengineConfig.EventLimits = config.EventLimits\n\tengineConfig.EventTransport = config.EventTransport\n\tengineConfig.Observer = config.Observer\n")
 	source.WriteString("\tengineConfig.CDCAdapters = config.CDCAdapters\n\tengineConfig.ReportEventOperator = config.ReportEventOperator\n\tengineConfig.HistoricalEventBundles = config.HistoricalEventBundles\n")
@@ -342,6 +346,9 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 	source.WriteString("\tif err != nil { return nil, err }\n\treturn &App[P]{runtime: engine, observer: config.Observer, provider: config.Database.Provider()}, nil\n}\n")
 	fmt.Fprintf(source, "\nfunc (app *App[P]) RunEventPublisher(ctx %s.Context) error { if app == nil { return %s.Failure(%s.CodeEventConfig) }; return app.runtime.RunEventPublisher(ctx) }\n", contextAlias, eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) RefreshSemanticIndexes(ctx %s.Context) error { if app == nil { return %s.Errorf(\"P9_SEMANTIC_RUNTIME: application is required\") }; return app.runtime.RefreshSemanticIndexes(ctx) }\n", contextAlias, fmtAlias)
+	fmt.Fprintf(source, "func (app *App[P]) RunQueueWorker(ctx %s.Context) error { if app == nil { return %s.Fail(%s.CodeConfigInvalid, \"application is required\") }; return app.runtime.RunQueueWorker(ctx) }\n", contextAlias, queueAlias, queueAlias)
+	fmt.Fprintf(source, "func (app *App[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if app == nil { return \"\", %s.Fail(%s.CodeConfigInvalid, \"application is required\") }; return app.runtime.Enqueue(ctx, pending) }\n", contextAlias, queueAlias, queueAlias, queueAlias, queueAlias)
+	fmt.Fprintf(source, "func (app *App[P]) QueueOperator() %s.Operator { if app == nil { return nil }; return app.runtime.QueueOperator() }\n", queueAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventCapabilities() %s.Capabilities { if app == nil { return %s.Capabilities{} }; return app.runtime.EventCapabilities() }\n", eventsAlias, eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventOperator() %s.Operator { if app == nil { return nil }; return app.runtime.EventOperator() }\n", eventsAlias)
 	fmt.Fprintf(source, "func (app *App[P]) EventLimits() %s.Limits { if app == nil { return %s.Limits{} }; return app.runtime.EventLimits() }\n", eventsAlias, eventsAlias)
@@ -364,6 +371,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "\t\tresult.%s = CallerTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+	fmt.Fprintf(source, "func (transaction *CallerTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.CallerTxEnqueue(ctx, (*%s.CallerTx[P, %s])(nil), pending) }; return %s.CallerTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 	fmt.Fprintf(source, "\nfunc (system System[P]) Transaction(ctx %s.Context, callback func(*SystemTx[P]) error) error {\n", contextAlias)
 	fmt.Fprintf(source, "\tif callback == nil { return %s.SystemTransaction(ctx, system.runtime, nil) }\n", runtimeAlias)
 	fmt.Fprintf(source, "\treturn %s.SystemTransaction(ctx, system.runtime, func(inner *%s.SystemTx[P, %s]) error {\n", runtimeAlias, runtimeAlias, actorType)
@@ -372,6 +380,7 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "\t\tresult.%s = SystemTx%sClient[P]{runtime: inner}\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("\t\treturn callback(result)\n\t})\n}\n")
+	fmt.Fprintf(source, "func (transaction *SystemTx[P]) Enqueue(ctx %s.Context, pending %s.Pending) (%s.JobID, error) { if transaction == nil { return %s.SystemTxEnqueue(ctx, (*%s.SystemTx[P, %s])(nil), pending) }; return %s.SystemTxEnqueue(ctx, transaction.runtime, pending) }\n", contextAlias, queueAlias, queueAlias, runtimeAlias, runtimeAlias, actorType, runtimeAlias)
 }
 
 func emitQueryPlanClientMethods(source *bytes.Buffer, goName, modelType, contextAlias, golemAlias, runtimeAlias, queryplanAlias, descriptor string, relation, scoped bool) {

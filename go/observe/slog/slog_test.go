@@ -72,7 +72,7 @@ func TestSlogAdapterEmitsOnlyStableClosedAttributes(t *testing.T) {
 		"golem.operation": "mutation.update", "golem.model_id": "00000000000000000000000000000009",
 		"golem.duration_ns": int64(7 * time.Millisecond), "golem.statement_count": int64(3),
 		"golem.attempt": int64(2), "golem.queue_depth": int64(4), "golem.queue_limit": int64(8),
-		"golem.aggregate_count": int64(5),
+		"golem.aggregate_count": int64(5), "golem.queue.type": "",
 	}
 	if len(got) != len(want) {
 		t.Fatalf("attribute count=%d values=%v", len(got), got)

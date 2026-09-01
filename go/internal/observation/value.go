@@ -28,6 +28,7 @@ type Value struct {
 	QueueDepthValue     int
 	QueueLimitValue     int
 	AggregateCountValue int64
+	QueueTypeValue      string
 }
 
 // RegisterEmitter connects the private producer representation to the public

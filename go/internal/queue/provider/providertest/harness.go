@@ -141,6 +141,214 @@ func ExpiredLeaseIsReclaimedByOrdinaryClaim(t testing.TB, fixture Fixture) {
 	}
 }
 
+// ExpiredFinalAttemptFailsWithoutReexecution proves a crashed final attempt is terminal.
+func ExpiredFinalAttemptFailsWithoutReexecution(t testing.TB, fixture Fixture) {
+	t.Helper()
+	identity := enqueue(t, fixture, "gate.exhausted", request{maxAttempts: 2})
+	first := claimOne(t, fixture, "gate.exhausted", shortLease)
+	if first.AttemptCount != 1 {
+		t.Fatalf("first claim attempts=%d", first.AttemptCount)
+	}
+	time.Sleep(expiry)
+	second := claimOne(t, fixture, "gate.exhausted", shortLease)
+	if second.AttemptCount != 2 {
+		t.Fatalf("second claim attempts=%d", second.AttemptCount)
+	}
+	time.Sleep(expiry)
+	if records := claim(t, fixture, "gate.exhausted", longLease, 1); len(records) != 0 {
+		t.Fatalf("exhausted job was reclaimed: %#v", records)
+	}
+	record := inspect(t, fixture, identity)
+	if record.State != queueprovider.StateFailed || record.AttemptCount != 2 || record.LastCode != queueprovider.CodeAttemptsExhausted || record.FinishedAt == nil {
+		t.Fatalf("exhausted job=%#v", record)
+	}
+}
+
+// ExpiredCanceledLeaseIsTerminalWithoutReexecution proves durable
+// cancellation survives a crash even on the final attempt.
+func ExpiredCanceledLeaseIsTerminalWithoutReexecution(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	identity := enqueue(t, fixture, "gate.cancel.crash", request{maxAttempts: 1})
+	claimOne(t, fixture, "gate.cancel.crash", shortLease)
+	result, err := fixture.Store.Cancel(ctx, identity)
+	if err != nil || !result.Changed || result.Terminal {
+		t.Fatalf("cancel final lease result=%#v error=%v", result, err)
+	}
+	time.Sleep(expiry)
+	if records := claim(t, fixture, "gate.cancel.crash", longLease, 1); len(records) != 0 {
+		t.Fatalf("canceled final lease was reclaimed: %#v", records)
+	}
+	record := inspect(t, fixture, identity)
+	if record.State != queueprovider.StateCanceled || record.AttemptCount != 1 || record.LastCode != queueprovider.CodeCanceled || record.FinishedAt == nil || !record.CancelRequested || record.LeaseToken != "" {
+		t.Fatalf("expired canceled job=%#v", record)
+	}
+}
+
+// FailedJobsCanBeDiscoveredAndRecovered proves stable redacted paging and bounded recovery.
+func FailedJobsCanBeDiscoveredAndRecovered(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	oldest := enqueue(t, fixture, "gate.failed", request{})
+	oldestLease := claimOne(t, fixture, "gate.failed", longLease)
+	if changed, err := fixture.Store.Fail(ctx, oldest, oldestLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail oldest changed=%t error=%v", changed, err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	newest := enqueue(t, fixture, "gate.failed", request{})
+	newestLease := claimOne(t, fixture, "gate.failed", longLease)
+	if changed, err := fixture.Store.Fail(ctx, newest, newestLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail newest changed=%t error=%v", changed, err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	other := enqueue(t, fixture, "gate.other", request{})
+	otherLease := claimOne(t, fixture, "gate.other", longLease)
+	if changed, err := fixture.Store.Fail(ctx, other, otherLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail other changed=%t error=%v", changed, err)
+	}
+	pending := enqueue(t, fixture, "gate.failed", request{delay: time.Hour})
+
+	first, err := fixture.Store.ListFailed(ctx, queueprovider.FailedQuery{Types: []string{"gate.failed"}, Limit: 1})
+	if err != nil || len(first.Jobs) != 1 || !first.More || first.Jobs[0].ID != newest || first.Jobs[0].FinishedAt == nil {
+		t.Fatalf("first failed page=%#v error=%v", first, err)
+	}
+	cursor := queueprovider.FailedCursor{FinishedAt: *first.Jobs[0].FinishedAt, ID: first.Jobs[0].ID}
+	second, err := fixture.Store.ListFailed(ctx, queueprovider.FailedQuery{Types: []string{"gate.failed"}, Limit: 1, Before: &cursor})
+	if err != nil || len(second.Jobs) != 1 || second.More || second.Jobs[0].ID != oldest {
+		t.Fatalf("second failed page=%#v error=%v", second, err)
+	}
+	if second.Jobs[0].State != queueprovider.StateFailed || second.Jobs[0].LastCode != "terminal" || second.Jobs[0].AttemptCount != 1 {
+		t.Fatalf("failed summary=%#v", second.Jobs[0])
+	}
+
+	changed, err := fixture.Store.RequeueFailed(ctx, []string{oldest, pending, "absent"})
+	if err != nil || changed != 1 {
+		t.Fatalf("recover changed=%d error=%v", changed, err)
+	}
+	recovered := inspect(t, fixture, oldest)
+	if recovered.State != queueprovider.StatePending || recovered.AttemptCount != 0 || recovered.LastCode != "" || recovered.FinishedAt != nil {
+		t.Fatalf("recovered job=%#v", recovered)
+	}
+	if remaining, err := fixture.Store.ListFailed(ctx, queueprovider.FailedQuery{Limit: 3}); err != nil || len(remaining.Jobs) != 2 || remaining.Jobs[0].ID != other || remaining.Jobs[1].ID != newest {
+		t.Fatalf("remaining failed=%#v error=%v", remaining, err)
+	}
+
+	blocked := enqueue(t, fixture, "gate.dedupe", request{dedupe: "same"})
+	blockedLease := claimOne(t, fixture, "gate.dedupe", longLease)
+	if changed, err := fixture.Store.Fail(ctx, blocked, blockedLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail dedupe changed=%t error=%v", changed, err)
+	}
+	active := enqueue(t, fixture, "gate.dedupe", request{dedupe: "same", delay: time.Hour})
+	if active == blocked {
+		t.Fatal("terminal dedupe key did not admit a successor")
+	}
+	if changed, err := fixture.Store.RequeueFailed(ctx, []string{blocked}); err != nil || changed != 0 {
+		t.Fatalf("dedupe-conflicted recovery changed=%d error=%v", changed, err)
+	}
+	if record := inspect(t, fixture, blocked); record.State != queueprovider.StateFailed {
+		t.Fatalf("dedupe-conflicted job=%#v", record)
+	}
+
+	sharedFirst := enqueue(t, fixture, "gate.dedupe", request{dedupe: "batch-shared"})
+	sharedFirstLease := claimOne(t, fixture, "gate.dedupe", longLease)
+	if changed, err := fixture.Store.Fail(ctx, sharedFirst, sharedFirstLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail first shared job changed=%t error=%v", changed, err)
+	}
+	sharedSecond := enqueue(t, fixture, "gate.dedupe", request{dedupe: "batch-shared"})
+	sharedSecondLease := claimOne(t, fixture, "gate.dedupe", longLease)
+	if changed, err := fixture.Store.Fail(ctx, sharedSecond, sharedSecondLease.LeaseToken, "terminal"); err != nil || !changed {
+		t.Fatalf("fail second shared job changed=%t error=%v", changed, err)
+	}
+	if changed, err := fixture.Store.RequeueFailed(ctx, []string{sharedFirst, sharedSecond}); err != nil || changed != 1 {
+		t.Fatalf("shared-dedupe recovery changed=%d error=%v", changed, err)
+	}
+	states := map[queueprovider.State]int{}
+	states[inspect(t, fixture, sharedFirst).State]++
+	states[inspect(t, fixture, sharedSecond).State]++
+	if states[queueprovider.StatePending] != 1 || states[queueprovider.StateFailed] != 1 {
+		t.Fatalf("shared-dedupe recovery states=%v", states)
+	}
+
+	for round := 0; round < 8; round++ {
+		key := "race-shared-" + strconv.Itoa(round)
+		typeName := "gate.dedupe.race." + strconv.Itoa(round)
+		first := enqueue(t, fixture, typeName, request{dedupe: key})
+		firstLease := claimOne(t, fixture, typeName, longLease)
+		if changed, err := fixture.Store.Fail(ctx, first, firstLease.LeaseToken, "terminal"); err != nil || !changed {
+			t.Fatalf("fail raced first changed=%t error=%v", changed, err)
+		}
+		second := enqueue(t, fixture, typeName, request{dedupe: key})
+		secondLease := claimOne(t, fixture, typeName, longLease)
+		if changed, err := fixture.Store.Fail(ctx, second, secondLease.LeaseToken, "terminal"); err != nil || !changed {
+			t.Fatalf("fail raced second changed=%t error=%v", changed, err)
+		}
+		start := make(chan struct{})
+		var recovered atomic.Int64
+		var failure atomic.Value
+		var group sync.WaitGroup
+		for _, id := range []string{first, second} {
+			group.Add(1)
+			go func() {
+				defer group.Done()
+				<-start
+				changed, err := fixture.Store.Requeue(ctx, id)
+				if err != nil {
+					failure.Store(err)
+					return
+				}
+				if changed {
+					recovered.Add(1)
+				}
+			}()
+		}
+		close(start)
+		group.Wait()
+		if value := failure.Load(); value != nil || recovered.Load() != 1 {
+			t.Fatalf("concurrent shared-dedupe recovery changed=%d error=%v", recovered.Load(), value)
+		}
+	}
+}
+
+// CancellationIsDurableAndIdempotent proves immediate and cooperative
+// cancellation preserve one stable durable request.
+func CancellationIsDurableAndIdempotent(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	pending := enqueue(t, fixture, "gate.cancel.pending", request{delay: time.Hour})
+	if result, err := fixture.Store.Cancel(ctx, pending); err != nil || !result.Changed || !result.Terminal || result.Type != "gate.cancel.pending" || result.AttemptCount != 0 {
+		t.Fatalf("cancel pending result=%#v error=%v", result, err)
+	}
+	pendingRecord := inspect(t, fixture, pending)
+	if pendingRecord.State != queueprovider.StateCanceled || pendingRecord.LastCode != "canceled" || pendingRecord.FinishedAt == nil {
+		t.Fatalf("canceled pending job=%#v", pendingRecord)
+	}
+	if result, err := fixture.Store.Cancel(ctx, pending); err != nil || result.Changed {
+		t.Fatalf("repeat pending cancellation result=%#v error=%v", result, err)
+	}
+
+	leased := enqueue(t, fixture, "gate.cancel.leased", request{})
+	claim := claimOne(t, fixture, "gate.cancel.leased", longLease)
+	if result, err := fixture.Store.Cancel(ctx, leased); err != nil || !result.Changed || result.Terminal || result.Type != "gate.cancel.leased" || result.AttemptCount != 1 {
+		t.Fatalf("cancel leased result=%#v error=%v", result, err)
+	}
+	requested := inspect(t, fixture, leased)
+	if requested.State != queueprovider.StateLeased || !requested.CancelRequested || requested.FinishedAt != nil || requested.LastCode != "" {
+		t.Fatalf("leased cancellation request=%#v", requested)
+	}
+	time.Sleep(2 * time.Millisecond)
+	if result, err := fixture.Store.Cancel(ctx, leased); err != nil || result.Changed {
+		t.Fatalf("repeat leased cancellation result=%#v error=%v", result, err)
+	}
+	repeated := inspect(t, fixture, leased)
+	if !repeated.UpdatedAt.Equal(requested.UpdatedAt) {
+		t.Fatalf("repeat cancellation rewrote timestamp: first=%s second=%s", requested.UpdatedAt, repeated.UpdatedAt)
+	}
+	renewal, err := fixture.Store.Renew(ctx, leased, claim.LeaseToken, longLease)
+	if err != nil || !renewal.Renewed || !renewal.CancelRequested {
+		t.Fatalf("renew after cancellation=%#v error=%v", renewal, err)
+	}
+}
+
 // ExclusiveKeyBlocksOnlyLiveHolders proves the three-way liveness rule: an
 // unexpired holder blocks, a stranded expired row does not, and a candidate is
 // never its own blocker.
@@ -292,9 +500,10 @@ func TransactionalEnqueueIsAtomicWithCallerTransaction(t testing.TB, fixture Fix
 }
 
 type request struct {
-	dedupe    string
-	exclusive string
-	delay     time.Duration
+	dedupe      string
+	exclusive   string
+	delay       time.Duration
+	maxAttempts int
 }
 
 func newRequest(t testing.TB, jobType string, options request) queueprovider.EnqueueRequest {
@@ -303,8 +512,12 @@ func newRequest(t testing.TB, jobType string, options request) queueprovider.Enq
 	if err != nil {
 		t.Fatal(err)
 	}
+	maxAttempts := options.maxAttempts
+	if maxAttempts == 0 {
+		maxAttempts = 5
+	}
 	return queueprovider.EnqueueRequest{
-		ID: identity, Type: jobType, Payload: []byte(`{"gate":true}`), MaxAttempts: 5,
+		ID: identity, Type: jobType, Payload: []byte(`{"gate":true}`), MaxAttempts: maxAttempts,
 		Delay: options.delay, DedupeKey: options.dedupe, ExclusiveKey: options.exclusive,
 	}
 }

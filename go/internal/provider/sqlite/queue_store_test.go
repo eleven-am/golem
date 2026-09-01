@@ -22,6 +22,22 @@ func TestExpiredLeaseIsReclaimedByOrdinaryClaim(t *testing.T) {
 	providertest.ExpiredLeaseIsReclaimedByOrdinaryClaim(t, newQueueFixture(t))
 }
 
+func TestExpiredFinalAttemptFailsWithoutReexecution(t *testing.T) {
+	providertest.ExpiredFinalAttemptFailsWithoutReexecution(t, newQueueFixture(t))
+}
+
+func TestExpiredCanceledLeaseIsTerminalWithoutReexecution(t *testing.T) {
+	providertest.ExpiredCanceledLeaseIsTerminalWithoutReexecution(t, newQueueFixture(t))
+}
+
+func TestFailedJobsCanBeDiscoveredAndRecovered(t *testing.T) {
+	providertest.FailedJobsCanBeDiscoveredAndRecovered(t, newQueueFixture(t))
+}
+
+func TestCancellationIsDurableAndIdempotent(t *testing.T) {
+	providertest.CancellationIsDurableAndIdempotent(t, newQueueFixture(t))
+}
+
 func TestExclusiveKeyBlocksOnlyLiveHolders(t *testing.T) {
 	providertest.ExclusiveKeyBlocksOnlyLiveHolders(t, newQueueFixture(t))
 }
