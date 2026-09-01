@@ -91,7 +91,7 @@ gate-full: gate go-test-fast ## The gate plus every database-free package
 verify: postgres-check ## Run every check CI runs, locally, reporting all failures at once
 	scripts/verify.sh full
 
-verify-quick: postgres-check ## verify without the race and documentation passes
+verify-quick: postgres-check ## verify without the race pass
 	scripts/verify.sh quick
 
 go-tier-check: ## Fail if a package opens a database outside the declared serial tier

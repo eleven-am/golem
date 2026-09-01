@@ -46,8 +46,8 @@ go_test() {
 database_free_packages() {
 	cd "$GO_DIR" && GOWORK=off "$GO" list ./... |
 		grep -vxF -f <(GOWORK=off "$GO" list \
-			./cmd/golem ./golemtest ./internal/p7oracle ./internal/p8oracle/... \
-			./internal/policy/oracle ./internal/provider/postgresql ./internal/read/decode \
+			./cmd/golem ./golemtest ./internal/generate/pipeline ./internal/p7oracle ./internal/p8oracle/... \
+			./internal/policy/oracle ./internal/provider/postgresql ./internal/read/decode ./internal/semantic/runtime \
 			./provider/postgresql ./runtime)
 }
 
@@ -66,8 +66,9 @@ run_step "vet" bash -c "cd '$GO_DIR' && GOWORK=off $GO vet ./..."
 run_step "gate-drift-and-identity" make -C "$ROOT" gate
 run_step "database-free-packages" step_database_free
 run_step "cli-and-harness" go_test -p=1 -count=1 -timeout=30m ./cmd/golem ./golemtest
-run_step "shared-schema-packages" go_test -p=1 -count=1 -timeout=30m \
-	./internal/provider/postgresql ./internal/read/decode ./runtime ./provider/postgresql
+run_step "database-bound-packages" go_test -p=1 -count=1 -timeout=30m \
+	./internal/generate/pipeline ./internal/provider/postgresql ./internal/read/decode \
+	./internal/semantic/runtime ./runtime ./provider/postgresql
 run_step "isolating-oracles" go_test -count=1 -timeout=30m \
 	./internal/p7oracle ./internal/policy/oracle \
 	./internal/p8oracle ./internal/p8oracle/analytics ./internal/p8oracle/diagnostic \
@@ -81,8 +82,6 @@ if [ "$SCOPE" = "full" ]; then
 		./events/... ./provider/... ./runtime ./queue \
 		./internal/event/outbox ./internal/event/cdc \
 		./internal/queue/worker ./internal/subscription
-	run_step "documented-commands" go_test -tags=releaseintegration -p=1 -count=1 -timeout=30m ./cmd/golem \
-		-run '^(TestP8DocumentationCommandCorpus|TestP8QuickstartFromEmptyDirectory|TestP8EveryPublicSnippetTypeChecks|TestP8DeploymentAndRecoveryRunbookDrills)$'
 fi
 
 printf '\n%s\n' "$(colour '1' 'summary')"

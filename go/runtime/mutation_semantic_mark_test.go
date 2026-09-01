@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
@@ -25,6 +26,10 @@ type semanticMarkEmbedder struct {
 	specification embedding.Specification
 	mu            sync.Mutex
 	calls         int
+}
+
+type semanticSharedQueuePayload struct {
+	Value string `json:"value"`
 }
 
 func (provider *semanticMarkEmbedder) Specification() embedding.Specification {
@@ -79,6 +84,70 @@ func newSemanticMarkFixtureWithEmbedder(t *testing.T, limits MutationLimits) (mu
 	embedder := &semanticMarkEmbedder{}
 	fixture := openConfiguredMutationResultFixture(t, schematest.NewSemanticIndexed(t), limits, nil, nil, nil, true, configureSemanticApp(t, embedder))
 	return fixture, embedder
+}
+
+func TestSemanticApplicationsKeepSharedQueueConfigurationAppLocal(t *testing.T) {
+	ctx := context.Background()
+	registry := queue.NewRegistry()
+	handled := make(chan string, 1)
+	jobType, err := queue.Register(registry, queue.Definition[semanticSharedQueuePayload]{
+		Type: "test.shared",
+		Handle: func(_ context.Context, job queue.Job[semanticSharedQueuePayload]) error {
+			handled <- job.Payload.Value
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	queueConfig := &QueueConfig{Registry: registry}
+	open := func(embedder *semanticMarkEmbedder) mutationResultFixture {
+		configure := configureSemanticApp(t, embedder)
+		return openConfiguredMutationResultFixture(t, schematest.NewSemanticIndexed(t), MutationLimits{}, nil, nil, nil, true, func(config *Config[mutationResultPrincipal, mutationResultActor]) {
+			configure(config)
+			config.Queue = queueConfig
+		})
+	}
+	firstEmbedder := &semanticMarkEmbedder{}
+	_ = open(firstEmbedder)
+	secondEmbedder := &semanticMarkEmbedder{}
+	second := open(secondEmbedder)
+	registrations := registry.Registrations()
+	if len(registrations) != 1 || registrations[0].Type != "test.shared" {
+		t.Fatalf("application open mutated shared registry: %#v", registrations)
+	}
+	if _, err := SystemCreate(ctx, second.app.System(), second.postDescriptor, second.createPost(91, golem.UUID{15: 1}, "second app")); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := jobType.New(semanticSharedQueuePayload{Value: "handled by second"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.app.Enqueue(ctx, pending); err != nil {
+		t.Fatal(err)
+	}
+	workerContext, stopWorker := context.WithCancel(ctx)
+	workerDone := make(chan error, 1)
+	go func() { workerDone <- second.app.RunQueueWorker(workerContext) }()
+	select {
+	case value := <-handled:
+		if value != "handled by second" {
+			t.Fatalf("shared handler value=%q", value)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("second application's cloned user handler did not run")
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for secondEmbedder.count() == 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	stopWorker()
+	if err := <-workerDone; err != nil {
+		t.Fatal(err)
+	}
+	if secondEmbedder.count() == 0 || firstEmbedder.count() != 0 {
+		t.Fatalf("semantic handlers crossed applications: first=%d second=%d", firstEmbedder.count(), secondEmbedder.count())
+	}
 }
 
 func newSemanticVersionedFixture(t *testing.T) mutationVocabularyFixture {
