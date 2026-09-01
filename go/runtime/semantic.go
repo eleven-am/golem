@@ -243,15 +243,15 @@ func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, oper
 	return nil
 }
 
-// assembleSemanticResults returns the ranked page in distance order. A ranked
-// identity that the authorized row statement did not return is a backend that
-// escaped the candidate set, and closes the request rather than the result.
+// assembleSemanticResults returns the rows still readable after ranking in
+// distance order. Rows deleted or newly unauthorized before hydration vanish
+// from the page rather than failing the request.
 func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[string]golem.Row[M]) ([]golem.SemanticResult[M], error) {
 	result := make([]golem.SemanticResult[M], 0, len(ranks))
 	for _, ranked := range ranks {
 		row, ok := rows[ranked.Key]
 		if !ok {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranked identity escaped authorized candidates")
+			continue
 		}
 		item, err := golem.RuntimeSemanticResult(row, ranked.Distance)
 		if err != nil {

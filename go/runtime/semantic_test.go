@@ -30,14 +30,11 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestSemanticRankedIdentityCannotEscapeAuthorizedCandidates(t *testing.T) {
-	// Ranking runs over a candidate subquery, but the ranked page is still read
-	// back through the ordinary authorized row statement. A ranked identity that
-	// statement did not return must close the request, never be skipped.
+func TestSemanticRanksRemovedBeforeHydrationAreOmitted(t *testing.T) {
 	ranks := []semanticruntime.Rank{{Key: "foreign", Distance: 0}, {Key: "other-foreign", Distance: 1}}
 	result, err := assembleSemanticResults(ranks, map[string]golem.Row[struct{}]{})
-	if err == nil || err.Error() != "P9_SEMANTIC_QUERY: ranked identity escaped authorized candidates" || len(result) != 0 {
-		t.Fatalf("escaped identity result=%#v error=%v", result, err)
+	if err != nil || len(result) != 0 {
+		t.Fatalf("removed ranks result=%#v error=%v", result, err)
 	}
 }
 
