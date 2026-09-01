@@ -3,11 +3,11 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
-	"strconv"
 	"sync"
 	"time"
 
@@ -296,7 +296,6 @@ func (state *wsConnection[P]) startLiveness() func() {
 	go func() {
 		ticker := time.NewTicker(state.server.eventLimits.WebSocketKeepAlive)
 		defer ticker.Stop()
-		var sequence uint64
 		for {
 			select {
 			case <-state.ctx.Done():
@@ -304,8 +303,13 @@ func (state *wsConnection[P]) startLiveness() func() {
 			case <-done:
 				return
 			case <-ticker.C:
-				sequence++
-				payload := strconv.FormatUint(sequence, 10)
+				var nonce [16]byte
+				if _, err := rand.Read(nonce[:]); err != nil {
+					state.cancel()
+					_ = state.conn.Close()
+					return
+				}
+				payload := string(nonce[:])
 				state.writeMu.Lock()
 				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
 				err := state.conn.WriteControl(websocket.PingMessage, []byte(payload), deadline)

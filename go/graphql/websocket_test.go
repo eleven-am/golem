@@ -107,7 +107,7 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 }
 
 func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
-	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 20 * time.Millisecond, WebSocketPongTimeout: 10 * time.Millisecond})
+	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 200 * time.Millisecond, WebSocketPongTimeout: 20 * time.Millisecond})
 	host := httptest.NewServer(server.Handler())
 	defer host.Close()
 	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
@@ -121,6 +121,9 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 		t.Fatalf("ack = %#v", message)
 	}
 	connection.SetPingHandler(func(string) error { return nil })
+	if err := connection.WriteControl(websocket.PongMessage, []byte("1"), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	stopNoise := make(chan struct{})
 	defer close(stopNoise)
 	go func() {
@@ -144,7 +147,7 @@ func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
 			break
 		}
 	}
-	if elapsed := time.Since(started); elapsed > 500*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > 320*time.Millisecond {
 		t.Fatalf("application messages kept a pongless connection alive for %s", elapsed)
 	}
 }
