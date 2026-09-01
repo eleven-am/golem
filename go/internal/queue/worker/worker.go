@@ -40,23 +40,29 @@ const (
 // Worker claims and executes registered job types. One Worker owns one Run at a
 // time; a second concurrent Run is refused rather than sharing capacity.
 type Worker struct {
-	store         queueprovider.Store
-	registry      *queue.Registry
+	store       queueprovider.Store
+	registry    *queue.Registry
+	claimGroups []claimGroup
+	claimOffset int
+	limits      queue.Limits
+	provider    golem.Provider
+	observer    observe.Observer
+	wake        chan struct{}
+	running     atomic.Bool
+	handlers    sync.WaitGroup
+	mutex       sync.Mutex
+	active      int
+	inflight    map[string]int
+}
+
+type claimGroup struct {
 	registrations []queue.Registration
-	limits        queue.Limits
-	provider      golem.Provider
-	observer      observe.Observer
-	wake          chan struct{}
-	running       atomic.Bool
-	handlers      sync.WaitGroup
-	mutex         sync.Mutex
-	active        int
-	inflight      map[string]int
+	resource      *queueprovider.ClaimResource
 }
 
 // New binds a registry to a durable store. Every refusal is CodeConfigInvalid
 // and happens before any background work exists.
-func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer) (*Worker, error) {
+func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limits, provider golem.Provider, observer observe.Observer, resources ...queue.Resource) (*Worker, error) {
 	if store == nil {
 		return nil, queue.Fail(queue.CodeConfigInvalid, "durable job store is required")
 	}
@@ -78,16 +84,86 @@ func New(store queueprovider.Store, registry *queue.Registry, limits queue.Limit
 	if resolved.ClaimBatch > queueprovider.MaximumClaimJobs {
 		return nil, queue.Fail(queue.CodeConfigInvalid, "ClaimBatch is above %d", queueprovider.MaximumClaimJobs)
 	}
+	claimGroups, err := normalizeClaimGroups(registrations, resources)
+	if err != nil {
+		return nil, err
+	}
 	return &Worker{
-		store:         store,
-		registry:      registry,
-		registrations: registrations,
-		limits:        resolved,
-		provider:      provider,
-		observer:      observer,
-		wake:          make(chan struct{}, 1),
-		inflight:      make(map[string]int, len(registrations)),
+		store:       store,
+		registry:    registry,
+		claimGroups: claimGroups,
+		limits:      resolved,
+		provider:    provider,
+		observer:    observer,
+		wake:        make(chan struct{}, 1),
+		inflight:    make(map[string]int, len(registrations)),
 	}, nil
+}
+
+func normalizeClaimGroups(registrations []queue.Registration, resources []queue.Resource) ([]claimGroup, error) {
+	normalized := make([]queueprovider.ClaimResource, 0, len(resources))
+	resourceNames := make(map[string]struct{}, len(resources))
+	typeOwners := make(map[string]string)
+	registered := make(map[string]struct{}, len(registrations))
+	for _, registration := range registrations {
+		registered[registration.Type] = struct{}{}
+	}
+	for _, resource := range resources {
+		if resource.Concurrency <= 0 {
+			return nil, queue.Fail(queue.CodeConfigInvalid, "resource %q concurrency must be positive", resource.Name)
+		}
+		plan := queueprovider.ClaimResource{
+			Name:        resource.Name,
+			Concurrency: int64(resource.Concurrency),
+			Costs:       make(map[string]int64, len(resource.Costs)),
+		}
+		for name, cost := range resource.Costs {
+			if _, exists := registered[name]; !exists {
+				return nil, queue.Fail(queue.CodeConfigInvalid, "resource %q names unregistered job type %q", resource.Name, name)
+			}
+			if cost <= 0 {
+				return nil, queue.Fail(queue.CodeConfigInvalid, "resource %q cost for %q must be positive", resource.Name, name)
+			}
+			plan.Costs[name] = int64(cost)
+		}
+		if err := queueprovider.ValidateClaimResource(plan); err != nil {
+			return nil, queue.Fail(queue.CodeConfigInvalid, "resource %q is invalid: %v", resource.Name, err)
+		}
+		if _, exists := resourceNames[plan.Name]; exists {
+			return nil, queue.Fail(queue.CodeConfigInvalid, "resource %q is repeated", plan.Name)
+		}
+		resourceNames[plan.Name] = struct{}{}
+		for name := range plan.Costs {
+			if owner, exists := typeOwners[name]; exists {
+				return nil, queue.Fail(queue.CodeConfigInvalid, "job type %q belongs to resources %q and %q", name, owner, plan.Name)
+			}
+			typeOwners[name] = plan.Name
+		}
+		normalized = append(normalized, plan)
+	}
+	groups := make([]claimGroup, 0, len(normalized)+1)
+	unpooled := claimGroup{}
+	for _, registration := range registrations {
+		if _, pooled := typeOwners[registration.Type]; !pooled {
+			unpooled.registrations = append(unpooled.registrations, registration)
+		}
+	}
+	if len(unpooled.registrations) != 0 {
+		groups = append(groups, unpooled)
+	}
+	for index := range normalized {
+		plan := &normalized[index]
+		group := claimGroup{resource: plan}
+		for _, registration := range registrations {
+			if _, exists := plan.Costs[registration.Type]; exists {
+				group.registrations = append(group.registrations, registration)
+			}
+		}
+		if len(group.registrations) != 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups, nil
 }
 
 // Wake nudges an idle worker to claim without waiting for the poll interval. It
@@ -148,22 +224,29 @@ type cohort struct {
 
 func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer observe.Observer) (int, error) {
 	claimed := 0
+	offset := worker.claimOffset
+	if len(worker.claimGroups) != 0 {
+		worker.claimOffset = (worker.claimOffset + 1) % len(worker.claimGroups)
+	}
 	for _, capped := range []bool{false, true} {
-		group, ok := worker.cohort(capped)
-		if !ok {
-			continue
-		}
-		records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration})
-		if err != nil {
-			return claimed, err
-		}
-		for _, record := range records {
-			if ctx.Err() != nil {
-				worker.release(ctx, record)
+		for position := range worker.claimGroups {
+			claimGroup := worker.claimGroups[(offset+position)%len(worker.claimGroups)]
+			group, ok := worker.cohort(claimGroup, capped)
+			if !ok {
 				continue
 			}
-			claimed++
-			worker.start(handlerContext, record, observer)
+			records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: claimGroup.resource})
+			if err != nil {
+				return claimed, err
+			}
+			for _, record := range records {
+				if ctx.Err() != nil {
+					worker.release(ctx, record)
+					continue
+				}
+				claimed++
+				worker.start(handlerContext, record, observer)
+			}
 		}
 	}
 	return claimed, nil
@@ -172,7 +255,7 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 // cohort selects the job types with free capacity and the largest claim that
 // cannot overrun any of them. Capacity is enforced here so a gated job is never
 // leased and bounced back through the database.
-func (worker *Worker) cohort(capped bool) (cohort, bool) {
+func (worker *Worker) cohort(group claimGroup, capped bool) (cohort, bool) {
 	worker.mutex.Lock()
 	defer worker.mutex.Unlock()
 	limit := worker.limits.Concurrency - worker.active
@@ -183,7 +266,7 @@ func (worker *Worker) cohort(capped bool) (cohort, bool) {
 		return cohort{}, false
 	}
 	var types []string
-	for _, registration := range worker.registrations {
+	for _, registration := range group.registrations {
 		if (registration.MaxConcurrent != 0) != capped {
 			continue
 		}
@@ -271,6 +354,7 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 	}
 	ticker := time.NewTicker(renewEvery)
 	defer ticker.Stop()
+	renewalChannel := ticker.C
 
 	var graceTimer *time.Timer
 	defer func() {
@@ -281,7 +365,7 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 	var grace <-chan time.Time
 	startGrace := func() {
 		if graceTimer == nil {
-			graceTimer = time.NewTimer(worker.limits.ShutdownGrace)
+			graceTimer = time.NewTimer(worker.limits.AbandonGrace)
 			grace = graceTimer.C
 		}
 	}
@@ -295,20 +379,26 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 			if lost || errors.Is(result.cause, errShutdown) {
 				return
 			}
+			if errors.Is(result.cause, context.DeadlineExceeded) {
+				result.err = context.DeadlineExceeded
+			}
 			worker.record(ctx, observer, record, registration, result.err, result.cause, canceled, time.Since(started))
 			return
 		case <-deadline:
 			deadline = nil
-			if errors.Is(context.Cause(handlerContext), errShutdown) {
-				return
-			}
 			startGrace()
 		case <-grace:
+			cause := context.Cause(handlerContext)
+			if lost || errors.Is(cause, errShutdown) || errors.Is(cause, ErrLeaseLost) {
+				return
+			}
+			worker.record(ctx, observer, record, registration, cause, cause, canceled, time.Since(started))
 			return
-		case <-ticker.C:
+		case <-renewalChannel:
 			renewal, err := worker.renew(ctx, record)
 			if err != nil || !renewal.Renewed {
 				lost = true
+				renewalChannel = nil
 				cancel(ErrLeaseLost)
 				startGrace()
 				continue
@@ -353,7 +443,7 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 		if changed {
 			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeFailure, observationReason(err, cause), duration)
 		}
-	case record.AttemptCount >= record.MaxAttempts:
+	case !outcome.Uncounted && record.AttemptCount >= record.MaxAttempts:
 		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
 			return worker.store.Fail(book, record.ID, record.LeaseToken, codeAttemptsExhausted)
 		})
@@ -370,7 +460,7 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 			code = codePanic
 		}
 		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
-			return worker.store.RetryAt(book, record.ID, record.LeaseToken, delay.Truncate(time.Microsecond), code)
+			return worker.store.RetryAt(book, record.ID, record.LeaseToken, delay.Truncate(time.Microsecond), code, outcome.Uncounted)
 		})
 		if changed {
 			worker.emit(observer, record, observe.PhaseRetry, observe.OutcomeRetrying, observationReason(err, cause), duration)
@@ -451,5 +541,11 @@ func (worker *Worker) awaitHandlers(cancel context.CancelCauseFunc) {
 	case <-done:
 	case <-timer.C:
 		cancel(errShutdown)
+		abandon := time.NewTimer(worker.limits.AbandonGrace)
+		defer abandon.Stop()
+		select {
+		case <-done:
+		case <-abandon.C:
+		}
 	}
 }

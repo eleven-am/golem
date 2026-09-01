@@ -82,6 +82,14 @@ type ClaimOptions struct {
 	Types         []string
 	Limit         int
 	LeaseDuration time.Duration
+	Resource      *ClaimResource
+}
+
+// ClaimResource is one normalized fleet-wide weighted concurrency budget.
+type ClaimResource struct {
+	Name        string
+	Concurrency int64
+	Costs       map[string]int64
 }
 
 // Renewal is the result of one fenced heartbeat. CancelRequested carries the
@@ -95,6 +103,7 @@ type Renewal struct {
 type RetentionPolicy struct {
 	OlderThan time.Time
 	MaxRows   int
+	States    []State
 }
 
 // Summary is the payload-free projection used by queue operators.
@@ -130,6 +139,40 @@ type FailedPage struct {
 	More bool
 }
 
+// JobCursor is the stable position immediately after one listed job.
+type JobCursor struct {
+	EnqueuedAt time.Time
+	ID         string
+}
+
+// JobQuery selects one bounded payload-free page of jobs.
+type JobQuery struct {
+	Types  []string
+	States []State
+	Limit  int
+	Before *JobCursor
+}
+
+// JobPage carries payload-free jobs and whether another page exists.
+type JobPage struct {
+	Jobs []Summary
+	More bool
+}
+
+// CountQuery selects the job types included in state counts.
+type CountQuery struct {
+	Types []string
+}
+
+// StateCounts is the number of stored jobs in each durable state.
+type StateCounts struct {
+	Pending   int64
+	Leased    int64
+	Succeeded int64
+	Failed    int64
+	Canceled  int64
+}
+
 // CancelResult distinguishes immediate terminal cancellation from a durable
 // request observed later by the lease owner.
 type CancelResult struct {
@@ -137,6 +180,13 @@ type CancelResult struct {
 	Terminal     bool
 	Type         string
 	AttemptCount int64
+}
+
+// CancelBatch carries partial progress and the immediate terminal transitions
+// an operator must observe.
+type CancelBatch struct {
+	Changed  int
+	Terminal []CancelResult
 }
 
 // Executor is the seam a transactional enqueue runs on. Both *sqlx.DB and
@@ -157,12 +207,15 @@ type Store interface {
 	Renew(ctx context.Context, id, token string, duration time.Duration) (Renewal, error)
 	Succeed(ctx context.Context, id, token, code string) (bool, error)
 	Fail(ctx context.Context, id, token, code string) (bool, error)
-	RetryAt(ctx context.Context, id, token string, delay time.Duration, code string) (bool, error)
+	RetryAt(ctx context.Context, id, token string, delay time.Duration, code string, uncounted bool) (bool, error)
 	MarkCanceled(ctx context.Context, id, token, code string) (bool, error)
 	Release(ctx context.Context, id, token string) (bool, error)
 	Inspect(ctx context.Context, id string) (Record, error)
+	List(ctx context.Context, query JobQuery) (JobPage, error)
 	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
+	CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
 	Cancel(ctx context.Context, id string) (CancelResult, error)
+	CancelMany(ctx context.Context, ids []string) (CancelBatch, error)
 	Requeue(ctx context.Context, id string) (bool, error)
 	RequeueFailed(ctx context.Context, ids []string) (int, error)
 	RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)
@@ -199,7 +252,39 @@ func ValidateClaim(options ClaimOptions) error {
 			return fmt.Errorf("QUEUE_CLAIM_LIMIT: claimed type is not canonical")
 		}
 	}
+	if options.Resource != nil {
+		if err := ValidateClaimResource(*options.Resource); err != nil {
+			return err
+		}
+		for _, name := range options.Types {
+			if _, exists := options.Resource.Costs[name]; !exists {
+				return fmt.Errorf("QUEUE_CLAIM_LIMIT: claimed type is absent from resource")
+			}
+		}
+	}
 	return ValidateLease(options.LeaseDuration)
+}
+
+// ValidateClaimResource refuses ambiguous or unbounded shared-resource plans.
+func ValidateClaimResource(resource ClaimResource) error {
+	if !canonicalName.MatchString(resource.Name) {
+		return fmt.Errorf("QUEUE_CLAIM_LIMIT: resource name is not canonical")
+	}
+	if resource.Concurrency <= 0 {
+		return fmt.Errorf("QUEUE_CLAIM_LIMIT: resource concurrency must be positive")
+	}
+	if len(resource.Costs) == 0 || len(resource.Costs) > MaximumClaimTypes {
+		return fmt.Errorf("QUEUE_CLAIM_LIMIT: resource must cover within 1..%d types", MaximumClaimTypes)
+	}
+	for name, cost := range resource.Costs {
+		if !canonicalName.MatchString(name) {
+			return fmt.Errorf("QUEUE_CLAIM_LIMIT: resource type is not canonical")
+		}
+		if cost <= 0 || cost > resource.Concurrency {
+			return fmt.Errorf("QUEUE_CLAIM_LIMIT: resource cost must be within its concurrency")
+		}
+	}
+	return nil
 }
 
 func ValidateLease(duration time.Duration) error {
@@ -243,7 +328,30 @@ func ValidateRetention(policy RetentionPolicy) error {
 	if policy.MaxRows <= 0 || policy.MaxRows > MaximumRetentionRows {
 		return fmt.Errorf("QUEUE_RETENTION_LIMIT: retention rows must be within 1..%d", MaximumRetentionRows)
 	}
+	if len(policy.States) > 3 {
+		return fmt.Errorf("QUEUE_RETENTION_LIMIT: retention covers more than 3 states")
+	}
+	seen := make(map[State]struct{}, len(policy.States))
+	for _, state := range policy.States {
+		switch state {
+		case StateSucceeded, StateFailed, StateCanceled:
+		default:
+			return fmt.Errorf("QUEUE_RETENTION_LIMIT: retention state is not terminal")
+		}
+		if _, exists := seen[state]; exists {
+			return fmt.Errorf("QUEUE_RETENTION_LIMIT: retention state is repeated")
+		}
+		seen[state] = struct{}{}
+	}
 	return nil
+}
+
+// RetentionStates returns the selected terminal states or every terminal state.
+func RetentionStates(policy RetentionPolicy) []State {
+	if len(policy.States) != 0 {
+		return append([]State(nil), policy.States...)
+	}
+	return []State{StateSucceeded, StateFailed, StateCanceled}
 }
 
 // ValidateFailedQuery refuses unbounded or unstable operator discovery.
@@ -251,11 +359,53 @@ func ValidateFailedQuery(query FailedQuery) error {
 	if query.Limit <= 0 || query.Limit > MaximumOperatorBatch {
 		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: page size must be within 1..%d", MaximumOperatorBatch)
 	}
-	if len(query.Types) > MaximumClaimTypes {
+	if err := validateOperatorTypes(query.Types); err != nil {
+		return err
+	}
+	if query.Before != nil && (query.Before.FinishedAt.IsZero() || query.Before.ID == "" || len(query.Before.ID) > 64) {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: failed cursor is invalid")
+	}
+	return nil
+}
+
+// ValidateJobQuery refuses unbounded or unstable operator discovery.
+func ValidateJobQuery(query JobQuery) error {
+	if query.Limit <= 0 || query.Limit > MaximumOperatorBatch {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: page size must be within 1..%d", MaximumOperatorBatch)
+	}
+	if err := validateOperatorTypes(query.Types); err != nil {
+		return err
+	}
+	if len(query.States) > 5 {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: query covers more than 5 states")
+	}
+	seen := make(map[State]struct{}, len(query.States))
+	for _, state := range query.States {
+		if !validState(state) {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job state is invalid")
+		}
+		if _, exists := seen[state]; exists {
+			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job state is repeated")
+		}
+		seen[state] = struct{}{}
+	}
+	if query.Before != nil && (query.Before.EnqueuedAt.IsZero() || query.Before.ID == "" || len(query.Before.ID) > 64) {
+		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job cursor is invalid")
+	}
+	return nil
+}
+
+// ValidateCountQuery refuses ambiguous operator counts.
+func ValidateCountQuery(query CountQuery) error {
+	return validateOperatorTypes(query.Types)
+}
+
+func validateOperatorTypes(types []string) error {
+	if len(types) > MaximumClaimTypes {
 		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: query covers more than %d types", MaximumClaimTypes)
 	}
-	seen := make(map[string]struct{}, len(query.Types))
-	for _, name := range query.Types {
+	seen := make(map[string]struct{}, len(types))
+	for _, name := range types {
 		if !canonicalName.MatchString(name) {
 			return fmt.Errorf("QUEUE_OPERATOR_LIMIT: job type is not canonical")
 		}
@@ -264,10 +414,16 @@ func ValidateFailedQuery(query FailedQuery) error {
 		}
 		seen[name] = struct{}{}
 	}
-	if query.Before != nil && (query.Before.FinishedAt.IsZero() || query.Before.ID == "" || len(query.Before.ID) > 64) {
-		return fmt.Errorf("QUEUE_OPERATOR_LIMIT: failed cursor is invalid")
-	}
 	return nil
+}
+
+func validState(state State) bool {
+	switch state {
+	case StatePending, StateLeased, StateSucceeded, StateFailed, StateCanceled:
+		return true
+	default:
+		return false
+	}
 }
 
 // ValidateOperatorIDs refuses unbounded or ambiguous bulk recovery.

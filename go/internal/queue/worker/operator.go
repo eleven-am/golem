@@ -44,6 +44,36 @@ func (control operator) Inspect(ctx context.Context, id queue.JobID) (queue.Stat
 	}), nil
 }
 
+func (control operator) List(ctx context.Context, query queue.JobQuery) (queue.JobPage, error) {
+	providerQuery := queueprovider.JobQuery{
+		Types:  append([]string(nil), query.Types...),
+		States: make([]queueprovider.State, len(query.States)),
+		Limit:  query.Limit,
+	}
+	for index, state := range query.States {
+		providerQuery.States[index] = queueprovider.State(state)
+	}
+	if query.Before != nil {
+		providerQuery.Before = &queueprovider.JobCursor{EnqueuedAt: query.Before.EnqueuedAt.UTC().Truncate(time.Microsecond), ID: string(query.Before.ID)}
+	}
+	if err := queueprovider.ValidateJobQuery(providerQuery); err != nil {
+		return queue.JobPage{}, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	page, err := control.store.List(ctx, providerQuery)
+	if err != nil {
+		return queue.JobPage{}, queue.Fail(queue.CodeStoreFailure, "list jobs: %v", err)
+	}
+	result := queue.JobPage{Jobs: make([]queue.Status, len(page.Jobs))}
+	for index, job := range page.Jobs {
+		result.Jobs[index] = statusFromSummary(job)
+	}
+	if page.More && len(result.Jobs) != 0 {
+		last := result.Jobs[len(result.Jobs)-1]
+		result.Next = &queue.JobCursor{EnqueuedAt: last.EnqueuedAt, ID: last.ID}
+	}
+	return result, nil
+}
+
 func (control operator) ListFailed(ctx context.Context, query queue.FailedQuery) (queue.FailedPage, error) {
 	providerQuery := queueprovider.FailedQuery{Types: append([]string(nil), query.Types...), Limit: query.Limit}
 	if query.Before != nil {
@@ -70,8 +100,27 @@ func (control operator) ListFailed(ctx context.Context, query queue.FailedQuery)
 	return result, nil
 }
 
+func (control operator) CountByState(ctx context.Context, query queue.CountQuery) (queue.StateCounts, error) {
+	providerQuery := queueprovider.CountQuery{Types: append([]string(nil), query.Types...)}
+	if err := queueprovider.ValidateCountQuery(providerQuery); err != nil {
+		return queue.StateCounts{}, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	counts, err := control.store.CountByState(ctx, providerQuery)
+	if err != nil {
+		return queue.StateCounts{}, queue.Fail(queue.CodeStoreFailure, "count jobs by state: %v", err)
+	}
+	return queue.StateCounts{
+		Pending: counts.Pending, Leased: counts.Leased, Succeeded: counts.Succeeded,
+		Failed: counts.Failed, Canceled: counts.Canceled,
+	}, nil
+}
+
 func (control operator) Cancel(ctx context.Context, id queue.JobID) (bool, error) {
-	result, err := control.store.Cancel(ctx, string(id))
+	value := string(id)
+	if err := queueprovider.ValidateOperatorIDs([]string{value}); err != nil {
+		return false, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	result, err := control.store.Cancel(ctx, value)
 	if err != nil {
 		return false, queue.Fail(queue.CodeStoreFailure, "cancel job %s: %v", id, err)
 	}
@@ -79,6 +128,24 @@ func (control operator) Cancel(ctx context.Context, id queue.JobID) (bool, error
 		observeexec.EmitQueue(control.observer, control.provider, result.Type, observe.PhaseCancel, observe.OutcomeCancelled, observe.ReasonNone, int(result.AttemptCount), 0)
 	}
 	return result.Changed, nil
+}
+
+func (control operator) CancelMany(ctx context.Context, ids []queue.JobID) (int, error) {
+	values := make([]string, len(ids))
+	for index, id := range ids {
+		values[index] = string(id)
+	}
+	if err := queueprovider.ValidateOperatorIDs(values); err != nil {
+		return 0, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	batch, err := control.store.CancelMany(ctx, values)
+	for _, result := range batch.Terminal {
+		observeexec.EmitQueue(control.observer, control.provider, result.Type, observe.PhaseCancel, observe.OutcomeCancelled, observe.ReasonNone, int(result.AttemptCount), 0)
+	}
+	if err != nil {
+		return batch.Changed, queue.Fail(queue.CodeStoreFailure, "cancel jobs: %v", err)
+	}
+	return batch.Changed, nil
 }
 
 func (control operator) Requeue(ctx context.Context, id queue.JobID) (bool, error) {
@@ -105,7 +172,15 @@ func (control operator) RequeueFailed(ctx context.Context, ids []queue.JobID) (i
 }
 
 func (control operator) RunRetention(ctx context.Context, policy queue.RetentionPolicy) (int, error) {
-	deleted, err := control.store.RunRetention(ctx, queueprovider.RetentionPolicy{OlderThan: policy.OlderThan, MaxRows: policy.MaxRows})
+	states := make([]queueprovider.State, len(policy.States))
+	for index, state := range policy.States {
+		states[index] = queueprovider.State(state)
+	}
+	providerPolicy := queueprovider.RetentionPolicy{OlderThan: policy.OlderThan, MaxRows: policy.MaxRows, States: states}
+	if err := queueprovider.ValidateRetention(providerPolicy); err != nil {
+		return 0, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	deleted, err := control.store.RunRetention(ctx, providerPolicy)
 	if err != nil {
 		return 0, queue.Fail(queue.CodeStoreFailure, "run job retention: %v", err)
 	}

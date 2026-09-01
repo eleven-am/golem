@@ -134,6 +134,18 @@ func (observer queueObserverFunc) ObserveGolem(ctx context.Context, value observ
 	observer(ctx, value)
 }
 
+func TestOperatorCancelRejectsInvalidIdentity(t *testing.T) {
+	control, err := NewOperator(stubStore{}, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed, err := control.Cancel(context.Background(), "")
+	code, classified := queue.CodeOf(err)
+	if changed || !classified || code != queue.CodeConfigInvalid {
+		t.Fatalf("cancel changed=%t code=%q classified=%t error=%v", changed, code, classified, err)
+	}
+}
+
 func register(t *testing.T, registry *queue.Registry, definition queue.Definition[gatePayload]) queue.Type[gatePayload] {
 	t.Helper()
 	jobType, err := queue.Register(registry, definition)
@@ -424,6 +436,45 @@ func TestRenewalFailureCancelsHandlerContext(t *testing.T) {
 	}
 }
 
+func TestHostileHandlerCannotTransitionAfterLeaseLoss(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.lease.lost.hostile",
+		Handle: func(context.Context, queue.Job[gatePayload]) error {
+			close(started)
+			<-release
+			return nil
+		},
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	renewed := make(chan struct{})
+	var renewalOnce sync.Once
+	var renewals atomic.Int64
+	store := stubStore{Store: fixture.store, renew: func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error) {
+		renewals.Add(1)
+		renewalOnce.Do(func() { close(renewed) })
+		return queueprovider.Renewal{}, nil
+	}}
+	limits := gateLimits()
+	limits.AbandonGrace = 30 * time.Millisecond
+	_, stop := fixture.start(t, store, registry, limits)
+	awaitSignal(t, started, "the hostile lease-loss handler to start")
+	awaitSignal(t, renewed, "the hostile handler to lose its lease")
+	time.Sleep(100 * time.Millisecond)
+	if renewals.Load() != 1 {
+		t.Fatalf("lost lease was renewed %d times", renewals.Load())
+	}
+	record := fixture.inspect(t, identity)
+	if record.State != queueprovider.StateLeased || record.AttemptCount != 1 || record.LastCode != "" || record.FinishedAt != nil {
+		t.Fatalf("hostile lease-loss handler recorded %#v", record)
+	}
+	close(release)
+	stop()
+}
+
 // TestPerTypeTimeoutIsIndependentOfLease proves the handler deadline and the
 // lease are separate clocks.
 func TestPerTypeTimeoutIsIndependentOfLease(t *testing.T) {
@@ -471,6 +522,100 @@ func TestPerTypeTimeoutIsIndependentOfLease(t *testing.T) {
 			t.Fatalf("a heartbeating job was reclaimed: %#v", record)
 		}
 	})
+}
+
+func TestAbandonmentPersistsTimeoutAndCancellation(t *testing.T) {
+	t.Run("timeout schedules a retry", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		started := make(chan struct{})
+		release := make(chan struct{})
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.abandon.timeout", Timeout: 20 * time.Millisecond, MaxAttempts: 2,
+			Backoff: queue.Backoff{Base: time.Hour, Cap: time.Hour},
+			Handle: func(context.Context, queue.Job[gatePayload]) error {
+				close(started)
+				<-release
+				return nil
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		limits := gateLimits()
+		limits.AbandonGrace = 30 * time.Millisecond
+		_, stop := fixture.start(t, fixture.store, registry, limits)
+		awaitSignal(t, started, "the hostile timeout handler to start")
+		record := awaitRecord(t, fixture, identity, "retry after abandonment", func(record queueprovider.Record) bool {
+			return record.State == queueprovider.StatePending && record.LastCode == codeRetry
+		})
+		close(release)
+		stop()
+		if record.AttemptCount != 1 {
+			t.Fatalf("abandoned timeout record=%#v", record)
+		}
+	})
+
+	t.Run("cancellation becomes terminal", func(t *testing.T) {
+		fixture := newHarness(t)
+		registry := queue.NewRegistry()
+		started := make(chan struct{})
+		release := make(chan struct{})
+		jobType := register(t, registry, queue.Definition[gatePayload]{
+			Type: "gate.abandon.cancel",
+			Handle: func(context.Context, queue.Job[gatePayload]) error {
+				close(started)
+				<-release
+				return nil
+			},
+		})
+		identity := fixture.enqueue(t, newPending(t, jobType))
+		limits := gateLimits()
+		limits.AbandonGrace = 30 * time.Millisecond
+		_, stop := fixture.start(t, fixture.store, registry, limits)
+		awaitSignal(t, started, "the hostile canceled handler to start")
+		control, err := NewOperator(fixture.store, "", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changed, err := control.Cancel(context.Background(), queue.JobID(identity)); err != nil || !changed {
+			t.Fatalf("cancel changed=%t error=%v", changed, err)
+		}
+		record := awaitState(t, fixture, identity, queueprovider.StateCanceled)
+		close(release)
+		stop()
+		if record.LastCode != codeCanceled {
+			t.Fatalf("abandoned cancellation record=%#v", record)
+		}
+	})
+}
+
+func TestUncountedRetryPreservesAttemptBudget(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	var executions atomic.Int64
+	var attempts sync.Map
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.retry.uncounted", MaxAttempts: 1,
+		Handle: func(_ context.Context, job queue.Job[gatePayload]) error {
+			index := executions.Add(1)
+			attempts.Store(index, job.Attempt)
+			if index < 3 {
+				return queue.RetryInWithoutAttempt(time.Millisecond, errors.New("external capacity"))
+			}
+			return nil
+		},
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	_, stop := fixture.start(t, fixture.store, registry, gateLimits())
+	record := awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+	stop()
+	if executions.Load() != 3 || record.AttemptCount != 1 {
+		t.Fatalf("executions=%d record=%#v", executions.Load(), record)
+	}
+	for index := int64(1); index <= 3; index++ {
+		if attempt, _ := attempts.Load(index); attempt != 1 {
+			t.Fatalf("execution %d observed attempt %v", index, attempt)
+		}
+	}
 }
 
 // TestTypeCapacityGatesClaimWithoutRequeue proves a gated job is never leased,
@@ -1003,5 +1148,81 @@ func TestStartupValidation(t *testing.T) {
 	<-running
 	if code, ok := queue.CodeOf(second); !ok || code != queue.CodeWorkerRunning {
 		t.Fatalf("a second concurrent Run reported %v", second)
+	}
+}
+
+func TestSharedResourceConfigurationIsClosedAndUnambiguous(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	for _, name := range []string{"gate.resource.one", "gate.resource.two"} {
+		register(t, registry, queue.Definition[gatePayload]{Type: name, Handle: func(context.Context, queue.Job[gatePayload]) error { return nil }})
+	}
+	rows := []struct {
+		name      string
+		resources []queue.Resource
+	}{
+		{name: "empty costs", resources: []queue.Resource{{Name: "gate.resource", Concurrency: 1}}},
+		{name: "uncanonical name", resources: []queue.Resource{{Name: "Gate", Concurrency: 1, Costs: map[string]int{"gate.resource.one": 1}}}},
+		{name: "zero concurrency", resources: []queue.Resource{{Name: "gate.resource", Costs: map[string]int{"gate.resource.one": 1}}}},
+		{name: "cost above concurrency", resources: []queue.Resource{{Name: "gate.resource", Concurrency: 1, Costs: map[string]int{"gate.resource.one": 2}}}},
+		{name: "unregistered type", resources: []queue.Resource{{Name: "gate.resource", Concurrency: 1, Costs: map[string]int{"gate.resource.absent": 1}}}},
+		{name: "repeated resource", resources: []queue.Resource{
+			{Name: "gate.resource", Concurrency: 1, Costs: map[string]int{"gate.resource.one": 1}},
+			{Name: "gate.resource", Concurrency: 1, Costs: map[string]int{"gate.resource.two": 1}},
+		}},
+		{name: "type in two resources", resources: []queue.Resource{
+			{Name: "gate.resource.one", Concurrency: 1, Costs: map[string]int{"gate.resource.one": 1}},
+			{Name: "gate.resource.two", Concurrency: 1, Costs: map[string]int{"gate.resource.one": 1}},
+		}},
+	}
+	for _, row := range rows {
+		t.Run(row.name, func(t *testing.T) {
+			worker, err := New(fixture.store, registry, gateLimits(), "", nil, row.resources...)
+			if worker != nil {
+				t.Fatal("refused resource configuration produced a worker")
+			}
+			if code, ok := queue.CodeOf(err); !ok || code != queue.CodeConfigInvalid {
+				t.Fatalf("resource refusal reported %v", err)
+			}
+		})
+	}
+}
+
+func TestDispatchCarriesTheCompleteResourcePlan(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	for _, name := range []string{"gate.resource.one", "gate.resource.two", "gate.unpooled"} {
+		register(t, registry, queue.Definition[gatePayload]{Type: name, Handle: func(context.Context, queue.Job[gatePayload]) error { return nil }})
+	}
+	costs := map[string]int{"gate.resource.one": 2, "gate.resource.two": 1}
+	var claims []queueprovider.ClaimOptions
+	store := stubStore{Store: fixture.store, claim: func(_ context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {
+		claims = append(claims, options)
+		return nil, nil
+	}}
+	worker, err := New(store, registry, gateLimits(), "", nil, queue.Resource{Name: "gate.shared", Concurrency: 3, Costs: costs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	costs["gate.resource.one"] = 3
+	if _, err := worker.dispatch(context.Background(), context.Background(), nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(claims) != 2 {
+		t.Fatalf("claim groups=%#v", claims)
+	}
+	var pooled, unpooled *queueprovider.ClaimOptions
+	for index := range claims {
+		if claims[index].Resource == nil {
+			unpooled = &claims[index]
+		} else {
+			pooled = &claims[index]
+		}
+	}
+	if unpooled == nil || len(unpooled.Types) != 1 || unpooled.Types[0] != "gate.unpooled" {
+		t.Fatalf("unpooled claim=%#v", unpooled)
+	}
+	if pooled == nil || pooled.Resource.Name != "gate.shared" || pooled.Resource.Concurrency != 3 || len(pooled.Types) != 2 || pooled.Types[0] != "gate.resource.one" || pooled.Types[1] != "gate.resource.two" || len(pooled.Resource.Costs) != 2 || pooled.Resource.Costs["gate.resource.one"] != 2 || pooled.Resource.Costs["gate.resource.two"] != 1 {
+		t.Fatalf("pooled claim=%#v", pooled)
 	}
 }

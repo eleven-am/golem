@@ -16,8 +16,9 @@ import (
 // QueueConfig enables the durable job queue for one application. The registry
 // is the complete set of job types this process is willing to execute.
 type QueueConfig struct {
-	Registry *queue.Registry
-	Limits   queue.Limits
+	Registry  *queue.Registry
+	Limits    queue.Limits
+	Resources []queue.Resource
 }
 
 func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueConfig) error {
@@ -31,7 +32,7 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	if err != nil {
 		return queue.Fail(queue.CodeConfigInvalid, "durable job storage is unavailable: %v", err)
 	}
-	worker, err := queueworker.New(store, config.Registry, config.Limits, app.eventProvider, app.observer)
+	worker, err := queueworker.New(store, config.Registry, config.Limits, app.eventProvider, app.observer, config.Resources...)
 	if err != nil {
 		return err
 	}

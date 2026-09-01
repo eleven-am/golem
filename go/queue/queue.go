@@ -38,6 +38,7 @@ const (
 	defaultLeaseDuration = 30 * time.Second
 	defaultPollInterval  = 250 * time.Millisecond
 	defaultShutdownGrace = 15 * time.Second
+	defaultAbandonGrace  = 5 * time.Second
 	maximumDelay         = 24 * time.Hour
 )
 
@@ -109,6 +110,16 @@ type Definition[T any] struct {
 	MaxConcurrent int
 	Backoff       Backoff
 	ExclusiveBy   func(T) string
+}
+
+// Resource is one fleet-wide weighted concurrency budget. Costs maps locally
+// registered job types to the capacity consumed by one active lease. Workers
+// with disjoint registries may share a name, but every active worker must agree
+// on its meaning. Drain workers before changing capacity or costs.
+type Resource struct {
+	Name        string
+	Concurrency int
+	Costs       map[string]int
 }
 
 // Meta is the durable job state a type-erased handler receives alongside the
@@ -284,6 +295,10 @@ func (jobType Type[T]) New(payload T, options ...Option) (Pending, error) {
 	if len(encoded) > MaximumPayloadBytes {
 		return Pending{}, Fail(CodePayloadInvalid, "job type %q payload is %d bytes, above %d", jobType.name, len(encoded), MaximumPayloadBytes)
 	}
+	var decoded T
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return Pending{}, Fail(CodePayloadInvalid, "job type %q payload does not round-trip", jobType.name)
+	}
 	resolved := enqueueOptions{}
 	for _, option := range options {
 		if option == nil {
@@ -331,6 +346,7 @@ type Limits struct {
 	LeaseDuration   time.Duration
 	PollInterval    time.Duration
 	ShutdownGrace   time.Duration
+	AbandonGrace    time.Duration
 	MaxPayloadBytes int
 }
 
@@ -342,6 +358,7 @@ func DefaultLimits() Limits {
 		LeaseDuration:   defaultLeaseDuration,
 		PollInterval:    defaultPollInterval,
 		ShutdownGrace:   defaultShutdownGrace,
+		AbandonGrace:    defaultAbandonGrace,
 		MaxPayloadBytes: MaximumPayloadBytes,
 	}
 }
@@ -356,6 +373,7 @@ func (limits Limits) Resolved() Limits {
 		LeaseDuration:   orDefaultDuration(limits.LeaseDuration, defaults.LeaseDuration),
 		PollInterval:    orDefaultDuration(limits.PollInterval, defaults.PollInterval),
 		ShutdownGrace:   orDefaultDuration(limits.ShutdownGrace, defaults.ShutdownGrace),
+		AbandonGrace:    orDefaultDuration(limits.AbandonGrace, defaults.AbandonGrace),
 		MaxPayloadBytes: orDefaultInt(limits.MaxPayloadBytes, defaults.MaxPayloadBytes),
 	}
 }
@@ -367,7 +385,7 @@ func (limits Limits) Validate() error {
 	switch {
 	case limits.Concurrency < 0 || limits.ClaimBatch < 0 || limits.MaxPayloadBytes < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative bound")
-	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0:
+	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative duration")
 	case resolved.MaxPayloadBytes > MaximumPayloadBytes:
 		return Fail(CodeConfigInvalid, "MaxPayloadBytes is above %d", MaximumPayloadBytes)
@@ -375,6 +393,8 @@ func (limits Limits) Validate() error {
 		return Fail(CodeConfigInvalid, "LeaseDuration must be within 1s..10m")
 	case resolved.PollInterval > time.Hour*24:
 		return Fail(CodeConfigInvalid, "PollInterval must be at most 24h")
+	case resolved.AbandonGrace > 2*time.Minute:
+		return Fail(CodeConfigInvalid, "AbandonGrace must be at most 2m")
 	}
 	return nil
 }
@@ -409,7 +429,7 @@ type Status struct {
 	FinishedAt      *time.Time
 }
 
-// MaximumOperatorBatch bounds one failed-job page or bulk recovery action.
+// MaximumOperatorBatch bounds one operator page or bulk control action.
 const MaximumOperatorBatch = 256
 
 // FailedCursor is the stable position immediately after one failed job.
@@ -432,21 +452,62 @@ type FailedPage struct {
 	Next *FailedCursor
 }
 
+// JobCursor is the stable position immediately after one listed job.
+type JobCursor struct {
+	EnqueuedAt time.Time
+	ID         JobID
+}
+
+// JobQuery selects one bounded payload-free page of jobs. Empty Types and
+// States lists include every stored type and state.
+type JobQuery struct {
+	Types  []string
+	States []State
+	Limit  int
+	Before *JobCursor
+}
+
+// JobPage is one payload-redacted page of jobs.
+type JobPage struct {
+	Jobs []Status
+	Next *JobCursor
+}
+
+// CountQuery selects the job types included in state counts. An empty Types
+// list includes every stored type.
+type CountQuery struct {
+	Types []string
+}
+
+// StateCounts is the number of stored jobs in each durable state.
+type StateCounts struct {
+	Pending   int64
+	Leased    int64
+	Succeeded int64
+	Failed    int64
+	Canceled  int64
+}
+
 // RetentionPolicy bounds one retention run over terminal rows.
 type RetentionPolicy struct {
 	OlderThan time.Time
 	MaxRows   int
+	States    []State
 }
 
 // Operator is the durable job control surface. Every method acts on state the
 // database owns; none of them reaches into a running handler. Cancellation is
 // immediate for pending jobs and cooperative for leased jobs, so completion
 // may win before a worker observes the request. RequeueFailed is retry-safe and
-// may return a nonzero changed count together with an error.
+// may return a nonzero changed count together with an error. CancelMany has the
+// same partial-progress contract.
 type Operator interface {
 	Inspect(ctx context.Context, id JobID) (Status, error)
+	List(ctx context.Context, query JobQuery) (JobPage, error)
 	ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
+	CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
 	Cancel(ctx context.Context, id JobID) (bool, error)
+	CancelMany(ctx context.Context, ids []JobID) (int, error)
 	Requeue(ctx context.Context, id JobID) (bool, error)
 	RequeueFailed(ctx context.Context, ids []JobID) (int, error)
 	RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)

@@ -75,6 +75,22 @@ func TestExternalGeneratedApplicationQueueIsUsable(t *testing.T) {
 			if status, inspectErr := operator.Inspect(context.Background(), directID); inspectErr != nil || status.State != queue.StatePending {
 				t.Fatalf("direct enqueue status=%#v error=%v", status, inspectErr)
 			}
+			canceledID, err := application.Enqueue(context.Background(), queuePending(t, jobType, "canceled"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			page, err := operator.List(context.Background(), queue.JobQuery{Types: []string{"gate.generated"}, States: []queue.State{queue.StatePending}, Limit: 8})
+			if err != nil || len(page.Jobs) != 2 {
+				t.Fatalf("pending page=%#v error=%v", page, err)
+			}
+			canceled, err := operator.CancelMany(context.Background(), []queue.JobID{canceledID, "absent"})
+			if err != nil || canceled != 1 {
+				t.Fatalf("canceled=%d error=%v", canceled, err)
+			}
+			counts, err := operator.CountByState(context.Background(), queue.CountQuery{Types: []string{"gate.generated"}})
+			if err != nil || counts.Pending != 1 || counts.Canceled != 1 {
+				t.Fatalf("counts=%#v error=%v", counts, err)
+			}
 
 			caller, err := application.ForPrincipal(context.Background(), actor(t))
 			if err != nil {
@@ -135,6 +151,9 @@ func TestExternalGeneratedApplicationQueueIsUsable(t *testing.T) {
 				if inspectErr != nil || status.State != queue.StateSucceeded {
 					t.Fatalf("completed job %s status=%#v error=%v", identity, status, inspectErr)
 				}
+			}
+			if status, inspectErr := operator.Inspect(context.Background(), canceledID); inspectErr != nil || status.State != queue.StateCanceled {
+				t.Fatalf("canceled job status=%#v error=%v", status, inspectErr)
 			}
 		})
 	}

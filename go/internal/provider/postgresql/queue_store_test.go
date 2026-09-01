@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/internal/physical"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
@@ -15,12 +16,28 @@ func TestClaimIsExclusiveUnderConcurrency(t *testing.T) {
 	runQueueGate(t, providertest.ClaimIsExclusiveUnderConcurrency)
 }
 
+func TestSharedResourceCapacityIsAtomicAndWeighted(t *testing.T) {
+	runQueueGate(t, providertest.SharedResourceCapacityIsAtomicAndWeighted)
+}
+
 func TestStaleTokenCannotTransition(t *testing.T) {
 	runQueueGate(t, providertest.StaleTokenCannotTransition)
 }
 
 func TestExpiredLeaseIsReclaimedByOrdinaryClaim(t *testing.T) {
 	runQueueGate(t, providertest.ExpiredLeaseIsReclaimedByOrdinaryClaim)
+}
+
+func TestExpiredLeaseCannotBeRenewed(t *testing.T) {
+	runQueueGate(t, providertest.ExpiredLeaseCannotBeRenewed)
+}
+
+func TestExpiredLeaseCannotTransition(t *testing.T) {
+	runQueueGate(t, providertest.ExpiredLeaseCannotTransition)
+}
+
+func TestUncountedRetryPreservesAttempt(t *testing.T) {
+	runQueueGate(t, providertest.UncountedRetryPreservesAttempt)
 }
 
 func TestExpiredFinalAttemptFailsWithoutReexecution(t *testing.T) {
@@ -31,8 +48,20 @@ func TestExpiredCanceledLeaseIsTerminalWithoutReexecution(t *testing.T) {
 	runQueueGate(t, providertest.ExpiredCanceledLeaseIsTerminalWithoutReexecution)
 }
 
+func TestExpiredLeaseCancellationIsImmediate(t *testing.T) {
+	runQueueGate(t, providertest.ExpiredLeaseCancellationIsImmediate)
+}
+
+func TestRetentionIsStateSelectiveAndPreservesLiveRows(t *testing.T) {
+	runQueueGate(t, providertest.RetentionIsStateSelectiveAndPreservesLiveRows)
+}
+
 func TestFailedJobsCanBeDiscoveredAndRecovered(t *testing.T) {
 	runQueueGate(t, providertest.FailedJobsCanBeDiscoveredAndRecovered)
+}
+
+func TestJobsCanBeListedCountedAndCanceledInBulk(t *testing.T) {
+	runQueueGate(t, providertest.JobsCanBeListedCountedAndCanceledInBulk)
 }
 
 func TestCancellationIsDurableAndIdempotent(t *testing.T) {
@@ -66,6 +95,74 @@ func TestQueueSchemaBootstrapIsIdempotent(t *testing.T) {
 		}
 		if _, err := fixture.Store.Enqueue(context.Background(), nil, queueprovider.EnqueueRequest{ID: identity, Type: "gate.bootstrap", Payload: []byte(`{}`), MaxAttempts: 1}); err != nil {
 			t.Fatal(err)
+		}
+	})
+}
+
+func TestExistingQueueSchemaAddsResourceLeaseSnapshots(t *testing.T) {
+	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
+		store, ok := fixture.Store.(*queueStore)
+		if !ok {
+			t.Fatal("queue store has unexpected type")
+		}
+		for _, column := range []string{"resource_name", "resource_cost", "resource_capacity"} {
+			if _, err := fixture.Database.ExecContext(context.Background(), `ALTER TABLE `+store.table()+` DROP COLUMN "`+column+`"`); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := fixture.Store.EnsureSchema(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		var columns int
+		if err := fixture.Database.GetContext(context.Background(), &columns, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema=$1 AND table_name='golem_queue' AND column_name IN ('resource_name','resource_cost','resource_capacity')`, string(store.namespace)); err != nil || columns != 3 {
+			t.Fatalf("resource snapshot columns=%d error=%v", columns, err)
+		}
+	})
+}
+
+func TestCancelUsesTimeAfterRowLock(t *testing.T) {
+	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
+		store, ok := fixture.Store.(*queueStore)
+		if !ok {
+			t.Fatal("queue store has unexpected type")
+		}
+		ctx := context.Background()
+		identity, err := queueprovider.NewIdentifier()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Enqueue(ctx, nil, queueprovider.EnqueueRequest{ID: identity, Type: "gate.cancel.lock", Payload: []byte(`{}`), MaxAttempts: 2}); err != nil {
+			t.Fatal(err)
+		}
+		claimed, err := store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.cancel.lock"}, Limit: 1, LeaseDuration: 150 * time.Millisecond})
+		if err != nil || len(claimed) != 1 {
+			t.Fatalf("claim=%#v error=%v", claimed, err)
+		}
+		transaction, err := fixture.Database.Beginx()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer transaction.Rollback()
+		var locked string
+		if err := transaction.GetContext(ctx, &locked, `SELECT "id" FROM `+store.table()+` WHERE "id"=$1 FOR UPDATE`, identity); err != nil {
+			t.Fatal(err)
+		}
+		result := make(chan queueprovider.CancelResult, 1)
+		failure := make(chan error, 1)
+		go func() {
+			canceled, cancelErr := store.Cancel(ctx, identity)
+			result <- canceled
+			failure <- cancelErr
+		}()
+		time.Sleep(300 * time.Millisecond)
+		if err := transaction.Commit(); err != nil {
+			t.Fatal(err)
+		}
+		if err := <-failure; err != nil {
+			t.Fatal(err)
+		}
+		if canceled := <-result; !canceled.Changed || !canceled.Terminal {
+			t.Fatalf("post-lock cancellation=%#v", canceled)
 		}
 	})
 }

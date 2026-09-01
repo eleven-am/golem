@@ -29,6 +29,7 @@ type Outcome struct {
 	Code       string
 	Delay      time.Duration
 	Scheduled  bool
+	Uncounted  bool
 	Err        error
 }
 
@@ -44,8 +45,9 @@ func (failure terminalError) Error() string {
 func (failure terminalError) Unwrap() error { return failure.err }
 
 type retryError struct {
-	delay time.Duration
-	err   error
+	delay     time.Duration
+	uncounted bool
+	err       error
 }
 
 func (failure retryError) Error() string {
@@ -87,6 +89,18 @@ func RetryIn(delay time.Duration, err error) error {
 	return retryError{delay: delay, err: err}
 }
 
+// RetryInWithoutAttempt reschedules work without spending the claimed attempt.
+// It is intended for external capacity deferrals, not handler failures.
+func RetryInWithoutAttempt(delay time.Duration, err error) error {
+	if delay < 0 {
+		delay = 0
+	}
+	if delay > maximumDelay {
+		delay = maximumDelay
+	}
+	return retryError{delay: delay, uncounted: true, err: err}
+}
+
 // CompletedWith terminates the job successfully while durably recording a code
 // describing what degraded.
 func CompletedWith(code string, err error) error {
@@ -109,7 +123,7 @@ func Classify(err error) Outcome {
 	}
 	var retry retryError
 	if errors.As(err, &retry) {
-		return Outcome{Resolution: ResolutionRetry, Delay: retry.delay, Scheduled: true, Err: err}
+		return Outcome{Resolution: ResolutionRetry, Delay: retry.delay, Scheduled: true, Uncounted: retry.uncounted, Err: err}
 	}
 	return Outcome{Resolution: ResolutionRetry, Err: err}
 }

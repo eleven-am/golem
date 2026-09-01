@@ -17,6 +17,12 @@ type payload struct {
 	Bulk    string `json:"bulk,omitempty"`
 }
 
+type poisonPayload struct{}
+
+func (poisonPayload) MarshalJSON() ([]byte, error) { return []byte(`"not-an-object"`), nil }
+
+func (*poisonPayload) UnmarshalJSON([]byte) error { return errors.New("poison payload") }
+
 func handler(context.Context, queue.Job[payload]) error { return nil }
 
 func TestOperatorStatusIsStructurallyPayloadFree(t *testing.T) {
@@ -101,6 +107,23 @@ func TestRegistrationDefaultsAndTypeErasure(t *testing.T) {
 	}
 }
 
+func TestNewRejectsPayloadThatCannotRoundTrip(t *testing.T) {
+	registry := queue.NewRegistry()
+	jobType, err := queue.Register(registry, queue.Definition[poisonPayload]{
+		Type:   "gate.poison",
+		Handle: func(context.Context, queue.Job[poisonPayload]) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobType.New(poisonPayload{}); func() bool {
+		code, ok := queue.CodeOf(err)
+		return !ok || code != queue.CodePayloadInvalid
+	}() {
+		t.Fatalf("poison payload returned %v", err)
+	}
+}
+
 func TestPendingRefusesOversizedPayload(t *testing.T) {
 	registry := queue.NewRegistry()
 	jobType, err := queue.Register(registry, queue.Definition[payload]{Type: "email.welcome", Handle: handler})
@@ -128,11 +151,13 @@ func TestOutcomeVocabulary(t *testing.T) {
 		code       string
 		delay      time.Duration
 		scheduled  bool
+		uncounted  bool
 	}{
 		{name: "nil succeeds", err: nil, resolution: queue.ResolutionSucceeded},
 		{name: "plain error retries", err: cause, resolution: queue.ResolutionRetry},
 		{name: "terminal fails", err: queue.Terminal(cause), resolution: queue.ResolutionFailed},
 		{name: "retry in schedules", err: queue.RetryIn(90*time.Second, cause), resolution: queue.ResolutionRetry, delay: 90 * time.Second, scheduled: true},
+		{name: "uncounted retry schedules", err: queue.RetryInWithoutAttempt(90*time.Second, cause), resolution: queue.ResolutionRetry, delay: 90 * time.Second, scheduled: true, uncounted: true},
 		{name: "completed records", err: queue.CompletedWith("sprites_partial", cause), resolution: queue.ResolutionSucceeded, code: "sprites_partial"},
 		{name: "wrapped terminal fails", err: fmt.Errorf("layer: %w", queue.Terminal(cause)), resolution: queue.ResolutionFailed},
 		{name: "non canonical code", err: queue.CompletedWith("Sprites Partial", cause), resolution: queue.ResolutionSucceeded, code: queue.InvalidCode},
@@ -140,7 +165,7 @@ func TestOutcomeVocabulary(t *testing.T) {
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
 			outcome := queue.Classify(row.err)
-			if outcome.Resolution != row.resolution || outcome.Code != row.code || outcome.Delay != row.delay || outcome.Scheduled != row.scheduled {
+			if outcome.Resolution != row.resolution || outcome.Code != row.code || outcome.Delay != row.delay || outcome.Scheduled != row.scheduled || outcome.Uncounted != row.uncounted {
 				t.Fatalf("outcome=%#v", outcome)
 			}
 			if row.err != nil && !errors.Is(outcome.Err, cause) {
@@ -173,7 +198,7 @@ func TestBackoffIsExponentialFullJitterUnderCap(t *testing.T) {
 
 func TestLimitsValidation(t *testing.T) {
 	defaults := queue.DefaultLimits()
-	if defaults.Concurrency != 4 || defaults.ClaimBatch != 16 || defaults.LeaseDuration != 30*time.Second || defaults.PollInterval != 250*time.Millisecond || defaults.ShutdownGrace != 15*time.Second || defaults.MaxPayloadBytes != queue.MaximumPayloadBytes {
+	if defaults.Concurrency != 4 || defaults.ClaimBatch != 16 || defaults.LeaseDuration != 30*time.Second || defaults.PollInterval != 250*time.Millisecond || defaults.ShutdownGrace != 15*time.Second || defaults.AbandonGrace != 5*time.Second || defaults.MaxPayloadBytes != queue.MaximumPayloadBytes {
 		t.Fatalf("defaults=%#v", defaults)
 	}
 	if (queue.Limits{}).Resolved() != defaults {
@@ -189,6 +214,7 @@ func TestLimitsValidation(t *testing.T) {
 		{name: "oversized payload", limits: queue.Limits{MaxPayloadBytes: queue.MaximumPayloadBytes + 1}, refused: true},
 		{name: "brief lease", limits: queue.Limits{LeaseDuration: time.Millisecond}, refused: true},
 		{name: "long lease", limits: queue.Limits{LeaseDuration: time.Hour}, refused: true},
+		{name: "long abandon grace", limits: queue.Limits{AbandonGrace: 3 * time.Minute}, refused: true},
 	}
 	for _, row := range rows {
 		t.Run(row.name, func(t *testing.T) {
