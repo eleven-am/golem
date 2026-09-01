@@ -612,7 +612,7 @@ func (fixture drainFixture) markStale(t *testing.T, ids ...string) {
 		}
 		records = append(records, MarkRecord{Key: key, Identity: []any{id}})
 	}
-	if err := fixture.manager.MarkStale(context.Background(), fixture.db, "post", records); err != nil {
+	if err := fixture.manager.MarkStale(context.Background(), fixture.db, "post", semanticMarkBinds, records); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1257,7 +1257,7 @@ func TestSemanticMarkStaleEmbedsABrandNewRecord(t *testing.T) {
 	fixture := newMarkFixture(t)
 	fixture.insertOwner(t, "alpha part")
 	key := markPartKey(t)
-	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", []MarkRecord{{Key: key, Identity: markPartIdentity()}}); err != nil {
+	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", semanticMarkBinds, []MarkRecord{{Key: key, Identity: markPartIdentity()}}); err != nil {
 		t.Fatal(err)
 	}
 	var status string
@@ -1294,7 +1294,7 @@ func TestSemanticMarkStaleStoresTheKeyTheRefreshScanProduces(t *testing.T) {
 	ctx := context.Background()
 	fixture := newMarkFixture(t)
 	fixture.insertOwner(t, "alpha part")
-	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", []MarkRecord{{Key: markPartKey(t), Identity: markPartIdentity()}}); err != nil {
+	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", semanticMarkBinds, []MarkRecord{{Key: markPartKey(t), Identity: markPartIdentity()}}); err != nil {
 		t.Fatal(err)
 	}
 	var marked string
@@ -1341,7 +1341,7 @@ func TestSemanticMarkStalePreservesTheHashOfAnIndexedRecord(t *testing.T) {
 	if err := fixture.db.Get(&before, `SELECT source_hash FROM "`+markStateTable+`" WHERE record_key=?`, key); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", []MarkRecord{{Key: key, Identity: markPartIdentity()}}); err != nil {
+	if err := fixture.manager.MarkStale(ctx, fixture.db, "part", semanticMarkBinds, []MarkRecord{{Key: key, Identity: markPartIdentity()}}); err != nil {
 		t.Fatal(err)
 	}
 	var after []byte
@@ -1372,7 +1372,7 @@ func TestSemanticMarkStaleAdvancesDatabaseGeneration(t *testing.T) {
 	}
 	mark := []MarkRecord{{Key: key, Identity: markPartIdentity()}}
 	for want := future + 1; want <= future+2; want++ {
-		if err := fixture.manager.MarkStale(ctx, fixture.db, "part", mark); err != nil {
+		if err := fixture.manager.MarkStale(ctx, fixture.db, "part", semanticMarkBinds, mark); err != nil {
 			t.Fatal(err)
 		}
 		var generation int64
@@ -1392,7 +1392,7 @@ func TestSemanticMarkStaleRefusesAKeyThatDisagreesWithItsIdentity(t *testing.T) 
 	ctx := context.Background()
 	fixture := newMarkFixture(t)
 	fixture.insertOwner(t, "alpha part")
-	err := fixture.manager.MarkStale(ctx, fixture.db, "part", []MarkRecord{{Key: "golem-semantic-key:v1|4:s:1:x", Identity: markPartIdentity()}})
+	err := fixture.manager.MarkStale(ctx, fixture.db, "part", semanticMarkBinds, []MarkRecord{{Key: "golem-semantic-key:v1|4:s:1:x", Identity: markPartIdentity()}})
 	if err == nil || !strings.Contains(err.Error(), "does not match its primary identity") {
 		t.Fatalf("disagreeing key error=%v", err)
 	}
@@ -1402,6 +1402,18 @@ func TestSemanticMarkStaleRefusesAKeyThatDisagreesWithItsIdentity(t *testing.T) 
 	}
 	if rows != 0 {
 		t.Fatalf("a refused mark still wrote %d rows", rows)
+	}
+}
+
+func TestSemanticMarkChunkObeysConfiguredParameterLimit(t *testing.T) {
+	if got := semanticMarkChunkSize(50, 1); got != 24 {
+		t.Fatalf("configured parameter chunk=%d want=24", got)
+	}
+	if got := semanticMarkChunkSize(semanticMarkBinds+100, 1); got != semanticMarkChunk {
+		t.Fatalf("internal parameter chunk=%d want=%d", got, semanticMarkChunk)
+	}
+	if got := semanticMarkChunkSize(2, 1); got != 0 {
+		t.Fatalf("exhausted parameter chunk=%d want=0", got)
 	}
 }
 

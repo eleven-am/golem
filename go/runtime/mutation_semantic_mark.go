@@ -236,7 +236,7 @@ func (app *App[P, A]) flushSemanticMarks(ctx context.Context, executor sqlx.Exec
 				records = append(records, semanticruntime.MarkRecord{Key: mark.key, Identity: mark.identity})
 			}
 		}
-		if err := app.semantic.MarkStale(ctx, executor, semanticIndexModel(model), records); err != nil {
+		if err := app.semantic.MarkStale(ctx, executor, semanticIndexModel(model), app.mutationLimits.statementParameters, records); err != nil {
 			return err
 		}
 		if err := app.enqueueSemanticDrains(ctx, queueExecutor, model); err != nil {

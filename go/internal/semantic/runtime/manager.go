@@ -502,7 +502,7 @@ type markRow struct {
 // an unchanged record back to ready without an embedding-provider call. A
 // record that has never been indexed is inserted with an EMPTY source hash,
 // which no real document hash can equal, so the drain must embed it.
-func (manager *Manager) MarkStale(ctx context.Context, executor sqlx.ExecerContext, model ir.ModelID, records []MarkRecord) error {
+func (manager *Manager) MarkStale(ctx context.Context, executor sqlx.ExecerContext, model ir.ModelID, maximumParameters int, records []MarkRecord) error {
 	if manager == nil || ctx == nil || executor == nil {
 		return fmt.Errorf("P9_SEMANTIC_MARK: context, manager, and executor are required")
 	}
@@ -523,7 +523,7 @@ func (manager *Manager) MarkStale(ctx context.Context, executor sqlx.ExecerConte
 		if err != nil {
 			return err
 		}
-		if err := manager.markIndex(ctx, executor, index, rows); err != nil {
+		if err := manager.markIndex(ctx, executor, index, maximumParameters, rows); err != nil {
 			return err
 		}
 	}
@@ -651,7 +651,7 @@ func markUUIDText(value [16]byte) string {
 // alone: a record that has been indexed before already carries the identity
 // storeBatch copied out of the owner table, which is more trustworthy than any
 // conversion performed here.
-func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerContext, index Index, rows []markRow) error {
+func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerContext, index Index, maximumParameters int, rows []markRow) error {
 	if len(rows) == 0 {
 		return nil
 	}
@@ -669,10 +669,7 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 	if manager.provider == ir.PostgreSQL {
 		generation = manager.hidden(index, "_state") + "." + manager.quote("updated_at") + "+1"
 	}
-	chunk := semanticMarkChunk
-	if capacity := (semanticMarkBinds - 2) / (1 + width); capacity < chunk {
-		chunk = capacity
-	}
+	chunk := semanticMarkChunkSize(maximumParameters, width)
 	if chunk < 1 {
 		return fmt.Errorf("P9_SEMANTIC_MARK: identity is too wide to mark")
 	}
@@ -710,6 +707,17 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 		}
 	}
 	return nil
+}
+
+func semanticMarkChunkSize(maximumParameters, width int) int {
+	if maximumParameters > semanticMarkBinds {
+		maximumParameters = semanticMarkBinds
+	}
+	capacity := (maximumParameters - 2) / (1 + width)
+	if capacity < semanticMarkChunk {
+		return capacity
+	}
+	return semanticMarkChunk
 }
 
 // refresh advances one index by exactly the records the write path marked

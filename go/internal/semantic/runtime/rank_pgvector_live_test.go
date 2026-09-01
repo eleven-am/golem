@@ -527,7 +527,7 @@ func TestPGVectorMarkStaleEmbedsBrandNewRecordsOfEveryIdentityKind(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.MarkStale(ctx, database, "doc", []MarkRecord{{Key: key, Identity: logical}}); err != nil {
+	if err := manager.MarkStale(ctx, database, "doc", semanticMarkBinds, []MarkRecord{{Key: key, Identity: logical}}); err != nil {
 		t.Fatal(err)
 	}
 	scanned, err := manager.scanSources(ctx, table, index)
@@ -565,7 +565,7 @@ func (fixture pgvectorDrainFixture) markStale(t *testing.T, ids ...string) {
 		}
 		records = append(records, MarkRecord{Key: key, Identity: []any{id}})
 	}
-	if err := fixture.manager.MarkStale(context.Background(), fixture.database, "doc", records); err != nil {
+	if err := fixture.manager.MarkStale(context.Background(), fixture.database, "doc", semanticMarkBinds, records); err != nil {
 		t.Fatal(err)
 	}
 }

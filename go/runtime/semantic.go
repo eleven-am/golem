@@ -15,6 +15,7 @@ import (
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
 	"github.com/eleven-am/golem/go/queue"
 )
@@ -263,14 +264,11 @@ func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[strin
 // authorized predicate; reading the projected rows through the same plan is
 // what keeps masks, relations, and row policy identical to a plain findMany.
 func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, operation string, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
-	primary, err := semanticPrimaryIdentity(descriptor)
-	if err != nil {
-		return nil, err
-	}
 	chunk := semanticIdentityChunkSize(planned, len(fields), baseArguments)
 	if chunk < 1 {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
 	}
+	var err error
 	result := make(map[string]golem.Row[M], len(ranks))
 	for start := 0; start < len(ranks); {
 		end := start + chunk
@@ -322,7 +320,7 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			if rowErr != nil {
 				return nil, rowErr
 			}
-			key, keyErr := golem.RuntimeSemanticRecordKey(row, primary)
+			key, keyErr := semanticHydrationRecordKey(item.values, fields)
 			if keyErr != nil {
 				continue
 			}
@@ -334,6 +332,31 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 		start = end
 	}
 	return result, nil
+}
+
+func semanticHydrationRecordKey(values map[policyir.FieldID]readdecode.Cell, fields []policyir.FieldID) (string, error) {
+	identity := make([]any, len(fields))
+	for index, field := range fields {
+		cell, ok := values[field]
+		if !ok {
+			return "", fmt.Errorf("semantic hydration identity field %x is absent", field)
+		}
+		value, ok := cell.PolicyValue()
+		if !ok {
+			return "", fmt.Errorf("semantic hydration identity field %x is unavailable", field)
+		}
+		switch value.Kind() {
+		case policyir.ValueInt16, policyir.ValueInt32, policyir.ValueInt64:
+			identity[index], _ = value.Signed()
+		case policyir.ValueString:
+			identity[index], _ = value.Text()
+		case policyir.ValueUUID:
+			identity[index], _ = value.UUID()
+		default:
+			return "", fmt.Errorf("semantic hydration identity field %x has unsupported kind %d", field, value.Kind())
+		}
+	}
+	return semantickey.Encode(identity)
 }
 
 func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {

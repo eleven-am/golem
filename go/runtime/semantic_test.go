@@ -18,6 +18,7 @@ import (
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	readbind "github.com/eleven-am/golem/go/internal/read/bind"
+	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -138,6 +139,37 @@ func TestSemanticHydrationChunkShrinksOnlyForByteCeiling(t *testing.T) {
 	}
 	if end, retry := reduceSemanticHydrationChunk(4, 12, errors.New("render failed")); retry || end != 12 {
 		t.Fatalf("unrelated error reduced to %d retry=%t", end, retry)
+	}
+}
+
+func TestSemanticHydrationKeysPrivateIdentityCells(t *testing.T) {
+	fixture := schematest.New(t)
+	field := policyir.FieldID(fixture.UserID)
+	decoder, err := readdecode.NewFields(policyir.ModelID(fixture.User), fixture.Registry, policyir.ProviderSQLite, []policyir.FieldID{field})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cells, err := decoder.Values([]any{"10000000-0000-0000-0000-000000000001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cells) != 1 || cells[0].Public() {
+		t.Fatalf("identity cells=%d public=%t", len(cells), len(cells) == 1 && cells[0].Public())
+	}
+	key, err := semanticHydrationRecordKey(map[policyir.FieldID]readdecode.Cell{field: cells[0]}, []policyir.FieldID{field})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uuid, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := semantickey.Encode([]any{uuid})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if key != want {
+		t.Fatalf("private identity key=%q want=%q", key, want)
 	}
 }
 
