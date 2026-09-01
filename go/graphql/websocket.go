@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -284,12 +285,18 @@ func (state *wsConnection[P]) read() (wsMessage, error) {
 
 func (state *wsConnection[P]) startLiveness() func() {
 	done := make(chan struct{})
-	state.conn.SetPongHandler(func(string) error {
-		return state.conn.SetReadDeadline(time.Time{})
+	pongs := make(chan string, 1)
+	state.conn.SetPongHandler(func(payload string) error {
+		select {
+		case pongs <- payload:
+		default:
+		}
+		return nil
 	})
 	go func() {
 		ticker := time.NewTicker(state.server.eventLimits.WebSocketKeepAlive)
 		defer ticker.Stop()
+		var sequence uint64
 		for {
 			select {
 			case <-state.ctx.Done():
@@ -297,20 +304,50 @@ func (state *wsConnection[P]) startLiveness() func() {
 			case <-done:
 				return
 			case <-ticker.C:
+				sequence++
+				payload := strconv.FormatUint(sequence, 10)
 				state.writeMu.Lock()
 				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
-				_ = state.conn.SetReadDeadline(deadline)
-				err := state.conn.WriteControl(websocket.PingMessage, nil, deadline)
+				err := state.conn.WriteControl(websocket.PingMessage, []byte(payload), deadline)
 				state.writeMu.Unlock()
 				if err != nil {
 					state.cancel()
+					_ = state.conn.Close()
 					return
 				}
+				timer := time.NewTimer(state.server.eventLimits.WebSocketPongTimeout)
+				waiting := true
+				for waiting {
+					select {
+					case pong := <-pongs:
+						waiting = pong != payload
+					case <-timer.C:
+						state.cancel()
+						_ = state.conn.Close()
+						return
+					case <-state.ctx.Done():
+						stopWSTimer(timer)
+						return
+					case <-done:
+						stopWSTimer(timer)
+						return
+					}
+				}
+				stopWSTimer(timer)
 			}
 		}
 	}()
 	var once sync.Once
 	return func() { once.Do(func() { close(done) }) }
+}
+
+func stopWSTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 func decodeWSMessage(payload []byte) (wsMessage, error) {

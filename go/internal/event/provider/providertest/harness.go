@@ -34,6 +34,13 @@ func RunCoordinatorContract(t testing.TB, coordinator eventprovider.Coordinator,
 		t.Fatalf("reowned claim=%#v error=%v", leases, err)
 	}
 	secondToken := leases[0].Delivery.LeaseToken
+	if changed, err := coordinator.Renew(ctx, causation, secondToken, time.Second); err != nil || !changed {
+		t.Fatalf("owner renew changed=%t error=%v", changed, err)
+	}
+	state, err = coordinator.Inspect(ctx, causation)
+	if err != nil || state.LeaseUntil == nil || !state.AvailableAt.Equal(*state.LeaseUntil) {
+		t.Fatalf("renewed=%#v error=%v", state, err)
+	}
 	staleTransitions := []struct {
 		name string
 		call func() (bool, error)
@@ -77,7 +84,7 @@ func RunCoordinatorContract(t testing.TB, coordinator eventprovider.Coordinator,
 
 func assertWholeCausation(t testing.TB, lease eventprovider.Lease, causation string, rows int) {
 	t.Helper()
-	if lease.Delivery.CausationID != causation || lease.Delivery.Status != eventprovider.StatusLeased || len(lease.Facts) != rows {
+	if lease.Delivery.CausationID != causation || lease.Delivery.Status != eventprovider.StatusLeased || lease.Delivery.LeaseUntil == nil || !lease.Delivery.AvailableAt.Equal(*lease.Delivery.LeaseUntil) || len(lease.Facts) != rows {
 		t.Fatalf("causal lease=%#v", lease)
 	}
 	for index, fact := range lease.Facts {

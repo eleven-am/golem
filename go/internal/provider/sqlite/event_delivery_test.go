@@ -96,7 +96,7 @@ func TestSQLiteDeliveryClaimFenceOperatorAndRetention(t *testing.T) {
 	}
 }
 
-func TestSQLiteDeliveryBlocksCausationAboveClaimByteBudget(t *testing.T) {
+func TestSQLiteDeliveryClaimsFirstCausationAboveEstimatedByteBudget(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
 	database := openEventDeliveryFixture(t, provider)
@@ -107,11 +107,11 @@ func TestSQLiteDeliveryBlocksCausationAboveClaimByteBudget(t *testing.T) {
 		t.Fatal(err)
 	}
 	leases, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Second, MaxBytes: 1})
-	if err != nil || len(leases) != 0 {
+	if err != nil || len(leases) != 1 || leases[0].Delivery.CausationID != cause {
 		t.Fatalf("oversized claim=%#v error=%v", leases, err)
 	}
 	state, err := coordinator.Inspect(ctx, cause)
-	if err != nil || state.Status != eventprovider.StatusBlocked || state.LastFailureCode != "batch-too-large" {
+	if err != nil || state.Status != eventprovider.StatusLeased || state.LastFailureCode != "" {
 		t.Fatalf("oversized state=%#v error=%v", state, err)
 	}
 }

@@ -297,7 +297,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 4 { t.Fatalf("initial refresh calls=%d want=4", provider.count()) }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 4},
-    observed{operation: observe.OperationSemanticRefresh, statements: 12, aggregate: 4},
+    observed{operation: observe.OperationSemanticRefresh, statements: 6, aggregate: 4},
   )
 
   var vectorCount, stateCount int
@@ -397,7 +397,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   for index := 0; index < 125; index++ {
     if bulkTrace[index] != (observed{operation: observe.OperationSemanticProvider, aggregate: 8}) { t.Fatalf("bulk provider observation[%d]=%#v", index, bulkTrace[index]) }
   }
-  if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 2024, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
+  if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 274, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
   plannerRanks, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if len(plannerRanks) != 10 || provider.count() != 1007 { t.Fatalf("generated HNSW ranks=%d calls=%d", len(plannerRanks), provider.count()) }
@@ -433,7 +433,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if err := plannerTx.Rollback(); err != nil { t.Fatal(err) }
   if _, err := database.UnsafeSQLX().ExecContext(ctx, "DELETE FROM \"{{NS}}\".\"posts\" WHERE title LIKE 'public planner %'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 2014, aggregate: 1000})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 30, aggregate: 1000})
   if err := database.UnsafeSQLX().Get(&vectorCount, "SELECT count(*) FROM \"{{NS}}\".\"{{VECTOR}}\""); err != nil { t.Fatal(err) }
   if err := database.UnsafeSQLX().Get(&stateCount, "SELECT count(*) FROM \"{{NS}}\".\"{{STATE}}\""); err != nil { t.Fatal(err) }
   if vectorCount != 3 || stateCount != 3 { t.Fatalf("planner cleanup vectors=%d states=%d", vectorCount, stateCount) }

@@ -1528,6 +1528,9 @@ func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, in
 		key := manager.placeholder(len(arguments))
 		arguments = append(arguments, record.updatedAt)
 		observed := manager.placeholder(len(arguments))
+		if manager.provider == ir.PostgreSQL {
+			observed += "::bigint"
+		}
 		guard = append(guard, "WHEN "+key+" THEN "+observed)
 	}
 	guard = append(guard, "END")

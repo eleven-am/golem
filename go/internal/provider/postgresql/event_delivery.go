@@ -97,11 +97,8 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	if err := transaction.SelectContext(ctx, &causations, query, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: discover claimable groups: %w", err)
 	}
-	causations, oversized, err := coordinator.boundedCausations(ctx, transaction, causations, eventprovider.ClaimByteLimit(options))
+	causations, err = coordinator.boundedCausations(ctx, transaction, causations, eventprovider.ClaimByteLimit(options))
 	if err != nil {
-		return eventprovider.ClaimSnapshot{}, err
-	}
-	if err := coordinator.blockOversizedCausations(ctx, transaction, oversized); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	if len(causations) != 0 {
@@ -113,8 +110,7 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 			arguments = append(arguments, tokens[index], options.LeaseDuration.Microseconds(), causation)
 		}
 		var changed []string
-		expiry := `clock_timestamp()+claim.lease_micros*interval '1 microsecond'`
-		update := `UPDATE ` + delivery + ` AS target SET "status"='leased',"attempt_count"=CASE WHEN target."attempt_count"<9223372036854775807 THEN target."attempt_count"+1 ELSE target."attempt_count" END,"lease_token"=claim.token,"available_at"=` + expiry + `,"lease_until"=` + expiry + `,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(token,lease_micros,causation_id) WHERE target."causation_id"=claim.causation_id AND target."status" IN ('pending','leased') AND target."available_at"<=clock_timestamp() RETURNING target."causation_id"`
+		update := `WITH claim(token,lease_micros,causation_id) AS (VALUES ` + strings.Join(values, ",") + `), deadline AS MATERIALIZED (SELECT token,causation_id,clock_timestamp()+lease_micros*interval '1 microsecond' AS expires_at FROM claim) UPDATE ` + delivery + ` AS target SET "status"='leased',"attempt_count"=CASE WHEN target."attempt_count"<9223372036854775807 THEN target."attempt_count"+1 ELSE target."attempt_count" END,"lease_token"=deadline.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=clock_timestamp() FROM deadline WHERE target."causation_id"=deadline.causation_id AND target."status" IN ('pending','leased') AND target."available_at"<=clock_timestamp() RETURNING target."causation_id"`
 		if err := transaction.SelectContext(ctx, &changed, update, arguments...); err != nil {
 			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: lease groups: %w", err)
 		}
@@ -145,9 +141,9 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	return eventprovider.ClaimSnapshot{Leases: clonePostgreSQLLeases(leases), Depth: depth}, nil
 }
 
-func (coordinator *eventCoordinator) boundedCausations(ctx context.Context, queryer sqlx.QueryerContext, causations []string, maximum int) ([]string, []string, error) {
+func (coordinator *eventCoordinator) boundedCausations(ctx context.Context, queryer sqlx.QueryerContext, causations []string, maximum int) ([]string, error) {
 	if len(causations) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	marks, arguments := postgresqlArguments(causations)
 	var rows []struct {
@@ -157,22 +153,25 @@ func (coordinator *eventCoordinator) boundedCausations(ctx context.Context, quer
 	size := `octet_length("event_id")+octet_length("codec_identity")+octet_length("generation_fingerprint")+octet_length("model_id")+octet_length("action")+COALESCE(octet_length("before_identity"),0)+COALESCE(octet_length("after_identity"),0)+octet_length("causation_id")+octet_length("metadata")+COALESCE(octet_length("delete_snapshot"),0)+32`
 	query := `SELECT "causation_id",SUM(` + size + `) AS "fact_bytes" FROM ` + coordinator.outboxTable() + ` WHERE "causation_id" IN (` + strings.Join(marks, ",") + `) GROUP BY "causation_id"`
 	if err := sqlx.SelectContext(ctx, queryer, &rows, query, arguments...); err != nil {
-		return nil, nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: measure claimed groups: %w", err)
+		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: measure claimed groups: %w", err)
 	}
 	measured := make(map[string]int64, len(rows))
 	for _, row := range rows {
 		measured[row.Causation] = row.Bytes
 	}
 	result := make([]string, 0, len(causations))
-	oversized := make([]string, 0)
 	total := int64(0)
 	for _, causation := range causations {
 		bytes, exists := measured[causation]
 		if !exists || bytes <= 0 {
-			return nil, nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: claimed group has no measurable facts")
+			return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: claimed group has no measurable facts")
 		}
-		if bytes > int64(maximum) {
-			oversized = append(oversized, causation)
+		if len(result) == 0 {
+			result = append(result, causation)
+			total = bytes
+			if total >= int64(maximum) {
+				break
+			}
 			continue
 		}
 		if bytes > int64(maximum)-total {
@@ -181,23 +180,7 @@ func (coordinator *eventCoordinator) boundedCausations(ctx context.Context, quer
 		result = append(result, causation)
 		total += bytes
 	}
-	return result, oversized, nil
-}
-
-func (coordinator *eventCoordinator) blockOversizedCausations(ctx context.Context, queryer sqlx.ExecerContext, causations []string) error {
-	if len(causations) == 0 {
-		return nil
-	}
-	marks, arguments := postgresqlArguments(causations)
-	result, err := queryer.ExecContext(ctx, `UPDATE `+coordinator.deliveryTable()+` SET "status"='blocked',"lease_token"=NULL,"lease_until"=NULL,"delivered_at"=NULL,"last_failure_code"='batch-too-large',"blocked_at"=clock_timestamp(),"retired_at"=NULL,"updated_at"=clock_timestamp() WHERE "causation_id" IN (`+strings.Join(marks, ",")+`)`, arguments...)
-	if err != nil {
-		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: block oversized groups: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil || int(changed) != len(causations) {
-		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: oversized group ownership changed")
-	}
-	return nil
+	return result, nil
 }
 
 func (coordinator *eventCoordinator) postgresqlDeliveryDepth(ctx context.Context, queryer sqlx.QueryerContext) (eventprovider.DepthSnapshot, error) {
@@ -217,7 +200,7 @@ func (coordinator *eventCoordinator) Renew(ctx context.Context, causation, token
 	if err := eventprovider.ValidateClaim(eventprovider.ClaimOptions{Groups: 1, LeaseDuration: duration}); err != nil {
 		return false, err
 	}
-	return coordinator.fenced(ctx, `UPDATE `+coordinator.deliveryTable()+` SET "available_at"=clock_timestamp()+$1*interval '1 microsecond',"lease_until"=clock_timestamp()+$1*interval '1 microsecond',"updated_at"=clock_timestamp() WHERE "causation_id"=$2 AND "lease_token"=$3 AND "status"='leased'`, duration.Microseconds(), causation, token)
+	return coordinator.fenced(ctx, `WITH deadline AS MATERIALIZED (SELECT clock_timestamp()+$1*interval '1 microsecond' AS expires_at) UPDATE `+coordinator.deliveryTable()+` SET "available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"updated_at"=clock_timestamp() FROM deadline WHERE "causation_id"=$2 AND "lease_token"=$3 AND "status"='leased'`, duration.Microseconds(), causation, token)
 }
 
 func (coordinator *eventCoordinator) Acknowledge(ctx context.Context, causation, token string) (bool, error) {

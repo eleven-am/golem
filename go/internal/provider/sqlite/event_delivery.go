@@ -94,11 +94,8 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	if err := connection.SelectContext(ctx, &causations, `SELECT "causation_id" FROM "main"."_golem_outbox_delivery" WHERE "status" IN ('pending','leased') AND "available_at"<=? ORDER BY "first_recorded_at","causation_id" LIMIT ?`, now, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
 	}
-	causations, oversized, err := sqliteBoundedCausations(ctx, connection, causations, eventprovider.ClaimByteLimit(options))
+	causations, err = sqliteBoundedCausations(ctx, connection, causations, eventprovider.ClaimByteLimit(options))
 	if err != nil {
-		return eventprovider.ClaimSnapshot{}, err
-	}
-	if err := sqliteBlockOversizedCausations(ctx, connection, oversized, now); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	leaseUntil := now + options.LeaseDuration.Microseconds()
@@ -143,9 +140,9 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	return eventprovider.ClaimSnapshot{Leases: cloneLeases(leases), Depth: depth}, nil
 }
 
-func sqliteBoundedCausations(ctx context.Context, queryer sqlx.QueryerContext, causations []string, maximum int) ([]string, []string, error) {
+func sqliteBoundedCausations(ctx context.Context, queryer sqlx.QueryerContext, causations []string, maximum int) ([]string, error) {
 	if len(causations) == 0 {
-		return nil, nil, nil
+		return nil, nil
 	}
 	arguments := make([]any, len(causations))
 	for index, causation := range causations {
@@ -158,22 +155,25 @@ func sqliteBoundedCausations(ctx context.Context, queryer sqlx.QueryerContext, c
 	size := `length("event_id")+length("codec_identity")+length("generation_fingerprint")+length("model_id")+length("action")+COALESCE(length("before_identity"),0)+COALESCE(length("after_identity"),0)+length("causation_id")+length("metadata")+COALESCE(length("delete_snapshot"),0)+32`
 	query := `SELECT "causation_id",SUM(` + size + `) AS "fact_bytes" FROM "main"."_golem_outbox" WHERE "causation_id" IN (` + placeholders(len(causations)) + `) GROUP BY "causation_id"`
 	if err := sqlx.SelectContext(ctx, queryer, &rows, query, arguments...); err != nil {
-		return nil, nil, fmt.Errorf("P7_SQLITE_DELIVERY: measure claimed groups: %w", err)
+		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: measure claimed groups: %w", err)
 	}
 	measured := make(map[string]int64, len(rows))
 	for _, row := range rows {
 		measured[row.Causation] = row.Bytes
 	}
 	result := make([]string, 0, len(causations))
-	oversized := make([]string, 0)
 	total := int64(0)
 	for _, causation := range causations {
 		bytes, exists := measured[causation]
 		if !exists || bytes <= 0 {
-			return nil, nil, fmt.Errorf("P7_SQLITE_DELIVERY: claimed group has no measurable facts")
+			return nil, fmt.Errorf("P7_SQLITE_DELIVERY: claimed group has no measurable facts")
 		}
-		if bytes > int64(maximum) {
-			oversized = append(oversized, causation)
+		if len(result) == 0 {
+			result = append(result, causation)
+			total = bytes
+			if total >= int64(maximum) {
+				break
+			}
 			continue
 		}
 		if bytes > int64(maximum)-total {
@@ -182,27 +182,7 @@ func sqliteBoundedCausations(ctx context.Context, queryer sqlx.QueryerContext, c
 		result = append(result, causation)
 		total += bytes
 	}
-	return result, oversized, nil
-}
-
-func sqliteBlockOversizedCausations(ctx context.Context, queryer sqlx.ExecerContext, causations []string, now int64) error {
-	if len(causations) == 0 {
-		return nil
-	}
-	arguments := make([]any, 0, len(causations)+2)
-	arguments = append(arguments, now, now)
-	for _, causation := range causations {
-		arguments = append(arguments, causation)
-	}
-	result, err := queryer.ExecContext(ctx, `UPDATE "main"."_golem_outbox_delivery" SET "status"='blocked',"lease_token"=NULL,"lease_until"=NULL,"delivered_at"=NULL,"last_failure_code"='batch-too-large',"blocked_at"=?,"retired_at"=NULL,"updated_at"=? WHERE "causation_id" IN (`+placeholders(len(causations))+`)`, arguments...)
-	if err != nil {
-		return fmt.Errorf("P7_SQLITE_DELIVERY: block oversized groups: %w", err)
-	}
-	changed, err := result.RowsAffected()
-	if err != nil || int(changed) != len(causations) {
-		return fmt.Errorf("P7_SQLITE_DELIVERY: oversized group ownership changed")
-	}
-	return nil
+	return result, nil
 }
 
 func sqliteDeliveryDepth(ctx context.Context, queryer sqlx.QueryerContext) (eventprovider.DepthSnapshot, error) {

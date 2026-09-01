@@ -146,14 +146,14 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	if changed, err := fixture.Store.Release(ctx, holder[0].ID, holder[0].LeaseToken); err != nil || !changed {
 		t.Fatalf("release holder changed=%t error=%v", changed, err)
 	}
-	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: shortLease, Resource: &weighted})
+	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: crashLease, Resource: &weighted})
 	if err != nil || len(expiring) != 1 {
 		t.Fatalf("expiring holder=%#v error=%v", expiring, err)
 	}
 	if blocked, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted}); err != nil || len(blocked) != 0 {
 		t.Fatalf("live resource holder admitted=%#v error=%v", blocked, err)
 	}
-	time.Sleep(expiry)
+	time.Sleep(crashLease + expiry)
 	afterExpiry, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted})
 	if err != nil || len(afterExpiry) != 1 || afterExpiry[0].ID != heavy {
 		t.Fatalf("expired resource holder admission=%#v error=%v", afterExpiry, err)
