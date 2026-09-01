@@ -799,13 +799,13 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	if !ok || table.PrimaryKey == nil || len(table.PrimaryKey.Columns) == 0 {
 		return fmt.Errorf("P9_SEMANTIC_SCHEMA: semantic model has no physical primary identity")
 	}
-	records, err := manager.scanSources(ctx, table, index)
-	if err != nil {
-		return fmt.Errorf("P9_SEMANTIC_REFRESH: source scan failed")
-	}
 	states, err := manager.scanStates(ctx, index)
 	if err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: state scan failed")
+	}
+	records, err := manager.scanSources(ctx, table, index)
+	if err != nil {
+		return fmt.Errorf("P9_SEMANTIC_REFRESH: source scan failed")
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	dirty := make([]sourceRecord, 0)
