@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -18,6 +19,7 @@ import (
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	readbind "github.com/eleven-am/golem/go/internal/read/bind"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticruntime "github.com/eleven-am/golem/go/internal/semantic/runtime"
@@ -114,6 +116,20 @@ func TestSemanticIdentityChunkAccountsForExistingBinds(t *testing.T) {
 	}
 	if got := semanticIdentityChunkSize(planned, 1, 951); got != 48 {
 		t.Fatalf("identity chunk=%d want=48", got)
+	}
+}
+
+func TestSemanticHydrationChunkShrinksOnlyForByteCeiling(t *testing.T) {
+	model := policyir.ModelID{1}
+	overflow := readsql.ValidateStatementComplexity(model, strings.Repeat("x", 21), 20, readsql.MaxStatementAliases)
+	if end, retry := reduceSemanticHydrationChunk(4, 12, overflow); !retry || end != 8 {
+		t.Fatalf("byte overflow reduced to %d retry=%t", end, retry)
+	}
+	if end, retry := reduceSemanticHydrationChunk(4, 5, overflow); retry || end != 5 {
+		t.Fatalf("single identity reduced to %d retry=%t", end, retry)
+	}
+	if end, retry := reduceSemanticHydrationChunk(4, 12, errors.New("render failed")); retry || end != 12 {
+		t.Fatalf("unrelated error reduced to %d retry=%t", end, retry)
 	}
 }
 

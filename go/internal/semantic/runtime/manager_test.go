@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
@@ -473,7 +474,39 @@ func textIdentity() []semanticstorage.IdentityColumn {
 func textCandidates(statement string, args ...any) Candidates {
 	return Candidates{
 		SQL: statement, Args: args, Columns: []string{"id"},
+		MaxStatementBytes: readsql.MaxStatementBytes, MaxStatementAliases: readsql.MaxStatementAliases,
 		NewScan: func() IdentityScan { return &textIdentityScan{} },
+	}
+}
+
+func TestRankStatementAppliesLimitsAfterAddingSemanticSQL(t *testing.T) {
+	fixture := newDrainFixture(t)
+	index, ok := fixture.manager.index("post", "related")
+	if !ok {
+		t.Fatal("semantic index is absent")
+	}
+	base := textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "a")
+	tests := []struct {
+		name    string
+		bytes   int
+		aliases int
+	}{
+		{name: "bytes", bytes: len(base.SQL), aliases: readsql.MaxStatementAliases},
+		{name: "aliases", bytes: readsql.MaxStatementBytes, aliases: strings.Count(base.SQL, " AS ")},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidates := base
+			candidates.MaxStatementBytes = test.bytes
+			candidates.MaxStatementAliases = test.aliases
+			if err := readsql.ValidateStatementComplexity(candidates.Model, candidates.SQL, test.bytes, test.aliases); err != nil {
+				t.Fatalf("candidate statement exceeded configured limit: %v", err)
+			}
+			_, err := fixture.manager.rankVector(context.Background(), index, []byte{0}, candidates, "", 1)
+			if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeInvalidInput {
+				t.Fatalf("rank error=%v code=%q ok=%t", err, code, ok)
+			}
+		})
 	}
 }
 

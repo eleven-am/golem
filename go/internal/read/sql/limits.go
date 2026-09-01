@@ -31,10 +31,11 @@ func enforceStatementParameterLimitWith(model policyir.ModelID, args []any, maxi
 }
 
 func enforceStatementComplexity(model policyir.ModelID, statement string) error {
-	return enforceStatementComplexityWith(model, statement, MaxStatementBytes, MaxStatementAliases)
+	return ValidateStatementComplexity(model, statement, MaxStatementBytes, MaxStatementAliases)
 }
 
-func enforceStatementComplexityWith(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
+// ValidateStatementComplexity applies the configured provider-neutral SQL size limits.
+func ValidateStatementComplexity(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
 	if maximumBytes <= 0 || maximumBytes > MaxStatementBytes || len(statement) > maximumBytes {
 		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral byte ceiling", nil)
 	}

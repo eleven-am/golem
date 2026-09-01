@@ -117,7 +117,7 @@ func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, pro
 		return SemanticCandidates{}, err
 	}
 	text := "SELECT " + strings.Join(projection, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(semanticCandidateAlias) + " WHERE " + fragment.SQL()
-	if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
+	if err := ValidateStatementComplexity(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 		return SemanticCandidates{}, err
 	}
 	return SemanticCandidates{text: text, args: cloneArgs(args), columns: columns, fields: fields}, nil

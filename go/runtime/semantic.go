@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/embedding"
@@ -199,7 +200,8 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 		columns[index] = string(column)
 	}
 	ranks, err := rank(ctx, model, semanticruntime.Candidates{
-		SQL: candidates.SQL(), Args: candidates.Args(), Columns: columns,
+		SQL: candidates.SQL(), Args: candidates.Args(), Columns: columns, Model: planned.ModelID(),
+		MaxStatementBytes: planned.Limits().MaxStatementBytes, MaxStatementAliases: planned.Limits().MaxStatementAliases,
 		NewScan: func() semanticruntime.IdentityScan { return decoder.NewScan() },
 	})
 	if err != nil {
@@ -271,35 +273,48 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
 	}
 	result := make(map[string]golem.Row[M], len(ranks))
-	for start := 0; start < len(ranks); start += chunk {
+	for start := 0; start < len(ranks); {
 		end := start + chunk
 		if end > len(ranks) {
 			end = len(ranks)
 		}
-		identities := make([]policyir.Condition, 0, end-start)
-		for _, ranked := range ranks[start:end] {
-			cells, decodeErr := decoder.Values(ranked.Identity)
-			if decodeErr != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity did not decode", decodeErr)
+		var chunkPlan readplan.Plan
+		var statement readsql.Statement
+		for {
+			identities := make([]policyir.Condition, 0, end-start)
+			for _, ranked := range ranks[start:end] {
+				cells, decodeErr := decoder.Values(ranked.Identity)
+				if decodeErr != nil {
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity did not decode", decodeErr)
+				}
+				condition, conditionErr := semanticIdentityCondition(app, planned.ModelID(), fields, cells)
+				if conditionErr != nil {
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be built", conditionErr)
+				}
+				identities = append(identities, condition)
 			}
-			condition, conditionErr := semanticIdentityCondition(app, planned.ModelID(), fields, cells)
-			if conditionErr != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be built", conditionErr)
+			selector := identities[0]
+			if len(identities) > 1 {
+				selector, err = policyir.NewLogical(planned.ModelID(), policyir.LogicalOr, identities)
+				if err != nil {
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be merged", err)
+				}
 			}
-			identities = append(identities, condition)
-		}
-		selector := identities[0]
-		if len(identities) > 1 {
-			selector, err = policyir.NewLogical(planned.ModelID(), policyir.LogicalOr, identities)
+			chunkPlan, err = readplan.WithAdditionalWhere(planned, selector)
 			if err != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be merged", err)
+				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be authorized", err)
 			}
+			statement, err = readsql.Render(chunkPlan, app.registry, app.provider, app.capabilities)
+			if err == nil {
+				break
+			}
+			reduced, retry := reduceSemanticHydrationChunk(start, end, err)
+			if !retry {
+				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+			}
+			end = reduced
 		}
-		chunkPlan, err := readplan.WithAdditionalWhere(planned, selector)
-		if err != nil {
-			return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be authorized", err)
-		}
-		executed, err := executePlan(ctx, app, prepared.executor, prepared.Operation(), chunkPlan)
+		executed, err := executeRenderedPlan(ctx, app, prepared.executor, prepared.Operation(), chunkPlan, statement)
 		if err != nil {
 			return nil, err
 		}
@@ -314,8 +329,24 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			}
 			result[key] = row
 		}
+		if size := end - start; size < chunk {
+			chunk = size
+		}
+		start = end
 	}
 	return result, nil
+}
+
+func semanticStatementExceedsByteLimit(err error) bool {
+	var failure *readsql.Error
+	return errors.As(err, &failure) && failure.Code == readsql.CodeRender && failure.Detail == "read statement exceeds the provider-neutral byte ceiling"
+}
+
+func reduceSemanticHydrationChunk(start, end int, err error) (int, bool) {
+	if end-start <= 1 || !semanticStatementExceedsByteLimit(err) {
+		return end, false
+	}
+	return start + (end-start)/2, true
 }
 
 // semanticIdentityChunkSize keeps one ranked page inside both the plan's own

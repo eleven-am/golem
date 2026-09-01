@@ -12,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
@@ -113,6 +114,7 @@ func (fixture pgvectorRankFixture) seedRankRows(t *testing.T, count int, hidden 
 func rankCandidates(statement string, args ...any) Candidates {
 	return Candidates{
 		SQL: statement, Args: args, Columns: []string{"id"},
+		MaxStatementBytes: readsql.MaxStatementBytes, MaxStatementAliases: readsql.MaxStatementAliases,
 		NewScan: func() IdentityScan { return &textIdentityScan{} },
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
+	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
@@ -64,10 +65,13 @@ type IdentityScan interface {
 // subquery projection in physical key order; ranking refuses any projection
 // that does not match the shadow table's identity contract.
 type Candidates struct {
-	SQL     string
-	Args    []any
-	Columns []string
-	NewScan func() IdentityScan
+	SQL                 string
+	Args                []any
+	Columns             []string
+	Model               policyir.ModelID
+	MaxStatementBytes   int
+	MaxStatementAliases int
+	NewScan             func() IdentityScan
 }
 
 type Rank struct {
@@ -352,6 +356,9 @@ func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (a
 // matching the portable read ordering on every supported locale.
 func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
 	statement := manager.rankStatement(index, candidates, exclude != "")
+	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
+	}
 	arguments := make([]any, 0, len(candidates.Args)+3)
 	arguments = append(arguments, vector)
 	arguments = append(arguments, candidates.Args...)
