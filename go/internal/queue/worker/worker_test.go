@@ -883,6 +883,93 @@ func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {
 	})
 }
 
+func TestRestartDoesNotReuseAbandonedRunWaiter(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	oldStarted := make(chan struct{})
+	oldRelease := make(chan struct{})
+	newHandled := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.shutdown.restart",
+		Handle: func(_ context.Context, job queue.Job[gatePayload]) error {
+			if job.Payload.Value == "old" {
+				close(oldStarted)
+				<-oldRelease
+				return nil
+			}
+			close(newHandled)
+			return nil
+		},
+	})
+	oldPending, err := jobType.New(gatePayload{Value: "old"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.enqueue(t, oldPending)
+
+	renewEntered := make(chan struct{})
+	renewRelease := make(chan struct{})
+	defer func() {
+		close(oldRelease)
+		close(renewRelease)
+	}()
+	var renewOnce sync.Once
+	store := stubStore{Store: fixture.store, renew: func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error) {
+		renewOnce.Do(func() { close(renewEntered) })
+		<-renewRelease
+		return queueprovider.Renewal{Renewed: true}, nil
+	}}
+	limits := gateLimits()
+	limits.Concurrency = 2
+	limits.ClaimBatch = 2
+	limits.ShutdownGrace = 400 * time.Millisecond
+	limits.AbandonGrace = 400 * time.Millisecond
+	worker, err := New(store, registry, limits, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstContext, cancelFirst := context.WithCancel(context.Background())
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- worker.Run(firstContext) }()
+	awaitSignal(t, oldStarted, "the first-run handler to start")
+	awaitSignal(t, renewEntered, "the first-run handler to enter renewal")
+	cancelFirst()
+	select {
+	case err := <-firstDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("the abandoned first run did not stop")
+	}
+
+	newPending, err := jobType.New(gatePayload{Value: "new"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newIdentity := fixture.enqueue(t, newPending)
+	secondContext, cancelSecond := context.WithCancel(context.Background())
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- worker.Run(secondContext) }()
+	awaitSignal(t, newHandled, "the restarted worker to handle new work")
+	awaitState(t, fixture, newIdentity, queueprovider.StateSucceeded)
+
+	startedShutdown := time.Now()
+	cancelSecond()
+	select {
+	case err := <-secondDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(limits.ShutdownGrace):
+		t.Fatal("the restarted worker waited on an abandoned prior run")
+	}
+	if elapsed := time.Since(startedShutdown); elapsed >= limits.ShutdownGrace {
+		t.Fatalf("restart shutdown waited %s on the prior run", elapsed)
+	}
+}
+
 func TestQueueLifecycleObservationsFollowDurableTransitions(t *testing.T) {
 	t.Run("retry then success", func(t *testing.T) {
 		fixture := newHarness(t)
@@ -1205,7 +1292,8 @@ func TestDispatchCarriesTheCompleteResourcePlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	costs["gate.resource.one"] = 3
-	if _, err := worker.dispatch(context.Background(), context.Background(), nil); err != nil {
+	var handlers sync.WaitGroup
+	if _, err := worker.dispatch(context.Background(), context.Background(), nil, &handlers); err != nil {
 		t.Fatal(err)
 	}
 	if len(claims) != 2 {

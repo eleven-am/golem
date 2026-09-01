@@ -49,7 +49,6 @@ type Worker struct {
 	observer    observe.Observer
 	wake        chan struct{}
 	running     atomic.Bool
-	handlers    sync.WaitGroup
 	mutex       sync.Mutex
 	active      int
 	inflight    map[string]int
@@ -193,6 +192,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 	defer worker.running.Store(false)
 	runObserver, stopObserver := worker.runObserver()
 	defer stopObserver()
+	var handlers sync.WaitGroup
 	handlerContext, cancelHandlers := context.WithCancelCause(context.WithoutCancel(ctx))
 	defer cancelHandlers(nil)
 	if err := worker.store.EnsureSchema(ctx); err != nil {
@@ -203,15 +203,15 @@ func (worker *Worker) Run(ctx context.Context) error {
 	}
 	for {
 		if ctx.Err() != nil {
-			worker.awaitHandlers(cancelHandlers)
+			worker.awaitHandlers(&handlers, cancelHandlers)
 			return nil
 		}
-		claimed, err := worker.dispatch(ctx, handlerContext, runObserver)
+		claimed, err := worker.dispatch(ctx, handlerContext, runObserver, &handlers)
 		if err == nil && claimed != 0 {
 			continue
 		}
 		if !worker.idle(ctx) {
-			worker.awaitHandlers(cancelHandlers)
+			worker.awaitHandlers(&handlers, cancelHandlers)
 			return nil
 		}
 	}
@@ -222,7 +222,7 @@ type cohort struct {
 	limit int
 }
 
-func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer observe.Observer) (int, error) {
+func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer observe.Observer, handlers *sync.WaitGroup) (int, error) {
 	claimed := 0
 	offset := worker.claimOffset
 	if len(worker.claimGroups) != 0 {
@@ -245,7 +245,7 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 					continue
 				}
 				claimed++
-				worker.start(handlerContext, record, observer)
+				worker.start(handlerContext, record, observer, handlers)
 			}
 		}
 	}
@@ -287,7 +287,7 @@ func (worker *Worker) cohort(group claimGroup, capped bool) (cohort, bool) {
 	return cohort{types: types, limit: limit}, true
 }
 
-func (worker *Worker) start(ctx context.Context, record queueprovider.Record, observer observe.Observer) {
+func (worker *Worker) start(ctx context.Context, record queueprovider.Record, observer observe.Observer, handlers *sync.WaitGroup) {
 	registration, found := worker.registry.Lookup(record.Type)
 	if !found {
 		worker.release(ctx, record)
@@ -297,19 +297,19 @@ func (worker *Worker) start(ctx context.Context, record queueprovider.Record, ob
 	worker.active++
 	worker.inflight[record.Type]++
 	worker.mutex.Unlock()
-	worker.handlers.Add(1)
+	handlers.Add(1)
 	go func() {
-		defer worker.finish(record.Type)
+		defer worker.finish(record.Type, handlers)
 		worker.run(ctx, record, registration, observer)
 	}()
 }
 
-func (worker *Worker) finish(typeName string) {
+func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
 	worker.mutex.Lock()
 	worker.active--
 	worker.inflight[typeName]--
 	worker.mutex.Unlock()
-	worker.handlers.Done()
+	handlers.Done()
 	worker.Wake()
 }
 
@@ -529,10 +529,10 @@ func (worker *Worker) idle(ctx context.Context) bool {
 	}
 }
 
-func (worker *Worker) awaitHandlers(cancel context.CancelCauseFunc) {
+func (worker *Worker) awaitHandlers(handlers *sync.WaitGroup, cancel context.CancelCauseFunc) {
 	done := make(chan struct{})
 	go func() {
-		worker.handlers.Wait()
+		handlers.Wait()
 		close(done)
 	}()
 	timer := time.NewTimer(worker.limits.ShutdownGrace)
