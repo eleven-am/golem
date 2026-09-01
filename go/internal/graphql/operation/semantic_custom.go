@@ -17,6 +17,7 @@ type semanticCustomRoot struct {
 	hydrate        bool
 	identityFields []golem.FieldID
 	selection      []readir.Selection
+	where          *golem.FrozenPredicate
 }
 
 func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationContractIR, arguments map[string]any, explicit bool) (bool, error) {
@@ -54,7 +55,7 @@ func (c *Compiler) bindSemanticSearchTake(operation compilerir.CustomOperationCo
 	return true, nil
 }
 
-func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationContractIR, modelID compilerir.ModelID, selected []readir.Selection) (*semanticCustomRoot, error) {
+func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationContractIR, modelID compilerir.ModelID, selected []readir.Selection, arguments map[string]any) (*semanticCustomRoot, error) {
 	if !graphqlextension.IsSemanticSearchOperation(c.compilation, operation) && !graphqlextension.IsSemanticSimilarOperation(c.compilation, operation) {
 		return nil, fmt.Errorf("semantic search contract is not authoritative")
 	}
@@ -79,6 +80,13 @@ func (c *Compiler) newSemanticCustomRoot(operation compilerir.CustomOperationCon
 		return nil, err
 	}
 	result := &semanticCustomRoot{model: modelID, publicModel: publicModel, selection: append([]readir.Selection(nil), selected...)}
+	if raw, present := arguments["where"]; present && raw != nil {
+		where, ok := raw.(golem.FrozenPredicate)
+		if !ok || where.View().RootModelID() != publicModel {
+			return nil, fmt.Errorf("semantic search predicate is not authoritative")
+		}
+		result.where = &where
+	}
 	selectedFields := make(map[policyir.FieldID]bool, len(selected))
 	for _, item := range selected {
 		if item.Kind() == readir.SelectScalar {
@@ -117,6 +125,7 @@ type SemanticCustomHydration struct {
 	selection []readir.Selection
 	rows      []golem.RuntimeSemanticRow
 	order     []golem.RuntimeSemanticIdentityToken
+	where     *golem.FrozenPredicate
 }
 
 // Len reports the number of ranked identities awaiting hydration.
@@ -137,7 +146,7 @@ func (c *Compiler) PrepareSemanticCustomHydration(root CustomRoot, value any) (S
 		return SemanticCustomHydration{}, true, fmt.Errorf("semantic search result has value %T", value)
 	}
 	if len(items) == 0 {
-		return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection}, true, nil
+		return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection, where: root.semantic.where}, true, nil
 	}
 	rows := make([]golem.RuntimeSemanticRow, len(items))
 	order := make([]golem.RuntimeSemanticIdentityToken, len(items))
@@ -160,7 +169,7 @@ func (c *Compiler) PrepareSemanticCustomHydration(root CustomRoot, value any) (S
 		}
 		seen[token], order[index], rows[index] = true, token, row
 	}
-	return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection, rows: rows, order: order}, true, nil
+	return SemanticCustomHydration{model: policyir.ModelID(root.semantic.publicModel), selection: root.semantic.selection, rows: rows, order: order, where: root.semantic.where}, true, nil
 }
 
 // SemanticCustomHydrationRequest freezes one ranked identity slice.
@@ -179,6 +188,9 @@ func (c *Compiler) SemanticCustomHydrationRequest(hydration SemanticCustomHydrat
 	base, err := c.freezeRequest(request)
 	if err != nil {
 		return golem.FrozenReadRequest{}, err
+	}
+	if hydration.where != nil {
+		return golem.RuntimeSemanticHydrationRequest(base, hydration.rows[start:end], *hydration.where)
 	}
 	return golem.RuntimeSemanticHydrationRequest(base, hydration.rows[start:end])
 }

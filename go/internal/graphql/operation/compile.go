@@ -669,7 +669,7 @@ func (c *Compiler) compileCustom(root rootField, kind compilerir.CustomOperation
 		}
 		compiled.Slots = selectset.StableSlots(selected.Slots)
 		if semantic {
-			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, selected.Selections)
+			compiled.semantic, err = c.newSemanticCustomRoot(contract, modelID, selected.Selections, arguments)
 			if err != nil {
 				return CustomRoot{}, fmt.Errorf("P5_OPERATION_CUSTOM: %s: %w", root.responseName, err)
 			}

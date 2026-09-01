@@ -377,7 +377,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 	ReportInternalError: func(context.Context, error) {},
   })
   if err != nil { t.Fatal(err) }
-  request := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 10) { title author { name } } }\"}"))
+  request := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { searchPostsByRelated(query: \\\"alpha\\\", take: 10, where: { title: { startsWith: \\\"public\\\" } }) { title author { name } } }\"}"))
   request.Header.Set("Content-Type", "application/json")
   response := httptest.NewRecorder()
   server.Handler().ServeHTTP(response, request)

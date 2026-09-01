@@ -128,7 +128,7 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	if definition := schema.Types[postContract.GraphQLName].Fields.ForName(relationField.GraphQLName); definition != nil && definition.Arguments.ForName("take") != nil {
 		relationArguments = "(take: 1)"
 	}
-	query, queryErrors := gqlparser.LoadQuery(schema, `query Search { `+operation.Name+`(query: "rank me") { `+postID.GraphQLName+` `+relationField.GraphQLName+relationArguments+` { `+targetID.GraphQLName+` } } }`)
+	query, queryErrors := gqlparser.LoadQuery(schema, `query Search { `+operation.Name+`(query: "rank me", where: { `+fieldContractByIDForTest(t, postContract, generatedFieldNamedForTest(t, postModel, "Title").ID).GraphQLName+`: { startsWith: "public" } }) { `+postID.GraphQLName+` `+relationField.GraphQLName+relationArguments+` { `+targetID.GraphQLName+` } } }`)
 	if len(queryErrors) != 0 {
 		t.Fatal(queryErrors)
 	}
@@ -165,6 +165,10 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	}
 	if take, ok := request.Take(); !ok || take != 2 || len(request.Selection()) < 2 {
 		t.Fatalf("semantic hydration request take/selection = %d/%t/%d", take, ok, len(request.Selection()))
+	}
+	where, present := request.Where()
+	if !present || where.View().Root().Operator() != golem.FrozenOperatorAnd {
+		t.Fatalf("semantic hydration request discarded its filter: present=%t", present)
 	}
 	sliced, err := compiler.SemanticCustomHydrationRequest(hydration, 1, 2)
 	if err != nil {

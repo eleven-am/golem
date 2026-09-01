@@ -115,8 +115,8 @@ func RuntimeSemanticRowIdentity(value RuntimeSemanticRow) (RuntimeSemanticIdenti
 // RuntimeSemanticHydrationRequest adds only the retained private identity
 // predicates to an ordinary generated read request. Authorization, masks, and
 // relation selection remain owned by the normal read executor.
-func RuntimeSemanticHydrationRequest(base FrozenReadRequest, rows []RuntimeSemanticRow) (FrozenReadRequest, error) {
-	if base.operation != ReadFindMany || base.model == (ModelID{}) || len(rows) == 0 {
+func RuntimeSemanticHydrationRequest(base FrozenReadRequest, rows []RuntimeSemanticRow, filters ...FrozenPredicate) (FrozenReadRequest, error) {
+	if base.operation != ReadFindMany || base.model == (ModelID{}) || len(rows) == 0 || len(filters) > 1 {
 		return FrozenReadRequest{}, fmt.Errorf("semantic hydration: findMany request and identities are required")
 	}
 	fields := rows[0].identityFields
@@ -133,6 +133,12 @@ func RuntimeSemanticHydrationRequest(base FrozenReadRequest, rows []RuntimeSeman
 	}
 	if base.where != nil {
 		selector = &frozenCondition{kind: FrozenConditionLogical, operator: FrozenOperatorAnd, operand: frozenOperand{kind: FrozenOperandNone}, children: []*frozenCondition{cloneFrozenCondition(base.where.root), selector}}
+	}
+	if len(filters) == 1 {
+		if filters[0].rootModel != base.model || filters[0].root == nil {
+			return FrozenReadRequest{}, fmt.Errorf("semantic hydration: filter does not match the request")
+		}
+		selector = &frozenCondition{kind: FrozenConditionLogical, operator: FrozenOperatorAnd, operand: frozenOperand{kind: FrozenOperandNone}, children: []*frozenCondition{cloneFrozenCondition(filters[0].root), selector}}
 	}
 	canonical, err := encodeFrozenPredicate(base.model, selector)
 	if err != nil {
