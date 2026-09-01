@@ -109,6 +109,13 @@ func TestSemanticCustomSearchBindsRuntimeLimitAndReloadsSelectedRelationsInRankO
 	if len(limited.Custom) != 1 || limited.Custom[0].Arguments["take"] != int32(2) {
 		t.Fatalf("runtime-limited semantic take = %#v", limited.Custom)
 	}
+	for _, semanticOperation := range compilation.Contract.CustomOperations {
+		arguments := map[string]any{}
+		bound, bindErr := limitCompiler.bindSemanticSearchTake(semanticOperation, arguments, false)
+		if bindErr != nil || !bound || arguments["take"] != int32(2) {
+			t.Fatalf("omitted %s take bound=%t arguments=%#v error=%v", semanticOperation.Name, bound, arguments, bindErr)
+		}
+	}
 	overflow, overflowErrors := gqlparser.LoadQuery(schema, `query { `+operation.Name+`(query: "rank me", take: 3) { `+postID.GraphQLName+` } }`)
 	if len(overflowErrors) != 0 {
 		t.Fatal(overflowErrors)

@@ -117,6 +117,14 @@ func TestSemanticIdentityChunkAccountsForExistingBinds(t *testing.T) {
 	if got := semanticIdentityChunkSize(planned, 1, 951); got != 48 {
 		t.Fatalf("identity chunk=%d want=48", got)
 	}
+	if err := validateSemanticPlanTake(PreparedRead{request: request}, planned, "similar", 101); err == nil {
+		t.Fatal("similar limit overflow was accepted")
+	} else {
+		var failure *golem.Error
+		if !errors.As(err, &failure) || failure.Operation != "similar" {
+			t.Fatalf("similar limit error=%v", err)
+		}
+	}
 }
 
 func TestSemanticHydrationChunkShrinksOnlyForByteCeiling(t *testing.T) {

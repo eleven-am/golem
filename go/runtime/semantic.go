@@ -42,7 +42,7 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "search", indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -71,7 +71,7 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, caller.app, descriptor, prepared, indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "similar", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -88,7 +88,7 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, "search", indexName, take, 2, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.Query(ctx, model, indexName, query, candidates, take)
 	})
 }
@@ -113,7 +113,7 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	return rankSemanticRows(ctx, system.app, descriptor, prepared, indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
+	return rankSemanticRows(ctx, system.app, descriptor, prepared, "similar", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
 		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
 	})
 }
@@ -177,21 +177,21 @@ func semanticSourceKey[M any](descriptor golem.ModelDescriptor[M], row golem.Row
 	return key, nil
 }
 
-func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, indexName string, take, rankParameters int, rank semanticRanker) ([]golem.SemanticResult[M], error) {
+func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, operation, indexName string, take, rankParameters int, rank semanticRanker) ([]golem.SemanticResult[M], error) {
 	planned, err := preparePlan(prepared, app.registry, app.readLimits.plan)
 	if err != nil {
 		return nil, publicPlanError(prepared, err)
 	}
-	if err := validateSemanticPlanTake(prepared, planned, take); err != nil {
+	if err := validateSemanticPlanTake(prepared, planned, operation, take); err != nil {
 		return nil, err
 	}
 	candidates, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities, rankParameters)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
 	}
 	decoder, err := readdecode.NewFields(planned.ModelID(), app.registry, app.provider, candidates.Fields())
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic identity decoder could not be built", err)
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic identity decoder could not be built", err)
 	}
 	model := semanticModelID(descriptor.Metadata())
 	identity := candidates.Columns()
@@ -212,16 +212,16 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	}
 	base, err := readsql.Render(planned, app.registry, app.provider, app.capabilities)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
 	}
-	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, decoder, candidates.Fields(), len(base.Args()), ranks)
+	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, operation, decoder, candidates.Fields(), len(base.Args()), ranks)
 	if err != nil {
 		return nil, err
 	}
 	return assembleSemanticResults(ranks, rows)
 }
 
-func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, requested int) error {
+func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, operation string, requested int) error {
 	maximum := 0
 	if limit := planned.ResultLimit(); limit > 0 {
 		maximum = limit
@@ -235,7 +235,7 @@ func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, requ
 		}
 	}
 	if maximum > 0 && requested > maximum {
-		return golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic result limit exceeds the planned row maximum", nil)
+		return golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic result limit exceeds the planned row maximum", nil)
 	}
 	return nil
 }
@@ -263,14 +263,14 @@ func assembleSemanticResults[M any](ranks []semanticruntime.Rank, rows map[strin
 // authorized row statement. Ranking already restricted candidacy to the
 // authorized predicate; reading the projected rows through the same plan is
 // what keeps masks, relations, and row policy identical to a plain findMany.
-func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
+func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descriptor golem.ModelDescriptor[M], prepared PreparedRead, planned readplan.Plan, operation string, decoder readdecode.Decoder, fields []policyir.FieldID, baseArguments int, ranks []semanticruntime.Rank) (map[string]golem.Row[M], error) {
 	primary, err := semanticPrimaryIdentity(descriptor)
 	if err != nil {
 		return nil, err
 	}
 	chunk := semanticIdentityChunkSize(planned, len(fields), baseArguments)
 	if chunk < 1 {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
+		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement has no identity capacity", nil)
 	}
 	result := make(map[string]golem.Row[M], len(ranks))
 	for start := 0; start < len(ranks); {
@@ -285,11 +285,11 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			for _, ranked := range ranks[start:end] {
 				cells, decodeErr := decoder.Values(ranked.Identity)
 				if decodeErr != nil {
-					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity did not decode", decodeErr)
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "ranked identity did not decode", decodeErr)
 				}
 				condition, conditionErr := semanticIdentityCondition(app, planned.ModelID(), fields, cells)
 				if conditionErr != nil {
-					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be built", conditionErr)
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be built", conditionErr)
 				}
 				identities = append(identities, condition)
 			}
@@ -297,12 +297,12 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			if len(identities) > 1 {
 				selector, err = policyir.NewLogical(planned.ModelID(), policyir.LogicalOr, identities)
 				if err != nil {
-					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be merged", err)
+					return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be merged", err)
 				}
 			}
 			chunkPlan, err = readplan.WithAdditionalWhere(planned, selector)
 			if err != nil {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be authorized", err)
+				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "ranked identity predicate could not be authorized", err)
 			}
 			statement, err = readsql.Render(chunkPlan, app.registry, app.provider, app.capabilities)
 			if err == nil {
@@ -310,7 +310,7 @@ func fetchSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descrip
 			}
 			reduced, retry := reduceSemanticHydrationChunk(start, end, err)
 			if !retry {
-				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "search", prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
+				return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
 			}
 			end = reduced
 		}
