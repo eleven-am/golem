@@ -196,14 +196,10 @@ func (b *Binder) Query(input QueryInput) (readir.Request, error) {
 			if valueErr != nil || value == 0 {
 				return readir.Request{}, fmt.Errorf("P5_BIND_PAGING: take must be a non-zero Int")
 			}
-			maximum := contract.Limits.MaxPageSize
-			if contract.Limits.MaxTake != 0 && (maximum == 0 || contract.Limits.MaxTake < maximum) {
-				maximum = contract.Limits.MaxTake
-			}
-			if b.limits.MaxPageSize > 0 && (maximum == 0 || uint32(b.limits.MaxPageSize) < maximum) {
-				maximum = uint32(b.limits.MaxPageSize)
-			}
-			if maximum != 0 && absInt(value) > int(maximum) {
+			maximum := readir.NarrowCap(0, int(contract.Limits.MaxPageSize))
+			maximum = readir.NarrowCap(maximum, int(contract.Limits.MaxTake))
+			maximum = readir.NarrowCap(maximum, b.limits.MaxPageSize)
+			if maximum != 0 && absInt(value) > maximum {
 				return readir.Request{}, fmt.Errorf("P5_BIND_PAGING: take exceeds model maximum %d", maximum)
 			}
 			request.Take = &value
@@ -379,19 +375,6 @@ func sortedKeys(value map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-func hasMode(values []compilerir.FieldMode, wanted compilerir.FieldMode) bool {
-	for _, value := range values {
-		if value == wanted {
-			return true
-		}
-	}
-	return false
-}
-
-func readable(field compilerir.FieldContractIR) bool {
-	return !hasMode(field.Modes, compilerir.ModeHidden) && !hasMode(field.Modes, compilerir.ModeWriteOnly)
 }
 
 func joinPath(parent, child string) string {

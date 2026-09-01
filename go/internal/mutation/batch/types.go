@@ -125,6 +125,7 @@ type Program struct {
 	capture     Statement
 	maxRows     uint32
 	primary     []policyir.FieldID
+	semantic    bool
 }
 
 func (program Program) Provider() policyir.Provider                    { return program.context.provider }
@@ -137,8 +138,12 @@ func (program Program) CaptureStatement() Statement {
 	copy.columns = program.capture.Columns()
 	return copy
 }
-func (program Program) MaxRows() uint32      { return program.maxRows }
-func (program Program) SentinelRows() uint32 { return program.maxRows + 1 }
+func (program Program) MaxRows() uint32 { return program.maxRows }
+
+// SemanticIndexed carries the plan's registry-derived decision that a write to
+// this model must be recorded for semantic re-embedding.
+func (program Program) SemanticIndexed() bool { return program.semantic }
+func (program Program) SentinelRows() uint32  { return program.maxRows + 1 }
 func (program Program) PrimaryKey() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), program.primary...)
 }

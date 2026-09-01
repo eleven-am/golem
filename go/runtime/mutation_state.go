@@ -12,7 +12,6 @@ import (
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/observeexec"
-	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
 )
@@ -30,6 +29,8 @@ type mutationState struct {
 	finished   bool
 	failure    error
 	facts      []mutationfact.OutboxRow
+	marks      []semanticMark
+	markIndex  map[semanticMarkIdentity]struct{}
 	after      []mutationAfterCommit
 	invalidate func()
 }
@@ -47,6 +48,7 @@ type mutationScope struct {
 	bytes      int
 	dirty      bool
 	facts      int
+	marks      int
 	after      int
 	failure    error
 	rolledBack bool
@@ -73,7 +75,7 @@ func (state *mutationState) beginScope() (*mutationScope, error) {
 	if state.flushed || state.finished {
 		return nil, fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
-	return &mutationScope{state: state, ordinal: state.ordinal, touched: state.touched, bytes: state.bytes, dirty: state.dirty, facts: len(state.facts), after: len(state.after), failure: state.failure}, nil
+	return &mutationScope{state: state, ordinal: state.ordinal, touched: state.touched, bytes: state.bytes, dirty: state.dirty, facts: len(state.facts), marks: len(state.marks), after: len(state.after), failure: state.failure}, nil
 }
 
 func (scope *mutationScope) release() error {
@@ -99,11 +101,55 @@ func (scope *mutationScope) rollback() error {
 	state.bytes = scope.bytes
 	state.dirty = scope.dirty
 	state.facts = state.facts[:scope.facts]
+	state.rewindMarks(scope.marks)
 	state.after = state.after[:scope.after]
 	state.failure = scope.failure
 	scope.rolledBack = true
 	scope.closed = true
 	return nil
+}
+
+// markSemantic records that one semantic-indexed record was written inside this
+// transaction. Marks are deduplicated per transaction, so a row rewritten many
+// times still costs one shadow-state row and the buffer never emits more than
+// one drain job per index.
+func (state *mutationState) markSemantic(model golem.ModelID, key string, identity []any) error {
+	if state == nil || model == (golem.ModelID{}) || key == "" || len(identity) == 0 {
+		return fmt.Errorf("P9_SEMANTIC_MARK: semantic mark is incomplete")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.flushed || state.finished {
+		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
+	}
+	identifier := semanticMarkIdentity{model: model, key: key}
+	if _, duplicate := state.markIndex[identifier]; duplicate {
+		return nil
+	}
+	if state.markIndex == nil {
+		state.markIndex = make(map[semanticMarkIdentity]struct{})
+	}
+	state.markIndex[identifier] = struct{}{}
+	state.marks = append(state.marks, semanticMark{model: model, key: key, identity: identity})
+	return nil
+}
+
+// rewindMarks drops the marks a rolled-back scope contributed. The caller holds
+// the state lock.
+func (state *mutationState) rewindMarks(count int) {
+	for _, mark := range state.marks[count:] {
+		delete(state.markIndex, semanticMarkIdentity{model: mark.model, key: mark.key})
+	}
+	state.marks = state.marks[:count]
+}
+
+func (state *mutationState) semanticMarks() []semanticMark {
+	if state == nil {
+		return nil
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return append([]semanticMark(nil), state.marks...)
 }
 
 func (state *mutationState) touch(rows int) error {
@@ -283,7 +329,7 @@ func (state *mutationState) poison(cause error) {
 	}
 }
 
-func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerContext, provider policyir.Provider, namespace string) error {
+func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerContext, config executionMutationConfig) error {
 	if state == nil || executor == nil {
 		return fmt.Errorf("P4_MUTATION_STATE: outbox flush requires transaction state and executor")
 	}
@@ -298,7 +344,7 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 	if state.flushed {
 		return fmt.Errorf("P4_MUTATION_STATE: outbox was already flushed")
 	}
-	statements, err := mutationfact.RenderInsertsAt(provider, namespace, state.facts, state.limits.statementParameters)
+	statements, err := mutationfact.RenderInsertsAt(config.provider, config.outboxNamespace, state.facts, state.limits.statementParameters)
 	if err != nil {
 		return err
 	}
@@ -309,7 +355,7 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 		}
 	}
 	if len(state.facts) != 0 {
-		delivery, err := mutationfact.RenderDeliveryInsertAt(provider, namespace, state.facts)
+		delivery, err := mutationfact.RenderDeliveryInsertAt(config.provider, config.outboxNamespace, state.facts)
 		if err != nil {
 			return err
 		}
@@ -318,8 +364,28 @@ func (state *mutationState) flush(ctx context.Context, executor sqlx.ExecerConte
 			return fmt.Errorf("P7_MUTATION_DELIVERY: insert causal state: %w", err)
 		}
 	}
+	// Semantic marks are written beside the outbox rows and on the same
+	// executor, so a record's shadow-state row and the drain job that will
+	// consume it commit or roll back with the write that produced them.
+	if len(state.marks) != 0 {
+		if config.flushSemantic == nil {
+			return fmt.Errorf("P9_SEMANTIC_MARK: execution has semantic marks and no semantic flush owner")
+		}
+		if err := config.flushSemantic(ctx, executor, append([]semanticMark(nil), state.marks...)); err != nil {
+			return err
+		}
+	}
 	state.flushed = true
 	return nil
+}
+
+func (state *mutationState) hasSemanticMarks() bool {
+	if state == nil {
+		return false
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return len(state.marks) != 0
 }
 
 func (state *mutationState) committed(ctx context.Context, report func(context.Context, golem.AfterCommitFailure)) {
@@ -336,6 +402,7 @@ func (state *mutationState) committed(ctx context.Context, report func(context.C
 	dirty := state.dirty
 	after := append([]mutationAfterCommit(nil), state.after...)
 	state.facts = nil
+	state.marks, state.markIndex = nil, nil
 	state.after = nil
 	state.mu.Unlock()
 
@@ -371,6 +438,7 @@ func (state *mutationState) discarded() {
 	defer state.mu.Unlock()
 	state.finished = true
 	state.facts = nil
+	state.marks, state.markIndex = nil, nil
 	state.after = nil
 	state.invalidate = nil
 }

@@ -413,6 +413,16 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 			return err
 		}
 		wantState := "record_key:text:true,source_hash:bytea:true,space_fingerprint:text:true,status:text:true,attempt_count:integer:true,error_code:text:false,updated_at:bigint:true"
+		if len(descriptor.Identity) == 0 {
+			return fmt.Errorf("postgresql semantic introspect: identity projection is absent extension=%s", extension.ID)
+		}
+		for _, column := range descriptor.Identity {
+			storage, storageErr := renderStorage(column.Storage)
+			if storageErr != nil {
+				return fmt.Errorf("postgresql semantic introspect: %w", storageErr)
+			}
+			wantState += "," + string(column.Name) + ":" + storage + ":" + strconv.FormatBool(column.NotNull)
+		}
 		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
 		if stateColumns != wantState || vectorColumns != wantVectors {
 			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)
@@ -966,7 +976,7 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 	if err != nil {
 		return err
 	}
-	return compareFingerprints(expected, actual)
+	return physical.CompareFingerprints(expected, actual)
 }
 
 var (

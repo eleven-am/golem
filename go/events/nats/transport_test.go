@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -100,6 +101,11 @@ func TestOrder7BrokerFailuresAreSealedAndNeverEchoConfiguration(t *testing.T) {
 	if eventCode(err) != events.CodeEventTransport || err.Error() != string(events.CodeEventTransport) {
 		t.Fatalf("unsealed error=%q", err)
 	}
+	for _, secret := range []string{"secret", "credential", "broker", "private", "payload"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error %q echoed broker or payload detail", err)
+		}
+	}
 }
 
 func TestOrder7BindExactlyOnceAndStartsNoBrokerWork(t *testing.T) {
@@ -137,8 +143,18 @@ func TestOrder7BrokerPayloadCeilingMustCoverConfiguredEnvelope(t *testing.T) {
 	if transport != nil || eventCode(err) != events.CodeEventConfig {
 		t.Fatalf("transport=%v error=%v", transport, err)
 	}
-	if err.Error() != string(events.CodeEventConfig) {
-		t.Fatalf("error leaked broker configuration: %q", err)
+	for _, secret := range []string{"credential", "broker"} {
+		if strings.Contains(err.Error(), secret) {
+			t.Fatalf("error leaked broker configuration: %q", err)
+		}
+	}
+	for _, number := range []string{"1024", "1025"} {
+		if !strings.Contains(err.Error(), number) {
+			t.Fatalf("error %q does not name the payload ceiling %s", err, number)
+		}
+	}
+	if !strings.Contains(err.Error(), "MaxInboundPayloadBytes") {
+		t.Fatalf("error %q does not name the configured field", err)
 	}
 }
 

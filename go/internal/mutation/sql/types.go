@@ -174,6 +174,7 @@ type Program struct {
 	fact                        mutationir.FactRequirement
 	concurrency                 *policyir.FieldID
 	requiresConcurrencyPrecheck bool
+	semanticIndexed             bool
 }
 
 func (program Program) Provider() policyir.Provider                    { return program.provider }
@@ -192,6 +193,10 @@ func (program Program) OptimisticConcurrency() (policyir.FieldID, bool) {
 	return *program.concurrency, true
 }
 func (program Program) RequiresConcurrencyPrecheck() bool { return program.requiresConcurrencyPrecheck }
+
+// SemanticIndexed carries the plan's registry-derived decision that a write to
+// this model must be recorded for semantic re-embedding.
+func (program Program) SemanticIndexed() bool { return program.semanticIndexed }
 func (program Program) IdentityVerification() IdentityVerification {
 	copy := program.identity
 	copy.fields = program.identity.Fields()

@@ -50,35 +50,35 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 	return nil
 }
 
-func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (string, error) {
+func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Executor, request queueprovider.EnqueueRequest) (queueprovider.EnqueueResult, error) {
 	if err := queueprovider.ValidateEnqueue(request); err != nil {
-		return "", err
+		return queueprovider.EnqueueResult{}, err
 	}
 	if executor == nil {
 		executor = store.database
 	}
 	var now int64
 	if err := executor.QueryRowContext(ctx, "SELECT "+sqliteDatabaseMicros).Scan(&now); err != nil {
-		return "", fmt.Errorf("QUEUE_SQLITE_STORE: read database time: %w", err)
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: read database time: %w", err)
 	}
 	result, err := executor.ExecContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
 		request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now, now)
 	if err != nil {
-		return "", fmt.Errorf("QUEUE_SQLITE_STORE: insert job: %w", err)
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert job: %w", err)
 	}
 	inserted, err := result.RowsAffected()
 	if err != nil {
-		return "", fmt.Errorf("QUEUE_SQLITE_STORE: insert result: %w", err)
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert result: %w", err)
 	}
 	if inserted == 1 {
-		return request.ID, nil
+		return queueprovider.EnqueueResult{ID: request.ID, State: queueprovider.StatePending, Inserted: true}, nil
 	}
 	if request.DedupeKey == "" {
-		return "", fmt.Errorf("QUEUE_SQLITE_STORE: job identity is already durable")
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is already durable")
 	}
-	var existing string
-	if err := executor.QueryRowContext(ctx, `SELECT "id" FROM `+sqliteQueueTable+` WHERE "dedupe_key"=? AND "status" IN ('pending','leased')`, request.DedupeKey).Scan(&existing); err != nil {
-		return "", fmt.Errorf("QUEUE_SQLITE_STORE: resolve coalesced job: %w", err)
+	var existing queueprovider.EnqueueResult
+	if err := executor.QueryRowContext(ctx, `SELECT "id","status" FROM `+sqliteQueueTable+` WHERE "dedupe_key"=? AND "status" IN ('pending','leased')`, request.DedupeKey).Scan(&existing.ID, &existing.State); err != nil {
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: resolve coalesced job: %w", err)
 	}
 	return existing, nil
 }
@@ -226,8 +226,8 @@ func (store *queueStore) Release(ctx context.Context, id, token string) (bool, e
 }
 
 func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
-	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is invalid")
+	if err := queueprovider.ValidateJobIdentity(id); err != nil {
+		return false, err
 	}
 	immediate, err := store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"finished_at"=`+sqliteDatabaseMicros+`,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status"='pending'`, id)
 	if err != nil || immediate {
@@ -237,8 +237,8 @@ func (store *queueStore) Cancel(ctx context.Context, id string) (bool, error) {
 }
 
 func (store *queueStore) Requeue(ctx context.Context, id string) (bool, error) {
-	if id == "" || len(id) > 64 {
-		return false, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is invalid")
+	if err := queueprovider.ValidateJobIdentity(id); err != nil {
+		return false, err
 	}
 	return store.fenced(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='pending',"attempt_count"=0,"available_at"=`+sqliteDatabaseMicros+`,"lease_token"=NULL,"lease_until"=NULL,"cancel_requested_at"=NULL,"finished_at"=NULL,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "status" IN ('failed','canceled')`, id)
 }

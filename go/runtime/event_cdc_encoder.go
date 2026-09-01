@@ -16,6 +16,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
@@ -143,7 +144,7 @@ func validateCDCEncodeInput(registry *schema.Registry, input eventcdc.EncodeInpu
 }
 
 func cdcFactRequirement(registry *schema.Registry, modelID policyir.ModelID, action golem.EventAction) (mutationir.FactRequirement, [32]byte, error) {
-	_, eventSchema, deleteSnapshot, err := mutationEventSchema(registry, modelID)
+	_, eventSchema, deleteSnapshot, err := mutationplan.ModelEventSchema(registry, modelID)
 	if err != nil {
 		return mutationir.FactRequirement{}, [32]byte{}, err
 	}

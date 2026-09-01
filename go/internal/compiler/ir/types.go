@@ -3,6 +3,11 @@
 // provider lowering, and code generation live in other packages.
 package ir
 
+import (
+	"slices"
+	"sort"
+)
+
 const (
 	RawDeclFormatVersion uint16 = 2
 	ModelFormatVersion   uint16 = 2
@@ -302,6 +307,33 @@ const (
 	TypeEnum       LogicalTypeKind = "enum"
 	TypeScalarList LogicalTypeKind = "scalarList"
 )
+
+var scalarGraphQLNameByKind = map[LogicalTypeKind]string{
+	TypeBool: "Boolean", TypeInt16: "Int", TypeInt32: "Int", TypeInt64: "BigInt",
+	TypeFloat32: "Float", TypeFloat64: "Float", TypeDecimal: "Decimal", TypeString: "String",
+	TypeBytes: "Bytes", TypeUUID: "UUID", TypeDate: "Date", TypeTime: "Time",
+	TypeDateTime: "DateTime", TypeJSON: "JSON",
+}
+
+func ScalarGraphQLName(kind LogicalTypeKind) (string, bool) {
+	name, ok := scalarGraphQLNameByKind[kind]
+	return name, ok
+}
+
+func ScalarGraphQLNames() []string {
+	names := make([]string, 0, len(scalarGraphQLNameByKind))
+	for _, name := range scalarGraphQLNameByKind {
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func IsScalarGraphQLName(name string) bool {
+	return slices.Contains(ScalarGraphQLNames(), name)
+}
 
 type LogicalTypeIR struct {
 	Kind         LogicalTypeKind `json:"kind"`
@@ -712,6 +744,19 @@ const (
 	ModeWriteOnly FieldMode = "writeOnly"
 	ModeImmutable FieldMode = "immutable"
 )
+
+func HasMode(modes []FieldMode, wanted FieldMode) bool {
+	for _, mode := range modes {
+		if mode == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func ModesReadable(modes []FieldMode) bool {
+	return !HasMode(modes, ModeHidden) && !HasMode(modes, ModeWriteOnly)
+}
 
 type FieldContractIR struct {
 	FieldID     FieldID     `json:"fieldId"`

@@ -112,7 +112,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	}
 	if normalized.Version != 1 || normalized.CanonicalVersion != 1 {
 		for _, extension := range normalized.Extensions {
-			statements, renderErr := renderSemanticExtension(extension)
+			statements, renderErr := renderSemanticExtension(extension, false)
 			if renderErr != nil {
 				return physical.PhysicalSchema{}, renderErr
 			}
@@ -122,10 +122,17 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			}
 			stateName := string(descriptor.Storage) + "_state"
 			vectorName := string(descriptor.Storage) + "_vec"
+			indexNames := semanticStateIndexNames(descriptor)
+			if len(statements) != len(indexNames)+2 {
+				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect semantic statement registry mismatch for %s", extension.ID)
+			}
 			expectedObjects["table\x00"+stateName] = statements[0]
+			for index, name := range indexNames {
+				expectedObjects["index\x00"+string(name)] = statements[index+1]
+			}
 			vectorKey := "table\x00" + vectorName
 			vector, exists := actual[vectorKey]
-			if !exists || strings.TrimSpace(vector.SQL) != statements[1] {
+			if !exists || strings.TrimSpace(vector.SQL) != statements[len(statements)-1] {
 				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)
 			}
 			delete(actual, vectorKey)
@@ -303,27 +310,8 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 	if err != nil {
 		return err
 	}
-	want, err := physical.PhysicalFingerprint(expected)
-	if err != nil {
-		return err
-	}
-	got, err := physical.PhysicalFingerprint(actual)
-	if err != nil {
-		return err
-	}
-	if got != want {
-		return fmt.Errorf("sqlite verify: physical fingerprint mismatch got=%s want=%s", got, want)
-	}
-	wantSystem, err := physical.SystemFingerprint(expected.Provider, expected.System)
-	if err != nil {
-		return err
-	}
-	gotSystem, err := physical.SystemFingerprint(actual.Provider, actual.System)
-	if err != nil {
-		return err
-	}
-	if gotSystem != wantSystem {
-		return fmt.Errorf("sqlite verify: system fingerprint mismatch")
+	if err := physical.CompareFingerprints(expected, actual); err != nil {
+		return fmt.Errorf("sqlite verify: %w", err)
 	}
 	return nil
 }

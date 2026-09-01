@@ -110,7 +110,7 @@ func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T
 	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{
 		ID: "70000000000000000000000000000001", Provider: ir.SQLite, Version: semanticcontract.Version,
 		Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload,
-	})
+	}, migrationFixtureTable(t, before, fixtureItemTable))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +145,7 @@ func TestSQLiteIncrementalSemanticIndexRewritePreservesOwnerRowsAndClearsDerived
 		if err != nil {
 			t.Fatal(err)
 		}
-		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: semanticcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload})
+		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: semanticcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: semanticcontract.IndexKind, Payload: payload}, migrationFixtureTable(t, base, fixtureItemTable))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,7 +169,7 @@ func TestSQLiteIncrementalSemanticIndexRewritePreservesOwnerRowsAndClearsDerived
 	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_vec" (record_key,embedding) VALUES ('old',?)`, encoded); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_state" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at) VALUES ('old',X'01','old','ready',1,NULL,1)`); err != nil {
+	if _, err := database.ExecContext(ctx, `INSERT INTO "`+baseName+`_state" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at,"id") VALUES ('old',X'01','old','ready',1,NULL,1,1)`); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1054,4 +1054,15 @@ func assertForeignKeysState(t *testing.T, database *sqlx.DB, want int) {
 	if got != want {
 		t.Fatalf("PRAGMA foreign_keys=%d want=%d", got, want)
 	}
+}
+
+func migrationFixtureTable(t *testing.T, schema physical.PhysicalSchema, model ir.ModelID) physical.PhysicalTable {
+	t.Helper()
+	for _, table := range schema.Tables {
+		if table.ID == model {
+			return table
+		}
+	}
+	t.Fatalf("fixture table %s is absent", model)
+	return physical.PhysicalTable{}
 }

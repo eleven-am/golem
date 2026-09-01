@@ -264,6 +264,15 @@ func WithMaximumTake(plan Plan, maximum int) (Plan, error) {
 	return result, nil
 }
 
+func modelRowCap(registry *schema.Registry, model policyir.ModelID, configuredRowCap int) int {
+	modelFact, ok := registry.Model(golem.ModelID(model))
+	if !ok {
+		return configuredRowCap
+	}
+	configured, _ := modelFact.MaxTake()
+	return readir.NarrowCap(configuredRowCap, int(configured))
+}
+
 func build(request readir.Request, registry *schema.Registry, policies PolicySet, limits Limits, system bool, depth, configuredRowCap int) (Plan, error) {
 	if registry == nil || request.ModelID() == (policyir.ModelID{}) {
 		return Plan{}, fail(CodeInput, request.ModelID(), policyir.FieldID{}, "registry and request are required", nil)
@@ -274,12 +283,7 @@ func build(request readir.Request, registry *schema.Registry, policies PolicySet
 	if depth > limits.MaxRelationDepth {
 		return Plan{}, fail(CodeLimit, request.ModelID(), policyir.FieldID{}, "relation depth limit exceeded", nil)
 	}
-	effectiveMaxTake := configuredRowCap
-	if modelFact, ok := registry.Model(golem.ModelID(request.ModelID())); ok {
-		if configured, present := modelFact.MaxTake(); present && (effectiveMaxTake == 0 || int(configured) < effectiveMaxTake) {
-			effectiveMaxTake = int(configured)
-		}
-	}
+	effectiveMaxTake := modelRowCap(registry, request.ModelID(), configuredRowCap)
 	if take, ok := request.Take(); ok && effectiveMaxTake > 0 && (take > effectiveMaxTake || take < -effectiveMaxTake) {
 		return Plan{}, fail(CodeLimit, request.ModelID(), policyir.FieldID{}, "take exceeds the model maximum", nil)
 	}
@@ -645,12 +649,7 @@ func dependencyReadPlan(tree dependency.Tree, registry *schema.Registry, policie
 		return Plan{}, fail(CodePolicy, model, policyir.FieldID{}, "relation dependency target predicate could not be normalized", err)
 	}
 	result := Plan{operation: readir.FindMany, model: model, where: row, anchor: row, system: system, limits: limits}
-	effectiveRowCap := configuredRowCap
-	if modelFact, ok := registry.Model(golem.ModelID(model)); ok {
-		if configured, present := modelFact.MaxTake(); present && (effectiveRowCap == 0 || int(configured) < effectiveRowCap) {
-			effectiveRowCap = int(configured)
-		}
-	}
+	effectiveRowCap := modelRowCap(registry, model, configuredRowCap)
 	if effectiveRowCap > 0 {
 		fetch := effectiveRowCap + 1
 		result.take = &fetch

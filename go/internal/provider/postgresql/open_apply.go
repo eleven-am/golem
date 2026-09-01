@@ -165,7 +165,7 @@ func (provider *Provider) applyInitial(ctx context.Context, database *sqlx.DB, s
 	if err != nil {
 		return fmt.Errorf("postgresql post-apply introspection: %w", err)
 	}
-	if err = compareFingerprints(normalized, actual); err != nil {
+	if err = physical.CompareFingerprints(normalized, actual); err != nil {
 		return fmt.Errorf("postgresql post-apply verification: %w", err)
 	}
 	if err = tx.Commit(); err != nil {
@@ -211,30 +211,4 @@ ORDER BY c.relkind, c.relname`, string(namespace))
 func advisoryKey(schema physical.PhysicalSchema) int64 {
 	hash := sha256.Sum256([]byte("golem:postgresql:migration-lock:v1\x00" + string(schema.Namespace.Name)))
 	return int64(binary.BigEndian.Uint64(hash[:8]))
-}
-
-func compareFingerprints(expected, actual physical.PhysicalSchema) error {
-	expectedPhysical, err := physical.HistoricalPhysicalFingerprint(expected)
-	if err != nil {
-		return err
-	}
-	actualPhysical, err := physical.HistoricalPhysicalFingerprint(actual)
-	if err != nil {
-		return err
-	}
-	if expectedPhysical != actualPhysical {
-		return fmt.Errorf("application physical fingerprint mismatch: expected %s actual %s", expectedPhysical, actualPhysical)
-	}
-	expectedSystem, err := physical.HistoricalSystemFingerprint(expected)
-	if err != nil {
-		return err
-	}
-	actualSystem, err := physical.HistoricalSystemFingerprint(actual)
-	if err != nil {
-		return err
-	}
-	if expectedSystem != actualSystem {
-		return fmt.Errorf("system physical fingerprint mismatch: expected %s actual %s", expectedSystem, actualSystem)
-	}
-	return nil
 }

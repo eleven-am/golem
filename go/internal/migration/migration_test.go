@@ -107,7 +107,7 @@ func TestSemanticExtensionDiffIsAdditiveAndDropsOnlyWithDataLoss(t *testing.T) {
 		PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_posts", Columns: []ir.FieldID{fieldID}},
 	}}
 	payload, _ := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{string(fieldID)}, Metric: "cosine"})
-	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload})
+	extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload}, desired.Tables[0])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -170,7 +170,7 @@ func TestSemanticExtensionChangeIsReviewedOrderedRewrite(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload})
+		extension, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload}, base.Tables[0])
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -1067,4 +1067,72 @@ func assertDependsOnKind(t *testing.T, operations []Operation, operation Operati
 		}
 	}
 	t.Fatalf("%s does not depend on %s: %#v", operation.Kind, dependencyKind, operation.Dependencies)
+}
+
+// TestLegacySemanticSnapshotRebuildsShadowStorage pins the upgrade path for
+// signed histories written before the shadow state table mirrored the owner's
+// identity columns. The retained snapshot must still decode, and re-compiling
+// it must rebuild the derived storage rather than silently keep the old shape.
+func TestLegacySemanticSnapshotRebuildsShadowStorage(t *testing.T) {
+	modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
+	identityID := ir.FieldID("1123456789abcdef0123456789abcdef")
+	titleID := ir.FieldID("1223456789abcdef0123456789abcdef")
+	base := schema()
+	base.Tables = []physical.PhysicalTable{{
+		ID: modelID, Name: "posts",
+		Columns: []physical.PhysicalColumn{
+			{ID: identityID, Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+			{ID: titleID, Name: "title", Ordinal: 1, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+		},
+		PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_posts", Columns: []ir.FieldID{identityID}},
+	}}
+	payload, err := semanticcontract.Encode(semanticcontract.Index{Name: "related", Space: "content", Dimensions: 3, Fields: []string{string(titleID)}, Metric: "cosine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := semanticstorage.Lower(ir.ProviderExtensionIR{ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: semanticcontract.IndexKind, Payload: payload}, base.Tables[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := current
+	legacy.Attributes = nil
+	for _, attribute := range current.Attributes {
+		if attribute.Name == "identity" {
+			continue
+		}
+		legacy.Attributes = append(legacy.Attributes, attribute)
+	}
+	if len(legacy.Attributes) != 6 || len(current.Attributes) != 7 {
+		t.Fatalf("legacy attributes=%d current attributes=%d", len(legacy.Attributes), len(current.Attributes))
+	}
+	retained, err := semanticstorage.Decode(legacy)
+	if err != nil || len(retained.Identity) != 0 {
+		t.Fatalf("retained snapshot decode identity=%#v error=%v", retained.Identity, err)
+	}
+	compiled, err := semanticstorage.Decode(current)
+	if err != nil || len(compiled.Identity) != 1 || compiled.Identity[0].Name != "id" || !compiled.Identity[0].NotNull {
+		t.Fatalf("compiled identity=%#v error=%v", compiled.Identity, err)
+	}
+	before, after := base, base
+	before.Extensions = []physical.Extension{legacy}
+	after.Extensions = []physical.Extension{current}
+	plan, err := Diff(before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var drop, create Operation
+	for _, operation := range plan.Operations {
+		switch operation.Kind {
+		case DropProviderExtension:
+			drop = operation
+		case CreateProviderExtension:
+			create = operation
+		}
+	}
+	if drop.ID == "" || create.ID == "" || drop.Risk != RiskRewrite || create.Risk != RiskRewrite {
+		t.Fatalf("legacy semantic upgrade operations=%#v", plan.Operations)
+	}
+	if len(create.Dependencies) != 1 || create.Dependencies[0] != drop.ID {
+		t.Fatalf("legacy semantic recreate does not depend on drop: drop=%#v create=%#v", drop, create)
+	}
 }

@@ -115,7 +115,7 @@ func render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		identity.hasBefore = true
 		identity.beforeStatement = 0
 	}
-	program := Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), fact: node.Fact()}
+	program := Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), fact: node.Fact(), semanticIndexed: plan.SemanticIndexed()}
 	if context.concurrency != nil {
 		field := *context.concurrency
 		program.concurrency = &field

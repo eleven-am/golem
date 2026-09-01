@@ -1,6 +1,7 @@
 package sql
 
 import (
+	"errors"
 	"strings"
 
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -31,10 +32,11 @@ func enforceStatementParameterLimitWith(model policyir.ModelID, args []any, maxi
 }
 
 func enforceStatementComplexity(model policyir.ModelID, statement string) error {
-	return enforceStatementComplexityWith(model, statement, MaxStatementBytes, MaxStatementAliases)
+	return ValidateStatementComplexity(model, statement, MaxStatementBytes, MaxStatementAliases)
 }
 
-func enforceStatementComplexityWith(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
+// ValidateStatementComplexity applies the configured provider-neutral SQL size limits.
+func ValidateStatementComplexity(model policyir.ModelID, statement string, maximumBytes, maximumAliases int) error {
 	if maximumBytes <= 0 || maximumBytes > MaxStatementBytes || len(statement) > maximumBytes {
 		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral byte ceiling", nil)
 	}
@@ -46,4 +48,13 @@ func enforceStatementComplexityWith(model policyir.ModelID, statement string, ma
 		return fail(CodeRender, model, policyir.FieldID{}, "read statement exceeds the provider-neutral alias ceiling", nil)
 	}
 	return nil
+}
+
+// StatementCapacityExceeded reports whether a rendered read exceeded a bind or byte ceiling.
+func StatementCapacityExceeded(err error) bool {
+	var failure *Error
+	if !errors.As(err, &failure) || failure.Code != CodeRender {
+		return false
+	}
+	return failure.Detail == "read statement exceeds the provider-neutral parameter ceiling" || failure.Detail == "read statement exceeds the provider-neutral byte ceiling"
 }

@@ -8,12 +8,11 @@ import (
 	"io/fs"
 	"net/http"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 )
 
-var hashedToken = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+const staticCacheControl = "no-cache"
 
 var assetExtensions = map[string]bool{
 	".js": true, ".mjs": true, ".cjs": true, ".css": true, ".map": true,
@@ -103,46 +102,9 @@ func (renderer *Renderer) serveFile(writer http.ResponseWriter, request *http.Re
 		}
 		seeker = bytes.NewReader(content)
 	}
-	writer.Header().Set("Cache-Control", cacheControl(path.Base(name)))
+	writer.Header().Set("Cache-Control", staticCacheControl)
 	http.ServeContent(writer, request, path.Base(name), info.ModTime(), seeker)
 	return true
-}
-
-func cacheControl(name string) string {
-	if isContentHashed(name) {
-		return "public, max-age=31536000, immutable"
-	}
-	return "no-cache"
-}
-
-func isContentHashed(name string) bool {
-	stem := strings.TrimSuffix(name, path.Ext(name))
-	separator := strings.LastIndexAny(stem, "-.")
-	if separator < 0 {
-		return false
-	}
-	token := stem[separator+1:]
-	if len(token) < 8 || !hashedToken.MatchString(token) {
-		return false
-	}
-	hex := true
-	mixed := false
-	for _, character := range token {
-		switch {
-		case character >= '0' && character <= '9':
-			mixed = true
-		case character >= 'a' && character <= 'f':
-		case character >= 'A' && character <= 'Z':
-			hex = false
-			mixed = true
-		case character == '_':
-			hex = false
-			mixed = true
-		default:
-			hex = false
-		}
-	}
-	return hex || mixed
 }
 
 func (renderer *Renderer) resolve(ctx context.Context, resolver Resolver, link Link) (meta *Meta) {

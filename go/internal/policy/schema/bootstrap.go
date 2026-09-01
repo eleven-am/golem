@@ -12,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
 
 // New validates and decodes a bundle exactly once, then publishes an immutable
@@ -319,6 +320,11 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		builder.registry.enumLabels[enum.ID] = labels
 	}
 
+	semanticIndexes, err := semanticcontract.IndexesByModel(model)
+	if err != nil {
+		return fail(CodeModel, "model.extensions", "%v", err)
+	}
+
 	globalFields := make(map[compilerir.FieldID]compilerir.ModelID)
 	for modelIndex, logicalModel := range model.Models {
 		path := fmt.Sprintf("model.models[%d]", modelIndex)
@@ -331,7 +337,7 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 		}
 		builder.logicalModels[logicalModel.ID] = logicalModel
 		builder.logicalFields[logicalModel.ID] = make(map[compilerir.FieldID]compilerir.FieldIR, len(logicalModel.Fields))
-		modelFact := Model{id: mid, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes))}
+		modelFact := Model{id: mid, fields: make([]golem.FieldID, 0, len(logicalModel.Fields)), equality: make(map[golem.FieldID]struct{}, len(logicalModel.EqualityIndexes)), semanticIndexed: len(semanticIndexes[logicalModel.ID]) != 0}
 		if logicalModel.OptimisticConcurrency != nil {
 			field, fieldErr := fieldID(*logicalModel.OptimisticConcurrency)
 			if fieldErr != nil {

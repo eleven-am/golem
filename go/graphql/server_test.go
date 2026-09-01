@@ -319,11 +319,11 @@ type Node { value: Int! nested: Node }`
 		}
 	})
 
-	for index := 0; index < 16; index++ {
+	for index := range limitBounds {
 		limit := Limits{}
 		setFuzzLimit(&limit, index, fuzzLimitMaximum(index)+1)
 		if _, err := NormalizeLimits(limit); err == nil {
-			t.Fatalf("public limit %d accepted a value above its portable hard maximum", index)
+			t.Fatalf("public limit %s accepted a value above its portable hard maximum", limitBounds[index].name)
 		}
 	}
 }

@@ -260,17 +260,6 @@ func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.P
 	if stance == mutationir.Caller {
 		request.Hooks = mutationHookInventory(app.bindings, model)
 	}
-	modelFact, _ := app.registry.Model(model)
-	if modelFact.SubscriptionsEnabled() {
-		factCodec, eventSchema, snapshot, err := mutationEventSchema(app.registry, policyir.ModelID(model))
-		if err != nil {
-			return mutationbatch.Program{}, err
-		}
-		request.CaptureFacts, request.FactCodec, request.EventSchema = true, &factCodec, eventSchema
-		if operation == mutationir.DeleteMany {
-			request.PrivateDeleteSnapshot = snapshot
-		}
-	}
 	if operation == mutationir.UpdateMany {
 		if input == nil {
 			return mutationbatch.Program{}, fmt.Errorf("update-many input is absent")
@@ -333,39 +322,29 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
-	state, stateScope, outerState, err := beginBatchMutationState(app, binding)
-	if err != nil {
-		_ = scope.abort()
-		return 0, publicBatchExecutionError(program, err)
-	}
 	activeBinding := scope.binding
 	if activeBinding == nil {
 		activeBinding = binding
 	}
-	if activeBinding != binding {
-		activeBinding.stateMu.Lock()
-		activeBinding.state = state
-		activeBinding.mutation = mutationConfig(app, binding)
-		activeBinding.stateMu.Unlock()
+	state, stateScope, outerState, err := beginBatchMutationState(app, binding, activeBinding)
+	if err != nil {
+		_ = scope.abort()
+		return 0, publicBatchExecutionError(program, err)
 	}
 	done := false
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			abortErr := scope.abort()
-			rollbackErr := stateScope.rollback()
-			if abortErr != nil || rollbackErr != nil {
-				state.poison(errors.Join(abortErr, rollbackErr))
-			}
-			panic(recovered)
+	abandon := func(cause error) {
+		if done {
+			return
 		}
-		if !done {
-			abortErr := scope.abort()
-			rollbackErr := stateScope.rollback()
-			if abortErr != nil || rollbackErr != nil {
-				state.poison(errors.Join(err, abortErr, rollbackErr))
-			}
+		done = true
+		abortErr := scope.abort()
+		rollbackErr := stateScope.rollback()
+		if abortErr != nil || rollbackErr != nil {
+			state.poison(errors.Join(cause, abortErr, rollbackErr))
 		}
-	}()
+	}
+	defer func() { abandon(err) }()
+	defer undoOnPanic(func() { abandon(nil) })
 
 	captured, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), program.CaptureStatement(), program.SentinelRows())
 	if err != nil {
@@ -405,6 +384,11 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	verification, err := prepared.VerifyAuthorized(authorized, applied, after, 0)
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
+	}
+	if program.SemanticIndexed() {
+		if markErr := markBatchSemanticRecords(state, program.ModelID(), program.PrimaryKey(), verification); markErr != nil {
+			return 0, publicBatchExecutionError(program, markErr)
+		}
 	}
 	if hooks != nil {
 		operation, ok := mutationHookOperation(program.Operation())
@@ -449,12 +433,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		}
 	}
 	if !outerState {
-		publicProvider := golem.SQLite
-		if app.provider == policyir.ProviderPostgreSQL {
-			publicProvider = golem.PostgreSQL
-		}
-		namespace, _ := app.registry.PhysicalSystemNamespace(publicProvider)
-		if err := state.flush(ctx, scope.execer, app.provider, string(namespace)); err != nil {
+		if err := flushMutationBinding(ctx, scope.execer, activeBinding); err != nil {
 			return 0, publicBatchExecutionError(program, err)
 		}
 	}
@@ -466,14 +445,20 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if !outerState {
-		state.committed(ctx, app.afterCommitError)
+		commitMutationBinding(ctx, activeBinding)
 	}
 	done = true
 	return verification.Count(), nil
 }
 
-func beginBatchMutationState[P, A any](app *App[P, A], binding *executionBinding) (*mutationState, *mutationScope, bool, error) {
-	if app == nil || binding == nil {
+// beginBatchMutationState joins the caller's outer transaction state when there
+// is one, and otherwise makes the batch's own execution binding the mutation
+// owner through enableMutation. The batch does not construct or publish a
+// mutationState itself; enableMutation is the single owner every other mutation
+// family already uses, and its idempotency guard is what keeps one binding from
+// acquiring two states.
+func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executionBinding) (*mutationState, *mutationScope, bool, error) {
+	if app == nil || binding == nil || active == nil {
 		return nil, nil, false, fmt.Errorf("batch mutation state is unavailable")
 	}
 	if binding.transaction != nil {
@@ -484,11 +469,11 @@ func beginBatchMutationState[P, A any](app *App[P, A], binding *executionBinding
 		scope, err := state.beginScope()
 		return state, scope, true, err
 	}
-	state, err := newMutationState(app.mutationLimits, [16]byte{})
-	if err != nil {
+	if err := active.enableMutation(mutationConfig(app, binding)); err != nil {
 		return nil, nil, false, err
 	}
-	if err := state.setInvalidation(binding.invalidateExecution); err != nil {
+	state, err := active.mutationState()
+	if err != nil {
 		return nil, nil, false, err
 	}
 	scope, err := state.beginScope()

@@ -287,7 +287,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	}
 	text += " ORDER BY " + strings.Join(orderFinal, ", ")
 	text = prefix + text
-	if err := enforceStatementComplexityWith(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
+	if err := ValidateStatementComplexity(plan.ModelID(), text, plan.Limits().MaxStatementBytes, plan.Limits().MaxStatementAliases); err != nil {
 		return BatchStatement{}, err
 	}
 	columns := make([]Column, len(context.fields))

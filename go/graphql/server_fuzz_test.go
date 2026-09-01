@@ -90,14 +90,14 @@ func FuzzGraphQLHTTPEnvelopeLimits(f *testing.F) {
 }
 
 func FuzzGraphQLLimitNormalizationBoundaries(f *testing.F) {
-	for index := 0; index < 16; index++ {
+	for index := range limitBounds {
 		maximum := fuzzLimitMaximum(index)
 		for _, value := range []int{-1, 0, 1, maximum - 1, maximum, maximum + 1} {
 			f.Add(uint8(index), int64(value))
 		}
 	}
 	f.Fuzz(func(t *testing.T, rawIndex uint8, rawValue int64) {
-		index := int(rawIndex % 16)
+		index := int(rawIndex) % len(limitBounds)
 		if rawValue < -1_000_000_000 || rawValue > 1_000_000_000 {
 			t.Skip()
 		}
@@ -252,19 +252,10 @@ func assertSanitizedInternalError(t testing.TB, presented Error, cause string) {
 }
 
 func fuzzLimitMaximum(index int) int {
-	values := []int{
-		hardLimits.MaxRequestBytes, hardLimits.MaxVariableBytes, hardLimits.MaxTokens, hardLimits.MaxASTNodes, hardLimits.MaxFragments,
-		hardLimits.MaxDepth, hardLimits.MaxSelectedFields, hardLimits.MaxAliases, hardLimits.MaxInputDepth, hardLimits.MaxInputNodes,
-		hardLimits.MaxListItems, hardLimits.MaxComplexity, hardLimits.MaxPageSize, hardLimits.MaxResolverConcurrency, hardLimits.MaxComputedBatchSize, hardLimits.MaxGroups,
-	}
-	return values[index]
+	maximums := hardLimits
+	return *limitBounds[index].field(&maximums)
 }
 
 func setFuzzLimit(limits *Limits, index, value int) {
-	fields := []*int{
-		&limits.MaxRequestBytes, &limits.MaxVariableBytes, &limits.MaxTokens, &limits.MaxASTNodes, &limits.MaxFragments,
-		&limits.MaxDepth, &limits.MaxSelectedFields, &limits.MaxAliases, &limits.MaxInputDepth, &limits.MaxInputNodes,
-		&limits.MaxListItems, &limits.MaxComplexity, &limits.MaxPageSize, &limits.MaxResolverConcurrency, &limits.MaxComputedBatchSize, &limits.MaxGroups,
-	}
-	*fields[index] = value
+	*limitBounds[index].field(limits) = value
 }

@@ -7,9 +7,6 @@ import (
 
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
-	"github.com/jackc/pgx/v5/pgconn"
-	ncrucsqlite "github.com/ncruces/go-sqlite3"
-	moderncsqlite "modernc.org/sqlite"
 )
 
 // FrozenValues is the one immutable snapshot of all runtime/default/hook
@@ -184,60 +181,7 @@ func retryDecision(class mutationir.RetryClass, ordinal, maxAttempts uint32, det
 }
 
 func retryableInterference(err error) bool {
-	var untrusted interface{ UntrustedRetryCause() }
-	if errors.As(err, &untrusted) {
-		return false
-	}
-	if uniqueCollision(err) {
-		return true
-	}
-	var postgres *pgconn.PgError
-	if errors.As(err, &postgres) {
-		switch postgres.Code {
-		case "23505", "40001", "40P01":
-			return true
-		}
-	}
-	var ncruces *ncrucsqlite.Error
-	if errors.As(err, &ncruces) {
-		switch ncruces.ExtendedCode() {
-		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
-			return true
-		}
-		switch ncruces.Code() {
-		case ncrucsqlite.BUSY, ncrucsqlite.LOCKED:
-			return true
-		}
-	}
-	var sqlite *moderncsqlite.Error
-	if errors.As(err, &sqlite) {
-		code := sqlite.Code()
-		switch {
-		case code == 1555 || code == 2067, code&0xff == 5 || code&0xff == 6:
-			return true
-		}
-	}
-	return false
-}
-
-func uniqueCollision(err error) bool {
-	var postgres *pgconn.PgError
-	if errors.As(err, &postgres) && postgres.Code == "23505" {
-		return true
-	}
-	var ncruces *ncrucsqlite.Error
-	if errors.As(err, &ncruces) {
-		switch ncruces.ExtendedCode() {
-		case ncrucsqlite.CONSTRAINT_PRIMARYKEY, ncrucsqlite.CONSTRAINT_UNIQUE:
-			return true
-		}
-	}
-	var sqlite *moderncsqlite.Error
-	if errors.As(err, &sqlite) {
-		code := sqlite.Code()
-		return code == 1555 || code == 2067
-	}
-	return false
+	return !untrustedRetryCause(err) && ClassifyProviderFault(err) != ProviderFaultNone
 }
 
 // RetryableInterference is the shared provider classification used by nested
@@ -249,6 +193,5 @@ func RetryableInterference(err error) bool { return retryableInterference(err) }
 // collisions. Expectation-aware absent upsert uses it after rolling back its
 // create savepoint to reclassify the winner without an existence oracle.
 func UniqueCollision(err error) bool {
-	var untrusted interface{ UntrustedRetryCause() }
-	return !errors.As(err, &untrusted) && uniqueCollision(err)
+	return !untrustedRetryCause(err) && ClassifyProviderFault(err) == ProviderFaultUniqueCollision
 }

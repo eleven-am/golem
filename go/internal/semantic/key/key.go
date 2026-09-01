@@ -4,6 +4,7 @@
 package key
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
 	"reflect"
@@ -12,12 +13,15 @@ import (
 	"time"
 )
 
+const maximumInlineBytes = 512
+const keyPrefix = "golem-semantic-key:v1"
+
 func Encode(values []any) (string, error) {
 	if len(values) == 0 {
 		return "", fmt.Errorf("semantic key: identity is empty")
 	}
 	var result strings.Builder
-	result.WriteString("golem-semantic-key:v1")
+	result.WriteString(keyPrefix)
 	for _, value := range values {
 		encoded, err := encodeValue(value)
 		if err != nil {
@@ -26,8 +30,9 @@ func Encode(values []any) (string, error) {
 		fmt.Fprintf(&result, "|%d:", len(encoded))
 		result.WriteString(encoded)
 	}
-	if result.Len() > 512 {
-		return "", fmt.Errorf("semantic key: identity exceeds 512 bytes")
+	if result.Len() > maximumInlineBytes {
+		digest := sha256.Sum256([]byte(result.String()))
+		return keyPrefix + "|sha256:" + hex.EncodeToString(digest[:]), nil
 	}
 	return result.String(), nil
 }
@@ -92,12 +97,19 @@ func encodeValue(value any) (string, error) {
 }
 
 func canonicalUUID(value string) (string, bool) {
-	compact := strings.ReplaceAll(strings.ToLower(value), "-", "")
-	if len(compact) != 32 {
+	if len(value) != 36 || value[8] != '-' || value[13] != '-' || value[18] != '-' || value[23] != '-' {
 		return "", false
 	}
-	if _, err := hex.DecodeString(compact); err != nil {
-		return "", false
+	compact := make([]byte, 0, 32)
+	for index := 0; index < len(value); index++ {
+		if index == 8 || index == 13 || index == 18 || index == 23 {
+			continue
+		}
+		digit := value[index]
+		if !(digit >= '0' && digit <= '9' || digit >= 'a' && digit <= 'f') {
+			return "", false
+		}
+		compact = append(compact, digit)
 	}
-	return compact, true
+	return string(compact), true
 }

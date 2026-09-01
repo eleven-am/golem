@@ -127,6 +127,11 @@ func forEachMutationVocabularyProvider(t *testing.T, run func(*testing.T, mutati
 
 func openMutationVocabularyFixture(t testing.TB, database *sqlx.DB, provider golem.Provider, schema schematest.Fixture) mutationVocabularyFixture {
 	t.Helper()
+	return openMutationVocabularyFixtureConfigured(t, database, provider, schema, nil)
+}
+
+func openMutationVocabularyFixtureConfigured(t testing.TB, database *sqlx.DB, provider golem.Provider, schema schematest.Fixture, configure func(*Config[mutationResultPrincipal, mutationResultActor])) mutationVocabularyFixture {
+	t.Helper()
 	ctx := context.Background()
 	userIdentity := golem.GeneratedIdentityMetadata(schema.User, schema.UserKey, golem.PrimaryIdentity, schema.UserID)
 	postIdentity := golem.GeneratedIdentityMetadata(schema.Post, schema.PostKey, golem.PrimaryIdentity, schema.PostID)
@@ -173,12 +178,16 @@ func openMutationVocabularyFixture(t testing.TB, database *sqlx.DB, provider gol
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(ctx, withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+	engineConfig := withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		Database: p8RuntimeTestDatabase(database, provider), Bundle: schema.Bundle, Bindings: bindings, Descriptors: descriptors,
 		ResolvePrincipal: func(context.Context, mutationResultPrincipal) (mutationResultActor, error) {
 			return mutationResultActor{}, nil
 		},
-	}))
+	})
+	if configure != nil {
+		configure(&engineConfig)
+	}
+	app, err := Open(ctx, engineConfig)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,8 +22,18 @@ func TestOrder7OpenRejectsAbsentProviderBeforeDial(t *testing.T) {
 	if code, ok := events.CodeOf(err); !ok || code != events.CodeEventConfig {
 		t.Fatalf("error=%v code=%q", err, code)
 	}
-	if got := err.Error(); got != string(events.CodeEventConfig) {
-		t.Fatalf("error leaked configuration: %q", got)
+	if got := err.Error(); !strings.Contains(got, "database must not be nil") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
+	}
+}
+
+func TestOrder7OpenRejectsNilContextBeforeConfiguration(t *testing.T) {
+	transport, err := Open(nil, nil, Config{URLs: []string{"nats://secret:credential@127.0.0.1:1"}, SubjectPrefix: "deployment"})
+	if transport != nil || eventCode(err) != events.CodeEventConfig {
+		t.Fatalf("transport=%v error=%v", transport, err)
+	}
+	if got := err.Error(); !strings.Contains(got, "context must not be nil") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
 	}
 }
 
@@ -49,6 +60,9 @@ func TestOrder7OpenRejectsSQLiteBeforeDial(t *testing.T) {
 	if transport != nil || eventCode(err) != events.CodeEventConfig {
 		t.Fatalf("transport=%v error=%v", transport, err)
 	}
+	if got := err.Error(); !strings.Contains(got, "database provider must be PostgreSQL") || strings.Contains(got, "secret") || strings.Contains(got, "credential") {
+		t.Fatalf("error is not actionable and sealed: %q", got)
+	}
 	select {
 	case <-accepted:
 		t.Fatal("SQLite rejection dialed NATS")
@@ -68,8 +82,13 @@ func TestOrder7ConfigIsClosedBoundedAndRedacted(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := normalizeConfig(config)
-			if eventCode(err) != events.CodeEventConfig || err.Error() != string(events.CodeEventConfig) {
+			if eventCode(err) != events.CodeEventConfig {
 				t.Fatalf("error=%v", err)
+			}
+			for _, secret := range []string{"nats://one,nats://two", "http://broker", "golem.>"} {
+				if strings.Contains(err.Error(), secret) {
+					t.Fatalf("error %q echoed a configured value", err)
+				}
 			}
 		})
 	}
