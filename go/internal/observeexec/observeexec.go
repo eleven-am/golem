@@ -79,6 +79,7 @@ func (observer *DeferredObserver) ObserveGolem(_ context.Context, value observe.
 		QueueDepthValue:     len(observer.values) + 1,
 		QueueLimitValue:     DeferredObservationLimit,
 		AggregateCountValue: value.AggregateCount(),
+		QueueTypeValue:      value.QueueType(),
 	})
 }
 
@@ -202,5 +203,14 @@ func Finish(span *Span, outcome observe.Outcome, reason observe.Reason) {
 			AttemptValue:        int(span.attempt.Load()),
 			AggregateCountValue: span.aggregate.Load(),
 		})
+	})
+}
+
+// EmitQueue emits one validated payload-free durable job lifecycle record.
+func EmitQueue(observer observe.Observer, provider golem.Provider, jobType string, phase observe.Phase, outcome observe.Outcome, reason observe.Reason, attempt int, duration time.Duration) {
+	internalvalue.Emit(observer, internalvalue.Value{
+		KindValue: string(observe.KindQueue), PhaseValue: string(phase), OutcomeValue: string(outcome),
+		ReasonValue: string(reason), ProviderValue: provider, OperationValue: string(observe.OperationQueueExecute),
+		AttemptValue: attempt, DurationValue: duration, QueueTypeValue: jobType,
 	})
 }

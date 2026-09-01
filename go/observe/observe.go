@@ -5,6 +5,7 @@ package observe
 
 import (
 	"context"
+	"regexp"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -34,6 +35,7 @@ const (
 	KindShutdown     Kind = "shutdown"
 	KindSemantic     Kind = "semantic"
 	KindQueryPlan    Kind = "query_plan"
+	KindQueue        Kind = "queue"
 )
 
 const (
@@ -156,6 +158,7 @@ const (
 	OperationSemanticProvider          Operation = "semantic.provider"
 	OperationSemanticRank              Operation = "semantic.rank"
 	OperationQueryPlanExplain          Operation = "query_plan.explain"
+	OperationQueueExecute              Operation = "queue.execute"
 )
 
 // Observation is immutable and can only be produced through Golem's validated
@@ -175,6 +178,7 @@ func (value Observation) Attempt() int             { return value.value.AttemptV
 func (value Observation) QueueDepth() int          { return value.value.QueueDepthValue }
 func (value Observation) QueueLimit() int          { return value.value.QueueLimitValue }
 func (value Observation) AggregateCount() int64    { return value.value.AggregateCountValue }
+func (value Observation) QueueType() string        { return value.value.QueueTypeValue }
 
 type Observer interface {
 	ObserveGolem(context.Context, Observation)
@@ -182,10 +186,9 @@ type Observer interface {
 
 const observationDeadline = 100 * time.Millisecond
 
-const (
-	maximumObservationDuration = 24 * time.Hour
-	maximumObservationCount    = int64(^uint32(0) >> 1)
-)
+const maximumObservationCount = int64(^uint32(0) >> 1)
+
+var canonicalQueueType = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
 
 func init() {
 	internalvalue.RegisterEmitter(func(candidate any, value internalvalue.Value) {
@@ -208,12 +211,19 @@ func valid(value internalvalue.Value) bool {
 		!validOutcome(Outcome(value.OutcomeValue)) || !validReason(Reason(value.ReasonValue)) ||
 		!validOperation(Operation(value.OperationValue)) ||
 		(value.ProviderValue != "" && value.ProviderValue != golem.SQLite && value.ProviderValue != golem.PostgreSQL) ||
-		value.DurationValue < 0 || value.DurationValue > maximumObservationDuration ||
+		value.DurationValue < 0 ||
 		value.StatementCountValue < 0 || int64(value.StatementCountValue) > maximumObservationCount ||
 		value.AttemptValue < 0 || int64(value.AttemptValue) > maximumObservationCount ||
 		value.QueueDepthValue < 0 || int64(value.QueueDepthValue) > maximumObservationCount ||
 		value.QueueLimitValue < 0 || int64(value.QueueLimitValue) > maximumObservationCount ||
 		value.AggregateCountValue < 0 || value.AggregateCountValue > maximumObservationCount {
+		return false
+	}
+	if Kind(value.KindValue) == KindQueue {
+		if Operation(value.OperationValue) != OperationQueueExecute || !canonicalQueueType.MatchString(value.QueueTypeValue) {
+			return false
+		}
+	} else if Operation(value.OperationValue) == OperationQueueExecute || value.QueueTypeValue != "" {
 		return false
 	}
 	return value.QueueLimitValue == 0 || value.QueueDepthValue <= value.QueueLimitValue
@@ -223,7 +233,7 @@ func validKind(value Kind) bool {
 	switch value {
 	case KindRuntime, KindRead, KindMutation, KindGraphQL, KindAnalytics, KindScopedRead,
 		KindTransaction, KindHook, KindRelationLoad, KindMigration, KindEvent,
-		KindSubscription, KindCDC, KindShutdown, KindSemantic, KindQueryPlan:
+		KindSubscription, KindCDC, KindShutdown, KindSemantic, KindQueryPlan, KindQueue:
 		return true
 	default:
 		return false
@@ -286,7 +296,7 @@ func validOperation(value Operation) bool {
 		OperationSubscriptionOverflow, OperationSubscriptionCancellation, OperationCDCReceive,
 		OperationCDCAcknowledge, OperationMigrationInspect, OperationShutdownHTTP,
 		OperationShutdownPublisher, OperationSemanticRefresh, OperationSemanticProvider,
-		OperationSemanticRank, OperationQueryPlanExplain:
+		OperationSemanticRank, OperationQueryPlanExplain, OperationQueueExecute:
 		return true
 	default:
 		return false

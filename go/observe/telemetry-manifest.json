@@ -14,7 +14,8 @@
     {"name": "golem.attempt", "type": "int64"},
     {"name": "golem.queue_depth", "type": "int64"},
     {"name": "golem.queue_limit", "type": "int64"},
-    {"name": "golem.aggregate_count", "type": "int64"}
+    {"name": "golem.aggregate_count", "type": "int64"},
+    {"name": "golem.queue.type", "type": "string"}
   ],
   "slog": {
     "message": "golem.observation.v1",
@@ -55,6 +56,7 @@
     {"kind": "cdc", "operations": ["cdc.receive", "cdc.acknowledge"]},
     {"kind": "shutdown", "operations": ["shutdown.http", "shutdown.publisher"]},
     {"kind": "semantic", "operations": ["semantic.refresh", "semantic.provider", "semantic.rank"]},
-    {"kind": "query_plan", "operations": ["query_plan.explain"]}
+    {"kind": "query_plan", "operations": ["query_plan.explain"]},
+    {"kind": "queue", "operations": ["queue.execute"]}
   ]
 }

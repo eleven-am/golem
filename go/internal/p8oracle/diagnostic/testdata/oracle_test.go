@@ -480,13 +480,14 @@ func assertSlogShape(t *testing.T, encoded []byte) {
 		"golem.reason": true, "golem.provider": true, "golem.operation": true, "golem.model_id": true,
 		"golem.duration_ns": true, "golem.statement_count": true, "golem.attempt": true,
 		"golem.queue_depth": true, "golem.queue_limit": true, "golem.aggregate_count": true,
+		"golem.queue.type": true,
 	}
 	for _, line := range lines {
 		var record map[string]any
 		if err := json.Unmarshal(line, &record); err != nil {
 			t.Fatalf("decode slog record=%q: %v", line, err)
 		}
-		if record["msg"] != "golem.observation.v1" || record["level"] != "INFO" || len(record) != 15 {
+		if record["msg"] != "golem.observation.v1" || record["level"] != "INFO" || len(record) != 16 {
 			t.Fatalf("unexpected slog shape=%v", record)
 		}
 		for key := range record {
@@ -505,7 +506,7 @@ func assertOTelShape(t *testing.T, reader *sdkmetric.ManualReader, recorder *tra
 	}
 	allowed := telemetryAttributeNames()
 	for _, span := range spans {
-		if span.Name() != "golem.operation.v1" || span.InstrumentationScope().Name != "github.com/eleven-am/golem/go/observe/otel" || len(span.Attributes()) != 13 {
+		if span.Name() != "golem.operation.v1" || span.InstrumentationScope().Name != "github.com/eleven-am/golem/go/observe/otel" || len(span.Attributes()) != 14 {
 			t.Fatalf("unexpected OTel span name=%q scope=%q attrs=%v", span.Name(), span.InstrumentationScope().Name, span.Attributes())
 		}
 		assertOTelAttributes(t, span.Attributes(), allowed, canary)
@@ -555,6 +556,7 @@ func telemetryAttributeNames() map[string]bool {
 		"golem.provider": true, "golem.operation": true, "golem.model_id": true,
 		"golem.duration_ns": true, "golem.statement_count": true, "golem.attempt": true,
 		"golem.queue_depth": true, "golem.queue_limit": true, "golem.aggregate_count": true,
+		"golem.queue.type": true,
 	}
 }
 

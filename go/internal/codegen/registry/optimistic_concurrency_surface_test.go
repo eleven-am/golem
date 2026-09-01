@@ -158,7 +158,7 @@ func TestNonVersionedRegistryEmissionBytesRemainFrozenAcrossConcurrencyBranch(t 
 		t.Fatal(err)
 	}
 	digest := fmt.Sprintf("%x", sha256.Sum256(result.Source))
-	const want = "c8424ca918f6e99f364925e4f621fd2734d7522029b0de6b622680e8b3867b4e"
+	const want = "7fbaa23cbaf52a076b86799296d6bdd5f5f46ce2b0e65f16a2dc0811d93871fb"
 	if digest != want {
 		t.Fatalf("non-versioned registry source digest=%s; want %s", digest, want)
 	}

@@ -12,7 +12,7 @@ func TestNormalizationAndAttributeInventoryAreClosed(t *testing.T) {
 	if record != want {
 		t.Fatalf("zero observation normalized to %#v", record)
 	}
-	if len(AttributeNames) != 13 || AttributeNames[0] != "golem.kind" || AttributeNames[len(AttributeNames)-1] != "golem.aggregate_count" {
+	if len(AttributeNames) != 14 || AttributeNames[0] != "golem.kind" || AttributeNames[len(AttributeNames)-1] != "golem.queue.type" {
 		t.Fatalf("attribute inventory=%v", AttributeNames)
 	}
 	if SlogMessage != "golem.observation.v1" || SpanName != "golem.operation.v1" || InstrumentationScope != "github.com/eleven-am/golem/go/observe/otel" {

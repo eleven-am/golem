@@ -14,6 +14,7 @@ import (
 	observe "github.com/eleven-am/golem/go/observe"
 	provider "github.com/eleven-am/golem/go/provider"
 	queryplan "github.com/eleven-am/golem/go/queryplan"
+	queue "github.com/eleven-am/golem/go/queue"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 )
 
@@ -1459,9 +1460,21 @@ func (app *App[P]) RefreshSemanticIndexes(ctx context.Context) error {
 }
 func (app *App[P]) RunQueueWorker(ctx context.Context) error {
 	if app == nil {
-		return fmt.Errorf("P9_QUEUE_RUNTIME: application is required")
+		return queue.Fail(queue.CodeConfigInvalid, "application is required")
 	}
 	return app.runtime.RunQueueWorker(ctx)
+}
+func (app *App[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if app == nil {
+		return "", queue.Fail(queue.CodeConfigInvalid, "application is required")
+	}
+	return app.runtime.Enqueue(ctx, pending)
+}
+func (app *App[P]) QueueOperator() queue.Operator {
+	if app == nil {
+		return nil
+	}
+	return app.runtime.QueueOperator()
 }
 func (app *App[P]) EventCapabilities() events.Capabilities {
 	if app == nil {
@@ -1530,6 +1543,12 @@ func (caller *Caller[P]) Transaction(ctx context.Context, callback func(*CallerT
 		return callback(result)
 	})
 }
+func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if transaction == nil {
+		return golemruntime.CallerTxEnqueue(ctx, (*golemruntime.CallerTx[P, Actor])(nil), pending)
+	}
+	return golemruntime.CallerTxEnqueue(ctx, transaction.runtime, pending)
+}
 
 func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error) error {
 	if callback == nil {
@@ -1546,4 +1565,10 @@ func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx
 		result.Users = SystemTxUserClient[P]{runtime: inner}
 		return callback(result)
 	})
+}
+func (transaction *SystemTx[P]) Enqueue(ctx context.Context, pending queue.Pending) (queue.JobID, error) {
+	if transaction == nil {
+		return golemruntime.SystemTxEnqueue(ctx, (*golemruntime.SystemTx[P, Actor])(nil), pending)
+	}
+	return golemruntime.SystemTxEnqueue(ctx, transaction.runtime, pending)
 }

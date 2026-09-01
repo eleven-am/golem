@@ -16,8 +16,9 @@ import (
 // QueueConfig enables the durable job queue for one application. The registry
 // is the complete set of job types this process is willing to execute.
 type QueueConfig struct {
-	Registry *queue.Registry
-	Limits   queue.Limits
+	Registry  *queue.Registry
+	Limits    queue.Limits
+	Resources []queue.Resource
 }
 
 func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueConfig) error {
@@ -32,18 +33,16 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 		return queue.Fail(queue.CodeConfigInvalid, "durable job storage is unavailable: %v", err)
 	}
 	registry := config.Registry.Clone()
-	// The worker snapshots its registry, so Golem's own job types must exist
-	// before it is built.
 	if len(app.semantic.IndexRefs()) > 0 {
 		if err := app.registerSemanticJobs(registry); err != nil {
 			return err
 		}
 	}
-	worker, err := queueworker.New(store, registry, config.Limits)
+	worker, err := queueworker.New(store, registry, config.Limits, app.eventProvider, app.observer, config.Resources...)
 	if err != nil {
 		return err
 	}
-	operator, err := queueworker.NewOperator(store)
+	operator, err := queueworker.NewOperator(store, app.eventProvider, app.observer)
 	if err != nil {
 		return err
 	}

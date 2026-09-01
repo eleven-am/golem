@@ -91,7 +91,7 @@ func assertP8AdapterAgreement(t *testing.T, fixture mutationResultFixture) {
 	if len(slogValues) != 1 || len(otelValues) != 1 {
 		t.Fatalf("adapter records slog=%v otel=%v", slogValues, otelValues)
 	}
-	if !reflect.DeepEqual(slogValues[0], otelValues[0]) || len(slogValues[0]) != 13 {
+	if !reflect.DeepEqual(slogValues[0], otelValues[0]) || len(slogValues[0]) != 14 {
 		t.Fatalf("slog/OTel closed records disagree: slog=%v otel=%v", slogValues[0], otelValues[0])
 	}
 	for _, values := range []map[string]any{slogValues[0], otelValues[0]} {

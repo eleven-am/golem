@@ -78,7 +78,7 @@ func TestTelemetryManifestExactlyCoversClosedObservationInventory(t *testing.T) 
 			t.Fatalf("provider-independent operation %q is absent from coverage", operation)
 		}
 	}
-	wantAttributes := []string{"golem.kind", "golem.phase", "golem.outcome", "golem.reason", "golem.provider", "golem.operation", "golem.model_id", "golem.duration_ns", "golem.statement_count", "golem.attempt", "golem.queue_depth", "golem.queue_limit", "golem.aggregate_count"}
+	wantAttributes := []string{"golem.kind", "golem.phase", "golem.outcome", "golem.reason", "golem.provider", "golem.operation", "golem.model_id", "golem.duration_ns", "golem.statement_count", "golem.attempt", "golem.queue_depth", "golem.queue_limit", "golem.aggregate_count", "golem.queue.type"}
 	if len(manifest.Attributes) != len(wantAttributes) {
 		t.Fatalf("attributes=%d want %d", len(manifest.Attributes), len(wantAttributes))
 	}

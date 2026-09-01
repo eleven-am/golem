@@ -108,6 +108,7 @@ func (target sink) ObserveGolem(ctx context.Context, value observe.Observation) 
 		attribute.String(adapterinternal.AttributeNames[4], record.Provider),
 		attribute.String(adapterinternal.AttributeNames[5], record.Operation),
 		attribute.String(adapterinternal.AttributeNames[6], record.ModelID),
+		attribute.String(adapterinternal.AttributeNames[13], record.QueueType),
 	}
 	spanAttributes := append(append([]attribute.KeyValue(nil), labels...),
 		attribute.Int64(adapterinternal.AttributeNames[7], record.DurationNS),
