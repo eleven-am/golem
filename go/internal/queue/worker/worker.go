@@ -201,15 +201,41 @@ func (worker *Worker) Run(ctx context.Context) error {
 		}
 		return queue.Fail(queue.CodeStoreFailure, "durable job storage is unavailable: %v", err)
 	}
+	storeFailures := 0
+	nextRetention := time.Time{}
 	for {
 		if ctx.Err() != nil {
 			worker.awaitHandlers(&handlers, cancelHandlers)
 			return nil
 		}
-		claimed, err := worker.dispatch(ctx, handlerContext, runObserver, &handlers)
+		var claimed int
+		var err error
+		if !time.Now().Before(nextRetention) {
+			_, err = worker.store.RunRetention(ctx, queueprovider.RetentionPolicy{
+				OlderThan: time.Now().Add(-worker.limits.RetentionAge), MaxRows: worker.limits.RetentionRows,
+				States: []queueprovider.State{queueprovider.StateSucceeded, queueprovider.StateFailed, queueprovider.StateCanceled},
+			})
+			if err == nil {
+				nextRetention = time.Now().Add(worker.limits.RetentionEvery)
+			}
+		}
+		if err == nil {
+			claimed, err = worker.dispatch(ctx, handlerContext, runObserver, &handlers)
+		}
 		if err == nil && claimed != 0 {
+			storeFailures = 0
 			continue
 		}
+		if err != nil {
+			storeFailures++
+			delay := worker.limits.PollInterval + (queue.Backoff{Base: worker.limits.PollInterval, Cap: 30 * time.Second}).Delay(storeFailures)
+			if worker.waitForRetry(ctx, delay) {
+				continue
+			}
+			worker.awaitHandlers(&handlers, cancelHandlers)
+			return nil
+		}
+		storeFailures = 0
 		if !worker.idle(ctx) {
 			worker.awaitHandlers(&handlers, cancelHandlers)
 			return nil
@@ -517,13 +543,28 @@ func (worker *Worker) bookkeeping(ctx context.Context) (context.Context, context
 }
 
 func (worker *Worker) idle(ctx context.Context) bool {
-	timer := time.NewTimer(worker.limits.PollInterval)
+	return worker.idleFor(ctx, worker.limits.PollInterval)
+}
+
+func (worker *Worker) idleFor(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-ctx.Done():
 		return false
 	case <-worker.wake:
 		return true
+	case <-timer.C:
+		return true
+	}
+}
+
+func (worker *Worker) waitForRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
 	case <-timer.C:
 		return true
 	}

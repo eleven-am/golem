@@ -106,6 +106,27 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 	}
 }
 
+func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
+	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 20 * time.Millisecond, WebSocketPongTimeout: 10 * time.Millisecond})
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	if message := readWS(t, connection); message.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", message)
+	}
+	connection.SetPingHandler(func(string) error { return nil })
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := connection.ReadMessage(); err == nil {
+		t.Fatal("connection without a pong remained open")
+	}
+}
+
 func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{ConnectionInitTimeout: 25 * time.Millisecond})
 	host := httptest.NewServer(server.Handler())

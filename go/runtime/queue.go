@@ -16,9 +16,10 @@ import (
 // QueueConfig enables the durable job queue for one application. The registry
 // is the complete set of job types this process is willing to execute.
 type QueueConfig struct {
-	Registry  *queue.Registry
-	Limits    queue.Limits
-	Resources []queue.Resource
+	Registry                  *queue.Registry
+	Limits                    queue.Limits
+	Resources                 []queue.Resource
+	SemanticReconcileInterval time.Duration
 }
 
 func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueConfig) error {
@@ -27,6 +28,10 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	}
 	if config.Registry == nil {
 		return queue.Fail(queue.CodeConfigInvalid, "queue registry is required")
+	}
+	reconcileInterval := config.SemanticReconcileInterval
+	if reconcileInterval != 0 && (reconcileInterval < time.Minute || reconcileInterval > 24*time.Hour || reconcileInterval%time.Microsecond != 0) {
+		return queue.Fail(queue.CodeConfigInvalid, "semantic reconcile interval must be microsecond-exact and within 1m..24h")
 	}
 	store, err := app.queueStoreFor()
 	if err != nil {
@@ -53,6 +58,7 @@ func (app *App[P, A]) initializeQueueRuntime(ctx context.Context, config *QueueC
 	app.queueWorker = worker
 	app.queueOperator = operator
 	app.queueLimits = config.Limits.Resolved()
+	app.semanticReconcileInterval = reconcileInterval
 	return nil
 }
 

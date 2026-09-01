@@ -37,7 +37,7 @@ func (statement SemanticCandidates) Fields() []policyir.FieldID {
 // over the owner table. The masks are mandatory: a masked primary identity was
 // previously dropped in Go while extracting record keys, and candidacy is now
 // decided entirely in SQL.
-func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, enclosingParameters int) (SemanticCandidates, error) {
+func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, enclosingParameters int, requiredFieldConditions ...policyir.Condition) (SemanticCandidates, error) {
 	if registry == nil || plan.ModelID() == (policyir.ModelID{}) {
 		return SemanticCandidates{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "plan and registry are required", nil)
 	}
@@ -69,7 +69,14 @@ func RenderSemanticCandidates(plan readplan.Plan, registry *schema.Registry, pro
 	for _, field := range plan.Fields() {
 		planned[field.FieldID()] = field
 	}
-	conditions := []policyir.Condition{plan.Where()}
+	conditions := make([]policyir.Condition, 0, len(requiredFieldConditions)+1)
+	conditions = append(conditions, plan.Where())
+	for _, condition := range requiredFieldConditions {
+		if condition.ModelID() != plan.ModelID() {
+			return SemanticCandidates{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "semantic field condition belongs to another model", nil)
+		}
+		conditions = append(conditions, condition)
+	}
 	primary := modelFact.PrimaryKey()
 	columns := make([]physical.PhysicalName, len(primary))
 	fields := make([]policyir.FieldID, len(primary))

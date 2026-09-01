@@ -593,8 +593,7 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 		}
 		queryer, err := binding.queryerFor(database)
 		if err != nil {
-			_, _ = binding.transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+name)
-			_, _ = binding.transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+name)
+			_ = execMutationCleanup(ctx, binding.transaction, "ROLLBACK TO SAVEPOINT "+name, "RELEASE SAVEPOINT "+name)
 			return batchExecutionScope{}, err
 		}
 		return batchExecutionScope{
@@ -606,9 +605,7 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 				return err
 			},
 			abort: func() error {
-				_, rollbackErr := binding.transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+name)
-				_, releaseErr := binding.transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+name)
-				return errors.Join(rollbackErr, releaseErr)
+				return execMutationCleanup(ctx, binding.transaction, "ROLLBACK TO SAVEPOINT "+name, "RELEASE SAVEPOINT "+name)
 			},
 		}, nil
 	}
@@ -651,7 +648,7 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 		queryer, err := active.queryerFor(database)
 		if err != nil {
 			active.close()
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
 			_ = connection.Close()
 			return batchExecutionScope{}, err
 		}
@@ -664,7 +661,7 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 			},
 			abort: func() error {
 				defer active.close()
-				_, rollbackErr := connection.ExecContext(context.Background(), "ROLLBACK")
+				rollbackErr := execMutationCleanup(ctx, connection, "ROLLBACK")
 				closeErr := connection.Close()
 				return errors.Join(rollbackErr, closeErr)
 			},

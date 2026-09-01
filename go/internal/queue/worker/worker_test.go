@@ -696,6 +696,50 @@ func TestEnqueueWakesIdleWorker(t *testing.T) {
 	stop()
 }
 
+func TestWakeDoesNotBypassStoreFailureBackoff(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	register(t, registry, queue.Definition[gatePayload]{
+		Type:   "gate.store.backoff",
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return nil },
+	})
+	claims := make(chan time.Time, 2)
+	store := stubStore{Store: fixture.store, claim: func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error) {
+		select {
+		case claims <- time.Now():
+		default:
+		}
+		return nil, errors.New("temporary store outage")
+	}}
+	limits := gateLimits()
+	limits.PollInterval = 20 * time.Millisecond
+	worker, err := New(store, registry, limits, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	first := <-claims
+	for range 100 {
+		worker.Wake()
+	}
+	var second time.Time
+	select {
+	case second = <-claims:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("worker did not retry the failed store")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if second.Sub(first) < limits.PollInterval {
+		t.Fatalf("wake bypassed store backoff: %s", second.Sub(first))
+	}
+}
+
 // TestShutdownReleasesUnstartedAndGracesRunning proves a deploy neither strands
 // claimed work behind lease expiry nor loses a running job's outcome.
 func TestShutdownReleasesUnstartedAndGracesRunning(t *testing.T) {

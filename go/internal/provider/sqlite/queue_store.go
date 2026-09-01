@@ -17,7 +17,7 @@ const (
 	sqliteQueueTable   = `"main"."golem_queue"`
 	sqliteQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
 	sqliteQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
-	sqliteQueueClaim   = `(("status"='pending' AND "available_at"<=?) OR ("status"='leased' AND "lease_until"<=?))`
+	sqliteQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=?)`
 	sqliteQueueFence   = ` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">` + sqliteDatabaseMicros
 )
 
@@ -30,6 +30,14 @@ var sqliteQueueSchema = []string{
 
 type queueStore struct {
 	database *sqlx.DB
+}
+
+type sqliteSelectedClaim struct {
+	candidateID string
+	token       string
+	resource    any
+	cost        any
+	capacity    any
 }
 
 // QueueStore binds the durable job state machine to a live SQLite database.
@@ -49,7 +57,13 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 			return fmt.Errorf("QUEUE_SQLITE_STORE: create durable job storage: %w", err)
 		}
 	}
-	return store.ensureQueueLeaseColumns(ctx)
+	if err := store.ensureQueueLeaseColumns(ctx); err != nil {
+		return err
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: align existing lease eligibility: %w", err)
+	}
+	return nil
 }
 
 func (store *queueStore) ensureQueueLeaseColumns(ctx context.Context) error {
@@ -64,7 +78,9 @@ func (store *queueStore) ensureQueueLeaseColumns(ctx context.Context) error {
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			cleanup, cancel := sqliteCleanupContext(ctx)
+			defer cancel()
+			_, _ = connection.ExecContext(cleanup, "ROLLBACK")
 		}
 	}()
 	var columns []struct {
@@ -152,7 +168,9 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	committed := false
 	defer func() {
 		if !committed {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			cleanup, cancel := sqliteCleanupContext(ctx)
+			defer cancel()
+			_, _ = connection.ExecContext(cleanup, "ROLLBACK")
 		}
 	}()
 	var now int64
@@ -169,7 +187,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		}
 		claimTypes = resourceEligibleTypes(options.Types, options.Resource.Costs, resourceCapacity-resourceUsed)
 	}
-	arguments := []any{now, now}
+	arguments := []any{now}
 	typePredicate := "0"
 	if len(claimTypes) != 0 {
 		typePredicate = `job."type" IN (` + placeholders(len(claimTypes)) + `)`
@@ -207,39 +225,19 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	}
 	leaseUntil := now + options.LeaseDuration.Microseconds()
 	held := make(map[string]struct{}, len(candidates))
-	records := make([]queueprovider.Record, 0, len(candidates))
+	selected := make([]sqliteSelectedClaim, 0, len(candidates))
+	canceled := make([]string, 0)
+	exhausted := make([]string, 0)
 	for _, candidate := range candidates {
-		if len(records) >= options.Limit {
+		if len(selected) >= options.Limit {
 			break
 		}
 		if candidate.Status == string(queueprovider.StateLeased) && candidate.CancelRequested.Valid {
-			result, updateErr := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=?,"finished_at"=?,"updated_at"=? WHERE "id"=? AND "status"='leased' AND "lease_until"<=? AND "cancel_requested_at" IS NOT NULL`,
-				queueprovider.CodeCanceled, now, now, candidate.ID, now)
-			if updateErr != nil {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: cancel expired lease: %w", updateErr)
-			}
-			changed, resultErr := result.RowsAffected()
-			if resultErr != nil {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: expired cancellation result: %w", resultErr)
-			}
-			if changed != 1 {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: expired cancellation changed %d rows", changed)
-			}
+			canceled = append(canceled, candidate.ID)
 			continue
 		}
 		if candidate.Status == string(queueprovider.StateLeased) && candidate.Attempts >= candidate.MaxAttempts {
-			result, updateErr := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='failed',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=?,"finished_at"=?,"updated_at"=? WHERE "id"=? AND "status"='leased' AND "lease_until"<=? AND "attempt_count">="max_attempts"`,
-				queueprovider.CodeAttemptsExhausted, now, now, candidate.ID, now)
-			if updateErr != nil {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: fail exhausted lease: %w", updateErr)
-			}
-			changed, resultErr := result.RowsAffected()
-			if resultErr != nil {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: exhausted lease result: %w", resultErr)
-			}
-			if changed != 1 {
-				return nil, fmt.Errorf("QUEUE_SQLITE_STORE: exhausted lease changed %d rows", changed)
-			}
+			exhausted = append(exhausted, candidate.ID)
 			continue
 		}
 		if candidate.ExclusiveKey.Valid {
@@ -266,30 +264,85 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 			resourceCost = candidateCost
 			snapshotCapacity = options.Resource.Concurrency
 		}
-		result, updateErr := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=?,"lease_until"=?,"resource_name"=?,"resource_cost"=?,"resource_capacity"=?,"updated_at"=? WHERE "id"=? AND `+sqliteQueueClaim,
-			token, leaseUntil, resourceName, resourceCost, snapshotCapacity, now, candidate.ID, now, now)
-		if updateErr != nil {
-			return nil, fmt.Errorf("QUEUE_SQLITE_STORE: lease job: %w", updateErr)
-		}
-		changed, _ := result.RowsAffected()
-		if changed != 1 {
-			continue
-		}
-		record, readErr := sqliteReadJob(ctx, connection, candidate.ID)
-		if readErr != nil {
-			return nil, readErr
-		}
 		if candidate.ExclusiveKey.Valid {
 			held[candidate.ExclusiveKey.String] = struct{}{}
 		}
 		resourceUsed += candidateCost
-		records = append(records, record)
+		selected = append(selected, sqliteSelectedClaim{candidateID: candidate.ID, token: token, resource: resourceName, cost: resourceCost, capacity: snapshotCapacity})
+	}
+	if err := sqliteFinishExpiredClaims(ctx, connection, canceled, exhausted, now); err != nil {
+		return nil, err
+	}
+	records, err := sqliteLeaseSelected(ctx, connection, selected, leaseUntil, now)
+	if err != nil {
+		return nil, err
 	}
 	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
 		return nil, fmt.Errorf("QUEUE_SQLITE_STORE: commit claim: %w", err)
 	}
 	committed = true
 	return queueprovider.CloneRecords(records), nil
+}
+
+func sqliteFinishExpiredClaims(ctx context.Context, connection *sqlx.Conn, canceled, exhausted []string, now int64) error {
+	for _, terminal := range []struct {
+		ids       []string
+		state     string
+		code      string
+		predicate string
+	}{
+		{canceled, "canceled", queueprovider.CodeCanceled, `"cancel_requested_at" IS NOT NULL`},
+		{exhausted, "failed", queueprovider.CodeAttemptsExhausted, `"attempt_count">="max_attempts"`},
+	} {
+		if len(terminal.ids) == 0 {
+			continue
+		}
+		arguments := []any{terminal.code, now, now}
+		for _, id := range terminal.ids {
+			arguments = append(arguments, id)
+		}
+		arguments = append(arguments, now)
+		result, err := connection.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "status"='`+terminal.state+`',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=?,"finished_at"=?,"updated_at"=? WHERE "id" IN (`+placeholders(len(terminal.ids))+`) AND "status"='leased' AND "lease_until"<=? AND `+terminal.predicate, arguments...)
+		if err != nil {
+			return fmt.Errorf("QUEUE_SQLITE_STORE: finalize expired leases: %w", err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil || int(changed) != len(terminal.ids) {
+			return fmt.Errorf("QUEUE_SQLITE_STORE: expired lease ownership changed")
+		}
+	}
+	return nil
+}
+
+func sqliteLeaseSelected(ctx context.Context, connection *sqlx.Conn, selected []sqliteSelectedClaim, leaseUntil, now int64) ([]queueprovider.Record, error) {
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	values := make([]string, len(selected))
+	arguments := make([]any, 0, len(selected)*5+4)
+	for index, claim := range selected {
+		values[index] = "(?,?,?,?,?)"
+		arguments = append(arguments, claim.candidateID, claim.token, claim.resource, claim.cost, claim.capacity)
+	}
+	arguments = append(arguments, leaseUntil, leaseUntil, now, now)
+	statement := `WITH claim(id,token,resource_name,resource_cost,resource_capacity) AS (VALUES ` + strings.Join(values, ",") + `) UPDATE ` + sqliteQueueTable + ` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=(SELECT token FROM claim WHERE claim.id="golem_queue"."id"),"available_at"=?,"lease_until"=?,"resource_name"=(SELECT resource_name FROM claim WHERE claim.id="golem_queue"."id"),"resource_cost"=(SELECT resource_cost FROM claim WHERE claim.id="golem_queue"."id"),"resource_capacity"=(SELECT resource_capacity FROM claim WHERE claim.id="golem_queue"."id"),"updated_at"=? WHERE "id" IN (SELECT id FROM claim) AND "status" IN ('pending','leased') AND "available_at"<=? RETURNING ` + sqliteQueueColumns
+	var rows []sqliteQueueRow
+	if err := connection.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return nil, fmt.Errorf("QUEUE_SQLITE_STORE: lease jobs: %w", err)
+	}
+	byID := make(map[string]queueprovider.Record, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row.record()
+	}
+	records := make([]queueprovider.Record, 0, len(selected))
+	for _, claim := range selected {
+		record, ok := byID[claim.candidateID]
+		if !ok {
+			return nil, fmt.Errorf("QUEUE_SQLITE_STORE: selected job lost claim eligibility")
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func (store *queueStore) resourceUsage(ctx context.Context, connection *sqlx.Conn, resource queueprovider.ClaimResource, now int64) (int64, int64, error) {
@@ -338,7 +391,7 @@ func (store *queueStore) Renew(ctx context.Context, id, token string, duration t
 		return queueprovider.Renewal{}, err
 	}
 	var requested sql.NullInt64
-	err := store.database.GetContext(ctx, &requested, `UPDATE `+sqliteQueueTable+` SET "lease_until"=`+sqliteDatabaseMicros+`+?,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">`+sqliteDatabaseMicros+` RETURNING "cancel_requested_at"`, duration.Microseconds(), id, token)
+	err := store.database.GetContext(ctx, &requested, `UPDATE `+sqliteQueueTable+` SET "available_at"=`+sqliteDatabaseMicros+`+?,"lease_until"=`+sqliteDatabaseMicros+`+?,"updated_at"=`+sqliteDatabaseMicros+` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">`+sqliteDatabaseMicros+` RETURNING "cancel_requested_at"`, duration.Microseconds(), duration.Microseconds(), id, token)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return queueprovider.Renewal{}, nil
@@ -413,17 +466,28 @@ func (store *queueStore) CancelMany(ctx context.Context, ids []string) (queuepro
 	}
 	ordered := append([]string(nil), ids...)
 	sort.Strings(ordered)
-	batch := queueprovider.CancelBatch{}
-	for _, id := range ordered {
-		result, err := store.Cancel(ctx, id)
-		if err != nil {
-			return batch, err
-		}
-		if result.Changed {
-			batch.Changed++
-		}
-		if result.Changed && result.Terminal {
-			batch.Terminal = append(batch.Terminal, result)
+	if len(ordered) == 0 {
+		return queueprovider.CancelBatch{}, nil
+	}
+	arguments := make([]any, len(ordered))
+	for index, id := range ordered {
+		arguments[index] = id
+	}
+	var rows []struct {
+		ID      string `db:"id"`
+		Type    string `db:"type"`
+		Attempt int64  `db:"attempt_count"`
+		State   string `db:"status"`
+	}
+	statement := `UPDATE ` + sqliteQueueTable + ` SET "status"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN 'canceled' ELSE "status" END,"lease_token"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN NULL ELSE "lease_token" END,"lease_until"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN NULL ELSE "lease_until" END,"resource_name"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN NULL ELSE "resource_name" END,"resource_cost"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN NULL ELSE "resource_cost" END,"resource_capacity"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN NULL ELSE "resource_capacity" END,"cancel_requested_at"=CASE WHEN "status"='leased' AND "lease_until">` + sqliteDatabaseMicros + ` THEN ` + sqliteDatabaseMicros + ` ELSE "cancel_requested_at" END,"last_code"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN 'canceled' ELSE "last_code" END,"finished_at"=CASE WHEN "status"='pending' OR "lease_until"<=` + sqliteDatabaseMicros + ` THEN ` + sqliteDatabaseMicros + ` ELSE "finished_at" END,"updated_at"=` + sqliteDatabaseMicros + ` WHERE "id" IN (` + placeholders(len(ordered)) + `) AND ("status"='pending' OR ("status"='leased' AND ("lease_until"<=` + sqliteDatabaseMicros + ` OR "cancel_requested_at" IS NULL))) RETURNING "id","type","attempt_count","status"`
+	if err := store.database.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return queueprovider.CancelBatch{}, fmt.Errorf("QUEUE_SQLITE_STORE: cancel jobs: %w", err)
+	}
+	sort.Slice(rows, func(left, right int) bool { return rows[left].ID < rows[right].ID })
+	batch := queueprovider.CancelBatch{Changed: len(rows)}
+	for _, row := range rows {
+		if row.State == string(queueprovider.StateCanceled) {
+			batch.Terminal = append(batch.Terminal, queueprovider.CancelResult{Changed: true, Terminal: true, Type: row.Type, AttemptCount: row.Attempt})
 		}
 	}
 	return batch, nil
@@ -648,6 +712,18 @@ type sqliteQueueSummaryRow struct {
 	FinishedAt        sql.NullInt64  `db:"finished_at"`
 }
 
+func (row sqliteQueueRow) record() queueprovider.Record {
+	return queueprovider.Record{
+		ID: row.ID, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
+		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+		AvailableAt: time.UnixMicro(row.AvailableAt).UTC(), LeaseToken: row.LeaseToken.String,
+		LeaseUntil: sqliteOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
+		ExclusiveKey: row.ExclusiveKey.String, CancelRequested: row.CancelRequestedAt.Valid,
+		LastCode: row.LastCode.String, EnqueuedAt: time.UnixMicro(row.EnqueuedAt).UTC(),
+		FinishedAt: sqliteOptionalTime(row.FinishedAt), UpdatedAt: time.UnixMicro(row.UpdatedAt).UTC(),
+	}
+}
+
 func (row sqliteQueueSummaryRow) summary() queueprovider.Summary {
 	return queueprovider.Summary{
 		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
@@ -666,15 +742,7 @@ func sqliteReadJob(ctx context.Context, queryer sqlx.QueryerContext, id string) 
 		}
 		return queueprovider.Record{}, fmt.Errorf("QUEUE_SQLITE_STORE: read job: %w", err)
 	}
-	return queueprovider.Record{
-		ID: row.ID, Type: row.Type, Payload: row.Payload, State: queueprovider.State(row.Status),
-		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
-		AvailableAt: time.UnixMicro(row.AvailableAt).UTC(), LeaseToken: row.LeaseToken.String,
-		LeaseUntil: sqliteOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
-		ExclusiveKey: row.ExclusiveKey.String, CancelRequested: row.CancelRequestedAt.Valid,
-		LastCode: row.LastCode.String, EnqueuedAt: time.UnixMicro(row.EnqueuedAt).UTC(),
-		FinishedAt: sqliteOptionalTime(row.FinishedAt), UpdatedAt: time.UnixMicro(row.UpdatedAt).UTC(),
-	}, nil
+	return row.record(), nil
 }
 
 func optionalText(value string) any {

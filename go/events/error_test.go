@@ -37,6 +37,7 @@ func TestNormalizeLimitsNamesEveryViolatedBound(t *testing.T) {
 		"ClaimRows":                     {ClaimRows: -1},
 		"PublisherConcurrency":          {PublisherConcurrency: -1},
 		"MaxEncodedEventBytes":          {MaxEncodedEventBytes: maximumLimits.MaxEncodedEventBytes + 1},
+		"MaxEncodedBatchBytes":          {MaxEncodedBatchBytes: maximumLimits.MaxEncodedBatchBytes + 1},
 		"SubscriberQueue":               {SubscriberQueue: maximumLimits.SubscriberQueue + 1},
 		"HubInputQueue":                 {HubInputQueue: -1},
 		"EvaluationConcurrency":         {EvaluationConcurrency: maximumLimits.EvaluationConcurrency + 1},
@@ -48,7 +49,11 @@ func TestNormalizeLimitsNamesEveryViolatedBound(t *testing.T) {
 		"RetryBase":                     {RetryBase: -1},
 		"RetryCap":                      {RetryCap: maximumLimits.RetryCap + 1},
 		"ConnectionInitTimeout":         {ConnectionInitTimeout: -1},
+		"WebSocketKeepAlive":            {WebSocketKeepAlive: maximumLimits.WebSocketKeepAlive + 1},
+		"WebSocketPongTimeout":          {WebSocketPongTimeout: -1},
 		"ShutdownGrace":                 {ShutdownGrace: maximumLimits.ShutdownGrace + 1},
+		"RetentionAge":                  {RetentionAge: -1},
+		"RetentionEvery":                {RetentionEvery: -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NormalizeLimits(limits)

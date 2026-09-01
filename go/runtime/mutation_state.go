@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	cryptorand "crypto/rand"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -15,6 +16,23 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
 )
+
+const mutationCleanupTimeout = 5 * time.Second
+
+func execMutationCleanup(ctx context.Context, executor sqlx.ExecerContext, statements ...string) error {
+	base := context.Background()
+	if ctx != nil {
+		base = context.WithoutCancel(ctx)
+	}
+	cleanup, cancel := context.WithTimeout(base, mutationCleanupTimeout)
+	defer cancel()
+	failures := make([]error, 0, len(statements))
+	for _, statement := range statements {
+		_, err := executor.ExecContext(cleanup, statement)
+		failures = append(failures, err)
+	}
+	return errors.Join(failures...)
+}
 
 type mutationState struct {
 	mu sync.Mutex

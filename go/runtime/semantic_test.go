@@ -370,10 +370,11 @@ func TestSemanticStartupRefusesAnUnqueuedIndex(t *testing.T) {
 func TestSemanticStartupEnqueuesOneDedupedReconcilePerIndex(t *testing.T) {
 	ctx := context.Background()
 	fixture := newSemanticJobFixture(t, nil)
+	fixture.app.semanticReconcileInterval = time.Minute
 	if err := fixture.app.startSemanticJobs(ctx); err != nil {
 		t.Fatal(err)
 	}
-	second := &App[testPrincipal, testActor]{database: fixture.database, semantic: fixture.app.semantic, queueStore: fixture.app.queueStore, queueLimits: fixture.app.queueLimits}
+	second := &App[testPrincipal, testActor]{database: fixture.database, semantic: fixture.app.semantic, queueStore: fixture.app.queueStore, queueLimits: fixture.app.queueLimits, semanticReconcileInterval: time.Minute}
 	if err := second.registerSemanticJobs(queue.NewRegistry()); err != nil {
 		t.Fatal(err)
 	}
@@ -382,6 +383,54 @@ func TestSemanticStartupEnqueuesOneDedupedReconcilePerIndex(t *testing.T) {
 	}
 	if got := fixture.jobs(t, semanticReconcileJobType); got != 1 {
 		t.Fatalf("startup reconcile jobs=%d want=1", got)
+	}
+}
+
+func TestSemanticStartupDoesNotScheduleFullScansByDefault(t *testing.T) {
+	fixture := newSemanticJobFixture(t, nil)
+	if err := fixture.app.startSemanticJobs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := fixture.jobs(t, semanticReconcileJobType); got != 0 {
+		t.Fatalf("default startup reconcile jobs=%d want=0", got)
+	}
+}
+
+func TestSemanticReconcileSchedulesItsDurableSuccessor(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSemanticJobFixture(t, nil)
+	fixture.app.semanticReconcileInterval = time.Minute
+	payload := semanticJob{Model: string(semanticJobModelID()), Index: "related"}
+	if err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-current", Payload: payload}); err != nil {
+		t.Fatal(err)
+	}
+	var row struct {
+		Dedupe      string `db:"dedupe_key"`
+		AvailableAt int64  `db:"available_at"`
+		EnqueuedAt  int64  `db:"enqueued_at"`
+	}
+	if err := fixture.database.Get(&row, `SELECT "dedupe_key","available_at","enqueued_at" FROM "golem_queue" WHERE "type"=?`, semanticReconcileJobType); err != nil {
+		t.Fatal(err)
+	}
+	want := semanticJobKey(semanticReconcileJobType, payload) + ":reconcile-current"
+	if row.Dedupe != want || row.AvailableAt-row.EnqueuedAt != time.Minute.Microseconds() {
+		t.Fatalf("scheduled reconcile=%#v want key=%q", row, want)
+	}
+}
+
+func TestSemanticReconcileSchedulesItsSuccessorBeforeRefreshFailure(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSemanticJobFixture(t, nil)
+	fixture.app.semanticReconcileInterval = time.Minute
+	if _, err := fixture.database.ExecContext(ctx, `DROP TABLE "posts"`); err != nil {
+		t.Fatal(err)
+	}
+	payload := semanticJob{Model: string(semanticJobModelID()), Index: "related"}
+	if err := fixture.app.runSemanticReconcile(ctx, queue.Job[semanticJob]{ID: "reconcile-failed", Payload: payload}); err == nil {
+		t.Fatal("failed refresh returned success")
+	}
+	if got := fixture.jobs(t, semanticReconcileJobType); got != 1 {
+		t.Fatalf("scheduled successors after refresh failure=%d want=1", got)
 	}
 }
 

@@ -10,34 +10,39 @@ type Limits struct {
 	RetryBase                     time.Duration
 	RetryCap                      time.Duration
 	MaxEncodedEventBytes          int
+	MaxEncodedBatchBytes          int
 	SubscriberQueue               int
 	HubInputQueue                 int
 	EvaluationConcurrency         int
 	MaxSubscriptionsPerConnection int
 	ConnectionInitBytes           int
 	ConnectionInitTimeout         time.Duration
+	WebSocketKeepAlive            time.Duration
+	WebSocketPongTimeout          time.Duration
 	ShutdownGrace                 time.Duration
 	RetentionDeleteRows           int
+	RetentionAge                  time.Duration
+	RetentionEvery                time.Duration
 }
 
 var defaultLimits = Limits{
 	ClaimRows: 64, PublisherConcurrency: 8, LeaseDuration: 30 * time.Second,
 	PublishTimeout: 15 * time.Second, RetryBase: 250 * time.Millisecond,
-	RetryCap: 5 * time.Minute, MaxEncodedEventBytes: 2 << 20,
+	RetryCap: 5 * time.Minute, MaxEncodedEventBytes: 2 << 20, MaxEncodedBatchBytes: 16 << 20,
 	SubscriberQueue: 64, HubInputQueue: 256, EvaluationConcurrency: 32,
 	MaxSubscriptionsPerConnection: 32, ConnectionInitBytes: 64 << 10,
-	ConnectionInitTimeout: 10 * time.Second, ShutdownGrace: 15 * time.Second,
-	RetentionDeleteRows: 256,
+	ConnectionInitTimeout: 10 * time.Second, WebSocketKeepAlive: 30 * time.Second, WebSocketPongTimeout: 10 * time.Second, ShutdownGrace: 15 * time.Second,
+	RetentionDeleteRows: 256, RetentionAge: 30 * 24 * time.Hour, RetentionEvery: time.Minute,
 }
 
 var maximumLimits = Limits{
 	ClaimRows: 1024, PublisherConcurrency: 128, LeaseDuration: 10 * time.Minute,
 	PublishTimeout: 2 * time.Minute, RetryBase: time.Minute,
-	RetryCap: 24 * time.Hour, MaxEncodedEventBytes: 16 << 20,
+	RetryCap: 24 * time.Hour, MaxEncodedEventBytes: 16 << 20, MaxEncodedBatchBytes: 64 << 20,
 	SubscriberQueue: 4096, HubInputQueue: 16384, EvaluationConcurrency: 256,
 	MaxSubscriptionsPerConnection: 256, ConnectionInitBytes: 1 << 20,
-	ConnectionInitTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
-	RetentionDeleteRows: 4096,
+	ConnectionInitTimeout: time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
+	RetentionDeleteRows: 4096, RetentionAge: 10 * 365 * 24 * time.Hour, RetentionEvery: 24 * time.Hour,
 }
 
 func DefaultLimits() Limits { return defaultLimits }
@@ -53,6 +58,7 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"ClaimRows", &output.ClaimRows, defaultLimits.ClaimRows, maximumLimits.ClaimRows},
 		{"PublisherConcurrency", &output.PublisherConcurrency, defaultLimits.PublisherConcurrency, maximumLimits.PublisherConcurrency},
 		{"MaxEncodedEventBytes", &output.MaxEncodedEventBytes, defaultLimits.MaxEncodedEventBytes, maximumLimits.MaxEncodedEventBytes},
+		{"MaxEncodedBatchBytes", &output.MaxEncodedBatchBytes, defaultLimits.MaxEncodedBatchBytes, maximumLimits.MaxEncodedBatchBytes},
 		{"SubscriberQueue", &output.SubscriberQueue, defaultLimits.SubscriberQueue, maximumLimits.SubscriberQueue},
 		{"HubInputQueue", &output.HubInputQueue, defaultLimits.HubInputQueue, maximumLimits.HubInputQueue},
 		{"EvaluationConcurrency", &output.EvaluationConcurrency, defaultLimits.EvaluationConcurrency, maximumLimits.EvaluationConcurrency},
@@ -81,7 +87,11 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"RetryBase", &output.RetryBase, defaultLimits.RetryBase, maximumLimits.RetryBase},
 		{"RetryCap", &output.RetryCap, defaultLimits.RetryCap, maximumLimits.RetryCap},
 		{"ConnectionInitTimeout", &output.ConnectionInitTimeout, defaultLimits.ConnectionInitTimeout, maximumLimits.ConnectionInitTimeout},
+		{"WebSocketKeepAlive", &output.WebSocketKeepAlive, defaultLimits.WebSocketKeepAlive, maximumLimits.WebSocketKeepAlive},
+		{"WebSocketPongTimeout", &output.WebSocketPongTimeout, defaultLimits.WebSocketPongTimeout, maximumLimits.WebSocketPongTimeout},
 		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
+		{"RetentionAge", &output.RetentionAge, defaultLimits.RetentionAge, maximumLimits.RetentionAge},
+		{"RetentionEvery", &output.RetentionEvery, defaultLimits.RetentionEvery, maximumLimits.RetentionEvery},
 	}
 	for _, item := range durations {
 		if *item.value == 0 {
@@ -96,6 +106,18 @@ func NormalizeLimits(input Limits) (Limits, error) {
 	}
 	if output.RetryBase > output.RetryCap {
 		return Limits{}, Failf(CodeEventConfig, "RetryBase (%s) must not exceed RetryCap (%s)", output.RetryBase, output.RetryCap)
+	}
+	if output.MaxEncodedBatchBytes < output.MaxEncodedEventBytes {
+		return Limits{}, Failf(CodeEventConfig, "MaxEncodedBatchBytes (%d) must not be below MaxEncodedEventBytes (%d)", output.MaxEncodedBatchBytes, output.MaxEncodedEventBytes)
+	}
+	if output.RetentionAge < time.Hour {
+		return Limits{}, Failf(CodeEventConfig, "RetentionAge must be at least 1h, got %s", output.RetentionAge)
+	}
+	if output.RetentionEvery < time.Minute {
+		return Limits{}, Failf(CodeEventConfig, "RetentionEvery must be at least 1m, got %s", output.RetentionEvery)
+	}
+	if output.WebSocketPongTimeout > output.WebSocketKeepAlive {
+		return Limits{}, Failf(CodeEventConfig, "WebSocketPongTimeout (%s) must not exceed WebSocketKeepAlive (%s)", output.WebSocketPongTimeout, output.WebSocketKeepAlive)
 	}
 	return output, nil
 }

@@ -127,6 +127,8 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	if err := state.write(wsMessage{Type: "connection_ack"}); err != nil {
 		return
 	}
+	stopLiveness := state.startLiveness()
+	defer stopLiveness()
 	for {
 		message, err = state.read()
 		if err != nil {
@@ -274,10 +276,42 @@ func (state *wsConnection[P]) read() (wsMessage, error) {
 	if err != nil {
 		return wsMessage{}, err
 	}
+	_ = state.conn.SetReadDeadline(time.Time{})
 	if kind != websocket.TextMessage {
 		return wsMessage{}, errWSProtocolMessage
 	}
 	return decodeWSMessage(payload)
+}
+
+func (state *wsConnection[P]) startLiveness() func() {
+	done := make(chan struct{})
+	state.conn.SetPongHandler(func(string) error {
+		return state.conn.SetReadDeadline(time.Time{})
+	})
+	go func() {
+		ticker := time.NewTicker(state.server.eventLimits.WebSocketKeepAlive)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-state.ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
+				_ = state.conn.SetReadDeadline(deadline)
+				state.writeMu.Lock()
+				err := state.conn.WriteControl(websocket.PingMessage, nil, deadline)
+				state.writeMu.Unlock()
+				if err != nil {
+					state.cancel()
+					return
+				}
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
 }
 
 func decodeWSMessage(payload []byte) (wsMessage, error) {

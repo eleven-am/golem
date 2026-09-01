@@ -388,7 +388,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 		}
 		binding := scopedExecution(backend.database, connection)
 		if err := binding.enableMutation(backend.mutation); err != nil {
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
 			binding.close()
 			_ = connection.Close()
 			return nil, err
@@ -396,7 +396,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 		queryer, err := binding.queryerFor(backend.database)
 		if err != nil {
 			binding.close()
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
 			_ = connection.Close()
 			return nil, err
 		}
@@ -417,7 +417,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 				return nil
 			},
 			func() error {
-				_, rollbackErr := connection.ExecContext(context.Background(), "ROLLBACK")
+				rollbackErr := execMutationCleanup(ctx, connection, "ROLLBACK")
 				binding.discardMutation()
 				binding.close()
 				closeErr := connection.Close()
@@ -454,8 +454,7 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 	}
 	queryer, err := backend.binding.queryerFor(backend.database)
 	if err != nil {
-		_, _ = transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+quoted)
-		_, _ = transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+quoted)
+		_ = execMutationCleanup(ctx, transaction, "ROLLBACK TO SAVEPOINT "+quoted, "RELEASE SAVEPOINT "+quoted)
 		_ = scope.rollback()
 		return nil, err
 	}
@@ -467,10 +466,9 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 			return scope.release()
 		},
 		func() error {
-			_, rollbackErr := transaction.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+quoted)
-			_, releaseErr := transaction.ExecContext(context.Background(), "RELEASE SAVEPOINT "+quoted)
+			cleanupErr := execMutationCleanup(ctx, transaction, "ROLLBACK TO SAVEPOINT "+quoted, "RELEASE SAVEPOINT "+quoted)
 			scopeErr := scope.rollback()
-			return errors.Join(rollbackErr, releaseErr, scopeErr)
+			return errors.Join(cleanupErr, scopeErr)
 		},
 	)), nil
 }

@@ -91,6 +91,35 @@ func TestOrder7PublishEnqueuesWholeBatchThenFlushesOnceWithDeadline(t *testing.T
 	}
 }
 
+func TestOrder7IndependentBatchesPublishConcurrently(t *testing.T) {
+	broker := &concurrentPublishConnection{fakeConnection: newFakeConnection(), firstEntered: make(chan struct{}), releaseFirst: make(chan struct{}), secondEntered: make(chan struct{})}
+	transport := mustTestTransport(t, broker, Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", FlushTimeout: time.Second})
+	batch := func(id byte, payload string) events.EventBatch {
+		cause := golem.CausationID{id}
+		notice := mustNotice(t, golem.EventID{id}, golem.SchemaDigest{1}, golem.EventSchemaDigest{2}, golem.ModelID{3}, cause, 1, []byte(payload))
+		value, err := eventvalue.NewEventBatch(cause, []events.Notice{notice})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	done := make(chan error, 2)
+	go func() { done <- transport.Publish(context.Background(), batch(1, "first")) }()
+	<-broker.firstEntered
+	go func() { done <- transport.Publish(context.Background(), batch(2, "second")) }()
+	select {
+	case <-broker.secondEntered:
+	case <-time.After(time.Second):
+		t.Fatal("second causal batch was serialized behind the first")
+	}
+	close(broker.releaseFirst)
+	for range 2 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestOrder7BrokerFailuresAreSealedAndNeverEchoConfiguration(t *testing.T) {
 	broker := newFakeConnection()
 	broker.flushErr = errors.New("nats://secret:credential@broker private subject payload")
@@ -623,6 +652,24 @@ type fakeConnection struct {
 type installBarrierConnection struct {
 	*fakeConnection
 	onConnectedCheck func()
+}
+
+type concurrentPublishConnection struct {
+	*fakeConnection
+	firstEntered  chan struct{}
+	releaseFirst  chan struct{}
+	secondEntered chan struct{}
+}
+
+func (connection *concurrentPublishConnection) Publish(subject string, payload []byte) error {
+	switch string(payload) {
+	case "first":
+		close(connection.firstEntered)
+		<-connection.releaseFirst
+	case "second":
+		close(connection.secondEntered)
+	}
+	return connection.fakeConnection.Publish(subject, payload)
 }
 
 func (connection *installBarrierConnection) IsConnected() bool {

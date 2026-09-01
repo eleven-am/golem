@@ -53,7 +53,6 @@ type Transport struct {
 	bound         bool
 	closed        bool
 	streams       map[*stream]struct{}
-	publish       sync.Mutex
 	once          sync.Once
 	available     atomic.Bool
 	callbackMu    sync.Mutex
@@ -380,11 +379,6 @@ func (transport *Transport) BindEventRuntime(binding events.RuntimeBinding) erro
 
 func (transport *Transport) Publish(ctx context.Context, batch events.EventBatch) error {
 	if transport == nil || ctx == nil || !batch.Valid() || ctx.Err() != nil {
-		return events.Failure(events.CodeEventTransport)
-	}
-	transport.publish.Lock()
-	defer transport.publish.Unlock()
-	if ctx.Err() != nil {
 		return events.Failure(events.CodeEventTransport)
 	}
 	transport.mu.Lock()

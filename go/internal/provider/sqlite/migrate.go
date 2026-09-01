@@ -870,10 +870,12 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 		return fmt.Errorf("sqlite migration disable foreign_keys: %w", err)
 	}
 	defer func() {
-		_, restoreErr := connection.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("PRAGMA foreign_keys = %d", foreignKeys))
+		cleanup, cancel := sqliteCleanupContext(ctx)
+		defer cancel()
+		_, restoreErr := connection.ExecContext(cleanup, fmt.Sprintf("PRAGMA foreign_keys = %d", foreignKeys))
 		if restoreErr == nil {
 			var restored int
-			restoreErr = connection.GetContext(context.WithoutCancel(ctx), &restored, "PRAGMA foreign_keys")
+			restoreErr = connection.GetContext(cleanup, &restored, "PRAGMA foreign_keys")
 			if restoreErr == nil && restored != foreignKeys {
 				restoreErr = fmt.Errorf("restored state=%d want=%d", restored, foreignKeys)
 			}
@@ -986,10 +988,12 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 		return fmt.Errorf("sqlite initial migration disable foreign_keys: %w", err)
 	}
 	defer func() {
-		_, restoreErr := connection.ExecContext(context.WithoutCancel(ctx), fmt.Sprintf("PRAGMA foreign_keys = %d", foreignKeys))
+		cleanup, cancel := sqliteCleanupContext(ctx)
+		defer cancel()
+		_, restoreErr := connection.ExecContext(cleanup, fmt.Sprintf("PRAGMA foreign_keys = %d", foreignKeys))
 		if restoreErr == nil {
 			var restored int
-			restoreErr = connection.GetContext(context.WithoutCancel(ctx), &restored, "PRAGMA foreign_keys")
+			restoreErr = connection.GetContext(cleanup, &restored, "PRAGMA foreign_keys")
 			if restoreErr == nil && restored != foreignKeys {
 				restoreErr = fmt.Errorf("restored state=%d want=%d", restored, foreignKeys)
 			}

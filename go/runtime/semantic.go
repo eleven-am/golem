@@ -11,6 +11,7 @@ import (
 	policybind "github.com/eleven-am/golem/go/internal/policy/bind"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
+	policyresolve "github.com/eleven-am/golem/go/internal/policy/resolve"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
@@ -60,7 +61,7 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	sourceRow, _, err := callerFindUniqueExecuted(ctx, caller, descriptor, source)
+	sourceRow, _, sourcePrepared, err := callerFindUniquePreparedExecuted(ctx, caller, descriptor, source)
 	if err != nil {
 		return nil, err
 	}
@@ -72,8 +73,12 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
+	sourceCandidates, err := renderSemanticCandidates(caller.app, sourcePrepared.prepared, sourcePrepared.plan, indexName, 2)
+	if err != nil {
+		return nil, err
+	}
 	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
+		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
 	})
 }
 
@@ -102,7 +107,7 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	sourceRow, _, err := systemFindUniqueExecuted(ctx, system, descriptor, source)
+	sourceRow, _, sourcePrepared, err := systemFindUniquePreparedExecuted(ctx, system, descriptor, source)
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +119,12 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
+	sourceCandidates, err := renderSemanticCandidates(system.app, sourcePrepared.prepared, sourcePrepared.plan, indexName, 2)
+	if err != nil {
+		return nil, err
+	}
 	return rankSemanticRows(ctx, system.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, candidates, take)
+		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
 	})
 }
 
@@ -189,25 +198,12 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err := validateSemanticPlanTake(prepared, planned, operation, take); err != nil {
 		return nil, err
 	}
-	candidates, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities, rankParameters)
+	candidates, err := renderSemanticCandidates(app, prepared, planned, indexName, rankParameters)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic candidate statement could not be rendered", err)
 	}
-	decoder, err := readdecode.NewFields(planned.ModelID(), app.registry, app.provider, candidates.Fields())
-	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic identity decoder could not be built", err)
-	}
 	model := semanticModelID(descriptor.Metadata())
-	identity := candidates.Columns()
-	columns := make([]string, len(identity))
-	for index, column := range identity {
-		columns[index] = string(column)
-	}
-	ranks, err := rank(ctx, model, semanticruntime.Candidates{
-		SQL: candidates.SQL(), Args: candidates.Args(), Columns: columns, Model: planned.ModelID(),
-		MaxStatementBytes: planned.Limits().MaxStatementBytes, MaxStatementAliases: planned.Limits().MaxStatementAliases,
-		NewScan: func() semanticruntime.IdentityScan { return decoder.NewScan() },
-	})
+	ranks, err := rank(ctx, model, candidates.candidates)
 	if err != nil {
 		return nil, err
 	}
@@ -218,11 +214,64 @@ func rankSemanticRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operation, prepared.ModelID(), golem.FieldID{}, "semantic row statement could not be rendered", err)
 	}
-	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, operation, decoder, candidates.Fields(), len(base.Args()), ranks)
+	rows, err := fetchSemanticRows(ctx, app, descriptor, prepared, planned, operation, candidates.decoder, candidates.fields, len(base.Args()), ranks)
 	if err != nil {
 		return nil, err
 	}
 	return assembleSemanticResults(ranks, rows)
+}
+
+type renderedSemanticCandidates struct {
+	candidates semanticruntime.Candidates
+	decoder    readdecode.Decoder
+	fields     []policyir.FieldID
+}
+
+func renderSemanticCandidates[P, A any](app *App[P, A], prepared PreparedRead, planned readplan.Plan, indexName string, enclosingParameters int) (renderedSemanticCandidates, error) {
+	fields, ok := app.semantic.IndexFields(semanticModelIDFromPlan(planned), indexName)
+	if !ok {
+		return renderedSemanticCandidates{}, embedding.Failf(embedding.CodeInvalidInput, nil, "the requested model has no semantic index with the requested name")
+	}
+	conditions := make([]policyir.Condition, 0, len(fields))
+	if !prepared.system {
+		policy, present := prepared.policies.Policy(planned.ModelID())
+		if !present {
+			return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read is not permitted", nil)
+		}
+		for _, field := range fields {
+			policyField, fieldErr := semanticPolicyFieldID(field)
+			if fieldErr != nil {
+				return renderedSemanticCandidates{}, fieldErr
+			}
+			condition, err := policyresolve.FieldCondition(policy, policyir.ActionRead, planned.ModelID(), policyField)
+			if err != nil {
+				return renderedSemanticCandidates{}, golem.RuntimeReadError(golem.CodeForbidden, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID(policyField), "semantic index field is not readable", err)
+			}
+			conditions = append(conditions, condition)
+		}
+	}
+	statement, err := readsql.RenderSemanticCandidates(planned, app.registry, app.provider, app.capabilities, enclosingParameters, conditions...)
+	if err != nil {
+		return renderedSemanticCandidates{}, err
+	}
+	decoder, err := readdecode.NewFields(planned.ModelID(), app.registry, app.provider, statement.Fields())
+	if err != nil {
+		return renderedSemanticCandidates{}, err
+	}
+	columns := make([]string, len(statement.Columns()))
+	for index, column := range statement.Columns() {
+		columns[index] = string(column)
+	}
+	value := semanticruntime.Candidates{
+		SQL: statement.SQL(), Args: statement.Args(), Columns: columns, Model: planned.ModelID(),
+		MaxStatementBytes: planned.Limits().MaxStatementBytes, MaxStatementAliases: planned.Limits().MaxStatementAliases,
+		NewScan: func() semanticruntime.IdentityScan { return decoder.NewScan() },
+	}
+	return renderedSemanticCandidates{candidates: value, decoder: decoder, fields: statement.Fields()}, nil
+}
+
+func semanticModelIDFromPlan(planned readplan.Plan) ir.ModelID {
+	return semanticIndexModel(golem.ModelID(planned.ModelID()))
 }
 
 func validateSemanticPlanTake(prepared PreparedRead, planned readplan.Plan, operation string, requested int) error {
@@ -456,6 +505,16 @@ func semanticIndexModel(model golem.ModelID) ir.ModelID {
 	return ir.ModelID(hex.EncodeToString(model[:]))
 }
 
+func semanticPolicyFieldID(field ir.FieldID) (policyir.FieldID, error) {
+	decoded, err := hex.DecodeString(string(field))
+	if err != nil || len(decoded) != len(policyir.FieldID{}) {
+		return policyir.FieldID{}, fmt.Errorf("P9_SEMANTIC_SCHEMA: semantic index field has a non-canonical identifier")
+	}
+	var result policyir.FieldID
+	copy(result[:], decoded)
+	return result, nil
+}
+
 const (
 	semanticDrainJobType     = semanticruntime.DrainJobType
 	semanticReconcileJobType = semanticruntime.ReconcileJobType
@@ -470,6 +529,10 @@ func semanticJobKey(prefix string, job semanticJob) string {
 	return prefix + ":" + job.Model + ":" + job.Index
 }
 
+func semanticJobExclusiveKey(job semanticJob) string {
+	return "semantic.index:" + job.Model + ":" + job.Index
+}
+
 // registerSemanticJobs publishes Golem's own job types into the application's
 // registry. Keeping the index current is Golem's obligation, not something an
 // application opts into, so the application never writes these handlers and
@@ -478,7 +541,7 @@ func (app *App[P, A]) registerSemanticJobs(registry *queue.Registry) error {
 	drain, err := queue.Register(registry, queue.Definition[semanticJob]{
 		Type:        semanticDrainJobType,
 		Handle:      app.runSemanticDrain,
-		ExclusiveBy: func(job semanticJob) string { return semanticJobKey(semanticDrainJobType, job) },
+		ExclusiveBy: semanticJobExclusiveKey,
 	})
 	if err != nil {
 		return err
@@ -486,7 +549,7 @@ func (app *App[P, A]) registerSemanticJobs(registry *queue.Registry) error {
 	reconcile, err := queue.Register(registry, queue.Definition[semanticJob]{
 		Type:        semanticReconcileJobType,
 		Handle:      app.runSemanticReconcile,
-		ExclusiveBy: func(job semanticJob) string { return semanticJobKey(semanticReconcileJobType, job) },
+		ExclusiveBy: semanticJobExclusiveKey,
 	})
 	if err != nil {
 		return err
@@ -518,6 +581,13 @@ func (app *App[P, A]) runSemanticReconcile(ctx context.Context, job queue.Job[se
 	if err := app.semanticJobTarget(job.Payload); err != nil {
 		return err
 	}
+	interval := app.semanticReconcileInterval
+	if interval != 0 {
+		chained := semanticJobKey(semanticReconcileJobType, job.Payload) + ":" + string(job.ID)
+		if _, err := app.enqueueSemanticJobWith(ctx, nil, app.semanticReconcile, job.Payload, chained, queue.After(interval)); err != nil {
+			return err
+		}
+	}
 	return app.semantic.Refresh(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
 }
 
@@ -544,6 +614,9 @@ func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
 	}
 	if app.queueStore == nil {
 		return fmt.Errorf("P9_SEMANTIC_CONFIG: a semantic index requires the durable job queue; set Config.Queue")
+	}
+	if app.semanticReconcileInterval == 0 {
+		return nil
 	}
 	for _, reference := range references {
 		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
@@ -595,7 +668,12 @@ func (app *App[P, A]) semanticIndexed(model golem.ModelID) bool {
 }
 
 func (app *App[P, A]) enqueueSemanticJob(ctx context.Context, executor queueprovider.Executor, jobType queue.Type[semanticJob], payload semanticJob, dedupe string) (queueprovider.EnqueueResult, error) {
-	pending, err := jobType.New(payload, queue.Dedupe(dedupe))
+	return app.enqueueSemanticJobWith(ctx, executor, jobType, payload, dedupe)
+}
+
+func (app *App[P, A]) enqueueSemanticJobWith(ctx context.Context, executor queueprovider.Executor, jobType queue.Type[semanticJob], payload semanticJob, dedupe string, options ...queue.Option) (queueprovider.EnqueueResult, error) {
+	options = append(options, queue.Dedupe(dedupe))
+	pending, err := jobType.New(payload, options...)
 	if err != nil {
 		return queueprovider.EnqueueResult{}, err
 	}

@@ -363,6 +363,9 @@ type Limits struct {
 	ShutdownGrace   time.Duration
 	AbandonGrace    time.Duration
 	MaxPayloadBytes int
+	RetentionAge    time.Duration
+	RetentionEvery  time.Duration
+	RetentionRows   int
 }
 
 // DefaultLimits returns the documented worker defaults.
@@ -375,6 +378,9 @@ func DefaultLimits() Limits {
 		ShutdownGrace:   defaultShutdownGrace,
 		AbandonGrace:    defaultAbandonGrace,
 		MaxPayloadBytes: MaximumPayloadBytes,
+		RetentionAge:    30 * 24 * time.Hour,
+		RetentionEvery:  time.Minute,
+		RetentionRows:   MaximumOperatorBatch,
 	}
 }
 
@@ -390,6 +396,9 @@ func (limits Limits) Resolved() Limits {
 		ShutdownGrace:   orDefaultDuration(limits.ShutdownGrace, defaults.ShutdownGrace),
 		AbandonGrace:    orDefaultDuration(limits.AbandonGrace, defaults.AbandonGrace),
 		MaxPayloadBytes: orDefaultInt(limits.MaxPayloadBytes, defaults.MaxPayloadBytes),
+		RetentionAge:    orDefaultDuration(limits.RetentionAge, defaults.RetentionAge),
+		RetentionEvery:  orDefaultDuration(limits.RetentionEvery, defaults.RetentionEvery),
+		RetentionRows:   orDefaultInt(limits.RetentionRows, defaults.RetentionRows),
 	}
 }
 
@@ -398,9 +407,9 @@ func (limits Limits) Resolved() Limits {
 func (limits Limits) Validate() error {
 	resolved := limits.Resolved()
 	switch {
-	case limits.Concurrency < 0 || limits.ClaimBatch < 0 || limits.MaxPayloadBytes < 0:
+	case limits.Concurrency < 0 || limits.ClaimBatch < 0 || limits.MaxPayloadBytes < 0 || limits.RetentionRows < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative bound")
-	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0:
+	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0 || limits.RetentionAge < 0 || limits.RetentionEvery < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative duration")
 	case resolved.MaxPayloadBytes > MaximumPayloadBytes:
 		return Fail(CodeConfigInvalid, "MaxPayloadBytes is above %d", MaximumPayloadBytes)
@@ -410,6 +419,12 @@ func (limits Limits) Validate() error {
 		return Fail(CodeConfigInvalid, "PollInterval must be at most 24h")
 	case resolved.AbandonGrace > 2*time.Minute:
 		return Fail(CodeConfigInvalid, "AbandonGrace must be at most 2m")
+	case resolved.RetentionAge < time.Hour || resolved.RetentionAge > 10*365*24*time.Hour:
+		return Fail(CodeConfigInvalid, "RetentionAge must be within 1h..10y")
+	case resolved.RetentionEvery < time.Minute || resolved.RetentionEvery > 24*time.Hour:
+		return Fail(CodeConfigInvalid, "RetentionEvery must be within 1m..24h")
+	case resolved.RetentionRows > MaximumRetentionRows:
+		return Fail(CodeConfigInvalid, "RetentionRows is above %d", MaximumRetentionRows)
 	}
 	return nil
 }
@@ -446,6 +461,9 @@ type Status struct {
 
 // MaximumOperatorBatch bounds one operator page or bulk control action.
 const MaximumOperatorBatch = 256
+
+// MaximumRetentionRows bounds one automatic or operator retention batch.
+const MaximumRetentionRows = 4096
 
 // FailedCursor is the stable position immediately after one failed job.
 type FailedCursor struct {
