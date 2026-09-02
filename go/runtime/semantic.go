@@ -602,9 +602,10 @@ func (app *App[P, A]) semanticJobTarget(payload semanticJob) error {
 }
 
 // startSemanticJobs refuses an application that declares a semantic index
-// without a durable queue, then hands every index one reconcile. Golem can see
-// that no queue is configured; it cannot see whether a worker will ever run,
-// so this refusal covers the configuration only.
+// without a durable queue, then hands every index one reconcile only when a
+// reconcile interval is configured; the default interval of zero schedules
+// none. Golem can see that no queue is configured; it cannot see whether a
+// worker will ever run, so this refusal covers the configuration only.
 func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
 	references := app.semantic.IndexRefs()
 	if len(references) == 0 {

@@ -370,10 +370,13 @@ func TestPlanIncrementalCreatesSemanticPgvectorStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "_golem_semantic_" + id(73)
-	for _, fragment := range []string{"CREATE EXTENSION IF NOT EXISTS vector", `CREATE TABLE "reviewed"."` + base + `_state"`, `CREATE TABLE "reviewed"."` + base + `_vec"`, `USING hnsw ("embedding" vector_cosine_ops)`} {
+	for _, fragment := range []string{"CREATE EXTENSION IF NOT EXISTS vector", `CREATE TABLE "reviewed"."` + base + `_state"`, `CREATE TABLE "reviewed"."` + base + `_vec"`} {
 		if !strings.Contains(plan.SQL(), fragment) {
 			t.Fatalf("semantic incremental SQL missing %q:\n%s", fragment, plan.SQL())
 		}
+	}
+	if strings.Contains(plan.SQL(), "USING hnsw") {
+		t.Fatalf("exact semantic storage created an unused HNSW index:\n%s", plan.SQL())
 	}
 }
 
@@ -412,7 +415,7 @@ func TestPlanIncrementalRebuildsChangedSemanticPgvectorStorageInOrder(t *testing
 	if dropPosition < 0 || createPosition < 0 || dropPosition >= createPosition {
 		t.Fatalf("semantic rewrite did not drop before recreate:\n%s", sql)
 	}
-	if !strings.Contains(sql[createPosition:], `vector(4)`) || !strings.Contains(sql[createPosition:], `USING hnsw ("embedding" vector_cosine_ops)`) {
+	if !strings.Contains(sql[createPosition:], `vector(4)`) || strings.Contains(sql[createPosition:], `USING hnsw`) {
 		t.Fatalf("semantic rewrite omitted new pgvector contract:\n%s", sql)
 	}
 }

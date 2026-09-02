@@ -121,7 +121,6 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 	}
 	state := physical.PhysicalName(string(descriptor.Storage) + "_state")
 	vectors := physical.PhysicalName(string(descriptor.Storage) + "_vec")
-	index := physical.PhysicalName(string(descriptor.Storage) + "_hnsw")
 	if len(descriptor.Identity) == 0 && !reviewedReplay {
 		return nil, fmt.Errorf("postgresql render semantic extension %s: identity projection is absent", extension.ID)
 	}
@@ -160,7 +159,6 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 		"CREATE TABLE "+qualified(namespace, vectors)+" ("+
 			quote("record_key")+" text NOT NULL PRIMARY KEY, "+
 			quote("embedding")+" vector("+strconv.Itoa(int(descriptor.Dimensions))+") NOT NULL)",
-		"CREATE INDEX "+quote(index)+" ON "+qualified(namespace, vectors)+" USING hnsw ("+quote("embedding")+" vector_cosine_ops)",
 	)
 	return statements, nil
 }

@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
@@ -495,6 +496,46 @@ func textCandidates(statement string, args ...any) Candidates {
 		SQL: statement, Args: args, Columns: []string{"id"},
 		MaxStatementBytes: readsql.MaxStatementBytes, MaxStatementAliases: readsql.MaxStatementAliases,
 		NewScan: func() IdentityScan { return &textIdentityScan{} },
+	}
+}
+
+func TestSQLiteRankBreaksDistanceTiesOnTheRecordKey(t *testing.T) {
+	fixture := newDrainFixture(t)
+	index, ok := fixture.manager.index("post", "related")
+	if !ok {
+		t.Fatal("semantic index is absent")
+	}
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	statement := fixture.manager.sqliteRankStatement(index, candidates, false)
+	if !strings.Contains(statement, "ORDER BY golem_sn.distance,golem_sn.record_key LIMIT") {
+		t.Fatalf("SQLite approximate ranking leaves the page boundary to the planner at distance ties: %s", statement)
+	}
+	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+	if _, err := fixture.db.Exec(`DELETE FROM "posts"; DELETE FROM "` + drainStateTable + `"; DELETE FROM "` + drainVectorTable + `"`); err != nil {
+		t.Fatal(err)
+	}
+	vector, err := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for ordinal, key := range []string{"f", "e", "d", "c", "b", "a"} {
+		id := fmt.Sprintf("p%d", ordinal)
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,'tied')`, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainStateTable+`" (record_key,source_hash,space_fingerprint,status,updated_at,"id") VALUES (?,x'01',?,'ready',1,?)`, key, fingerprint, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.db.Exec(`INSERT INTO "`+drainVectorTable+`" (record_key,embedding) VALUES (?,?)`, key, vector); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ranks, err := fixture.manager.rankVector(context.Background(), index, vector, candidates, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 2 || ranks[0].Key != "a" || ranks[1].Key != "b" {
+		t.Fatalf("tie page=%#v want the two lowest record keys a,b", ranks)
 	}
 }
 

@@ -6,7 +6,9 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,11 @@ type pgvectorRankFixture struct {
 
 func openPGVectorRankFixture(t *testing.T) pgvectorRankFixture {
 	t.Helper()
+	return openPGVectorRankFixtureOf(t, 3, true)
+}
+
+func openPGVectorRankFixtureOf(t *testing.T, dimensions int, buildIndex bool) pgvectorRankFixture {
+	t.Helper()
 	dsn := os.Getenv("GOLEM_TEST_PGVECTOR_DSN")
 	if dsn == "" {
 		if os.Getenv("GOLEM_REQUIRE_PGVECTOR") == "1" {
@@ -57,20 +64,23 @@ func openPGVectorRankFixture(t *testing.T) pgvectorRankFixture {
 		drop()
 		_ = database.Close()
 	})
-	for _, statement := range []string{
+	statements := []string{
 		`CREATE EXTENSION IF NOT EXISTS vector`,
 		`CREATE SCHEMA "` + pgvectorRankNamespace + `"`,
 		`CREATE TABLE "` + pgvectorRankNamespace + `"."docs" ("id" text NOT NULL PRIMARY KEY, "hidden" boolean NOT NULL)`,
 		`CREATE TABLE "` + pgvectorRankNamespace + `"."` + storage + `_state" ("record_key" text NOT NULL PRIMARY KEY, "source_hash" bytea NOT NULL, "space_fingerprint" text NOT NULL, "status" text NOT NULL, "attempt_count" integer NOT NULL DEFAULT 0, "error_code" text, "updated_at" bigint NOT NULL, "id" text NOT NULL)`,
 		`CREATE INDEX "` + storage + `_state_identity" ON "` + pgvectorRankNamespace + `"."` + storage + `_state" ("id")`,
-		`CREATE TABLE "` + pgvectorRankNamespace + `"."` + storage + `_vec" ("record_key" text NOT NULL PRIMARY KEY, "embedding" vector(3) NOT NULL)`,
-		`CREATE INDEX "` + storage + `_hnsw" ON "` + pgvectorRankNamespace + `"."` + storage + `_vec" USING hnsw ("embedding" vector_cosine_ops)`,
-	} {
+		`CREATE TABLE "` + pgvectorRankNamespace + `"."` + storage + `_vec" ("record_key" text NOT NULL PRIMARY KEY, "embedding" vector(` + strconv.Itoa(dimensions) + `) NOT NULL)`,
+	}
+	if buildIndex {
+		statements = append(statements, hnswIndexStatement(storage))
+	}
+	for _, statement := range statements {
 		if _, err := database.ExecContext(ctx, statement); err != nil {
 			t.Fatalf("%s: %v", statement, err)
 		}
 	}
-	specification, err := embedding.NewSpecification("test", "deterministic", "v1", 3, 8)
+	specification, err := embedding.NewSpecification("test", "deterministic", "v1", dimensions, 8)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +134,140 @@ func rankCandidates(statement string, args ...any) Candidates {
 
 func authorizedRankCandidates() Candidates {
 	return rankCandidates(`SELECT golem_r0."id" AS "id" FROM "`+pgvectorRankNamespace+`"."docs" AS golem_r0 WHERE golem_r0."hidden" = $1`, false)
+}
+
+func hnswIndexStatement(storage string) string {
+	return `CREATE INDEX "` + storage + `_hnsw" ON "` + pgvectorRankNamespace + `"."` + storage + `_vec" USING hnsw ("embedding" vector_cosine_ops)`
+}
+
+const (
+	rankOracleDimensions = 128
+	rankOracleRows       = 20000
+	rankOraclePage       = 20
+)
+
+func rankOracleVectorSQL(seed string, dimensions int) string {
+	axis := `(('x'||substr(md5(` + seed + `||':'||axis::text),1,8))::bit(32)::int)::double precision/2147483648.0`
+	return `('['||(SELECT string_agg((` + axis + `)::text,',' ORDER BY axis) FROM generate_series(1,` + strconv.Itoa(dimensions) + `) axis)||']')::vector`
+}
+
+func (fixture pgvectorRankFixture) seedOracleRows(t *testing.T, count, dimensions int) {
+	t.Helper()
+	ctx := context.Background()
+	namespace := `"` + pgvectorRankNamespace + `".`
+	series := ` FROM generate_series(0,` + strconv.Itoa(count-1) + `) value`
+	key := `'k'||lpad(value::text,6,'0')`
+	fingerprint := hex.EncodeToString(fixture.index.SpaceFingerprint[:])
+	for _, statement := range []string{
+		`INSERT INTO ` + namespace + `"docs" ("id","hidden") SELECT ` + key + `, (value % 10) <> 0` + series,
+		`INSERT INTO ` + namespace + `"` + fixture.storage + `_state" ("record_key","source_hash","space_fingerprint","status","updated_at","id") SELECT ` + key + `, '\x01'::bytea, '` + fingerprint + `', 'ready', 1, ` + key + series,
+		`INSERT INTO ` + namespace + `"` + fixture.storage + `_vec" ("record_key","embedding") SELECT ` + key + `, ` + rankOracleVectorSQL(`value::text`, dimensions) + series,
+		hnswIndexStatement(fixture.storage),
+		`ANALYZE ` + namespace + `"docs"`,
+		`ANALYZE ` + namespace + `"` + fixture.storage + `_state"`,
+		`ANALYZE ` + namespace + `"` + fixture.storage + `_vec"`,
+	} {
+		if _, err := fixture.database.ExecContext(ctx, statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+}
+
+func (fixture pgvectorRankFixture) oracleQueryVector(t *testing.T, dimensions int) string {
+	t.Helper()
+	var vector string
+	if err := fixture.database.GetContext(context.Background(), &vector, `SELECT (`+rankOracleVectorSQL(`'query'`, dimensions)+`)::text`); err != nil {
+		t.Fatal(err)
+	}
+	return vector
+}
+
+func (fixture pgvectorRankFixture) explain(t *testing.T, transaction *sqlx.Tx, statement string, arguments ...any) string {
+	t.Helper()
+	rows, err := transaction.QueryxContext(context.Background(), "EXPLAIN (COSTS OFF) "+statement, arguments...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan strings.Builder
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			t.Fatal(err)
+		}
+		plan.WriteString(line)
+		plan.WriteByte('\n')
+	}
+	if err := rows.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return plan.String()
+}
+
+func (fixture pgvectorRankFixture) exactOraclePage(t *testing.T, vector string, take int) []Rank {
+	t.Helper()
+	ctx := context.Background()
+	namespace := `"` + pgvectorRankNamespace + `".`
+	distance := `(golem_ov."embedding" <=> $1::vector)`
+	statement := `SELECT golem_ov."record_key",` + distance + `::double precision AS distance,golem_os."id"` +
+		` FROM ` + namespace + `"` + fixture.storage + `_vec" AS golem_ov` +
+		` JOIN ` + namespace + `"` + fixture.storage + `_state" AS golem_os ON golem_os."record_key"=golem_ov."record_key"` +
+		` JOIN ` + namespace + `"docs" AS golem_od ON golem_od."id"=golem_os."id"` +
+		` WHERE golem_od."hidden"=false AND golem_os."space_fingerprint"=$2 AND golem_os."status"='ready'` +
+		` ORDER BY (` + distance + `+0.0),golem_ov."record_key" COLLATE "C" LIMIT $3`
+	arguments := []any{vector, hex.EncodeToString(fixture.index.SpaceFingerprint[:]), take}
+	transaction, err := fixture.database.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback()
+	if plan := fixture.explain(t, transaction, statement, arguments...); strings.Contains(plan, fixture.storage+"_hnsw") {
+		t.Fatalf("the ground-truth oracle is not exact, it used the HNSW index:\n%s", plan)
+	}
+	rows, err := transaction.QueryxContext(ctx, statement, arguments...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ranks, err := decodeRanks(rows, take, rankCandidates(""))
+	if closeErr := rows.Close(); closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ranks
+}
+
+func rankPageDigest(ranks []Rank) string {
+	parts := make([]string, len(ranks))
+	for position, rank := range ranks {
+		parts[position] = fmt.Sprintf("%s@%.9f", rank.Key, rank.Distance)
+	}
+	return strings.Join(parts, " ")
+}
+
+func TestPGVectorRankMatchesTheExactPageWithHNSWPresent(t *testing.T) {
+	fixture := openPGVectorRankFixtureOf(t, rankOracleDimensions, false)
+	fixture.seedOracleRows(t, rankOracleRows, rankOracleDimensions)
+	candidates := authorizedRankCandidates()
+	vector := fixture.oracleQueryVector(t, rankOracleDimensions)
+
+	exact := fixture.exactOraclePage(t, vector, rankOraclePage)
+	if len(exact) != rankOraclePage {
+		t.Fatalf("exact page=%d want=%d", len(exact), rankOraclePage)
+	}
+	ranks, err := fixture.manager.rankVector(context.Background(), fixture.index, vector, candidates, "", rankOraclePage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != rankOraclePage {
+		t.Fatalf("served page=%d want=%d", len(ranks), rankOraclePage)
+	}
+	for position := range exact {
+		if ranks[position].Key == exact[position].Key && math.Abs(ranks[position].Distance-exact[position].Distance) <= 1e-9 {
+			continue
+		}
+		t.Fatalf("served page diverges from ground truth at %d\nserved: %s\nexact:  %s", position, rankPageDigest(ranks), rankPageDigest(exact))
+	}
 }
 
 // TestPGVectorRankHasNoCandidateCeilingAndRanksOnlyAuthorizedRows proves the
@@ -180,14 +324,12 @@ func TestPGVectorRankExcludesTheSimilaritySourceBeforeRanking(t *testing.T) {
 	}
 }
 
-// TestPGVectorRankUsesTheHNSWIndex asserts that authorization remains in the
-// rank statement without breaking the vector pathkey.
-func TestPGVectorRankUsesTheHNSWIndex(t *testing.T) {
+func TestPGVectorRankUsesAnExactPlan(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	fixture.seedRankRows(t, 10002, "k009995")
 	ctx := context.Background()
 	candidates := authorizedRankCandidates()
-	statement := fixture.manager.rankStatement(fixture.index, candidates, false)
+	statement := fixture.manager.exactPostgreSQLRankStatement(fixture.index, candidates, false)
 	arguments := append([]any{"[1,0,0]"}, candidates.Args...)
 	arguments = append(arguments, hex.EncodeToString(fixture.index.SpaceFingerprint[:]))
 	arguments = append(arguments, 20)
@@ -196,27 +338,8 @@ func TestPGVectorRankUsesTheHNSWIndex(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := transaction.QueryxContext(ctx, "EXPLAIN (COSTS OFF) "+statement, arguments...)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var plan strings.Builder
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			t.Fatal(err)
-		}
-		plan.WriteString(line)
-		plan.WriteByte('\n')
-	}
-	if err := rows.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(plan.String(), fixture.storage+"_hnsw") {
-		t.Fatalf("rank plan did not use the HNSW index:\n%s", plan.String())
+	if plan := fixture.explain(t, transaction, statement, arguments...); strings.Contains(plan, fixture.storage+"_hnsw") {
+		t.Fatalf("exact rank plan used the HNSW index:\n%s", plan)
 	}
 }
 
@@ -254,7 +377,7 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	}
 }
 
-func TestPGVectorRankFallsBackWhenIterativeScanIsExhausted(t *testing.T) {
+func TestPGVectorRankIgnoresHNSWScanLimits(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	fixture.seedRankRows(t, 2000, "")
 	ctx := context.Background()
