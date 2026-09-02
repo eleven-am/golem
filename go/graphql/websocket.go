@@ -3,6 +3,7 @@ package graphql
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
@@ -127,6 +128,8 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 	if err := state.write(wsMessage{Type: "connection_ack"}); err != nil {
 		return
 	}
+	stopLiveness := state.startLiveness()
+	defer stopLiveness()
 	for {
 		message, err = state.read()
 		if err != nil {
@@ -278,6 +281,77 @@ func (state *wsConnection[P]) read() (wsMessage, error) {
 		return wsMessage{}, errWSProtocolMessage
 	}
 	return decodeWSMessage(payload)
+}
+
+func (state *wsConnection[P]) startLiveness() func() {
+	done := make(chan struct{})
+	pongs := make(chan string, 1)
+	state.conn.SetPongHandler(func(payload string) error {
+		select {
+		case pongs <- payload:
+		default:
+		}
+		return nil
+	})
+	go func() {
+		ticker := time.NewTicker(state.server.eventLimits.WebSocketKeepAlive)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-state.ctx.Done():
+				return
+			case <-done:
+				return
+			case <-ticker.C:
+				var nonce [16]byte
+				if _, err := rand.Read(nonce[:]); err != nil {
+					state.cancel()
+					_ = state.conn.Close()
+					return
+				}
+				payload := string(nonce[:])
+				state.writeMu.Lock()
+				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
+				err := state.conn.WriteControl(websocket.PingMessage, []byte(payload), deadline)
+				state.writeMu.Unlock()
+				if err != nil {
+					state.cancel()
+					_ = state.conn.Close()
+					return
+				}
+				timer := time.NewTimer(state.server.eventLimits.WebSocketPongTimeout)
+				waiting := true
+				for waiting {
+					select {
+					case pong := <-pongs:
+						waiting = pong != payload
+					case <-timer.C:
+						state.cancel()
+						_ = state.conn.Close()
+						return
+					case <-state.ctx.Done():
+						stopWSTimer(timer)
+						return
+					case <-done:
+						stopWSTimer(timer)
+						return
+					}
+				}
+				stopWSTimer(timer)
+			}
+		}
+	}()
+	var once sync.Once
+	return func() { once.Do(func() { close(done) }) }
+}
+
+func stopWSTimer(timer *time.Timer) {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
 }
 
 func decodeWSMessage(payload []byte) (wsMessage, error) {

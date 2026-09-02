@@ -29,16 +29,16 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-// Manager owns refresh and nearest-neighbour storage operations. One manager
-// serializes refreshes so duplicate application requests never call an
-// embedding provider for the same observed source generation concurrently.
+// Manager owns refresh and nearest-neighbour storage operations. Refreshes of
+// one index serialize, while unrelated indexes may advance concurrently.
 type Manager struct {
-	database *sqlx.DB
-	provider ir.Provider
-	schema   physical.PhysicalSchema
-	indexes  []Index
-	observer observe.Observer
-	mu       sync.Mutex
+	database     *sqlx.DB
+	provider     ir.Provider
+	schema       physical.PhysicalSchema
+	indexes      []Index
+	observer     observe.Observer
+	mu           sync.Mutex
+	refreshLocks map[string]*sync.Mutex
 }
 
 const MaximumResults = 1000
@@ -46,10 +46,11 @@ const MaximumResults = 1000
 // semanticStaleProbe bounds how many marked records one drain pass claims, and
 // semanticKeyChunk bounds how many record keys one statement binds.
 const (
-	semanticStaleProbe = 256
-	semanticKeyChunk   = 128
-	semanticMarkChunk  = 128
-	semanticMarkBinds  = 900
+	semanticStaleProbe    = 256
+	semanticReconcilePage = 256
+	semanticKeyChunk      = 128
+	semanticMarkChunk     = 128
+	semanticMarkBinds     = 900
 )
 
 // IdentityScan decodes one ranked row's owner identity columns. The caller owns
@@ -91,7 +92,7 @@ func NewManager(database *sqlx.DB, provider ir.Provider, schema physical.Physica
 	if len(observers) == 1 {
 		observer = observers[0]
 	}
-	return &Manager{database: database, provider: provider, schema: schema, indexes: inventory.Indexes(), observer: observer}, nil
+	return &Manager{database: database, provider: provider, schema: schema, indexes: inventory.Indexes(), observer: observer, refreshLocks: make(map[string]*sync.Mutex)}, nil
 }
 
 // DrainJobType and ReconcileJobType name the durable job types Golem registers
@@ -109,6 +110,17 @@ const (
 type IndexRef struct {
 	Model ir.ModelID
 	Name  string
+}
+
+func (manager *Manager) IndexFields(model ir.ModelID, name string) ([]ir.FieldID, bool) {
+	if manager == nil {
+		return nil, false
+	}
+	index, ok := manager.index(model, name)
+	if !ok {
+		return nil, false
+	}
+	return append([]ir.FieldID(nil), index.Descriptor.Fields...), true
 }
 
 func (manager *Manager) IndexRefs() []IndexRef {
@@ -156,8 +168,9 @@ func (manager *Manager) Drain(ctx context.Context, model ir.ModelID, name string
 	deferred := observeexec.NewDeferredObserver(manager.observer)
 	var pending bool
 	err := func() error {
-		manager.mu.Lock()
-		defer manager.mu.Unlock()
+		lock := manager.indexLock(selected)
+		lock.Lock()
+		defer lock.Unlock()
 		observed := semanticObservationModel(selected.Descriptor.ModelID)
 		drainContext, drainSpan := observeexec.Begin(ctx, deferred, golem.Provider(manager.provider), observed, observe.KindSemantic, observe.OperationSemanticRefresh, observe.PhaseFinish)
 		remaining, drainErr := manager.refresh(drainContext, selected, drainSpan)
@@ -170,26 +183,43 @@ func (manager *Manager) Drain(ctx context.Context, model ir.ModelID, name string
 }
 
 func (manager *Manager) reconcileIndexes(ctx context.Context, indexes []Index) error {
-	// Reconcile serializes provider work, but arbitrary observer code must never
-	// be invoked while that lock is held. Buffer closed records and flush only
-	// after releasing it so observer re-entry cannot deadlock semantic refresh.
 	deferred := observeexec.NewDeferredObserver(manager.observer)
 	err := func() error {
-		manager.mu.Lock()
-		defer manager.mu.Unlock()
 		for _, index := range indexes {
-			model := semanticObservationModel(index.Descriptor.ModelID)
-			refreshContext, refreshSpan := observeexec.Begin(ctx, deferred, golem.Provider(manager.provider), model, observe.KindSemantic, observe.OperationSemanticRefresh, observe.PhaseFinish)
-			refreshErr := manager.reconcile(refreshContext, index, refreshSpan)
-			finishSemanticObservation(refreshSpan, refreshErr)
-			if refreshErr != nil {
-				return refreshErr
+			if err := manager.reconcileIndex(ctx, deferred, index); err != nil {
+				return err
 			}
 		}
 		return nil
 	}()
 	deferred.Flush()
 	return err
+}
+
+func (manager *Manager) reconcileIndex(ctx context.Context, observer observe.Observer, index Index) error {
+	lock := manager.indexLock(index)
+	lock.Lock()
+	defer lock.Unlock()
+	model := semanticObservationModel(index.Descriptor.ModelID)
+	refreshContext, refreshSpan := observeexec.Begin(ctx, observer, golem.Provider(manager.provider), model, observe.KindSemantic, observe.OperationSemanticRefresh, observe.PhaseFinish)
+	err := manager.reconcile(refreshContext, index, refreshSpan)
+	finishSemanticObservation(refreshSpan, err)
+	return err
+}
+
+func (manager *Manager) indexLock(index Index) *sync.Mutex {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.refreshLocks == nil {
+		manager.refreshLocks = make(map[string]*sync.Mutex)
+	}
+	lock := manager.refreshLocks[key]
+	if lock == nil {
+		lock = &sync.Mutex{}
+		manager.refreshLocks[key] = lock
+	}
+	return lock
 }
 
 func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
@@ -272,7 +302,7 @@ func validateCandidates(index Index, candidates Candidates) error {
 // query. The source vector is read from managed storage, so a similarity
 // request performs no embedding-provider call and compares vectors that were
 // produced under the same canonical document framing.
-func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, candidates Candidates, take int) (result []Rank, resultErr error) {
+func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, sourceKey string, source, candidates Candidates, take int) (result []Rank, resultErr error) {
 	if manager == nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
 	}
@@ -298,7 +328,10 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
 	}
-	vector, err := manager.sourceVector(ctx, selected, sourceKey)
+	if err := validateCandidates(selected, source); err != nil {
+		return nil, err
+	}
+	vector, err := manager.sourceVector(ctx, selected, sourceKey, source)
 	if err != nil {
 		return nil, err
 	}
@@ -310,30 +343,39 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 	return ranks, nil
 }
 
-// sourceVector resolves a similarity source by its last stored vector, not by
-// its freshness. A record the write path has marked stale still ranks, and
-// still serves as a similarity source, on the vector it was last embedded
-// with in the active embedding space; a record that has never been embedded in
-// that space simply has no row here.
-func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string) (any, error) {
+func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string, source Candidates) (any, error) {
 	vectorProjection := "golem_sv.embedding"
 	if manager.provider == ir.PostgreSQL {
 		vectorProjection = "golem_sv.embedding::text"
 	}
+	policyProvider := policyir.ProviderSQLite
+	if manager.provider == ir.PostgreSQL {
+		policyProvider = policyir.ProviderPostgreSQL
+	}
+	sourceSQL := policysql.RebasePlaceholders(source.SQL, 2, policyProvider)
+	joins := make([]string, len(index.Descriptor.Identity))
+	for position, column := range index.Descriptor.Identity {
+		joins[position] = "golem_source." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
+	}
 	statement := "SELECT " + vectorProjection +
 		" FROM " + manager.hidden(index, "_vec") + " AS golem_sv" +
 		" JOIN " + manager.hidden(index, "_state") + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
+		" JOIN (" + sourceSQL + ") AS golem_source ON " + strings.Join(joins, " AND ") +
 		" WHERE golem_sv.record_key=" + manager.placeholder(1) +
-		" AND golem_ss.space_fingerprint=" + manager.placeholder(2)
+		" AND golem_ss.space_fingerprint=" + manager.placeholder(2) +
+		" AND golem_ss.status='ready'"
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+	arguments := make([]any, 0, len(source.Args)+2)
+	arguments = append(arguments, sourceKey, fingerprint)
+	arguments = append(arguments, source.Args...)
 	observeexec.RecordStatement(ctx)
 	if manager.provider == ir.SQLite {
 		var encoded []byte
-		err := manager.database.GetContext(ctx, &encoded, statement, sourceKey, fingerprint)
+		err := manager.database.GetContext(ctx, &encoded, statement, arguments...)
 		return classifySourceVector(encoded, err)
 	}
 	var text string
-	err := manager.database.GetContext(ctx, &text, statement, sourceKey, fingerprint)
+	err := manager.database.GetContext(ctx, &text, statement, arguments...)
 	return classifySourceVector(text, err)
 }
 
@@ -353,17 +395,49 @@ func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (a
 	return vector, nil
 }
 
-// rankVector ranks exactly the authorized candidate rows. The candidate
-// subquery is the row source, so an unreadable row can neither occupy a result
-// slot nor influence ordering. PostgreSQL adds +0.0 to the ordering distance:
-// the resulting expression no longer matches the HNSW pathkey, so the planner
-// must rank the joined candidates exactly instead of serving an approximate
-// neighbourhood. Ties order by the binary collation of the opaque record key,
-// matching the portable read ordering on every supported locale.
 func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
 	statement := manager.rankStatement(index, candidates, exclude != "")
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
+	}
+	if manager.provider == ir.PostgreSQL {
+		exact := manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
+		if err := readsql.ValidateStatementComplexity(candidates.Model, exact, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
+			return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
+		}
+		return manager.rankPostgreSQL(ctx, index, statement, exact, vector, candidates, exclude, take)
+	}
+	ranks, err := manager.rankSQLite(ctx, index, statement, vector, candidates, exclude, take, semanticANNProbe(take))
+	if err != nil || len(ranks) >= take {
+		return ranks, err
+	}
+	exact := manager.exactSQLiteRankStatement(index, candidates, exclude != "")
+	if err := readsql.ValidateStatementComplexity(candidates.Model, exact, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
+	}
+	return manager.rankSQLiteExact(ctx, index, exact, vector, candidates, exclude, take)
+}
+
+func semanticANNProbe(take int) int {
+	probe := take * 32
+	if probe < semanticStaleProbe {
+		probe = semanticStaleProbe
+	}
+	if probe > 4096 {
+		probe = 4096
+	}
+	return probe
+}
+
+func (manager *Manager) rankPostgreSQL(ctx context.Context, index Index, statement, exact string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+	transaction, err := manager.database.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking transaction failed")
+	}
+	defer transaction.Rollback()
+	observeexec.RecordStatement(ctx)
+	if _, err := transaction.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: iterative ranking configuration failed")
 	}
 	arguments := make([]any, 0, len(candidates.Args)+4)
 	arguments = append(arguments, vector)
@@ -373,6 +447,63 @@ func (manager *Manager) rankVector(ctx context.Context, index Index, vector any,
 		arguments = append(arguments, exclude)
 	}
 	arguments = append(arguments, take)
+	query := func(statement string) ([]Rank, error) {
+		observeexec.RecordStatement(ctx)
+		rows, err := transaction.QueryxContext(ctx, statement, arguments...)
+		if err != nil {
+			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking failed")
+		}
+		ranks, decodeErr := decodeRanks(rows, take, candidates)
+		closeErr := rows.Close()
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
+		}
+		return ranks, nil
+	}
+	ranks, err := query(statement)
+	if err != nil {
+		return nil, err
+	}
+	if len(ranks) < take {
+		ranks, err = query(exact)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := transaction.Commit(); err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking transaction failed")
+	}
+	return ranks, nil
+}
+
+func (manager *Manager) rankSQLite(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take, probe int) ([]Rank, error) {
+	arguments := make([]any, 0, len(candidates.Args)+5)
+	arguments = append(arguments, vector, probe)
+	arguments = append(arguments, candidates.Args...)
+	arguments = append(arguments, hex.EncodeToString(index.SpaceFingerprint[:]))
+	if exclude != "" {
+		arguments = append(arguments, exclude)
+	}
+	arguments = append(arguments, take)
+	return manager.queryRanks(ctx, statement, arguments, take, candidates)
+}
+
+func (manager *Manager) rankSQLiteExact(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+	arguments := make([]any, 0, len(candidates.Args)+4)
+	arguments = append(arguments, vector)
+	arguments = append(arguments, candidates.Args...)
+	arguments = append(arguments, hex.EncodeToString(index.SpaceFingerprint[:]))
+	if exclude != "" {
+		arguments = append(arguments, exclude)
+	}
+	arguments = append(arguments, take)
+	return manager.queryRanks(ctx, statement, arguments, take, candidates)
+}
+
+func (manager *Manager) queryRanks(ctx context.Context, statement string, arguments []any, take int, candidates Candidates) ([]Rank, error) {
 	observeexec.RecordStatement(ctx)
 	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
 	if err != nil {
@@ -393,25 +524,85 @@ func (manager *Manager) rankStatement(index Index, candidates Candidates, exclud
 		identity[position] = "golem_ss." + manager.quote(column.Name)
 		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
 	}
+	if manager.provider == ir.PostgreSQL {
+		distance := "(golem_sv.embedding <=> " + manager.placeholder(1) + "::vector)"
+		candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
+		outerIdentity := make([]string, len(index.Descriptor.Identity))
+		for position, column := range index.Descriptor.Identity {
+			outerIdentity[position] = "golem_sc." + manager.quote(column.Name)
+		}
+		statement := "SELECT golem_sv.record_key," + distance + "::double precision AS distance," + strings.Join(outerIdentity, ",") +
+			" FROM " + vectors + " AS golem_sv" +
+			" JOIN LATERAL (SELECT " + strings.Join(identity, ",") +
+			" FROM " + state + " AS golem_ss" +
+			" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
+		position := len(candidates.Args) + 2
+		statement += " WHERE golem_ss.record_key=golem_sv.record_key AND golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready' LIMIT 1) AS golem_sc ON TRUE"
+		if exclude {
+			position++
+			statement += " WHERE golem_sv.record_key<>" + manager.placeholder(position)
+		}
+		return statement + " ORDER BY " + distance + ",golem_sv.record_key COLLATE \"C\" LIMIT " + manager.placeholder(position+1)
+	}
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 2, policyir.ProviderSQLite)
+	statement := "WITH golem_sn AS (SELECT record_key,distance FROM " + vectors + " WHERE embedding MATCH " + manager.placeholder(1) + " AND k=" + manager.placeholder(2) + ")" +
+		" SELECT golem_sn.record_key,golem_sn.distance," + strings.Join(identity, ",") +
+		" FROM golem_sn" +
+		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sn.record_key" +
+		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
+	position := len(candidates.Args) + 3
+	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
+	if exclude {
+		position++
+		statement += " AND golem_sn.record_key<>" + manager.placeholder(position)
+	}
+	return statement + " ORDER BY golem_sn.distance LIMIT " + manager.placeholder(position+1)
+}
+
+func (manager *Manager) exactPostgreSQLRankStatement(index Index, candidates Candidates, exclude bool) string {
+	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
+	identity := make([]string, len(index.Descriptor.Identity))
+	joins := make([]string, len(index.Descriptor.Identity))
+	for position, column := range index.Descriptor.Identity {
+		identity[position] = "golem_ss." + manager.quote(column.Name)
+		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
+	}
+	distance := "(golem_sv.embedding <=> " + manager.placeholder(1) + "::vector)"
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
+	statement := "SELECT golem_sv.record_key," + distance + "::double precision AS distance," + strings.Join(identity, ",") +
+		" FROM " + vectors + " AS golem_sv" +
+		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
+		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
+	position := len(candidates.Args) + 2
+	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
+	if exclude {
+		position++
+		statement += " AND golem_sv.record_key<>" + manager.placeholder(position)
+	}
+	return statement + " ORDER BY (" + distance + "+0.0),golem_sv.record_key COLLATE \"C\" LIMIT " + manager.placeholder(position+1)
+}
+
+func (manager *Manager) exactSQLiteRankStatement(index Index, candidates Candidates, exclude bool) string {
+	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
+	identity := make([]string, len(index.Descriptor.Identity))
+	joins := make([]string, len(index.Descriptor.Identity))
+	for position, column := range index.Descriptor.Identity {
+		identity[position] = "golem_ss." + manager.quote(column.Name)
+		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
+	}
 	distance := "vec_distance_cosine(golem_sv.embedding," + manager.placeholder(1) + ")"
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
-	order := "distance,golem_sv.record_key"
-	if manager.provider == ir.PostgreSQL {
-		distance = "(golem_sv.embedding <=> " + manager.placeholder(1) + "::vector)::double precision"
-		candidateSQL = policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
-		order = "(" + distance + " + 0.0),golem_sv.record_key COLLATE \"C\""
-	}
 	statement := "SELECT golem_sv.record_key," + distance + " AS distance," + strings.Join(identity, ",") +
 		" FROM " + vectors + " AS golem_sv" +
 		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
 		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
 	position := len(candidates.Args) + 2
-	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position)
+	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
 	if exclude {
 		position++
 		statement += " AND golem_sv.record_key<>" + manager.placeholder(position)
 	}
-	return statement + " ORDER BY " + order + " LIMIT " + manager.placeholder(position+1)
+	return statement + " ORDER BY distance,golem_sv.record_key LIMIT " + manager.placeholder(position+1)
 }
 
 // placeholder mirrors the provider policy dialects, which both emit ordinal
@@ -447,6 +638,12 @@ func decodeRanks(rows *sqlx.Rows, capacity int, candidates Candidates) ([]Rank, 
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
 	}
+	sort.SliceStable(result, func(left, right int) bool {
+		if result[left].Distance == result[right].Distance {
+			return result[left].Key < result[right].Key
+		}
+		return result[left].Distance < result[right].Distance
+	})
 	return result, nil
 }
 
@@ -463,6 +660,11 @@ type stateRecord struct {
 	fingerprint string
 	status      string
 	updatedAt   int64
+}
+
+type keyedStateRecord struct {
+	key string
+	stateRecord
 }
 
 type staleRecord struct {
@@ -795,10 +997,8 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	if err := manager.markReady(ctx, index, unchanged); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: unchanged record flip failed")
 	}
-	for _, record := range absent {
-		if err := manager.deleteRecord(ctx, index, record); err != nil {
-			return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
-		}
+	if err := manager.deleteRecords(ctx, index, absent); err != nil {
+		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
 	}
 	return nil
 }
@@ -808,58 +1008,94 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	if !ok || table.PrimaryKey == nil || len(table.PrimaryKey.Columns) == 0 {
 		return fmt.Errorf("P9_SEMANTIC_SCHEMA: semantic model has no physical primary identity")
 	}
-	states, err := manager.scanStates(ctx, index)
-	if err != nil {
-		return fmt.Errorf("P9_SEMANTIC_REFRESH: state scan failed")
-	}
-	records, err := manager.scanSources(ctx, table, index)
-	if err != nil {
-		return fmt.Errorf("P9_SEMANTIC_REFRESH: source scan failed")
-	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
-	dirty := make([]sourceRecord, 0)
-	unchanged := make([]observedRecord, 0)
-	present := make(map[string]bool, len(records))
-	for _, record := range records {
-		present[record.key] = true
-		state, exists := states[record.key]
-		record.updatedAt = semanticUnobserved
-		if exists {
-			record.updatedAt = state.updatedAt
+	var aggregate int64
+	var sourceCursor []any
+	dirtyPending := make([]sourceRecord, 0, index.Specification.MaximumBatch())
+	for {
+		records, err := manager.scanSourcePage(ctx, table, index, sourceCursor, semanticReconcilePage)
+		if err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: source scan failed")
 		}
-		if !exists || len(state.hash) != sha256.Size || state.fingerprint != fingerprint || !equalBytes(state.hash, record.hash[:]) {
-			dirty = append(dirty, record)
-			continue
+		if len(records) == 0 {
+			break
 		}
-		// A record the write path marked but never changed is settled by the same
-		// hash the drain uses, so reconciling an application that marks every
-		// write costs no embedding it would not otherwise have paid for. A
-		// quarantined record whose document matches its stored hash is settled the
-		// same way: that hash was written with the vector that still stands.
-		if state.status != "ready" {
-			unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
+		states, err := manager.scanStatesForSources(ctx, index, records)
+		if err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: state scan failed")
 		}
-	}
-	stale := 0
-	for key := range states {
-		if !present[key] {
-			stale++
-		}
-	}
-	span.SetAggregateCount(int64(len(dirty) + len(unchanged) + stale))
-	if err := manager.embedDirty(ctx, index, fingerprint, dirty); err != nil {
-		return err
-	}
-	if err := manager.markReady(ctx, index, unchanged); err != nil {
-		return fmt.Errorf("P9_SEMANTIC_REFRESH: unchanged record flip failed")
-	}
-	for key, state := range states {
-		if !present[key] {
-			if err := manager.deleteRecord(ctx, index, observedRecord{key: key, updatedAt: state.updatedAt}); err != nil {
-				return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
+		dirty := make([]sourceRecord, 0, len(records))
+		unchanged := make([]observedRecord, 0, len(records))
+		for _, record := range records {
+			state, exists := states[record.key]
+			record.updatedAt = semanticUnobserved
+			if exists {
+				record.updatedAt = state.updatedAt
+			}
+			if !exists || len(state.hash) != sha256.Size || state.fingerprint != fingerprint || !equalBytes(state.hash, record.hash[:]) {
+				dirty = append(dirty, record)
+				continue
+			}
+			if state.status != "ready" {
+				unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
 			}
 		}
+		aggregate += int64(len(dirty) + len(unchanged))
+		dirtyPending = append(dirtyPending, dirty...)
+		flush := len(dirtyPending) / index.Specification.MaximumBatch() * index.Specification.MaximumBatch()
+		if flush != 0 {
+			if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending[:flush]); err != nil {
+				return err
+			}
+			copy(dirtyPending, dirtyPending[flush:])
+			dirtyPending = dirtyPending[:len(dirtyPending)-flush]
+		}
+		if err := manager.markReady(ctx, index, unchanged); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: unchanged record flip failed")
+		}
+		sourceCursor = append(sourceCursor[:0], records[len(records)-1].identity...)
+		if len(records) < semanticReconcilePage {
+			break
+		}
 	}
+	if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending); err != nil {
+		return err
+	}
+
+	stateCursor := ""
+	for {
+		states, err := manager.scanStatePage(ctx, index, stateCursor, semanticReconcilePage)
+		if err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: state scan failed")
+		}
+		if len(states) == 0 {
+			break
+		}
+		stale := make([]staleRecord, len(states))
+		for position, state := range states {
+			stale[position] = staleRecord{key: state.key, updatedAt: state.updatedAt}
+		}
+		owners, err := manager.scanOwners(ctx, table, index, stale)
+		if err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: stale source probe failed")
+		}
+		absent := make([]observedRecord, 0, len(states))
+		for _, state := range states {
+			if _, present := owners[state.key]; present {
+				continue
+			}
+			aggregate++
+			absent = append(absent, observedRecord{key: state.key, updatedAt: state.updatedAt})
+		}
+		if err := manager.deleteRecords(ctx, index, absent); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
+		}
+		stateCursor = states[len(states)-1].key
+		if len(states) < semanticReconcilePage {
+			break
+		}
+	}
+	span.SetAggregateCount(aggregate)
 	return nil
 }
 
@@ -1045,13 +1281,71 @@ func (manager *Manager) projectionList(projection sourceProjection, prefix strin
 	return strings.Join(names, ",")
 }
 
-func (manager *Manager) scanSources(ctx context.Context, table physical.PhysicalTable, index Index) ([]sourceRecord, error) {
+func (manager *Manager) scanSourcePage(ctx context.Context, table physical.PhysicalTable, index Index, after []any, limit int) ([]sourceRecord, error) {
 	projection, err := manager.projection(table, index)
 	if err != nil {
 		return nil, err
 	}
-	query := "SELECT " + manager.projectionList(projection, "") + " FROM " + manager.table(table.Name) + " ORDER BY " + strings.Join(projection.order, ",")
-	return manager.decodeSources(ctx, table, index, projection, query)
+	if limit <= 0 || limit > semanticReconcilePage || len(after) != 0 && len(after) != len(projection.order) {
+		return nil, fmt.Errorf("semantic source page is invalid")
+	}
+	query := "SELECT " + manager.projectionList(projection, "") + " FROM " + manager.table(table.Name)
+	arguments := make([]any, 0, len(after))
+	if len(after) != 0 {
+		marks := make([]string, len(after))
+		for position, value := range after {
+			marks[position] = manager.placeholder(position + 1)
+			arguments = append(arguments, value)
+		}
+		if len(projection.order) == 1 {
+			query += " WHERE " + projection.order[0] + ">" + marks[0]
+		} else {
+			query += " WHERE (" + strings.Join(projection.order, ",") + ")>(" + strings.Join(marks, ",") + ")"
+		}
+	}
+	query += " ORDER BY " + strings.Join(projection.order, ",") + " LIMIT " + strconv.Itoa(limit)
+	return manager.decodeSources(ctx, table, index, projection, query, arguments...)
+}
+
+func (manager *Manager) scanStatesForSources(ctx context.Context, index Index, records []sourceRecord) (map[string]stateRecord, error) {
+	result := make(map[string]stateRecord, len(records))
+	for offset := 0; offset < len(records); offset += semanticKeyChunk {
+		end := offset + semanticKeyChunk
+		if end > len(records) {
+			end = len(records)
+		}
+		marks := make([]string, 0, end-offset)
+		arguments := make([]any, 0, end-offset)
+		for position, record := range records[offset:end] {
+			marks = append(marks, manager.placeholder(position+1))
+			arguments = append(arguments, record.key)
+		}
+		query := "SELECT " + manager.quote("record_key") + "," + manager.quote("space_fingerprint") + "," + manager.quote("status") + "," + manager.quote("updated_at") + "," + manager.quote("source_hash") +
+			" FROM " + manager.hidden(index, "_state") + " WHERE " + manager.quote("record_key") + " IN (" + strings.Join(marks, ",") + ")"
+		observeexec.RecordStatement(ctx)
+		rows, err := manager.database.QueryxContext(ctx, query, arguments...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var key, fingerprint, status string
+			var hash []byte
+			var updatedAt int64
+			if err := rows.Scan(&key, &fingerprint, &status, &updatedAt, &hash); err != nil {
+				_ = rows.Close()
+				return nil, err
+			}
+			result[key] = stateRecord{hash: append([]byte(nil), hash...), fingerprint: fingerprint, status: status, updatedAt: updatedAt}
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return nil, err
+		}
+		if err := rows.Close(); err != nil {
+			return nil, err
+		}
+	}
+	return result, nil
 }
 
 // scanOwners reads exactly the marked records' owner rows. The join predicate
@@ -1173,16 +1467,25 @@ func (manager *Manager) scanStale(ctx context.Context, index Index, limit int) (
 	return result, rows.Err()
 }
 
-// scanStates projects source_hash last for the reason scanStale does.
-func (manager *Manager) scanStates(ctx context.Context, index Index) (map[string]stateRecord, error) {
+// scanStatePage projects source_hash last for the reason scanStale does.
+func (manager *Manager) scanStatePage(ctx context.Context, index Index, after string, limit int) ([]keyedStateRecord, error) {
+	if limit <= 0 || limit > semanticReconcilePage {
+		return nil, fmt.Errorf("semantic state page is invalid")
+	}
 	query := "SELECT " + manager.quote("record_key") + "," + manager.quote("space_fingerprint") + "," + manager.quote("status") + "," + manager.quote("updated_at") + "," + manager.quote("source_hash") + " FROM " + manager.hidden(index, "_state")
+	arguments := []any(nil)
+	if after != "" {
+		query += " WHERE " + manager.quote("record_key") + ">" + manager.placeholder(1)
+		arguments = append(arguments, after)
+	}
+	query += " ORDER BY " + manager.quote("record_key") + " LIMIT " + strconv.Itoa(limit)
 	observeexec.RecordStatement(ctx)
-	rows, err := manager.database.QueryxContext(ctx, query)
+	rows, err := manager.database.QueryxContext(ctx, query, arguments...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	result := make(map[string]stateRecord)
+	result := make([]keyedStateRecord, 0, limit)
 	for rows.Next() {
 		var key, fingerprint, status string
 		var hash []byte
@@ -1190,73 +1493,153 @@ func (manager *Manager) scanStates(ctx context.Context, index Index) (map[string
 		if err := rows.Scan(&key, &fingerprint, &status, &updatedAt, &hash); err != nil {
 			return nil, err
 		}
-		result[key] = stateRecord{hash: append([]byte(nil), hash...), fingerprint: fingerprint, status: status, updatedAt: updatedAt}
+		result = append(result, keyedStateRecord{key: key, stateRecord: stateRecord{hash: append([]byte(nil), hash...), fingerprint: fingerprint, status: status, updatedAt: updatedAt}})
 	}
 	return result, rows.Err()
 }
 
 func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint string, records []sourceRecord, vectors []embedding.Vector) error {
+	if len(records) != len(vectors) {
+		return fmt.Errorf("semantic record and vector counts differ")
+	}
 	transaction, err := manager.database.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 	defer transaction.Rollback()
-	columns, values, assignments := "", "", ""
-	for position, column := range index.Descriptor.Identity {
-		columns += "," + manager.quote(column.Name)
-		values += "," + manager.placeholder(position+5)
-		assignments += "," + manager.quote(column.Name) + "=excluded." + manager.quote(column.Name)
+	width := len(index.Descriptor.Identity)
+	chunk := semanticMarkBinds / (width + 6)
+	if chunk < 1 {
+		return fmt.Errorf("P9_SEMANTIC_REFRESH: identity is too wide to store")
 	}
-	// The state row is written first and its guard decides the record: the
-	// conflict arm only fires while the row still carries the updated_at the pass
-	// observed, so a record marked again mid-embed keeps its mark and its vector
-	// is not overwritten by the older content this pass embedded.
-	guard := manager.placeholder(len(index.Descriptor.Identity) + 5)
-	for position, record := range records {
-		if len(record.identity) != len(index.Descriptor.Identity) {
-			return fmt.Errorf("P9_SEMANTIC_REFRESH: identity width does not match the shadow contract")
+	for offset := 0; offset < len(records); offset += chunk {
+		end := offset + chunk
+		if end > len(records) {
+			end = len(records)
 		}
-		vectorValue, err := manager.vectorValue(vectors[position])
-		if err != nil {
-			return err
-		}
-		arguments := append([]any{record.key, record.hash[:], fingerprint, time.Now().UTC().UnixMicro()}, record.identity...)
-		arguments = append(arguments, record.updatedAt)
-		var state sql.Result
-		if manager.provider == ir.SQLite {
-			observeexec.RecordStatement(ctx)
-			state, err = transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at"+columns+") VALUES (?,?,?,'ready',1,NULL,?"+values+") ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count=attempt_count+1,error_code=NULL,updated_at=excluded.updated_at"+assignments+" WHERE updated_at="+guard, arguments...)
-		} else {
-			observeexec.RecordStatement(ctx)
-			state, err = transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_state")+" (record_key,source_hash,space_fingerprint,status,attempt_count,error_code,updated_at"+columns+") VALUES ($1,$2,$3,'ready',1,NULL,$4"+values+") ON CONFLICT(record_key) DO UPDATE SET source_hash=excluded.source_hash,space_fingerprint=excluded.space_fingerprint,status='ready',attempt_count="+manager.hidden(index, "_state")+".attempt_count+1,error_code=NULL,updated_at=excluded.updated_at"+assignments+" WHERE "+manager.hidden(index, "_state")+".updated_at="+guard, arguments...)
-		}
-		if err != nil {
-			return err
-		}
-		settled, err := state.RowsAffected()
-		if err != nil {
-			return err
-		}
-		if settled == 0 {
-			continue
-		}
-		if manager.provider == ir.SQLite {
-			observeexec.RecordStatement(ctx)
-			if _, err := transaction.ExecContext(ctx, "DELETE FROM "+manager.hidden(index, "_vec")+" WHERE "+manager.quote("record_key")+"=?", record.key); err != nil {
-				return err
-			}
-			observeexec.RecordStatement(ctx)
-			if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_vec")+" ("+manager.quote("record_key")+","+manager.quote("embedding")+") VALUES (?,?)", record.key, vectorValue); err != nil {
-				return err
-			}
-			continue
-		}
-		observeexec.RecordStatement(ctx)
-		if _, err := transaction.ExecContext(ctx, "INSERT INTO "+manager.hidden(index, "_vec")+" (record_key,embedding) VALUES ($1,$2::vector) ON CONFLICT(record_key) DO UPDATE SET embedding=excluded.embedding", record.key, vectorValue); err != nil {
+		if err := manager.storeChunk(ctx, transaction, index, fingerprint, records[offset:end], vectors[offset:end]); err != nil {
 			return err
 		}
 	}
 	return transaction.Commit()
+}
+
+func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, index Index, fingerprint string, records []sourceRecord, vectors []embedding.Vector) error {
+	columns := []string{"record_key", "source_hash", "space_fingerprint", "status", "attempt_count", "error_code", "updated_at"}
+	assignments := []string{"source_hash=excluded.source_hash", "space_fingerprint=excluded.space_fingerprint", "status='ready'", "error_code=NULL", "updated_at=excluded.updated_at"}
+	for _, column := range index.Descriptor.Identity {
+		name := manager.quote(column.Name)
+		columns = append(columns, name)
+		assignments = append(assignments, name+"=excluded."+name)
+	}
+	state := manager.hidden(index, "_state")
+	attempt := manager.quote("attempt_count") + "+1"
+	guardTarget := manager.quote("updated_at")
+	if manager.provider == ir.PostgreSQL {
+		attempt = state + "." + manager.quote("attempt_count") + "+1"
+		guardTarget = state + "." + manager.quote("updated_at")
+	}
+	assignments = append(assignments, "attempt_count="+attempt)
+	arguments := make([]any, 0, len(records)*(len(index.Descriptor.Identity)+6))
+	tuples := make([]string, 0, len(records))
+	now := time.Now().UTC().UnixMicro()
+	for _, record := range records {
+		if len(record.identity) != len(index.Descriptor.Identity) {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: identity width does not match the shadow contract")
+		}
+		row := make([]string, 0, len(index.Descriptor.Identity)+7)
+		for _, value := range []any{record.key, record.hash[:], fingerprint} {
+			arguments = append(arguments, value)
+			row = append(row, manager.placeholder(len(arguments)))
+		}
+		row = append(row, "'ready'", "1", "NULL")
+		arguments = append(arguments, now)
+		row = append(row, manager.placeholder(len(arguments)))
+		for _, value := range record.identity {
+			arguments = append(arguments, value)
+			row = append(row, manager.placeholder(len(arguments)))
+		}
+		tuples = append(tuples, "("+strings.Join(row, ",")+")")
+	}
+	guard := make([]string, 0, len(records)*2+1)
+	guard = append(guard, "CASE excluded."+manager.quote("record_key"))
+	for _, record := range records {
+		arguments = append(arguments, record.key)
+		key := manager.placeholder(len(arguments))
+		arguments = append(arguments, record.updatedAt)
+		observed := manager.placeholder(len(arguments))
+		if manager.provider == ir.PostgreSQL {
+			observed += "::bigint"
+		}
+		guard = append(guard, "WHEN "+key+" THEN "+observed)
+	}
+	guard = append(guard, "END")
+	statement := "INSERT INTO " + state + " (" + strings.Join(columns, ",") + ") VALUES " + strings.Join(tuples, ",") +
+		" ON CONFLICT(" + manager.quote("record_key") + ") DO UPDATE SET " + strings.Join(assignments, ",") +
+		" WHERE " + guardTarget + "=" + strings.Join(guard, " ") + " RETURNING " + manager.quote("record_key")
+	observeexec.RecordStatement(ctx)
+	rows, err := transaction.QueryxContext(ctx, statement, arguments...)
+	if err != nil {
+		return err
+	}
+	accepted := make(map[string]struct{}, len(records))
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		accepted[key] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	keys := make([]string, 0, len(accepted))
+	values := make([]any, 0, len(accepted)*2)
+	vectorTuples := make([]string, 0, len(accepted))
+	for position, record := range records {
+		if _, ok := accepted[record.key]; !ok {
+			continue
+		}
+		encoded, err := manager.vectorValue(vectors[position])
+		if err != nil {
+			return err
+		}
+		keys = append(keys, record.key)
+		values = append(values, record.key, encoded)
+		first := manager.placeholder(len(values) - 1)
+		second := manager.placeholder(len(values))
+		if manager.provider == ir.PostgreSQL {
+			second += "::vector"
+		}
+		vectorTuples = append(vectorTuples, "("+first+","+second+")")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	vectorTable := manager.hidden(index, "_vec")
+	if manager.provider == ir.SQLite {
+		marks := make([]string, len(keys))
+		keyArguments := make([]any, len(keys))
+		for position, key := range keys {
+			marks[position] = manager.placeholder(position + 1)
+			keyArguments[position] = key
+		}
+		observeexec.RecordStatement(ctx)
+		if _, err := transaction.ExecContext(ctx, "DELETE FROM "+vectorTable+" WHERE "+manager.quote("record_key")+" IN ("+strings.Join(marks, ",")+")", keyArguments...); err != nil {
+			return err
+		}
+		observeexec.RecordStatement(ctx)
+		_, err = transaction.ExecContext(ctx, "INSERT INTO "+vectorTable+" ("+manager.quote("record_key")+","+manager.quote("embedding")+") VALUES "+strings.Join(vectorTuples, ","), values...)
+		return err
+	}
+	observeexec.RecordStatement(ctx)
+	_, err = transaction.ExecContext(ctx, "INSERT INTO "+vectorTable+" (record_key,embedding) VALUES "+strings.Join(vectorTuples, ",")+" ON CONFLICT(record_key) DO UPDATE SET embedding=excluded.embedding", values...)
+	return err
 }
 
 // deleteRecord removes a record whose owner row the pass could not reach. The
@@ -1264,29 +1647,63 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 // so a record deleted, drained, and created again mid-pass keeps the state row
 // its re-creation wrote, and its vector is left for the next pass to settle.
 func (manager *Manager) deleteRecord(ctx context.Context, index Index, record observedRecord) error {
+	return manager.deleteRecords(ctx, index, []observedRecord{record})
+}
+
+func (manager *Manager) deleteRecords(ctx context.Context, index Index, records []observedRecord) error {
+	if len(records) == 0 {
+		return nil
+	}
 	transaction, err := manager.database.BeginTxx(ctx, &sql.TxOptions{})
 	if err != nil {
 		return err
 	}
 	defer transaction.Rollback()
-	observeexec.RecordStatement(ctx)
-	state, err := transaction.ExecContext(ctx, "DELETE FROM "+manager.hidden(index, "_state")+
-		" WHERE "+manager.quote("record_key")+"="+manager.placeholder(1)+
-		" AND "+manager.quote("updated_at")+"="+manager.placeholder(2), record.key, record.updatedAt)
-	if err != nil {
-		return err
-	}
-	settled, err := state.RowsAffected()
-	if err != nil {
-		return err
-	}
-	if settled == 0 {
-		return nil
-	}
-	observeexec.RecordStatement(ctx)
-	if _, err := transaction.ExecContext(ctx, "DELETE FROM "+manager.hidden(index, "_vec")+
-		" WHERE "+manager.quote("record_key")+"="+manager.placeholder(1), record.key); err != nil {
-		return err
+	for offset := 0; offset < len(records); offset += semanticKeyChunk {
+		end := offset + semanticKeyChunk
+		if end > len(records) {
+			end = len(records)
+		}
+		arguments := make([]any, 0, (end-offset)*2)
+		predicates := make([]string, 0, end-offset)
+		for _, record := range records[offset:end] {
+			arguments = append(arguments, record.key, record.updatedAt)
+			predicates = append(predicates, "("+manager.quote("record_key")+"="+manager.placeholder(len(arguments)-1)+" AND "+manager.quote("updated_at")+"="+manager.placeholder(len(arguments))+")")
+		}
+		observeexec.RecordStatement(ctx)
+		rows, err := transaction.QueryxContext(ctx, "DELETE FROM "+manager.hidden(index, "_state")+" WHERE "+strings.Join(predicates, " OR ")+" RETURNING "+manager.quote("record_key"), arguments...)
+		if err != nil {
+			return err
+		}
+		keys := make([]string, 0, end-offset)
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			keys = append(keys, key)
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if len(keys) == 0 {
+			continue
+		}
+		marks := make([]string, len(keys))
+		keyArguments := make([]any, len(keys))
+		for position, key := range keys {
+			marks[position] = manager.placeholder(position + 1)
+			keyArguments[position] = key
+		}
+		observeexec.RecordStatement(ctx)
+		if _, err := transaction.ExecContext(ctx, "DELETE FROM "+manager.hidden(index, "_vec")+" WHERE "+manager.quote("record_key")+" IN ("+strings.Join(marks, ",")+")", keyArguments...); err != nil {
+			return err
+		}
 	}
 	return transaction.Commit()
 }

@@ -28,6 +28,7 @@ const (
 	longLease  = 5 * time.Minute
 	shortLease = 80 * time.Millisecond
 	expiry     = 200 * time.Millisecond
+	crashLease = 2 * time.Second
 )
 
 // ClaimIsExclusiveUnderConcurrency proves concurrent claimers over one backlog
@@ -145,14 +146,14 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	if changed, err := fixture.Store.Release(ctx, holder[0].ID, holder[0].LeaseToken); err != nil || !changed {
 		t.Fatalf("release holder changed=%t error=%v", changed, err)
 	}
-	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: shortLease, Resource: &weighted})
+	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: crashLease, Resource: &weighted})
 	if err != nil || len(expiring) != 1 {
 		t.Fatalf("expiring holder=%#v error=%v", expiring, err)
 	}
 	if blocked, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted}); err != nil || len(blocked) != 0 {
 		t.Fatalf("live resource holder admitted=%#v error=%v", blocked, err)
 	}
-	time.Sleep(expiry)
+	time.Sleep(crashLease + expiry)
 	afterExpiry, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted})
 	if err != nil || len(afterExpiry) != 1 || afterExpiry[0].ID != heavy {
 		t.Fatalf("expired resource holder admission=%#v error=%v", afterExpiry, err)
@@ -296,6 +297,7 @@ func StaleTokenCannotTransition(t testing.TB, fixture Fixture) {
 	if renewal, err := fixture.Store.Renew(ctx, identity, fresh.LeaseToken, longLease); err != nil || !renewal.Renewed || renewal.CancelRequested {
 		t.Fatalf("owner renew=%#v error=%v", renewal, err)
 	}
+	assertLeaseClock(t, inspect(t, fixture, identity))
 }
 
 // ExpiredLeaseIsReclaimedByOrdinaryClaim proves crashed-worker recovery is the
@@ -440,12 +442,12 @@ func ExpiredCanceledLeaseIsTerminalWithoutReexecution(t testing.TB, fixture Fixt
 	t.Helper()
 	ctx := context.Background()
 	identity := enqueue(t, fixture, "gate.cancel.crash", request{maxAttempts: 1})
-	claimOne(t, fixture, "gate.cancel.crash", shortLease)
+	claimOne(t, fixture, "gate.cancel.crash", crashLease)
 	result, err := fixture.Store.Cancel(ctx, identity)
 	if err != nil || !result.Changed || result.Terminal {
 		t.Fatalf("cancel final lease result=%#v error=%v", result, err)
 	}
-	time.Sleep(expiry)
+	time.Sleep(crashLease + expiry)
 	if records := claim(t, fixture, "gate.cancel.crash", longLease, 1); len(records) != 0 {
 		t.Fatalf("canceled final lease was reclaimed: %#v", records)
 	}
@@ -968,7 +970,15 @@ func claimOne(t testing.TB, fixture Fixture, jobType string, lease time.Duration
 	if len(records) != 1 {
 		t.Fatalf("claim of %s returned %d jobs", jobType, len(records))
 	}
+	assertLeaseClock(t, records[0])
 	return records[0]
+}
+
+func assertLeaseClock(t testing.TB, record queueprovider.Record) {
+	t.Helper()
+	if record.LeaseUntil == nil || !record.AvailableAt.Equal(*record.LeaseUntil) {
+		t.Fatalf("job %s has divergent lease clocks: available=%s lease=%v", record.ID, record.AvailableAt, record.LeaseUntil)
+	}
 }
 
 func inspect(t testing.TB, fixture Fixture, identity string) queueprovider.Record {

@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"context"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -220,7 +221,7 @@ func (hub *ModelHub[T]) sourceLoop(run *hubRun[T]) {
 				hub.terminateRun(run.id, events.CodeSubscriptionSourceClosed)
 				return
 			}
-			if !waitContext(run.ctx, backoff) {
+			if !waitContext(run.ctx, jitterBackoff(backoff)) {
 				return
 			}
 			backoff = nextBackoff(backoff, hub.limits.RetryCap)
@@ -245,7 +246,7 @@ func (hub *ModelHub[T]) sourceLoop(run *hubRun[T]) {
 					return
 				}
 				events.Observe(hub.config.Observer, run.ctx, hub.config.Model, "", events.ObservationTransportReconnect, events.OutcomeFailure, "", 0, len(run.input), cap(run.input), 0, 1)
-				if !waitContext(run.ctx, backoff) {
+				if !waitContext(run.ctx, jitterBackoff(backoff)) {
 					return
 				}
 				backoff = nextBackoff(backoff, hub.limits.RetryCap)
@@ -267,6 +268,14 @@ func (hub *ModelHub[T]) sourceLoop(run *hubRun[T]) {
 			}
 		}
 	}
+}
+
+func jitterBackoff(maximum time.Duration) time.Duration {
+	if maximum <= time.Microsecond {
+		return maximum
+	}
+	floor := maximum / 2
+	return (floor + time.Duration(rand.Int64N(int64(maximum-floor)+1))).Truncate(time.Microsecond)
 }
 
 func (hub *ModelHub[T]) dispatchLoop(run *hubRun[T]) {

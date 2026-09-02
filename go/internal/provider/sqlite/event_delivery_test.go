@@ -96,6 +96,26 @@ func TestSQLiteDeliveryClaimFenceOperatorAndRetention(t *testing.T) {
 	}
 }
 
+func TestSQLiteDeliveryClaimsFirstCausationAboveEstimatedByteBudget(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	database := openEventDeliveryFixture(t, provider)
+	cause := deliveryUUID(700)
+	insertDeliveryFact(t, database, cause, deliveryUUID(701), 1, 1)
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leases, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Second, MaxBytes: 1})
+	if err != nil || len(leases) != 1 || leases[0].Delivery.CausationID != cause {
+		t.Fatalf("oversized claim=%#v error=%v", leases, err)
+	}
+	state, err := coordinator.Inspect(ctx, cause)
+	if err != nil || state.Status != eventprovider.StatusLeased || state.LastFailureCode != "" {
+		t.Fatalf("oversized state=%#v error=%v", state, err)
+	}
+}
+
 func TestSQLiteConcurrentWorkersClaimWholeCausationsExclusively(t *testing.T) {
 	ctx := context.Background()
 	provider := New()
@@ -361,7 +381,7 @@ func p8RunSQLiteDepthCrash(t *testing.T, databasePath, causation string) {
 
 func p8SQLiteMaterializeDelivery(t *testing.T, database *sqlx.DB) {
 	t.Helper()
-	if err := sqliteMaterializeMissing(context.Background(), database, 1); err != nil {
+	if _, err := sqliteMaterializeMissing(context.Background(), database, 1); err != nil {
 		t.Fatal(err)
 	}
 }

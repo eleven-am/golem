@@ -106,6 +106,52 @@ func TestGraphQLTransportWSProtocolCorpus(t *testing.T) {
 	}
 }
 
+func TestWebSocketDisconnectsPeerThatDoesNotAnswerControlPing(t *testing.T) {
+	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 200 * time.Millisecond, WebSocketPongTimeout: 20 * time.Millisecond})
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	if message := readWS(t, connection); message.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", message)
+	}
+	connection.SetPingHandler(func(string) error { return nil })
+	if err := connection.WriteControl(websocket.PongMessage, []byte("1"), time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	stopNoise := make(chan struct{})
+	defer close(stopNoise)
+	go func() {
+		ticker := time.NewTicker(2 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stopNoise:
+				return
+			case <-ticker.C:
+				if err := connection.WriteJSON(wsMessage{Type: "ping"}); err != nil {
+					return
+				}
+			}
+		}
+	}()
+	started := time.Now()
+	_ = connection.SetReadDeadline(time.Now().Add(time.Second))
+	for {
+		if _, _, err := connection.ReadMessage(); err != nil {
+			break
+		}
+	}
+	if elapsed := time.Since(started); elapsed > 320*time.Millisecond {
+		t.Fatalf("application messages kept a pongless connection alive for %s", elapsed)
+	}
+}
+
 func TestWebSocketRejectsLegacyDuplicateMalformedAndTimesOutInit(t *testing.T) {
 	server, _ := newProtocolServer(t, events.Limits{ConnectionInitTimeout: 25 * time.Millisecond})
 	host := httptest.NewServer(server.Handler())

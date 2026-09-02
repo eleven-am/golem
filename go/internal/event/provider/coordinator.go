@@ -23,9 +23,12 @@ const (
 )
 
 const (
-	MaximumClaimGroups   = 1024
-	MaximumRetentionRows = 4096
-	MaximumFailureCode   = 128
+	MaximumClaimGroups    = 1024
+	DefaultClaimBytes     = 16 << 20
+	MaximumClaimBytes     = 64 << 20
+	MaximumCausationFacts = 1000
+	MaximumRetentionRows  = 4096
+	MaximumFailureCode    = 128
 )
 
 var failureCodePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,127}$`)
@@ -78,6 +81,7 @@ type Lease struct {
 type ClaimOptions struct {
 	Groups        int
 	LeaseDuration time.Duration
+	MaxBytes      int
 }
 
 type RetentionPolicy struct {
@@ -103,9 +107,9 @@ type ClaimSnapshot struct {
 	Depth  DepthSnapshot
 }
 
-// ClaimDepthCoordinator is implemented by released SQL providers. Keeping it
-// separate preserves small deterministic coordinator fakes while production
-// publisher paths require the transaction-coupled snapshot when available.
+// ClaimDepthCoordinator is implemented by released SQL providers. The
+// publisher samples its transaction-coupled snapshot instead of counting the
+// complete delivery table on every poll.
 type ClaimDepthCoordinator interface {
 	ClaimWithDepth(context.Context, ClaimOptions) (ClaimSnapshot, error)
 }
@@ -133,7 +137,17 @@ func ValidateClaim(options ClaimOptions) error {
 	if options.LeaseDuration <= 0 || options.LeaseDuration > 10*time.Minute || options.LeaseDuration%time.Microsecond != 0 {
 		return fmt.Errorf("P7_DELIVERY_LIMIT: lease duration must be positive, microsecond-exact, and at most 10m")
 	}
+	if options.MaxBytes < 0 || options.MaxBytes > MaximumClaimBytes {
+		return fmt.Errorf("P7_DELIVERY_LIMIT: claim bytes must not exceed %d", MaximumClaimBytes)
+	}
 	return nil
+}
+
+func ClaimByteLimit(options ClaimOptions) int {
+	if options.MaxBytes == 0 {
+		return DefaultClaimBytes
+	}
+	return options.MaxBytes
 }
 
 func ValidateRetention(policy RetentionPolicy) error {

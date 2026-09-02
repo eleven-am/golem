@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/events"
@@ -77,51 +78,52 @@ type Config[P, A any] struct {
 // App contains immutable process-wide metadata only. No actor, policy set,
 // loader, request context, or decoded row is retained here.
 type App[P, A any] struct {
-	databaseHandle    *providerapi.Database
-	database          *sqlx.DB
-	provider          policyir.Provider
-	registry          *schema.Registry
-	providers         policyir.ProviderSet
-	capabilities      policysql.CapabilityProof
-	bindings          golem.ApplicationBindings[A]
-	descriptors       golem.ApplicationDescriptors
-	resolvePrincipal  func(context.Context, P) (A, error)
-	snapshotActor     func(A) (A, error)
-	readLimits        normalizedReadLimits
-	mutationLimits    normalizedMutationLimits
-	analyticsLimits   normalizedAnalyticsLimits
-	eventRegistry     golem.EventRegistry
-	eventFactories    EventFactoryRegistry
-	eventLimits       events.Limits
-	eventTransport    events.EventTransport
-	eventObserver     events.Observer
-	observer          observe.Observer
-	eventSchemas      *eventSchemaHistory
-	eventProvider     golem.Provider
-	eventPublisher    eventPublisherRunner
-	eventOperator     events.Operator
-	eventAdapters     []events.CDCAdapter
-	eventCDCWorkers   []eventCDCWorker
-	eventAdapterNames []string
-	eventModels       []golem.ModelID
-	eventTransportABI events.TransportCapabilities
-	eventRunning      atomic.Bool
-	snapshotPrincipal func(P) (P, error)
-	eventMu           sync.Mutex
-	eventHubs         map[golem.ModelID]*subscription.ModelHub[any]
-	nextSubscription  atomic.Uint64
-	afterCommitError  func(context.Context, golem.AfterCommitFailure)
-	auditPrincipal    func(P) string
-	reportScopedQuery func(context.Context, golem.ScopedAuditRecord)
-	nextExecution     atomic.Uint64
-	semantic          *semanticruntime.Manager
-	semanticDrain     queue.Type[semanticJob]
-	semanticReconcile queue.Type[semanticJob]
-	queueStore        queueprovider.Store
-	queueWorker       *queueworker.Worker
-	queueOperator     queue.Operator
-	queueLimits       queue.Limits
-	queueRunning      atomic.Bool
+	databaseHandle            *providerapi.Database
+	database                  *sqlx.DB
+	provider                  policyir.Provider
+	registry                  *schema.Registry
+	providers                 policyir.ProviderSet
+	capabilities              policysql.CapabilityProof
+	bindings                  golem.ApplicationBindings[A]
+	descriptors               golem.ApplicationDescriptors
+	resolvePrincipal          func(context.Context, P) (A, error)
+	snapshotActor             func(A) (A, error)
+	readLimits                normalizedReadLimits
+	mutationLimits            normalizedMutationLimits
+	analyticsLimits           normalizedAnalyticsLimits
+	eventRegistry             golem.EventRegistry
+	eventFactories            EventFactoryRegistry
+	eventLimits               events.Limits
+	eventTransport            events.EventTransport
+	eventObserver             events.Observer
+	observer                  observe.Observer
+	eventSchemas              *eventSchemaHistory
+	eventProvider             golem.Provider
+	eventPublisher            eventPublisherRunner
+	eventOperator             events.Operator
+	eventAdapters             []events.CDCAdapter
+	eventCDCWorkers           []eventCDCWorker
+	eventAdapterNames         []string
+	eventModels               []golem.ModelID
+	eventTransportABI         events.TransportCapabilities
+	eventRunning              atomic.Bool
+	snapshotPrincipal         func(P) (P, error)
+	eventMu                   sync.Mutex
+	eventHubs                 map[golem.ModelID]*subscription.ModelHub[any]
+	nextSubscription          atomic.Uint64
+	afterCommitError          func(context.Context, golem.AfterCommitFailure)
+	auditPrincipal            func(P) string
+	reportScopedQuery         func(context.Context, golem.ScopedAuditRecord)
+	nextExecution             atomic.Uint64
+	semantic                  *semanticruntime.Manager
+	semanticDrain             queue.Type[semanticJob]
+	semanticReconcile         queue.Type[semanticJob]
+	semanticReconcileInterval time.Duration
+	queueStore                queueprovider.Store
+	queueWorker               *queueworker.Worker
+	queueOperator             queue.Operator
+	queueLimits               queue.Limits
+	queueRunning              atomic.Bool
 }
 
 // Caller is one principal-bound execution. Its policy set and identity are not
@@ -683,25 +685,30 @@ func CallerFindUnique[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 }
 
 func callerFindUniqueExecuted[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
+	result, resultRow, _, resultErr = callerFindUniquePreparedExecuted(ctx, caller, descriptor, selector, options...)
+	return result, resultRow, resultErr
+}
+
+func callerFindUniquePreparedExecuted[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], prepared preparedReadStatement, resultErr error) {
 	if caller == nil || caller.app == nil {
-		return executedRow{}, golem.Row[M]{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, golem.RuntimeReadError(golem.CodeUnauthenticated, "findUnique", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
 	ctx, observation := beginExecutionObservation(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	prepared, err := prepareCallerFindUnique(ctx, caller, descriptor, selector, options)
 	if err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
 	executed, row, err := executePreparedUnique(ctx, caller.app, prepared, descriptor)
 	if err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookResult := golem.RuntimeFindOneHookResult(row)
 	if err := invokeReadHookObserved(hookContext, caller.app, caller.executor, caller.app.bindings, descriptor.Metadata().ModelID(), golem.ReadFindUnique, golem.HookFindOne, golem.HookAfter, hookResult); err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
-	return executed, row, nil
+	return executed, row, prepared, nil
 }
 
 func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (resultRow golem.Row[M], resultErr error) {
@@ -710,21 +717,30 @@ func SystemFindUnique[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func systemFindUniqueExecuted[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], resultErr error) {
+	result, resultRow, _, resultErr = systemFindUniquePreparedExecuted(ctx, system, descriptor, selector, options...)
+	return result, resultRow, resultErr
+}
+
+func systemFindUniquePreparedExecuted[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (result executedRow, resultRow golem.Row[M], prepared preparedReadStatement, resultErr error) {
 	ctx, observation := beginExecutionObservation(ctx, system.app, system.executor, descriptor.Metadata().ModelID(), observe.KindRead, observe.OperationReadFindUnique)
 	defer func() { finishObservation(observation, resultErr) }()
 	frozen, err := golem.FreezeFindUnique(descriptor, selector, options...)
 	if err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
-	prepared, err := system.Prepare(frozen)
+	bound, err := system.Prepare(frozen)
 	if err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
-	statement, err := prepareReadStatement(system.app, prepared)
+	prepared, err = prepareReadStatement(system.app, bound)
 	if err != nil {
-		return executedRow{}, golem.Row[M]{}, err
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
 	}
-	return executePreparedUnique(ctx, system.app, statement, descriptor)
+	executed, row, err := executePreparedUnique(ctx, system.app, prepared, descriptor)
+	if err != nil {
+		return executedRow{}, golem.Row[M]{}, preparedReadStatement{}, err
+	}
+	return executed, row, prepared, nil
 }
 
 func CallerCount[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (result int64, resultErr error) {

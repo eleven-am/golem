@@ -297,7 +297,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 4 { t.Fatalf("initial refresh calls=%d want=4", provider.count()) }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 4},
-    observed{operation: observe.OperationSemanticRefresh, statements: 10, aggregate: 4},
+    observed{operation: observe.OperationSemanticRefresh, statements: 6, aggregate: 4},
   )
 
   var vectorCount, stateCount int
@@ -321,7 +321,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 3},
+    observed{operation: observe.OperationSemanticRank, statements: 3, aggregate: 3},
   )
 
   similarSourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
@@ -345,7 +345,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("pgvector similarity leaked source or private row: %q,%q", similarFirst, similarSecond)
   }
   assertTrace(t, observations,
-    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 2},
+    observed{operation: observe.OperationSemanticRank, statements: 4, aggregate: 2},
   )
 
   tx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
@@ -366,13 +366,13 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
 
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 5 { t.Fatalf("unchanged refresh re-embedded rows: calls=%d", provider.count()) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 2})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 4})
   if _, err := application.System().Posts.Update(ctx, models.Posts.ByID.Value(ids[2]), models.Posts.Update(models.Posts.Body.Set("alpha revised"))); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 6 { t.Fatalf("indexed-field refresh calls=%d want=6", provider.count()) }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRefresh, statements: 4, aggregate: 1},
+    observed{operation: observe.OperationSemanticRefresh, statements: 6, aggregate: 1},
   )
   // Writing a non-indexed field still marks the record: the write path cannot
   // know whether the embedded document changed. Reconciliation settles it with
@@ -381,10 +381,10 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if _, err := application.System().Posts.Update(ctx, models.Posts.ByID.Value(ids[2]), models.Posts.Update(models.Posts.Published.Set(false))); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 6 { t.Fatalf("non-indexed field caused re-embedding: calls=%d", provider.count()) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 3, aggregate: 1})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 5, aggregate: 1})
   if _, err := application.System().Posts.Delete(ctx, models.Posts.ByID.Value(ids[1])); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 4, aggregate: 1})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 6, aggregate: 1})
   if err := database.UnsafeSQLX().Get(&vectorCount, "SELECT count(*) FROM \"{{NS}}\".\"{{VECTOR}}\""); err != nil { t.Fatal(err) }
   if err := database.UnsafeSQLX().Get(&stateCount, "SELECT count(*) FROM \"{{NS}}\".\"{{STATE}}\""); err != nil { t.Fatal(err) }
   if vectorCount != 3 || stateCount != 3 { t.Fatalf("stale semantic cleanup vectors=%d states=%d", vectorCount, stateCount) }
@@ -397,7 +397,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   for index := 0; index < 125; index++ {
     if bulkTrace[index] != (observed{operation: observe.OperationSemanticProvider, aggregate: 8}) { t.Fatalf("bulk provider observation[%d]=%#v", index, bulkTrace[index]) }
   }
-  if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 2002, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
+  if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 274, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
   plannerRanks, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
   if len(plannerRanks) != 10 || provider.count() != 1007 { t.Fatalf("generated HNSW ranks=%d calls=%d", len(plannerRanks), provider.count()) }
@@ -407,7 +407,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 10},
+    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 10},
   )
   plannerKeys := make([]string, 0, 1003)
   if err := database.UnsafeSQLX().Select(&plannerKeys, "SELECT record_key FROM \"{{NS}}\".\"{{VECTOR}}\" ORDER BY record_key"); err != nil { t.Fatal(err) }
@@ -433,7 +433,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if err := plannerTx.Rollback(); err != nil { t.Fatal(err) }
   if _, err := database.UnsafeSQLX().ExecContext(ctx, "DELETE FROM \"{{NS}}\".\"posts\" WHERE title LIKE 'public planner %'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
-  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 2002, aggregate: 1000})
+  assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 30, aggregate: 1000})
   if err := database.UnsafeSQLX().Get(&vectorCount, "SELECT count(*) FROM \"{{NS}}\".\"{{VECTOR}}\""); err != nil { t.Fatal(err) }
   if err := database.UnsafeSQLX().Get(&stateCount, "SELECT count(*) FROM \"{{NS}}\".\"{{STATE}}\""); err != nil { t.Fatal(err) }
   if vectorCount != 3 || stateCount != 3 { t.Fatalf("planner cleanup vectors=%d states=%d", vectorCount, stateCount) }

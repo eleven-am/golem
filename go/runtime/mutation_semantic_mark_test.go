@@ -709,10 +709,13 @@ func TestSemanticSimilarityResolvesHiddenPrimaryIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(callerRows) != 0 {
+		t.Fatalf("caller similarity ranked rows whose indexed title is masked: %d", len(callerRows))
+	}
+	if len(systemRows) != 2 {
+		t.Fatalf("system similar rows=%d want=2", len(systemRows))
+	}
 	for name, rows := range map[string][]golem.SemanticResult[mutationResultPost]{"caller": callerRows, "system": systemRows} {
-		if len(rows) != 2 {
-			t.Fatalf("%s similar rows=%d want=2", name, len(rows))
-		}
 		for _, item := range rows {
 			if _, present := golem.Value(item.Row(), fixture.postID).Get(); present {
 				t.Fatalf("%s similarity exposed the hidden primary key", name)

@@ -49,6 +49,9 @@ func (app *App[P, A]) initializeEventRuntime(adapters []events.CDCAdapter, audit
 		LeaseDuration: app.eventLimits.LeaseDuration, PublishTimeout: app.eventLimits.PublishTimeout,
 		RetryBase: app.eventLimits.RetryBase, RetryCap: app.eventLimits.RetryCap,
 		ShutdownGrace: app.eventLimits.ShutdownGrace, MaxEncodedBytes: app.eventLimits.MaxEncodedEventBytes,
+		MaxBatchBytes: app.eventLimits.MaxEncodedBatchBytes,
+		RetentionAge:  app.eventLimits.RetentionAge, RetentionEvery: app.eventLimits.RetentionEvery,
+		RetentionRows: app.eventLimits.RetentionDeleteRows,
 	}, app.eventObserver)
 	if err != nil {
 		return events.Failure(events.CodeEventConfig)
@@ -64,7 +67,7 @@ func (app *App[P, A]) initializeEventRuntime(adapters []events.CDCAdapter, audit
 
 	workers := make([]eventCDCWorker, len(adapters))
 	for index, adapter := range adapters {
-		emitter, emitterErr := eventcdc.NewEmitter(eventcdc.Config{Adapter: adapter, Transport: app.eventTransport, Encoder: encoder, Observer: app.eventObserver})
+		emitter, emitterErr := eventcdc.NewEmitter(eventcdc.Config{Adapter: adapter, Transport: app.eventTransport, Encoder: encoder, Observer: app.eventObserver, MaxBatchBytes: app.eventLimits.MaxEncodedBatchBytes})
 		if emitterErr != nil {
 			return events.Failure(events.CodeEventConfig)
 		}

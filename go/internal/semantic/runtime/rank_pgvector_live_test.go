@@ -180,10 +180,9 @@ func TestPGVectorRankExcludesTheSimilaritySourceBeforeRanking(t *testing.T) {
 	}
 }
 
-// TestPGVectorRankIsExactAndNeverServedFromTheApproximateIndex asserts the
-// pathkey breaker: the rank plan may not read the HNSW index, and its page must
-// equal the exact bounded scan over the same authorized rows.
-func TestPGVectorRankIsExactAndNeverServedFromTheApproximateIndex(t *testing.T) {
+// TestPGVectorRankUsesTheHNSWIndex asserts that authorization remains in the
+// rank statement without breaking the vector pathkey.
+func TestPGVectorRankUsesTheHNSWIndex(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	fixture.seedRankRows(t, 10002, "k009995")
 	ctx := context.Background()
@@ -192,7 +191,15 @@ func TestPGVectorRankIsExactAndNeverServedFromTheApproximateIndex(t *testing.T) 
 	arguments := append([]any{"[1,0,0]"}, candidates.Args...)
 	arguments = append(arguments, hex.EncodeToString(fixture.index.SpaceFingerprint[:]))
 	arguments = append(arguments, 20)
-	rows, err := fixture.database.QueryxContext(ctx, "EXPLAIN (COSTS OFF) "+statement, arguments...)
+	transaction, err := fixture.database.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Rollback()
+	if _, err := transaction.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := transaction.QueryxContext(ctx, "EXPLAIN (COSTS OFF) "+statement, arguments...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,24 +215,8 @@ func TestPGVectorRankIsExactAndNeverServedFromTheApproximateIndex(t *testing.T) 
 	if err := rows.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(plan.String(), fixture.storage+"_hnsw") {
-		t.Fatalf("rank plan was served from the approximate HNSW index:\n%s", plan.String())
-	}
-	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[1,0,0]", candidates, "", 20)
-	if err != nil {
-		t.Fatal(err)
-	}
-	exact := make([]string, 0, 20)
-	if err := fixture.database.SelectContext(ctx, &exact, `SELECT v."record_key" FROM "`+pgvectorRankNamespace+`"."`+fixture.storage+`_vec" v JOIN "`+pgvectorRankNamespace+`"."docs" d ON d."id"=v."record_key" WHERE d."hidden"=false ORDER BY (v."embedding" <=> '[1,0,0]'::vector) + 0.0, v."record_key" COLLATE "C" LIMIT 20`); err != nil {
-		t.Fatal(err)
-	}
-	if len(exact) != len(ranks) {
-		t.Fatalf("exact page=%d ranked page=%d", len(exact), len(ranks))
-	}
-	for position := range exact {
-		if exact[position] != ranks[position].Key {
-			t.Fatalf("rank[%d]=%q exact=%q", position, ranks[position].Key, exact[position])
-		}
+	if !strings.Contains(plan.String(), fixture.storage+"_hnsw") {
+		t.Fatalf("rank plan did not use the HNSW index:\n%s", plan.String())
 	}
 }
 
@@ -236,7 +227,7 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	fixture := openPGVectorRankFixture(t)
 	ctx := context.Background()
 	namespace := `"` + pgvectorRankNamespace + `".`
-	for _, key := range []string{"a", "A"} {
+	for _, key := range []string{"a", "A", "B"} {
 		if _, err := fixture.database.ExecContext(ctx, `INSERT INTO `+namespace+`"docs" ("id","hidden") VALUES ($1,false)`, key); err != nil {
 			t.Fatal(err)
 		}
@@ -251,15 +242,41 @@ func TestPGVectorRankBreaksDistanceTiesInBinaryCollation(t *testing.T) {
 	if err := fixture.database.SelectContext(ctx, &linguistic, `SELECT "record_key" FROM `+namespace+`"`+fixture.storage+`_vec" ORDER BY "record_key"`); err != nil {
 		t.Fatal(err)
 	}
-	if len(linguistic) != 2 || linguistic[0] != "a" {
+	if len(linguistic) != 3 || linguistic[0] != "a" {
 		t.Skipf("database collation is not linguistic: %v", linguistic)
 	}
 	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[1,0,0]", authorizedRankCandidates(), "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ranks) != 2 || ranks[0].Key != "A" || ranks[1].Key != "a" {
-		t.Fatalf("tie order=%#v want binary collation A,a", ranks)
+	if len(ranks) != 2 || ranks[0].Key != "A" || ranks[1].Key != "B" {
+		t.Fatalf("tie page=%#v want binary collation A,B", ranks)
+	}
+}
+
+func TestPGVectorRankFallsBackWhenIterativeScanIsExhausted(t *testing.T) {
+	fixture := openPGVectorRankFixture(t)
+	fixture.seedRankRows(t, 2000, "")
+	ctx := context.Background()
+	namespace := `"` + pgvectorRankNamespace + `".`
+	if _, err := fixture.database.ExecContext(ctx, `UPDATE `+namespace+`"docs" SET "hidden"=true WHERE "id">='k000010'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.database.SetMaxOpenConns(1)
+	if _, err := fixture.database.ExecContext(ctx, `SET hnsw.max_scan_tuples = 1`); err != nil {
+		t.Fatal(err)
+	}
+	ranks, err := fixture.manager.rankVector(ctx, fixture.index, "[1,0,0]", authorizedRankCandidates(), "", 5)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 5 {
+		t.Fatalf("selective ranks=%d want=5", len(ranks))
+	}
+	for position, rank := range ranks {
+		if want := fmt.Sprintf("k%06d", 9-position); rank.Key != want {
+			t.Fatalf("rank[%d]=%q want=%q", position, rank.Key, want)
+		}
 	}
 }
 
@@ -534,7 +551,7 @@ func TestPGVectorMarkStaleEmbedsBrandNewRecordsOfEveryIdentityKind(t *testing.T)
 	if err := manager.MarkStale(ctx, database, "doc", semanticMarkBinds, []MarkRecord{{Key: key, Identity: logical}}); err != nil {
 		t.Fatal(err)
 	}
-	scanned, err := manager.scanSources(ctx, table, index)
+	scanned, err := manager.scanSourcePage(ctx, table, index, nil, semanticReconcilePage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -717,11 +734,12 @@ func TestPGVectorSourceVectorSeparatesAbsentFailedAndEmpty(t *testing.T) {
 	fixture.seedRankRows(t, 4, "")
 	ctx := context.Background()
 	vectors := `"` + pgvectorRankNamespace + `"."` + fixture.storage + `_vec"`
+	source := rankCandidates(`SELECT "id" AS "id" FROM "` + pgvectorRankNamespace + `"."docs"`)
 
-	if _, err := fixture.manager.sourceVector(ctx, fixture.index, "k000000"); err != nil {
+	if _, err := fixture.manager.sourceVector(ctx, fixture.index, "k000000", source); err != nil {
 		t.Fatalf("an embedded source did not resolve: %v", err)
 	}
-	_, absent := fixture.manager.sourceVector(ctx, fixture.index, "k999999")
+	_, absent := fixture.manager.sourceVector(ctx, fixture.index, "k999999", source)
 	if absent == nil || absent.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
 		t.Fatalf("never embedded source: %v", absent)
 	}
@@ -729,7 +747,7 @@ func TestPGVectorSourceVectorSeparatesAbsentFailedAndEmpty(t *testing.T) {
 	if _, err := fixture.database.ExecContext(ctx, `ALTER TABLE `+vectors+` DROP COLUMN "embedding"`); err != nil {
 		t.Fatal(err)
 	}
-	_, failed := fixture.manager.sourceVector(ctx, fixture.index, "k000000")
+	_, failed := fixture.manager.sourceVector(ctx, fixture.index, "k000000", source)
 	if failed == nil || failed.Error() != "P9_SEMANTIC_QUERY: semantic source vector read failed" {
 		t.Fatalf("storage read failure: %v", failed)
 	}
@@ -745,7 +763,7 @@ func TestPGVectorSourceVectorSeparatesAbsentFailedAndEmpty(t *testing.T) {
 	if _, err := fixture.database.ExecContext(ctx, `ALTER TABLE `+vectors+` ADD COLUMN "embedding" text NOT NULL DEFAULT ''`); err != nil {
 		t.Fatal(err)
 	}
-	_, empty := fixture.manager.sourceVector(ctx, fixture.index, "k000000")
+	_, empty := fixture.manager.sourceVector(ctx, fixture.index, "k000000", source)
 	if empty == nil || empty.Error() != "P9_SEMANTIC_QUERY: semantic source vector is empty" {
 		t.Fatalf("empty stored vector: %v", empty)
 	}

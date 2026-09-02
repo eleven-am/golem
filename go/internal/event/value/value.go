@@ -7,11 +7,14 @@ package value
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
 )
+
+var ErrBatchTooLarge = errors.New("sealed event batch exceeds its encoded byte limit")
 
 type Notice struct {
 	eventID     golem.EventID
@@ -69,11 +72,16 @@ type EventBatch struct {
 }
 
 func NewEventBatch(causation golem.CausationID, notices []Notice) (EventBatch, error) {
+	return NewEventBatchBounded(causation, notices, 0)
+}
+
+func NewEventBatchBounded(causation golem.CausationID, notices []Notice, maximumBytes int) (EventBatch, error) {
 	if causation == (golem.CausationID{}) || len(notices) == 0 {
 		return EventBatch{}, fmt.Errorf("sealed event batch has absent causation or events")
 	}
 	owned := append([]Notice(nil), notices...)
 	seen := make(map[golem.EventID]struct{}, len(owned))
+	total := 0
 	for index, notice := range owned {
 		if !notice.Valid() || notice.causation != causation || notice.ordinal != uint32(index+1) {
 			return EventBatch{}, fmt.Errorf("sealed event batch is not one contiguous causation")
@@ -82,6 +90,10 @@ func NewEventBatch(causation golem.CausationID, notices []Notice) (EventBatch, e
 			return EventBatch{}, fmt.Errorf("sealed event batch repeats an event identity")
 		}
 		seen[notice.eventID] = struct{}{}
+		if maximumBytes > 0 && len(notice.encoded) > maximumBytes-total {
+			return EventBatch{}, ErrBatchTooLarge
+		}
+		total += len(notice.encoded)
 	}
 	return EventBatch{causation: causation, events: owned}, nil
 }

@@ -48,16 +48,23 @@ func (input CorrelationInput) SourceTransactionID() string { return input.source
 func (input CorrelationInput) Cursor() []byte              { return append([]byte(nil), input.cursor...) }
 
 type Config struct {
-	Adapter   events.CDCAdapter
-	Transport events.EventTransport
-	Encoder   Encoder
-	Observer  events.Observer
+	Adapter       events.CDCAdapter
+	Transport     events.EventTransport
+	Encoder       Encoder
+	Observer      events.Observer
+	MaxBatchBytes int
 }
 
 type Emitter struct{ config Config }
 
 func NewEmitter(config Config) (*Emitter, error) {
 	if config.Adapter == nil || events.ValidateCDCIdentity(config.Adapter.Identity()) != nil || config.Transport == nil || config.Encoder == nil {
+		return nil, events.Failure(events.CodeCDCInvalid)
+	}
+	if config.MaxBatchBytes == 0 {
+		config.MaxBatchBytes = events.DefaultLimits().MaxEncodedBatchBytes
+	}
+	if config.MaxBatchBytes < 1 || config.MaxBatchBytes > events.MaximumLimits().MaxEncodedBatchBytes {
 		return nil, events.Failure(events.CodeCDCInvalid)
 	}
 	return &Emitter{config: config}, nil
@@ -98,7 +105,7 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 		notices[index] = notice
 		events.Observe(emitter.config.Observer, ctx, change.Model, change.Action, events.ObservationCDCReceive, events.OutcomeSuccess, "", 0, 0, 0, 0, 1)
 	}
-	batch, err := eventvalue.NewEventBatch(causation, notices)
+	batch, err := eventvalue.NewEventBatchBounded(causation, notices, emitter.config.MaxBatchBytes)
 	if err != nil {
 		return events.Failure(events.CodeCDCInvalid)
 	}

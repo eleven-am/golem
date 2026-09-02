@@ -1099,7 +1099,7 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 		queryer, err := binding.queryerFor(boundary.app.database)
 		if err != nil {
 			binding.close()
-			_, _ = connection.ExecContext(context.Background(), "ROLLBACK")
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
 			_ = connection.Close()
 			return nil, err
 		}
@@ -1155,14 +1155,9 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 }
 
 func rollbackNestedSavepoint(ctx context.Context, executor sqlx.ExecerContext, name string, scope *mutationScope, state *mutationState) error {
-	rollbackContext := context.Background()
-	if ctx != nil {
-		rollbackContext = context.WithoutCancel(ctx)
-	}
-	_, rollbackErr := executor.ExecContext(rollbackContext, "ROLLBACK TO SAVEPOINT "+name)
-	_, releaseErr := executor.ExecContext(rollbackContext, "RELEASE SAVEPOINT "+name)
+	cleanupErr := execMutationCleanup(ctx, executor, "ROLLBACK TO SAVEPOINT "+name, "RELEASE SAVEPOINT "+name)
 	scopeErr := scope.rollback()
-	failure := errors.Join(rollbackErr, releaseErr, scopeErr)
+	failure := errors.Join(cleanupErr, scopeErr)
 	if failure != nil {
 		// A failed savepoint recovery leaves the SQL transaction's contents or
 		// state uncertain. Poisoning the outer mutation makes its final flush

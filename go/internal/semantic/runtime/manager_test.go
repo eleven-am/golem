@@ -33,6 +33,26 @@ type deterministicProvider struct {
 	database      *sqlx.DB
 }
 
+func TestSemanticRefreshLocksAreIndexLocal(t *testing.T) {
+	manager := &Manager{}
+	first := Index{Descriptor: semanticstorage.Descriptor{ModelID: "model-a", Name: "search"}}
+	second := Index{Descriptor: semanticstorage.Descriptor{ModelID: "model-b", Name: "search"}}
+	firstLock := manager.indexLock(first)
+	if firstLock != manager.indexLock(first) {
+		t.Fatal("one semantic index received multiple refresh locks")
+	}
+	secondLock := manager.indexLock(second)
+	if firstLock == secondLock {
+		t.Fatal("unrelated semantic indexes share one refresh lock")
+	}
+	firstLock.Lock()
+	defer firstLock.Unlock()
+	if !secondLock.TryLock() {
+		t.Fatal("refreshing one semantic index blocked another index")
+	}
+	secondLock.Unlock()
+}
+
 type semanticObservation struct {
 	kind       observe.Kind
 	operation  observe.Operation
@@ -415,7 +435,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticProvider, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 0, aggregate: 2},
-		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 8, aggregate: 2},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 7, aggregate: 2},
 	})
 	if lockObserver.wasBlocked() {
 		t.Fatal("semantic observer was invoked while the refresh mutex was held")
@@ -425,7 +445,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
-		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 2, aggregate: 0},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 4, aggregate: 0},
 	})
 
 	if _, err := manager.Query(ctx, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "b"), 1); err != nil {
@@ -436,13 +456,12 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 1, aggregate: 1},
 	})
 
-	// Similarity reads the source vector and ranks. Freshness is not consulted,
-	// so it is two statements and no provider record at all.
 	sourceKey, err := semantickey.Encode([]any{"a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.QueryByKey(ctx, "post", "related", sourceKey, textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "b"), 1); err != nil {
+	source := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	if _, err := manager.QueryByKey(ctx, "post", "related", sourceKey, source, textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"=?`, "b"), 1); err != nil {
 		t.Fatal(err)
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
@@ -1050,10 +1069,7 @@ func TestSemanticReconcileQuarantinesAnUnseenRefusedRecord(t *testing.T) {
 	}
 }
 
-// TestSemanticStaleRecordsStillRankOnTheirLastGoodVector is the freshness
-// tradeoff stated as a test: marking a record stale removes it from neither
-// ranking nor similarity, it only stops the vector from being current.
-func TestSemanticStaleRecordsStillRankOnTheirLastGoodVector(t *testing.T) {
+func TestSemanticStaleRecordsFailClosedUntilReembedded(t *testing.T) {
 	ctx := context.Background()
 	fixture := newDrainFixture(t)
 	fixture.mark(t, "a")
@@ -1062,23 +1078,16 @@ func TestSemanticStaleRecordsStillRankOnTheirLastGoodVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(ranked) != 2 {
-		t.Fatalf("stale records ranked=%d want=2", len(ranked))
+	if len(ranked) != 0 {
+		t.Fatalf("stale records ranked=%d want=0", len(ranked))
 	}
 	sourceKey, err := semantickey.Encode([]any{"a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	similar, err := fixture.manager.QueryByKey(ctx, "post", "related", sourceKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
-	if err != nil {
-		t.Fatalf("similarity from a stale source: %v", err)
-	}
-	betaKey, err := semantickey.Encode([]any{"b"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(similar) != 1 || similar[0].Key != betaKey {
-		t.Fatalf("similarity from a stale source=%#v", similar)
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	if _, err := fixture.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, candidates, 10); err == nil || err.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
+		t.Fatalf("similarity from a stale source error=%v", err)
 	}
 }
 
@@ -1103,10 +1112,11 @@ func TestSemanticRankingUsesOnlyTheActiveEmbeddingSpace(t *testing.T) {
 	if len(ranked) != 1 || ranked[0].Key != alphaKey {
 		t.Fatalf("mixed-space search=%#v", ranked)
 	}
-	if _, err := fixture.manager.QueryByKey(ctx, "post", "related", betaKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10); err == nil || err.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	if _, err := fixture.manager.QueryByKey(ctx, "post", "related", betaKey, candidates, candidates, 10); err == nil || err.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
 		t.Fatalf("old-space source error=%v", err)
 	}
-	similar, err := fixture.manager.QueryByKey(ctx, "post", "related", alphaKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	similar, err := fixture.manager.QueryByKey(ctx, "post", "related", alphaKey, candidates, candidates, 10)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1137,6 +1147,68 @@ func TestSemanticReconcileFlipsMarkedRecordsAndSeesUnmarkedWrites(t *testing.T) 
 	if fixture.status(t, "a") != "ready" {
 		t.Fatalf("marked but unchanged record status=%q", fixture.status(t, "a"))
 	}
+}
+
+func TestSemanticReconcilePagesOwnersAndShadowCleanup(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	if _, err := fixture.db.Exec(`DELETE FROM "posts"`); err != nil {
+		t.Fatal(err)
+	}
+	total := semanticReconcilePage + 44
+	for ordinal := range total {
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,?)`, fmt.Sprintf("k%06d", ordinal), "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fixture.manager.RefreshAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.count(t, drainStateTable) != total || fixture.count(t, drainVectorTable) != total {
+		t.Fatalf("after paged refresh state=%d vec=%d want=%d", fixture.count(t, drainStateTable), fixture.count(t, drainVectorTable), total)
+	}
+	if _, err := fixture.db.Exec(`DELETE FROM "posts" WHERE id < 'k000290'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.manager.RefreshAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.count(t, drainStateTable) != 10 || fixture.count(t, drainVectorTable) != 10 {
+		t.Fatalf("after paged cleanup state=%d vec=%d want=10", fixture.count(t, drainStateTable), fixture.count(t, drainVectorTable))
+	}
+}
+
+func TestSQLiteSemanticRankingFallsBackWhenAuthorizationExcludesANNProbe(t *testing.T) {
+	ctx := context.Background()
+	fixture := newDrainFixture(t)
+	if _, err := fixture.db.Exec(`DELETE FROM "posts"`); err != nil {
+		t.Fatal(err)
+	}
+	for ordinal := range semanticStaleProbe + 44 {
+		if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES (?,?)`, fmt.Sprintf("a%06d", ordinal), "alpha"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := fixture.db.Exec(`INSERT INTO "posts" (id,title) VALUES ('z','beta')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.manager.RefreshAll(ctx); err != nil {
+		t.Fatal(err)
+	}
+	collector := &semanticObservationCollector{}
+	fixture.manager.observer = collector
+	ranked, err := fixture.manager.Query(ctx, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts" WHERE "id"='z'`), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := semantickey.Encode([]any{"z"})
+	if len(ranked) != 1 || ranked[0].Key != want {
+		t.Fatalf("authorized fallback ranking=%#v", ranked)
+	}
+	assertSemanticObservations(t, collector.take(), []semanticObservation{
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticProvider, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 0, aggregate: 1},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 2, aggregate: 1},
+	})
 }
 
 // TestSemanticDrainBoundsOnePassAndChainsTheRemainder pins the page: one drain
@@ -1334,7 +1406,7 @@ func TestSemanticMarkStaleStoresTheKeyTheRefreshScanProduces(t *testing.T) {
 	if err := fixture.db.Get(&marked, `SELECT record_key FROM "`+markStateTable+`"`); err != nil {
 		t.Fatal(err)
 	}
-	scanned, err := fixture.manager.scanSources(ctx, fixture.table, fixture.index)
+	scanned, err := fixture.manager.scanSourcePage(ctx, fixture.table, fixture.index, nil, semanticReconcilePage)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1591,7 +1663,7 @@ func TestSemanticSimilarityDistinguishesTheThreeSourceVectorStates(t *testing.T)
 	}
 
 	absent := newDrainFixture(t)
-	_, absentErr := absent.manager.QueryByKey(ctx, "post", "related", absentKey, candidates, 10)
+	_, absentErr := absent.manager.QueryByKey(ctx, "post", "related", absentKey, candidates, candidates, 10)
 	if absentErr == nil || absentErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector is unavailable" {
 		t.Fatalf("never embedded source: %v", absentErr)
 	}
@@ -1600,7 +1672,7 @@ func TestSemanticSimilarityDistinguishesTheThreeSourceVectorStates(t *testing.T)
 	if _, err := broken.db.Exec(`DROP TABLE "` + drainVectorTable + `"`); err != nil {
 		t.Fatal(err)
 	}
-	_, brokenErr := broken.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, 10)
+	_, brokenErr := broken.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, candidates, 10)
 	if brokenErr == nil || brokenErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector read failed" {
 		t.Fatalf("storage read failure: %v", brokenErr)
 	}
@@ -1616,7 +1688,7 @@ CREATE TABLE "` + drainVectorTable + `" (record_key TEXT NOT NULL PRIMARY KEY,em
 	if _, err := empty.db.Exec(`INSERT INTO "`+drainVectorTable+`" (record_key,embedding) VALUES (?,X'')`, sourceKey); err != nil {
 		t.Fatal(err)
 	}
-	_, emptyErr := empty.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, 10)
+	_, emptyErr := empty.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, candidates, 10)
 	if emptyErr == nil || emptyErr.Error() != "P9_SEMANTIC_QUERY: semantic source vector is empty" {
 		t.Fatalf("empty stored vector: %v", emptyErr)
 	}
@@ -1632,7 +1704,8 @@ func TestSemanticSimilaritySourceVectorFailureDisclosesNothing(t *testing.T) {
 	if _, err := fixture.db.Exec(`DROP TABLE "` + drainVectorTable + `"`); err != nil {
 		t.Fatal(err)
 	}
-	_, failure := fixture.manager.QueryByKey(ctx, "post", "related", sourceKey, textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
+	_, failure := fixture.manager.QueryByKey(ctx, "post", "related", sourceKey, candidates, candidates, 10)
 	if failure == nil {
 		t.Fatal("a dropped vector table did not fail")
 	}

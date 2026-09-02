@@ -626,11 +626,10 @@ func executeAbsentCreateSavepoint(ctx context.Context, attempt *sqlxUpsertAttemp
 	}
 	value, executionErr := execute()
 	if executionErr != nil {
-		_, rollbackErr := execer.ExecContext(context.Background(), "ROLLBACK TO SAVEPOINT "+savepoint)
-		_, releaseErr := execer.ExecContext(context.Background(), "RELEASE SAVEPOINT "+savepoint)
+		cleanupErr := execMutationCleanup(ctx, execer, "ROLLBACK TO SAVEPOINT "+savepoint, "RELEASE SAVEPOINT "+savepoint)
 		scopeErr := scope.rollback()
-		if rollbackErr != nil || releaseErr != nil || scopeErr != nil {
-			return nil, &absentCreateRollbackFailure{cause: errors.Join(executionErr, rollbackErr, releaseErr, scopeErr)}
+		if cleanupErr != nil || scopeErr != nil {
+			return nil, &absentCreateRollbackFailure{cause: errors.Join(executionErr, cleanupErr, scopeErr)}
 		}
 		return nil, executionErr
 	}

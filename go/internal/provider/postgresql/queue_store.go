@@ -20,12 +20,20 @@ import (
 const (
 	postgresqlQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
 	postgresqlQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
-	postgresqlQueueClaim   = `(("status"='pending' AND "available_at"<=clock_timestamp()) OR ("status"='leased' AND "lease_until"<=clock_timestamp()))`
+	postgresqlQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=clock_timestamp())`
 )
 
 type queueStore struct {
 	database  *sqlx.DB
 	namespace physical.PhysicalName
+}
+
+type postgresqlSelectedClaim struct {
+	candidateID string
+	token       string
+	resource    any
+	cost        any
+	capacity    any
 }
 
 // QueueStore binds the durable job state machine to a live PostgreSQL database
@@ -67,6 +75,9 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 		if _, err := store.database.ExecContext(ctx, statement); err != nil {
 			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: create durable job storage: %w", err)
 		}
+	}
+	if _, err := store.database.ExecContext(ctx, `UPDATE `+store.table()+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: align existing lease eligibility: %w", err)
 	}
 	return nil
 }
@@ -176,39 +187,19 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: discover claimable jobs: %w", err)
 	}
 	held := make(map[string]struct{}, len(candidates))
-	records := make([]queueprovider.Record, 0, len(candidates))
+	selected := make([]postgresqlSelectedClaim, 0, len(candidates))
+	canceled := make([]string, 0)
+	exhausted := make([]string, 0)
 	for _, candidate := range candidates {
-		if len(records) >= options.Limit {
+		if len(selected) >= options.Limit {
 			break
 		}
 		if candidate.Status == string(queueprovider.StateLeased) && candidate.CancelRequested.Valid {
-			result, updateErr := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='canceled',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$1,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$2 AND "status"='leased' AND "lease_until"<=clock_timestamp() AND "cancel_requested_at" IS NOT NULL`,
-				queueprovider.CodeCanceled, candidate.ID)
-			if updateErr != nil {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: cancel expired lease: %w", updateErr)
-			}
-			changed, resultErr := result.RowsAffected()
-			if resultErr != nil {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired cancellation result: %w", resultErr)
-			}
-			if changed != 1 {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired cancellation changed %d rows", changed)
-			}
+			canceled = append(canceled, candidate.ID)
 			continue
 		}
 		if candidate.Status == string(queueprovider.StateLeased) && candidate.Attempts >= candidate.MaxAttempts {
-			result, updateErr := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='failed',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$1,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id"=$2 AND "status"='leased' AND "lease_until"<=clock_timestamp() AND "attempt_count">="max_attempts"`,
-				queueprovider.CodeAttemptsExhausted, candidate.ID)
-			if updateErr != nil {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: fail exhausted lease: %w", updateErr)
-			}
-			changed, resultErr := result.RowsAffected()
-			if resultErr != nil {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: exhausted lease result: %w", resultErr)
-			}
-			if changed != 1 {
-				return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: exhausted lease changed %d rows", changed)
-			}
+			exhausted = append(exhausted, candidate.ID)
 			continue
 		}
 		candidateCost := int64(0)
@@ -242,29 +233,84 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 			resourceCost = candidateCost
 			snapshotCapacity = options.Resource.Concurrency
 		}
-		result, updateErr := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=$1,"lease_until"=clock_timestamp()+$2*interval '1 microsecond',"resource_name"=$3,"resource_cost"=$4,"resource_capacity"=$5,"updated_at"=clock_timestamp() WHERE "id"=$6 AND `+postgresqlQueueClaim,
-			token, options.LeaseDuration.Microseconds(), resourceName, resourceCost, snapshotCapacity, candidate.ID)
-		if updateErr != nil {
-			return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: lease job: %w", updateErr)
-		}
-		changed, _ := result.RowsAffected()
-		if changed != 1 {
-			continue
-		}
-		record, readErr := store.readJob(ctx, transaction, candidate.ID)
-		if readErr != nil {
-			return nil, readErr
-		}
 		if candidate.ExclusiveKey.Valid {
 			held[candidate.ExclusiveKey.String] = struct{}{}
 		}
 		resourceUsed += candidateCost
-		records = append(records, record)
+		selected = append(selected, postgresqlSelectedClaim{candidateID: candidate.ID, token: token, resource: resourceName, cost: resourceCost, capacity: snapshotCapacity})
+	}
+	if err := store.finishExpiredClaims(ctx, transaction, canceled, exhausted); err != nil {
+		return nil, err
+	}
+	records, err := store.leaseSelected(ctx, transaction, selected, options.LeaseDuration)
+	if err != nil {
+		return nil, err
 	}
 	if err := transaction.Commit(); err != nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: commit claim: %w", err)
 	}
 	return queueprovider.CloneRecords(records), nil
+}
+
+func (store *queueStore) finishExpiredClaims(ctx context.Context, transaction *sqlx.Tx, canceled, exhausted []string) error {
+	for _, terminal := range []struct {
+		ids       []string
+		state     string
+		code      string
+		predicate string
+	}{
+		{canceled, "canceled", queueprovider.CodeCanceled, `"cancel_requested_at" IS NOT NULL`},
+		{exhausted, "failed", queueprovider.CodeAttemptsExhausted, `"attempt_count">="max_attempts"`},
+	} {
+		if len(terminal.ids) == 0 {
+			continue
+		}
+		marks, arguments := postgresqlArguments(terminal.ids)
+		arguments = append(arguments, terminal.code)
+		result, err := transaction.ExecContext(ctx, `UPDATE `+store.table()+` SET "status"='`+terminal.state+`',"lease_token"=NULL,"lease_until"=NULL,"resource_name"=NULL,"resource_cost"=NULL,"resource_capacity"=NULL,"last_code"=$`+strconv.Itoa(len(arguments))+`,"finished_at"=clock_timestamp(),"updated_at"=clock_timestamp() WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased' AND "lease_until"<=clock_timestamp() AND `+terminal.predicate, arguments...)
+		if err != nil {
+			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: finalize expired leases: %w", err)
+		}
+		changed, err := result.RowsAffected()
+		if err != nil || int(changed) != len(terminal.ids) {
+			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: expired lease ownership changed")
+		}
+	}
+	return nil
+}
+
+func (store *queueStore) leaseSelected(ctx context.Context, transaction *sqlx.Tx, selected []postgresqlSelectedClaim, duration time.Duration) ([]queueprovider.Record, error) {
+	if len(selected) == 0 {
+		return nil, nil
+	}
+	values := make([]string, len(selected))
+	arguments := make([]any, 0, len(selected)*5+1)
+	for index, claim := range selected {
+		position := len(arguments) + 1
+		values[index] = "($" + strconv.Itoa(position) + "::text,$" + strconv.Itoa(position+1) + "::text,$" + strconv.Itoa(position+2) + "::text,$" + strconv.Itoa(position+3) + "::bigint,$" + strconv.Itoa(position+4) + "::bigint)"
+		arguments = append(arguments, claim.candidateID, claim.token, claim.resource, claim.cost, claim.capacity)
+	}
+	arguments = append(arguments, duration.Microseconds())
+	returned := `job.` + strings.ReplaceAll(postgresqlQueueColumns, `,`, `,job.`)
+	deadline := `clock_timestamp()+$` + strconv.Itoa(len(arguments)) + `*interval '1 microsecond'`
+	statement := `WITH deadline AS (SELECT ` + deadline + ` AS expires_at) UPDATE ` + store.table() + ` AS job SET "status"='leased',"attempt_count"=CASE WHEN job."attempt_count"<9223372036854775807 THEN job."attempt_count"+1 ELSE job."attempt_count" END,"lease_token"=claim.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"resource_name"=claim.resource_name,"resource_cost"=claim.resource_cost,"resource_capacity"=claim.resource_capacity,"updated_at"=clock_timestamp() FROM (VALUES ` + strings.Join(values, ",") + `) AS claim(id,token,resource_name,resource_cost,resource_capacity) CROSS JOIN deadline WHERE job."id"=claim.id AND ` + postgresqlQueueClaim + ` RETURNING ` + returned
+	var rows []postgresqlQueueRow
+	if err := transaction.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: lease jobs: %w", err)
+	}
+	byID := make(map[string]queueprovider.Record, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row.record()
+	}
+	records := make([]queueprovider.Record, 0, len(selected))
+	for _, claim := range selected {
+		record, ok := byID[claim.candidateID]
+		if !ok {
+			return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: selected job lost claim eligibility")
+		}
+		records = append(records, record)
+	}
+	return records, nil
 }
 
 func (store *queueStore) resourceUsage(ctx context.Context, transaction *sqlx.Tx, resource queueprovider.ClaimResource) (int64, int64, error) {
@@ -306,16 +352,9 @@ func resourceEligibleTypes(types []string, costs map[string]int64, remaining int
 }
 
 func (store *queueStore) holdExclusiveKey(ctx context.Context, transaction *sqlx.Tx, key, id string) (bool, error) {
-	var acquired bool
-	if err := transaction.GetContext(ctx, &acquired, `SELECT pg_try_advisory_xact_lock($1)`, queueAdvisoryKey(key)); err != nil {
-		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: hold exclusivity key: %w", err)
-	}
-	if !acquired {
-		return false, nil
-	}
 	var free bool
-	if err := transaction.GetContext(ctx, &free, `SELECT NOT EXISTS (SELECT 1 FROM `+store.table()+` WHERE "exclusive_key"=$1 AND "id"<>$2 AND "status"='leased' AND "lease_until">clock_timestamp())`, key, id); err != nil {
-		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: recheck exclusivity holder: %w", err)
+	if err := transaction.GetContext(ctx, &free, `SELECT CASE WHEN pg_try_advisory_xact_lock($1) THEN NOT EXISTS (SELECT 1 FROM `+store.table()+` WHERE "exclusive_key"=$2 AND "id"<>$3 AND "status"='leased' AND "lease_until">clock_timestamp()) ELSE FALSE END`, queueAdvisoryKey(key), key, id); err != nil {
+		return false, fmt.Errorf("QUEUE_POSTGRESQL_STORE: hold and verify exclusivity key: %w", err)
 	}
 	return free, nil
 }
@@ -328,7 +367,7 @@ func (store *queueStore) Renew(ctx context.Context, id, token string, duration t
 		return queueprovider.Renewal{}, err
 	}
 	var requested sql.NullTime
-	err := store.database.QueryRowxContext(ctx, `UPDATE `+store.table()+` SET "lease_until"=clock_timestamp()+$1*interval '1 microsecond',"updated_at"=clock_timestamp() WHERE "id"=$2 AND "lease_token"=$3 AND "status"='leased' AND "lease_until">clock_timestamp() RETURNING "cancel_requested_at"`, duration.Microseconds(), id, token).Scan(&requested)
+	err := store.database.QueryRowxContext(ctx, `WITH deadline AS (SELECT clock_timestamp()+$1*interval '1 microsecond' AS expires_at) UPDATE `+store.table()+` SET "available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"updated_at"=clock_timestamp() FROM deadline WHERE "id"=$2 AND "lease_token"=$3 AND "status"='leased' AND "lease_until">clock_timestamp() RETURNING "cancel_requested_at"`, duration.Microseconds(), id, token).Scan(&requested)
 	if errors.Is(err, sql.ErrNoRows) {
 		return queueprovider.Renewal{}, nil
 	}
@@ -403,17 +442,30 @@ func (store *queueStore) CancelMany(ctx context.Context, ids []string) (queuepro
 	}
 	ordered := append([]string(nil), ids...)
 	sort.Strings(ordered)
-	batch := queueprovider.CancelBatch{}
-	for _, id := range ordered {
-		result, err := store.Cancel(ctx, id)
-		if err != nil {
-			return batch, err
-		}
-		if result.Changed {
-			batch.Changed++
-		}
-		if result.Changed && result.Terminal {
-			batch.Terminal = append(batch.Terminal, result)
+	if len(ordered) == 0 {
+		return queueprovider.CancelBatch{}, nil
+	}
+	parameters := make([]string, len(ordered))
+	arguments := make([]any, len(ordered))
+	for index, id := range ordered {
+		parameters[index] = "$" + strconv.Itoa(index+1)
+		arguments[index] = id
+	}
+	var rows []struct {
+		ID      string `db:"id"`
+		Type    string `db:"type"`
+		Attempt int64  `db:"attempt_count"`
+		State   string `db:"status"`
+	}
+	statement := `WITH target AS MATERIALIZED (SELECT "id" FROM ` + store.table() + ` WHERE "id" IN (` + strings.Join(parameters, ",") + `) FOR UPDATE), moment AS MATERIALIZED (SELECT clock_timestamp() AS "now" FROM target LIMIT 1) UPDATE ` + store.table() + ` AS job SET "status"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN 'canceled' ELSE job."status" END,"lease_token"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN NULL ELSE job."lease_token" END,"lease_until"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN NULL ELSE job."lease_until" END,"resource_name"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN NULL ELSE job."resource_name" END,"resource_cost"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN NULL ELSE job."resource_cost" END,"resource_capacity"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN NULL ELSE job."resource_capacity" END,"cancel_requested_at"=CASE WHEN job."status"='leased' AND job."lease_until">moment."now" THEN moment."now" ELSE job."cancel_requested_at" END,"last_code"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN 'canceled' ELSE job."last_code" END,"finished_at"=CASE WHEN job."status"='pending' OR job."lease_until"<=moment."now" THEN moment."now" ELSE job."finished_at" END,"updated_at"=moment."now" FROM target,moment WHERE job."id"=target."id" AND (job."status"='pending' OR (job."status"='leased' AND (job."lease_until"<=moment."now" OR job."cancel_requested_at" IS NULL))) RETURNING job."id",job."type",job."attempt_count",job."status"`
+	if err := store.database.SelectContext(ctx, &rows, statement, arguments...); err != nil {
+		return queueprovider.CancelBatch{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: cancel jobs: %w", err)
+	}
+	sort.Slice(rows, func(left, right int) bool { return rows[left].ID < rows[right].ID })
+	batch := queueprovider.CancelBatch{Changed: len(rows)}
+	for _, row := range rows {
+		if row.State == string(queueprovider.StateCanceled) {
+			batch.Terminal = append(batch.Terminal, queueprovider.CancelResult{Changed: true, Terminal: true, Type: row.Type, AttemptCount: row.Attempt})
 		}
 	}
 	return batch, nil
@@ -656,6 +708,18 @@ type postgresqlQueueSummaryRow struct {
 	FinishedAt        sql.NullTime   `db:"finished_at"`
 }
 
+func (row postgresqlQueueRow) record() queueprovider.Record {
+	return queueprovider.Record{
+		ID: row.ID, Type: row.Type, Payload: append([]byte(nil), row.Payload...), State: queueprovider.State(row.Status),
+		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
+		AvailableAt: row.AvailableAt.UTC().Truncate(time.Microsecond), LeaseToken: row.LeaseToken.String,
+		LeaseUntil: postgresqlOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
+		ExclusiveKey: row.ExclusiveKey.String, CancelRequested: row.CancelRequestedAt.Valid,
+		LastCode: row.LastCode.String, EnqueuedAt: row.EnqueuedAt.UTC().Truncate(time.Microsecond),
+		FinishedAt: postgresqlOptionalTime(row.FinishedAt), UpdatedAt: row.UpdatedAt.UTC().Truncate(time.Microsecond),
+	}
+}
+
 func (row postgresqlQueueSummaryRow) summary() queueprovider.Summary {
 	return queueprovider.Summary{
 		ID: row.ID, Type: row.Type, State: queueprovider.State(row.Status),
@@ -674,15 +738,7 @@ func (store *queueStore) readJob(ctx context.Context, queryer sqlx.QueryerContex
 		}
 		return queueprovider.Record{}, fmt.Errorf("QUEUE_POSTGRESQL_STORE: read job: %w", err)
 	}
-	return queueprovider.Record{
-		ID: row.ID, Type: row.Type, Payload: row.Payload, State: queueprovider.State(row.Status),
-		AttemptCount: row.AttemptCount, MaxAttempts: row.MaxAttempts,
-		AvailableAt: row.AvailableAt.UTC().Truncate(time.Microsecond), LeaseToken: row.LeaseToken.String,
-		LeaseUntil: postgresqlOptionalTime(row.LeaseUntil), DedupeKey: row.DedupeKey.String,
-		ExclusiveKey: row.ExclusiveKey.String, CancelRequested: row.CancelRequestedAt.Valid,
-		LastCode: row.LastCode.String, EnqueuedAt: row.EnqueuedAt.UTC().Truncate(time.Microsecond),
-		FinishedAt: postgresqlOptionalTime(row.FinishedAt), UpdatedAt: row.UpdatedAt.UTC().Truncate(time.Microsecond),
-	}, nil
+	return row.record(), nil
 }
 
 func optionalText(value string) any {

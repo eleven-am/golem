@@ -232,7 +232,10 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     Database: database,
     Embeddings: embeddings,
     Observer: observations,
-    Queue: &golemruntime.QueueConfig{Registry: queue.NewRegistry()},
+    Queue: &golemruntime.QueueConfig{
+      Registry: queue.NewRegistry(),
+      SemanticReconcileInterval: time.Minute,
+    },
     ResolvePrincipal: func(_ context.Context, principal string) (actor.Actor, error) { return actor.Actor{Private: principal == "private", Denied: principal == "denied"}, nil },
   })
   if err != nil { t.Fatal(err) }
@@ -259,7 +262,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 3),
-    success(observe.OperationSemanticRefresh, 11, 3),
+    success(observe.OperationSemanticRefresh, 7, 3),
   )
 
   caller, err := application.ForPrincipal(ctx, "public")
@@ -271,7 +274,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 0),
+    success(observe.OperationSemanticRank, 2, 0),
   )
   ranked, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
@@ -286,7 +289,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 5 { t.Fatalf("initial provider calls=%%d want=5", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 2),
+    success(observe.OperationSemanticRank, 2, 2),
   )
   sourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
   if err != nil { t.Fatal(err) }
@@ -303,7 +306,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     if strings.Contains(title, "private") { t.Fatalf("similarity disclosed an unauthorized row: %%q", title) }
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 2, 1),
+    success(observe.OperationSemanticRank, 3, 1),
   )
   hiddenID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000002")
   if err != nil { t.Fatal(err) }
@@ -332,7 +335,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 3),
+    success(observe.OperationSemanticRank, 2, 3),
   )
   if _, err := caller.Posts.SearchRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
   if provider.count() != 7 { t.Fatalf("unchanged rows were re-embedded: calls=%%d", provider.count()) }
@@ -354,13 +357,13 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 9 { t.Fatalf("reconcile calls=%%d want=9", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRefresh, 5, 1),
+    success(observe.OperationSemanticRefresh, 7, 1),
   )
   if _, err := database.UnsafeSQLX().Exec("DELETE FROM \"posts\" WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 9 { t.Fatalf("delete cleanup unexpectedly embedded: calls=%%d", provider.count()) }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRefresh, 4, 1),
+    success(observe.OperationSemanticRefresh, 6, 1),
   )
   afterDelete, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
@@ -369,7 +372,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 1),
+    success(observe.OperationSemanticRank, 2, 1),
   )
 
   server, err := application.GraphQL(app.GraphQLConfig[string]{
@@ -414,7 +417,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 	}
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 1),
+    success(observe.OperationSemanticRank, 2, 1),
   )
 
   // The similarity root is compiled and bound by different code than search:
@@ -424,7 +427,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRefresh, 5, 1),
+    success(observe.OperationSemanticRefresh, 7, 1),
   )
   beforeSimilarGraphQL := provider.count()
   similarRequest := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}, take: 10) { title } }\"}"))
@@ -448,7 +451,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("similarity GraphQL embedded a query: calls=%%d want=%%d", provider.count(), beforeSimilarGraphQL)
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 2, 1),
+    success(observe.OperationSemanticRank, 3, 1),
   )
 
   defaulted := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}) { title } }\"}"))
@@ -467,7 +470,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("defaulted-take similarity GraphQL embedded a query: calls=%%d", provider.count())
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 2, 1),
+    success(observe.OperationSemanticRank, 3, 1),
   )
 }
 `, "file:"+databasePath))

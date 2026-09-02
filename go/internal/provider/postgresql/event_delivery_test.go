@@ -303,7 +303,7 @@ func p8PostgreSQLMaterializeDelivery(t *testing.T, coordinator *eventCoordinator
 		t.Fatal(err)
 	}
 	defer transaction.Rollback()
-	if err := coordinator.materializeMissing(context.Background(), transaction, 1); err != nil {
+	if _, err := coordinator.materializeMissing(context.Background(), transaction, 1); err != nil {
 		t.Fatal(err)
 	}
 	if err := transaction.Commit(); err != nil {
@@ -373,6 +373,9 @@ func testP7PostgreSQLDeliveryCoordinatorLive(t *testing.T, dsn string) {
 	providertest.RunCoordinatorContract(t, harnessCoordinator, harnessCause, 2)
 	expiryCause := postgresqlDeliveryUUID(8)
 	insertPostgreSQLDeliveryFact(t, database, expiryCause, postgresqlDeliveryUUID(80), 1)
+	if _, err := database.Exec(`INSERT INTO "_golem"."_golem_outbox_delivery" ("causation_id","status","first_recorded_at","attempt_count","available_at","updated_at") SELECT $1,'pending',MIN("recorded_at"),0,MIN("recorded_at"),MIN("recorded_at") FROM "_golem"."_golem_outbox" WHERE "causation_id"=$1 GROUP BY "causation_id" ON CONFLICT ("causation_id") DO NOTHING`, expiryCause); err != nil {
+		t.Fatal(err)
+	}
 	expired, err := harnessCoordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: 5 * time.Millisecond})
 	if err != nil || len(expired) != 1 || expired[0].Delivery.CausationID != expiryCause {
 		t.Fatalf("expiry claim=%#v error=%v", expired, err)
@@ -402,10 +405,10 @@ func testP7PostgreSQLDeliveryCoordinatorLive(t *testing.T, dsn string) {
 			insertPostgreSQLDeliveryFact(t, database, cause, postgresqlDeliveryUUID(group*100+ordinal), ordinal)
 		}
 	}
-	// Isolate SKIP LOCKED ownership from legacy missing-state materialization.
-	// Concurrent backfill transactions may legitimately contend on the same
-	// absent candidates and return an uneven first claim; once the durable state
-	// exists, every worker competes only through the intended row locks.
+	harnessCoordinator, err = provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
 	materialized, err := harnessCoordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 4, LeaseDuration: time.Second})
 	if err != nil || len(materialized) != 4 {
 		t.Fatalf("pre-materialize claims=%#v error=%v", materialized, err)

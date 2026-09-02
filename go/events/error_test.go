@@ -37,6 +37,7 @@ func TestNormalizeLimitsNamesEveryViolatedBound(t *testing.T) {
 		"ClaimRows":                     {ClaimRows: -1},
 		"PublisherConcurrency":          {PublisherConcurrency: -1},
 		"MaxEncodedEventBytes":          {MaxEncodedEventBytes: maximumLimits.MaxEncodedEventBytes + 1},
+		"MaxEncodedBatchBytes":          {MaxEncodedBatchBytes: maximumLimits.MaxEncodedBatchBytes + 1},
 		"SubscriberQueue":               {SubscriberQueue: maximumLimits.SubscriberQueue + 1},
 		"HubInputQueue":                 {HubInputQueue: -1},
 		"EvaluationConcurrency":         {EvaluationConcurrency: maximumLimits.EvaluationConcurrency + 1},
@@ -48,7 +49,11 @@ func TestNormalizeLimitsNamesEveryViolatedBound(t *testing.T) {
 		"RetryBase":                     {RetryBase: -1},
 		"RetryCap":                      {RetryCap: maximumLimits.RetryCap + 1},
 		"ConnectionInitTimeout":         {ConnectionInitTimeout: -1},
+		"WebSocketKeepAlive":            {WebSocketKeepAlive: maximumLimits.WebSocketKeepAlive + 1},
+		"WebSocketPongTimeout":          {WebSocketPongTimeout: -1},
 		"ShutdownGrace":                 {ShutdownGrace: maximumLimits.ShutdownGrace + 1},
+		"RetentionAge":                  {RetentionAge: -1},
+		"RetentionEvery":                {RetentionEvery: -1},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NormalizeLimits(limits)
@@ -76,6 +81,26 @@ func TestNormalizeLimitsNamesTheRetryOrderingAndMemoryBuffer(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "Buffer") {
 		t.Fatalf("memory limits error %q does not name Buffer", err)
+	}
+}
+
+func TestNormalizeLimitsRejectsPongTimeoutEqualToKeepalive(t *testing.T) {
+	_, err := NormalizeLimits(Limits{WebSocketKeepAlive: time.Second, WebSocketPongTimeout: time.Second})
+	if errorCode(t, err) != CodeEventConfig {
+		t.Fatalf("code = %v", err)
+	}
+	if !strings.Contains(err.Error(), "WebSocketPongTimeout") || !strings.Contains(err.Error(), "WebSocketKeepAlive") {
+		t.Fatalf("liveness ordering error %q names neither bound", err)
+	}
+}
+
+func TestNormalizeLimitsRejectsRetentionBelowOneCausation(t *testing.T) {
+	_, err := NormalizeLimits(Limits{RetentionDeleteRows: 999})
+	if errorCode(t, err) != CodeEventConfig {
+		t.Fatalf("code = %v", err)
+	}
+	if !strings.Contains(err.Error(), "RetentionDeleteRows") || !strings.Contains(err.Error(), "1000") || !strings.Contains(err.Error(), "999") {
+		t.Fatalf("retention minimum error %q omits its field, bound, or value", err)
 	}
 }
 

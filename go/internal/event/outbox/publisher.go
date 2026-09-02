@@ -37,6 +37,10 @@ type Limits struct {
 	RetryCap        time.Duration
 	ShutdownGrace   time.Duration
 	MaxEncodedBytes int
+	MaxBatchBytes   int
+	RetentionAge    time.Duration
+	RetentionEvery  time.Duration
+	RetentionRows   int
 }
 
 func (limits Limits) normalized() (Limits, error) {
@@ -64,6 +68,18 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.MaxEncodedBytes == 0 {
 		limits.MaxEncodedBytes = eventcodec.DefaultMaxEncodedBytes
 	}
+	if limits.MaxBatchBytes == 0 {
+		limits.MaxBatchBytes = events.DefaultLimits().MaxEncodedBatchBytes
+	}
+	if limits.RetentionAge == 0 {
+		limits.RetentionAge = events.DefaultLimits().RetentionAge
+	}
+	if limits.RetentionEvery == 0 {
+		limits.RetentionEvery = events.DefaultLimits().RetentionEvery
+	}
+	if limits.RetentionRows == 0 {
+		limits.RetentionRows = events.DefaultLimits().RetentionDeleteRows
+	}
 	if err := eventprovider.ValidateClaim(eventprovider.ClaimOptions{Groups: limits.ClaimGroups, LeaseDuration: limits.LeaseDuration}); err != nil {
 		return Limits{}, err
 	}
@@ -85,6 +101,18 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.MaxEncodedBytes < 1 || limits.MaxEncodedBytes > eventcodec.HardMaxEncodedBytes {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: encoded event bytes are invalid")
 	}
+	if limits.MaxBatchBytes < limits.MaxEncodedBytes || limits.MaxBatchBytes > events.MaximumLimits().MaxEncodedBatchBytes {
+		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: encoded batch bytes are invalid")
+	}
+	if limits.RetentionAge < time.Hour || limits.RetentionAge > events.MaximumLimits().RetentionAge || limits.RetentionAge%time.Microsecond != 0 {
+		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention age is invalid")
+	}
+	if limits.RetentionEvery < time.Minute || limits.RetentionEvery > events.MaximumLimits().RetentionEvery || limits.RetentionEvery%time.Microsecond != 0 {
+		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention interval is invalid")
+	}
+	if limits.RetentionRows < eventprovider.MaximumCausationFacts || limits.RetentionRows > events.MaximumLimits().RetentionDeleteRows {
+		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention rows are invalid")
+	}
 	return limits, nil
 }
 
@@ -103,6 +131,7 @@ type Publisher struct {
 	limits        Limits
 	observer      events.Observer
 	hooks         crashHooks
+	retryKey      string
 
 	mu      sync.Mutex
 	running bool
@@ -128,7 +157,11 @@ func NewPublisherObserved(coordinator eventprovider.Coordinator, resolver mutati
 	if !ok {
 		return nil, fmt.Errorf("P7_PUBLISHER_CONFIG: active event-schema compatibility is required")
 	}
-	return &Publisher{coordinator: coordinator, resolver: resolver, compatibility: compatibility, transport: transport, limits: normalized, observer: observer}, nil
+	retryKey, err := eventprovider.NewLeaseToken()
+	if err != nil {
+		return nil, fmt.Errorf("P7_PUBLISHER_CONFIG: retry entropy is unavailable")
+	}
+	return &Publisher{coordinator: coordinator, resolver: resolver, compatibility: compatibility, transport: transport, limits: normalized, observer: observer, retryKey: retryKey}, nil
 }
 
 func (publisher *Publisher) Run(ctx context.Context) error {
@@ -148,20 +181,39 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 		publisher.mu.Unlock()
 	}()
 
+	nextDepth := time.Time{}
+	nextRetention := time.Now().Add(publisher.limits.RetentionEvery)
+	retentionFailures := int64(0)
+	loopFailures := int64(0)
 	for {
 		if err := ctx.Err(); err != nil {
 			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 			return nil
 		}
-		claimOptions := eventprovider.ClaimOptions{Groups: publisher.limits.ClaimGroups, LeaseDuration: publisher.limits.LeaseDuration}
+		claimOptions := eventprovider.ClaimOptions{Groups: publisher.limits.ClaimGroups, LeaseDuration: publisher.limits.LeaseDuration, MaxBytes: publisher.limits.MaxBatchBytes}
 		var leases []eventprovider.Lease
 		var err error
-		if coordinator, ok := publisher.coordinator.(eventprovider.ClaimDepthCoordinator); ok {
+		now := time.Now()
+		if !now.Before(nextRetention) {
+			started := time.Now()
+			retained, retentionErr := publisher.coordinator.RunRetention(ctx, eventprovider.RetentionPolicy{OlderThan: now.Add(-publisher.limits.RetentionAge), MaxRows: publisher.limits.RetentionRows})
+			if retentionErr != nil {
+				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationRetention, events.OutcomeFailure, "", 0, 0, publisher.limits.RetentionRows, time.Since(started), 0)
+				retentionFailures++
+				nextRetention = now.Add(retryDelay(publisher.retryKey+":retention", retentionFailures, publisher.limits.RetryBase, publisher.limits.RetryCap))
+			} else {
+				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationRetention, events.OutcomeSuccess, "", 0, 0, publisher.limits.RetentionRows, time.Since(started), int64(retained.Facts))
+				retentionFailures = 0
+				nextRetention = now.Add(publisher.limits.RetentionEvery)
+			}
+		}
+		if coordinator, ok := publisher.coordinator.(eventprovider.ClaimDepthCoordinator); ok && !now.Before(nextDepth) {
 			var snapshot eventprovider.ClaimSnapshot
 			snapshot, err = coordinator.ClaimWithDepth(ctx, claimOptions)
 			leases = snapshot.Leases
 			if err == nil {
 				publisher.observeDepth(ctx, snapshot.Depth)
+				nextDepth = now.Add(time.Minute)
 			}
 		} else {
 			leases, err = publisher.coordinator.Claim(ctx, claimOptions)
@@ -172,20 +224,35 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 				return nil
 			}
 			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeFailure, "", 0, 0, publisher.limits.ClaimGroups, 0, 1)
-			return fmt.Errorf("P7_PUBLISHER_CLAIM: %w", err)
+			loopFailures++
+			delay := retryDelay(publisher.retryKey+":claim", loopFailures, publisher.limits.RetryBase, publisher.limits.RetryCap)
+			if !waitContext(ctx, delay) {
+				return nil
+			}
+			continue
 		}
 		if len(leases) != 0 {
 			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeSuccess, "", 0, len(leases), publisher.limits.ClaimGroups, 0, int64(len(leases)))
 		}
 		if len(leases) == 0 {
+			loopFailures = 0
 			if !waitContext(ctx, publisher.limits.RetryBase) {
 				return nil
 			}
 			continue
 		}
 		if err := publisher.runClaimed(ctx, leases); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return nil
+			}
+			loopFailures++
+			delay := retryDelay(publisher.retryKey+":delivery", loopFailures, publisher.limits.RetryBase, publisher.limits.RetryCap)
+			if !waitContext(ctx, delay) {
+				return nil
+			}
+			continue
 		}
+		loopFailures = 0
 	}
 }
 
@@ -283,8 +350,11 @@ func (publisher *Publisher) publishLease(ctx context.Context, lease eventprovide
 		}
 		notices[index] = notice
 	}
-	batch, err := eventvalue.NewEventBatch(causation, notices)
+	batch, err := eventvalue.NewEventBatchBounded(causation, notices, publisher.limits.MaxBatchBytes)
 	if err != nil {
+		if errors.Is(err, eventvalue.ErrBatchTooLarge) {
+			return publisher.blockInvalid(ctx, lease, "batch-too-large")
+		}
 		return publisher.blockInvalid(ctx, lease, "fact-order-invalid")
 	}
 	if publisher.hooks.BeforePublish != nil {
@@ -307,7 +377,7 @@ func (publisher *Publisher) publishLease(ctx context.Context, lease eventprovide
 			publisher.releaseLease(lease)
 			return nil
 		}
-		delay := retryDelay(lease.Delivery.CausationID, lease.Delivery.AttemptCount, publisher.limits.RetryBase, publisher.limits.RetryCap)
+		delay := retryDelay(publisher.retryKey+":"+lease.Delivery.CausationID, lease.Delivery.AttemptCount, publisher.limits.RetryBase, publisher.limits.RetryCap)
 		changed, retryErr := publisher.coordinator.Retry(ctx, lease.Delivery.CausationID, lease.Delivery.LeaseToken, delay, "transport-failure")
 		if retryErr != nil {
 			return fmt.Errorf("P7_PUBLISHER_RETRY: %w", retryErr)

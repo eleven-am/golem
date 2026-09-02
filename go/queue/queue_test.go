@@ -243,7 +243,7 @@ func TestBackoffIsExponentialFullJitterUnderCap(t *testing.T) {
 
 func TestLimitsValidation(t *testing.T) {
 	defaults := queue.DefaultLimits()
-	if defaults.Concurrency != 4 || defaults.ClaimBatch != 16 || defaults.LeaseDuration != 30*time.Second || defaults.PollInterval != 250*time.Millisecond || defaults.ShutdownGrace != 15*time.Second || defaults.AbandonGrace != 5*time.Second || defaults.MaxPayloadBytes != queue.MaximumPayloadBytes {
+	if defaults.Concurrency != 4 || defaults.ClaimBatch != 16 || defaults.LeaseDuration != 30*time.Second || defaults.PollInterval != 250*time.Millisecond || defaults.ShutdownGrace != 15*time.Second || defaults.AbandonGrace != 5*time.Second || defaults.MaxPayloadBytes != queue.MaximumPayloadBytes || defaults.RetentionAge != 30*24*time.Hour || defaults.RetentionEvery != time.Minute || defaults.RetentionRows != queue.MaximumOperatorBatch {
 		t.Fatalf("defaults=%#v", defaults)
 	}
 	if (queue.Limits{}).Resolved() != defaults {

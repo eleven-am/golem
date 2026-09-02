@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -94,6 +95,65 @@ type publisherRunCoordinator struct {
 	once    sync.Once
 }
 
+type transientClaimCoordinator struct {
+	publisherTestCoordinator
+	calls     atomic.Int64
+	recovered chan struct{}
+}
+
+type transientAcknowledgeCoordinator struct {
+	publisherTestCoordinator
+	lease     eventprovider.Lease
+	claims    atomic.Int64
+	continued chan struct{}
+}
+
+type retentionFailureCoordinator struct {
+	publisherTestCoordinator
+	claimed chan struct{}
+	once    sync.Once
+}
+
+func (coordinator *transientClaimCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	if coordinator.calls.Add(1) == 1 {
+		return nil, errors.New("temporary database outage")
+	}
+	select {
+	case <-coordinator.recovered:
+	default:
+		close(coordinator.recovered)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (coordinator *transientAcknowledgeCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	if coordinator.claims.Add(1) == 1 {
+		return []eventprovider.Lease{coordinator.lease}, nil
+	}
+	select {
+	case <-coordinator.continued:
+	default:
+		close(coordinator.continued)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (coordinator *transientAcknowledgeCoordinator) Acknowledge(context.Context, string, string) (bool, error) {
+	return false, errors.New("temporary acknowledgement outage")
+}
+
+func (*retentionFailureCoordinator) RunRetention(context.Context, eventprovider.RetentionPolicy) (eventprovider.RetentionResult, error) {
+	return eventprovider.RetentionResult{}, errors.New("retention storage unavailable")
+}
+
+func (coordinator *retentionFailureCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	coordinator.once.Do(func() { close(coordinator.claimed) })
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
 func (coordinator *publisherRunCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
 	coordinator.once.Do(func() { close(coordinator.entered) })
 	<-ctx.Done()
@@ -170,6 +230,79 @@ func TestPublisherRunOwnershipAndShutdownGrace(t *testing.T) {
 	// send through a channel closed by the already-returned publisher worker.
 	close(release)
 	time.Sleep(25 * time.Millisecond)
+}
+
+func TestPublisherRetriesTransientClaimFailure(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &transientClaimCoordinator{publisherTestCoordinator: publisherTestCoordinator{renewed: true}, recovered: make(chan struct{})}
+	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- publisher.Run(ctx) }()
+	select {
+	case <-coordinator.recovered:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("publisher did not retry its failed claim")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublisherClaimsDespiteRetentionFailure(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &retentionFailureCoordinator{
+		publisherTestCoordinator: publisherTestCoordinator{renewed: true},
+		claimed:                  make(chan struct{}),
+	}
+	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	publisher.limits.RetentionEvery = time.Microsecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- publisher.Run(ctx) }()
+	select {
+	case <-coordinator.claimed:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("retention failure blocked publisher claims")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublisherRejectsRetentionBelowOneCausation(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	_, err := NewPublisher(&publisherTestCoordinator{}, publisherTestResolver{fixture.Registry}, &captureTransport{}, Limits{RetentionRows: eventprovider.MaximumCausationFacts - 1})
+	if err == nil {
+		t.Fatal("publisher accepted a retention batch below one legal causation")
+	}
+}
+
+func TestPublisherRetriesAfterTransientAcknowledgementFailure(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &transientAcknowledgeCoordinator{
+		publisherTestCoordinator: publisherTestCoordinator{renewed: true},
+		lease:                    publisherValidLease(t, fixture),
+		continued:                make(chan struct{}),
+	}
+	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- publisher.Run(ctx) }()
+	select {
+	case <-coordinator.continued:
+		cancel()
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("publisher stopped after a transient acknowledgement failure")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (transport *captureTransport) Publish(_ context.Context, batch eventvalue.EventBatch) error {

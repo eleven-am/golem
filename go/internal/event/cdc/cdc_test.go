@@ -163,6 +163,20 @@ func TestCDCRejectsEncoderMetadataMismatch(t *testing.T) {
 	}
 }
 
+func TestCDCRejectsAggregateEncodedBatchAboveLimit(t *testing.T) {
+	transport := &captureTransport{}
+	emitter, err := NewEmitter(Config{Adapter: &emitterTestAdapter{correlator: &fakeCorrelator{}}, Transport: transport, Encoder: &fakeEncoder{encodedBytes: 32}, MaxBatchBytes: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := emitter.Emit(context.Background(), validBatch(t)); eventCode(t, err) != events.CodeCDCInvalid {
+		t.Fatalf("oversized causal batch error=%v", err)
+	}
+	if len(transport.snapshot()) != 0 {
+		t.Fatal("oversized causal batch reached the transport")
+	}
+}
+
 func TestCDCExactImageValidationFailureFromSharedEncoderStopsPublication(t *testing.T) {
 	encoder := &fakeEncoder{failure: errors.New("missing required schema field")}
 	transport := &captureTransport{}
@@ -230,6 +244,7 @@ type fakeEncoder struct {
 	inputs       []EncodeInput
 	wrongEventID bool
 	failure      error
+	encodedBytes int
 }
 
 func (encoder *fakeEncoder) EncodeCDC(_ context.Context, input EncodeInput) (events.Notice, error) {
@@ -245,6 +260,9 @@ func (encoder *fakeEncoder) EncodeCDC(_ context.Context, input EncodeInput) (eve
 		eventID[0] ^= 0xff
 	}
 	encoded := append(append([]byte(nil), eventID[:]...), byte(input.Ordinal))
+	if encoder.encodedBytes > len(encoded) {
+		encoded = append(encoded, make([]byte, encoder.encodedBytes-len(encoded))...)
+	}
 	return eventvalue.NewNotice(eventID, golem.SchemaDigest{7}, input.Model, input.Action, input.CausationID, input.Ordinal, encoded)
 }
 func (encoder *fakeEncoder) snapshot() []EncodeInput {
