@@ -920,40 +920,10 @@ func snapshotEventPrincipal[P any](principal P, snapshot func(P) (P, error)) (P,
 }
 
 func validateImmutablePrincipal(value reflect.Value, path string) error {
-	if !value.IsValid() {
-		return nil
-	}
-	switch value.Kind() {
-	case reflect.Interface:
-		if value.IsNil() {
-			return nil
+	return validateImmutableValue(value, path, func(path string, kind reflect.Kind, mutable bool) error {
+		if mutable {
+			return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has mutable or aliasing kind %s; configure SnapshotPrincipal", path, kind)
 		}
-		return validateImmutablePrincipal(value.Elem(), path+".(dynamic)")
-	case reflect.Struct:
-		typ := value.Type()
-		for index := 0; index < value.NumField(); index++ {
-			if err := validateImmutablePrincipal(value.Field(index), path+"."+typ.Field(index).Name); err != nil {
-				return err
-			}
-		}
-		return nil
-	case reflect.Array:
-		for index := 0; index < value.Len(); index++ {
-			if err := validateImmutablePrincipal(value.Index(index), fmt.Sprintf("%s[%d]", path, index)); err != nil {
-				return err
-			}
-		}
-		return nil
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has mutable or aliasing kind %s; configure SnapshotPrincipal", path, value.Kind())
-	case reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
-		reflect.Float32, reflect.Float64,
-		reflect.Complex64, reflect.Complex128,
-		reflect.String:
-		return nil
-	default:
-		return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has unsupported kind %s; configure SnapshotPrincipal", path, value.Kind())
-	}
+		return fmt.Errorf("GOLEM_SUBSCRIPTION_REVALIDATION: %s has unsupported kind %s; configure SnapshotPrincipal", path, kind)
+	})
 }

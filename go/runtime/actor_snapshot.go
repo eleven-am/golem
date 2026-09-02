@@ -26,6 +26,15 @@ func snapshotActor[A any](actor A, snapshot func(A) (A, error)) (A, error) {
 }
 
 func validateImmutableActor(value reflect.Value, path string) error {
+	return validateImmutableValue(value, path, func(path string, kind reflect.Kind, mutable bool) error {
+		if mutable {
+			return fmt.Errorf("P3_ACTOR_SNAPSHOT: %s has mutable or aliasing kind %s; configure SnapshotActor", path, kind)
+		}
+		return fmt.Errorf("P3_ACTOR_SNAPSHOT: %s has unsupported kind %s; configure SnapshotActor", path, kind)
+	})
+}
+
+func validateImmutableValue(value reflect.Value, path string, invalid func(string, reflect.Kind, bool) error) error {
 	if !value.IsValid() {
 		return nil
 	}
@@ -34,24 +43,24 @@ func validateImmutableActor(value reflect.Value, path string) error {
 		if value.IsNil() {
 			return nil
 		}
-		return validateImmutableActor(value.Elem(), path+".(dynamic)")
+		return validateImmutableValue(value.Elem(), path+".(dynamic)", invalid)
 	case reflect.Struct:
 		typ := value.Type()
 		for index := 0; index < value.NumField(); index++ {
-			if err := validateImmutableActor(value.Field(index), path+"."+typ.Field(index).Name); err != nil {
+			if err := validateImmutableValue(value.Field(index), path+"."+typ.Field(index).Name, invalid); err != nil {
 				return err
 			}
 		}
 		return nil
 	case reflect.Array:
 		for index := 0; index < value.Len(); index++ {
-			if err := validateImmutableActor(value.Index(index), fmt.Sprintf("%s[%d]", path, index)); err != nil {
+			if err := validateImmutableValue(value.Index(index), fmt.Sprintf("%s[%d]", path, index), invalid); err != nil {
 				return err
 			}
 		}
 		return nil
 	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.UnsafePointer:
-		return fmt.Errorf("P3_ACTOR_SNAPSHOT: %s has mutable or aliasing kind %s; configure SnapshotActor", path, value.Kind())
+		return invalid(path, value.Kind(), true)
 	case reflect.Bool,
 		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
@@ -60,6 +69,6 @@ func validateImmutableActor(value reflect.Value, path string) error {
 		reflect.String:
 		return nil
 	default:
-		return fmt.Errorf("P3_ACTOR_SNAPSHOT: %s has unsupported kind %s; configure SnapshotActor", path, value.Kind())
+		return invalid(path, value.Kind(), false)
 	}
 }

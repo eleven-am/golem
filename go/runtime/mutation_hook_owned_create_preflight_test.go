@@ -2,16 +2,11 @@ package runtime
 
 import (
 	"context"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
-	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	"github.com/eleven-am/golem/go/observe"
 )
@@ -179,44 +174,6 @@ func mustGraphMutationCaller(t testing.TB, fixture graphMutationFixture) *Caller
 
 func withGraphHookOwnedPostAuthor(t testing.TB, fixture schematest.GraphFixture) schematest.GraphFixture {
 	t.Helper()
-	contractDocument := fixture.Bundle.Contract()
-	var contract compilerir.ContractIR
-	if err := json.Unmarshal(contractDocument.Bytes(), &contract); err != nil {
-		t.Fatal(err)
-	}
-	found := false
-	for index := range contract.Models {
-		if contract.Models[index].ModelID == compilerir.ModelID(fmt.Sprintf("%x", fixture.Post[:])) {
-			contract.Models[index].HookOwnedCreateFields = []compilerir.FieldID{compilerir.FieldID(fmt.Sprintf("%x", fixture.AuthorID[:]))}
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("graph Post contract is absent")
-	}
-	payload, err := compilerir.CanonicalContract(contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fingerprint, err := compilerir.ContractFingerprint(contract)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, err := hex.DecodeString(string(fingerprint))
-	if err != nil || len(raw) != len(golem.SchemaDigest{}) {
-		t.Fatalf("contract fingerprint=%q error=%v", fingerprint, err)
-	}
-	var digest golem.SchemaDigest
-	copy(digest[:], raw)
-	contractDocument = golem.GeneratedSchemaDocument(contractDocument.FormatVersion(), contractDocument.CanonicalVersion(), digest, payload)
-	fixture.Bundle = golem.GeneratedSchemaBundle(
-		fixture.Bundle.GenerationDigest(), fixture.Bundle.GeneratorVersion(), fixture.Bundle.TemplateABIVersion(),
-		fixture.Bundle.Model(), contractDocument, fixture.Bundle.Providers()...,
-	)
-	registry, err := policyschema.New(fixture.Bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	fixture.Registry = registry
+	fixture.Bundle, fixture.Registry = withHookOwnedCreateField(t, fixture.Bundle, fixture.Post, fixture.AuthorID, "graph Post contract is absent")
 	return fixture
 }

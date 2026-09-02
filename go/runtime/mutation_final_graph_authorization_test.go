@@ -18,10 +18,12 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	policyschema "github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jmoiron/sqlx"
 )
 
 func TestCallerCreateRowAuthorizationUsesCompletedInverseRelationGraph(t *testing.T) {
@@ -1035,38 +1037,15 @@ type finalGraphFactWant struct {
 
 func assertFinalGraphFactOrder(t testing.TB, fixture graphMutationFixture, want []finalGraphFactWant) {
 	t.Helper()
-	type row struct {
-		Model    string `db:"model_id"`
-		Ordinal  int64  `db:"transaction_ordinal"`
-		Metadata []byte `db:"metadata"`
-	}
-	var rows []row
-	if err := fixture.app.database.Select(&rows, `SELECT "model_id","transaction_ordinal","metadata" FROM `+nestedAcceptanceOutbox(fixture.app)+` ORDER BY "transaction_ordinal"`); err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != len(want) {
-		t.Fatalf("facts=%d want=%d", len(rows), len(want))
-	}
-	for index, expected := range want {
-		if rows[index].Model != hex.EncodeToString(expected.model[:]) || rows[index].Ordinal != int64(index+1) {
-			t.Fatalf("fact[%d]=%#v want model=%x ordinal=%d", index, rows[index], expected.model, index+1)
-		}
-		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(expected.model), rows[index].Metadata)
-		if err != nil {
-			t.Fatal(err)
-		}
-		identity, ok := envelope.AfterIdentity()
-		if !ok || len(identity.Components()) != 1 {
-			t.Fatalf("fact[%d] identity=%#v present=%t", index, identity, ok)
-		}
-		value, ok := identity.Components()[0].PolicyValue()
-		if !ok || !mutationdecode.EqualValue(value, policyir.UUIDValue([16]byte(golem.UUID{15: expected.id}))) {
-			t.Fatalf("fact[%d] identity value=%#v present=%t want=%d", index, value, ok, expected.id)
-		}
-	}
+	assertMutationFactOrder(t, fixture.app.database, fixture.schema.Registry, nestedAcceptanceOutbox(fixture.app), "", want)
 }
 
 func assertFinalSocialFactOrder(t testing.TB, fixture socialMutationFixture, want []finalGraphFactWant) {
+	t.Helper()
+	assertMutationFactOrder(t, fixture.app.database, fixture.schema.Registry, nestedAcceptanceOutbox(fixture.app), "social ", want)
+}
+
+func assertMutationFactOrder(t testing.TB, database *sqlx.DB, registry *policyschema.Registry, outbox, prefix string, want []finalGraphFactWant) {
 	t.Helper()
 	type row struct {
 		Model    string `db:"model_id"`
@@ -1074,27 +1053,27 @@ func assertFinalSocialFactOrder(t testing.TB, fixture socialMutationFixture, wan
 		Metadata []byte `db:"metadata"`
 	}
 	var rows []row
-	if err := fixture.app.database.Select(&rows, `SELECT "model_id","transaction_ordinal","metadata" FROM `+nestedAcceptanceOutbox(fixture.app)+` ORDER BY "transaction_ordinal"`); err != nil {
+	if err := database.Select(&rows, `SELECT "model_id","transaction_ordinal","metadata" FROM `+outbox+` ORDER BY "transaction_ordinal"`); err != nil {
 		t.Fatal(err)
 	}
 	if len(rows) != len(want) {
-		t.Fatalf("social ordered facts=%d want=%d", len(rows), len(want))
+		t.Fatalf("%sfacts=%d want=%d", prefix, len(rows), len(want))
 	}
 	for index, expected := range want {
 		if rows[index].Model != hex.EncodeToString(expected.model[:]) || rows[index].Ordinal != int64(index+1) {
-			t.Fatalf("social fact[%d]=%#v want model=%x ordinal=%d", index, rows[index], expected.model, index+1)
+			t.Fatalf("%sfact[%d]=%#v want model=%x ordinal=%d", prefix, index, rows[index], expected.model, index+1)
 		}
-		envelope, err := decodeCurrentMutationFactMetadata(fixture.schema.Registry, policyir.ModelID(expected.model), rows[index].Metadata)
+		envelope, err := decodeCurrentMutationFactMetadata(registry, policyir.ModelID(expected.model), rows[index].Metadata)
 		if err != nil {
 			t.Fatal(err)
 		}
 		identity, ok := envelope.AfterIdentity()
 		if !ok || len(identity.Components()) != 1 {
-			t.Fatalf("social fact[%d] identity=%#v present=%t", index, identity, ok)
+			t.Fatalf("%sfact[%d] identity=%#v present=%t", prefix, index, identity, ok)
 		}
 		value, ok := identity.Components()[0].PolicyValue()
 		if !ok || !mutationdecode.EqualValue(value, policyir.UUIDValue([16]byte(golem.UUID{15: expected.id}))) {
-			t.Fatalf("social fact[%d] identity value=%#v present=%t want=%d", index, value, ok, expected.id)
+			t.Fatalf("%sfact[%d] identity value=%#v present=%t want=%d", prefix, index, value, ok, expected.id)
 		}
 	}
 }

@@ -83,6 +83,10 @@ func AddSemanticSearchOperations(compilation *ir.CompilationIR) []ir.Diagnostic 
 // IsSemanticSearchOperation verifies the complete synthetic contract against
 // the logical model's provider-neutral semantic-index authority.
 func IsSemanticSearchOperation(compilation ir.CompilationIR, operation ir.CustomOperationContractIR) bool {
+	return isSemanticOperation(compilation, operation, false)
+}
+
+func isSemanticOperation(compilation ir.CompilationIR, operation ir.CustomOperationContractIR, similar bool) bool {
 	if compilation.Model.Schema.PackagePath == "" || operation.Resolver.PackagePath != compilation.Model.Schema.PackagePath {
 		return false
 	}
@@ -120,6 +124,9 @@ func IsSemanticSearchOperation(compilation ir.CompilationIR, operation ir.Custom
 		return false
 	}
 	expected := semanticSearchOperation(contract, expectedIndex, semanticSearchIdentity(contract.ModelID, expectedIndex.Name), exportedPlural, exported, compilation.Model.Schema.PackagePath)
+	if similar {
+		expected = semanticSimilarOperation(contract, expectedIndex, semanticSimilarIdentity(contract.ModelID, expectedIndex.Name), exportedPlural, exported, compilation.Model.Schema.PackagePath)
+	}
 	return reflect.DeepEqual(operation, expected)
 }
 

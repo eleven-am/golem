@@ -158,6 +158,58 @@ func openMutationBoundaryPostgreSQL(t testing.TB, dsn string) (*sqlx.DB, *mutati
 	return database, counts
 }
 
+func runMutationBoundaryProfiles(t *testing.T, evidence string, run func(*testing.T, mutationResultFixture, *mutationBoundaryCounts)) {
+	t.Helper()
+	t.Run("sqlite", func(t *testing.T) {
+		database, counts := openMutationBoundarySQLite(t)
+		run(t, newMutationResultFixtureWithHooksAndDatabase(t, MutationLimits{}, nil, nil, database), counts)
+	})
+	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
+		profile := profile
+		t.Run(profile.name, func(t *testing.T) {
+			dsn := strings.TrimSpace(os.Getenv(profile.env))
+			if dsn == "" {
+				t.Skipf("%s is required for %s", profile.env, evidence)
+			}
+			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
+			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
+			t.Cleanup(func() { _ = database.Close() })
+			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
+				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
+				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
+			}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			fixture.app = app
+			run(t, fixture, counts)
+		})
+	}
+}
+
+type mutationBoundaryOperation struct {
+	name string
+	run  func() error
+}
+
+func assertMutationBoundaryRefusals(t *testing.T, counts *mutationBoundaryCounts, label string, operations []mutationBoundaryOperation) {
+	t.Helper()
+	for _, operation := range operations {
+		t.Run(operation.name, func(t *testing.T) {
+			counts.reset()
+			err := operation.run()
+			var failure *golem.Error
+			if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
+				t.Fatalf("%s refusal=%#v err=%v", label, failure, err)
+			}
+			if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
+				t.Fatalf("%s crossed SQL boundary: begins=%d queries=%d execs=%d", label, begins, queries, execs)
+			}
+		})
+	}
+}
+
 func TestRefusedMutationDoesNotBeginTransactionOrIssueSQL(t *testing.T) {
 	assertRefused := func(t *testing.T, fixture mutationResultFixture, counts *mutationBoundaryCounts) {
 		t.Helper()
@@ -187,33 +239,7 @@ func TestRefusedMutationDoesNotBeginTransactionOrIssueSQL(t *testing.T) {
 		}
 	}
 
-	t.Run("sqlite", func(t *testing.T) {
-		database, counts := openMutationBoundarySQLite(t)
-		fixture := newMutationResultFixtureWithHooksAndDatabase(t, MutationLimits{}, nil, nil, database)
-		assertRefused(t, fixture, counts)
-	})
-	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
-		profile := profile
-		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				t.Skipf("%s is required for PostgreSQL refusal-boundary evidence", profile.env)
-			}
-			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
-			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
-			t.Cleanup(func() { _ = database.Close() })
-			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
-				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
-				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture.app = app
-			assertRefused(t, fixture, counts)
-		})
-	}
+	runMutationBoundaryProfiles(t, "PostgreSQL refusal-boundary evidence", assertRefused)
 }
 
 func TestScalarAndRelationCorrelationOverlapRefusesBeforeSQLAcrossProviders(t *testing.T) {
@@ -235,10 +261,7 @@ func TestScalarAndRelationCorrelationOverlapRefusesBeforeSQLAcrossProviders(t *t
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, operation := range []struct {
-			name string
-			run  func() error
-		}{
+		assertMutationBoundaryRefusals(t, counts, "overlap", []mutationBoundaryOperation{
 			{"caller", func() error {
 				_, err := CallerUpdate(ctx, caller, fixture.postDescriptor, fixture.target(11), input)
 				return err
@@ -255,48 +278,10 @@ func TestScalarAndRelationCorrelationOverlapRefusesBeforeSQLAcrossProviders(t *t
 				_, err := SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, user, recursive)
 				return err
 			}},
-		} {
-			t.Run(operation.name, func(t *testing.T) {
-				counts.reset()
-				err := operation.run()
-				var failure *golem.Error
-				if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
-					t.Fatalf("overlap refusal=%#v err=%v", failure, err)
-				}
-				if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
-					t.Fatalf("overlap crossed SQL boundary: begins=%d queries=%d execs=%d", begins, queries, execs)
-				}
-			})
-		}
-	}
-
-	t.Run("sqlite", func(t *testing.T) {
-		database, counts := openMutationBoundarySQLite(t)
-		fixture := newMutationResultFixtureWithHooksAndDatabase(t, MutationLimits{}, nil, nil, database)
-		assertRefused(t, fixture, counts)
-	})
-	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
-		profile := profile
-		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				t.Skipf("%s is required for correlation-overlap refusal evidence", profile.env)
-			}
-			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
-			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
-			t.Cleanup(func() { _ = database.Close() })
-			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
-				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
-				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture.app = app
-			assertRefused(t, fixture, counts)
 		})
 	}
+
+	runMutationBoundaryProfiles(t, "PostgreSQL correlation-overlap refusal evidence", assertRefused)
 }
 
 func TestDuplicateToOneRelationValuesRefuseBeforeSQLAcrossProviders(t *testing.T) {
@@ -355,33 +340,7 @@ func TestDuplicateToOneRelationValuesRefuseBeforeSQLAcrossProviders(t *testing.T
 		}
 	}
 
-	t.Run("sqlite", func(t *testing.T) {
-		database, counts := openMutationBoundarySQLite(t)
-		fixture := newMutationResultFixtureWithHooksAndDatabase(t, MutationLimits{}, nil, nil, database)
-		assertRefused(t, fixture, counts)
-	})
-	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
-		profile := profile
-		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				t.Skipf("%s is required for duplicate-relation refusal evidence", profile.env)
-			}
-			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
-			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
-			t.Cleanup(func() { _ = database.Close() })
-			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
-				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
-				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture.app = app
-			assertRefused(t, fixture, counts)
-		})
-	}
+	runMutationBoundaryProfiles(t, "PostgreSQL duplicate-relation refusal evidence", assertRefused)
 }
 
 func TestTargetlessToManyDisconnectRefusesBeforeSQLAcrossProviders(t *testing.T) {
@@ -397,10 +356,7 @@ func TestTargetlessToManyDisconnectRefusesBeforeSQLAcrossProviders(t *testing.T)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, operation := range []struct {
-			name string
-			run  func() error
-		}{
+		assertMutationBoundaryRefusals(t, counts, "targetless disconnect", []mutationBoundaryOperation{
 			{"caller", func() error {
 				_, err := CallerUpdate(ctx, caller, fixture.userDescriptor, user, input)
 				return err
@@ -409,48 +365,10 @@ func TestTargetlessToManyDisconnectRefusesBeforeSQLAcrossProviders(t *testing.T)
 				_, err := SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, user, input)
 				return err
 			}},
-		} {
-			t.Run(operation.name, func(t *testing.T) {
-				counts.reset()
-				err := operation.run()
-				var failure *golem.Error
-				if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
-					t.Fatalf("targetless disconnect refusal=%#v err=%v", failure, err)
-				}
-				if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
-					t.Fatalf("targetless disconnect crossed SQL boundary: begins=%d queries=%d execs=%d", begins, queries, execs)
-				}
-			})
-		}
-	}
-
-	t.Run("sqlite", func(t *testing.T) {
-		database, counts := openMutationBoundarySQLite(t)
-		fixture := newMutationResultFixtureWithHooksAndDatabase(t, MutationLimits{}, nil, nil, database)
-		assertRefused(t, fixture, counts)
-	})
-	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
-		profile := profile
-		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				t.Skipf("%s is required for targetless disconnect refusal evidence", profile.env)
-			}
-			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
-			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
-			t.Cleanup(func() { _ = database.Close() })
-			app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
-				Database: p8RuntimeTestDatabase(database, golem.PostgreSQL), Bundle: fixture.schema.Bundle,
-				Bindings: fixture.app.bindings, Descriptors: fixture.app.descriptors,
-				ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
-			}))
-			if err != nil {
-				t.Fatal(err)
-			}
-			fixture.app = app
-			assertRefused(t, fixture, counts)
 		})
 	}
+
+	runMutationBoundaryProfiles(t, "PostgreSQL targetless disconnect refusal evidence", assertRefused)
 }
 
 func TestMissingExactNestedTargetsReturnNotFoundAcrossProviders(t *testing.T) {
@@ -508,10 +426,7 @@ func TestRequiredInverseHasOneDisconnectRefusesBeforeSQLAcrossProviders(t *testi
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, operation := range []struct {
-			name string
-			run  func() error
-		}{
+		assertMutationBoundaryRefusals(t, counts, "required inverse disconnect", []mutationBoundaryOperation{
 			{"caller", func() error {
 				_, err := CallerUpdate(ctx, caller, fixture.userDescriptor, user, input)
 				return err
@@ -520,19 +435,7 @@ func TestRequiredInverseHasOneDisconnectRefusesBeforeSQLAcrossProviders(t *testi
 				_, err := SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, user, input)
 				return err
 			}},
-		} {
-			t.Run(operation.name, func(t *testing.T) {
-				counts.reset()
-				err := operation.run()
-				var failure *golem.Error
-				if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput {
-					t.Fatalf("required inverse disconnect refusal=%#v err=%v", failure, err)
-				}
-				if begins, queries, execs := counts.begins.Load(), counts.queries.Load(), counts.execs.Load(); begins != 0 || queries != 0 || execs != 0 {
-					t.Fatalf("required inverse disconnect crossed SQL boundary: begins=%d queries=%d execs=%d", begins, queries, execs)
-				}
-			})
-		}
+		})
 	}
 
 	t.Run("sqlite", func(t *testing.T) {
