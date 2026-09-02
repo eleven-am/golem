@@ -14,10 +14,11 @@ import (
 
 const sqliteDatabaseMicros = `CAST((julianday('now') - 2440587.5) * 86400000000 AS INTEGER)`
 
+const sqliteFactByteExpression = `length(CAST("event_id" AS BLOB))+length(CAST("codec_identity" AS BLOB))+length(CAST("generation_fingerprint" AS BLOB))+length(CAST("model_id" AS BLOB))+length(CAST("action" AS BLOB))+COALESCE(length("before_identity"),0)+COALESCE(length("after_identity"),0)+length(CAST("causation_id" AS BLOB))+length("metadata")+COALESCE(length("delete_snapshot"),0)+32`
+
 type eventCoordinator struct {
 	database            *sqlx.DB
 	legacyProbeComplete atomic.Bool
-	leaseClockAligned   atomic.Bool
 }
 
 type sqliteEventQueryExecer interface {
@@ -79,19 +80,12 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 		}
 		legacyComplete = complete
 	}
-	leaseAligned := false
-	if !coordinator.leaseClockAligned.Load() {
-		if _, err := connection.ExecContext(ctx, `UPDATE "main"."_golem_outbox_delivery" SET "available_at"=CASE "status" WHEN 'leased' THEN "lease_until" ELSE "delivered_at" END WHERE ("status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until") OR ("status"='delivered' AND "delivered_at" IS NOT NULL AND "available_at"<>"delivered_at")`); err != nil {
-			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: align existing lease eligibility: %w", err)
-		}
-		leaseAligned = true
-	}
 	var now int64
 	if err := connection.GetContext(ctx, &now, "SELECT "+sqliteDatabaseMicros); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: read database time: %w", err)
 	}
 	var causations []string
-	if err := connection.SelectContext(ctx, &causations, `SELECT "causation_id" FROM "main"."_golem_outbox_delivery" WHERE "status" IN ('pending','leased') AND "available_at"<=? ORDER BY "first_recorded_at","causation_id" LIMIT ?`, now, options.Groups); err != nil {
+	if err := connection.SelectContext(ctx, &causations, `SELECT "causation_id" FROM "main"."_golem_outbox_delivery" WHERE "status" IN ('pending','leased') AND "available_at"<=? AND ("lease_until" IS NULL OR "lease_until"<=?) ORDER BY "first_recorded_at","causation_id" LIMIT ?`, now, now, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
 	}
 	causations, err = sqliteBoundedCausations(ctx, connection, causations, eventprovider.ClaimByteLimit(options))
@@ -106,9 +100,9 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 			values[index] = "(?,?)"
 			arguments = append(arguments, causation, tokens[index])
 		}
-		arguments = append(arguments, leaseUntil, leaseUntil, now, now)
+		arguments = append(arguments, leaseUntil, leaseUntil, now, now, now)
 		var changed []string
-		update := `WITH claim(causation_id,token) AS (VALUES ` + strings.Join(values, ",") + `) UPDATE "main"."_golem_outbox_delivery" SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=(SELECT token FROM claim WHERE claim.causation_id="_golem_outbox_delivery"."causation_id"),"available_at"=?,"lease_until"=?,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=? WHERE "causation_id" IN (SELECT causation_id FROM claim) AND "status" IN ('pending','leased') AND "available_at"<=? RETURNING "causation_id"`
+		update := `WITH claim(causation_id,token) AS (VALUES ` + strings.Join(values, ",") + `) UPDATE "main"."_golem_outbox_delivery" SET "status"='leased',"attempt_count"=CASE WHEN "attempt_count"<9223372036854775807 THEN "attempt_count"+1 ELSE "attempt_count" END,"lease_token"=(SELECT token FROM claim WHERE claim.causation_id="_golem_outbox_delivery"."causation_id"),"available_at"=?,"lease_until"=?,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=? WHERE "causation_id" IN (SELECT causation_id FROM claim) AND "status" IN ('pending','leased') AND "available_at"<=? AND ("lease_until" IS NULL OR "lease_until"<=?) RETURNING "causation_id"`
 		if err := connection.SelectContext(ctx, &changed, update, arguments...); err != nil {
 			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: lease groups: %w", err)
 		}
@@ -134,9 +128,6 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	if legacyComplete {
 		coordinator.legacyProbeComplete.Store(true)
 	}
-	if leaseAligned {
-		coordinator.leaseClockAligned.Store(true)
-	}
 	return eventprovider.ClaimSnapshot{Leases: cloneLeases(leases), Depth: depth}, nil
 }
 
@@ -152,8 +143,7 @@ func sqliteBoundedCausations(ctx context.Context, queryer sqlx.QueryerContext, c
 		Causation string `db:"causation_id"`
 		Bytes     int64  `db:"fact_bytes"`
 	}
-	size := `length("event_id")+length("codec_identity")+length("generation_fingerprint")+length("model_id")+length("action")+COALESCE(length("before_identity"),0)+COALESCE(length("after_identity"),0)+length("causation_id")+length("metadata")+COALESCE(length("delete_snapshot"),0)+32`
-	query := `SELECT "causation_id",SUM(` + size + `) AS "fact_bytes" FROM "main"."_golem_outbox" WHERE "causation_id" IN (` + placeholders(len(causations)) + `) GROUP BY "causation_id"`
+	query := `SELECT "causation_id",SUM(` + sqliteFactByteExpression + `) AS "fact_bytes" FROM "main"."_golem_outbox" WHERE "causation_id" IN (` + placeholders(len(causations)) + `) GROUP BY "causation_id"`
 	if err := sqlx.SelectContext(ctx, queryer, &rows, query, arguments...); err != nil {
 		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: measure claimed groups: %w", err)
 	}
@@ -295,11 +285,8 @@ func (coordinator *eventCoordinator) RunRetention(ctx context.Context, policy ev
 			_, _ = connection.ExecContext(cleanup, "ROLLBACK")
 		}
 	}()
-	if _, err := connection.ExecContext(ctx, `UPDATE "main"."_golem_outbox_delivery" SET "available_at"="delivered_at" WHERE "status"='delivered' AND "delivered_at" IS NOT NULL AND "available_at"<>"delivered_at"`); err != nil {
-		return eventprovider.RetentionResult{}, fmt.Errorf("P7_SQLITE_RETENTION: align existing delivery time: %w", err)
-	}
 	var candidates []sqliteRetentionCandidate
-	if err := connection.SelectContext(ctx, &candidates, `SELECT d."causation_id",COUNT(o."event_id") AS "fact_rows" FROM "main"."_golem_outbox_delivery" d JOIN "main"."_golem_outbox" o ON o."causation_id"=d."causation_id" WHERE d."status"='delivered' AND d."available_at"<=? GROUP BY d."causation_id",d."available_at",d."first_recorded_at" HAVING MAX(o."recorded_at")<=? ORDER BY d."available_at",d."first_recorded_at",d."causation_id" LIMIT ?`, policy.OlderThan.UTC().UnixMicro(), policy.OlderThan.UTC().UnixMicro(), policy.MaxRows); err != nil {
+	if err := connection.SelectContext(ctx, &candidates, `SELECT d."causation_id",COUNT(o."event_id") AS "fact_rows" FROM "main"."_golem_outbox_delivery" d JOIN "main"."_golem_outbox" o ON o."causation_id"=d."causation_id" WHERE d."status"='delivered' AND d."available_at"<=? AND d."delivered_at"<=? GROUP BY d."causation_id",d."available_at",d."first_recorded_at" HAVING MAX(o."recorded_at")<=? ORDER BY d."available_at",d."first_recorded_at",d."causation_id" LIMIT ?`, policy.OlderThan.UTC().UnixMicro(), policy.OlderThan.UTC().UnixMicro(), policy.OlderThan.UTC().UnixMicro(), policy.MaxRows); err != nil {
 		return eventprovider.RetentionResult{}, fmt.Errorf("P7_SQLITE_RETENTION: select groups: %w", err)
 	}
 	selected := retentionPrefix(candidates, policy.MaxRows)

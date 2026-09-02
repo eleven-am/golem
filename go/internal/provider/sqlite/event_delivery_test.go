@@ -585,3 +585,105 @@ func sortedLeaseCausations(leases []eventprovider.Lease) []string {
 	sort.Strings(result)
 	return result
 }
+
+func TestSQLiteClaimRefusesLiveLeaseWrittenWithoutAvailableAtAlignment(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	database := openEventDeliveryFixture(t, provider)
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	warm := deliveryUUID(800)
+	insertDeliveryFact(t, database, warm, deliveryUUID(801), 1, 1)
+	if leases, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Second}); err != nil || len(leases) != 1 {
+		t.Fatalf("warming claim=%#v error=%v", leases, err)
+	}
+	if changed, err := coordinator.Acknowledge(ctx, warm, warmLeaseToken(t, database, warm)); err != nil || !changed {
+		t.Fatalf("warming ack changed=%t error=%v", changed, err)
+	}
+	legacy := deliveryUUID(810)
+	insertDeliveryFact(t, database, legacy, deliveryUUID(811), 1, 2)
+	now := time.Now().UTC().UnixMicro()
+	insertLegacyDelivery(t, database, legacy, "leased", now-int64(time.Hour/time.Microsecond), sql.NullInt64{Int64: now + int64(time.Hour/time.Microsecond), Valid: true}, sql.NullInt64{}, sql.NullString{String: deliveryUUID(812), Valid: true})
+	leases, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Second})
+	if err != nil || len(leases) != 0 {
+		t.Fatalf("legacy live lease was stolen: leases=%#v error=%v", leases, err)
+	}
+	state, err := coordinator.Inspect(ctx, legacy)
+	if err != nil || state.Status != eventprovider.StatusLeased || state.LeaseToken != deliveryUUID(812) {
+		t.Fatalf("legacy lease ownership changed: %#v error=%v", state, err)
+	}
+}
+
+func TestSQLiteRetentionHonoursLegacyDeliveryTimeWithoutRewritingRows(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	database := openEventDeliveryFixture(t, provider)
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	micros := func(offset time.Duration) int64 { return now.Add(offset).UnixMicro() }
+	recent := deliveryUUID(820)
+	insertDeliveryFact(t, database, recent, deliveryUUID(821), 1, micros(-3*time.Hour))
+	insertLegacyDelivery(t, database, recent, "delivered", micros(-3*time.Hour), sql.NullInt64{}, sql.NullInt64{Int64: micros(-time.Minute), Valid: true}, sql.NullString{})
+	expired := deliveryUUID(830)
+	insertDeliveryFact(t, database, expired, deliveryUUID(831), 1, micros(-4*time.Hour))
+	insertLegacyDelivery(t, database, expired, "delivered", micros(-4*time.Hour), sql.NullInt64{}, sql.NullInt64{Int64: micros(-2 * time.Hour), Valid: true}, sql.NullString{})
+	retained, err := coordinator.RunRetention(ctx, eventprovider.RetentionPolicy{OlderThan: now.Add(-time.Hour), MaxRows: 8})
+	if err != nil || retained.Causations != 1 || retained.Facts != 1 {
+		t.Fatalf("retention=%#v error=%v", retained, err)
+	}
+	var survivors int
+	if err := database.Get(&survivors, `SELECT count(*) FROM "_golem_outbox_delivery" WHERE "causation_id"=?`, expired); err != nil || survivors != 0 {
+		t.Fatalf("expired legacy group survived: %d error=%v", survivors, err)
+	}
+	var available int64
+	if err := database.Get(&available, `SELECT "available_at" FROM "_golem_outbox_delivery" WHERE "causation_id"=?`, recent); err != nil {
+		t.Fatal(err)
+	}
+	if available != micros(-3*time.Hour) {
+		t.Fatalf("retention rewrote an undeletable delivered row: available_at=%d want=%d", available, micros(-3*time.Hour))
+	}
+}
+
+func TestSQLiteFactByteBudgetMeasuresBytesNotCharacters(t *testing.T) {
+	provider := New()
+	database := openEventDeliveryFixture(t, provider)
+	cause := deliveryUUID(840)
+	codec := "golem.fact.v1.ünïcødé"
+	event := deliveryUUID(841)
+	fingerprint := fmt.Sprintf("%064x", 1)
+	model := fmt.Sprintf("%032x", 2)
+	_, err := database.Exec(`INSERT INTO "_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES (?,?,?,?,?,?,?,?,?,?,?)`, event, 1, codec, fingerprint, model, "created", []byte{1}, cause, 1, []byte{7}, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := int64(len(event) + len(codec) + len(fingerprint) + len(model) + len("created") + 1 + len(cause) + 1 + 32)
+	var measured int64
+	if err := database.Get(&measured, `SELECT SUM(`+sqliteFactByteExpression+`) FROM "_golem_outbox" WHERE "causation_id"=?`, cause); err != nil {
+		t.Fatal(err)
+	}
+	if measured != want {
+		t.Fatalf("claim budget measured %d units for %d bytes", measured, want)
+	}
+}
+
+func warmLeaseToken(t *testing.T, database *sqlx.DB, causation string) string {
+	t.Helper()
+	var token string
+	if err := database.Get(&token, `SELECT "lease_token" FROM "_golem_outbox_delivery" WHERE "causation_id"=?`, causation); err != nil {
+		t.Fatal(err)
+	}
+	return token
+}
+
+func insertLegacyDelivery(t *testing.T, database *sqlx.DB, causation, status string, availableAt int64, leaseUntil, deliveredAt sql.NullInt64, leaseToken sql.NullString) {
+	t.Helper()
+	_, err := database.Exec(`INSERT INTO "_golem_outbox_delivery" ("causation_id","status","first_recorded_at","attempt_count","available_at","lease_token","lease_until","delivered_at","updated_at") VALUES (?,?,?,?,?,?,?,?,?)`, causation, status, availableAt, 1, availableAt, leaseToken, leaseUntil, deliveredAt, availableAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
