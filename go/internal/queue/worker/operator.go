@@ -149,7 +149,11 @@ func (control operator) CancelMany(ctx context.Context, ids []queue.JobID) (int,
 }
 
 func (control operator) Requeue(ctx context.Context, id queue.JobID) (bool, error) {
-	changed, err := control.store.Requeue(ctx, string(id))
+	value := string(id)
+	if err := queueprovider.ValidateOperatorIDs([]string{value}); err != nil {
+		return false, queue.Fail(queue.CodeConfigInvalid, "%v", err)
+	}
+	changed, err := control.store.Requeue(ctx, value)
 	if err != nil {
 		return false, queue.Fail(queue.CodeStoreFailure, "requeue job %s: %v", id, err)
 	}

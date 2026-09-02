@@ -35,6 +35,7 @@ const (
 	codeCanceled          = "canceled"
 	codeAttemptsExhausted = queueprovider.CodeAttemptsExhausted
 	codePanic             = "handler_panic"
+	retentionQueueType    = "retention"
 )
 
 // Worker claims and executes registered job types. One Worker owns one Run at a
@@ -213,12 +214,14 @@ func (worker *Worker) Run(ctx context.Context) error {
 		var err error
 		now := time.Now()
 		if !now.Before(nextRetention) {
+			started := time.Now()
 			_, retentionErr := worker.store.RunRetention(ctx, queueprovider.RetentionPolicy{
 				OlderThan: now.Add(-worker.limits.RetentionAge), MaxRows: worker.limits.RetentionRows,
 				States: []queueprovider.State{queueprovider.StateSucceeded, queueprovider.StateFailed, queueprovider.StateCanceled},
 			})
 			if retentionErr != nil {
 				retentionFailures++
+				observeexec.EmitQueue(runObserver, worker.provider, retentionQueueType, observe.PhaseApply, observe.OutcomeFailure, observe.ReasonProvider, retentionFailures, time.Since(started))
 				delay := worker.limits.PollInterval + (queue.Backoff{Base: worker.limits.PollInterval, Cap: 30 * time.Second}).Delay(retentionFailures)
 				nextRetention = now.Add(delay)
 			} else {
