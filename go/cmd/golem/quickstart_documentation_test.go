@@ -130,3 +130,54 @@ func quickstartGo(t *testing.T, directory string, arguments ...string) string {
 	}
 	return string(output)
 }
+
+func TestGuideApplicationRuns(t *testing.T) {
+	moduleRoot := commandModuleRoot(t)
+	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "GUIDE.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := quickstartDocumentedFiles(t, string(source))
+	for _, required := range []string{"notes/schema.go", "notes/policies.go", "cmd/notes/main.go"} {
+		if files[required] == "" {
+			t.Fatalf("GUIDE.md documents no %s block", required)
+		}
+	}
+
+	application := t.TempDir()
+	for path, body := range files {
+		full := filepath.Join(application, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	golemModule, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "module example.com/notes\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quickstartGo(t, application, "mod", "tidy")
+
+	database := "file:" + filepath.ToSlash(filepath.Join(application, "notes.db"))
+	for _, arguments := range [][]string{
+		{"migration", "new", "--schema", "./notes", "--name", "init"},
+		{"generate", "--schema", "./notes", "--app-out", "./notes"},
+		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
+	} {
+		var stdout, stderr bytes.Buffer
+		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
+		}
+	}
+	quickstartGo(t, application, "mod", "tidy")
+	output := quickstartGo(t, application, "run", "./cmd/notes")
+	if !strings.Contains(output, "author=2 anonymous=1 drafts=1") {
+		t.Fatalf("the documented program printed %q", output)
+	}
+}
