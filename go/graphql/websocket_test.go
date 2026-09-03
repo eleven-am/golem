@@ -2,9 +2,11 @@ package graphql
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http/httptest"
 	"strings"
 	"sync"
@@ -290,5 +292,60 @@ func readCloseCode(t *testing.T, connection *websocket.Conn) int {
 			}
 			t.Fatal(err)
 		}
+	}
+}
+
+func maskedPongFrame(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	if len(payload) > 125 {
+		t.Fatalf("control payload = %d bytes", len(payload))
+	}
+	var mask [4]byte
+	if _, err := rand.Read(mask[:]); err != nil {
+		t.Fatal(err)
+	}
+	frame := []byte{0x8a, byte(0x80 | len(payload))}
+	frame = append(frame, mask[:]...)
+	for index, value := range payload {
+		frame = append(frame, value^mask[index%4])
+	}
+	return frame
+}
+
+func TestWebSocketKeepsClientThatSendsUnsolicitedPongsBeforeItsAnswer(t *testing.T) {
+	server, _ := newProtocolServer(t, events.Limits{WebSocketKeepAlive: 100 * time.Millisecond, WebSocketPongTimeout: 30 * time.Millisecond})
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	if message := readWS(t, connection); message.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", message)
+	}
+	wire := connection.UnderlyingConn()
+	connection.SetPingHandler(func(nonce string) error {
+		var batch []byte
+		for index := range 16 {
+			batch = append(batch, maskedPongFrame(t, []byte{byte('a' + index)})...)
+		}
+		batch = append(batch, maskedPongFrame(t, []byte(nonce))...)
+		_, writeErr := wire.Write(batch)
+		return writeErr
+	})
+	_ = connection.SetReadDeadline(time.Now().Add(400 * time.Millisecond))
+	for {
+		_, _, err := connection.ReadMessage()
+		if err == nil {
+			continue
+		}
+		var timeout net.Error
+		if errors.As(err, &timeout) && timeout.Timeout() {
+			return
+		}
+		t.Fatalf("server dropped a client that answered every probe: %v", err)
 	}
 }

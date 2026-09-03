@@ -525,3 +525,119 @@ func insertPostgreSQLDeliveryFact(t *testing.T, database *sqlx.DB, causation, ev
 func postgresqlDeliveryUUID(value int) string {
 	return fmt.Sprintf("00000000-0000-4000-8000-%012x", value)
 }
+
+func TestPostgreSQLLegacyDeliveryShapeLiveProfiles(t *testing.T) {
+	for _, profile := range []struct{ name, env string }{{"c", "GOLEM_TEST_POSTGRES_DSN"}, {"linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
+		t.Run(profile.name, func(t *testing.T) {
+			dsn := os.Getenv(profile.env)
+			if dsn == "" {
+				t.Skip(profile.env + " is not configured")
+			}
+			assertPostgreSQLLegacyDeliveryShape(t, dsn)
+		})
+	}
+}
+
+func assertPostgreSQLLegacyDeliveryShape(t *testing.T, dsn string) {
+	t.Helper()
+	ctx := context.Background()
+	provider := New()
+	database, _, err := provider.Open(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	cleanup := func() {
+		_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_p7_legacy_live" CASCADE`)
+		_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	}
+	cleanup()
+	defer cleanup()
+	schema, err := provider.Lower(ctx, fixtureModel(), physical.LowerOptions{Namespace: "golem_p7_legacy_live"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ApplyInitial(ctx, database, schema); err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := provider.EventCoordinator(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	warm := postgresqlDeliveryUUID(800)
+	insertPostgreSQLLegacyFact(t, database, warm, postgresqlDeliveryUUID(801), 1, now.Add(-5*time.Hour))
+	warmed, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 1, LeaseDuration: time.Second})
+	if err != nil || len(warmed) != 1 {
+		t.Fatalf("warming claim=%#v error=%v", warmed, err)
+	}
+	if changed, err := coordinator.Acknowledge(ctx, warm, warmed[0].Delivery.LeaseToken); err != nil || !changed {
+		t.Fatalf("warming ack changed=%t error=%v", changed, err)
+	}
+	legacyToken := postgresqlDeliveryUUID(812)
+	leasedCause := postgresqlDeliveryUUID(810)
+	insertPostgreSQLLegacyFact(t, database, leasedCause, postgresqlDeliveryUUID(811), 1, now.Add(-4*time.Hour))
+	insertPostgreSQLLegacyDelivery(t, database, leasedCause, "leased", now.Add(-time.Hour), &leasedLegacy{Until: now.Add(time.Hour), Token: legacyToken})
+	leases, err := coordinator.Claim(ctx, eventprovider.ClaimOptions{Groups: 4, LeaseDuration: time.Second})
+	if err != nil || len(leases) != 0 {
+		t.Fatalf("legacy live lease was stolen: leases=%#v error=%v", leases, err)
+	}
+	state, err := coordinator.Inspect(ctx, leasedCause)
+	if err != nil || state.Status != eventprovider.StatusLeased || state.LeaseToken != legacyToken {
+		t.Fatalf("legacy lease ownership changed: %#v error=%v", state, err)
+	}
+	recent := postgresqlDeliveryUUID(820)
+	insertPostgreSQLLegacyFact(t, database, recent, postgresqlDeliveryUUID(821), 1, now.Add(-3*time.Hour))
+	insertPostgreSQLLegacyDelivery(t, database, recent, "delivered", now.Add(-3*time.Hour), &deliveredLegacy{At: now.Add(-time.Minute)})
+	expired := postgresqlDeliveryUUID(830)
+	insertPostgreSQLLegacyFact(t, database, expired, postgresqlDeliveryUUID(831), 1, now.Add(-4*time.Hour))
+	insertPostgreSQLLegacyDelivery(t, database, expired, "delivered", now.Add(-4*time.Hour), &deliveredLegacy{At: now.Add(-2 * time.Hour)})
+	retained, err := coordinator.RunRetention(ctx, eventprovider.RetentionPolicy{OlderThan: now.Add(-time.Hour), MaxRows: 8})
+	if err != nil || retained.Causations != 1 || retained.Facts != 1 {
+		t.Fatalf("retention=%#v error=%v", retained, err)
+	}
+	var survivors int
+	if err := database.Get(&survivors, `SELECT COUNT(*) FROM "_golem"."_golem_outbox_delivery" WHERE "causation_id"=$1`, expired); err != nil || survivors != 0 {
+		t.Fatalf("expired legacy group survived: %d error=%v", survivors, err)
+	}
+	var available time.Time
+	if err := database.Get(&available, `SELECT "available_at" FROM "_golem"."_golem_outbox_delivery" WHERE "causation_id"=$1`, recent); err != nil {
+		t.Fatal(err)
+	}
+	if !available.UTC().Equal(now.Add(-3 * time.Hour)) {
+		t.Fatalf("retention rewrote an undeletable delivered row: available_at=%s want=%s", available.UTC(), now.Add(-3*time.Hour))
+	}
+}
+
+type leasedLegacy struct {
+	Until time.Time
+	Token string
+}
+
+type deliveredLegacy struct{ At time.Time }
+
+func insertPostgreSQLLegacyFact(t *testing.T, database *sqlx.DB, causation, event string, ordinal int, recorded time.Time) {
+	t.Helper()
+	_, err := database.Exec(`INSERT INTO "_golem"."_golem_outbox" ("event_id","fact_version","codec_identity","generation_fingerprint","model_id","action","after_identity","causation_id","transaction_ordinal","metadata","recorded_at") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, event, 1, "golem.fact.v1", strings.Repeat("1", 64), strings.Repeat("2", 32), "created", []byte{1}, causation, ordinal, []byte{byte(ordinal)}, recorded)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func insertPostgreSQLLegacyDelivery(t *testing.T, database *sqlx.DB, causation, status string, availableAt time.Time, shape any) {
+	t.Helper()
+	var leaseUntil, deliveredAt any
+	var leaseToken any
+	switch value := shape.(type) {
+	case *leasedLegacy:
+		leaseUntil, leaseToken = value.Until, value.Token
+	case *deliveredLegacy:
+		deliveredAt = value.At
+	default:
+		t.Fatalf("unsupported legacy delivery shape %T", shape)
+	}
+	_, err := database.Exec(`INSERT INTO "_golem"."_golem_outbox_delivery" ("causation_id","status","first_recorded_at","attempt_count","available_at","lease_token","lease_until","delivered_at","updated_at") VALUES ($1,$2,$3,1,$3,$4,$5,$6,$3)`, causation, status, availableAt, leaseToken, leaseUntil, deliveredAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+}

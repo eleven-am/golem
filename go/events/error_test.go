@@ -84,13 +84,13 @@ func TestNormalizeLimitsNamesTheRetryOrderingAndMemoryBuffer(t *testing.T) {
 	}
 }
 
-func TestNormalizeLimitsRejectsPongTimeoutEqualToKeepalive(t *testing.T) {
-	_, err := NormalizeLimits(Limits{WebSocketKeepAlive: time.Second, WebSocketPongTimeout: time.Second})
-	if errorCode(t, err) != CodeEventConfig {
-		t.Fatalf("code = %v", err)
+func TestNormalizeLimitsAcceptsPongTimeoutEqualToKeepalive(t *testing.T) {
+	limits, err := NormalizeLimits(Limits{WebSocketKeepAlive: 30 * time.Second, WebSocketPongTimeout: 30 * time.Second})
+	if err != nil {
+		t.Fatalf("equal liveness bounds were rejected: %v", err)
 	}
-	if !strings.Contains(err.Error(), "WebSocketPongTimeout") || !strings.Contains(err.Error(), "WebSocketKeepAlive") {
-		t.Fatalf("liveness ordering error %q names neither bound", err)
+	if limits.WebSocketKeepAlive != 30*time.Second || limits.WebSocketPongTimeout != 30*time.Second {
+		t.Fatalf("liveness bounds = %s keepalive, %s pong timeout", limits.WebSocketKeepAlive, limits.WebSocketPongTimeout)
 	}
 }
 

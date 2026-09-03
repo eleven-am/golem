@@ -128,7 +128,6 @@ func DefineSchema(schema *golem.Schema) {
 	}
 	vectorTable := string(descriptor.Storage) + "_vec"
 	stateTable := string(descriptor.Storage) + "_state"
-	hnswIndex := string(descriptor.Storage) + "_hnsw"
 
 	provider := postgresqlprovider.New()
 	database, report, err := provider.Open(ctx, dsn)
@@ -153,23 +152,9 @@ func DefineSchema(schema *golem.Schema) {
 	if err := provider.Verify(ctx, database, desired); err != nil {
 		t.Fatalf("introspect reviewed PostgreSQL semantic schema: %v", err)
 	}
-	var extensionVersion, method, opclass string
-	var valid, ready bool
+	var extensionVersion string
 	if err := database.Get(&extensionVersion, `SELECT extversion FROM pg_catalog.pg_extension WHERE extname='vector'`); err != nil || extensionVersion == "" {
 		t.Fatalf("pgvector extension version=%q error=%v", extensionVersion, err)
-	}
-	if err := database.QueryRowx(`SELECT am.amname,opc.opcname,i.indisvalid,i.indisready
-FROM pg_catalog.pg_index i
-JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid
-JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid
-JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace
-JOIN pg_catalog.pg_am am ON am.oid=ci.relam
-JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0]
-WHERE n.nspname=$1 AND ct.relname=$2 AND ci.relname=$3`, namespace, vectorTable, hnswIndex).Scan(&method, &opclass, &valid, &ready); err != nil {
-		t.Fatal(err)
-	}
-	if method != "hnsw" || opclass != "vector_cosine_ops" || !valid || !ready {
-		t.Fatalf("HNSW facts method=%q opclass=%q valid=%t ready=%t", method, opclass, valid, ready)
 	}
 	acceptance := `package acceptance_test
 
@@ -321,7 +306,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 3, aggregate: 3},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 3},
   )
 
   similarSourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
@@ -345,7 +330,7 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("pgvector similarity leaked source or private row: %q,%q", similarFirst, similarSecond)
   }
   assertTrace(t, observations,
-    observed{operation: observe.OperationSemanticRank, statements: 4, aggregate: 2},
+    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 2},
   )
 
   tx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
@@ -400,37 +385,15 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
   if bulkTrace[125] != (observed{operation: observe.OperationSemanticRefresh, statements: 274, aggregate: 1000}) { t.Fatalf("bulk refresh observation=%#v", bulkTrace[125]) }
   plannerRanks, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
-  if len(plannerRanks) != 10 || provider.count() != 1007 { t.Fatalf("generated HNSW ranks=%d calls=%d", len(plannerRanks), provider.count()) }
+  if len(plannerRanks) != 10 || provider.count() != 1007 { t.Fatalf("generated exact ranks=%d calls=%d", len(plannerRanks), provider.count()) }
   for _, rank := range plannerRanks {
     title, _ := golem.Value(rank.Row(), models.Posts.Title).Get()
-    if !strings.HasPrefix(title, "public ") || strings.Contains(title, "private") { t.Fatalf("generated HNSW authorization escaped: %q", title) }
+    if !strings.HasPrefix(title, "public ") || strings.Contains(title, "private") { t.Fatalf("generated exact authorization escaped: %q", title) }
   }
   assertTrace(t, observations,
     observed{operation: observe.OperationSemanticProvider, aggregate: 1},
-    observed{operation: observe.OperationSemanticRank, statements: 2, aggregate: 10},
+    observed{operation: observe.OperationSemanticRank, statements: 1, aggregate: 10},
   )
-  plannerKeys := make([]string, 0, 1003)
-  if err := database.UnsafeSQLX().Select(&plannerKeys, "SELECT record_key FROM \"{{NS}}\".\"{{VECTOR}}\" ORDER BY record_key"); err != nil { t.Fatal(err) }
-  if len(plannerKeys) != 1003 { t.Fatalf("planner candidate keys=%d", len(plannerKeys)) }
-  plannerTx, err := database.UnsafeSQLX().BeginTxx(ctx, nil)
-  if err != nil { t.Fatal(err) }
-  defer plannerTx.Rollback()
-  if _, err := plannerTx.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan='strict_order'"); err != nil { t.Fatal(err) }
-  explainRows, err := plannerTx.QueryxContext(ctx, "EXPLAIN (COSTS OFF) SELECT record_key FROM \"{{NS}}\".\"{{VECTOR}}\" WHERE record_key=ANY($2::text[]) ORDER BY embedding <=> $1::vector LIMIT $3", "[1,0,0]", plannerKeys, 42)
-  if err != nil { t.Fatal(err) }
-  var plan strings.Builder
-  for explainRows.Next() { var line string; if err := explainRows.Scan(&line); err != nil { t.Fatal(err) }; plan.WriteString(line); plan.WriteByte('\n') }
-  if err := explainRows.Close(); err != nil { t.Fatal(err) }
-  if !strings.Contains(plan.String(), "{{HNSW}}") || !strings.Contains(plan.String(), "Index Scan") {
-    t.Fatalf("eligible native HNSW plan was not selected:\n%s", plan.String())
-  }
-  hnswRows, err := plannerTx.QueryxContext(ctx, "SELECT (embedding <=> $1::vector)::double precision FROM \"{{NS}}\".\"{{VECTOR}}\" WHERE record_key=ANY($2::text[]) ORDER BY embedding <=> $1::vector LIMIT $3", "[1,0,0]", plannerKeys, 10)
-  if err != nil { t.Fatal(err) }
-  hnswCount := 0
-  for hnswRows.Next() { var distance float64; if err := hnswRows.Scan(&distance); err != nil { t.Fatal(err) }; if distance != 0 { t.Fatalf("HNSW nearest distance=%v", distance) }; hnswCount++ }
-  if err := hnswRows.Close(); err != nil { t.Fatal(err) }
-  if hnswCount != 10 { t.Fatalf("HNSW nearest count=%d", hnswCount) }
-  if err := plannerTx.Rollback(); err != nil { t.Fatal(err) }
   if _, err := database.UnsafeSQLX().ExecContext(ctx, "DELETE FROM \"{{NS}}\".\"posts\" WHERE title LIKE 'public planner %'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   assertTrace(t, observations, observed{operation: observe.OperationSemanticRefresh, statements: 30, aggregate: 1000})
@@ -505,7 +468,6 @@ func TestGeneratedPGVectorSearchIsNativeAuthorizedAndIncremental(t *testing.T) {
 		"{{NS}}", namespace,
 		"{{VECTOR}}", vectorTable,
 		"{{STATE}}", stateTable,
-		"{{HNSW}}", hnswIndex,
 	).Replace(acceptance)
 	writePipelineAcceptanceFile(t, root, "acceptance/semantic_postgresql_test.go", acceptance)
 	command := exec.Command("go", "test", "-mod=mod", "-count=1", "./...")

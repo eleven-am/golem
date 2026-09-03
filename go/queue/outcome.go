@@ -90,7 +90,11 @@ func RetryIn(delay time.Duration, err error) error {
 }
 
 // RetryInWithoutAttempt reschedules work without spending the claimed attempt.
-// It is intended for external capacity deferrals, not handler failures.
+// It is intended for external capacity deferrals, not handler failures. A
+// handler that always returns it produces a job that never exhausts its
+// attempts and so never dead-letters: the row stays live, and automatic
+// retention only deletes terminal rows, so nothing ages it out. Bound the
+// deferral on something other than the attempt count.
 func RetryInWithoutAttempt(delay time.Duration, err error) error {
 	if delay < 0 {
 		delay = 0

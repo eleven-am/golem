@@ -173,6 +173,7 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 
 func runQueueGate(t *testing.T, gate func(testing.TB, providertest.Fixture)) {
 	t.Helper()
+	required := os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1"
 	for _, profile := range []struct{ name, environment string }{
 		{name: "c", environment: "GOLEM_TEST_POSTGRES_DSN"},
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
@@ -180,7 +181,10 @@ func runQueueGate(t *testing.T, gate func(testing.TB, providertest.Fixture)) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.environment))
 			if dsn == "" {
-				t.Skip(profile.environment + " is not configured; queue store evidence requires this live profile")
+				if required {
+					t.Fatalf("required PostgreSQL queue profile %s is not configured", profile.environment)
+				}
+				t.Skip(profile.environment + " is not configured; queue store evidence requires this live profile, so this run proves SQLite parity only")
 			}
 			gate(t, newQueueFixture(t, dsn))
 		})

@@ -3,7 +3,6 @@ package extension
 import (
 	"crypto/sha256"
 	"fmt"
-	"reflect"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -13,44 +12,7 @@ import (
 // the logical model's provider-neutral semantic-index authority, mirroring
 // IsSemanticSearchOperation for the similarity root.
 func IsSemanticSimilarOperation(compilation ir.CompilationIR, operation ir.CustomOperationContractIR) bool {
-	if compilation.Model.Schema.PackagePath == "" || operation.Resolver.PackagePath != compilation.Model.Schema.PackagePath {
-		return false
-	}
-	var contract ir.ModelContractIR
-	for _, candidate := range compilation.Contract.Models {
-		if operation.Result.Kind == ir.GraphQLTypeList && operation.Result.Element != nil && candidate.GraphQLName == operation.Result.Element.Name {
-			contract = candidate
-			break
-		}
-	}
-	if contract.ModelID == "" || !contract.Exposed {
-		return false
-	}
-	indexes, err := semanticcontract.IndexesByModel(compilation.Model)
-	if err != nil {
-		return false
-	}
-	var expectedIndex semanticcontract.Index
-	found := false
-	for _, index := range indexes[contract.ModelID] {
-		if index.Name == operation.Resolver.Name {
-			expectedIndex, found = index, true
-			break
-		}
-	}
-	if !found {
-		return false
-	}
-	exported, ok := semanticcontract.ExportedIndexName(expectedIndex.Name)
-	if !ok {
-		return false
-	}
-	exportedPlural, ok := semanticcontract.ExportedIndexName(contract.GraphQLPlural)
-	if !ok {
-		return false
-	}
-	expected := semanticSimilarOperation(contract, expectedIndex, semanticSimilarIdentity(contract.ModelID, expectedIndex.Name), exportedPlural, exported, compilation.Model.Schema.PackagePath)
-	return reflect.DeepEqual(operation, expected)
+	return isSemanticOperation(compilation, operation, true)
 }
 
 // semanticSimilarOperation takes the model's unique selector rather than an

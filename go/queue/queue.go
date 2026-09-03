@@ -28,6 +28,12 @@ const MaximumPayloadBytes = 1 << 20
 // MaximumKeyBytes is the ceiling on a dedupe or exclusivity key.
 const MaximumKeyBytes = 256
 
+// RetentionDisabled turns automatic retention off. Assigned to
+// Limits.RetentionEvery it stops a worker deleting terminal job rows at all,
+// so job history survives until an operator calls RunRetention. It is the only
+// negative duration Limits accepts.
+const RetentionDisabled = time.Duration(-1)
+
 const (
 	defaultMaxAttempts   = 5
 	defaultTimeout       = 10 * time.Minute
@@ -356,19 +362,34 @@ func (pending Pending) MaxAttempts() int { return pending.maxAttempts }
 
 // Limits bound one worker. Zero-valued fields take the package defaults.
 type Limits struct {
-	Concurrency     int
-	ClaimBatch      int
-	LeaseDuration   time.Duration
-	PollInterval    time.Duration
-	ShutdownGrace   time.Duration
+	Concurrency   int
+	ClaimBatch    int
+	LeaseDuration time.Duration
+	PollInterval  time.Duration
+	ShutdownGrace time.Duration
+	// AbandonGrace is how long the worker waits for a handler to return after
+	// cancelling it, on shutdown and on a per-type Timeout. Go cannot kill a
+	// goroutine: once the grace elapses the worker stops waiting and records
+	// the durable outcome while the handler may still be running, so an
+	// abandoned timed-out job can execute concurrently with its own retry.
+	// Handlers that must not run twice have to honour their context.
 	AbandonGrace    time.Duration
 	MaxPayloadBytes int
-	RetentionAge    time.Duration
-	RetentionEvery  time.Duration
-	RetentionRows   int
+	// RetentionAge is how long a terminal job row survives automatic
+	// retention. It bounds only succeeded, failed and canceled rows; live work
+	// is never deleted.
+	RetentionAge time.Duration
+	// RetentionEvery is how often a worker runs automatic retention.
+	// RetentionDisabled turns it off entirely and keeps every terminal row
+	// until an operator calls RunRetention.
+	RetentionEvery time.Duration
+	RetentionRows  int
 }
 
-// DefaultLimits returns the documented worker defaults.
+// DefaultLimits returns the documented worker defaults. Automatic retention is
+// on: a worker deletes terminal job rows older than thirty days every minute.
+// Applications that keep job history for longer must set RetentionAge, or
+// RetentionEvery to RetentionDisabled.
 func DefaultLimits() Limits {
 	return Limits{
 		Concurrency:     defaultConcurrency,
@@ -402,6 +423,12 @@ func (limits Limits) Resolved() Limits {
 	}
 }
 
+// RetentionEnabled reports whether a worker deletes terminal job rows on its
+// own. It is false only when RetentionEvery is RetentionDisabled.
+func (limits Limits) RetentionEnabled() bool {
+	return limits.Resolved().RetentionEvery != RetentionDisabled
+}
+
 // Validate refuses limits a worker cannot honour. Zero-valued fields are the
 // defaults and always pass.
 func (limits Limits) Validate() error {
@@ -409,8 +436,10 @@ func (limits Limits) Validate() error {
 	switch {
 	case limits.Concurrency < 0 || limits.ClaimBatch < 0 || limits.MaxPayloadBytes < 0 || limits.RetentionRows < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative bound")
-	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0 || limits.RetentionAge < 0 || limits.RetentionEvery < 0:
+	case limits.LeaseDuration < 0 || limits.PollInterval < 0 || limits.ShutdownGrace < 0 || limits.AbandonGrace < 0 || limits.RetentionAge < 0:
 		return Fail(CodeConfigInvalid, "limits carry a negative duration")
+	case limits.RetentionEvery < 0 && limits.RetentionEvery != RetentionDisabled:
+		return Fail(CodeConfigInvalid, "RetentionEvery must be positive or RetentionDisabled")
 	case resolved.MaxPayloadBytes > MaximumPayloadBytes:
 		return Fail(CodeConfigInvalid, "MaxPayloadBytes is above %d", MaximumPayloadBytes)
 	case resolved.LeaseDuration < time.Second || resolved.LeaseDuration > 10*time.Minute:
@@ -421,8 +450,8 @@ func (limits Limits) Validate() error {
 		return Fail(CodeConfigInvalid, "AbandonGrace must be at most 2m")
 	case resolved.RetentionAge < time.Hour || resolved.RetentionAge > 10*365*24*time.Hour:
 		return Fail(CodeConfigInvalid, "RetentionAge must be within 1h..10y")
-	case resolved.RetentionEvery < time.Minute || resolved.RetentionEvery > 24*time.Hour:
-		return Fail(CodeConfigInvalid, "RetentionEvery must be within 1m..24h")
+	case resolved.RetentionEvery != RetentionDisabled && (resolved.RetentionEvery < time.Minute || resolved.RetentionEvery > 24*time.Hour):
+		return Fail(CodeConfigInvalid, "RetentionEvery must be within 1m..24h or RetentionDisabled")
 	case resolved.RetentionRows > MaximumRetentionRows:
 		return Fail(CodeConfigInvalid, "RetentionRows is above %d", MaximumRetentionRows)
 	}

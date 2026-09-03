@@ -11,6 +11,7 @@ import (
 
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	eventcodec "github.com/eleven-am/golem/go/internal/event/codec"
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
@@ -498,4 +499,132 @@ func assertIdenticalBatches(t *testing.T, left, right eventvalue.EventBatch) {
 			t.Fatalf("event %d identity or bytes changed across retry", index)
 		}
 	}
+}
+
+type quarantineCoordinator struct {
+	publisherTestCoordinator
+	lease     eventprovider.Lease
+	claims    atomic.Int64
+	continued chan struct{}
+	codeMu    sync.Mutex
+	codes     []string
+}
+
+func (coordinator *quarantineCoordinator) Claim(ctx context.Context, _ eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
+	if coordinator.claims.Add(1) == 1 {
+		return []eventprovider.Lease{coordinator.lease}, nil
+	}
+	select {
+	case <-coordinator.continued:
+	default:
+		close(coordinator.continued)
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func (coordinator *quarantineCoordinator) Block(_ context.Context, _, _, code string) (bool, error) {
+	coordinator.codeMu.Lock()
+	defer coordinator.codeMu.Unlock()
+	coordinator.codes = append(coordinator.codes, code)
+	return true, nil
+}
+
+func (coordinator *quarantineCoordinator) blocked() []string {
+	coordinator.codeMu.Lock()
+	defer coordinator.codeMu.Unlock()
+	return append([]string(nil), coordinator.codes...)
+}
+
+func TestPublisherQuarantinesCausationAboveEncodedBatchBound(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	lease := publisherCausalLease(t, fixture, 2)
+	bound := publisherEncodedFactBytes(t, fixture, lease.Facts[0])
+	coordinator := &quarantineCoordinator{
+		publisherTestCoordinator: publisherTestCoordinator{renewed: true},
+		lease:                    lease,
+		continued:                make(chan struct{}),
+	}
+	transport := &captureTransport{}
+	publisher, err := NewPublisher(coordinator, publisherTestResolver{fixture.Registry}, transport, Limits{
+		ClaimGroups: 1, Concurrency: 1, LeaseDuration: time.Second, PublishTimeout: time.Second,
+		RetryBase: time.Millisecond, RetryCap: time.Second, ShutdownGrace: 20 * time.Millisecond,
+		MaxEncodedBytes: bound, MaxBatchBytes: bound,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- publisher.Run(ctx) }()
+	select {
+	case <-coordinator.continued:
+		cancel()
+	case <-time.After(5 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("publisher stopped after an oversized causation")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if codes := coordinator.blocked(); len(codes) != 1 || codes[0] != "batch-too-large" {
+		t.Fatalf("oversized causation quarantine codes=%#v", codes)
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.retryCalls != 0 || coordinator.ackCalls != 0 {
+		t.Fatalf("oversized causation was rescheduled: retries=%d acks=%d", coordinator.retryCalls, coordinator.ackCalls)
+	}
+	transport.mu.Lock()
+	defer transport.mu.Unlock()
+	if len(transport.batches) != 0 {
+		t.Fatalf("oversized causation reached the transport: %d batches", len(transport.batches))
+	}
+}
+
+func publisherEncodedFactBytes(t *testing.T, fixture schematest.Fixture, fact eventprovider.FactRow) int {
+	t.Helper()
+	envelope, err := eventcodec.EncodeStoredRow(codecFactRow(fact), publisherTestResolver{fixture.Registry}, eventcodec.Limits{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(envelope.Encoded())
+}
+
+func publisherCausalLease(t *testing.T, fixture schematest.Fixture, rows int) eventprovider.Lease {
+	t.Helper()
+	requirement, err := mutationir.NewFactRequirement(mutationir.FactCreated, nil, []policyir.FieldID{policyir.FieldID(fixture.PostID)}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cause := mutationfact.CausationID{8}
+	lease := eventprovider.Lease{Delivery: eventprovider.Delivery{
+		Status: eventprovider.StatusLeased, LeaseToken: "00000000-0000-4000-8000-000000000001", AttemptCount: 1,
+	}}
+	for ordinal := 1; ordinal <= rows; ordinal++ {
+		row, err := mutationdecode.NewRow(fixture.Registry, policyir.ModelID(fixture.Post), []mutationdecode.Cell{
+			mutationdecode.Value(policyir.FieldID(fixture.PostID), policyir.UUIDValue([16]byte{byte(ordinal)})),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		envelope, err := mutationfact.New(fixture.Registry, mutationfact.EventID{byte(ordinal)}, requirement, cause, uint32(ordinal), nil, &row)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stored, err := envelope.OutboxRow(time.Unix(1_700_000_000, 123_456_000).UTC())
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease.Delivery.CausationID = stored.CausationID
+		lease.Facts = append(lease.Facts, eventprovider.FactRow{
+			EventID: stored.EventID, FactVersion: stored.FactVersion, CodecIdentity: stored.CodecIdentity,
+			GenerationFingerprint: stored.GenerationFingerprint, ModelID: stored.ModelID, Action: stored.Action,
+			BeforeIdentity: stored.BeforeIdentity, AfterIdentity: stored.AfterIdentity, CausationID: stored.CausationID,
+			TransactionOrdinal: stored.TransactionOrdinal, Metadata: stored.Metadata, DeleteSnapshot: stored.DeleteSnapshot,
+			RecordedAt: stored.RecordedAt,
+		})
+	}
+	return lease
 }

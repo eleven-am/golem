@@ -285,10 +285,18 @@ func (state *wsConnection[P]) read() (wsMessage, error) {
 
 func (state *wsConnection[P]) startLiveness() func() {
 	done := make(chan struct{})
-	pongs := make(chan string, 1)
+	answered := make(chan struct{}, 1)
+	var expectedMu sync.Mutex
+	var expected string
 	state.conn.SetPongHandler(func(payload string) error {
+		expectedMu.Lock()
+		matched := expected != "" && payload == expected
+		expectedMu.Unlock()
+		if !matched {
+			return nil
+		}
 		select {
-		case pongs <- payload:
+		case answered <- struct{}{}:
 		default:
 		}
 		return nil
@@ -304,15 +312,17 @@ func (state *wsConnection[P]) startLiveness() func() {
 				return
 			case <-ticker.C:
 				var nonce [16]byte
-				if _, err := rand.Read(nonce[:]); err != nil {
-					state.cancel()
-					_ = state.conn.Close()
-					return
+				_, _ = rand.Read(nonce[:])
+				expectedMu.Lock()
+				expected = string(nonce[:])
+				expectedMu.Unlock()
+				select {
+				case <-answered:
+				default:
 				}
-				payload := string(nonce[:])
 				state.writeMu.Lock()
 				deadline := time.Now().Add(state.server.eventLimits.WebSocketPongTimeout)
-				err := state.conn.WriteControl(websocket.PingMessage, []byte(payload), deadline)
+				err := state.conn.WriteControl(websocket.PingMessage, nonce[:], deadline)
 				state.writeMu.Unlock()
 				if err != nil {
 					state.cancel()
@@ -320,24 +330,20 @@ func (state *wsConnection[P]) startLiveness() func() {
 					return
 				}
 				timer := time.NewTimer(state.server.eventLimits.WebSocketPongTimeout)
-				waiting := true
-				for waiting {
-					select {
-					case pong := <-pongs:
-						waiting = pong != payload
-					case <-timer.C:
-						state.cancel()
-						_ = state.conn.Close()
-						return
-					case <-state.ctx.Done():
-						stopWSTimer(timer)
-						return
-					case <-done:
-						stopWSTimer(timer)
-						return
-					}
+				select {
+				case <-answered:
+					stopWSTimer(timer)
+				case <-timer.C:
+					state.cancel()
+					_ = state.conn.Close()
+					return
+				case <-state.ctx.Done():
+					stopWSTimer(timer)
+					return
+				case <-done:
+					stopWSTimer(timer)
+					return
 				}
-				stopWSTimer(timer)
 			}
 		}
 	}()

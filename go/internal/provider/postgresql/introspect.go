@@ -403,7 +403,6 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 		state := string(descriptor.Storage) + "_state"
 		vectors := string(descriptor.Storage) + "_vec"
-		index := string(descriptor.Storage) + "_hnsw"
 		var stateColumns, vectorColumns string
 		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
 		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), state).Scan(&stateColumns); err != nil {
@@ -426,14 +425,6 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
 		if stateColumns != wantState || vectorColumns != wantVectors {
 			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)
-		}
-		var indexMethod, opclass string
-		var valid, ready bool
-		if err := query.QueryRowxContext(ctx, `SELECT am.amname,opc.opcname,i.indisvalid,i.indisready FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ci.relam JOIN pg_catalog.pg_opclass opc ON opc.oid=i.indclass[0] WHERE n.nspname=$1 AND ct.relname=$2 AND ci.relname=$3`, string(expected.Namespace.Name), vectors, index).Scan(&indexMethod, &opclass, &valid, &ready); err != nil {
-			return fmt.Errorf("postgresql semantic introspect: HNSW index missing extension=%s", extension.ID)
-		}
-		if indexMethod != "hnsw" || opclass != "vector_cosine_ops" || !valid || !ready {
-			return fmt.Errorf("postgresql semantic introspect: HNSW index drift extension=%s", extension.ID)
 		}
 	}
 	return nil

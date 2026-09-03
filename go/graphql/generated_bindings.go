@@ -368,17 +368,6 @@ func generatedEnumGraphQLName(compilation compilerir.CompilationIR, enumName, wi
 	return "", false
 }
 
-func bindGeneratedCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), erase func(R) any, conversions []GeneratedCustomArgumentConversion) (CustomBinding, error) {
-	decode := func(arguments []CustomArgument) (A, error) {
-		return generatedCustomArguments[A](arguments, conversions)
-	}
-	encode := func(value R) (any, error) { return erase(value), nil }
-	if operation == CustomQuery {
-		return BindCustomQuery(spec, decode, resolver, encode)
-	}
-	return BindCustomMutation(spec, decode, resolver, encode)
-}
-
 func generatedCustomArguments[A any](arguments []CustomArgument, conversions []GeneratedCustomArgumentConversion) (A, error) {
 	values := make([]ComputedArgument, len(arguments))
 	for index, argument := range arguments {

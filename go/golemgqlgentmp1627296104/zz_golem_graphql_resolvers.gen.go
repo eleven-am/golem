@@ -1,0 +1,571 @@
+package golemgqlgen
+
+// THIS CODE WILL BE UPDATED WITH SCHEMA CHANGES. PREVIOUS IMPLEMENTATION FOR SCHEMA CHANGES WILL BE KEPT IN THE COMMENT SECTION. IMPLEMENTATION FOR UNCHANGED SCHEMA WILL BE KEPT.
+
+import (
+	"context"
+
+	graphql1 "github.com/eleven-am/golem/go/graphql"
+)
+
+type Resolver struct{}
+
+func (r *batchPayloadResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (int, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) PostID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) AuthorID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) ParentID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) Body(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) Post(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) Author(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) ReplyTo(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) Replies(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput, orderBy []*CommentOrderByInput, cursor *CommentWhereUniqueInput, distinct []CommentScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *commentResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *commentCountOutputResolver) Replies(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *friendshipResolver) UserID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *friendshipResolver) FriendID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *friendshipResolver) User(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *friendshipResolver) Friend(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreateComment(ctx context.Context, data CommentCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateComment(ctx context.Context, where CommentWhereUniqueInput, data CommentUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertComment(ctx context.Context, where CommentWhereUniqueInput, create CommentCreateInput, update CommentUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteComment(ctx context.Context, where CommentWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyComments(ctx context.Context, where CommentWhereInput, data CommentUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyComments(ctx context.Context, where CommentWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreateFriendship(ctx context.Context, data FriendshipCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateFriendship(ctx context.Context, where FriendshipWhereUniqueInput, data FriendshipUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertFriendship(ctx context.Context, where FriendshipWhereUniqueInput, create FriendshipCreateInput, update FriendshipUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteFriendship(ctx context.Context, where FriendshipWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyFriendships(ctx context.Context, where FriendshipWhereInput, data FriendshipUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyFriendships(ctx context.Context, where FriendshipWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreatePost(ctx context.Context, data PostCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdatePost(ctx context.Context, where PostWhereUniqueInput, data PostUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertPost(ctx context.Context, where PostWhereUniqueInput, create PostCreateInput, update PostUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeletePost(ctx context.Context, where PostWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyPosts(ctx context.Context, where PostWhereInput, data PostUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyPosts(ctx context.Context, where PostWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreatePostTag(ctx context.Context, data PostTagCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdatePostTag(ctx context.Context, where PostTagWhereUniqueInput, data PostTagUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertPostTag(ctx context.Context, where PostTagWhereUniqueInput, create PostTagCreateInput, update PostTagUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeletePostTag(ctx context.Context, where PostTagWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyPostTags(ctx context.Context, where PostTagWhereInput, data PostTagUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyPostTags(ctx context.Context, where PostTagWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreateTag(ctx context.Context, data TagCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateTag(ctx context.Context, where TagWhereUniqueInput, data TagUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertTag(ctx context.Context, where TagWhereUniqueInput, create TagCreateInput, update TagUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteTag(ctx context.Context, where TagWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyTags(ctx context.Context, where TagWhereInput, data TagUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyTags(ctx context.Context, where TagWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) CreateUser(ctx context.Context, data UserCreateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateUser(ctx context.Context, where UserWhereUniqueInput, data UserUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpsertUser(ctx context.Context, where UserWhereUniqueInput, create UserCreateInput, update UserUpdateInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteUser(ctx context.Context, where UserWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) UpdateManyUsers(ctx context.Context, where UserWhereInput, data UserUpdateManyInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *mutationResolver) DeleteManyUsers(ctx context.Context, where UserWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) AuthorID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) Author(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) Comments(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput, orderBy []*CommentOrderByInput, cursor *CommentWhereUniqueInput, distinct []CommentScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) PostTags(ctx context.Context, obj graphql1.PreparedObject, where *PostTagWhereInput, orderBy []*PostTagOrderByInput, cursor *PostTagWhereUniqueInput, distinct []PostTagScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postAggregateResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postAggregateResolver) CountFields(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postAggregateResolver) Min(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postAggregateResolver) Max(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postCountAggregateResolver) AuthorID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postCountAggregateResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postCountAggregateResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postCountOutputResolver) Comments(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *postCountOutputResolver) PostTags(ctx context.Context, obj graphql1.PreparedObject, where *PostTagWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupResolver) Key(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupResolver) CountFields(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupResolver) Min(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupResolver) Max(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupKeyResolver) AuthorID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupKeyResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postGroupKeyResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (string, error) {
+	panic("not implemented")
+}
+
+func (r *postMaxAggregateResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *postMinAggregateResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupResolver) Key(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupResolver) CountFields(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupResolver) Min(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupResolver) Max(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupKeyResolver) AuthorID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupKeyResolver) AuthorName(ctx context.Context, obj graphql1.PreparedObject) (string, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupKeyResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postRelationGroupKeyResolver) Title(ctx context.Context, obj graphql1.PreparedObject) (string, error) {
+	panic("not implemented")
+}
+
+func (r *postTagResolver) PostID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *postTagResolver) TagName(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *postTagResolver) Post(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *postTagResolver) Tag(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Comment(ctx context.Context, where CommentWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Comments(ctx context.Context, where *CommentWhereInput, orderBy []*CommentOrderByInput, cursor *CommentWhereUniqueInput, distinct []CommentScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Friendship(ctx context.Context, where FriendshipWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Friendships(ctx context.Context, where *FriendshipWhereInput, orderBy []*FriendshipOrderByInput, cursor *FriendshipWhereUniqueInput, distinct []FriendshipScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Post(ctx context.Context, where PostWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Posts(ctx context.Context, where *PostWhereInput, orderBy []*PostOrderByInput, cursor *PostWhereUniqueInput, distinct []PostScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) AggregatePosts(ctx context.Context, where *PostWhereInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) GroupByPosts(ctx context.Context, by []PostGroupField, where *PostWhereInput, having *PostGroupHavingInput, orderBy []*PostGroupOrderByInput, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) RelationGroupByPosts(ctx context.Context, by []PostRelationGroupField, where *PostWhereInput, having *PostRelationGroupHavingInput, orderBy []*PostRelationGroupOrderByInput, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) PostTag(ctx context.Context, where PostTagWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) PostTags(ctx context.Context, where *PostTagWhereInput, orderBy []*PostTagOrderByInput, cursor *PostTagWhereUniqueInput, distinct []PostTagScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Tag(ctx context.Context, where TagWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Tags(ctx context.Context, where *TagWhereInput, orderBy []*TagOrderByInput, cursor *TagWhereUniqueInput, distinct []TagScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) User(ctx context.Context, where UserWhereUniqueInput) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *queryResolver) Users(ctx context.Context, where *UserWhereInput, orderBy []*UserOrderByInput, cursor *UserWhereUniqueInput, distinct []UserScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *tagResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *tagResolver) Name(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *tagResolver) PostTags(ctx context.Context, obj graphql1.PreparedObject, where *PostTagWhereInput, orderBy []*PostTagOrderByInput, cursor *PostTagWhereUniqueInput, distinct []PostTagScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *tagResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *tagCountOutputResolver) PostTags(ctx context.Context, obj graphql1.PreparedObject, where *PostTagWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) ID(ctx context.Context, obj graphql1.PreparedObject) (any, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) Name(ctx context.Context, obj graphql1.PreparedObject) (*string, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) Posts(ctx context.Context, obj graphql1.PreparedObject, where *PostWhereInput, orderBy []*PostOrderByInput, cursor *PostWhereUniqueInput, distinct []PostScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) Comments(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput, orderBy []*CommentOrderByInput, cursor *CommentWhereUniqueInput, distinct []CommentScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) FriendshipsFrom(ctx context.Context, obj graphql1.PreparedObject, where *FriendshipWhereInput, orderBy []*FriendshipOrderByInput, cursor *FriendshipWhereUniqueInput, distinct []FriendshipScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) FriendshipsTo(ctx context.Context, obj graphql1.PreparedObject, where *FriendshipWhereInput, orderBy []*FriendshipOrderByInput, cursor *FriendshipWhereUniqueInput, distinct []FriendshipScalarField, skip *int, take *int) ([]graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *userResolver) Count(ctx context.Context, obj graphql1.PreparedObject) (graphql1.PreparedObject, error) {
+	panic("not implemented")
+}
+
+func (r *userCountOutputResolver) Posts(ctx context.Context, obj graphql1.PreparedObject, where *PostWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *userCountOutputResolver) Comments(ctx context.Context, obj graphql1.PreparedObject, where *CommentWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *userCountOutputResolver) FriendshipsFrom(ctx context.Context, obj graphql1.PreparedObject, where *FriendshipWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *userCountOutputResolver) FriendshipsTo(ctx context.Context, obj graphql1.PreparedObject, where *FriendshipWhereInput) (*int, error) {
+	panic("not implemented")
+}
+
+func (r *Resolver) BatchPayload() BatchPayloadResolver { return &batchPayloadResolver{r} }
+
+func (r *Resolver) Comment() CommentResolver { return &commentResolver{r} }
+
+func (r *Resolver) CommentCountOutput() CommentCountOutputResolver {
+	return &commentCountOutputResolver{r}
+}
+
+func (r *Resolver) Friendship() FriendshipResolver { return &friendshipResolver{r} }
+
+func (r *Resolver) Mutation() MutationResolver { return &mutationResolver{r} }
+
+func (r *Resolver) Post() PostResolver { return &postResolver{r} }
+
+func (r *Resolver) PostAggregate() PostAggregateResolver { return &postAggregateResolver{r} }
+
+func (r *Resolver) PostCountAggregate() PostCountAggregateResolver {
+	return &postCountAggregateResolver{r}
+}
+
+func (r *Resolver) PostCountOutput() PostCountOutputResolver { return &postCountOutputResolver{r} }
+
+func (r *Resolver) PostGroup() PostGroupResolver { return &postGroupResolver{r} }
+
+func (r *Resolver) PostGroupKey() PostGroupKeyResolver { return &postGroupKeyResolver{r} }
+
+func (r *Resolver) PostMaxAggregate() PostMaxAggregateResolver { return &postMaxAggregateResolver{r} }
+
+func (r *Resolver) PostMinAggregate() PostMinAggregateResolver { return &postMinAggregateResolver{r} }
+
+func (r *Resolver) PostRelationGroup() PostRelationGroupResolver {
+	return &postRelationGroupResolver{r}
+}
+
+func (r *Resolver) PostRelationGroupKey() PostRelationGroupKeyResolver {
+	return &postRelationGroupKeyResolver{r}
+}
+
+func (r *Resolver) PostTag() PostTagResolver { return &postTagResolver{r} }
+
+func (r *Resolver) Query() QueryResolver { return &queryResolver{r} }
+
+func (r *Resolver) Tag() TagResolver { return &tagResolver{r} }
+
+func (r *Resolver) TagCountOutput() TagCountOutputResolver { return &tagCountOutputResolver{r} }
+
+func (r *Resolver) User() UserResolver { return &userResolver{r} }
+
+func (r *Resolver) UserCountOutput() UserCountOutputResolver { return &userCountOutputResolver{r} }
+
+type batchPayloadResolver struct{ *Resolver }
+type commentResolver struct{ *Resolver }
+type commentCountOutputResolver struct{ *Resolver }
+type friendshipResolver struct{ *Resolver }
+type mutationResolver struct{ *Resolver }
+type postResolver struct{ *Resolver }
+type postAggregateResolver struct{ *Resolver }
+type postCountAggregateResolver struct{ *Resolver }
+type postCountOutputResolver struct{ *Resolver }
+type postGroupResolver struct{ *Resolver }
+type postGroupKeyResolver struct{ *Resolver }
+type postMaxAggregateResolver struct{ *Resolver }
+type postMinAggregateResolver struct{ *Resolver }
+type postRelationGroupResolver struct{ *Resolver }
+type postRelationGroupKeyResolver struct{ *Resolver }
+type postTagResolver struct{ *Resolver }
+type queryResolver struct{ *Resolver }
+type tagResolver struct{ *Resolver }
+type tagCountOutputResolver struct{ *Resolver }
+type userResolver struct{ *Resolver }
+type userCountOutputResolver struct{ *Resolver }

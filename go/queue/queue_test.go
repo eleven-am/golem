@@ -283,3 +283,30 @@ func TestCodeOfIgnoresForeignErrors(t *testing.T) {
 		t.Fatal("nil was classified")
 	}
 }
+
+func TestRetentionCanBeDisabled(t *testing.T) {
+	disabled := queue.Limits{RetentionEvery: queue.RetentionDisabled}
+	if err := disabled.Validate(); err != nil {
+		t.Fatalf("disabled retention was refused: %v", err)
+	}
+	if resolved := disabled.Resolved(); resolved.RetentionEvery != queue.RetentionDisabled {
+		t.Fatalf("disabled retention resolved to %v", resolved.RetentionEvery)
+	}
+	if disabled.RetentionEnabled() {
+		t.Fatal("RetentionDisabled still reports retention as enabled")
+	}
+	for _, retaining := range []queue.Limits{{}, queue.DefaultLimits(), {RetentionAge: time.Hour}} {
+		if !retaining.RetentionEnabled() {
+			t.Fatalf("limits %#v no longer retain", retaining)
+		}
+		if resolved := retaining.Resolved(); resolved.RetentionEvery != time.Minute || resolved.RetentionAge != 30*24*time.Hour && resolved.RetentionAge != time.Hour {
+			t.Fatalf("default retention schedule is %v/%v", resolved.RetentionEvery, resolved.RetentionAge)
+		}
+	}
+	for _, refused := range []queue.Limits{{RetentionEvery: -2 * time.Second}, {RetentionAge: queue.RetentionDisabled}, {RetentionEvery: time.Second}} {
+		code, classified := queue.CodeOf(refused.Validate())
+		if !classified || code != queue.CodeConfigInvalid {
+			t.Fatalf("limits %#v were accepted", refused)
+		}
+	}
+}

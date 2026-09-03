@@ -624,6 +624,22 @@ func RuntimeInvokeHooks[A any](ctx context.Context, bindings ApplicationBindings
 	return nil
 }
 
+func invokeBeforeHookBindings[A any](bindings ApplicationBindings[A], model ModelID, operation HookOperation, family string, invoke func(HookBinding[A]) error) error {
+	for packageIndex, pkg := range bindings.packages {
+		if pkg.generation != bindings.generation {
+			return fmt.Errorf("generated %s hooks: package %d generation mismatch", family, packageIndex)
+		}
+		for _, binding := range pkg.hooks {
+			if binding.model == model && binding.operation == operation && binding.phase == HookBefore {
+				if err := invoke(binding); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
+}
+
 // RuntimeInvokeMutationBeforeHooks runs generated hooks one at a time. The
 // validator is invoked after every transformation so a later hook can never
 // observe an unbound or unauthorized request produced by an earlier hook.
@@ -632,30 +648,21 @@ func RuntimeInvokeMutationBeforeHooks[A any](ctx context.Context, bindings Appli
 		return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: context, request, and validator are required")
 	}
 	current := request
-	for packageIndex, pkg := range bindings.packages {
-		if pkg.generation != bindings.generation {
-			return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: package %d generation mismatch", packageIndex)
+	err := invokeBeforeHookBindings(bindings, request.model, request.operation, "mutation", func(binding HookBinding[A]) error {
+		if binding.mutationBefore == nil {
+			return fmt.Errorf("generated mutation hooks: matching before hook has no mutation bridge")
 		}
-		for _, binding := range pkg.hooks {
-			if binding.model != request.model || binding.operation != request.operation || binding.phase != HookBefore {
-				continue
-			}
-			if binding.mutationBefore == nil {
-				return RuntimeMutationHookRequest{}, fmt.Errorf("generated mutation hooks: matching before hook has no mutation bridge")
-			}
-			var err error
-			err = invokeGeneratedHookSafely(func() error {
-				var invokeErr error
-				current, invokeErr = binding.mutationBefore(ctx, current)
-				return invokeErr
-			})
-			if err != nil {
-				return RuntimeMutationHookRequest{}, err
-			}
-			if err := validate(current); err != nil {
-				return RuntimeMutationHookRequest{}, err
-			}
+		if err := invokeGeneratedHookSafely(func() error {
+			var invokeErr error
+			current, invokeErr = binding.mutationBefore(ctx, current)
+			return invokeErr
+		}); err != nil {
+			return err
 		}
+		return validate(current)
+	})
+	if err != nil {
+		return RuntimeMutationHookRequest{}, err
 	}
 	return current, nil
 }
@@ -691,30 +698,21 @@ func RuntimeInvokeReadBeforeHooks[A any](ctx context.Context, bindings Applicati
 		return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: context, request, and validator are required")
 	}
 	current := request
-	for packageIndex, pkg := range bindings.packages {
-		if pkg.generation != bindings.generation {
-			return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: package %d generation mismatch", packageIndex)
+	err := invokeBeforeHookBindings(bindings, request.model, request.operation, "read", func(binding HookBinding[A]) error {
+		if binding.readBefore == nil {
+			return fmt.Errorf("generated read hooks: matching before hook has no read bridge")
 		}
-		for _, binding := range pkg.hooks {
-			if binding.model != request.model || binding.operation != request.operation || binding.phase != HookBefore {
-				continue
-			}
-			if binding.readBefore == nil {
-				return RuntimeReadHookRequest{}, fmt.Errorf("generated read hooks: matching before hook has no read bridge")
-			}
-			var err error
-			err = invokeGeneratedHookSafely(func() error {
-				var invokeErr error
-				current, invokeErr = binding.readBefore(ctx, current)
-				return invokeErr
-			})
-			if err != nil {
-				return RuntimeReadHookRequest{}, err
-			}
-			if err := validate(current); err != nil {
-				return RuntimeReadHookRequest{}, err
-			}
+		if err := invokeGeneratedHookSafely(func() error {
+			var invokeErr error
+			current, invokeErr = binding.readBefore(ctx, current)
+			return invokeErr
+		}); err != nil {
+			return err
 		}
+		return validate(current)
+	})
+	if err != nil {
+		return RuntimeReadHookRequest{}, err
 	}
 	return current, nil
 }

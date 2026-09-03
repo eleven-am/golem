@@ -396,16 +396,16 @@ func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (a
 }
 
 func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
-	statement := manager.rankStatement(index, candidates, exclude != "")
-	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
-	}
 	if manager.provider == ir.PostgreSQL {
-		exact := manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
-		if err := readsql.ValidateStatementComplexity(candidates.Model, exact, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
+		statement := manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
+		if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 			return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 		}
-		return manager.rankPostgreSQL(ctx, index, statement, exact, vector, candidates, exclude, take)
+		return manager.rankExact(ctx, index, statement, vector, candidates, exclude, take)
+	}
+	statement := manager.sqliteRankStatement(index, candidates, exclude != "")
+	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 	}
 	ranks, err := manager.rankSQLite(ctx, index, statement, vector, candidates, exclude, take, semanticANNProbe(take))
 	if err != nil || len(ranks) >= take {
@@ -415,7 +415,7 @@ func (manager *Manager) rankVector(ctx context.Context, index Index, vector any,
 	if err := readsql.ValidateStatementComplexity(candidates.Model, exact, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 	}
-	return manager.rankSQLiteExact(ctx, index, exact, vector, candidates, exclude, take)
+	return manager.rankExact(ctx, index, exact, vector, candidates, exclude, take)
 }
 
 func semanticANNProbe(take int) int {
@@ -427,56 +427,6 @@ func semanticANNProbe(take int) int {
 		probe = 4096
 	}
 	return probe
-}
-
-func (manager *Manager) rankPostgreSQL(ctx context.Context, index Index, statement, exact string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
-	transaction, err := manager.database.BeginTxx(ctx, &sql.TxOptions{ReadOnly: true})
-	if err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking transaction failed")
-	}
-	defer transaction.Rollback()
-	observeexec.RecordStatement(ctx)
-	if _, err := transaction.ExecContext(ctx, "SET LOCAL hnsw.iterative_scan = strict_order"); err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: iterative ranking configuration failed")
-	}
-	arguments := make([]any, 0, len(candidates.Args)+4)
-	arguments = append(arguments, vector)
-	arguments = append(arguments, candidates.Args...)
-	arguments = append(arguments, hex.EncodeToString(index.SpaceFingerprint[:]))
-	if exclude != "" {
-		arguments = append(arguments, exclude)
-	}
-	arguments = append(arguments, take)
-	query := func(statement string) ([]Rank, error) {
-		observeexec.RecordStatement(ctx)
-		rows, err := transaction.QueryxContext(ctx, statement, arguments...)
-		if err != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking failed")
-		}
-		ranks, decodeErr := decodeRanks(rows, take, candidates)
-		closeErr := rows.Close()
-		if decodeErr != nil {
-			return nil, decodeErr
-		}
-		if closeErr != nil {
-			return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking stream failed")
-		}
-		return ranks, nil
-	}
-	ranks, err := query(statement)
-	if err != nil {
-		return nil, err
-	}
-	if len(ranks) < take {
-		ranks, err = query(exact)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := transaction.Commit(); err != nil {
-		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking transaction failed")
-	}
-	return ranks, nil
 }
 
 func (manager *Manager) rankSQLite(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take, probe int) ([]Rank, error) {
@@ -491,7 +441,7 @@ func (manager *Manager) rankSQLite(ctx context.Context, index Index, statement s
 	return manager.queryRanks(ctx, statement, arguments, take, candidates)
 }
 
-func (manager *Manager) rankSQLiteExact(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+func (manager *Manager) rankExact(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
 	arguments := make([]any, 0, len(candidates.Args)+4)
 	arguments = append(arguments, vector)
 	arguments = append(arguments, candidates.Args...)
@@ -513,10 +463,10 @@ func (manager *Manager) queryRanks(ctx context.Context, statement string, argume
 	return decodeRanks(rows, take, candidates)
 }
 
-// rankStatement binds the query vector first, the authorized candidate
+// sqliteRankStatement binds the query vector first, the authorized candidate
 // subquery next, then the active space, optional excluded source key, and page
 // size.
-func (manager *Manager) rankStatement(index Index, candidates Candidates, exclude bool) string {
+func (manager *Manager) sqliteRankStatement(index Index, candidates Candidates, exclude bool) string {
 	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
 	identity := make([]string, len(index.Descriptor.Identity))
 	joins := make([]string, len(index.Descriptor.Identity))
@@ -524,28 +474,8 @@ func (manager *Manager) rankStatement(index Index, candidates Candidates, exclud
 		identity[position] = "golem_ss." + manager.quote(column.Name)
 		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
 	}
-	if manager.provider == ir.PostgreSQL {
-		distance := "(golem_sv.embedding <=> " + manager.placeholder(1) + "::vector)"
-		candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
-		outerIdentity := make([]string, len(index.Descriptor.Identity))
-		for position, column := range index.Descriptor.Identity {
-			outerIdentity[position] = "golem_sc." + manager.quote(column.Name)
-		}
-		statement := "SELECT golem_sv.record_key," + distance + "::double precision AS distance," + strings.Join(outerIdentity, ",") +
-			" FROM " + vectors + " AS golem_sv" +
-			" JOIN LATERAL (SELECT " + strings.Join(identity, ",") +
-			" FROM " + state + " AS golem_ss" +
-			" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
-		position := len(candidates.Args) + 2
-		statement += " WHERE golem_ss.record_key=golem_sv.record_key AND golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready' LIMIT 1) AS golem_sc ON TRUE"
-		if exclude {
-			position++
-			statement += " WHERE golem_sv.record_key<>" + manager.placeholder(position)
-		}
-		return statement + " ORDER BY " + distance + ",golem_sv.record_key COLLATE \"C\" LIMIT " + manager.placeholder(position+1)
-	}
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 2, policyir.ProviderSQLite)
-	statement := "WITH golem_sn AS (SELECT record_key,distance FROM " + vectors + " WHERE embedding MATCH " + manager.placeholder(1) + " AND k=" + manager.placeholder(2) + ")" +
+	statement := "WITH golem_sn AS MATERIALIZED (SELECT record_key,distance FROM " + vectors + " WHERE embedding MATCH " + manager.placeholder(1) + " AND k=" + manager.placeholder(2) + ")" +
 		" SELECT golem_sn.record_key,golem_sn.distance," + strings.Join(identity, ",") +
 		" FROM golem_sn" +
 		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sn.record_key" +
@@ -556,7 +486,7 @@ func (manager *Manager) rankStatement(index Index, candidates Candidates, exclud
 		position++
 		statement += " AND golem_sn.record_key<>" + manager.placeholder(position)
 	}
-	return statement + " ORDER BY golem_sn.distance LIMIT " + manager.placeholder(position+1)
+	return statement + " ORDER BY golem_sn.distance,golem_sn.record_key LIMIT " + manager.placeholder(position+1)
 }
 
 func (manager *Manager) exactPostgreSQLRankStatement(index Index, candidates Candidates, exclude bool) string {
@@ -1640,14 +1570,6 @@ func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, in
 	observeexec.RecordStatement(ctx)
 	_, err = transaction.ExecContext(ctx, "INSERT INTO "+vectorTable+" (record_key,embedding) VALUES "+strings.Join(vectorTuples, ",")+" ON CONFLICT(record_key) DO UPDATE SET embedding=excluded.embedding", values...)
 	return err
-}
-
-// deleteRecord removes a record whose owner row the pass could not reach. The
-// state row is deleted under the same guard the rest of the pass writes under,
-// so a record deleted, drained, and created again mid-pass keeps the state row
-// its re-creation wrote, and its vector is left for the next pass to settle.
-func (manager *Manager) deleteRecord(ctx context.Context, index Index, record observedRecord) error {
-	return manager.deleteRecords(ctx, index, []observedRecord{record})
 }
 
 func (manager *Manager) deleteRecords(ctx context.Context, index Index, records []observedRecord) error {

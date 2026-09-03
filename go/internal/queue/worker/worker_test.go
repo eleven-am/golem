@@ -1393,3 +1393,35 @@ func TestDispatchCarriesTheCompleteResourcePlan(t *testing.T) {
 		t.Fatalf("pooled claim=%#v", pooled)
 	}
 }
+
+func TestRetentionFailureIsObserved(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	register(t, registry, queue.Definition[gatePayload]{
+		Type:   "gate.retention.observed",
+		Handle: func(context.Context, queue.Job[gatePayload]) error { return nil },
+	})
+	store := stubStore{Store: fixture.store, retention: func(context.Context, queueprovider.RetentionPolicy) (int, error) {
+		return 0, errors.New("retention storage unavailable")
+	}}
+	failures := make(chan observe.Observation, 4)
+	_, stop := fixture.startObserved(t, store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+		if value.Phase() == observe.PhaseApply {
+			select {
+			case failures <- value:
+			default:
+			}
+		}
+	}))
+	select {
+	case value := <-failures:
+		stop()
+		if value.Kind() != observe.KindQueue || value.Operation() != observe.OperationQueueExecute || value.QueueType() != "retention" ||
+			value.Outcome() != observe.OutcomeFailure || value.Reason() != observe.ReasonProvider || value.Provider() != golem.SQLite || value.Attempt() < 1 {
+			t.Fatalf("retention failure observation = %#v", value)
+		}
+	case <-time.After(10 * time.Second):
+		stop()
+		t.Fatal("a failing retention produced no observation")
+	}
+}

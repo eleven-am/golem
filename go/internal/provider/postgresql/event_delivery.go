@@ -21,7 +21,6 @@ type eventCoordinator struct {
 	database            *sqlx.DB
 	namespace           physical.PhysicalName
 	legacyProbeComplete atomic.Bool
-	leaseClockAligned   atomic.Bool
 }
 
 type postgresqlEventQueryExecer interface {
@@ -84,16 +83,9 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 		}
 		legacyComplete = complete
 	}
-	leaseAligned := false
-	if !coordinator.leaseClockAligned.Load() {
-		if _, err := transaction.ExecContext(ctx, `UPDATE `+coordinator.deliveryTable()+` SET "available_at"=CASE "status" WHEN 'leased' THEN "lease_until" ELSE "delivered_at" END WHERE ("status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until") OR ("status"='delivered' AND "delivered_at" IS NOT NULL AND "available_at"<>"delivered_at")`); err != nil {
-			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: align existing lease eligibility: %w", err)
-		}
-		leaseAligned = true
-	}
 	var causations []string
 	delivery := coordinator.deliveryTable()
-	query := `SELECT "causation_id" FROM ` + delivery + ` WHERE "status" IN ('pending','leased') AND "available_at"<=clock_timestamp() ORDER BY "first_recorded_at","causation_id" FOR UPDATE SKIP LOCKED LIMIT $1`
+	query := `SELECT "causation_id" FROM ` + delivery + ` WHERE "status" IN ('pending','leased') AND "available_at"<=clock_timestamp() AND ("lease_until" IS NULL OR "lease_until"<=clock_timestamp()) ORDER BY "first_recorded_at","causation_id" FOR UPDATE SKIP LOCKED LIMIT $1`
 	if err := transaction.SelectContext(ctx, &causations, query, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: discover claimable groups: %w", err)
 	}
@@ -110,7 +102,7 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 			arguments = append(arguments, tokens[index], options.LeaseDuration.Microseconds(), causation)
 		}
 		var changed []string
-		update := `WITH claim(token,lease_micros,causation_id) AS (VALUES ` + strings.Join(values, ",") + `), deadline AS MATERIALIZED (SELECT token,causation_id,clock_timestamp()+lease_micros*interval '1 microsecond' AS expires_at FROM claim) UPDATE ` + delivery + ` AS target SET "status"='leased',"attempt_count"=CASE WHEN target."attempt_count"<9223372036854775807 THEN target."attempt_count"+1 ELSE target."attempt_count" END,"lease_token"=deadline.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=clock_timestamp() FROM deadline WHERE target."causation_id"=deadline.causation_id AND target."status" IN ('pending','leased') AND target."available_at"<=clock_timestamp() RETURNING target."causation_id"`
+		update := `WITH claim(token,lease_micros,causation_id) AS (VALUES ` + strings.Join(values, ",") + `), deadline AS MATERIALIZED (SELECT token,causation_id,clock_timestamp()+lease_micros*interval '1 microsecond' AS expires_at FROM claim) UPDATE ` + delivery + ` AS target SET "status"='leased',"attempt_count"=CASE WHEN target."attempt_count"<9223372036854775807 THEN target."attempt_count"+1 ELSE target."attempt_count" END,"lease_token"=deadline.token,"available_at"=deadline.expires_at,"lease_until"=deadline.expires_at,"delivered_at"=NULL,"blocked_at"=NULL,"retired_at"=NULL,"updated_at"=clock_timestamp() FROM deadline WHERE target."causation_id"=deadline.causation_id AND target."status" IN ('pending','leased') AND target."available_at"<=clock_timestamp() AND (target."lease_until" IS NULL OR target."lease_until"<=clock_timestamp()) RETURNING target."causation_id"`
 		if err := transaction.SelectContext(ctx, &changed, update, arguments...); err != nil {
 			return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: lease groups: %w", err)
 		}
@@ -134,9 +126,6 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	}
 	if legacyComplete {
 		coordinator.legacyProbeComplete.Store(true)
-	}
-	if leaseAligned {
-		coordinator.leaseClockAligned.Store(true)
 	}
 	return eventprovider.ClaimSnapshot{Leases: clonePostgreSQLLeases(leases), Depth: depth}, nil
 }
@@ -284,10 +273,7 @@ func (coordinator *eventCoordinator) RunRetention(ctx context.Context, policy ev
 		return eventprovider.RetentionResult{}, fmt.Errorf("P7_POSTGRESQL_RETENTION: begin: %w", err)
 	}
 	defer transaction.Rollback()
-	if _, err := transaction.ExecContext(ctx, `UPDATE `+coordinator.deliveryTable()+` SET "available_at"="delivered_at" WHERE "status"='delivered' AND "delivered_at" IS NOT NULL AND "available_at"<>"delivered_at"`); err != nil {
-		return eventprovider.RetentionResult{}, fmt.Errorf("P7_POSTGRESQL_RETENTION: align existing delivery time: %w", err)
-	}
-	query := `SELECT d."causation_id" FROM ` + coordinator.deliveryTable() + ` d WHERE d."status"='delivered' AND d."available_at"<=$1 AND NOT EXISTS (SELECT 1 FROM ` + coordinator.outboxTable() + ` o WHERE o."causation_id"=d."causation_id" AND o."recorded_at">$1) ORDER BY d."available_at",d."first_recorded_at",d."causation_id" FOR UPDATE OF d SKIP LOCKED LIMIT $2`
+	query := `SELECT d."causation_id" FROM ` + coordinator.deliveryTable() + ` d WHERE d."status"='delivered' AND d."available_at"<=$1 AND d."delivered_at"<=$1 AND NOT EXISTS (SELECT 1 FROM ` + coordinator.outboxTable() + ` o WHERE o."causation_id"=d."causation_id" AND o."recorded_at">$1) ORDER BY d."available_at",d."first_recorded_at",d."causation_id" FOR UPDATE OF d SKIP LOCKED LIMIT $2`
 	var causations []string
 	if err := transaction.SelectContext(ctx, &causations, query, policy.OlderThan.UTC().Truncate(time.Microsecond), policy.MaxRows); err != nil {
 		return eventprovider.RetentionResult{}, fmt.Errorf("P7_POSTGRESQL_RETENTION: select groups: %w", err)
