@@ -82,6 +82,8 @@ if [ "$SCOPE" = "full" ]; then
 		./events/... ./provider/... ./runtime ./queue \
 		./internal/event/outbox ./internal/event/cdc \
 		./internal/queue/worker ./internal/subscription
+	run_step "documented-commands" go_test -p=1 -count=1 -timeout=20m ./cmd/golem \
+		-run "^TestQuickstartFromEmptyDirectory$"
 fi
 
 printf '\n%s\n' "$(colour '1' 'summary')"
