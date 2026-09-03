@@ -83,7 +83,7 @@ if [ "$SCOPE" = "full" ]; then
 		./internal/event/outbox ./internal/event/cdc \
 		./internal/queue/worker ./internal/subscription
 	run_step "documented-commands" go_test -p=1 -count=1 -timeout=20m ./cmd/golem \
-		-run "^(TestQuickstartFromEmptyDirectory|TestGuideApplicationRuns|TestQueueApplicationRuns)$"
+		-run "^(TestQuickstartFromEmptyDirectory|TestGuideApplicationRuns|TestQueueApplicationRuns|TestSemanticApplicationRuns)$"
 fi
 
 printf '\n%s\n' "$(colour '1' 'summary')"
