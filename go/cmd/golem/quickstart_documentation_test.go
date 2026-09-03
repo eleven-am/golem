@@ -287,3 +287,68 @@ func TestSemanticApplicationRuns(t *testing.T) {
 		}
 	}
 }
+
+func TestRenderApplicationRuns(t *testing.T) {
+	moduleRoot := commandModuleRoot(t)
+	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "RENDER.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := string(source)
+	files := quickstartDocumentedFiles(t, document)
+	if files["cmd/site/main.go"] == "" {
+		t.Fatal("RENDER.md documents no cmd/site/main.go block")
+	}
+	shell := quickstartDocumentedShell(t, document)
+
+	application := t.TempDir()
+	for path, body := range map[string]string{"cmd/site/main.go": files["cmd/site/main.go"], "public/index.html": shell} {
+		full := filepath.Join(application, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	golemModule, err := filepath.Abs(moduleRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	module := "module example.com/site\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\n\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(golemModule) + "\n"
+	if err := os.WriteFile(filepath.Join(application, "go.mod"), []byte(module), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	quickstartGo(t, application, "mod", "tidy")
+
+	output := quickstartGo(t, application, "run", "./cmd/site")
+	for _, expected := range []string{`/n/42 title="Note 42" cache="no-cache"`, `/n/missing title="Notes" cache="no-cache"`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("the documented program printed %q, want %q", output, expected)
+		}
+	}
+}
+
+func quickstartDocumentedShell(t *testing.T, document string) string {
+	t.Helper()
+	scanner := bufio.NewScanner(strings.NewReader(document))
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	for scanner.Scan() {
+		if strings.TrimSpace(scanner.Text()) != "```html" {
+			continue
+		}
+		var body []string
+		for scanner.Scan() {
+			line := scanner.Text()
+			if strings.TrimSpace(line) == "```" {
+				return strings.Join(body, "\n") + "\n"
+			}
+			body = append(body, line)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	t.Fatal("the page documents no html shell block")
+	return ""
+}
