@@ -5,11 +5,42 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.3.0
+go get github.com/eleven-am/golem/go@v0.3.1
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable.
+
+---
+
+## go/v0.3.1
+
+Fixes an upgrade blocker in v0.3.0. Anyone on v0.3.0 with a semantic index
+should take this release; anyone on v0.2.1 should upgrade straight to it.
+
+**An application could not apply migrations authored before v0.3.0.**
+v0.3.0 added an identity projection to semantic managed storage, and
+migrations predating it carry none — which the renderer already handled by
+replaying sealed history in the shape it was reviewed in. The post-apply
+introspection did not honour that, re-rendering the same extension without
+the replay flag and refusing DDL golem had just written. Applying a
+pre-existing initial migration failed even against an empty database, on
+both providers, with no way forward but discarding migration history.
+
+### Upgrading from v0.2.1
+
+```
+golem migration new --schema ./app --name semantic_identity
+golem generate --schema ./app --app-out ./app
+golem migration apply --provider sqlite --dsn "file:app.db"
+```
+
+That order is enforced: `generate` refuses a schema with no migration for
+it and says so. Migration names must match `[a-z][a-z0-9_]{0,62}`, so
+`semantic_identity` is accepted and `semantic-identity` is not.
+
+This carries an existing database to current storage in place; no reset is
+needed.
 
 ---
 
