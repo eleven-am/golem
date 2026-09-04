@@ -45,7 +45,7 @@ func (provider *Provider) introspectQuery(ctx context.Context, query catalogQuer
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized)
+	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized, false)
 }
 
 func (provider *Provider) introspectReviewedQuery(ctx context.Context, query catalogQueryer, reviewed reviewedSnapshot) (physical.PhysicalSchema, error) {
@@ -53,10 +53,10 @@ func (provider *Provider) introspectReviewedQuery(ctx context.Context, query cat
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized)
+	return provider.introspectNormalizedQuery(ctx, query, expectedNormalized, true)
 }
 
-func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query catalogQueryer, expectedNormalized physical.PhysicalSchema) (physical.PhysicalSchema, error) {
+func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query catalogQueryer, expectedNormalized physical.PhysicalSchema, reviewedReplay bool) (physical.PhysicalSchema, error) {
 	report, err := probeCapabilities(ctx, query)
 	if err != nil {
 		return physical.PhysicalSchema{}, err
@@ -328,7 +328,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 		return physical.PhysicalSchema{}, err
 	}
 	if expectedNormalized.Version != 1 || expectedNormalized.CanonicalVersion != 1 {
-		if err := introspectSemanticExtensions(ctx, query, expectedNormalized); err != nil {
+		if err := introspectSemanticExtensions(ctx, query, expectedNormalized, reviewedReplay); err != nil {
 			return physical.PhysicalSchema{}, err
 		}
 	}
@@ -388,7 +388,7 @@ func reconcileOptimisticConcurrency(expected, actual physical.PhysicalSchema) (p
 	return physical.NormalizeHistorical(actual)
 }
 
-func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema) error {
+func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema, reviewedReplay bool) error {
 	if len(expected.Extensions) == 0 {
 		return nil
 	}
@@ -412,7 +412,7 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 			return err
 		}
 		wantState := "record_key:text:true,source_hash:bytea:true,space_fingerprint:text:true,status:text:true,attempt_count:integer:true,error_code:text:false,updated_at:bigint:true"
-		if len(descriptor.Identity) == 0 {
+		if len(descriptor.Identity) == 0 && !reviewedReplay {
 			return fmt.Errorf("postgresql semantic introspect: identity projection is absent extension=%s", extension.ID)
 		}
 		for _, column := range descriptor.Identity {
