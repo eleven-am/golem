@@ -21,6 +21,11 @@ Every page here is executed by a test. The code on them is code that ran.
 - **[RENDER.md](./RENDER.md)** — serve a single-page application with
   per-route metadata for crawlers.
 
+## Releases
+
+- **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — what each `go/v*` release
+  changed, what to check before upgrading, and what is deliberately absent.
+
 ## The idea
 
 Authorization is a predicate, not a callback. A policy is compiled into the
