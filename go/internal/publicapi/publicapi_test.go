@@ -100,11 +100,12 @@ func declarationNames(packagePath string, declaration ast.Decl) []string {
 				if value.Name.IsExported() {
 					names = append(names, packagePath+"."+value.Name.Name+" "+underlying(value))
 					names = append(names, structFieldNames(packagePath, value)...)
+					names = append(names, interfaceMemberNames(packagePath, value)...)
 				}
 			case *ast.ValueSpec:
-				for _, name := range value.Names {
+				for index, name := range value.Names {
 					if name.IsExported() {
-						names = append(names, packagePath+"."+name.Name)
+						names = append(names, packagePath+"."+name.Name+" "+valueType(value, index))
 					}
 				}
 			}
@@ -142,6 +143,34 @@ func underlying(spec *ast.TypeSpec) string {
 		return "interface"
 	}
 	return render(spec.Type)
+}
+
+func interfaceMemberNames(packagePath string, spec *ast.TypeSpec) []string {
+	declared, ok := spec.Type.(*ast.InterfaceType)
+	if !ok || declared.Methods == nil {
+		return nil
+	}
+	var names []string
+	for _, member := range declared.Methods.List {
+		if len(member.Names) == 0 {
+			names = append(names, packagePath+"."+spec.Name.Name+" embeds "+render(member.Type))
+			continue
+		}
+		for _, name := range member.Names {
+			names = append(names, packagePath+"."+spec.Name.Name+"."+name.Name+strings.TrimPrefix(render(member.Type), "func"))
+		}
+	}
+	return names
+}
+
+func valueType(spec *ast.ValueSpec, index int) string {
+	if spec.Type != nil {
+		return render(spec.Type)
+	}
+	if index < len(spec.Values) {
+		return "= " + render(spec.Values[index])
+	}
+	return "untyped"
 }
 
 func render(node ast.Node) string {
