@@ -143,7 +143,7 @@ postgres-up: ## Start the PostgreSQL test servers, creating them when absent
 			docker start "$$name" >/dev/null || exit 1; \
 		else \
 			echo "creating $$name on $$port"; \
-			docker run -d --name "$$name" -p "$$port:5432" -e POSTGRES_DB=golem $$env "$$image" >/dev/null || exit 1; \
+			docker run -d --name "$$name" -p "127.0.0.1:$$port:5432" -e POSTGRES_DB=golem $$env "$$image" >/dev/null || exit 1; \
 		fi; \
 	done
 	@for attempt in $$(seq 1 60); do \
