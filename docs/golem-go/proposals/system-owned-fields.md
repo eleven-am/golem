@@ -163,6 +163,29 @@ field produces byte-identical canonical JSON and an unchanged fingerprint.
 Only a schema that uses the mode gets a new one, which is the ordinary
 consequence of editing a schema.
 
+## Decided: declarations get the system stance
+
+The first implementation left the escape unreachable from schema-package
+code, and left a mutation hook unable to write a `system` field because
+hook-replaced inputs re-enter with the caller stance. Both are now closed:
+without them the mode mostly produces compile errors in the place custom
+mutations actually live — `examples/social/social/extensions.go` already
+opens `caller.Transaction` inside the schema package.
+
+The shell exposes the system surface to the whole schema package, because it
+type-checks that package as one unit and cannot scope by declaration kind.
+That is narrower than it sounds. `SystemEscape` takes a `*CallerTx[P]`, and a
+policy body receives `(rules *golem.Rules[M], actor Actor)` — no context, no
+caller, no transaction. A policy cannot call it because it has nothing to
+pass, and the type system enforces that rather than a convention. Only code
+already holding a caller transaction can reach it, which is the code that
+needs it.
+
+The ABI test that rejected any `System` symbol in the shell is relaxed to
+permit exactly the system surface, and must keep proving the shell and the
+final registry agree. A test that merely stops checking would leave
+generation-time type-checking free to drift from what actually compiles.
+
 ## Not in scope
 
 Per-field policy on system writes, a way for a client to propose a value the
