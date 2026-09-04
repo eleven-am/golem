@@ -407,7 +407,7 @@ func nonMutationRuntimeEntryPoints() map[string]struct{} {
 		"CallerGroupBy", "CallerMutationModel", "CallerRelationGroupBy", "CallerScoped", "CallerSearch",
 		"CallerSimilar", "CallerTransaction", "CallerTxAggregate", "CallerTxCount", "CallerTxEnqueue",
 		"CallerTxFindFirst", "CallerTxFindMany", "CallerTxFindUnique", "CallerTxGroupBy",
-		"CallerTxRelationGroupBy", "CallerTxScoped",
+		"CallerTxRelationGroupBy", "CallerTxScoped", "CallerTxSystem",
 		"SystemAggregate", "SystemCount", "SystemFindFirst", "SystemFindMany", "SystemFindUnique",
 		"SystemGroupBy", "SystemRelationGroupBy", "SystemScoped", "SystemSearch", "SystemSimilar",
 		"SystemTransaction", "SystemTxAggregate", "SystemTxCount", "SystemTxEnqueue", "SystemTxFindFirst",

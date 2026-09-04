@@ -267,6 +267,9 @@ func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.C
 	if !modelOK {
 		return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested model is absent", nil)
 	}
+	if err := builder.refuseSystemOwnedWrites(node); err != nil {
+		return mutationir.NodeInput{}, err
+	}
 	primary := make([]policyir.FieldID, len(model.PrimaryKey()))
 	for index, field := range model.PrimaryKey() {
 		primary[index] = policyir.FieldID(field)
@@ -366,6 +369,25 @@ func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.C
 	}
 	node.Hooks = hooks
 	return builder.finalizeImages(node)
+}
+
+func (builder *builder) refuseSystemOwnedWrites(node mutationir.NodeInput) error {
+	if builder.request.Stance != mutationir.Caller {
+		return nil
+	}
+	for _, operation := range node.ScalarOperations {
+		if operation.RuntimeOwned() {
+			continue
+		}
+		field, ok := builder.request.Registry.Field(golem.ModelID(node.Model), golem.FieldID(operation.FieldID()))
+		if !ok {
+			continue
+		}
+		if compilerir.HasMode(field.Modes(), compilerir.ModeSystem) {
+			return fail(CodeExposure, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "system field is not caller writable", nil)
+		}
+	}
+	return nil
 }
 
 func (builder *builder) decorateMembership(node mutationir.NodeInput, position *policyir.Condition, endpoint schema.RelationEndpoint) (mutationir.NodeInput, error) {

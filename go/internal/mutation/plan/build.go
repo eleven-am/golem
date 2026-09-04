@@ -124,6 +124,14 @@ func validateRequest(request RootRequest) error {
 			return fail(CodeRequest, request, policyir.FieldID{}, "update input kind or model is invalid", nil)
 		}
 	}
+	if request.Stance == mutationir.Caller {
+		if err := refuseSystemOwnedWrites(request, request.Create); err != nil {
+			return err
+		}
+		if err := refuseSystemOwnedWrites(request, request.Update); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -275,6 +283,25 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 	}
 	node.Before, node.After = before, after
 	return node, nil
+}
+
+func refuseSystemOwnedWrites(request RootRequest, input *mutationbind.ScalarInput) error {
+	if input == nil {
+		return nil
+	}
+	for _, operation := range input.Operations() {
+		if operation.RuntimeOwned() {
+			continue
+		}
+		field, ok := request.Registry.Field(golem.ModelID(request.Model), golem.FieldID(operation.FieldID()))
+		if !ok {
+			continue
+		}
+		if compilerir.HasMode(field.Modes(), compilerir.ModeSystem) {
+			return fail(CodeExposure, request, operation.FieldID(), "system field is not caller writable", nil)
+		}
+	}
+	return nil
 }
 
 func concurrencyHookMutableFields(request RootRequest) []policyir.FieldID {

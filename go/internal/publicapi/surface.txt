@@ -15,22 +15,24 @@ embedding.(Specification).Validate() error
 embedding.(Vector).Dimensions() int
 embedding.(Vector).Values() []float32
 embedding.Code string
-embedding.CodeInvalidInput
+embedding.CodeInvalidInput Code
 embedding.CodeOf(err error) (Code, bool)
-embedding.CodeProvider
-embedding.CodeUnavailable
+embedding.CodeProvider Code
+embedding.CodeUnavailable Code
 embedding.Error struct
 embedding.Failf(code Code, cause error, format string, arguments ...any) error
 embedding.Input struct
-embedding.MaximumBatchSize
-embedding.MaximumDimensions
-embedding.MaximumInputBytes
+embedding.MaximumBatchSize = 2048
+embedding.MaximumDimensions = 2000
+embedding.MaximumInputBytes = 16 << 20
 embedding.NewError(code Code, cause error) error
 embedding.NewInput(key, text string) (Input, error)
 embedding.NewRegistry(providers map[string]Provider) (Registry, error)
 embedding.NewSpecification(provider, model, revision string, dimensions, maximumBatch int) (Specification, error)
 embedding.NewVector(values []float32) (Vector, error)
 embedding.Provider interface
+embedding.Provider.Embed(ctx context.Context, inputs []Input) ([]Vector, error)
+embedding.Provider.Specification() Specification
 embedding.Registry struct
 embedding.Specification struct
 embedding.ValidateResult(specification Specification, inputs []Input, vectors []Vector) error
@@ -75,7 +77,11 @@ events.(TransportCapabilities).Identity() string
 events.(TransportCapabilities).Scope() TransportScope
 events.AvailabilityOf(transport EventTransport) bool
 events.AvailabilityReporter interface
+events.AvailabilityReporter.TransportAvailable() bool
 events.CDCAdapter interface
+events.CDCAdapter.CorrelatesGolemTransaction(context.Context, CDCCorrelationInput) (bool, error)
+events.CDCAdapter.Identity() CDCIdentity
+events.CDCAdapter.Run(context.Context, CDCEmitter) error
 events.CDCAdapterCapabilities(provider golem.Provider, adapters []CDCAdapter) ([]string, bool, error)
 events.CDCBatchInput struct
 events.CDCBatchInput.Changes []CDCChangeInput
@@ -90,6 +96,7 @@ events.CDCChangeInput.Model golem.ModelID
 events.CDCChangeInput.Ordinal uint32
 events.CDCCorrelationInput struct
 events.CDCEmitter interface
+events.CDCEmitter.Emit(context.Context, CDCBatchInput) error
 events.CDCIdentity struct
 events.CDCIdentity.Name string
 events.CDCIdentity.Provider golem.Provider
@@ -97,33 +104,42 @@ events.CDCIdentity.Version string
 events.Capabilities struct
 events.CapabilitiesOf(transport EventTransport) TransportCapabilities
 events.CapabilityReporter interface
-events.CodeCDCInvalid
-events.CodeCDCUnavailable
-events.CodeEventCodec
-events.CodeEventConfig
-events.CodeEventPoison
-events.CodeEventPublisherRunning
-events.CodeEventSourceClosed
-events.CodeEventTransport
+events.CapabilityReporter.TransportCapabilities() TransportCapabilities
+events.CodeCDCInvalid ErrorCode
+events.CodeCDCUnavailable ErrorCode
+events.CodeEventCodec ErrorCode
+events.CodeEventConfig ErrorCode
+events.CodeEventPoison ErrorCode
+events.CodeEventPublisherRunning ErrorCode
+events.CodeEventSourceClosed ErrorCode
+events.CodeEventTransport ErrorCode
 events.CodeOf(err error) (ErrorCode, bool)
-events.CodeSubscriptionCancelled
-events.CodeSubscriptionInvalid
-events.CodeSubscriptionOverflow
-events.CodeSubscriptionRevalidation
-events.CodeSubscriptionSourceClosed
+events.CodeSubscriptionCancelled ErrorCode
+events.CodeSubscriptionInvalid ErrorCode
+events.CodeSubscriptionOverflow ErrorCode
+events.CodeSubscriptionRevalidation ErrorCode
+events.CodeSubscriptionSourceClosed ErrorCode
 events.DefaultLimits() Limits
 events.Delivery interface
-events.DeliveryBlocked
-events.DeliveryDelivered
+events.Delivery.AttemptCount() int64
+events.Delivery.CausationID() golem.CausationID
+events.Delivery.FactRows() int
+events.Delivery.FailureCode() DeliveryFailureCode
+events.Delivery.Status() DeliveryStatus
+events.Delivery.UpdatedAt() time.Time
+events.DeliveryBlocked DeliveryStatus
+events.DeliveryDelivered DeliveryStatus
 events.DeliveryFailureCode string
-events.DeliveryLeased
-events.DeliveryPending
-events.DeliveryRetired
+events.DeliveryLeased DeliveryStatus
+events.DeliveryPending DeliveryStatus
+events.DeliveryRetired DeliveryStatus
 events.DeliveryStatus string
 events.Error struct
 events.ErrorCode string
 events.EventBatch internalvalue.EventBatch
 events.EventTransport interface
+events.EventTransport.Publish(context.Context, EventBatch) error
+events.EventTransport.Subscribe(context.Context, Subscription) (Stream, error)
 events.Failf(code ErrorCode, format string, arguments ...any) error
 events.Failure(code ErrorCode) error
 events.Limits struct
@@ -147,13 +163,13 @@ events.Limits.ShutdownGrace time.Duration
 events.Limits.SubscriberQueue int
 events.Limits.WebSocketKeepAlive time.Duration
 events.Limits.WebSocketPongTimeout time.Duration
-events.MaximumCDCAdapters
-events.MaximumCDCChangesPerTransaction
-events.MaximumCDCCursorBytes
-events.MaximumCDCIdentityBytes
-events.MaximumCDCSourceTransactionBytes
+events.MaximumCDCAdapters = 64
+events.MaximumCDCChangesPerTransaction = 4096
+events.MaximumCDCCursorBytes = 1 << 20
+events.MaximumCDCIdentityBytes = 128
+events.MaximumCDCSourceTransactionBytes = 4096
 events.MaximumLimits() Limits
-events.MaximumTransportIdentityBytes
+events.MaximumTransportIdentityBytes = 128
 events.MemoryLimits struct
 events.MemoryLimits.Buffer int
 events.NewMemoryTransport(limits MemoryLimits) (EventTransport, error)
@@ -163,70 +179,80 @@ events.NewTransportCapabilities(identity string, scope TransportScope, durable b
 events.NormalizeLimits(input Limits) (Limits, error)
 events.Notice internalvalue.Notice
 events.Observation struct
-events.ObservationCDCAck
-events.ObservationCDCReceive
-events.ObservationCancellation
-events.ObservationDelivery
-events.ObservationDepthBlocked
-events.ObservationDepthPending
-events.ObservationDepthRetired
-events.ObservationEvaluation
-events.ObservationHubMembership
+events.ObservationCDCAck ObservationKind
+events.ObservationCDCReceive ObservationKind
+events.ObservationCancellation ObservationKind
+events.ObservationDelivery ObservationKind
+events.ObservationDepthBlocked ObservationKind
+events.ObservationDepthPending ObservationKind
+events.ObservationDepthRetired ObservationKind
+events.ObservationEvaluation ObservationKind
+events.ObservationHubMembership ObservationKind
 events.ObservationKind string
-events.ObservationLifecycleFailure
-events.ObservationOverflow
-events.ObservationPublisherAck
-events.ObservationPublisherAttempt
-events.ObservationPublisherBlock
-events.ObservationPublisherClaim
-events.ObservationPublisherRetry
-events.ObservationRetention
-events.ObservationSuppression
-events.ObservationTransportReceive
-events.ObservationTransportReconnect
+events.ObservationLifecycleFailure ObservationKind
+events.ObservationOverflow ObservationKind
+events.ObservationPublisherAck ObservationKind
+events.ObservationPublisherAttempt ObservationKind
+events.ObservationPublisherBlock ObservationKind
+events.ObservationPublisherClaim ObservationKind
+events.ObservationPublisherRetry ObservationKind
+events.ObservationRetention ObservationKind
+events.ObservationSuppression ObservationKind
+events.ObservationTransportReceive ObservationKind
+events.ObservationTransportReconnect ObservationKind
 events.Observe(observer Observer, ctx context.Context, model golem.ModelID, action golem.EventAction, kind ObservationKind, outcome Outcome, reason SuppressionReason, attempt, depth, limit int, duration time.Duration, count int64)
 events.Observer interface
+events.Observer.ObserveEvent(context.Context, Observation)
 events.Operator interface
+events.Operator.Inspect(context.Context, golem.CausationID) (Delivery, error)
+events.Operator.Resume(context.Context, golem.CausationID) error
+events.Operator.Retire(context.Context, golem.CausationID) error
+events.Operator.RunRetention(context.Context, RetentionPolicy) (RetentionResult, error)
 events.OperatorAudit func(context.Context, OperatorAuditRecord)
 events.OperatorAuditAction string
-events.OperatorAuditFailed
+events.OperatorAuditFailed OperatorAuditOutcome
 events.OperatorAuditOutcome string
 events.OperatorAuditRecord struct
-events.OperatorAuditRejected
-events.OperatorAuditResume
-events.OperatorAuditRetention
-events.OperatorAuditRetire
-events.OperatorAuditSucceeded
+events.OperatorAuditRejected OperatorAuditOutcome
+events.OperatorAuditResume OperatorAuditAction
+events.OperatorAuditRetention OperatorAuditAction
+events.OperatorAuditRetire OperatorAuditAction
+events.OperatorAuditSucceeded OperatorAuditOutcome
 events.Outcome string
-events.OutcomeCancelled
-events.OutcomeFailure
-events.OutcomeSuccess
-events.OutcomeSuppressed
+events.OutcomeCancelled Outcome
+events.OutcomeFailure Outcome
+events.OutcomeSuccess Outcome
+events.OutcomeSuppressed Outcome
 events.PayloadLimitOf(transport EventTransport) (int, bool)
 events.PayloadLimitReporter interface
+events.PayloadLimitReporter.MaxEncodedEventBytes() int
 events.ReportOperatorAudit(report OperatorAudit, ctx context.Context, record OperatorAuditRecord)
 events.RetentionPolicy struct
 events.RetentionResult struct
 events.RuntimeBindableTransport interface
+events.RuntimeBindableTransport.BindEventRuntime(RuntimeBinding) error
 events.RuntimeBinding interface
+events.RuntimeBinding.DecodeNotice(context.Context, []byte) (Notice, error)
 events.RuntimeCDCCorrelationInput(sourceTransactionID string, cursor []byte) CDCCorrelationInput
 events.RuntimeCapabilities(provider golem.Provider, factCodecs, eventCodecs []string, transport TransportCapabilities, publisherEnabled, publisherRunning bool, subscriptionModels []golem.ModelID, cdcAdapters []string, externalWritesObserved bool) Capabilities
 events.RuntimeCapabilitiesWithTransportAvailability(provider golem.Provider, factCodecs, eventCodecs []string, transport TransportCapabilities, transportAvailable, publisherEnabled, publisherRunning bool, subscriptionModels []golem.ModelID, cdcAdapters []string, externalWritesObserved bool) Capabilities
 events.RuntimeDelivery(causation golem.CausationID, status DeliveryStatus, attempts int64, failure DeliveryFailureCode, facts int, updatedAt time.Time) (Delivery, error)
 events.RuntimeOperatorAuditRecord(action OperatorAuditAction, outcome OperatorAuditOutcome, causation golem.CausationID, causations, facts int) OperatorAuditRecord
 events.Stream interface
+events.Stream.Close() error
+events.Stream.Recv(context.Context) (Notice, error)
 events.Subscription internalvalue.Subscription
-events.SuppressionCorrelatedGolemWrite
-events.SuppressionDeleteFiltered
-events.SuppressionDeletionUnverifiable
-events.SuppressionEntityAbsent
-events.SuppressionFiltered
+events.SuppressionCorrelatedGolemWrite SuppressionReason
+events.SuppressionDeleteFiltered SuppressionReason
+events.SuppressionDeletionUnverifiable SuppressionReason
+events.SuppressionEntityAbsent SuppressionReason
+events.SuppressionFiltered SuppressionReason
 events.SuppressionReason string
-events.SuppressionUnauthorized
+events.SuppressionUnauthorized SuppressionReason
 events.TransportCapabilities struct
 events.TransportScope string
-events.TransportScopeCrossProcess
-events.TransportScopeProcessLocal
+events.TransportScopeCrossProcess TransportScope
+events.TransportScopeProcessLocal TransportScope
 events.ValidateCDCAdapters(provider golem.Provider, adapters []CDCAdapter) ([]CDCIdentity, error)
 events.ValidateCDCIdentity(identity CDCIdentity) error
 events/cdctest.Fixture struct
@@ -752,34 +778,38 @@ golem.ASCIIInsensitive() ComparisonMode
 golem.ActorFrom[A any](ctx context.Context) A
 golem.Actor[A any](_ *Schema)
 golem.AfterCommitFailure struct
-golem.AggregateAverage
-golem.AggregateCountAll
-golem.AggregateCountField
-golem.AggregateMaximum
+golem.AggregateAverage untyped
+golem.AggregateCountAll AggregateOperator
+golem.AggregateCountField untyped
+golem.AggregateMaximum untyped
 golem.AggregateMeasure interface
-golem.AggregateMinimum
+golem.AggregateMeasure.aggregateMeasure(M)
+golem.AggregateMeasure.analyticsIdentity() aggregateIdentity
+golem.AggregateMinimum untyped
 golem.AggregateOperator uint8
 golem.AggregateOption interface
+golem.AggregateOption.aggregateOption(M) aggregateOptionValue[M]
 golem.AggregateRequest struct
 golem.AggregateResult struct
-golem.AggregateSum
+golem.AggregateSum untyped
 golem.AggregateValue[M, V any](result AggregateResult[M], measure Measure[M, V]) ReadValue[V]
 golem.All[M any]() Predicate[M]
-golem.AnalyticsAggregate
+golem.AnalyticsAggregate AnalyticsOperation
 golem.AnalyticsDimensions[M any](_ ...Column[M]) AnalyticsOption[M]
-golem.AnalyticsGroupBy
+golem.AnalyticsGroupBy untyped
 golem.AnalyticsLimits[M any](_, _ int) AnalyticsOption[M]
 golem.AnalyticsMeasures[M any](_ ...Column[M]) AnalyticsOption[M]
 golem.AnalyticsOperation uint8
 golem.AnalyticsOption interface
+golem.AnalyticsOption.analyticsOption(M)
 golem.AnalyticsRelationDimensions[M any](_ ...RelationDimensionSpec[M]) AnalyticsOption[M]
-golem.AnalyticsRelationGroupBy
+golem.AnalyticsRelationGroupBy untyped
 golem.Analytics[M any](_ ...AnalyticsOption[M]) ModelOption[M]
 golem.AndGroup[M any](first GroupPredicate[M], rest ...GroupPredicate[M]) GroupPredicate[M]
 golem.AndScoped(first ScopedPredicate, rest ...ScopedPredicate) ScopedPredicate
 golem.AndScopedGroup(first ScopedGroupPredicate, rest ...ScopedGroupPredicate) ScopedGroupPredicate
 golem.And[M any](values ...Predicate[M]) Predicate[M]
-golem.AnyNull
+golem.AnyNull anyNullSentinel
 golem.ApplicationBindings struct
 golem.ApplicationDescriptors struct
 golem.BatchResult struct
@@ -788,28 +818,34 @@ golem.BatchedComputedField[M any, K comparable, Loader any](_ *GraphQLModel[M], 
 golem.BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (GeneratedPolicySet, error)
 golem.BytesField struct
 golem.CanonicalJSON(value JSONValue) ([]byte, error)
-golem.Cascade
+golem.Cascade ReferentialAction
 golem.Cast[M any, From any, To any](_ SchemaValue[M, From], _ SchemaCast[From, To]) SchemaExpr[M, To]
 golem.CausationID [16]byte
 golem.Check[M any](_ string, _ SchemaPredicate[M]) ModelOption[M]
 golem.Coalesce[M any, V any](_ ...SchemaValue[M, V]) SchemaExpr[M, V]
-golem.CodeBadUserInput
-golem.CodeConflict
-golem.CodeForbidden
-golem.CodeNotFound
-golem.CodeUnauthenticated
+golem.CodeBadUserInput ErrorCode
+golem.CodeConflict ErrorCode
+golem.CodeForbidden ErrorCode
+golem.CodeNotFound ErrorCode
+golem.CodeUnauthenticated ErrorCode
+golem.Column embeds Field[M]
 golem.Column interface
+golem.Column.columnModel(M)
 golem.ComparisonMode interface
+golem.ComparisonMode.comparisonMode() FrozenComparisonMode
 golem.ComputedField[M, Resolver any](_ *GraphQLModel[M], _ string, _ GraphQLResultType, _ Resolver, _ ...ComputedOption[M])
 golem.ComputedOption interface
+golem.ComputedOption.computedOption(M)
 golem.ConcurrencyExpectation concurrencyclaim.ConcurrencyExpectation
 golem.CreateFieldCapability interface
+golem.CreateFieldCapability.generatedCreateFieldCapability(M, V) (ModelID, ScalarColumn[M, V])
 golem.CreateHookRequest struct
 golem.CreateHookResult struct
 golem.CreateInput struct
 golem.CreateValue interface
+golem.CreateValue.createMutationValue(M) mutationValueNode
 golem.Cursor[M any](selector UniqueSelectorValue[M]) ReadOption[M]
-golem.DBNull
+golem.DBNull dbNullSentinel
 golem.Date struct
 golem.DateFromTime(value time.Time) (Date, error)
 golem.Decimal struct
@@ -833,6 +869,7 @@ golem.EnumValueOption struct
 golem.EnumValueSpec struct
 golem.EnumValue[E ~string](_ E, _ ...EnumValueOption) EnumValueSpec[E]
 golem.EqualField struct
+golem.EqualValue embeds ~bool | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string | UUID | Decimal | Date | Time | time.Time
 golem.EqualValue interface
 golem.Error struct
 golem.Error.Code ErrorCode
@@ -842,17 +879,20 @@ golem.Error.Model ModelID
 golem.Error.Operation string
 golem.ErrorCode string
 golem.EventAction string
-golem.EventCreated
-golem.EventDeleted
+golem.EventCreated EventAction
+golem.EventDeleted EventAction
 golem.EventID [16]byte
 golem.EventMetadata struct
 golem.EventModelMetadata struct
 golem.EventOption interface
+golem.EventOption.eventOption(M) eventOptionNode[M]
 golem.EventRegistry struct
 golem.EventSchemaDigest [32]byte
 golem.EventSelect[M any](fields ...Field[M]) EventOption[M]
 golem.EventStream interface
-golem.EventUpdated
+golem.EventStream.Close() error
+golem.EventStream.Recv(context.Context) (E, error)
+golem.EventUpdated EventAction
 golem.EventWhere[M any](predicate Predicate[M]) EventOption[M]
 golem.ExactDecimal struct
 golem.ExactDecimalFrom(value Decimal) ExactDecimal
@@ -862,6 +902,9 @@ golem.ExpectAbsent() ConcurrencyExpectation
 golem.ExpectExisting(value int64) ConcurrencyExpectation
 golem.ExpectVersion(value int64) ExistingVersion
 golem.Field interface
+golem.Field.fieldGeneration() SchemaDigest
+golem.Field.fieldIdentity() FieldID
+golem.Field.fieldModel(M)
 golem.FieldGenerationDigest[M any](field Field[M]) (generation SchemaDigest, ok bool)
 golem.FieldID [16]byte
 golem.FieldIdentity[M any](field Field[M]) (identity FieldID, ok bool)
@@ -882,18 +925,18 @@ golem.FreezeErrorCode string
 golem.FreezeFindFirst[M any](descriptor ModelDescriptor[M], options ...ReadOption[M]) (FrozenReadRequest, error)
 golem.FreezeFindMany[M any](descriptor ModelDescriptor[M], options ...ReadOption[M]) (FrozenReadRequest, error)
 golem.FreezeFindUnique[M any](descriptor ModelDescriptor[M], selector UniqueSelectorValue[M], options ...ReadOption[M]) (FrozenReadRequest, error)
-golem.FreezeInvalidField
-golem.FreezeInvalidModel
-golem.FreezeInvalidPredicate
-golem.FreezeInvalidRelation
-golem.FreezeInvalidRule
-golem.FreezeInvalidValue
+golem.FreezeInvalidField FreezeErrorCode
+golem.FreezeInvalidModel FreezeErrorCode
+golem.FreezeInvalidPredicate FreezeErrorCode
+golem.FreezeInvalidRelation FreezeErrorCode
+golem.FreezeInvalidRule FreezeErrorCode
+golem.FreezeInvalidValue FreezeErrorCode
 golem.From[M any](root Scope[M]) ScopedQuery[M]
 golem.FrozenAction uint8
-golem.FrozenActionCreate
-golem.FrozenActionDelete
-golem.FrozenActionRead
-golem.FrozenActionUpdate
+golem.FrozenActionCreate FrozenAction
+golem.FrozenActionDelete FrozenAction
+golem.FrozenActionRead FrozenAction
+golem.FrozenActionUpdate FrozenAction
 golem.FrozenAnalyticsOrder struct
 golem.FrozenAnalyticsOrder.Descending bool
 golem.FrozenAnalyticsOrder.Term FrozenAnalyticsTerm
@@ -904,20 +947,29 @@ golem.FrozenAnalyticsTerm.Model ModelID
 golem.FrozenAnalyticsTerm.Operator AggregateOperator
 golem.FrozenAnalyticsTerm.RelationName string
 golem.FrozenAnalyticsTerm.RelationPath []RelationID
-golem.FrozenComparisonASCIIInsensitive
+golem.FrozenComparisonASCIIInsensitive FrozenComparisonMode
 golem.FrozenComparisonMode uint8
-golem.FrozenComparisonSensitive
-golem.FrozenConditionConstant
-golem.FrozenConditionJSON
+golem.FrozenComparisonSensitive FrozenComparisonMode
+golem.FrozenConditionConstant FrozenConditionKind
+golem.FrozenConditionJSON FrozenConditionKind
 golem.FrozenConditionKind uint8
-golem.FrozenConditionList
-golem.FrozenConditionLogical
-golem.FrozenConditionRelation
-golem.FrozenConditionScalar
+golem.FrozenConditionList FrozenConditionKind
+golem.FrozenConditionLogical FrozenConditionKind
+golem.FrozenConditionRelation FrozenConditionKind
+golem.FrozenConditionScalar FrozenConditionKind
 golem.FrozenConditionView interface
+golem.FrozenConditionView.Children() []FrozenConditionView
+golem.FrozenConditionView.FieldID() (FieldID, bool)
+golem.FrozenConditionView.Kind() FrozenConditionKind
+golem.FrozenConditionView.Mode() FrozenComparisonMode
+golem.FrozenConditionView.Operand() FrozenOperandView
+golem.FrozenConditionView.Operator() FrozenOperator
+golem.FrozenConditionView.Path() FrozenJSONPathView
+golem.FrozenConditionView.Relation() (FrozenRelationRef, bool)
+golem.FrozenConditionView.sealedFrozenConditionView()
 golem.FrozenEffect uint8
-golem.FrozenEffectDeny
-golem.FrozenEffectGrant
+golem.FrozenEffectDeny FrozenEffect
+golem.FrozenEffectGrant FrozenEffect
 golem.FrozenEventRequest struct
 golem.FrozenGroupPredicate struct
 golem.FrozenGroupPredicate.Children []FrozenGroupPredicate
@@ -926,75 +978,102 @@ golem.FrozenGroupPredicate.Mode FrozenComparisonMode
 golem.FrozenGroupPredicate.Operator string
 golem.FrozenGroupPredicate.Term FrozenAnalyticsTerm
 golem.FrozenGroupPredicate.Value any
-golem.FrozenJSONAnyNull
-golem.FrozenJSONDbNull
-golem.FrozenJSONDocumentNull
+golem.FrozenJSONAnyNull FrozenJSONNullKind
+golem.FrozenJSONDbNull FrozenJSONNullKind
+golem.FrozenJSONDocumentNull FrozenJSONNullKind
 golem.FrozenJSONNullKind uint8
 golem.FrozenJSONPathView interface
+golem.FrozenJSONPathView.Present() bool
+golem.FrozenJSONPathView.Segments() []JSONPathSegment
+golem.FrozenJSONPathView.sealedFrozenJSONPathView()
 golem.FrozenMutationField struct
 golem.FrozenMutationInput struct
 golem.FrozenMutationTarget struct
 golem.FrozenNestedMutation struct
 golem.FrozenNestedMutationBranch struct
-golem.FrozenOperandFlag
-golem.FrozenOperandJSONNull
+golem.FrozenOperandFlag FrozenOperandKind
+golem.FrozenOperandJSONNull FrozenOperandKind
 golem.FrozenOperandKind uint8
-golem.FrozenOperandMany
-golem.FrozenOperandNone
-golem.FrozenOperandOne
+golem.FrozenOperandMany FrozenOperandKind
+golem.FrozenOperandNone FrozenOperandKind
+golem.FrozenOperandOne FrozenOperandKind
 golem.FrozenOperandView interface
+golem.FrozenOperandView.Flag() (bool, bool)
+golem.FrozenOperandView.JSONNull() (FrozenJSONNullKind, bool)
+golem.FrozenOperandView.Kind() FrozenOperandKind
+golem.FrozenOperandView.Many() []FrozenValueView
+golem.FrozenOperandView.One() (FrozenValueView, bool)
+golem.FrozenOperandView.sealedFrozenOperandView()
 golem.FrozenOperator uint16
-golem.FrozenOperatorAnd
-golem.FrozenOperatorContains
-golem.FrozenOperatorEndsWith
-golem.FrozenOperatorEq
-golem.FrozenOperatorGT
-golem.FrozenOperatorGTE
-golem.FrozenOperatorIn
-golem.FrozenOperatorIsNotNull
-golem.FrozenOperatorIsNull
-golem.FrozenOperatorJSONArrayContains
-golem.FrozenOperatorJSONArrayEndsWith
-golem.FrozenOperatorJSONArrayStartsWith
-golem.FrozenOperatorJSONEq
-golem.FrozenOperatorJSONGT
-golem.FrozenOperatorJSONGTE
-golem.FrozenOperatorJSONLT
-golem.FrozenOperatorJSONLTE
-golem.FrozenOperatorJSONNe
-golem.FrozenOperatorJSONStringContains
-golem.FrozenOperatorJSONStringEndsWith
-golem.FrozenOperatorJSONStringStartsWith
-golem.FrozenOperatorLT
-golem.FrozenOperatorLTE
-golem.FrozenOperatorListEq
-golem.FrozenOperatorListHas
-golem.FrozenOperatorListHasEvery
-golem.FrozenOperatorListHasSome
-golem.FrozenOperatorListIsEmpty
-golem.FrozenOperatorNe
-golem.FrozenOperatorNone
-golem.FrozenOperatorNot
-golem.FrozenOperatorNotIn
-golem.FrozenOperatorOr
-golem.FrozenOperatorRelationEvery
-golem.FrozenOperatorRelationIs
-golem.FrozenOperatorRelationIsNot
-golem.FrozenOperatorRelationIsNotNull
-golem.FrozenOperatorRelationIsNull
-golem.FrozenOperatorRelationNone
-golem.FrozenOperatorRelationSome
-golem.FrozenOperatorStartsWith
+golem.FrozenOperatorAnd FrozenOperator
+golem.FrozenOperatorContains FrozenOperator
+golem.FrozenOperatorEndsWith FrozenOperator
+golem.FrozenOperatorEq FrozenOperator
+golem.FrozenOperatorGT FrozenOperator
+golem.FrozenOperatorGTE FrozenOperator
+golem.FrozenOperatorIn FrozenOperator
+golem.FrozenOperatorIsNotNull FrozenOperator
+golem.FrozenOperatorIsNull FrozenOperator
+golem.FrozenOperatorJSONArrayContains FrozenOperator
+golem.FrozenOperatorJSONArrayEndsWith FrozenOperator
+golem.FrozenOperatorJSONArrayStartsWith FrozenOperator
+golem.FrozenOperatorJSONEq FrozenOperator
+golem.FrozenOperatorJSONGT FrozenOperator
+golem.FrozenOperatorJSONGTE FrozenOperator
+golem.FrozenOperatorJSONLT FrozenOperator
+golem.FrozenOperatorJSONLTE FrozenOperator
+golem.FrozenOperatorJSONNe FrozenOperator
+golem.FrozenOperatorJSONStringContains FrozenOperator
+golem.FrozenOperatorJSONStringEndsWith FrozenOperator
+golem.FrozenOperatorJSONStringStartsWith FrozenOperator
+golem.FrozenOperatorLT FrozenOperator
+golem.FrozenOperatorLTE FrozenOperator
+golem.FrozenOperatorListEq FrozenOperator
+golem.FrozenOperatorListHas FrozenOperator
+golem.FrozenOperatorListHasEvery FrozenOperator
+golem.FrozenOperatorListHasSome FrozenOperator
+golem.FrozenOperatorListIsEmpty FrozenOperator
+golem.FrozenOperatorNe FrozenOperator
+golem.FrozenOperatorNone FrozenOperator
+golem.FrozenOperatorNot FrozenOperator
+golem.FrozenOperatorNotIn FrozenOperator
+golem.FrozenOperatorOr FrozenOperator
+golem.FrozenOperatorRelationEvery FrozenOperator
+golem.FrozenOperatorRelationIs FrozenOperator
+golem.FrozenOperatorRelationIsNot FrozenOperator
+golem.FrozenOperatorRelationIsNotNull FrozenOperator
+golem.FrozenOperatorRelationIsNull FrozenOperator
+golem.FrozenOperatorRelationNone FrozenOperator
+golem.FrozenOperatorRelationSome FrozenOperator
+golem.FrozenOperatorStartsWith FrozenOperator
 golem.FrozenPolicy struct
 golem.FrozenPolicyView interface
+golem.FrozenPolicyView.CanonicalBytes() []byte
+golem.FrozenPolicyView.ModelID() ModelID
+golem.FrozenPolicyView.Rules() []FrozenRuleView
+golem.FrozenPolicyView.Version() uint16
+golem.FrozenPolicyView.sealedFrozenPolicyView()
 golem.FrozenPredicate struct
 golem.FrozenPredicateView interface
+golem.FrozenPredicateView.CanonicalBytes() []byte
+golem.FrozenPredicateView.Root() FrozenConditionView
+golem.FrozenPredicateView.RootModelID() ModelID
+golem.FrozenPredicateView.Version() uint16
+golem.FrozenPredicateView.sealedFrozenPredicateView()
 golem.FrozenReadCursor struct
 golem.FrozenReadOrder struct
 golem.FrozenReadRequest struct
 golem.FrozenReadSelection struct
 golem.FrozenRelationRef struct
 golem.FrozenRuleView interface
+golem.FrozenRuleView.Action() FrozenAction
+golem.FrozenRuleView.Condition() (FrozenPredicateView, bool)
+golem.FrozenRuleView.Effect() FrozenEffect
+golem.FrozenRuleView.Fields() (fields []FieldID, modelWide bool)
+golem.FrozenRuleView.IsUnconditional() bool
+golem.FrozenRuleView.ModelID() ModelID
+golem.FrozenRuleView.Position() uint32
+golem.FrozenRuleView.sealedFrozenRuleView()
 golem.FrozenScopedExpression struct
 golem.FrozenScopedExpression.Field FieldID
 golem.FrozenScopedExpression.Kind ScopedExpressionKind
@@ -1019,22 +1098,35 @@ golem.FrozenScopedPredicate.Operator ScopedPredicateOperator
 golem.FrozenScopedPredicate.Values []any
 golem.FrozenScopedQuery struct
 golem.FrozenUniqueSelector struct
-golem.FrozenValueBool
-golem.FrozenValueBytes
-golem.FrozenValueDate
-golem.FrozenValueDateTime
-golem.FrozenValueDecimal
-golem.FrozenValueFloat32
-golem.FrozenValueFloat64
-golem.FrozenValueInt16
-golem.FrozenValueInt32
-golem.FrozenValueInt64
-golem.FrozenValueJSON
+golem.FrozenValueBool FrozenValueKind
+golem.FrozenValueBytes FrozenValueKind
+golem.FrozenValueDate FrozenValueKind
+golem.FrozenValueDateTime FrozenValueKind
+golem.FrozenValueDecimal FrozenValueKind
+golem.FrozenValueFloat32 FrozenValueKind
+golem.FrozenValueFloat64 FrozenValueKind
+golem.FrozenValueInt16 FrozenValueKind
+golem.FrozenValueInt32 FrozenValueKind
+golem.FrozenValueInt64 FrozenValueKind
+golem.FrozenValueJSON FrozenValueKind
 golem.FrozenValueKind uint8
-golem.FrozenValueString
-golem.FrozenValueTime
-golem.FrozenValueUUID
+golem.FrozenValueString FrozenValueKind
+golem.FrozenValueTime FrozenValueKind
+golem.FrozenValueUUID FrozenValueKind
 golem.FrozenValueView interface
+golem.FrozenValueView.Bool() (bool, bool)
+golem.FrozenValueView.Bytes() ([]byte, bool)
+golem.FrozenValueView.Date() (Date, bool)
+golem.FrozenValueView.DateTime() (unixSeconds int64, nanosecond uint32, ok bool)
+golem.FrozenValueView.Decimal() (Decimal, bool)
+golem.FrozenValueView.FloatBits() (bits uint64, width uint8, ok bool)
+golem.FrozenValueView.JSON() (JSONValue, bool)
+golem.FrozenValueView.Kind() FrozenValueKind
+golem.FrozenValueView.Signed() (value int64, width uint8, ok bool)
+golem.FrozenValueView.String() (string, bool)
+golem.FrozenValueView.Time() (Time, bool)
+golem.FrozenValueView.UUID() (UUID, bool)
+golem.FrozenValueView.sealedFrozenValueView()
 golem.GeneratedAfterCommitHookBinding[A, M, Result any](model ModelID, operation HookOperation, invoke func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAfterHookBinding[A, M, Result any](model ModelID, operation HookOperation, invoke func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAggregateSelect[M any](first AggregateMeasure[M], rest ...AggregateMeasure[M]) AggregateOption[M]
@@ -1171,21 +1263,21 @@ golem.GenerationDigestError.Actual SchemaDigest
 golem.GenerationDigestError.Expected SchemaDigest
 golem.GenerationDigestError.PackageIndex int
 golem.GenerationDigestError.Registry string
-golem.GraphQLAggregate
+golem.GraphQLAggregate GraphQLOperation
 golem.GraphQLBigInt() GraphQLType[int64]
 golem.GraphQLBoolean() GraphQLType[bool]
 golem.GraphQLBytes() GraphQLType[[]byte]
-golem.GraphQLCreate
+golem.GraphQLCreate GraphQLOperation
 golem.GraphQLDate() GraphQLType[Date]
 golem.GraphQLDateTime() GraphQLType[time.Time]
 golem.GraphQLDecimal() GraphQLType[Decimal]
-golem.GraphQLDelete
-golem.GraphQLDeleteMany
+golem.GraphQLDelete GraphQLOperation
+golem.GraphQLDeleteMany GraphQLOperation
 golem.GraphQLEnum[E ~string]() GraphQLType[E]
-golem.GraphQLFindMany
-golem.GraphQLFindOne
+golem.GraphQLFindMany GraphQLOperation
+golem.GraphQLFindOne GraphQLOperation
 golem.GraphQLFloat() GraphQLType[float64]
-golem.GraphQLGroupBy
+golem.GraphQLGroupBy GraphQLOperation
 golem.GraphQLHidden() GraphQLOption
 golem.GraphQLHookOwned[M any](_ ...Column[M]) GraphQLOption
 golem.GraphQLInt() GraphQLType[int32]
@@ -1198,8 +1290,9 @@ golem.GraphQLOperations(_ ...GraphQLOperation) GraphQLOption
 golem.GraphQLOption struct
 golem.GraphQLPageSizes(_, _ int) GraphQLOption
 golem.GraphQLPlural(_ string) GraphQLOption
-golem.GraphQLRelationGroupBy
+golem.GraphQLRelationGroupBy GraphQLOperation
 golem.GraphQLResultType interface
+golem.GraphQLResultType.graphqlResultType()
 golem.GraphQLRootNames struct
 golem.GraphQLRootNames.Aggregate string
 golem.GraphQLRootNames.Create string
@@ -1219,37 +1312,40 @@ golem.GraphQLString() GraphQLType[string]
 golem.GraphQLTime() GraphQLType[Time]
 golem.GraphQLType struct
 golem.GraphQLUUID() GraphQLType[UUID]
-golem.GraphQLUpdate
-golem.GraphQLUpdateMany
-golem.GraphQLUpsert
+golem.GraphQLUpdate GraphQLOperation
+golem.GraphQLUpdateMany GraphQLOperation
+golem.GraphQLUpsert GraphQLOperation
 golem.GraphQLValue(_ string) EnumValueOption
 golem.GraphQL[M any](_ ...GraphQLOption) ModelOption[M]
 golem.GroupCell interface
+golem.GroupCell.analyticsIdentity() aggregateIdentity
+golem.GroupCell.groupCell(M, V)
 golem.GroupOption interface
+golem.GroupOption.groupOption(M) groupOptionValue[M]
 golem.GroupOrder struct
 golem.GroupPredicate struct
 golem.GroupRequest struct
 golem.GroupRow struct
 golem.GroupValue[M, V any](row GroupRow[M], cell GroupCell[M, V]) ReadValue[V]
-golem.HookAfter
-golem.HookAfterCommit
-golem.HookBefore
+golem.HookAfter HookPhase
+golem.HookAfterCommit HookPhase
+golem.HookBefore HookPhase
 golem.HookBinding struct
-golem.HookCreate
+golem.HookCreate HookOperation
 golem.HookCreateRow[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], input CreateInput[M]) (Row[M], error)
-golem.HookDelete
-golem.HookDeleteMany
+golem.HookDelete HookOperation
+golem.HookDeleteMany HookOperation
 golem.HookDeleteManyRows[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], where Predicate[M]) (int64, error)
 golem.HookDeleteRow[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], target MutationTarget[M]) (Row[M], error)
 golem.HookExecutor struct
-golem.HookFindFirst
-golem.HookFindMany
+golem.HookFindFirst HookOperation
+golem.HookFindMany HookOperation
 golem.HookFindManyRows[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], options ...ReadOption[M]) ([]Row[M], error)
-golem.HookFindOne
+golem.HookFindOne HookOperation
 golem.HookOperation string
 golem.HookPhase string
-golem.HookUpdate
-golem.HookUpdateMany
+golem.HookUpdate HookOperation
+golem.HookUpdateMany HookOperation
 golem.HookUpdateManyRows[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], where Predicate[M], input UpdateManyInput[M]) (int64, error)
 golem.HookUpdateRow[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], target MutationTarget[M], input UpdateInput[M]) (Row[M], error)
 golem.HookUpsertRow[M any](ctx context.Context, executor HookExecutor, descriptor ModelDescriptor[M], target MutationTarget[M], create CreateInput[M], update UpdateInput[M]) (Row[M], error)
@@ -1263,40 +1359,52 @@ golem.IndexKey struct
 golem.IndexSpec struct
 golem.Index[M any](_ string) IndexSpec[M]
 golem.InnerJoin[M, R any](from Scope[M], relation Relation[M, R]) Scope[R]
-golem.Int16ToInt32
-golem.Int16ToInt64
-golem.Int32ToInt64
-golem.Int64ToString
+golem.Int16ToInt32 SchemaCast[int16, int32]
+golem.Int16ToInt64 SchemaCast[int16, int64]
+golem.Int32ToInt64 SchemaCast[int32, int64]
+golem.Int64ToString SchemaCast[int64, string]
 golem.JSON struct
 golem.JSONArray(values ...JSONValue) JSONArrayValue
 golem.JSONArrayValue struct
 golem.JSONBool(value bool) JSONBoolValue
 golem.JSONBoolValue struct
 golem.JSONEqualityOperand interface
+golem.JSONEqualityOperand.jsonEqualityOperand()
 golem.JSONField struct
 golem.JSONIndex(index uint32) JSONPathSegment
 golem.JSONKey(key string) JSONPathSegment
-golem.JSONNull
+golem.JSONNull jsonNullSentinel
 golem.JSONNumber(value Decimal) JSONNumberValue
 golem.JSONNumberValue struct
 golem.JSONObject(values map[string]JSONValue) JSONObjectValue
 golem.JSONObjectValue struct
+golem.JSONOrderedValue embeds JSONScalarValue
 golem.JSONOrderedValue interface
+golem.JSONOrderedValue.jsonOrderedValue()
 golem.JSONPath struct
 golem.JSONPathSegment interface
+golem.JSONPathSegment.Index() (uint32, bool)
+golem.JSONPathSegment.Key() (string, bool)
+golem.JSONPathSegment.jsonPathSegment()
+golem.JSONScalarValue embeds JSONValue
 golem.JSONScalarValue interface
+golem.JSONScalarValue.jsonScalarValue()
 golem.JSONString(value string) JSONStringValue
 golem.JSONStringComparison struct
 golem.JSONStringValue struct
 golem.JSONTarget struct
 golem.JSONValue interface
+golem.JSONValue.jsonValue()
 golem.KeyID [16]byte
 golem.LeftJoin[M, R any](from Scope[M], relation Relation[M, R]) Scope[R]
 golem.Length[M any, V ~string | ~[]byte](_ SchemaValue[M, V]) SchemaExpr[M, int64]
 golem.List []T
+golem.ListElement embeds ~bool | ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string | UUID | Decimal | Date | Time | time.Time
 golem.ListElement interface
 golem.ListField struct
 golem.LocalGroupDimension interface
+golem.LocalGroupDimension.analyticsIdentity() aggregateIdentity
+golem.LocalGroupDimension.localGroupDimension(M)
 golem.Lower[M any, V ~string](_ SchemaValue[M, V]) SchemaExpr[M, V]
 golem.Many[M, R any](row Row[M], field ToMany[M, R]) ReadValue[[]Row[R]]
 golem.MaskedDependency(field, dependency string) error
@@ -1309,39 +1417,47 @@ golem.ModelDescriptor struct
 golem.ModelID [16]byte
 golem.ModelMetadata struct
 golem.ModelOption interface
+golem.ModelOption.modelOption(M)
 golem.ModelSpec struct
 golem.Model[M any](_ *Schema)
 golem.MustParseExactDecimal(text string) ExactDecimal
 golem.MustParseExactInteger(text string) ExactInteger
-golem.MutationFieldCreate
-golem.MutationFieldDecrement
-golem.MutationFieldIncrement
-golem.MutationFieldNull
+golem.MutationFieldCreate MutationFieldOperation
+golem.MutationFieldDecrement untyped
+golem.MutationFieldIncrement untyped
+golem.MutationFieldNull untyped
 golem.MutationFieldOperation uint8
-golem.MutationFieldSet
+golem.MutationFieldSet untyped
 golem.MutationRelationAction uint8
 golem.MutationRelationBranch uint8
-golem.MutationRelationConnect
-golem.MutationRelationConnectOrCreate
-golem.MutationRelationConnectOrCreateConnectBranch
-golem.MutationRelationConnectOrCreateCreateBranch
-golem.MutationRelationCreate
-golem.MutationRelationCreateMany
-golem.MutationRelationDelete
-golem.MutationRelationDeleteMany
-golem.MutationRelationDisconnect
-golem.MutationRelationMainBranch
-golem.MutationRelationSet
-golem.MutationRelationUpdate
-golem.MutationRelationUpdateMany
-golem.MutationRelationUpsert
-golem.MutationRelationUpsertCreateBranch
-golem.MutationRelationUpsertUpdateBranch
+golem.MutationRelationConnect untyped
+golem.MutationRelationConnectOrCreate untyped
+golem.MutationRelationConnectOrCreateConnectBranch untyped
+golem.MutationRelationConnectOrCreateCreateBranch untyped
+golem.MutationRelationCreate MutationRelationAction
+golem.MutationRelationCreateMany untyped
+golem.MutationRelationDelete untyped
+golem.MutationRelationDeleteMany untyped
+golem.MutationRelationDisconnect untyped
+golem.MutationRelationMainBranch MutationRelationBranch
+golem.MutationRelationSet untyped
+golem.MutationRelationUpdate untyped
+golem.MutationRelationUpdateMany untyped
+golem.MutationRelationUpsert untyped
+golem.MutationRelationUpsertCreateBranch untyped
+golem.MutationRelationUpsertUpdateBranch untyped
 golem.MutationTarget interface
+golem.MutationTarget.mutationTarget(M) mutationTargetNode[M]
 golem.Mutation[Resolver any](_ *GraphQLSchema, _ string, _ Resolver)
 golem.NamedRelationDimension[M, V any](_ string, _ RelationDimensionPath[M, V]) RelationDimensionSpec[M]
+golem.NestedCreateValue embeds CreateValue[M]
 golem.NestedCreateValue interface
+golem.NestedCreateValue.nestedCreateMutationValue(M) mutationValueNode
+golem.NestedUpdateValue embeds UpdateValue[M]
 golem.NestedUpdateValue interface
+golem.NestedUpdateValue.nestedUpdateMutationValue(M) mutationValueNode
+golem.NestedValue embeds NestedCreateValue[M]
+golem.NestedValue embeds NestedUpdateValue[M]
 golem.NestedValue interface
 golem.NewDate(year int, month time.Month, day int) (Date, error)
 golem.NewDecimal(coefficient int64, scale uint8) (Decimal, error)
@@ -1351,7 +1467,7 @@ golem.NewJSONPath(first JSONPathSegment, rest ...JSONPathSegment) JSONPath
 golem.NewRules[M any]() *Rules[M]
 golem.NewTime(hour, minute, second, microsecond int) (Time, error)
 golem.NewUUID(value [16]byte) UUID
-golem.NoAction
+golem.NoAction ReferentialAction
 golem.None[M any]() Predicate[M]
 golem.NotGroup[M any](value GroupPredicate[M]) GroupPredicate[M]
 golem.NotScoped(value ScopedPredicate) ScopedPredicate
@@ -1379,9 +1495,13 @@ golem.OrScopedGroup(first ScopedGroupPredicate, rest ...ScopedGroupPredicate) Sc
 golem.Or[M any](values ...Predicate[M]) Predicate[M]
 golem.OrderBy[M any](terms ...OrderTerm[M]) ReadOption[M]
 golem.OrderTerm struct
+golem.OrderedAnalyticsValue embeds ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string | Decimal | Date | Time | time.Time
 golem.OrderedAnalyticsValue interface
 golem.OrderedField struct
 golem.OrderedGroupDimension interface
+golem.OrderedGroupDimension.analyticsIdentity() aggregateIdentity
+golem.OrderedGroupDimension.orderedGroupDimension(M, V)
+golem.OrderedValue embeds ~int16 | ~int32 | ~int64 | ~float32 | ~float64 | ~string | Decimal | Date | Time | time.Time
 golem.OrderedValue interface
 golem.PackageBindings struct
 golem.PackageDescriptors struct
@@ -1396,32 +1516,36 @@ golem.ParseTime(input string) (Time, error)
 golem.ParseUUID(input string) (UUID, error)
 golem.PolicyBinding struct
 golem.PolicyFactory func(A) (FrozenPolicy, error)
-golem.PostgreSQL
+golem.PostgreSQL Provider
 golem.Predicate struct
-golem.PrimaryIdentity
+golem.PrimaryIdentity IdentityKind
 golem.PrimaryKey[M any](_ string, _ ...Column[M]) ModelOption[M]
+golem.Projection embeds ReadOption[M]
 golem.Projection interface
-golem.ProjectionDefault
-golem.ProjectionInclude
-golem.ProjectionSelect
+golem.Projection.mutationProjection(M) readOptionNode
+golem.ProjectionDefault ReadProjectionMode
+golem.ProjectionInclude untyped
+golem.ProjectionSelect untyped
 golem.Provider string
 golem.ProviderSchemaDocument struct
 golem.Providers(_ *Schema, _ ...Provider)
 golem.Query[Resolver any](_ *GraphQLSchema, _ string, _ Resolver)
-golem.ReadCount
-golem.ReadFindFirst
-golem.ReadFindMany
-golem.ReadFindUnique
-golem.ReadNull
+golem.ReadCount untyped
+golem.ReadFindFirst untyped
+golem.ReadFindMany untyped
+golem.ReadFindUnique ReadOperation
+golem.ReadNull untyped
 golem.ReadOperation uint8
 golem.ReadOption interface
-golem.ReadPresent
+golem.ReadOption.readOption(M) readOptionNode
+golem.ReadPresent untyped
 golem.ReadProjectionMode uint8
 golem.ReadState uint8
-golem.ReadUnselected
+golem.ReadUnselected ReadState
 golem.ReadValue struct
 golem.ReferentialAction string
 golem.Relation interface
+golem.Relation.scopedRelation(M, R) scopedRelationIdentity
 golem.RelationCardinality string
 golem.RelationCountSelection struct
 golem.RelationCount[M, R any](row Row[M], field ToMany[M, R]) ReadValue[int64]
@@ -1429,24 +1553,30 @@ golem.RelationDimension struct
 golem.RelationDimensionPath struct
 golem.RelationDimensionSpec struct
 golem.RelationGroupCell interface
+golem.RelationGroupCell.analyticsIdentity() aggregateIdentity
+golem.RelationGroupCell.relationGroupCell(M, V)
 golem.RelationGroupDimension interface
+golem.RelationGroupDimension.analyticsIdentity() aggregateIdentity
+golem.RelationGroupDimension.relationGroupDimension(M)
 golem.RelationGroupOption interface
+golem.RelationGroupOption.relationGroupOption(M) groupOptionValue[M]
 golem.RelationGroupRequest struct
 golem.RelationGroupRow struct
 golem.RelationGroupValue[M, V any](row RelationGroupRow[M], cell RelationGroupCell[M, V]) ReadValue[V]
 golem.RelationID [16]byte
 golem.RelationInclusion interface
-golem.RelationInverse
+golem.RelationInclusion.readRelationInclusion(M) readSelectionNode
+golem.RelationInverse RelationRole
 golem.RelationMetadata struct
 golem.RelationOptionSpec struct
 golem.RelationOptions[M any, R any](_ ToOneRelationOption[M, R]) RelationOptionSpec[M]
 golem.RelationRole string
 golem.RelationSelection struct
-golem.RelationSource
-golem.RelationToMany
-golem.RelationToOne
+golem.RelationSource RelationRole
+golem.RelationToMany RelationCardinality
+golem.RelationToOne RelationCardinality
 golem.Requires[M any](_ Field[M], _ ...Field[M]) ComputedOption[M]
-golem.Restrict
+golem.Restrict ReferentialAction
 golem.Row struct
 golem.Rules struct
 golem.RuntimeAfterCommitFailure(operation HookOperation, model ModelID, cause error) AfterCommitFailure
@@ -1504,31 +1634,31 @@ golem.RuntimeFreezeScopedQuery[M any](query ScopedQuery[M]) (FrozenScopedQuery, 
 golem.RuntimeFreezeUpdateInput[M any](input UpdateInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeUpdateManyInput[M any](input UpdateManyInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeVersionedMutationRequest(input RuntimeVersionedMutationRequestInput) (RuntimeMutationRequest, error)
-golem.RuntimeGroupAnd
-golem.RuntimeGroupCompare
-golem.RuntimeGroupNot
-golem.RuntimeGroupOr
+golem.RuntimeGroupAnd uint8
+golem.RuntimeGroupCompare uint8
+golem.RuntimeGroupNot uint8
+golem.RuntimeGroupOr uint8
 golem.RuntimeGroupRow[M any](model ModelID, cells ...RuntimeAnalyticsCell) GroupRow[M]
 golem.RuntimeHookExecutor(execute func(context.Context, RuntimeHookExecutorRequest) (RuntimeHookExecutorResult, error)) HookExecutor
 golem.RuntimeHookExecutorCount(count int64) RuntimeHookExecutorResult
 golem.RuntimeHookExecutorCreate(model ModelID, input FrozenMutationInput) RuntimeHookExecutorRequest
-golem.RuntimeHookExecutorCreateOperation
+golem.RuntimeHookExecutorCreateOperation untyped
 golem.RuntimeHookExecutorDelete(model ModelID, target FrozenMutationTarget) RuntimeHookExecutorRequest
 golem.RuntimeHookExecutorDeleteMany(model ModelID, predicate FrozenPredicate) RuntimeHookExecutorRequest
-golem.RuntimeHookExecutorDeleteManyOperation
-golem.RuntimeHookExecutorDeleteOperation
+golem.RuntimeHookExecutorDeleteManyOperation untyped
+golem.RuntimeHookExecutorDeleteOperation untyped
 golem.RuntimeHookExecutorFindMany(request FrozenReadRequest) RuntimeHookExecutorRequest
-golem.RuntimeHookExecutorFindManyOperation
+golem.RuntimeHookExecutorFindManyOperation RuntimeHookExecutorOperation
 golem.RuntimeHookExecutorOperation uint8
 golem.RuntimeHookExecutorRequest struct
 golem.RuntimeHookExecutorResult struct
 golem.RuntimeHookExecutorRows(rows ...RuntimeModelRow) RuntimeHookExecutorResult
 golem.RuntimeHookExecutorUpdate(model ModelID, target FrozenMutationTarget, input FrozenMutationInput) RuntimeHookExecutorRequest
 golem.RuntimeHookExecutorUpdateMany(model ModelID, predicate FrozenPredicate, input FrozenMutationInput) RuntimeHookExecutorRequest
-golem.RuntimeHookExecutorUpdateManyOperation
-golem.RuntimeHookExecutorUpdateOperation
+golem.RuntimeHookExecutorUpdateManyOperation untyped
+golem.RuntimeHookExecutorUpdateOperation untyped
 golem.RuntimeHookExecutorUpsert(model ModelID, target FrozenMutationTarget, create, update FrozenMutationInput) RuntimeHookExecutorRequest
-golem.RuntimeHookExecutorUpsertOperation
+golem.RuntimeHookExecutorUpsertOperation untyped
 golem.RuntimeHookMetadata struct
 golem.RuntimeHookMetadata.Model ModelID
 golem.RuntimeHookMetadata.Operation HookOperation
@@ -1546,10 +1676,10 @@ golem.RuntimeModelRow struct
 golem.RuntimeModelRowFromTyped[M any](row Row[M]) RuntimeModelRow
 golem.RuntimeModelRowWithSemanticIdentity(row RuntimeModelRow, key string) RuntimeModelRow
 golem.RuntimeMutationCountResult(count int64) (RuntimeMutationResult, error)
-golem.RuntimeMutationCreate
-golem.RuntimeMutationCreateInput
-golem.RuntimeMutationDelete
-golem.RuntimeMutationDeleteMany
+golem.RuntimeMutationCreate RuntimeMutationOperation
+golem.RuntimeMutationCreateInput RuntimeMutationInputKind
+golem.RuntimeMutationDelete untyped
+golem.RuntimeMutationDeleteMany untyped
 golem.RuntimeMutationFieldValue struct
 golem.RuntimeMutationFieldValue.Field FieldID
 golem.RuntimeMutationFieldValue.HasValue bool
@@ -1577,11 +1707,11 @@ golem.RuntimeMutationResult struct
 golem.RuntimeMutationRowResult(row RuntimeModelRow) RuntimeMutationResult
 golem.RuntimeMutationTargetFromIdentity(model ModelID, key KeyID, values []RuntimeSelectorValue) (FrozenMutationTarget, error)
 golem.RuntimeMutationTargetFromPredicate(model ModelID, key KeyID, fields []FieldID, predicate FrozenPredicate) (FrozenMutationTarget, error)
-golem.RuntimeMutationUpdate
-golem.RuntimeMutationUpdateInput
-golem.RuntimeMutationUpdateMany
-golem.RuntimeMutationUpdateManyInput
-golem.RuntimeMutationUpsert
+golem.RuntimeMutationUpdate untyped
+golem.RuntimeMutationUpdateInput untyped
+golem.RuntimeMutationUpdateMany untyped
+golem.RuntimeMutationUpdateManyInput untyped
+golem.RuntimeMutationUpsert untyped
 golem.RuntimeNestedMutationBranchValue struct
 golem.RuntimeNestedMutationBranchValue.Action MutationRelationAction
 golem.RuntimeNestedMutationBranchValue.Branch MutationRelationBranch
@@ -1646,8 +1776,8 @@ golem.RuntimeReadHookRows(request RuntimeReadHookRequest, rows []RuntimeModelRow
 golem.RuntimeReadOrderInput struct
 golem.RuntimeReadOrderInput.Direction SortDirection
 golem.RuntimeReadOrderInput.Field FieldID
-golem.RuntimeReadRelation
-golem.RuntimeReadRelationCount
+golem.RuntimeReadRelation untyped
+golem.RuntimeReadRelationCount untyped
 golem.RuntimeReadRequestInput struct
 golem.RuntimeReadRequestInput.Cursor *RuntimeReadCursorInput
 golem.RuntimeReadRequestInput.Distinct []FieldID
@@ -1662,7 +1792,7 @@ golem.RuntimeReadRequestInput.Skip *int
 golem.RuntimeReadRequestInput.Take *int
 golem.RuntimeReadRequestInput.Where *FrozenPredicate
 golem.RuntimeReadRow[M any](descriptor ModelDescriptor[M], cells ...RuntimeReadCell) (Row[M], error)
-golem.RuntimeReadScalar
+golem.RuntimeReadScalar RuntimeReadSelectionKind
 golem.RuntimeReadSelectionInput struct
 golem.RuntimeReadSelectionInput.Field FieldID
 golem.RuntimeReadSelectionInput.Kind RuntimeReadSelectionKind
@@ -1725,11 +1855,14 @@ golem.RuntimeVersionedMutationRequestInput struct
 golem.RuntimeVersionedMutationRequestInput.ConcurrencyExpectation *ConcurrencyExpectation
 golem.RuntimeVersionedMutationRequestInput.ExistingVersion *ExistingVersion
 golem.RuntimeVersionedMutationRequestInput.Request RuntimeMutationRequestInput
-golem.SQLite
+golem.SQLite Provider
+golem.ScalarColumn embeds Column[M]
 golem.ScalarColumn interface
+golem.ScalarColumn.Expr() SchemaExpr[M, V]
+golem.ScalarColumn.schemaValue(M, V)
 golem.Schema struct
 golem.SchemaBundle struct
-golem.SchemaBundleFormatVersion
+golem.SchemaBundleFormatVersion uint16
 golem.SchemaCast struct
 golem.SchemaDigest [32]byte
 golem.SchemaDocument struct
@@ -1737,27 +1870,30 @@ golem.SchemaExpr struct
 golem.SchemaName(_ *Schema, _ string)
 golem.SchemaPredicate struct
 golem.SchemaValue interface
+golem.SchemaValue.schemaValue(M, V)
 golem.SchemaValueOf[M any, V any](_ V) SchemaExpr[M, V]
 golem.Scope struct
 golem.ScopedAuditRecord struct
 golem.ScopedDecimalField struct
 golem.ScopedDimension interface
+golem.ScopedDimension.scopedDimension() scopedExpression
 golem.ScopedEqualField struct
-golem.ScopedExpressionAverage
-golem.ScopedExpressionCountAll
-golem.ScopedExpressionCountField
-golem.ScopedExpressionField
+golem.ScopedExpressionAverage untyped
+golem.ScopedExpressionCountAll untyped
+golem.ScopedExpressionCountField untyped
+golem.ScopedExpressionField ScopedExpressionKind
 golem.ScopedExpressionKind uint8
-golem.ScopedExpressionMaximum
-golem.ScopedExpressionMinimum
-golem.ScopedExpressionSum
+golem.ScopedExpressionMaximum untyped
+golem.ScopedExpressionMinimum untyped
+golem.ScopedExpressionSum untyped
 golem.ScopedFloatField struct
 golem.ScopedGroupPredicate struct
-golem.ScopedInnerJoin
+golem.ScopedInnerJoin ScopedJoinKind
 golem.ScopedIntegerField struct
 golem.ScopedJoin interface
+golem.ScopedJoin.runtimeScopedIdentity() (uint64, []FrozenScopedJoin)
 golem.ScopedJoinKind uint8
-golem.ScopedLeftJoin
+golem.ScopedLeftJoin untyped
 golem.ScopedMeasure struct
 golem.ScopedNullableDecimalField struct
 golem.ScopedNullableEqualField struct
@@ -1768,50 +1904,54 @@ golem.ScopedNullableTextField struct
 golem.ScopedOrder struct
 golem.ScopedOrderedField struct
 golem.ScopedOutcome uint8
-golem.ScopedOutcomeCancelled
-golem.ScopedOutcomeFailed
-golem.ScopedOutcomeRefused
-golem.ScopedOutcomeSucceeded
+golem.ScopedOutcomeCancelled untyped
+golem.ScopedOutcomeFailed untyped
+golem.ScopedOutcomeRefused untyped
+golem.ScopedOutcomeSucceeded ScopedOutcome
 golem.ScopedPredicate struct
-golem.ScopedPredicateAnd
-golem.ScopedPredicateContains
-golem.ScopedPredicateEndsWith
-golem.ScopedPredicateEqual
-golem.ScopedPredicateGreaterThan
-golem.ScopedPredicateGreaterThanOrEqual
-golem.ScopedPredicateIn
-golem.ScopedPredicateIsNotNull
-golem.ScopedPredicateIsNull
-golem.ScopedPredicateLessThan
-golem.ScopedPredicateLessThanOrEqual
-golem.ScopedPredicateNot
-golem.ScopedPredicateNotEqual
-golem.ScopedPredicateNotIn
+golem.ScopedPredicateAnd untyped
+golem.ScopedPredicateContains untyped
+golem.ScopedPredicateEndsWith untyped
+golem.ScopedPredicateEqual ScopedPredicateOperator
+golem.ScopedPredicateGreaterThan untyped
+golem.ScopedPredicateGreaterThanOrEqual untyped
+golem.ScopedPredicateIn untyped
+golem.ScopedPredicateIsNotNull untyped
+golem.ScopedPredicateIsNull untyped
+golem.ScopedPredicateLessThan untyped
+golem.ScopedPredicateLessThanOrEqual untyped
+golem.ScopedPredicateNot untyped
+golem.ScopedPredicateNotEqual untyped
+golem.ScopedPredicateNotIn untyped
 golem.ScopedPredicateOperator uint8
-golem.ScopedPredicateOr
-golem.ScopedPredicateStartsWith
+golem.ScopedPredicateOr untyped
+golem.ScopedPredicateStartsWith untyped
 golem.ScopedQuery struct
 golem.ScopedReads[M any]() ModelOption[M]
 golem.ScopedRelationCardinality uint8
-golem.ScopedRelationToMany
-golem.ScopedRelationToOne
+golem.ScopedRelationToMany untyped
+golem.ScopedRelationToOne ScopedRelationCardinality
+golem.ScopedResult embeds ScopedSelection
 golem.ScopedResult interface
+golem.ScopedResult.scopedResult(V) scopedExpression
 golem.ScopedRow struct
 golem.ScopedSelection interface
+golem.ScopedSelection.scopedSelection() scopedExpression
 golem.ScopedTextField struct
 golem.ScopedValue[V any](row ScopedRow, expression ScopedResult[V]) ReadValue[V]
 golem.Select[M any](fields ...Selection[M]) Projection[M]
 golem.Selection interface
+golem.Selection.readSelection(M) readSelectionNode
 golem.SemanticIndex[M any](_, _ string, _ ...Column[M]) ModelOption[M]
 golem.SemanticResult struct
 golem.SetCreate[M, V any](request *CreateHookRequest[M], field CreateFieldCapability[M, V], value V) error
-golem.SetDefault
-golem.SetNull
+golem.SetDefault ReferentialAction
+golem.SetNull ReferentialAction
 golem.Skip[M any](value int) ReadOption[M]
-golem.SortAscending
-golem.SortDescending
+golem.SortAscending SortDirection
+golem.SortDescending untyped
 golem.SortDirection uint8
-golem.Stored
+golem.Stored GeneratedStorage
 golem.Subscriptions[M any]() ModelOption[M]
 golem.Take[M any](value int) ReadOption[M]
 golem.TextComparison struct
@@ -1823,10 +1963,13 @@ golem.Time struct
 golem.ToMany struct
 golem.ToOne struct
 golem.ToOneRelation interface
+golem.ToOneRelation.relationOption(M, R)
+golem.ToOneRelation.toOneRelation(M, R)
 golem.ToOneRelationOption interface
+golem.ToOneRelationOption.relationOption(M, R)
 golem.ToOneSchemaField struct
 golem.UUID [16]byte
-golem.UniqueIdentity
+golem.UniqueIdentity IdentityKind
 golem.UniqueSelectorValue struct
 golem.Unique[M any](_ string, _ ...Column[M]) ModelOption[M]
 golem.UpdateHookRequest struct
@@ -1835,12 +1978,15 @@ golem.UpdateInput struct
 golem.UpdateManyHookRequest struct
 golem.UpdateManyHookResult struct
 golem.UpdateManyInput struct
+golem.UpdateManyValue embeds UpdateValue[M]
 golem.UpdateManyValue interface
+golem.UpdateManyValue.updateManyMutationValue(M) mutationValueNode
 golem.UpdateValue interface
+golem.UpdateValue.updateMutationValue(M) mutationValueNode
 golem.Upper[M any, V ~string](_ SchemaValue[M, V]) SchemaExpr[M, V]
 golem.Value[M, V any](row Row[M], field ScalarColumn[M, V]) ReadValue[V]
 golem.Via[M, R, V any](_ ToOneRelation[M, R], _ RelationDimensionPath[R, V]) RelationDimensionPath[M, V]
-golem.Virtual
+golem.Virtual GeneratedStorage
 golem.Where[M any](predicate Predicate[M]) ReadOption[M]
 golemtest.(Constraint).CanonicalBytes() []byte
 golemtest.(Constraint).Constant() (value bool, constant bool)
@@ -1867,22 +2013,22 @@ golemtest.(ReadPlan).ModelID() golem.ModelID
 golemtest.(ReadPlan).SelectingAction() golem.FrozenAction
 golemtest.(ReadPlan).UseKind() UseKind
 golemtest.Access uint8
-golemtest.AccessAlways
-golemtest.AccessConditional
-golemtest.AccessNever
+golemtest.AccessAlways Access
+golemtest.AccessConditional untyped
+golemtest.AccessNever untyped
 golemtest.CodeOf(err error) (ErrorCode, bool)
 golemtest.Constraint struct
 golemtest.DependencyEntry struct
 golemtest.DependencyKind uint8
-golemtest.DependencyRelation
-golemtest.DependencyScalar
+golemtest.DependencyRelation untyped
+golemtest.DependencyScalar DependencyKind
 golemtest.DependencyTree struct
 golemtest.Equivalent[M any](constraint Constraint[M], expected golem.Predicate[M]) (bool, error)
 golemtest.ErrorCode string
-golemtest.ErrorGenerationMismatch
-golemtest.ErrorInvalidInput
-golemtest.ErrorPolicyAnalysis
-golemtest.ErrorPolicyFactory
+golemtest.ErrorGenerationMismatch ErrorCode
+golemtest.ErrorInvalidInput ErrorCode
+golemtest.ErrorPolicyAnalysis ErrorCode
+golemtest.ErrorPolicyFactory ErrorCode
 golemtest.FieldClassification struct
 golemtest.Implies[M any](constraint Constraint[M], expected golem.Predicate[M]) (bool, error)
 golemtest.Kit struct
@@ -1891,18 +2037,18 @@ golemtest.Model[M any](policies PolicySet, descriptor golem.ModelDescriptor[M]) 
 golemtest.New[A any](bindings golem.ApplicationBindings[A], descriptors golem.ApplicationDescriptors, bundle golem.SchemaBundle) (*Kit[A], error)
 golemtest.PolicySet struct
 golemtest.ReadPlan struct
-golemtest.UseAggregateMeasure
-golemtest.UseAggregateOrder
-golemtest.UseComputedDependency
-golemtest.UseCursor
-golemtest.UseDistinct
-golemtest.UseFilter
-golemtest.UseGroupDimension
-golemtest.UseHaving
+golemtest.UseAggregateMeasure untyped
+golemtest.UseAggregateOrder untyped
+golemtest.UseComputedDependency untyped
+golemtest.UseCursor untyped
+golemtest.UseDistinct untyped
+golemtest.UseFilter untyped
+golemtest.UseGroupDimension untyped
+golemtest.UseHaving untyped
 golemtest.UseKind uint8
-golemtest.UseOrder
-golemtest.UseProjection
-golemtest.UseSelector
+golemtest.UseOrder untyped
+golemtest.UseProjection UseKind
+golemtest.UseSelector untyped
 graphql.(CallerCustomExecution).Execute(ctx context.Context, operation CustomOperation, name string, arguments map[string]any) (CustomResult, error)
 graphql.(ComputedBatchParent).CacheKey() string
 graphql.(ComputedBatchParent).Parent() golem.RuntimeModelRow
@@ -1928,10 +2074,14 @@ graphql.BindGeneratedCustomMutationModelContract[M, C, A, R any](bundle golem.Sc
 graphql.BindGeneratedCustomQueryContract[C, A, R any](bundle golem.SchemaBundle, spec CustomBindingSpec, resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error)
 graphql.BindGeneratedCustomQueryModelContract[M, C, A, R any](bundle golem.SchemaBundle, spec CustomBindingSpec, _ golem.ModelDescriptor[M], resolver func(context.Context, C, A) (R, error), conversions ...GeneratedCustomArgumentConversion) (CustomBinding, error)
 graphql.CallerAnalyticsExecution interface
+graphql.CallerAnalyticsExecution.ExecuteFrozenAnalytics(context.Context, golem.FrozenAnalyticsRequest) ([][]golem.RuntimeAnalyticsCell, error)
 graphql.CallerCustomExecution struct
 graphql.CallerEventExecution interface
+graphql.CallerEventExecution.SubscribeFrozenEvents(context.Context, golem.FrozenReadRequest, bool) (EventStream, error)
 graphql.CallerExecution interface
+graphql.CallerExecution.ExecuteFrozenRead(context.Context, golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error)
 graphql.CallerMutationExecution interface
+graphql.CallerMutationExecution.ExecuteFrozenMutation(context.Context, golem.RuntimeMutationRequest) (golem.RuntimeMutationResult, error)
 graphql.ComputedArgument struct
 graphql.ComputedArgument.Name string
 graphql.ComputedArgument.Value any
@@ -1966,9 +2116,10 @@ graphql.CustomBindingSpec.ExtensionID string
 graphql.CustomBindingSpec.ResolverName string
 graphql.CustomBindingSpec.ResolverPackage string
 graphql.CustomCallerCapability interface
-graphql.CustomMutation
+graphql.CustomCallerCapability.GolemGraphQLCallerCapability()
+graphql.CustomMutation CustomOperation
 graphql.CustomOperation string
-graphql.CustomQuery
+graphql.CustomQuery CustomOperation
 graphql.CustomRegistry struct
 graphql.CustomResult struct
 graphql.CustomResultEncoder func(R) (any, error)
@@ -1977,7 +2128,10 @@ graphql.Error.Extensions map[string]any
 graphql.Error.Message string
 graphql.Error.Path []any
 graphql.EventStream interface
+graphql.EventStream.Close() error
+graphql.EventStream.Recv(context.Context) (GeneratedEvent, error)
 graphql.Executor interface
+graphql.Executor.Execute(context.Context, P, Operation) Response
 graphql.GeneratedCustomArgumentConversion func(any) (any, error)
 graphql.GeneratedCustomMutationInputArgument[M any](descriptor golem.ModelDescriptor[M], kind golem.RuntimeMutationInputKind) GeneratedCustomArgumentConversion
 graphql.GeneratedCustomPredicateArgument[M any](descriptor golem.ModelDescriptor[M]) GeneratedCustomArgumentConversion
@@ -2030,8 +2184,11 @@ graphql.Response struct
 graphql.Response.Data any
 graphql.Response.Errors []Error
 graphql.ResponseStream interface
+graphql.ResponseStream.Close() error
+graphql.ResponseStream.Recv(context.Context) (Response, error)
 graphql.Server struct
 graphql.SubscriptionExecutor interface
+graphql.SubscriptionExecutor.Subscribe(context.Context, P, Operation) (ResponseStream, error)
 observe.(Dispatcher).Dropped() uint64
 observe.(Dispatcher).ObserveGolem(_ context.Context, value Observation)
 observe.(Dispatcher).Shutdown(ctx context.Context) error
@@ -2049,147 +2206,149 @@ observe.(Observation).QueueLimit() int
 observe.(Observation).QueueType() string
 observe.(Observation).Reason() Reason
 observe.(Observation).StatementCount() int
-observe.DefaultQueueCapacity
+observe.DefaultQueueCapacity = 1024
 observe.Dispatcher struct
 observe.DispatcherConfig struct
 observe.DispatcherConfig.QueueCapacity int
 observe.Kind string
-observe.KindAnalytics
-observe.KindCDC
-observe.KindEvent
-observe.KindGraphQL
-observe.KindHook
-observe.KindMigration
-observe.KindMutation
-observe.KindQueryPlan
-observe.KindQueue
-observe.KindRead
-observe.KindRelationLoad
-observe.KindRuntime
-observe.KindScopedRead
-observe.KindSemantic
-observe.KindShutdown
-observe.KindSubscription
-observe.KindTransaction
-observe.MaximumQueueCapacity
+observe.KindAnalytics Kind
+observe.KindCDC Kind
+observe.KindEvent Kind
+observe.KindGraphQL Kind
+observe.KindHook Kind
+observe.KindMigration Kind
+observe.KindMutation Kind
+observe.KindQueryPlan Kind
+observe.KindQueue Kind
+observe.KindRead Kind
+observe.KindRelationLoad Kind
+observe.KindRuntime Kind
+observe.KindScopedRead Kind
+observe.KindSemantic Kind
+observe.KindShutdown Kind
+observe.KindSubscription Kind
+observe.KindTransaction Kind
+observe.MaximumQueueCapacity = 65536
 observe.NewDispatcher(target Observer, config DispatcherConfig) (*Dispatcher, error)
 observe.Observation struct
 observe.Observer interface
+observe.Observer.ObserveGolem(context.Context, Observation)
 observe.Operation string
-observe.OperationAnalyticsAggregate
-observe.OperationAnalyticsGroupBy
-observe.OperationAnalyticsRelationGroupBy
-observe.OperationCDCAcknowledge
-observe.OperationCDCReceive
-observe.OperationCallerTransaction
-observe.OperationEventDepthBlocked
-observe.OperationEventDepthPending
-observe.OperationEventDepthRetired
-observe.OperationEventPublisherAcknowledge
-observe.OperationEventPublisherAttempt
-observe.OperationEventPublisherBlock
-observe.OperationEventPublisherClaim
-observe.OperationEventPublisherRetry
-observe.OperationEventRetention
-observe.OperationEventTransportReceive
-observe.OperationEventTransportReconnect
-observe.OperationGraphQLBatchedComputed
-observe.OperationGraphQLComputed
-observe.OperationGraphQLCustomMutation
-observe.OperationGraphQLCustomQuery
-observe.OperationGraphQLMutation
-observe.OperationGraphQLQuery
-observe.OperationGraphQLRequest
-observe.OperationGraphQLSubscription
-observe.OperationHookCreate
-observe.OperationHookDelete
-observe.OperationHookDeleteMany
-observe.OperationHookFindFirst
-observe.OperationHookFindMany
-observe.OperationHookFindOne
-observe.OperationHookUpdate
-observe.OperationHookUpdateMany
-observe.OperationMigrationInspect
-observe.OperationMutationConnect
-observe.OperationMutationCreate
-observe.OperationMutationDelete
-observe.OperationMutationDeleteMany
-observe.OperationMutationDisconnect
-observe.OperationMutationSetRelation
-observe.OperationMutationUpdate
-observe.OperationMutationUpdateMany
-observe.OperationMutationUpsert
-observe.OperationQueryPlanExplain
-observe.OperationQueueExecute
-observe.OperationReadCount
-observe.OperationReadFindFirst
-observe.OperationReadFindMany
-observe.OperationReadFindUnique
-observe.OperationRelationLoad
-observe.OperationRuntimeOpen
-observe.OperationScopedRead
-observe.OperationSemanticProvider
-observe.OperationSemanticRank
-observe.OperationSemanticRefresh
-observe.OperationShutdownHTTP
-observe.OperationShutdownPublisher
-observe.OperationSubscriptionCancellation
-observe.OperationSubscriptionDelivery
-observe.OperationSubscriptionEvaluation
-observe.OperationSubscriptionMembership
-observe.OperationSubscriptionOverflow
-observe.OperationSubscriptionSuppression
-observe.OperationSystemTransaction
+observe.OperationAnalyticsAggregate Operation
+observe.OperationAnalyticsGroupBy Operation
+observe.OperationAnalyticsRelationGroupBy Operation
+observe.OperationCDCAcknowledge Operation
+observe.OperationCDCReceive Operation
+observe.OperationCallerTransaction Operation
+observe.OperationEventDepthBlocked Operation
+observe.OperationEventDepthPending Operation
+observe.OperationEventDepthRetired Operation
+observe.OperationEventPublisherAcknowledge Operation
+observe.OperationEventPublisherAttempt Operation
+observe.OperationEventPublisherBlock Operation
+observe.OperationEventPublisherClaim Operation
+observe.OperationEventPublisherRetry Operation
+observe.OperationEventRetention Operation
+observe.OperationEventTransportReceive Operation
+observe.OperationEventTransportReconnect Operation
+observe.OperationGraphQLBatchedComputed Operation
+observe.OperationGraphQLComputed Operation
+observe.OperationGraphQLCustomMutation Operation
+observe.OperationGraphQLCustomQuery Operation
+observe.OperationGraphQLMutation Operation
+observe.OperationGraphQLQuery Operation
+observe.OperationGraphQLRequest Operation
+observe.OperationGraphQLSubscription Operation
+observe.OperationHookCreate Operation
+observe.OperationHookDelete Operation
+observe.OperationHookDeleteMany Operation
+observe.OperationHookFindFirst Operation
+observe.OperationHookFindMany Operation
+observe.OperationHookFindOne Operation
+observe.OperationHookUpdate Operation
+observe.OperationHookUpdateMany Operation
+observe.OperationMigrationInspect Operation
+observe.OperationMutationConnect Operation
+observe.OperationMutationCreate Operation
+observe.OperationMutationDelete Operation
+observe.OperationMutationDeleteMany Operation
+observe.OperationMutationDisconnect Operation
+observe.OperationMutationSetRelation Operation
+observe.OperationMutationUpdate Operation
+observe.OperationMutationUpdateMany Operation
+observe.OperationMutationUpsert Operation
+observe.OperationQueryPlanExplain Operation
+observe.OperationQueueExecute Operation
+observe.OperationReadCount Operation
+observe.OperationReadFindFirst Operation
+observe.OperationReadFindMany Operation
+observe.OperationReadFindUnique Operation
+observe.OperationRelationLoad Operation
+observe.OperationRuntimeOpen Operation
+observe.OperationScopedRead Operation
+observe.OperationSemanticProvider Operation
+observe.OperationSemanticRank Operation
+observe.OperationSemanticRefresh Operation
+observe.OperationShutdownHTTP Operation
+observe.OperationShutdownPublisher Operation
+observe.OperationSubscriptionCancellation Operation
+observe.OperationSubscriptionDelivery Operation
+observe.OperationSubscriptionEvaluation Operation
+observe.OperationSubscriptionMembership Operation
+observe.OperationSubscriptionOverflow Operation
+observe.OperationSubscriptionSuppression Operation
+observe.OperationSystemEscape Operation
+observe.OperationSystemTransaction Operation
 observe.Outcome string
-observe.OutcomeCancelled
-observe.OutcomeFailure
-observe.OutcomeOverflow
-observe.OutcomeRefused
-observe.OutcomeRetrying
-observe.OutcomeSuccess
-observe.OutcomeSuppressed
+observe.OutcomeCancelled Outcome
+observe.OutcomeFailure Outcome
+observe.OutcomeOverflow Outcome
+observe.OutcomeRefused Outcome
+observe.OutcomeRetrying Outcome
+observe.OutcomeSuccess Outcome
+observe.OutcomeSuppressed Outcome
 observe.Phase string
-observe.PhaseAcknowledge
-observe.PhaseAfter
-observe.PhaseAfterCommit
-observe.PhaseApply
-observe.PhaseAttempt
-observe.PhaseBefore
-observe.PhaseCancel
-observe.PhaseClaim
-observe.PhaseClose
-observe.PhaseCommit
-observe.PhaseDeliver
-observe.PhaseFinish
-observe.PhaseOpen
-observe.PhaseOverflow
-observe.PhaseRetry
-observe.PhaseRollback
-observe.PhaseStart
-observe.PhaseSuppress
-observe.PhaseVerify
+observe.PhaseAcknowledge Phase
+observe.PhaseAfter Phase
+observe.PhaseAfterCommit Phase
+observe.PhaseApply Phase
+observe.PhaseAttempt Phase
+observe.PhaseBefore Phase
+observe.PhaseCancel Phase
+observe.PhaseClaim Phase
+observe.PhaseClose Phase
+observe.PhaseCommit Phase
+observe.PhaseDeliver Phase
+observe.PhaseFinish Phase
+observe.PhaseOpen Phase
+observe.PhaseOverflow Phase
+observe.PhaseRetry Phase
+observe.PhaseRollback Phase
+observe.PhaseStart Phase
+observe.PhaseSuppress Phase
+observe.PhaseVerify Phase
 observe.Reason string
-observe.ReasonAuthorization
-observe.ReasonCapability
-observe.ReasonClosed
-observe.ReasonConflict
-observe.ReasonCorrelatedGolemWrite
-observe.ReasonDeletionUnverifiable
-observe.ReasonEntityAbsent
-observe.ReasonFiltered
-observe.ReasonIncompatibleGeneration
-observe.ReasonInvalidInput
-observe.ReasonLimit
-observe.ReasonMigrationHistory
-observe.ReasonNone
-observe.ReasonNotFound
-observe.ReasonPanic
-observe.ReasonProvider
-observe.ReasonQueueFull
-observe.ReasonRevalidation
-observe.ReasonSchemaDrift
-observe.ReasonTimeout
-observe.ReasonTransport
+observe.ReasonAuthorization Reason
+observe.ReasonCapability Reason
+observe.ReasonClosed Reason
+observe.ReasonConflict Reason
+observe.ReasonCorrelatedGolemWrite Reason
+observe.ReasonDeletionUnverifiable Reason
+observe.ReasonEntityAbsent Reason
+observe.ReasonFiltered Reason
+observe.ReasonIncompatibleGeneration Reason
+observe.ReasonInvalidInput Reason
+observe.ReasonLimit Reason
+observe.ReasonMigrationHistory Reason
+observe.ReasonNone Reason
+observe.ReasonNotFound Reason
+observe.ReasonPanic Reason
+observe.ReasonProvider Reason
+observe.ReasonQueueFull Reason
+observe.ReasonRevalidation Reason
+observe.ReasonSchemaDrift Reason
+observe.ReasonTimeout Reason
+observe.ReasonTransport Reason
 observe/otel.(Adapter).Dropped() uint64
 observe/otel.(Adapter).ObserveGolem(ctx context.Context, value observe.Observation)
 observe/otel.(Adapter).Shutdown(ctx context.Context) error
@@ -2221,23 +2380,23 @@ provider.(PoolStatus).MaximumIdle() int
 provider.(PoolStatus).MaximumOpen() int
 provider.Capabilities struct
 provider.Code string
-provider.CodeClose
-provider.CodeConfig
-provider.CodeMaintenance
+provider.CodeClose Code
+provider.CodeConfig Code
+provider.CodeMaintenance Code
 provider.CodeOf(err error) (Code, bool)
-provider.CodeOpen
+provider.CodeOpen Code
 provider.Database providerhandle.Database
 provider.Feature string
-provider.FeatureAdvisoryLocks
-provider.FeatureAnalyticsExact
-provider.FeatureForeignKeys
-provider.FeatureGeneratedColumns
-provider.FeatureJSON
-provider.FeaturePolicyASCIIText
-provider.FeaturePolicyBinaryText
-provider.FeaturePolicyExactJSON
-provider.FeaturePolicyRelation
-provider.FeaturePolicyScalarList
+provider.FeatureAdvisoryLocks Feature
+provider.FeatureAnalyticsExact Feature
+provider.FeatureForeignKeys Feature
+provider.FeatureGeneratedColumns Feature
+provider.FeatureJSON Feature
+provider.FeaturePolicyASCIIText Feature
+provider.FeaturePolicyBinaryText Feature
+provider.FeaturePolicyExactJSON Feature
+provider.FeaturePolicyRelation Feature
+provider.FeaturePolicyScalarList Feature
 provider.PoolStatus struct
 provider.Version struct
 provider.Version.Major uint32
@@ -2280,55 +2439,55 @@ queryplan.(Statement).Ordinal() uint32
 queryplan.(Statement).Purpose() StatementPurpose
 queryplan.(Statement).Root() Node
 queryplan.AccessKind string
-queryplan.AccessKindBitmapIndex
-queryplan.AccessKindConstant
-queryplan.AccessKindFullScan
-queryplan.AccessKindIndex
-queryplan.AccessKindNone
-queryplan.AccessKindPrimaryKey
-queryplan.AccessKindUniqueIndex
-queryplan.AccessKindUnknown
+queryplan.AccessKindBitmapIndex AccessKind
+queryplan.AccessKindConstant AccessKind
+queryplan.AccessKindFullScan AccessKind
+queryplan.AccessKindIndex AccessKind
+queryplan.AccessKindNone AccessKind
+queryplan.AccessKindPrimaryKey AccessKind
+queryplan.AccessKindUniqueIndex AccessKind
+queryplan.AccessKindUnknown AccessKind
 queryplan.CodeOf(err error) (ErrorCode, bool)
 queryplan.ErrorCode string
-queryplan.ErrorInvalid
-queryplan.ErrorTooComplex
-queryplan.ErrorUnavailable
+queryplan.ErrorInvalid ErrorCode
+queryplan.ErrorTooComplex ErrorCode
+queryplan.ErrorUnavailable ErrorCode
 queryplan.IndexID [16]byte
 queryplan.Node internalreport.Node
 queryplan.NodeKind string
-queryplan.NodeKindAccess
-queryplan.NodeKindAggregate
-queryplan.NodeKindConstant
-queryplan.NodeKindCorrelatedRelation
-queryplan.NodeKindDeferredBatch
-queryplan.NodeKindJoin
-queryplan.NodeKindMaterialize
-queryplan.NodeKindSort
-queryplan.NodeKindUnknown
+queryplan.NodeKindAccess NodeKind
+queryplan.NodeKindAggregate NodeKind
+queryplan.NodeKindConstant NodeKind
+queryplan.NodeKindCorrelatedRelation NodeKind
+queryplan.NodeKindDeferredBatch NodeKind
+queryplan.NodeKindJoin NodeKind
+queryplan.NodeKindMaterialize NodeKind
+queryplan.NodeKindSort NodeKind
+queryplan.NodeKindUnknown NodeKind
 queryplan.Operation string
-queryplan.OperationAggregate
-queryplan.OperationCount
-queryplan.OperationFindFirst
-queryplan.OperationFindMany
-queryplan.OperationFindUnique
-queryplan.OperationGroupBy
-queryplan.OperationRelationGroupBy
-queryplan.OperationScoped
+queryplan.OperationAggregate Operation
+queryplan.OperationCount Operation
+queryplan.OperationFindFirst Operation
+queryplan.OperationFindMany Operation
+queryplan.OperationFindUnique Operation
+queryplan.OperationGroupBy Operation
+queryplan.OperationRelationGroupBy Operation
+queryplan.OperationScoped Operation
 queryplan.Report internalreport.Report
 queryplan.Statement internalreport.Statement
 queryplan.StatementPurpose string
-queryplan.StatementPurposeAnalytics
-queryplan.StatementPurposePolicyHydration
-queryplan.StatementPurposeRelationBatch
-queryplan.StatementPurposeRoot
-queryplan.StatementPurposeScoped
+queryplan.StatementPurposeAnalytics StatementPurpose
+queryplan.StatementPurposePolicyHydration StatementPurpose
+queryplan.StatementPurposeRelationBatch StatementPurpose
+queryplan.StatementPurposeRoot StatementPurpose
+queryplan.StatementPurposeScoped StatementPurpose
 queryplan.Warning string
-queryplan.WarningDeferredBatch
-queryplan.WarningFullScan
-queryplan.WarningMaterialization
-queryplan.WarningMultiStatement
-queryplan.WarningTemporarySort
-queryplan.WarningUnknownProviderNode
+queryplan.WarningDeferredBatch Warning
+queryplan.WarningFullScan Warning
+queryplan.WarningMaterialization Warning
+queryplan.WarningMultiStatement Warning
+queryplan.WarningTemporarySort Warning
+queryplan.WarningUnknownProviderNode Warning
 queue.(Backoff).Delay(attempt int) time.Duration
 queue.(Limits).Resolved() Limits
 queue.(Limits).RetentionEnabled() bool
@@ -2348,12 +2507,12 @@ queue.Backoff struct
 queue.Backoff.Base time.Duration
 queue.Backoff.Cap time.Duration
 queue.Classify(err error) Outcome
-queue.CodeConfigInvalid
-queue.CodeJobNotFound
+queue.CodeConfigInvalid ErrorCode
+queue.CodeJobNotFound ErrorCode
 queue.CodeOf(err error) (ErrorCode, bool)
-queue.CodePayloadInvalid
-queue.CodeStoreFailure
-queue.CodeWorkerRunning
+queue.CodePayloadInvalid ErrorCode
+queue.CodeStoreFailure ErrorCode
+queue.CodeWorkerRunning ErrorCode
 queue.CompletedWith(code string, err error) error
 queue.CountQuery struct
 queue.CountQuery.Types []string
@@ -2380,7 +2539,7 @@ queue.FailedQuery.Before *FailedCursor
 queue.FailedQuery.Limit int
 queue.FailedQuery.Types []string
 queue.Handler func(ctx context.Context, payload []byte, meta Meta) error
-queue.InvalidCode
+queue.InvalidCode = "invalid_code"
 queue.Job struct
 queue.Job.Attempt int
 queue.Job.EnqueuedAt time.Time
@@ -2410,10 +2569,10 @@ queue.Limits.RetentionAge time.Duration
 queue.Limits.RetentionEvery time.Duration
 queue.Limits.RetentionRows int
 queue.Limits.ShutdownGrace time.Duration
-queue.MaximumKeyBytes
-queue.MaximumOperatorBatch
-queue.MaximumPayloadBytes
-queue.MaximumRetentionRows
+queue.MaximumKeyBytes = 256
+queue.MaximumOperatorBatch = 256
+queue.MaximumPayloadBytes = 1 << 20
+queue.MaximumRetentionRows = 4096
 queue.Meta struct
 queue.Meta.Attempt int
 queue.Meta.EnqueuedAt time.Time
@@ -2421,6 +2580,15 @@ queue.Meta.ID JobID
 queue.Meta.MaxAttempts int
 queue.NewRegistry() *Registry
 queue.Operator interface
+queue.Operator.Cancel(ctx context.Context, id JobID) (bool, error)
+queue.Operator.CancelMany(ctx context.Context, ids []JobID) (int, error)
+queue.Operator.CountByState(ctx context.Context, query CountQuery) (StateCounts, error)
+queue.Operator.Inspect(ctx context.Context, id JobID) (Status, error)
+queue.Operator.List(ctx context.Context, query JobQuery) (JobPage, error)
+queue.Operator.ListFailed(ctx context.Context, query FailedQuery) (FailedPage, error)
+queue.Operator.Requeue(ctx context.Context, id JobID) (bool, error)
+queue.Operator.RequeueFailed(ctx context.Context, ids []JobID) (int, error)
+queue.Operator.RunRetention(ctx context.Context, policy RetentionPolicy) (int, error)
 queue.Option func(*enqueueOptions)
 queue.Outcome struct
 queue.Outcome.Code string
@@ -2440,14 +2608,14 @@ queue.Registration.Timeout time.Duration
 queue.Registration.Type string
 queue.Registry struct
 queue.Resolution string
-queue.ResolutionFailed
-queue.ResolutionRetry
-queue.ResolutionSucceeded
+queue.ResolutionFailed Resolution
+queue.ResolutionRetry Resolution
+queue.ResolutionSucceeded Resolution
 queue.Resource struct
 queue.Resource.Concurrency int
 queue.Resource.Costs map[string]int
 queue.Resource.Name string
-queue.RetentionDisabled
+queue.RetentionDisabled = time.Duration(-1)
 queue.RetentionPolicy struct
 queue.RetentionPolicy.MaxRows int
 queue.RetentionPolicy.OlderThan time.Time
@@ -2455,17 +2623,17 @@ queue.RetentionPolicy.States []State
 queue.RetryIn(delay time.Duration, err error) error
 queue.RetryInWithoutAttempt(delay time.Duration, err error) error
 queue.State string
-queue.StateCanceled
+queue.StateCanceled State
 queue.StateCounts struct
 queue.StateCounts.Canceled int64
 queue.StateCounts.Failed int64
 queue.StateCounts.Leased int64
 queue.StateCounts.Pending int64
 queue.StateCounts.Succeeded int64
-queue.StateFailed
-queue.StateLeased
-queue.StatePending
-queue.StateSucceeded
+queue.StateFailed State
+queue.StateLeased State
+queue.StatePending State
+queue.StateSucceeded State
 queue.Status struct
 queue.Status.Attempt int
 queue.Status.AvailableAt time.Time
@@ -2480,11 +2648,11 @@ queue.Status.Type string
 queue.Terminal(err error) error
 queue.Type struct
 render.(Renderer).Handler() http.Handler
-render.CodeBundleMissing
-render.CodeConfigInvalid
-render.CodeIndexInvalid
+render.CodeBundleMissing ErrorCode
+render.CodeConfigInvalid ErrorCode
+render.CodeIndexInvalid ErrorCode
 render.CodeOf(err error) (ErrorCode, bool)
-render.CodeRouteInvalid
+render.CodeRouteInvalid ErrorCode
 render.Config struct
 render.Config.BaseURL string
 render.Config.Defaults Meta
@@ -2591,6 +2759,7 @@ runtime.CallerTxFindUnique[P, A, M any](ctx context.Context, transaction *Caller
 runtime.CallerTxGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
 runtime.CallerTxRelationGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.CallerTxScoped[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], query golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
+runtime.CallerTxSystem[P, A any](transaction *CallerTx[P, A]) *SystemTx[P, A]
 runtime.CallerTxUpdateMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error)
 runtime.CallerTxUpdateVersioned[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerTxUpdate[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error)
@@ -2626,16 +2795,19 @@ runtime.Config.ResolvePrincipal func(context.Context, P) (A, error)
 runtime.Config.SnapshotActor func(A) (A, error)
 runtime.Config.SnapshotPrincipal func(P) (P, error)
 runtime.EventFactory interface
+runtime.EventFactory.Build(ValidatedEvent) (any, error)
+runtime.EventFactory.EventSchemaDigest() golem.EventSchemaDigest
+runtime.EventFactory.ModelID() golem.ModelID
 runtime.EventFactoryRegistry struct
 runtime.GeneratedEventFactoryRegistry(expected golem.SchemaDigest, packages ...PackageEventFactories) (EventFactoryRegistry, error)
 runtime.GeneratedPackageEventFactories(generation golem.SchemaDigest, factories ...EventFactory) PackageEventFactories
-runtime.MaxBatchLoaderKeys
-runtime.MaxMutationFacts
-runtime.MaxMutationNestedDepth
-runtime.MaxMutationOutboxBytes
-runtime.MaxMutationStatementParameters
-runtime.MaxMutationTouchedRows
-runtime.MaxMutationUpsertAttempts
+runtime.MaxBatchLoaderKeys = 90_000
+runtime.MaxMutationFacts = eventprovider.MaximumCausationFacts
+runtime.MaxMutationNestedDepth = 5
+runtime.MaxMutationOutboxBytes = 1 << 20
+runtime.MaxMutationStatementParameters = 999
+runtime.MaxMutationTouchedRows = 1_000
+runtime.MaxMutationUpsertAttempts = 3
 runtime.MutationLimits struct
 runtime.MutationLimits.MaxFacts int
 runtime.MutationLimits.MaxNestedDepth int
