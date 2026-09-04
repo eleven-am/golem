@@ -21,6 +21,11 @@ Every page here is executed by a test. The code on them is code that ran.
 - **[RENDER.md](./RENDER.md)** — serve a single-page application with
   per-route metadata for crawlers.
 
+## Contracts
+
+- **[PUBLIC-API.md](./PUBLIC-API.md)** — which packages are public, what is
+  guaranteed about them, and where each guarantee is enforced.
+
 ## Releases
 
 - **[RELEASE-NOTES.md](./RELEASE-NOTES.md)** — what each `go/v*` release
