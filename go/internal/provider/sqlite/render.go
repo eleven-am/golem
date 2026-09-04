@@ -126,7 +126,7 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 			"CHECK (" + quote("attempt_count") + " >= 0), " +
 			"CHECK (" + quote("updated_at") + " >= 0)) STRICT",
 	}
-	if len(descriptor.Identity) != 0 {
+	if len(names) != 0 {
 		statements = append(statements,
 			"CREATE INDEX "+quote(names[0])+" ON "+quote(state)+" ("+strings.Join(identityKeys, ", ")+")",
 			"CREATE INDEX "+quote(names[1])+" ON "+quote(state)+" ("+quote("record_key")+" ASC) WHERE "+quote("status")+" <> 'ready'",
@@ -142,6 +142,9 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 // semantic shadow state table in the exact order renderSemanticExtension emits
 // their CREATE statements.
 func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
+	if len(descriptor.Identity) == 0 {
+		return nil
+	}
 	return []physical.PhysicalName{
 		physical.PhysicalName(string(descriptor.Storage) + "_state_identity"),
 		physical.PhysicalName(string(descriptor.Storage) + "_state_stale"),

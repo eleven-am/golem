@@ -53,7 +53,7 @@ func (provider *Provider) introspectCatalog(ctx context.Context, database catalo
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return provider.introspectNormalizedCatalog(ctx, database, normalized)
+	return provider.introspectNormalizedCatalog(ctx, database, normalized, false)
 }
 
 func (provider *Provider) introspectReviewedCatalog(ctx context.Context, database catalogQuerier, reviewed reviewedSnapshot) (physical.PhysicalSchema, error) {
@@ -61,10 +61,10 @@ func (provider *Provider) introspectReviewedCatalog(ctx context.Context, databas
 	if err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	return provider.introspectNormalizedCatalog(ctx, database, normalized)
+	return provider.introspectNormalizedCatalog(ctx, database, normalized, true)
 }
 
-func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, database catalogQuerier, normalized physical.PhysicalSchema) (physical.PhysicalSchema, error) {
+func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, database catalogQuerier, normalized physical.PhysicalSchema, reviewedReplay bool) (physical.PhysicalSchema, error) {
 	var rows []schemaRow
 	if err := database.SelectContext(ctx, &rows, "SELECT type,name,tbl_name,sql FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' AND type IN ('table','index','view','trigger') ORDER BY type,name"); err != nil {
 		return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect schema: %w", err)
@@ -112,7 +112,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	}
 	if normalized.Version != 1 || normalized.CanonicalVersion != 1 {
 		for _, extension := range normalized.Extensions {
-			statements, renderErr := renderSemanticExtension(extension, false)
+			statements, renderErr := renderSemanticExtension(extension, reviewedReplay)
 			if renderErr != nil {
 				return physical.PhysicalSchema{}, renderErr
 			}

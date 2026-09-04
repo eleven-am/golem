@@ -149,7 +149,7 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 			quote("updated_at") + " bigint NOT NULL CHECK (" + quote("updated_at") + " >= 0)" +
 			strings.Join(identityColumns, "") + ")",
 	}
-	if len(descriptor.Identity) != 0 {
+	if len(names) != 0 {
 		statements = append(statements,
 			"CREATE INDEX "+quote(names[0])+" ON "+qualified(namespace, state)+" ("+strings.Join(identityKeys, ", ")+")",
 			"CREATE INDEX "+quote(names[1])+" ON "+qualified(namespace, state)+" ("+quote("record_key")+") WHERE "+quote("status")+" <> 'ready'",
@@ -164,6 +164,9 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 }
 
 func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
+	if len(descriptor.Identity) == 0 {
+		return nil
+	}
 	return []physical.PhysicalName{
 		physical.PhysicalName(string(descriptor.Storage) + "_state_identity"),
 		physical.PhysicalName(string(descriptor.Storage) + "_state_stale"),
