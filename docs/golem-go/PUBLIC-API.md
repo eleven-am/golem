@@ -21,8 +21,10 @@ enforces that — an application cannot import it.
 
 **The shape of the surface is recorded and enforced.**
 `internal/publicapi/surface.txt` holds every exported symbol of those
-packages — types, functions, methods on exported types, and exported struct
-fields. `TestPublicSurfaceMatchesItsRecord` compares the code against it and
+packages with its signature — functions and methods with their parameters
+and results, types with their kind, struct fields with their type. Signatures are recorded, not just
+names, so widening a parameter list is a removal rather than a match.
+`TestPublicSurfaceMatchesItsRecord` compares the code against the record and
 fails when they differ, separating what was **removed** from what was added,
 because removal is what breaks an application.
 

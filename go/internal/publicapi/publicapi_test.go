@@ -1,8 +1,10 @@
 package publicapi
 
 import (
+	"bytes"
 	"go/ast"
 	"go/parser"
+	"go/printer"
 	"go/token"
 	"os"
 	"path/filepath"
@@ -90,13 +92,13 @@ func declarationNames(packagePath string, declaration ast.Decl) []string {
 				return nil
 			}
 		}
-		names = append(names, packagePath+"."+receiver+typed.Name.Name)
+		names = append(names, packagePath+"."+receiver+typed.Name.Name+signature(typed.Type))
 	case *ast.GenDecl:
 		for _, spec := range typed.Specs {
 			switch value := spec.(type) {
 			case *ast.TypeSpec:
 				if value.Name.IsExported() {
-					names = append(names, packagePath+"."+value.Name.Name)
+					names = append(names, packagePath+"."+value.Name.Name+" "+underlying(value))
 					names = append(names, structFieldNames(packagePath, value)...)
 				}
 			case *ast.ValueSpec:
@@ -120,11 +122,34 @@ func structFieldNames(packagePath string, spec *ast.TypeSpec) []string {
 	for _, field := range structure.Fields.List {
 		for _, name := range field.Names {
 			if name.IsExported() {
-				names = append(names, packagePath+"."+spec.Name.Name+"."+name.Name)
+				names = append(names, packagePath+"."+spec.Name.Name+"."+name.Name+" "+render(field.Type))
 			}
 		}
 	}
 	return names
+}
+
+func signature(function *ast.FuncType) string {
+	rendered := render(function)
+	return strings.TrimPrefix(rendered, "func")
+}
+
+func underlying(spec *ast.TypeSpec) string {
+	switch spec.Type.(type) {
+	case *ast.StructType:
+		return "struct"
+	case *ast.InterfaceType:
+		return "interface"
+	}
+	return render(spec.Type)
+}
+
+func render(node ast.Node) string {
+	var buffer bytes.Buffer
+	if err := printer.Fprint(&buffer, token.NewFileSet(), node); err != nil {
+		return "?"
+	}
+	return strings.Join(strings.Fields(buffer.String()), " ")
 }
 
 func exportedReceiver(expression ast.Expr) bool {
