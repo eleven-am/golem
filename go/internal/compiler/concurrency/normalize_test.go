@@ -74,6 +74,7 @@ func TestApplyRejectsEveryIneligibleConcurrencyFieldFact(t *testing.T) {
 		{name: "write only", code: "P1_CONCURRENCY_WRITE_ONLY", mutate: fieldMode(ir.ModeWriteOnly)},
 		{name: "immutable", code: "P1_CONCURRENCY_IMMUTABLE", mutate: fieldMode(ir.ModeImmutable)},
 		{name: "read only", code: "P1_CONCURRENCY_READ_ONLY", mutate: fieldMode(ir.ModeReadOnly)},
+		{name: "system owned", code: "P1_CONCURRENCY_SYSTEM", mutate: fieldMode(ir.ModeSystem)},
 		{name: "missing read exposure", code: "P1_CONCURRENCY_READ_EXPOSURE", mutate: fieldMode()},
 		{name: "missing field contract", code: "P1_CONCURRENCY_CONTRACT_FIELD", mutate: func(compilation *ir.CompilationIR, _ *[]Declaration) {
 			compilation.Contract.Models[0].Fields = compilation.Contract.Models[0].Fields[:1]

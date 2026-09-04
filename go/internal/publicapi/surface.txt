@@ -2139,6 +2139,7 @@ observe.OperationSubscriptionEvaluation
 observe.OperationSubscriptionMembership
 observe.OperationSubscriptionOverflow
 observe.OperationSubscriptionSuppression
+observe.OperationSystemEscape
 observe.OperationSystemTransaction
 observe.Outcome string
 observe.OutcomeCancelled
@@ -2591,6 +2592,7 @@ runtime.CallerTxFindUnique[P, A, M any](ctx context.Context, transaction *Caller
 runtime.CallerTxGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
 runtime.CallerTxRelationGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.CallerTxScoped[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], query golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
+runtime.CallerTxSystem[P, A any](transaction *CallerTx[P, A]) *SystemTx[P, A]
 runtime.CallerTxUpdateMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error)
 runtime.CallerTxUpdateVersioned[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerTxUpdate[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error)

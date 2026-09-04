@@ -17,6 +17,7 @@ const (
 	CodeClassification ErrorCode = "P4_PLAN_CLASSIFICATION"
 	CodeRequirements   ErrorCode = "P4_PLAN_REQUIREMENTS"
 	CodeIR             ErrorCode = "P4_PLAN_IR"
+	CodeExposure       ErrorCode = "P4_PLAN_EXPOSURE"
 )
 
 // Error contains logical identities only. Cause is trusted diagnostic context;

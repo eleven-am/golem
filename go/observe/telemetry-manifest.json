@@ -47,7 +47,7 @@
     {"kind": "graphql", "operations": ["graphql.request", "graphql.query", "graphql.mutation", "graphql.subscription", "graphql.custom_query", "graphql.custom_mutation", "graphql.computed", "graphql.batched_computed"]},
     {"kind": "analytics", "operations": ["analytics.aggregate", "analytics.group_by", "analytics.relation_group_by"]},
     {"kind": "scoped_read", "operations": ["scoped.read"]},
-    {"kind": "transaction", "operations": ["transaction.caller", "transaction.system"]},
+    {"kind": "transaction", "operations": ["transaction.caller", "transaction.system", "transaction.system_escape"]},
     {"kind": "hook", "operations": ["hook.find_one", "hook.find_first", "hook.find_many", "hook.create", "hook.update", "hook.delete", "hook.update_many", "hook.delete_many"]},
     {"kind": "relation_load", "operations": ["relation.load"]},
     {"kind": "migration", "operations": ["migration.inspect"]},

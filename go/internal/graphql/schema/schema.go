@@ -343,7 +343,7 @@ func renderModel(view modelView, models map[ir.ModelID]ir.ModelDeclIR, contracts
 			continue
 		}
 		readable := ir.ModesReadable(fc.Modes)
-		writableCreate := !ir.HasMode(fc.Modes, ir.ModeReadOnly)
+		writableCreate := !notCallerWritable(fc.Modes)
 		writableUpdate := writableCreate && !ir.HasMode(fc.Modes, ir.ModeImmutable)
 		if field.Kind == ir.FieldRelation {
 			relation := relationForField(field, view.relations)
@@ -941,7 +941,7 @@ func renderWithoutInputPair(model ir.ModelDeclIR, contract ir.ModelContractIR, n
 			continue
 		}
 		fc, ok := fieldContractByID(contract, field.ID)
-		if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
+		if !ok || hidden(fc.Modes) || notCallerWritable(fc.Modes) {
 			continue
 		}
 		if field.Relation != nil {
@@ -1039,7 +1039,7 @@ func relationMutationTypes(view modelView, contracts map[ir.ModelID]ir.ModelCont
 			continue
 		}
 		fc := view.fields[field.ID]
-		if hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
+		if hidden(fc.Modes) || notCallerWritable(fc.Modes) {
 			continue
 		}
 		relation := relationForField(field, view.relations)
@@ -1223,7 +1223,7 @@ func relationMutationCapabilitiesFor(field ir.FieldIR, model ir.ModelDeclIR, con
 		return relationMutationCapabilities{}, nil
 	}
 	fc, ok := fieldContractByID(contract, field.ID)
-	if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
+	if !ok || hidden(fc.Modes) || notCallerWritable(fc.Modes) {
 		return relationMutationCapabilities{}, nil
 	}
 	result := relationMutationCapabilities{
@@ -1287,7 +1287,7 @@ func modelInputCapabilitiesWithout(model ir.ModelDeclIR, contract ir.ModelContra
 			continue
 		}
 		fc, ok := fieldContractByID(contract, field.ID)
-		if !ok || hidden(fc.Modes) || ir.HasMode(fc.Modes, ir.ModeReadOnly) {
+		if !ok || hidden(fc.Modes) || notCallerWritable(fc.Modes) {
 			continue
 		}
 		if field.Scalar != nil {
@@ -1406,6 +1406,10 @@ func fieldByID(model ir.ModelDeclIR, id ir.FieldID) *ir.FieldIR {
 	return nil
 }
 func hidden(values []ir.FieldMode) bool { return ir.HasMode(values, ir.ModeHidden) }
+
+func notCallerWritable(values []ir.FieldMode) bool {
+	return ir.HasMode(values, ir.ModeReadOnly) || ir.HasMode(values, ir.ModeSystem)
+}
 func exported(value string) string {
 	if value == "" {
 		return value

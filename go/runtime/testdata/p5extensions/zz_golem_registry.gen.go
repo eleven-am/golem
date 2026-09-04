@@ -398,6 +398,26 @@ func (transaction *CallerTx[P]) Enqueue(ctx context.Context, pending queue.Pendi
 	return golemruntime.CallerTxEnqueue(ctx, transaction.runtime, pending)
 }
 
+// SystemEscape leaves the authorized path. It returns the unrestricted
+// system clients for the caller transaction itself, so their reads and
+// writes run inside that transaction and commit or roll back with every
+// caller write in it.
+//
+// Nothing performed through them is policy-checked. No caller rule, field
+// restriction, or row predicate applies, exactly as if the write had been
+// made by App.System. Use it only for a value the application owns and no
+// client may set, and keep the call at the site that needs it: every call
+// is observed as transaction.system_escape.
+func SystemEscape[P any](transaction *CallerTx[P]) *SystemTx[P] {
+	var inner *golemruntime.SystemTx[P, Actor]
+	if transaction != nil {
+		inner = golemruntime.CallerTxSystem(transaction.runtime)
+	}
+	result := &SystemTx[P]{runtime: inner}
+	result.Users = SystemTxUserClient[P]{runtime: inner}
+	return result
+}
+
 func (system System[P]) Transaction(ctx context.Context, callback func(*SystemTx[P]) error) error {
 	if callback == nil {
 		return golemruntime.SystemTransaction(ctx, system.runtime, nil)

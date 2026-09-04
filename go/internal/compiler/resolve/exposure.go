@@ -9,6 +9,13 @@ func resolveModes(field ir.RawFieldDecl) ([]ir.FieldMode, []ir.Diagnostic) {
 	readOnly := hasAttribute(field.GolemAttrs, "readonly")
 	writeOnly := hasAttribute(field.GolemAttrs, "writeonly")
 	immutable := hasAttribute(field.GolemAttrs, "immutable")
+	system := hasAttribute(field.GolemAttrs, "system")
+	if system && readOnly {
+		return nil, []ir.Diagnostic{errorf("P1_EXPOSURE_SYSTEM_READONLY", field.Span, "field %s combines system and readonly: readonly already means nobody writes, so naming system as the owner is meaningless", field.GoName)}
+	}
+	if system && hidden {
+		return nil, []ir.Diagnostic{errorf("P1_EXPOSURE_MODE_CONFLICT", field.Span, "field %s has incompatible exposure modes", field.GoName)}
+	}
 	count := 0
 	for _, enabled := range []bool{hidden, readOnly, writeOnly, immutable} {
 		if enabled {
@@ -24,15 +31,18 @@ func resolveModes(field ir.RawFieldDecl) ([]ir.FieldMode, []ir.Diagnostic) {
 	if readOnly {
 		return []ir.FieldMode{ir.ModeReadOnly}, nil
 	}
+	modes := []ir.FieldMode{}
 	if writeOnly {
-		modes := []ir.FieldMode{ir.ModeWriteOnly}
-		if immutable {
-			modes = append(modes, ir.ModeImmutable)
-		}
-		return modes, nil
+		modes = append(modes, ir.ModeWriteOnly)
+	}
+	if system {
+		modes = append(modes, ir.ModeSystem)
 	}
 	if immutable {
-		return []ir.FieldMode{ir.ModeImmutable}, nil
+		modes = append(modes, ir.ModeImmutable)
 	}
-	return []ir.FieldMode{ir.ModeVisible}, nil
+	if len(modes) == 0 {
+		return []ir.FieldMode{ir.ModeVisible}, nil
+	}
+	return modes, nil
 }

@@ -513,6 +513,9 @@ func mutationFieldRefusal(field compilerir.FieldIR, contract compilerir.FieldCon
 		if mode == compilerir.ModeHidden || mode == compilerir.ModeReadOnly {
 			return "is not writable"
 		}
+		if mode == compilerir.ModeSystem {
+			return "is system owned and is not client writable"
+		}
 		if mode == compilerir.ModeImmutable && kind != CreateInput {
 			return "is immutable"
 		}

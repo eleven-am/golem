@@ -131,7 +131,7 @@
     {
       "path": "social/zz_golem_registry.gen.go",
       "kind": "registry_go",
-      "contentSha256": "65034ec836e8f94da6829f1d6b488216bd84f1cca44e063e96d915075d3e045f",
+      "contentSha256": "60d23dc7952d08ac34d258ef4ddbaf9bda9d99e531d3a29770b132798c8f7adc",
       "modelFingerprint": "ca6fc9d75f1e5e41e48f7a4ef243b9368e36da70316a9fa1916efbdf1bab4707",
       "generationDigest": "1d6b9a939a19378a22129fe33eb710e126765950d95fdbee40a7ba1661a30864",
       "generatorVersion": "p1-v1",

@@ -111,6 +111,8 @@ func Apply(compilation *ir.CompilationIR, declarations []Declaration) []ir.Diagn
 					diagnostics = append(diagnostics, diagnostic("P1_CONCURRENCY_IMMUTABLE", declaration.Span, "optimistic concurrency field %s cannot already be immutable", field.GoName))
 				case ir.ModeReadOnly:
 					diagnostics = append(diagnostics, diagnostic("P1_CONCURRENCY_READ_ONLY", declaration.Span, "optimistic concurrency field %s cannot already be read-only", field.GoName))
+				case ir.ModeSystem:
+					diagnostics = append(diagnostics, diagnostic("P1_CONCURRENCY_SYSTEM", declaration.Span, "optimistic concurrency field %s cannot already be system owned", field.GoName))
 				}
 			}
 			if !visible && len(modes) == 0 {

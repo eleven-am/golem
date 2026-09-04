@@ -123,6 +123,7 @@ const (
 	OperationScopedRead                Operation = "scoped.read"
 	OperationCallerTransaction         Operation = "transaction.caller"
 	OperationSystemTransaction         Operation = "transaction.system"
+	OperationSystemEscape              Operation = "transaction.system_escape"
 	OperationHookFindOne               Operation = "hook.find_one"
 	OperationHookFindFirst             Operation = "hook.find_first"
 	OperationHookFindMany              Operation = "hook.find_many"
@@ -285,7 +286,7 @@ func validOperation(value Operation) bool {
 		OperationGraphQLCustomQuery, OperationGraphQLCustomMutation, OperationGraphQLComputed,
 		OperationGraphQLBatchedComputed, OperationAnalyticsAggregate, OperationAnalyticsGroupBy,
 		OperationAnalyticsRelationGroupBy, OperationScopedRead, OperationCallerTransaction,
-		OperationSystemTransaction, OperationHookFindOne, OperationHookFindFirst, OperationHookFindMany,
+		OperationSystemTransaction, OperationSystemEscape, OperationHookFindOne, OperationHookFindFirst, OperationHookFindMany,
 		OperationHookCreate, OperationHookUpdate, OperationHookDelete,
 		OperationHookUpdateMany, OperationHookDeleteMany, OperationRelationLoad,
 		OperationEventPublisherClaim, OperationEventPublisherAttempt, OperationEventPublisherAcknowledge,

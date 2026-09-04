@@ -140,6 +140,9 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 		if contracts[model.ID].ScopedReads {
 			members["Scope"] = "scoped-read method"
 		}
+		if len(systemOwnedFields(model, contracts[model.ID])) != 0 {
+			members["System"] = "system-field namespace method"
+		}
 		for _, field := range model.Fields {
 			if fieldIsHidden(field.ID, contracts[model.ID]) {
 				continue
@@ -238,6 +241,11 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 				if err := emitMutationFieldType(&body, field, model, contract, enumByID, imports, scopedSchema); err != nil {
 					return File{}, nil, err
 				}
+				if systemOwnedScalar(field, model, contract) {
+					if err := emitSystemMutationFieldType(&body, field, model, contract, enumByID, imports); err != nil {
+						return File{}, nil, err
+					}
+				}
 			}
 			if field.Relation != nil {
 				if err := emitMutationRelationType(&body, field, model, contract, modelByID, relations, imports); err != nil {
@@ -273,6 +281,9 @@ func emitPackage(spec PackageSpec, models []ir.ModelDeclIR, modelByID map[ir.Mod
 			}
 		}
 		body.WriteString("}\n\n")
+		if err := emitSystemFieldNamespace(&body, model, contract, modelByID, enumByID, relations, imports, generationLiteral); err != nil {
+			return File{}, nil, err
+		}
 		if contract.ScopedReads {
 			fmt.Fprintf(&body, "func (%s) Scope() golem.Scope[%s] { return golem.GeneratedScope[%s](%s) }\n\n", typeName, model.Go.Name, model.Go.Name, modelLiteral)
 		}
@@ -459,6 +470,13 @@ func orderedFields(fields []ir.FieldIR) []ir.FieldIR {
 	return result
 }
 
+type mutationClient uint8
+
+const (
+	callerClient mutationClient = iota
+	systemClient
+)
+
 type scalarMutationCapabilities struct {
 	readable   bool
 	create     bool
@@ -485,7 +503,7 @@ func fieldIsHidden(field ir.FieldID, contract ir.ModelContractIR) bool {
 	return fieldModes(field, contract)[ir.ModeHidden]
 }
 
-func mutationCapabilities(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR) scalarMutationCapabilities {
+func mutationCapabilities(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, client mutationClient) scalarMutationCapabilities {
 	if field.Scalar == nil {
 		return scalarMutationCapabilities{}
 	}
@@ -497,6 +515,9 @@ func mutationCapabilities(field ir.FieldIR, model ir.ModelDeclIR, contract ir.Mo
 	writable := !modes[ir.ModeHidden] && !modes[ir.ModeReadOnly] &&
 		!field.Scalar.DatabaseReadOnly && field.Scalar.Generation == nil
 	if !writable {
+		return result
+	}
+	if modes[ir.ModeSystem] && client == callerClient {
 		return result
 	}
 	result.create = true
@@ -549,7 +570,7 @@ func emitMutationAliases(body *bytes.Buffer, model ir.ModelDeclIR) {
 }
 
 func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet, scopedSchema bool) error {
-	capabilities := mutationCapabilities(field, model, contract)
+	capabilities := mutationCapabilities(field, model, contract, callerClient)
 	analytics := capabilities.readable && analyticsFieldSupported(field)
 	scoped := scopedSchema && analytics
 	if !capabilities.create && !capabilities.set && !analytics && !scoped {
@@ -633,6 +654,110 @@ func emitMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelD
 			fmt.Fprintf(body, "func (field %s) Max() golem.Measure[%s, %s] { return golem.GeneratedMeasure[%s, %s, %s](%s, %s, golem.AggregateMaximum) }\n\n", typeName, model.Go.Name, valueType, model.Go.Name, valueType, valueType, modelLiteral, column)
 		}
 	}
+	return nil
+}
+
+func generatedSystemScalarFieldType(model ir.ModelDeclIR, field ir.FieldIR) string {
+	return "golemGenerated" + model.Go.Name + field.GoName + "SystemMutationField"
+}
+
+func systemOwnedScalar(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR) bool {
+	if field.Scalar == nil || !fieldModes(field.ID, contract)[ir.ModeSystem] {
+		return false
+	}
+	capabilities := mutationCapabilities(field, model, contract, systemClient)
+	return capabilities.create || capabilities.set
+}
+
+func systemOwnedFields(model ir.ModelDeclIR, contract ir.ModelContractIR) []ir.FieldIR {
+	result := make([]ir.FieldIR, 0)
+	for _, field := range orderedFields(model.Fields) {
+		if fieldIsHidden(field.ID, contract) || !systemOwnedScalar(field, model, contract) {
+			continue
+		}
+		result = append(result, field)
+	}
+	return result
+}
+
+func emitSystemMutationFieldType(body *bytes.Buffer, field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, enums map[ir.EnumID]ir.EnumIR, imports *importSet) error {
+	capabilities := mutationCapabilities(field, model, contract, systemClient)
+	baseType, err := fieldHandle(field, model.ID, map[ir.ModelID]ir.ModelDeclIR{model.ID: model}, enums, nil, imports)
+	if err != nil {
+		return err
+	}
+	valueType, err := logicalGoType(field.Scalar.Type, enums, imports)
+	if err != nil {
+		return err
+	}
+	modelLiteral, err := idLiteral("ModelID", string(model.ID))
+	if err != nil {
+		return err
+	}
+	typeName := generatedSystemScalarFieldType(model, field)
+	fmt.Fprintf(body, "type %s struct {\n\tcolumn %s\n", typeName, baseType)
+	if capabilities.create {
+		fmt.Fprintf(body, "\tgolem.CreateFieldCapability[%s, %s]\n", model.Go.Name, valueType)
+	}
+	body.WriteString("}\n\n")
+	if capabilities.create {
+		fmt.Fprintf(body, "func (field %s) Create(value %s) golem.CreateValue[%s] {\n", typeName, valueType, model.Go.Name)
+		fmt.Fprintf(body, "\treturn golem.GeneratedCreateFieldValue(%s, field.column, value)\n}\n\n", modelLiteral)
+		if field.Scalar.Nullable {
+			fmt.Fprintf(body, "func (field %s) CreateNull() golem.CreateValue[%s] {\n", typeName, model.Go.Name)
+			fmt.Fprintf(body, "\treturn golem.GeneratedCreateNullFieldValue(%s, field.column)\n}\n\n", modelLiteral)
+		}
+	}
+	if capabilities.set {
+		fmt.Fprintf(body, "func (field %s) Set(value %s) golem.UpdateManyValue[%s] {\n", typeName, valueType, model.Go.Name)
+		fmt.Fprintf(body, "\treturn golem.GeneratedSetFieldValue(%s, field.column, value)\n}\n\n", modelLiteral)
+	}
+	if capabilities.null {
+		fmt.Fprintf(body, "func (field %s) Null() golem.UpdateManyValue[%s] {\n", typeName, model.Go.Name)
+		fmt.Fprintf(body, "\treturn golem.GeneratedNullFieldValue(%s, field.column)\n}\n\n", modelLiteral)
+	}
+	if capabilities.arithmetic {
+		fmt.Fprintf(body, "func (field %s) Increment(value %s) golem.UpdateManyValue[%s] {\n", typeName, valueType, model.Go.Name)
+		fmt.Fprintf(body, "\treturn golem.GeneratedIncrementFieldValue(%s, field.column, value)\n}\n\n", modelLiteral)
+		fmt.Fprintf(body, "func (field %s) Decrement(value %s) golem.UpdateManyValue[%s] {\n", typeName, valueType, model.Go.Name)
+		fmt.Fprintf(body, "\treturn golem.GeneratedDecrementFieldValue(%s, field.column, value)\n}\n\n", modelLiteral)
+	}
+	return nil
+}
+
+func emitSystemFieldNamespace(body *bytes.Buffer, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet, generation string) error {
+	fields := systemOwnedFields(model, contract)
+	if len(fields) == 0 {
+		return nil
+	}
+	fieldsType := "golemGenerated" + model.Go.Name + "Fields"
+	systemType := "golemGenerated" + model.Go.Name + "SystemFields"
+	modelLiteral, err := idLiteral("ModelID", string(model.ID))
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(body, "type %s struct {\n", systemType)
+	for _, field := range fields {
+		fmt.Fprintf(body, "\t%s %s\n", field.GoName, generatedSystemScalarFieldType(model, field))
+	}
+	body.WriteString("}\n\n")
+	fmt.Fprintf(body, "func (%s) System() %s {\n\treturn %s{\n", fieldsType, systemType, systemType)
+	for _, field := range fields {
+		initializer, initializerErr := fieldInitializer(field, model.ID, models, enums, relations, imports, generation)
+		if initializerErr != nil {
+			return initializerErr
+		}
+		capabilityInitializer := ""
+		if mutationCapabilities(field, model, contract, systemClient).create {
+			valueType, valueErr := logicalGoType(field.Scalar.Type, enums, imports)
+			if valueErr != nil {
+				return valueErr
+			}
+			capabilityInitializer = fmt.Sprintf(", CreateFieldCapability: golem.GeneratedCreateFieldCapability[%s, %s](%s, %s)", model.Go.Name, valueType, modelLiteral, initializer)
+		}
+		fmt.Fprintf(body, "\t\t%s: %s{column: %s%s},\n", field.GoName, generatedSystemScalarFieldType(model, field), initializer, capabilityInitializer)
+	}
+	body.WriteString("\t}\n}\n\n")
 	return nil
 }
 
@@ -875,7 +1000,7 @@ func emitMutationRelationType(body *bytes.Buffer, field ir.FieldIR, model ir.Mod
 
 func emittedFieldHandle(field ir.FieldIR, model ir.ModelDeclIR, contract ir.ModelContractIR, models map[ir.ModelID]ir.ModelDeclIR, enums map[ir.EnumID]ir.EnumIR, relations map[ir.RelationID]ir.RelationIR, imports *importSet) (string, error) {
 	if field.Scalar != nil {
-		capabilities := mutationCapabilities(field, model, contract)
+		capabilities := mutationCapabilities(field, model, contract, callerClient)
 		if capabilities.create || capabilities.set || (capabilities.readable && analyticsFieldSupported(field)) {
 			return generatedScalarFieldType(model, field, capabilities), nil
 		}
@@ -925,7 +1050,7 @@ func emittedFieldInitializer(field ir.FieldIR, model ir.ModelDeclIR, contract ir
 	if field.Scalar == nil {
 		return initializer, nil
 	}
-	capabilities := mutationCapabilities(field, model, contract)
+	capabilities := mutationCapabilities(field, model, contract, callerClient)
 	if !capabilities.create && !capabilities.set && !(capabilities.readable && analyticsFieldSupported(field)) {
 		return initializer, nil
 	}

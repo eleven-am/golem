@@ -21,7 +21,7 @@ var (
 	}
 	fieldAllowed = tags.Allowed{
 		"id": true, "type": true, "pk": true, "unique": true, "default": true,
-		"updated": true, "readonly": true, "writeonly": true, "immutable": true,
+		"updated": true, "readonly": true, "writeonly": true, "immutable": true, "system": true,
 		"hidden": true, "graphql": true, "renameFrom": true,
 		"relation": true, "name": true, "fields": true, "references": true,
 		"through": true, "source": true, "target": true,
@@ -344,6 +344,11 @@ func (c *compiler) validateFieldAttributes(pkg *load.Package, field *ast.Field, 
 		switch attr.Name {
 		case "pk", "unique", "updated", "readonly", "writeonly", "immutable", "hidden":
 			c.requireFlag(pkg, field, attr)
+		case "system":
+			c.requireFlag(pkg, field, attr)
+			if hasAttribute(attrs, "relation") {
+				c.error(pkg, "P1_GOLEM_TAG_SYSTEM_RELATION", "system is a scalar field mode and cannot be declared on a relation", field)
+			}
 		case "id", "renameFrom":
 			c.requireStableID(pkg, field, attr)
 		case "graphql", "name", "through", "source", "target":

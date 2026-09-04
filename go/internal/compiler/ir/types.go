@@ -743,6 +743,7 @@ const (
 	ModeReadOnly  FieldMode = "readOnly"
 	ModeWriteOnly FieldMode = "writeOnly"
 	ModeImmutable FieldMode = "immutable"
+	ModeSystem    FieldMode = "system"
 )
 
 func HasMode(modes []FieldMode, wanted FieldMode) bool {

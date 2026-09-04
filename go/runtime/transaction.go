@@ -345,6 +345,27 @@ func SystemTransaction[P, A any](ctx context.Context, system System[P, A], callb
 	return finishTransaction(ctx, transaction, binding, func() error { return callback(capability) })
 }
 
+// CallerTxSystem is the policy escape: it returns the unrestricted system
+// stance for the caller transaction's own transaction, execution binding and
+// execution identity, so a write it performs commits or rolls back with every
+// caller write in the same transaction. Nothing it does is policy-checked.
+// Every call emits a transaction.system_escape observation so a deployment can
+// count how often application code leaves the authorized path. It returns nil
+// for a transaction that never owned a caller execution.
+func CallerTxSystem[P, A any](transaction *CallerTx[P, A]) *SystemTx[P, A] {
+	if transaction == nil || transaction.caller == nil || transaction.caller.app == nil || transaction.caller.execution == 0 {
+		return nil
+	}
+	caller := transaction.caller
+	observeSystemEscape(caller.app, caller.executor)
+	return &SystemTx[P, A]{system: System[P, A]{app: caller.app, executor: caller.executor}, execution: caller.execution}
+}
+
+func observeSystemEscape[P, A any](app *App[P, A], execution *executionBinding) {
+	_, observation := beginExecutionObservationPhase(context.Background(), app, execution, golem.ModelID{}, observe.KindTransaction, observe.OperationSystemEscape, observe.PhaseOpen)
+	finishObservation(observation, nil)
+}
+
 func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *executionBinding, callback func() error) (err error) {
 	defer binding.close()
 	defer undoOnPanic(func() {
