@@ -387,7 +387,35 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 }
 
 func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
-	return prepareNestedCompilationWithHookOwnedDeferral(app, policies, stance, operation, input, target, result, false, snapshots...)
+	return prepareNestedCompilationWithHookOwnedDeferral(app, policies, stance, operation, input, target, result, false, nil, snapshots...)
+}
+
+func prepareNestedCompilationFromHook[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, hookAuthored []golem.FieldID, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
+	return prepareNestedCompilationWithHookOwnedDeferral(app, policies, stance, operation, input, target, result, false, hookAuthored, snapshots...)
+}
+
+func hookAuthoredSystemFields(registry *schema.Registry, prior *golem.FrozenMutationInput, transformed *golem.FrozenMutationInput) []golem.FieldID {
+	if registry == nil || transformed == nil {
+		return nil
+	}
+	caller := make(map[golem.FieldID]struct{})
+	if prior != nil {
+		for _, field := range prior.Fields() {
+			caller[field.FieldID()] = struct{}{}
+		}
+	}
+	var result []golem.FieldID
+	for _, field := range transformed.Fields() {
+		if _, present := caller[field.FieldID()]; present {
+			continue
+		}
+		declared, ok := registry.Field(transformed.ModelID(), field.FieldID())
+		if !ok || !compilerir.HasMode(declared.Modes(), compilerir.ModeSystem) {
+			continue
+		}
+		result = append(result, field.FieldID())
+	}
+	return result
 }
 
 // prepareNestedCompilationWithHookOwnedDeferral is used only by the pure
@@ -396,7 +424,7 @@ func prepareNestedCompilation[P, A any](app *App[P, A], policies mutationplan.Po
 // when the generated bindings contain the matching hook. The graph returned
 // by that preflight is never executed; the post-hook compilation calls the
 // strict entry point above and must bind every required create field.
-func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, deferHookOwned bool, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
+func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, deferHookOwned bool, hookAuthored []golem.FieldID, snapshots ...*mutationRuntimeValues) (mutationnested.Result, error) {
 	if app == nil || input == nil || len(input.Relations()) == 0 || (operation != mutationir.Create && operation != mutationir.Update) {
 		return mutationnested.Result{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: create/update input with relations is required")
 	}
@@ -435,7 +463,7 @@ func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], pol
 			}
 			ownedFields = mergeRuntimeOwnedFields(ownedFields, missing)
 		}
-		bound, _, bindErr := mutationbind.CreateInputWithRuntimeOwnedFields(*input, app.registry, ownedFields)
+		bound, _, bindErr := mutationbind.CreateInputFromHook(*input, app.registry, ownedFields, hookAuthored)
 		if bindErr != nil {
 			return mutationnested.Result{}, bindErr
 		}
@@ -452,7 +480,7 @@ func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], pol
 		if target == nil {
 			return mutationnested.Result{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: update target is absent")
 		}
-		boundInput, bindErr := mutationbind.UpdateInput(*input, app.registry)
+		boundInput, bindErr := mutationbind.UpdateInputFromHook(*input, app.registry, hookAuthored)
 		if bindErr != nil {
 			return mutationnested.Result{}, bindErr
 		}
@@ -665,6 +693,14 @@ func prepareNestedGraph[P, A any](app *App[P, A], policies mutationplan.PolicySe
 	return built.Graph(), nil
 }
 
+func prepareNestedGraphFromHook[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, result mutationir.ImageRequirements, hookAuthored []golem.FieldID, snapshots ...*mutationRuntimeValues) (mutationir.Graph, error) {
+	built, err := prepareNestedCompilationFromHook(app, policies, stance, operation, input, target, result, hookAuthored, snapshots...)
+	if err != nil {
+		return mutationir.Graph{}, err
+	}
+	return built.Graph(), nil
+}
+
 func nestedNodeInput(node mutationir.Node) mutationir.NodeInput {
 	input := mutationir.NodeInput{
 		Operation: node.Operation(), Model: node.ModelID(), Relation: node.RelationID(), Branch: node.Branch(),
@@ -728,7 +764,7 @@ func executeSystemNestedScalar[P, A, M any](ctx context.Context, system System[P
 	return golem.RuntimeReadRow(descriptor)
 }
 
-func executeCallerNestedScalar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection, snapshots ...*mutationRuntimeValues) (golem.Row[M], error) {
+func executeCallerNestedScalar[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection, hookAuthored []golem.FieldID, snapshots ...*mutationRuntimeValues) (golem.Row[M], error) {
 	if caller == nil || caller.app == nil || caller.executor == nil || caller.policies == nil {
 		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_NESTED: caller execution is unavailable")
 	}
@@ -740,7 +776,7 @@ func executeCallerNestedScalar[P, A, M any](ctx context.Context, caller *Caller[
 	if len(snapshots) != 0 && snapshots[0] != nil {
 		runtimeValues = snapshots[0]
 	}
-	compiled, err := prepareNestedCompilation(caller.app, caller.policies, mutationir.Caller, operation, input, target, result, runtimeValues)
+	compiled, err := prepareNestedCompilationFromHook(caller.app, caller.policies, mutationir.Caller, operation, input, target, result, hookAuthored, runtimeValues)
 	if err != nil {
 		return golem.Row[M]{}, err
 	}
@@ -867,6 +903,17 @@ func prepareCallerNestedGraph[P, A, M any](caller *Caller[P, A], descriptor gole
 	return prepareNestedGraph(caller.app, caller.policies, mutationir.Caller, operation, input, target, result, snapshots...)
 }
 
+func prepareCallerNestedGraphFromHook[P, A, M any](caller *Caller[P, A], descriptor golem.ModelDescriptor[M], operation mutationir.Operation, input *golem.FrozenMutationInput, target *golem.FrozenMutationTarget, projection scalarMutationProjection, hookAuthored []golem.FieldID, snapshots ...*mutationRuntimeValues) (mutationir.Graph, error) {
+	if caller == nil || caller.app == nil || caller.policies == nil || input == nil {
+		return mutationir.Graph{}, fmt.Errorf("P4_RUNTIME_NESTED_PREPARE: caller and frozen input are required")
+	}
+	result, err := projection.requirements(policyir.ModelID(descriptor.Metadata().ModelID()))
+	if err != nil {
+		return mutationir.Graph{}, err
+	}
+	return prepareNestedGraphFromHook(caller.app, caller.policies, mutationir.Caller, operation, input, target, result, hookAuthored, snapshots...)
+}
+
 // prepareCallerNestedCreatePreHookGraph preserves the pre-hook refusal gate
 // for model-erased nested existing-row writes while allowing only generated
 // BeforeCreate-owned required fields to remain absent until that hook runs.
@@ -878,7 +925,7 @@ func prepareCallerNestedCreatePreHookGraph[P, A, M any](caller *Caller[P, A], de
 	if err != nil {
 		return mutationir.Graph{}, err
 	}
-	built, err := prepareNestedCompilationWithHookOwnedDeferral(caller.app, caller.policies, mutationir.Caller, mutationir.Create, input, nil, result, true, snapshots...)
+	built, err := prepareNestedCompilationWithHookOwnedDeferral(caller.app, caller.policies, mutationir.Caller, mutationir.Create, input, nil, result, true, nil, snapshots...)
 	if err != nil {
 		return mutationir.Graph{}, err
 	}

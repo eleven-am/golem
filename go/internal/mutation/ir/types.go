@@ -12,8 +12,9 @@ import (
 
 // P7 adds an explicit delete-snapshot verification state to fact semantics.
 // Empty captured inventory and an unverifiable delete must fingerprint
-// differently, so this is a canonical mutation-plan format change.
-const CanonicalFormatVersion uint16 = 4
+// differently, so this is a canonical mutation-plan format change. Version 5
+// adds the hook-authored bit to a scalar operation for the same reason.
+const CanonicalFormatVersion uint16 = 5
 
 type Operation uint8
 

@@ -369,22 +369,24 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 	var program mutationsql.Program
 	var finalInput *golem.FrozenMutationInput
 	var finalTarget *golem.FrozenMutationTarget
+	var finalHookAuthored []golem.FieldID
 	validate := func(transformed golem.RuntimeMutationHookRequest) error {
 		transformedInput, transformedTarget, partsErr := scalarRequestParts(transformed)
 		if partsErr != nil {
 			return partsErr
 		}
+		hookAuthored := hookAuthoredSystemFields(caller.app.registry, input, transformedInput)
 		if transformedInput != nil && len(transformedInput.Relations()) != 0 {
-			if _, prepareErr := prepareCallerNestedGraph(caller, descriptor, operation, transformedInput, transformedTarget, projection, runtimeValues); prepareErr != nil {
+			if _, prepareErr := prepareCallerNestedGraphFromHook(caller, descriptor, operation, transformedInput, transformedTarget, projection, hookAuthored, runtimeValues); prepareErr != nil {
 				return prepareErr
 			}
-			finalInput, finalTarget = transformedInput, transformedTarget
+			finalInput, finalTarget, finalHookAuthored = transformedInput, transformedTarget, hookAuthored
 			return nil
 		}
-		prepared, prepareErr := prepareCallerScalarProgram(caller, scalarMutationPrepareRequest{operation: operation, model: model, input: transformedInput, target: transformedTarget, result: requirements, runtimeValues: runtimeValues})
+		prepared, prepareErr := prepareCallerScalarProgram(caller, scalarMutationPrepareRequest{operation: operation, model: model, input: transformedInput, target: transformedTarget, result: requirements, runtimeValues: runtimeValues, hookAuthored: hookAuthored})
 		if prepareErr == nil {
 			program = prepared
-			finalInput, finalTarget = transformedInput, transformedTarget
+			finalInput, finalTarget, finalHookAuthored = transformedInput, transformedTarget, hookAuthored
 		}
 		return prepareErr
 	}
@@ -399,7 +401,7 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 		return golem.Row[M]{}, publicMutationPreparationError(operation, golem.ModelID(model), err)
 	}
 	if finalInput != nil && len(finalInput.Relations()) != 0 {
-		row, err := executeCallerNestedScalar(ctx, caller, descriptor, operation, finalInput, finalTarget, projection, runtimeValues)
+		row, err := executeCallerNestedScalar(ctx, caller, descriptor, operation, finalInput, finalTarget, projection, finalHookAuthored, runtimeValues)
 		if err != nil {
 			return golem.Row[M]{}, publicNestedMutationExecutionError(operation, golem.ModelID(model), err)
 		}

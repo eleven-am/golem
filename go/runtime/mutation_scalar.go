@@ -87,6 +87,7 @@ type scalarMutationPrepareRequest struct {
 	result            mutationir.ImageRequirements
 	forceHookSnapshot bool
 	runtimeValues     *mutationRuntimeValues
+	hookAuthored      []golem.FieldID
 }
 
 // prepareCallerScalarProgram is the single pre-transaction caller path for
@@ -159,7 +160,7 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 		if request.input == nil || request.target != nil {
 			return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "create requires input and forbids a target", nil)
 		}
-		bound, bindErr := mutationbind.CreateInput(*request.input, app.registry)
+		bound, _, bindErr := mutationbind.CreateInputFromHook(*request.input, app.registry, nil, request.hookAuthored)
 		if bindErr != nil {
 			return mutationsql.Program{}, bindErr
 		}
@@ -176,7 +177,7 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 		if request.input == nil || request.target == nil {
 			return mutationsql.Program{}, scalarMutationError(request.operation, scalarMutationInvalid, 0, 0, "update requires input and target", nil)
 		}
-		boundInput, bindErr := mutationbind.UpdateInput(*request.input, app.registry)
+		boundInput, bindErr := mutationbind.UpdateInputFromHook(*request.input, app.registry, request.hookAuthored)
 		if bindErr != nil {
 			return mutationsql.Program{}, bindErr
 		}

@@ -23,6 +23,8 @@ const readSurfaceGenerationDigest = "0000000000000000000000000000000000000000000
 type readSurfaceArtifacts struct {
 	files          map[string]string
 	registry       []byte
+	model          ir.ModelIR
+	contract       ir.ContractIR
 	sqliteManifest migration.Manifest
 	sqliteFiles    map[string][]byte
 }
@@ -560,7 +562,7 @@ func GolemGeneratedBindings() golem.PackageBindings[security.Actor] {
 	for _, file := range generatedModels.Files {
 		files[filepath.Join("models", filepath.Base(file.Path))] = string(file.Source)
 	}
-	return readSurfaceArtifacts{files: files, registry: generatedRegistry.Source, sqliteManifest: sqliteManifest, sqliteFiles: sqliteFiles}
+	return readSurfaceArtifacts{files: files, registry: generatedRegistry.Source, model: model, contract: contract, sqliteManifest: sqliteManifest, sqliteFiles: sqliteFiles}
 }
 
 func reviewedSQLiteReadSurfaceFixture(t *testing.T, after physical.PhysicalSchema, afterModel ir.Fingerprint) (migration.Manifest, map[string][]byte, []byte) {

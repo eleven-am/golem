@@ -294,10 +294,14 @@ func refuseSystemOwnedWrites(request RootRequest, input *mutationbind.ScalarInpu
 			continue
 		}
 		field, ok := request.Registry.Field(golem.ModelID(request.Model), golem.FieldID(operation.FieldID()))
-		if !ok {
+		system := ok && compilerir.HasMode(field.Modes(), compilerir.ModeSystem)
+		if operation.HookAuthored() {
+			if !system {
+				return fail(CodeExposure, request, operation.FieldID(), "hook authorship is reserved for a system field", nil)
+			}
 			continue
 		}
-		if compilerir.HasMode(field.Modes(), compilerir.ModeSystem) {
+		if system {
 			return fail(CodeExposure, request, operation.FieldID(), "system field is not caller writable", nil)
 		}
 	}
@@ -482,7 +486,7 @@ func scalarFields(operations []mutationir.ScalarOperation) []policyir.FieldID {
 func authoredScalarFields(operations []mutationir.ScalarOperation) []policyir.FieldID {
 	result := make([]policyir.FieldID, 0, len(operations))
 	for _, operation := range operations {
-		if !operation.RuntimeOwned() {
+		if !operation.RuntimeOwned() && !operation.HookAuthored() {
 			result = append(result, operation.FieldID())
 		}
 	}

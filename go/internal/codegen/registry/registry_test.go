@@ -74,12 +74,17 @@ func TestEmitShellMatchesFinalCallerABI(t *testing.T) {
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("registry bootstrap caller ABI differs from final registry\nbootstrap: %v\nfinal:     %v\n\n%s", got, want, shell.Source)
 	}
-	wantExports := []string{"type Caller", "type CallerAuditLogClient", "type CallerTx", "type CallerTxAuditLogClient", "type CallerTxUserClient", "type CallerUserClient"}
+	wantSystem := systemEscapeABI(t, final.Source)
+	gotSystem := systemEscapeABI(t, shell.Source)
+	if fmt.Sprint(gotSystem) != fmt.Sprint(wantSystem) {
+		t.Fatalf("registry bootstrap system-escape ABI differs from final registry\nbootstrap: %v\nfinal:     %v\n\n%s", gotSystem, wantSystem, shell.Source)
+	}
+	wantExports := []string{"func SystemEscape", "type Caller", "type CallerAuditLogClient", "type CallerTx", "type CallerTxAuditLogClient", "type CallerTxUserClient", "type CallerUserClient", "type SystemTx", "type SystemTxAuditLogClient", "type SystemTxUserClient"}
 	if gotExports := registryTopLevelExports(t, shell.Source); fmt.Sprint(gotExports) != fmt.Sprint(wantExports) {
 		t.Fatalf("registry bootstrap exposed unexpected top-level declarations\ngot:  %v\nwant: %v\n\n%s", gotExports, wantExports, shell.Source)
 	}
 	assertRegistryShellClosed(t, shell.Source, []string{"context", modelcodegen.DefaultGolemImportPath, strings.TrimSuffix(modelcodegen.DefaultGolemImportPath, "/golem") + "/queryplan", strings.TrimSuffix(modelcodegen.DefaultGolemImportPath, "/golem") + "/queue"})
-	for _, forbidden := range []string{"System", "App", "Config", "sqlx", "database/sql", "golemruntime", " runtime ", " DB ", " Tx "} {
+	for _, forbidden := range []string{"System[", "App", "Config", "sqlx", "database/sql", "golemruntime", " runtime ", " DB ", " Tx "} {
 		if bytes.Contains(shell.Source, []byte(forbidden)) {
 			t.Fatalf("registry bootstrap leaked forbidden capability %q:\n%s", forbidden, shell.Source)
 		}
@@ -113,14 +118,14 @@ func assertRegistryShellClosed(t *testing.T, source []byte, wantImports []string
 				if !ok {
 					continue
 				}
-				if !callerTypeName(typeSpec.Name.Name) {
-					t.Fatalf("registry bootstrap contains non-caller type %s", typeSpec.Name.Name)
+				if !callerTypeName(typeSpec.Name.Name) && !systemTxTypeName(typeSpec.Name.Name) {
+					t.Fatalf("registry bootstrap contains type %s outside the caller and system-escape surfaces", typeSpec.Name.Name)
 				}
 				structure, ok := typeSpec.Type.(*ast.StructType)
 				if !ok {
-					t.Fatalf("registry bootstrap caller type %s is not a struct", typeSpec.Name.Name)
+					t.Fatalf("registry bootstrap type %s is not a struct", typeSpec.Name.Name)
 				}
-				if typeSpec.Name.Name != "Caller" && typeSpec.Name.Name != "CallerTx" && len(structure.Fields.List) != 0 {
+				if !registryShellStanceRoot(typeSpec.Name.Name) && len(structure.Fields.List) != 0 {
 					t.Fatalf("registry bootstrap client %s contains capabilities", typeSpec.Name.Name)
 				}
 				for _, field := range structure.Fields.List {
@@ -135,14 +140,28 @@ func assertRegistryShellClosed(t *testing.T, source []byte, wantImports []string
 				}
 			}
 		case *ast.FuncDecl:
-			if value.Recv == nil {
+			if value.Recv == nil && value.Name.Name != "SystemEscape" {
 				t.Fatalf("registry bootstrap contains package function %s", value.Name.Name)
 			}
 		}
 	}
 }
 
+func registryShellStanceRoot(name string) bool {
+	return name == "Caller" || name == "CallerTx" || name == "SystemTx"
+}
+
 func callerABI(t *testing.T, source []byte) []string {
+	t.Helper()
+	return registryABI(t, source, callerTypeName, func(string) bool { return false })
+}
+
+func systemEscapeABI(t *testing.T, source []byte) []string {
+	t.Helper()
+	return registryABI(t, source, systemTxTypeName, func(name string) bool { return name == "SystemEscape" })
+}
+
+func registryABI(t *testing.T, source []byte, includeType, includeFunction func(string) bool) []string {
 	t.Helper()
 	file, err := parser.ParseFile(token.NewFileSet(), "registry.go", source, 0)
 	if err != nil {
@@ -154,13 +173,10 @@ func callerABI(t *testing.T, source []byte) []string {
 		case *ast.GenDecl:
 			for _, spec := range value.Specs {
 				typeSpec, ok := spec.(*ast.TypeSpec)
-				if !ok || !callerTypeName(typeSpec.Name.Name) {
+				if !ok || !includeType(typeSpec.Name.Name) {
 					continue
 				}
 				result = append(result, "type "+typeSpec.Name.Name+registryTypeParameters(t, typeSpec.TypeParams))
-				if typeSpec.Name.Name != "Caller" && typeSpec.Name.Name != "CallerTx" {
-					continue
-				}
 				structure, ok := typeSpec.Type.(*ast.StructType)
 				if !ok {
 					t.Fatalf("%s is not a struct", typeSpec.Name.Name)
@@ -174,7 +190,13 @@ func callerABI(t *testing.T, source []byte) []string {
 				}
 			}
 		case *ast.FuncDecl:
-			if value.Recv == nil || len(value.Recv.List) != 1 {
+			if value.Recv == nil {
+				if includeFunction(value.Name.Name) {
+					result = append(result, "func "+value.Name.Name+registryTypeParameters(t, value.Type.TypeParams)+registryFieldList(t, value.Type.Params)+" "+registryFieldList(t, value.Type.Results))
+				}
+				continue
+			}
+			if len(value.Recv.List) != 1 {
 				continue
 			}
 			receiver := registryExpr(t, value.Recv.List[0].Type)
@@ -182,7 +204,7 @@ func callerABI(t *testing.T, source []byte) []string {
 			if index := strings.IndexByte(base, '['); index >= 0 {
 				base = base[:index]
 			}
-			if !callerTypeName(base) {
+			if !includeType(base) {
 				continue
 			}
 			result = append(result, "method "+receiver+"."+value.Name.Name+registryFieldList(t, value.Type.Params)+" "+registryFieldList(t, value.Type.Results))
@@ -194,6 +216,10 @@ func callerABI(t *testing.T, source []byte) []string {
 
 func callerTypeName(name string) bool {
 	return name == "Caller" || name == "CallerTx" || strings.HasPrefix(name, "Caller") && strings.HasSuffix(name, "Client")
+}
+
+func systemTxTypeName(name string) bool {
+	return name == "SystemTx" || strings.HasPrefix(name, "SystemTx") && strings.HasSuffix(name, "Client")
 }
 
 func registryTypeParameters(t *testing.T, fields *ast.FieldList) string {

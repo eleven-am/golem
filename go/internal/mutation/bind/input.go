@@ -175,7 +175,16 @@ func WithRuntimeOwnedOperations(model policyir.ModelID, kind InputKind, operatio
 }
 
 func CreateInput(frozen golem.FrozenMutationInput, registry *schema.Registry) (ScalarInput, error) {
-	input, _, err := bindInput(InputCreate, frozen, registry, nil)
+	input, _, err := bindInput(InputCreate, frozen, registry, nil, nil)
+	return input, err
+}
+
+func CreateInputFromHook(frozen golem.FrozenMutationInput, registry *schema.Registry, runtimeFields []golem.FieldID, hookAuthored []golem.FieldID) (ScalarInput, []policyir.FieldID, error) {
+	return bindInput(InputCreate, frozen, registry, runtimeFields, hookAuthored)
+}
+
+func UpdateInputFromHook(frozen golem.FrozenMutationInput, registry *schema.Registry, hookAuthored []golem.FieldID) (ScalarInput, error) {
+	input, _, err := bindInput(InputUpdate, frozen, registry, nil, hookAuthored)
 	return input, err
 }
 
@@ -184,20 +193,44 @@ func CreateInput(frozen golem.FrozenMutationInput, registry *schema.Registry) (S
 // Root creates must use CreateInput. Every exemption is revalidated against the
 // active schema and returned as a closed, sorted inventory for the planner.
 func CreateInputWithRuntimeOwnedFields(frozen golem.FrozenMutationInput, registry *schema.Registry, fields []golem.FieldID) (ScalarInput, []policyir.FieldID, error) {
-	return bindInput(InputCreate, frozen, registry, fields)
+	return bindInput(InputCreate, frozen, registry, fields, nil)
 }
 
 func UpdateInput(frozen golem.FrozenMutationInput, registry *schema.Registry) (ScalarInput, error) {
-	input, _, err := bindInput(InputUpdate, frozen, registry, nil)
+	input, _, err := bindInput(InputUpdate, frozen, registry, nil, nil)
 	return input, err
 }
 
 func UpdateManyInput(frozen golem.FrozenMutationInput, registry *schema.Registry) (ScalarInput, error) {
-	input, _, err := bindInput(InputUpdateMany, frozen, registry, nil)
+	input, _, err := bindInput(InputUpdateMany, frozen, registry, nil, nil)
 	return input, err
 }
 
-func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schema.Registry, runtimeFields []golem.FieldID) (ScalarInput, []policyir.FieldID, error) {
+func hookAuthoredSet(modelID golem.ModelID, registry *schema.Registry, fields []golem.FieldID) (map[golem.FieldID]struct{}, error) {
+	if len(fields) == 0 {
+		return nil, nil
+	}
+	result := make(map[golem.FieldID]struct{}, len(fields))
+	for _, fieldID := range fields {
+		if fieldID == (golem.FieldID{}) {
+			return nil, fail(CodeField, modelID, fieldID, "hook-authored field is zero", nil)
+		}
+		if _, duplicate := result[fieldID]; duplicate {
+			return nil, fail(CodeField, modelID, fieldID, "hook-authored field is duplicate", nil)
+		}
+		field, present := registry.Field(modelID, fieldID)
+		if !present || field.Kind() == compilerir.FieldRelation {
+			return nil, fail(CodeField, modelID, fieldID, "hook-authored field is absent, foreign, or relational", nil)
+		}
+		if !compilerir.HasMode(field.Modes(), compilerir.ModeSystem) {
+			return nil, fail(CodeExposure, modelID, fieldID, "hook authorship is reserved for a system field", nil)
+		}
+		result[fieldID] = struct{}{}
+	}
+	return result, nil
+}
+
+func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schema.Registry, runtimeFields []golem.FieldID, hookAuthoredFields []golem.FieldID) (ScalarInput, []policyir.FieldID, error) {
 	modelID := frozen.ModelID()
 	if registry == nil {
 		return ScalarInput{}, nil, fail(CodeInput, modelID, golem.FieldID{}, "active schema registry is required", nil)
@@ -211,6 +244,10 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 	}
 	if kind != InputCreate && len(runtimeFields) != 0 {
 		return ScalarInput{}, nil, fail(CodeInput, modelID, golem.FieldID{}, "runtime-owned fields are valid only for create", nil)
+	}
+	hookAuthored, hookErr := hookAuthoredSet(modelID, registry, hookAuthoredFields)
+	if hookErr != nil {
+		return ScalarInput{}, nil, hookErr
 	}
 	concurrencyField, concurrencyEnabled := model.OptimisticConcurrency()
 	runtimeOwned := make(map[golem.FieldID]struct{}, len(runtimeFields))
@@ -278,6 +315,13 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 		if err != nil {
 			return ScalarInput{}, nil, err
 		}
+		if _, byHook := hookAuthored[fieldID]; byHook {
+			delete(hookAuthored, fieldID)
+			operation, err = mutationir.NewHookAuthored(operation)
+			if err != nil {
+				return ScalarInput{}, nil, fail(CodeInternal, modelID, fieldID, "hook-authored operation is invalid", err)
+			}
+		}
 		operations = append(operations, operation)
 		authored[fieldID] = struct{}{}
 	}
@@ -303,6 +347,9 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 		}
 	}
 
+	for fieldID := range hookAuthored {
+		return ScalarInput{}, nil, fail(CodeField, modelID, fieldID, "hook-authored field has no operation in the transformed input", nil)
+	}
 	sort.Slice(operations, func(i, j int) bool {
 		left, right := operations[i].FieldID(), operations[j].FieldID()
 		return string(left[:]) < string(right[:])

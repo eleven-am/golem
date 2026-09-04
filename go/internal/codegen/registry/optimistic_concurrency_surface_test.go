@@ -81,6 +81,11 @@ func TestOptimisticConcurrencyDeclarationAndGeneratedSurfaceAreExact(t *testing.
 	if fmt.Sprint(gotCaller) != fmt.Sprint(wantCaller) {
 		t.Fatalf("versioned bootstrap caller ABI differs from final registry\nbootstrap: %v\nfinal:     %v", gotCaller, wantCaller)
 	}
+	wantSystem := systemEscapeABI(t, final.Source)
+	gotSystem := systemEscapeABI(t, shell.Source)
+	if fmt.Sprint(gotSystem) != fmt.Sprint(wantSystem) {
+		t.Fatalf("versioned bootstrap system-escape ABI differs from final registry\nbootstrap: %v\nfinal:     %v", gotSystem, wantSystem)
+	}
 
 	models, err := modelcodegen.Emit(modelcodegen.Request{
 		Compilation: ir.CompilationIR{Model: request.Schema.Model, Contract: request.Schema.Contract},
