@@ -78,7 +78,7 @@ run_step "nats-oracle" env GOLEM_P8_REQUIRE_NATS=1 GOLEM_P8_REQUIRE_POSTGRESQL=1
 	bash -c "cd '$GO_DIR' && GOWORK=off $GO test -p=1 -count=1 -timeout=30m ./internal/p8oracle/natslive"
 
 if [ "$SCOPE" = "full" ]; then
-	run_step "race" go_test -race -p=1 -count=1 -timeout=45m \
+	run_step "race" go_test -race -p=1 -parallel 4 -count=1 -timeout=45m \
 		./events/... ./provider/... ./runtime ./queue \
 		./internal/event/outbox ./internal/event/cdc \
 		./internal/queue/worker ./internal/subscription

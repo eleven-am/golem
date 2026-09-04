@@ -131,6 +131,27 @@ go-quality: ## Check Go formatting, whitespace, and vet
 go-vuln: ## Run govulncheck (install it separately first)
 	cd $(GO_DIR) && GOWORK=off govulncheck ./...
 
+postgres-up: ## Start the PostgreSQL test servers, creating them when absent
+	@docker info >/dev/null 2>&1 || { echo "Docker is not running; start it first" >&2; exit 1; }
+	@for spec in \
+		"golem-pg-c|postgres:17|55433|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=C" \
+		"golem-pg-linguistic|postgres:17|55432|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=en_US.utf8" \
+		"golem-pgvector|pgvector/pgvector:pg17|55434|-e POSTGRES_PASSWORD=golem"; do \
+		name=$${spec%%|*}; rest=$${spec#*|}; image=$${rest%%|*}; rest=$${rest#*|}; port=$${rest%%|*}; env=$${rest#*|}; \
+		if [ -n "$$(docker ps -q -f name=^$$name$$)" ]; then continue; fi; \
+		if [ -n "$$(docker ps -aq -f name=^$$name$$)" ]; then \
+			docker start "$$name" >/dev/null || exit 1; \
+		else \
+			echo "creating $$name on $$port"; \
+			docker run -d --name "$$name" -p "$$port:5432" -e POSTGRES_DB=golem $$env "$$image" >/dev/null || exit 1; \
+		fi; \
+	done
+	@for attempt in $$(seq 1 60); do \
+		$(MAKE) --no-print-directory postgres-check >/dev/null 2>&1 && exit 0; \
+		sleep 1; \
+	done; \
+	echo "the test servers did not accept connections in time" >&2; exit 1
+
 postgres-check:
 	@for name in GOLEM_TEST_POSTGRES_DSN GOLEM_TEST_POSTGRES_LINGUISTIC_DSN GOLEM_TEST_PGVECTOR_DSN; do \
 		dsn="$${!name:-}"; \
@@ -143,4 +164,4 @@ postgres-check:
 		dsn="$${!name}"; \
 		pg_isready -d "$$dsn" -t 5 >/dev/null 2>&1 || down="$$down\n  $$name"; \
 	done; \
-	test -z "$$down" || { printf "these test servers are not accepting connections:%b\nA DSN may carry a password, so only the variable is named.\n" "$$down" >&2; exit 1; }
+	test -z "$$down" || { printf "these test servers are not accepting connections:%b\nRun: make postgres-up\nA DSN may carry a password, so only the variable is named.\n" "$$down" >&2; exit 1; }
