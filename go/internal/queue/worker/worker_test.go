@@ -1425,3 +1425,61 @@ func TestRetentionFailureIsObserved(t *testing.T) {
 		t.Fatal("a failing retention produced no observation")
 	}
 }
+
+func TestRetentionDisabledRunsNoRetentionPass(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	executed := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.retention-disabled",
+		Handle: func(context.Context, queue.Job[gatePayload]) error {
+			close(executed)
+			return nil
+		},
+	})
+	fixture.enqueue(t, newPending(t, jobType))
+	var passes atomic.Int64
+	store := stubStore{Store: fixture.store, retention: func(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {
+		passes.Add(1)
+		return fixture.store.RunRetention(ctx, policy)
+	}}
+	limits := gateLimits()
+	limits.RetentionEvery = queue.RetentionDisabled
+	_, stop := fixture.start(t, store, registry, limits)
+	awaitSignal(t, executed, "job dispatch with retention disabled")
+	time.Sleep(120 * time.Millisecond)
+	stop()
+	if ran := passes.Load(); ran != 0 {
+		t.Fatalf("retention ran %d times while disabled", ran)
+	}
+}
+
+func TestRetentionEnabledStillRunsARetentionPass(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	executed := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.retention-enabled",
+		Handle: func(context.Context, queue.Job[gatePayload]) error {
+			close(executed)
+			return nil
+		},
+	})
+	fixture.enqueue(t, newPending(t, jobType))
+	passes := make(chan struct{}, 1)
+	store := stubStore{Store: fixture.store, retention: func(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {
+		select {
+		case passes <- struct{}{}:
+		default:
+		}
+		return fixture.store.RunRetention(ctx, policy)
+	}}
+	limits := gateLimits()
+	limits.RetentionEvery = time.Minute
+	limits.RetentionAge = time.Hour
+	limits.RetentionRows = 16
+	_, stop := fixture.start(t, store, registry, limits)
+	awaitSignal(t, executed, "job dispatch with retention enabled")
+	awaitSignal(t, passes, "retention pass with retention enabled")
+	stop()
+}

@@ -213,7 +213,7 @@ func (worker *Worker) Run(ctx context.Context) error {
 		var claimed int
 		var err error
 		now := time.Now()
-		if !now.Before(nextRetention) {
+		if worker.limits.RetentionEnabled() && !now.Before(nextRetention) {
 			started := time.Now()
 			_, retentionErr := worker.store.RunRetention(ctx, queueprovider.RetentionPolicy{
 				OlderThan: now.Add(-worker.limits.RetentionAge), MaxRows: worker.limits.RetentionRows,
