@@ -5,11 +5,59 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.3.1
+go get github.com/eleven-am/golem/go@v0.3.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable.
+
+---
+
+## go/v0.3.3
+
+**Take this release if you set `queue.RetentionDisabled` on v0.3.2.** It did
+the opposite of what it says.
+
+`RetentionDisabled` is a negative duration, and the worker scheduled its
+next pass with `now.Add(RetentionEvery)` — permanently in the past. The
+configuration documented as turning retention off ran a retention `DELETE`
+on every dispatch iteration instead of never.
+
+`RetentionAge` still gated the delete, so recent rows survived and nothing
+looked wrong. What was lost is what the setting was chosen to keep: terminal
+jobs past the age, deleted hard, nothing archived, nothing logged on the
+success path. If you also lowered `RetentionAge` toward its one-hour
+minimum, you lost more.
+
+**If you were on v0.3.2 with retention disabled, your job history was
+trimmed to `RetentionAge` regardless.** golem cannot recover it; restore
+from your own database backups if you need it.
+
+---
+
+## go/v0.3.2
+
+A field an application owns and no client may set.
+
+`golem:"system"` withholds a field's write builders from caller clients and
+keeps them on system clients; `golem:"system;immutable"` keeps only create.
+The field never enters a generated GraphQL input, stays readable, and a
+policy granting it to a caller does not override the mode.
+
+`SystemEscape(tx)` returns a system client bound to the caller's own
+transaction, so a write the caller may not perform commits or rolls back
+with the work that caused it. Every call is observed as
+`transaction.system_escape`. It reaches extension bodies and hooks, where
+custom mutations live.
+
+A hook may author such a field. A field the caller's own input named stays
+refused whatever a hook does to it, so a hook chain cannot launder a value.
+
+Nested-child hooks, upsert, versioned mutations and update-many batches
+still refuse a hook-authored system field. Each fails closed.
+
+No migration is required. A schema declaring no `system` field generates
+byte-identical output.
 
 ---
 
