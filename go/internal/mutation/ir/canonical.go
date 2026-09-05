@@ -232,6 +232,7 @@ func (encoder *canonicalEncoder) scalar(operation ScalarOperation) {
 	encoder.typeRef(operation.fieldType)
 	encoder.u8(uint8(operation.kind))
 	encoder.boolean(operation.runtimeOwned)
+	encoder.boolean(operation.hookAuthored)
 	encoder.boolean(operation.hasValue)
 	if operation.hasValue {
 		encoder.value(operation.value)

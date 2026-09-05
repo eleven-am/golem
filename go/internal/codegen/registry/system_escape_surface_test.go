@@ -24,9 +24,10 @@ func TestGeneratedSystemEscapeSurfaceIsExactAndDocumented(t *testing.T) {
 			t.Errorf("generated registry missing %q", fragment)
 		}
 	}
-	// The bootstrap shell type-checks declaration sources against the caller ABI
-	// and cannot name a system type, so the escape must never become a CallerTx
-	// method. TestEmitShellMatchesFinalCallerABI fails the moment it does.
+	// The bootstrap shell mirrors the escape as a free function, never as a
+	// caller method, so a CallerTx method would put the shell's caller ABI out of
+	// step with the final registry. TestEmitShellMatchesFinalCallerABI fails the
+	// moment it does.
 	if strings.Contains(source, "func (transaction *CallerTx[P]) System(") {
 		t.Error("system escape was emitted as a CallerTx method the bootstrap shell cannot mirror")
 	}

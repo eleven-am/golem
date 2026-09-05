@@ -62,7 +62,7 @@ func (prepared Prepared) VerifyAuthorized(authorized []AuthorizedRow, applied, a
 	}
 	authoredInput := make([]policyir.FieldID, 0, len(prepared.context.node.ScalarOperations()))
 	for _, operation := range prepared.context.node.ScalarOperations() {
-		if !operation.RuntimeOwned() {
+		if !operation.RuntimeOwned() && !operation.HookAuthored() {
 			authoredInput = append(authoredInput, operation.FieldID())
 		}
 	}

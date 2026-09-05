@@ -23,6 +23,7 @@ type ScalarOperation struct {
 	value        policyir.Value
 	hasValue     bool
 	runtimeOwned bool
+	hookAuthored bool
 }
 
 func NewScalarOperation(field policyir.FieldID, fieldType policyir.TypeRef, kind ScalarOperationKind, value *policyir.Value) (ScalarOperation, error) {
@@ -52,6 +53,15 @@ func NewRuntimeSet(field policyir.FieldID, fieldType policyir.TypeRef, value pol
 	return result, nil
 }
 
+func NewHookAuthored(operation ScalarOperation) (ScalarOperation, error) {
+	result := operation
+	result.hookAuthored = true
+	if err := result.validate(); err != nil {
+		return ScalarOperation{}, err
+	}
+	return result, nil
+}
+
 func NewNull(field policyir.FieldID, fieldType policyir.TypeRef) (ScalarOperation, error) {
 	return NewScalarOperation(field, fieldType, ScalarNull, nil)
 }
@@ -68,6 +78,7 @@ func (operation ScalarOperation) FieldID() policyir.FieldID { return operation.f
 func (operation ScalarOperation) Type() policyir.TypeRef    { return operation.fieldType }
 func (operation ScalarOperation) Kind() ScalarOperationKind { return operation.kind }
 func (operation ScalarOperation) RuntimeOwned() bool        { return operation.runtimeOwned }
+func (operation ScalarOperation) HookAuthored() bool        { return operation.hookAuthored }
 func (operation ScalarOperation) Value() (policyir.Value, bool) {
 	return operation.value, operation.hasValue
 }
@@ -98,6 +109,9 @@ func (operation ScalarOperation) validate() error {
 	}
 	if operation.runtimeOwned && operation.kind != ScalarSet {
 		return fmt.Errorf("P4_MUTATION_IR_SCALAR: runtime-owned operation must be set")
+	}
+	if operation.runtimeOwned && operation.hookAuthored {
+		return fmt.Errorf("P4_MUTATION_IR_SCALAR: operation cannot be both runtime owned and hook authored")
 	}
 	if operation.hasValue {
 		if err := operation.value.Validate(); err != nil {

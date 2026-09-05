@@ -68,6 +68,9 @@ func TestGeneratedQueryPlanSurfaceIsCallerOnlyAndExact(t *testing.T) {
 	if got, want := callerABI(t, finalShell.Source), callerABI(t, final.Source); fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("final shell caller ABI differs from final registry\nshell: %v\nfinal: %v", got, want)
 	}
+	if got, want := systemEscapeABI(t, finalShell.Source), systemEscapeABI(t, final.Source); fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("final shell system-escape ABI differs from final registry\nshell: %v\nfinal: %v", got, want)
+	}
 
 	discoveryRequest := request.Schema.Contract
 	discoveryRequest.Models[0].Aggregation = nil

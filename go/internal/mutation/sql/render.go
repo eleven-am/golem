@@ -726,7 +726,7 @@ func scalarOperationFields(operations []mutationir.ScalarOperation) []policyir.F
 func authoredScalarOperationFields(operations []mutationir.ScalarOperation) []policyir.FieldID {
 	result := make([]policyir.FieldID, 0, len(operations))
 	for _, operation := range operations {
-		if !operation.RuntimeOwned() {
+		if !operation.RuntimeOwned() && !operation.HookAuthored() {
 			result = append(result, operation.FieldID())
 		}
 	}

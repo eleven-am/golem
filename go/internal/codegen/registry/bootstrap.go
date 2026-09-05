@@ -13,9 +13,10 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 )
 
-// ShellRequest describes the generated caller surface needed while the source
-// package is type-checked before its final registry exists. The shell is an
-// in-memory overlay only: it contains exact public method signatures and no
+// ShellRequest describes the generated caller surface, and the system surface
+// SystemEscape reaches from inside a caller transaction, needed while the
+// source package is type-checked before its final registry exists. The shell is
+// an in-memory overlay only: it contains exact public method signatures and no
 // runtime, database, policy, or transaction behavior.
 type ShellRequest struct {
 	AppPackage      modelcodegen.PackageSpec
@@ -32,9 +33,11 @@ type ShellRequest struct {
 	DeclarationDiscovery bool
 }
 
-// EmitShell produces the deterministic caller-only registry bootstrap used by
-// compiler method interpretation and typed binding discovery. It is never a
-// publishable artifact.
+// EmitShell produces the deterministic registry bootstrap used by compiler
+// method interpretation and typed binding discovery. It carries the caller
+// surface plus SystemEscape and the transactional system clients it returns, so
+// a declaration body holding a caller transaction type-checks against the same
+// ABI the final registry publishes. It is never a publishable artifact.
 func EmitShell(request ShellRequest) (File, error) {
 	if request.GolemImportPath == "" {
 		request.GolemImportPath = modelcodegen.DefaultGolemImportPath
@@ -85,13 +88,21 @@ func EmitShell(request ShellRequest) (File, error) {
 		fmt.Fprintf(&source, "\t%s CallerTx%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
 	}
 	source.WriteString("}\n")
+	source.WriteString("type SystemTx[P any] struct {\n")
+	for _, model := range models {
+		fmt.Fprintf(&source, "\t%s SystemTx%sClient[P]\n", pluralName(model.LogicalName), model.Go.Name)
+	}
+	source.WriteString("}\n")
 	for _, model := range models {
 		contract := contracts[model.ID]
 		emitShellClient(&source, "Caller", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
 		emitShellClient(&source, "CallerTx", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
+		emitShellClient(&source, "SystemTx", model, aliases[model.Go.PackagePath], contextAlias, golemAlias, queryplanAlias, contract, request.DeclarationDiscovery)
 	}
 	fmt.Fprintf(&source, "\nfunc (caller *Caller[P]) Transaction(_ %s.Context, _ func(*CallerTx[P]) error) error { return nil }\n", contextAlias)
 	fmt.Fprintf(&source, "func (transaction *CallerTx[P]) Enqueue(_ %s.Context, _ %s.Pending) (%s.JobID, error) { return \"\", nil }\n", contextAlias, queueAlias, queueAlias)
+	source.WriteString("func SystemEscape[P any](transaction *CallerTx[P]) *SystemTx[P] { return &SystemTx[P]{} }\n")
+	fmt.Fprintf(&source, "func (transaction *SystemTx[P]) Enqueue(_ %s.Context, _ %s.Pending) (%s.JobID, error) { return \"\", nil }\n", contextAlias, queueAlias, queueAlias)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry bootstrap: format: %w\n%s", err, source.String())
