@@ -15,8 +15,10 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ## go/v0.3.3
 
-**Take this release if you set `queue.RetentionDisabled` on v0.3.2.** It did
-the opposite of what it says.
+**Take this release if you ever set `queue.RetentionDisabled`.** It did the
+opposite of what it says, in every release that offered it — v0.3.0, v0.3.1
+and v0.3.2. Each shipped the constant and a QUEUE.md instructing its use,
+and none gated the worker on it.
 
 `RetentionDisabled` is a negative duration, and the worker scheduled its
 next pass with `now.Add(RetentionEvery)` — permanently in the past. The
@@ -29,9 +31,9 @@ jobs past the age, deleted hard, nothing archived, nothing logged on the
 success path. If you also lowered `RetentionAge` toward its one-hour
 minimum, you lost more.
 
-**If you were on v0.3.2 with retention disabled, your job history was
-trimmed to `RetentionAge` regardless.** golem cannot recover it; restore
-from your own database backups if you need it.
+**If you ran any of v0.3.0, v0.3.1 or v0.3.2 with retention disabled, your
+job history was trimmed to `RetentionAge` regardless.** golem cannot recover
+it; restore from your own database backups if you need it.
 
 ---
 
