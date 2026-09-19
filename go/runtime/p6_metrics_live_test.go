@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	providerapi "github.com/eleven-am/golem/go/provider"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
@@ -247,7 +248,7 @@ func TestGeneratedMetricExactNullAndScalarMatrixAcrossProviders(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -548,7 +549,7 @@ func TestAggregateScalarResultMatrixProviderAgreement(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -575,7 +576,7 @@ func TestEmptyAndAllNullAggregateCells(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -615,7 +616,7 @@ func TestExactIntegerDecimalAndTemporalNeverPassThroughFloat(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -644,7 +645,7 @@ func TestGeneratedMetricSignedPagingAndCompleteTiesAcrossProviders(t *testing.T)
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -691,7 +692,7 @@ func TestLocalGroupByCompleteSemanticOracle(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -722,7 +723,7 @@ func TestNullKeyAndNullableMeasureGroups(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -752,7 +753,7 @@ func TestHavingAndOrderPrivateMeasureIsAuthorizedButNotReturned(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -779,7 +780,7 @@ func TestSignedTakeSkipAndCanonicalTieBreakAgreement(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -805,7 +806,7 @@ func TestBinaryAnalyticalStringSemanticsAcrossProviderCollations(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, _ := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -830,7 +831,7 @@ func TestTextWhereStillUsesDeclaredP2ComparisonMode(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, _ := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -861,7 +862,7 @@ func TestTextMeasureHavingDefaultAndASCIIInsensitiveAcrossProviders(t *testing.T
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -903,7 +904,7 @@ func TestGraphQLTextMeasureHavingComparisonModesAcrossProviders(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -928,7 +929,7 @@ func TestStringNullAndUnicodeCorpus(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, _ := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -957,7 +958,7 @@ func TestContributionAndIntermediateOverflowReturnNoRows(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{MaxContributionRows: 3, MaxIntermediateGroups: 2})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{})
@@ -1009,7 +1010,7 @@ func TestProgrammatic34424GroupsAreComplete(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{
 				MaxContributionRows: 40_000, MaxIntermediateGroups: 40_000, MaxProgrammaticGroups: 40_000,
@@ -1043,7 +1044,7 @@ func TestForwardToOneRelationGroupProviderOracle(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{CategoryPrefix: "public-"})
@@ -1081,7 +1082,7 @@ func TestRelationAbsentAndInvisibleTargetsAreIndistinguishable(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{CategoryPrefix: "public-"})
@@ -1116,7 +1117,7 @@ func TestRelationHopPolicyAndConditionalTerminalDischarge(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -1148,7 +1149,7 @@ func TestRelationAverageUsesOneSQLContributionSet(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			caller, err := h.app.ForPrincipal(context.Background(), p6metrics.Principal{CategoryPrefix: "public-"})
@@ -1230,7 +1231,7 @@ func TestIndependentSocialAnalyticsOraclePostgreSQLProfiles(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			runP6IndependentProviderOracle(t, profile)
 		})

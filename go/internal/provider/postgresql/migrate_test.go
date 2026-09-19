@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPlanIncrementalRendersReviewedPostgreSQLBaseline(t *testing.T) {
@@ -745,7 +746,7 @@ func reviewedPostgreSQLEntry(t *testing.T, migrationID migration.MigrationID, be
 func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
 	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not set")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
 	}
 	provider := New()
 	database, _, err := provider.Open(context.Background(), dsn)

@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
@@ -19,7 +20,7 @@ func TestGraphQLAndGoAnalyticsPlanPolicySQLAndResultOracle(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -154,7 +155,7 @@ func TestGraphQLMissingTakeProbesPlusOneAndExplicitTakeNeverClamps(t *testing.T)
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarnessWithAnalyticsLimits(t, profile, golemruntime.AnalyticsLimits{MaxProgrammaticGroups: 2})
 			for index := 0; index < 101; index++ {
@@ -212,7 +213,7 @@ func TestProgrammaticGroupLimitIsIndependentOfGraphQL(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarnessWithAnalyticsLimits(t, profile, golemruntime.AnalyticsLimits{MaxProgrammaticGroups: 2})
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -245,7 +246,7 @@ func TestLocalAggregateAndGroupUseAuthorizedSingleStatementsAcrossProviders(t *t
 	for _, profile := range p5ExtensionProviderProfiles() {
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			userID, err := golem.ParseUUID(p5SocialID(1))
@@ -340,7 +341,7 @@ func TestPostTagExplicitJoinModelAnalytics(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			caller, err := harness.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
@@ -607,7 +608,7 @@ func TestClassificationPositionSpyCoversWhereCountMeasureDimensionHavingOrderAnd
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}

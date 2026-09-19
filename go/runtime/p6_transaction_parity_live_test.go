@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p6metrics"
 )
@@ -17,7 +18,7 @@ func TestAnalyticsTransactionFamiliesBindToTxAndRollbackAcrossProviders(t *testi
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP6MetricsHarness(t, profile, golemruntime.AnalyticsLimits{})
 			bundle := p6metrics.GolemGeneratedSchemaBundle()

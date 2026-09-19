@@ -31,6 +31,7 @@ import (
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
@@ -169,7 +170,7 @@ func runMutationBoundaryProfiles(t *testing.T, evidence string, run func(*testin
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for %s", profile.env, evidence)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for %s", profile.env, evidence)
 			}
 			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
@@ -453,7 +454,7 @@ func TestRequiredInverseHasOneDisconnectRefusesBeforeSQLAcrossProviders(t *testi
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for required inverse has-one refusal evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for required inverse has-one refusal evidence", profile.env)
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := fmt.Sprintf("golem_p4_inverse_%s_%d_%d", profile.namespace, os.Getpid(), sequence)
@@ -818,7 +819,7 @@ func runRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixtur
 		t.Run(value.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(value.env))
 			if dsn == "" {
-				t.Skipf("%s is required for direction-specific delete evidence", value.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for direction-specific delete evidence", value.env)
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := fmt.Sprintf("golem_p4_%s_%s_%d_%d", prefix, value.profile, os.Getpid(), sequence)
@@ -1343,7 +1344,7 @@ func TestMutationExactValuesAgreeAcrossProviders(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for exact mutation parity evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for exact mutation parity evidence", profile.env)
 			}
 			fixture := schematest.NewMutationExactValues(t)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
@@ -1456,7 +1457,7 @@ func runCreateDefaultPostgreSQLProfiles(t *testing.T, fieldPolicy bool) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for persisted-default create evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for persisted-default create evidence", profile.env)
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_create_%d", sequence))
@@ -1613,7 +1614,7 @@ func TestSystemOutboxV1MigratesIntrospectsAndFingerprintsBothProviders(t *testin
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for live outbox migration/introspection evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for live outbox migration/introspection evidence", profile.env)
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_outbox_%d", sequence))
@@ -1714,7 +1715,7 @@ func TestPostgreSQLUpsertSameSelectorMultiConnection(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for PostgreSQL same-selector connection evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for PostgreSQL same-selector connection evidence", profile.env)
 			}
 			fixture, applicationNamespace, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			const workers = 4
@@ -1776,7 +1777,7 @@ func TestUpsertRetriesWholeEngineAttemptAndExhaustsAsConflict(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for PostgreSQL retry-exhaustion evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for PostgreSQL retry-exhaustion evidence", profile.env)
 			}
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			var attempts atomic.Int64

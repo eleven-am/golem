@@ -6,6 +6,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	publicgraphql "github.com/eleven-am/golem/go/graphql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestCompleteSocialGraphQLReadAcrossSQLiteAndPostgreSQLProfiles(t *testing.T) {
@@ -16,7 +17,7 @@ func TestCompleteSocialGraphQLReadAcrossSQLiteAndPostgreSQLProfiles(t *testing.T
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertP5CompleteSocialGraphQLRead(t, newPostgresSocialMutationFixture(t, profile, golem.ModelID{}, nil))
 		})

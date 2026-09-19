@@ -13,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/jmoiron/sqlx"
@@ -27,6 +28,7 @@ func TestRuntimeRequiresExactReviewedMigrationLedgerPostgreSQL(t *testing.T) {
 	for profileIndex, profile := range profiles {
 		dsn := strings.TrimSpace(os.Getenv(profile.environment))
 		if dsn == "" {
+			testenv.FailMissingPostgreSQLIfRequired(t, profile.environment+" is not configured")
 			continue
 		}
 		ran = true
@@ -103,7 +105,7 @@ func TestRuntimeRequiresExactReviewedMigrationLedgerPostgreSQL(t *testing.T) {
 		})
 	}
 	if !ran {
-		t.Skip("PostgreSQL profile DSNs are not configured")
+		testenv.SkipMissingPostgreSQL(t, "PostgreSQL profile DSNs are not configured")
 	}
 }
 

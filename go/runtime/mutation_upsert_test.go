@@ -15,6 +15,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -147,7 +148,7 @@ func TestPostgreSQLRootUpsertExecutesOnlySelectedNestedBranch(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture := newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil)
 			assertRootUpsertSelectedNestedBranch(t, fixture)
@@ -285,7 +286,7 @@ func TestPostgreSQLCCallerRootUpsertSelectedNestedBranchHooksAndFactsAreExact(t 
 		}
 	}
 	if profile.dsn == "" {
-		t.Skip(profile.env + " is not configured")
+		testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 	}
 	ctx := context.Background()
 	schema := schematest.NewSubscribedGraph(t)
@@ -570,7 +571,7 @@ func TestUpsertHiddenExistingNeverFallsThroughToUnauthorizedUpdate(t *testing.T)
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for hidden-existing upsert evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for hidden-existing upsert evidence", profile.env)
 			}
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			run(t, fixture, oracleQualified(applicationNamespace, "posts"), oracleQualified(systemNamespace, "_golem_upsert_guard"), func(index int) string { return "$" + fmt.Sprint(index) })

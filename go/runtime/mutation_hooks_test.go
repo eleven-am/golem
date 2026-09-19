@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -89,7 +90,7 @@ func TestAfterCommitFailureReportsCommittedSuccess(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresAfterCommitFailureReportsCommittedSuccess(t, profile)
 		})
@@ -250,7 +251,7 @@ func TestBeforeHookTransformsOwnedCloneThenRebinds(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresBeforeHookTransformsOwnedCloneThenRebinds(t, profile)
 		})
@@ -376,7 +377,7 @@ func TestTransactionBoundReadsRelationsLoadersNestedWritesAndHooks(t *testing.T)
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresTransactionBoundReadsRelationsNestedWritesAndHooks(t, profile)
 		})
@@ -485,7 +486,7 @@ func TestUpsertHooksRepeatOnlyForEngineAttempts(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c-live-committed-attempt", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresUpsertHooksRunOnceForCommittedAttempt(t, profile)
 		})
@@ -573,7 +574,7 @@ func TestSystemMutationsBypassAllHooks(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresSystemMutationsBypassAllHooks(t, profile)
 		})
@@ -593,7 +594,7 @@ func TestDeleteAndDeleteManyHookFamiliesAcrossProviders(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			hooks, counters := graphDeleteHookBindings(schema)
 			assertGraphDeleteHookFamilies(t, newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, hooks), counters)
@@ -1014,7 +1015,7 @@ func TestAfterCommitRunsOnlyAfterOutermostCommit(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresAfterCommitRunsOnlyAfterOutermostCommit(t, profile)
 		})

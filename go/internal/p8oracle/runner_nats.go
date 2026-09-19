@@ -18,6 +18,8 @@ import (
 	"time"
 
 	natsclient "github.com/nats-io/nats.go"
+
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 const (
@@ -48,8 +50,8 @@ func runExternalNATSScenario(t *testing.T, source []byte, scenario string, race 
 		t.Fatal("external NATS scenario is required")
 	}
 	available, err := order7NATSAvailable(
-		os.Getenv("GOLEM_P8_REQUIRE_NATS"),
-		os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL"),
+		os.Getenv(testenv.NATSRequiredVariable),
+		os.Getenv(testenv.PostgreSQLRequiredVariable),
 		exec.LookPath,
 		localNATSImagePresent,
 	)
@@ -72,12 +74,12 @@ func order7NATSAvailable(required, postgresRequired string, lookup executableLoo
 	switch required {
 	case "", "0", "1":
 	default:
-		return false, errors.New("GOLEM_P8_REQUIRE_NATS must be 0 or 1")
+		return false, errors.New(testenv.NATSRequiredVariable + " must be 0 or 1")
 	}
 	switch postgresRequired {
 	case "", "0", "1":
 	default:
-		return false, errors.New("GOLEM_P8_REQUIRE_POSTGRESQL must be 0 or 1")
+		return false, errors.New(testenv.PostgreSQLRequiredVariable + " must be 0 or 1")
 	}
 	if required == "1" && postgresRequired != "1" {
 		return false, errors.New("required live Core NATS requires mandatory PostgreSQL profiles")

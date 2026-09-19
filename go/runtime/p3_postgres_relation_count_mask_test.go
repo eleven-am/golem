@@ -16,6 +16,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -37,7 +38,7 @@ func TestPostgreSQLImmediateBatchedChildOwnsAuthorizedRelationCount(t *testing.T
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			fixture := schematest.NewGraph(t)
@@ -57,7 +58,7 @@ func TestPostgreSQLConditionalMaskPrivateDependencies(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			fixture := schematest.New(t)
@@ -101,7 +102,7 @@ func TestPostgreSQLMASK_THE_BATCH_KEY(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			fixture := schematest.NewIndexed(t)
@@ -126,7 +127,7 @@ func TestPostgreSQLMASK_THE_DISTINCT_KEY(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			fixture := schematest.New(t)

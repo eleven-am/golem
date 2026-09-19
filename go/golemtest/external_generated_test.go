@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 const externalApplicationModule = `module example.com/golempolicykit
@@ -68,7 +70,7 @@ func runExternalGeneratedApplication(t *testing.T, gate string) {
 	if testing.Short() {
 		t.Skip("external generated application build")
 	}
-	mandatory := os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1"
+	mandatory := testenv.PostgreSQLRequired()
 	moduleRoot := filepath.Dir(packageDirectory(t))
 	consumer := externalApplicationConsumer(t, moduleRoot)
 	environment := append(os.Environ(), "GOWORK=off", "GOFLAGS=")
@@ -90,9 +92,7 @@ func runExternalGeneratedApplication(t *testing.T, gate string) {
 	for _, profile := range externalProfiles() {
 		administrative := strings.TrimSpace(os.Getenv(profile.variable))
 		if administrative == "" {
-			if mandatory {
-				t.Fatalf("%s is required when mandatory PostgreSQL evidence is enabled", profile.variable)
-			}
+			testenv.FailMissingPostgreSQLIfRequired(t, profile.variable+" is not configured")
 			continue
 		}
 		dsn := externalPostgreSQLDatabase(t, administrative, profile)

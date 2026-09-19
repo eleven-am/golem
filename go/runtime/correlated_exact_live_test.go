@@ -15,6 +15,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -49,7 +50,7 @@ func TestCorrelatedExactBigIntAndDecimalPostgreSQLProfilesLive(t *testing.T) {
 		{"linguistic", strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))},
 	}
 	if profiles[0].dsn == "" || profiles[1].dsn == "" {
-		t.Skip("both PostgreSQL profile DSNs are required")
+		testenv.SkipMissingPostgreSQL(t, "both PostgreSQL profile DSNs are required")
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {

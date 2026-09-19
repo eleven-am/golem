@@ -24,6 +24,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	providerhandle "github.com/eleven-am/golem/go/internal/provider/handle"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	publicprovider "github.com/eleven-am/golem/go/provider"
 	providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
 	"github.com/jackc/pgx/v5"
@@ -413,7 +414,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is not configured", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is not configured", profile.env)
 			}
 			exerciseP8DoctorPostgreSQLMatrix(t, dsn)
 		})

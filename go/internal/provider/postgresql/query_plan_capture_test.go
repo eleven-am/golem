@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 	"testing"
 
@@ -18,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/queryplancapture"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -138,17 +138,10 @@ func TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution(t *testing.T) {
 		{name: "c", environment: "GOLEM_TEST_POSTGRES_DSN"},
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN", linguistic: true},
 	}
-	required := os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1"
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.environment))
-			if dsn == "" {
-				if required {
-					t.Fatalf("required PostgreSQL query-plan profile %s is not configured", profile.environment)
-				}
-				t.Skipf("%s is not configured", profile.environment)
-			}
+			dsn := testenv.PostgreSQLDSN(t, profile.environment)
 			fixture := schematest.NewIndexed(t)
 			table := postgresPhysicalTable(t, fixture.PostgreSQL, fixture.Post)
 			if table.PrimaryKey == nil {

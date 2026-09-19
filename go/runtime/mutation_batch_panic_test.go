@@ -13,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 type batchPanicHookKey int
@@ -31,7 +32,7 @@ func forEachHookedMutationResultProvider(t *testing.T, limits MutationLimits, ho
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			base := newMutationResultFixtureWithHooks(t, limits, hookFactory, discard)
 			run(t, reopenHookedMutationResultOnPostgres(t, profile, base, limits))

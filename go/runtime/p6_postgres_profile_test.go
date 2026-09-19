@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPostgreSQLProfilesAreLiveDistinctAndCollationVerified(t *testing.T) {
 	cDSN := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	linguisticDSN := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if cDSN == "" || linguisticDSN == "" {
-		t.Skip("both PostgreSQL provider profiles are required")
+		testenv.SkipMissingPostgreSQL(t, "both PostgreSQL provider profiles are required")
 	}
 	if cDSN == linguisticDSN {
 		t.Fatal("C and linguistic PostgreSQL DSNs resolve to the same configured value")

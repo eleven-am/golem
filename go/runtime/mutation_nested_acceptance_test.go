@@ -18,6 +18,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -82,7 +83,7 @@ func TestCreateNestedDenialRollsBackDataAndFactsAtEveryDepth(t *testing.T) {
 				profile := profile
 				t.Run("postgresql-"+profile.name, func(t *testing.T) {
 					if profile.dsn == "" {
-						t.Skip(profile.env + " is not configured")
+						testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 					}
 					assertNestedDenialAtomic(t, newPostgresGraphMutationFixtureWithHooks(t, profile, test.deny(schema), nil))
 				})
@@ -121,7 +122,7 @@ func TestNestedHookAndFactOrderIsDeterministic(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertNestedHookAndFactOrder(t, func(_ schematest.GraphFixture, hooks []golem.HookBinding[graphMutationActor]) graphMutationFixture {
 				return newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, hooks)
@@ -223,7 +224,7 @@ func TestNestedCompositeRelationsAndRecursiveComments(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertNestedCompositeRelation(t, newPostgresCompositeMutationFixture(t, profile))
 			assertRecursiveComments(t, newPostgresRecursiveMutationFixture(t, profile))
@@ -239,7 +240,7 @@ func TestNestedMutationEmitsFactsForEveryChangedRow(t *testing.T) {
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertNestedFacts(t, newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil), 11, 12, 13)
 		})
@@ -254,7 +255,7 @@ func TestNestedAndBatchFactsHaveStableTransactionOrdinals(t *testing.T) {
 		profile := profile
 		t.Run("nested postgresql "+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertNestedFacts(t, newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil), 21, 22, 23)
 		})
@@ -267,7 +268,7 @@ func TestNestedAndBatchFactsHaveStableTransactionOrdinals(t *testing.T) {
 		profile := profile
 		t.Run("batch postgresql "+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture, _ := newMutationResultPostgresFixture(t, context.Background(), profile)
 			assertBatchFactOrdinals(t, fixture)

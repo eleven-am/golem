@@ -13,12 +13,13 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestExactDecoderPostgreSQLLiveDriverRepresentations(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not configured")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
 	}
 	runExactDecoderPostgreSQLLive(t, dsn, "c")
 }
@@ -26,7 +27,7 @@ func TestExactDecoderPostgreSQLLiveDriverRepresentations(t *testing.T) {
 func TestExactDecoderPostgreSQLLiveLinguisticDriverRepresentations(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN is not configured")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN is not configured")
 	}
 	runExactDecoderPostgreSQLLive(t, dsn, "linguistic")
 }

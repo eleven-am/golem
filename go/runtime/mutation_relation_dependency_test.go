@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestRelationTraversingMutationAuthorizationExecutesInProviderSQL(t *testing.T) {
@@ -335,7 +336,7 @@ func TestPostgreSQLRequiredSourceCreateAndConnectOrCreateDependencies(t *testing
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture := newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil)
 			schema := fixture.schema
@@ -381,7 +382,7 @@ func TestRootUpsertCreateBranchSupportsRequiredSourceDependencies(t *testing.T) 
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertRootUpsertRequiredSourceDependency(t, newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil))
 		})

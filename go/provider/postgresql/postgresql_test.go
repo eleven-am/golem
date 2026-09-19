@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 	"github.com/jmoiron/sqlx"
@@ -25,7 +26,7 @@ func TestPostgreSQLPublicOpenConfiguresEveryPooledConnection(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dataSourceName := strings.TrimSpace(os.Getenv(profile.env))
 			if dataSourceName == "" {
-				t.Skipf("%s is not configured", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is not configured", profile.env)
 			}
 			assertPostgreSQLPublicPoolProfile(t, dataSourceName)
 		})
@@ -145,7 +146,7 @@ func TestPostgreSQLPoolDefaultsAndHardLimits(t *testing.T) {
 		t.Run("defaults-"+profile.name, func(t *testing.T) {
 			dataSourceName := strings.TrimSpace(os.Getenv(profile.env))
 			if dataSourceName == "" {
-				t.Skipf("%s is not configured", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is not configured", profile.env)
 			}
 			database, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: dataSourceName})
 			if err != nil {

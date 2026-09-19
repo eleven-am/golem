@@ -25,6 +25,7 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/examples/social/social"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 	"github.com/eleven-am/golem/go/provider/sqlite"
@@ -215,7 +216,7 @@ func TestExternalSocialApplicationPostgreSQLJourney(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			base := os.Getenv(profile.env)
 			if base == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			dsn, cleanup := createP8DisposablePostgreSQLDatabase(t, base, profile.name)
 			defer cleanup()

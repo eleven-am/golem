@@ -19,6 +19,7 @@ import (
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 	"github.com/eleven-am/golem/go/internal/provider/postgresql"
 	"github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -72,7 +73,7 @@ func TestSQLiteProviderMigratedSchemaPolicyProof(t *testing.T) {
 // collation failure remains a hard test failure there.
 func TestPostgreSQLProviderAgreementLiveProfiles(t *testing.T) {
 	if strings.TrimSpace(os.Getenv(PostgreSQLDSNEnv)) == "" || strings.TrimSpace(os.Getenv(PostgreSQLLinguisticDSNEnv)) == "" {
-		t.Skipf("local PostgreSQL agreement requires both %s and %s; the completion profile must provide them", PostgreSQLDSNEnv, PostgreSQLLinguisticDSNEnv)
+		testenv.SkipMissingPostgreSQLf(t, "local PostgreSQL agreement requires both %s and %s; the completion profile must provide them", PostgreSQLDSNEnv, PostgreSQLLinguisticDSNEnv)
 	}
 	profiles, err := PostgreSQLProfiles()
 	if err != nil {

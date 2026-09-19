@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 )
 
@@ -280,10 +281,7 @@ func provisionProfile(t testing.TB, profile liveProfile) (string, func()) {
 	}
 	admin, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: profile.baseDSN})
 	if err != nil {
-		if os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1" {
-			t.Fatalf("required %s profile is unavailable", profile.name)
-		}
-		t.Skip(profile.name + " profile is unavailable")
+		testenv.SkipMissingPostgreSQLf(t, "%s profile is unavailable: %v", profile.name, err)
 	}
 	var collate, ctype string
 	if err := admin.UnsafeSQLX().QueryRowxContext(context.Background(), `SELECT datcollate,datctype FROM pg_database WHERE datname=current_database()`).Scan(&collate, &ctype); err != nil {

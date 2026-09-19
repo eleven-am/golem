@@ -12,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -710,7 +711,7 @@ func TestPostgreSQLWideningCAndLinguisticProfilesProduceIdenticalTruth(t *testin
 	c := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	linguistic := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if c == "" || linguistic == "" {
-		t.Skip("both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
+		testenv.SkipMissingPostgreSQL(t, "both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
 	}
 	var truth []string
 	var corpus []string
@@ -902,7 +903,7 @@ func forEachPostgreSQLProfile(t *testing.T, run func(*testing.T, string, *sqlx.D
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.environment))
 			if dsn == "" {
-				t.Skipf("%s is not set", profile.environment)
+				testenv.SkipMissingPostgreSQLf(t, "%s is not set", profile.environment)
 			}
 			database, _, err := New().Open(context.Background(), dsn)
 			if err != nil {
