@@ -4,116 +4,151 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 GO_DIR="$ROOT/go"
 GO="${GO:-go}"
-LOG_DIR="${VERIFY_LOG_DIR:-$ROOT/go/bin/verify}"
-SCOPE="${1:-full}"
+LOG_DIR="${VERIFY_LOG_DIR:-$GO_DIR/bin/verify}"
+GOVULNCHECK="golang.org/x/vuln/cmd/govulncheck@v1.7.0"
+NATS_IMAGE="nats:2.14.4@sha256:ecf677bae6a0ae7900bd3217be041c6614d5dcd2cae780000f9cd69462b36541"
 
-mkdir -p "$LOG_DIR"
-rm -f "$LOG_DIR"/*.log
+export GOWORK=off GOLEM_P8_REQUIRE_POSTGRESQL=1 GOLEM_REQUIRE_PGVECTOR=1
 
-STEP_NAMES=()
-STEP_STATUS=()
-STEP_SECONDS=()
-FAILED=0
+STEPS=(
+	format vet gate database-free cli-and-harness database-bound
+	oracle-mutation-and-load oracle-failure-and-event oracle-read-and-diagnostics race
+)
 
-colour() {
-	if [ -t 1 ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi
-}
-
-run_step() {
-	local name="$1"
-	shift
-	local started=$SECONDS
-	printf '  %-34s ' "$name"
-	if "$@" >"$LOG_DIR/$name.log" 2>&1; then
-		local elapsed=$((SECONDS - started))
-		printf '%s  %ds\n' "$(colour '32' 'pass')" "$elapsed"
-		STEP_STATUS+=("pass")
-		STEP_SECONDS+=("$elapsed")
-	else
-		local elapsed=$((SECONDS - started))
-		printf '%s  %ds\n' "$(colour '31' 'FAIL')" "$elapsed"
-		STEP_STATUS+=("fail")
-		STEP_SECONDS+=("$elapsed")
-		FAILED=$((FAILED + 1))
-	fi
-	STEP_NAMES+=("$name")
-}
+CLI_PACKAGES=(./cmd/golem ./golemtest)
+DATABASE_PACKAGES=(
+	./runtime ./internal/generate/pipeline ./internal/semantic/runtime ./internal/provider/postgresql
+	./internal/read/decode ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
+	./internal/event/outbox
+)
+ORACLE_MUTATION_AND_LOAD=(./internal/p8oracle/mutation ./internal/p8oracle/load ./internal/p8oracle/analytics)
+ORACLE_FAILURE_AND_EVENT=(./internal/p8oracle/failure ./internal/p8oracle/event ./internal/p8oracle/natslive)
+ORACLE_READ_AND_DIAGNOSTICS=(
+	./internal/p8oracle ./internal/p8oracle/disclosure ./internal/p8oracle/rejection ./internal/p8oracle/diagnostic
+)
+RACE_PACKAGES=(
+	./events/... ./provider/... ./runtime ./queue
+	./internal/event/outbox ./internal/event/cdc ./internal/queue/worker ./internal/subscription
+)
+GATE_PACKAGES=(./internal/migration/workflow ./internal/physical ./observe)
+GATE_GOLDEN_TEST="TestInspectSocialGoldenAndDeterminism"
+GATE_IDENTITY_TESTS="TestP5GeneratedExtensionFixtureRegeneratesByteIdentically|TestP5GeneratedSocialFixtureRegeneratesByteIdentically|TestP6GeneratedMetricsFixtureRegeneratesByteIdentically|TestP6GeneratedArtifactsAreByteIdenticalAcrossShuffleAndRepeat"
 
 go_test() {
-	cd "$GO_DIR" && GOWORK=off "$GO" test "$@"
+	(cd "$GO_DIR" && "$GO" test "$@")
 }
 
-database_free_packages() {
-	cd "$GO_DIR" && GOWORK=off "$GO" list ./... |
-		grep -vxF -f <(GOWORK=off "$GO" list \
-			./cmd/golem ./golemtest ./internal/generate/pipeline ./internal/p7oracle ./internal/p8oracle/... \
-			./internal/policy/oracle ./internal/provider/postgresql ./internal/read/decode ./internal/semantic/runtime \
-			./provider/postgresql ./runtime)
+go_test_serial() {
+	go_test -p=1 -count=1 -timeout=30m "$@"
 }
 
-step_database_free() {
-	local packages
-	packages="$(database_free_packages)" || return 1
-	# shellcheck disable=SC2086
+go_test_matching() {
+	local want="$1" filter="$2" package="$3" matched
+	matched="$(cd "$GO_DIR" && "$GO" test -list "$filter" "$package" | grep -c '^Test')"
+	if [ "$matched" != "$want" ]; then
+		echo "filter $filter matched $matched tests in $package; want $want" >&2
+		return 1
+	fi
+	go_test -count=1 -run "$filter" "$package"
+}
+
+database_bound_packages() {
+	(cd "$GO_DIR" && "$GO" list "${CLI_PACKAGES[@]}" "${DATABASE_PACKAGES[@]}" \
+		"${ORACLE_MUTATION_AND_LOAD[@]}" "${ORACLE_FAILURE_AND_EVENT[@]}" "${ORACLE_READ_AND_DIAGNOSTICS[@]}")
+}
+
+check_database_tier() {
+	local bound declared file directory candidate covered status=0
+	bound="$(database_bound_packages)" || return 1
+	declared="$(cd "$GO_DIR" && "$GO" list -f '{{.Dir}}' $bound)" || return 1
+	while IFS= read -r file; do
+		directory="$(cd "$(dirname "$file")" && pwd)"
+		case "$directory" in "$GO_DIR/examples/"* | "$GO_DIR/internal/testenv") continue ;; esac
+		covered=0
+		for candidate in $declared; do
+			case "$directory" in "$candidate" | "$candidate"/*) covered=1 ;; esac
+		done
+		if [ "$covered" -eq 0 ]; then
+			echo "undeclared database package: $file" >&2
+			status=1
+		fi
+	done < <(grep -rl --include='*.go' \
+		-e GOLEM_TEST_POSTGRES_DSN -e GOLEM_TEST_POSTGRES_LINGUISTIC_DSN -e GOLEM_TEST_PGVECTOR_DSN \
+		-e '/internal/testenv"' "$GO_DIR")
+	return "$status"
+}
+
+format() {
+	local unformatted
+	unformatted="$(cd "$GO_DIR" && find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)" || return 1
+	[ -z "$unformatted" ] || {
+		printf 'gofmt would rewrite:\n%s\n' "$unformatted" >&2
+		return 1
+	}
+}
+
+gate() {
+	local work="$GO_DIR/bin/gate.work" social="$GO_DIR/examples/social"
+	make -C "$ROOT" --no-print-directory GO="$GO" go-build || return 1
+	printf 'go 1.25.0\n\nuse (\n\t%s\n\t%s\n)\n\nreplace github.com/eleven-am/golem/go v0.0.0 => %s\n' \
+		"$GO_DIR" "$social" "$GO_DIR" >"$work" || return 1
+	(cd "$social" && GOWORK="$work" "$GO_DIR/bin/golem" check \
+		--schema ./social --app-out ./social --migrations migrations) || return 1
+	go_test_matching 1 "$GATE_GOLDEN_TEST" ./cmd/golem || return 1
+	go_test_matching 4 "$GATE_IDENTITY_TESTS" ./runtime || return 1
+	go_test -count=1 "${GATE_PACKAGES[@]}"
+}
+
+database_free() {
+	local bound packages
+	check_database_tier || return 1
+	bound="$(database_bound_packages)" || return 1
+	packages="$(cd "$GO_DIR" && "$GO" list ./... | grep -vxF -f <(printf '%s\n' "$bound"))" || return 1
 	go_test -count=1 -timeout=30m $packages
 }
 
-printf '\n%s\n' "$(colour '1' "golem verify — scope: $SCOPE")"
-printf '  logs: %s\n\n' "$LOG_DIR"
+run() {
+	case "$1" in
+	format) format ;;
+	vet) (cd "$GO_DIR" && "$GO" vet ./...) ;;
+	gate) gate ;;
+	database-free) database_free ;;
+	cli-and-harness) go_test_serial "${CLI_PACKAGES[@]}" ;;
+	database-bound) go_test_serial "${DATABASE_PACKAGES[@]}" ;;
+	oracle-mutation-and-load) go_test_serial "${ORACLE_MUTATION_AND_LOAD[@]}" ;;
+	oracle-failure-and-event)
+		docker image inspect "$NATS_IMAGE" >/dev/null 2>&1 || docker pull "$NATS_IMAGE" || return 1
+		export GOLEM_P8_REQUIRE_NATS=1
+		go_test_serial "${ORACLE_FAILURE_AND_EVENT[@]}"
+		;;
+	oracle-read-and-diagnostics) go_test_serial "${ORACLE_READ_AND_DIAGNOSTICS[@]}" ;;
+	race) go_test -race -p=1 -parallel 4 -count=1 -timeout=45m "${RACE_PACKAGES[@]}" ;;
+	vulncheck) (cd "$GO_DIR" && "$GO" run "$GOVULNCHECK" ./...) ;;
+	*)
+		echo "unknown step: $1 (steps: ${STEPS[*]})" >&2
+		return 2
+		;;
+	esac
+}
 
-run_step "format" bash -c "cd '$GO_DIR' && test -z \"\$(find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)\""
-run_step "vet" bash -c "cd '$GO_DIR' && GOWORK=off $GO vet ./..."
-run_step "gate-drift-and-identity" make -C "$ROOT" gate
-run_step "database-free-packages" step_database_free
-run_step "cli-and-harness" go_test -p=1 -count=1 -timeout=30m ./cmd/golem ./golemtest
-run_step "database-bound-packages" go_test -p=1 -count=1 -timeout=30m \
-	./internal/generate/pipeline ./internal/provider/postgresql ./internal/read/decode \
-	./internal/semantic/runtime ./runtime ./provider/postgresql
-run_step "isolating-oracles" go_test -count=1 -timeout=30m \
-	./internal/p7oracle ./internal/policy/oracle \
-	./internal/p8oracle ./internal/p8oracle/analytics ./internal/p8oracle/diagnostic \
-	./internal/p8oracle/disclosure ./internal/p8oracle/event ./internal/p8oracle/failure \
-	./internal/p8oracle/load ./internal/p8oracle/mutation ./internal/p8oracle/rejection
-run_step "nats-oracle" env GOLEM_P8_REQUIRE_NATS=1 GOLEM_P8_REQUIRE_POSTGRESQL=1 \
-	bash -c "cd '$GO_DIR' && GOWORK=off $GO test -p=1 -count=1 -timeout=30m ./internal/p8oracle/natslive"
-
-if [ "$SCOPE" = "full" ]; then
-	run_step "race" go_test -race -p=1 -parallel 4 -count=1 -timeout=45m \
-		./events/... ./provider/... ./runtime ./queue \
-		./internal/event/outbox ./internal/event/cdc \
-		./internal/queue/worker ./internal/subscription
-	run_step "documented-commands" go_test -p=1 -count=1 -timeout=20m ./cmd/golem \
-		-run "^(TestQuickstartFromEmptyDirectory|TestGuideApplicationRuns|TestQueueApplicationRuns|TestSemanticApplicationRuns|TestRenderApplicationRuns)$"
-fi
-
-printf '\n%s\n' "$(colour '1' 'summary')"
-index=0
-while [ "$index" -lt "${#STEP_NAMES[@]}" ]; do
-	name="${STEP_NAMES[$index]}"
-	status="${STEP_STATUS[$index]}"
-	if [ "$status" = "pass" ]; then
-		printf '  %s  %-34s %ds\n' "$(colour '32' '✓')" "$name" "${STEP_SECONDS[$index]}"
-	else
-		printf '  %s  %-34s %ds\n' "$(colour '31' '✗')" "$name" "${STEP_SECONDS[$index]}"
-	fi
-	index=$((index + 1))
-done
-
-if [ "$FAILED" -eq 0 ]; then
-	printf '\n%s\n\n' "$(colour '32' 'every step passed — this tree is releasable from this platform')"
+if [ "${1:-}" = list ]; then
+	printf '%s\n' "${STEPS[@]}"
 	exit 0
 fi
+[ "$#" -gt 0 ] || set -- "${STEPS[@]}"
 
-printf '\n%s\n' "$(colour '31' "$FAILED step(s) failed — every failure is listed below")"
-index=0
-while [ "$index" -lt "${#STEP_NAMES[@]}" ]; do
-	if [ "${STEP_STATUS[$index]}" = "fail" ]; then
-		name="${STEP_NAMES[$index]}"
-		printf '\n%s\n' "$(colour '1' "── $name")"
-		grep -E '^(--- FAIL|FAIL|panic:|# )' "$LOG_DIR/$name.log" | head -25
-		printf '  full log: %s\n' "$LOG_DIR/$name.log"
-	fi
-	index=$((index + 1))
+mkdir -p "$LOG_DIR"
+rm -f "$LOG_DIR"/*.log
+failed=""
+for name in "$@"; do
+	printf '\n── %s\n' "$name"
+	(run "$name") 2>&1 | tee "$LOG_DIR/$name.log"
+	[ "${PIPESTATUS[0]}" -eq 0 ] || failed="$failed $name"
 done
-printf '\n'
+
+if [ -z "$failed" ]; then
+	printf '\npassed: %s\n' "$*"
+	exit 0
+fi
+printf '\nfailed:%s\nlogs: %s\n' "$failed" "$LOG_DIR"
 exit 1

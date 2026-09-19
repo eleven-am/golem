@@ -2,6 +2,8 @@ module github.com/eleven-am/golem/go
 
 go 1.25.0
 
+toolchain go1.25.14
+
 require (
 	github.com/99designs/gqlgen v0.17.70
 	github.com/asg017/sqlite-vec-go-bindings v0.0.0-20260326160809-b64d0e563e61
