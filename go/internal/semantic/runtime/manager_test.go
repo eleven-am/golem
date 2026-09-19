@@ -124,7 +124,7 @@ func (provider *deterministicProvider) Embed(_ context.Context, inputs []embeddi
 	if provider.rejectText != "" {
 		for _, input := range inputs {
 			if strings.Contains(input.Text(), provider.rejectText) {
-				return nil, fmt.Errorf("provider refused a document")
+				return nil, embedding.NewError(embedding.CodeInvalidInput, fmt.Errorf("provider refused a document"))
 			}
 		}
 	}
@@ -506,9 +506,9 @@ func TestSQLiteRankBreaksDistanceTiesOnTheRecordKey(t *testing.T) {
 		t.Fatal("semantic index is absent")
 	}
 	candidates := textCandidates(`SELECT "id" AS "id" FROM "posts"`)
-	statement := fixture.manager.sqliteRankStatement(index, candidates, false)
-	if !strings.Contains(statement, "ORDER BY golem_sn.distance,golem_sn.record_key LIMIT") {
-		t.Fatalf("SQLite approximate ranking leaves the page boundary to the planner at distance ties: %s", statement)
+	statement := fixture.manager.exactSQLiteRankStatement(index, candidates, false)
+	if !strings.Contains(statement, "ORDER BY distance,golem_sv.record_key LIMIT") {
+		t.Fatalf("SQLite ranking leaves the page boundary to the planner at distance ties: %s", statement)
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	if _, err := fixture.db.Exec(`DELETE FROM "posts"; DELETE FROM "` + drainStateTable + `"; DELETE FROM "` + drainVectorTable + `"`); err != nil {
@@ -1059,7 +1059,7 @@ func TestSemanticDrainRetriesUnavailableProviderWithoutQuarantine(t *testing.T) 
 	fixture.manager.indexes[0].Provider = unavailable
 	if _, err := fixture.manager.Drain(ctx, "post", "related"); err == nil {
 		t.Fatal("unavailable provider did not fail the drain")
-	} else if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeUnavailable || strings.Contains(err.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(err)), "canary") {
+	} else if code, ok := embedding.CodeOf(err); !ok || code != embedding.CodeUnavailable || !ProviderDeferred(err) || strings.Contains(err.Error(), "canary") || strings.Contains(fmt.Sprint(errors.Unwrap(err)), "canary") {
 		t.Fatalf("unavailable drain error=%v cause=%v", err, errors.Unwrap(err))
 	}
 	if unavailable.calls != 1 {
@@ -1088,7 +1088,7 @@ func TestSemanticReconcileQuarantinesAnUnseenRefusedRecord(t *testing.T) {
 		t.Fatal(err)
 	}
 	status, code, attempts := fixture.failure(t, "c")
-	if status != "failed" || !code.Valid || code.String != string(embedding.CodeProvider) || attempts != 1 {
+	if status != "failed" || !code.Valid || code.String != string(embedding.CodeInvalidInput) || attempts != 1 {
 		t.Fatalf("unseen quarantine status=%q code=%#v attempts=%d", status, code, attempts)
 	}
 	if hash := fixture.hash(t, "c"); len(hash) != 0 {
@@ -1219,7 +1219,7 @@ func TestSemanticReconcilePagesOwnersAndShadowCleanup(t *testing.T) {
 	}
 }
 
-func TestSQLiteSemanticRankingFallsBackWhenAuthorizationExcludesANNProbe(t *testing.T) {
+func TestSQLiteSemanticRankingFindsTheAuthorizedRowBeyondTheNearestNeighbours(t *testing.T) {
 	ctx := context.Background()
 	fixture := newDrainFixture(t)
 	if _, err := fixture.db.Exec(`DELETE FROM "posts"`); err != nil {
@@ -1244,11 +1244,11 @@ func TestSQLiteSemanticRankingFallsBackWhenAuthorizationExcludesANNProbe(t *test
 	}
 	want, _ := semantickey.Encode([]any{"z"})
 	if len(ranked) != 1 || ranked[0].Key != want {
-		t.Fatalf("authorized fallback ranking=%#v", ranked)
+		t.Fatalf("authorized ranking=%#v", ranked)
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticProvider, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 0, aggregate: 1},
-		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 2, aggregate: 1},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRank, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 1, aggregate: 1},
 	})
 }
 
