@@ -309,10 +309,11 @@ func TestSharedEvaluationStillOwnsEachSubscriberResult(t *testing.T) {
 func TestSubscriberQueueExactBoundaryAndOverflowDisconnect(t *testing.T) {
 	source := newFakeSource()
 	evaluated := make(chan golem.EventID, 3)
+	overflowed := kindObserver{kind: events.ObservationOverflow, seen: make(chan struct{}, 1)}
 	hub := newTestHub(t, sourceFactory(source), events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, func(_ context.Context, notice events.Notice, _ SubscriberKey) (Evaluation[golem.EventID], error) {
 		evaluated <- notice.EventID()
 		return Deliver(notice.EventID()), nil
-	}, nil)
+	}, overflowed)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
 	source.send(testNotice(t, 1))
 	waitID(t, evaluated)
@@ -323,6 +324,11 @@ func TestSubscriberQueueExactBoundaryAndOverflowDisconnect(t *testing.T) {
 	waitID(t, evaluated)
 	source.send(testNotice(t, 3))
 	waitID(t, evaluated)
+	select {
+	case <-overflowed.seen:
+	case <-time.After(time.Second):
+		t.Fatal("third notice did not overflow the full subscriber queue")
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionOverflow {
@@ -695,6 +701,21 @@ func sequentialFactory(sources ...*fakeSource) SourceFactory {
 }
 
 type panicObserver struct{}
+
+type kindObserver struct {
+	kind events.ObservationKind
+	seen chan struct{}
+}
+
+func (observer kindObserver) ObserveEvent(_ context.Context, observation events.Observation) {
+	if observation.Kind() != observer.kind {
+		return
+	}
+	select {
+	case observer.seen <- struct{}{}:
+	default:
+	}
+}
 
 func (panicObserver) ObserveEvent(context.Context, events.Observation) {
 	panic("observer must be isolated")
