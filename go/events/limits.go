@@ -6,6 +6,12 @@ import (
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 )
 
+// RetentionDisabled turns automatic event retention off. Assigned to
+// Limits.RetentionEvery it stops the publisher deleting delivered outbox rows
+// at all, so they survive until an operator runs retention. It is the only
+// negative duration Limits accepts.
+const RetentionDisabled = time.Duration(-1)
+
 type Limits struct {
 	ClaimRows                     int
 	PublisherConcurrency          int
@@ -47,6 +53,12 @@ var maximumLimits = Limits{
 	MaxSubscriptionsPerConnection: 256, ConnectionInitBytes: 1 << 20,
 	ConnectionInitTimeout: time.Minute, WebSocketKeepAlive: 5 * time.Minute, WebSocketPongTimeout: time.Minute, ShutdownGrace: 2 * time.Minute,
 	RetentionDeleteRows: 4096, RetentionAge: 10 * 365 * 24 * time.Hour, RetentionEvery: 24 * time.Hour,
+}
+
+// RetentionEnabled reports whether the publisher deletes delivered outbox rows
+// on its own. It is false only when RetentionEvery is RetentionDisabled.
+func (limits Limits) RetentionEnabled() bool {
+	return limits.RetentionEvery != RetentionDisabled
 }
 
 func DefaultLimits() Limits { return defaultLimits }
@@ -95,7 +107,13 @@ func NormalizeLimits(input Limits) (Limits, error) {
 		{"WebSocketPongTimeout", &output.WebSocketPongTimeout, defaultLimits.WebSocketPongTimeout, maximumLimits.WebSocketPongTimeout},
 		{"ShutdownGrace", &output.ShutdownGrace, defaultLimits.ShutdownGrace, maximumLimits.ShutdownGrace},
 		{"RetentionAge", &output.RetentionAge, defaultLimits.RetentionAge, maximumLimits.RetentionAge},
-		{"RetentionEvery", &output.RetentionEvery, defaultLimits.RetentionEvery, maximumLimits.RetentionEvery},
+	}
+	if output.RetentionEnabled() {
+		durations = append(durations, struct {
+			name              string
+			value             *time.Duration
+			fallback, maximum time.Duration
+		}{"RetentionEvery", &output.RetentionEvery, defaultLimits.RetentionEvery, maximumLimits.RetentionEvery})
 	}
 	for _, item := range durations {
 		if *item.value == 0 {
@@ -117,8 +135,8 @@ func NormalizeLimits(input Limits) (Limits, error) {
 	if output.RetentionAge < time.Hour {
 		return Limits{}, Failf(CodeEventConfig, "RetentionAge must be at least 1h, got %s", output.RetentionAge)
 	}
-	if output.RetentionEvery < time.Minute {
-		return Limits{}, Failf(CodeEventConfig, "RetentionEvery must be at least 1m, got %s", output.RetentionEvery)
+	if output.RetentionEnabled() && output.RetentionEvery < time.Minute {
+		return Limits{}, Failf(CodeEventConfig, "RetentionEvery must be at least 1m or RetentionDisabled, got %s", output.RetentionEvery)
 	}
 	if output.RetentionDeleteRows < eventprovider.MaximumCausationFacts {
 		return Limits{}, Failf(CodeEventConfig, "RetentionDeleteRows must be at least %d, got %d", eventprovider.MaximumCausationFacts, output.RetentionDeleteRows)

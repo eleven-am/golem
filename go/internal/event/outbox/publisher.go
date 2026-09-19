@@ -107,7 +107,7 @@ func (limits Limits) normalized() (Limits, error) {
 	if limits.RetentionAge < time.Hour || limits.RetentionAge > events.MaximumLimits().RetentionAge || limits.RetentionAge%time.Microsecond != 0 {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention age is invalid")
 	}
-	if limits.RetentionEvery < time.Minute || limits.RetentionEvery > events.MaximumLimits().RetentionEvery || limits.RetentionEvery%time.Microsecond != 0 {
+	if limits.RetentionEvery != events.RetentionDisabled && (limits.RetentionEvery < time.Minute || limits.RetentionEvery > events.MaximumLimits().RetentionEvery || limits.RetentionEvery%time.Microsecond != 0) {
 		return Limits{}, fmt.Errorf("P7_PUBLISHER_LIMIT: retention interval is invalid")
 	}
 	if limits.RetentionRows < eventprovider.MaximumCausationFacts || limits.RetentionRows > events.MaximumLimits().RetentionDeleteRows {
@@ -190,11 +190,11 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 			return nil
 		}
-		claimOptions := eventprovider.ClaimOptions{Groups: publisher.limits.ClaimGroups, LeaseDuration: publisher.limits.LeaseDuration, MaxBytes: publisher.limits.MaxBatchBytes}
+		claimOptions := eventprovider.ClaimOptions{Groups: publisher.claimGroups(), LeaseDuration: publisher.limits.LeaseDuration, MaxBytes: publisher.limits.MaxBatchBytes}
 		var leases []eventprovider.Lease
 		var err error
 		now := time.Now()
-		if !now.Before(nextRetention) {
+		if publisher.limits.RetentionEvery != events.RetentionDisabled && !now.Before(nextRetention) {
 			started := time.Now()
 			retained, retentionErr := publisher.coordinator.RunRetention(ctx, eventprovider.RetentionPolicy{OlderThan: now.Add(-publisher.limits.RetentionAge), MaxRows: publisher.limits.RetentionRows})
 			if retentionErr != nil {
@@ -223,7 +223,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 				events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationCancellation, events.OutcomeCancelled, "", 0, 0, 0, 0, 1)
 				return nil
 			}
-			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeFailure, "", 0, 0, publisher.limits.ClaimGroups, 0, 1)
+			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeFailure, "", 0, 0, claimOptions.Groups, 0, 1)
 			loopFailures++
 			delay := retryDelay(publisher.retryKey+":claim", loopFailures, publisher.limits.RetryBase, publisher.limits.RetryCap)
 			if !waitContext(ctx, delay) {
@@ -232,7 +232,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			continue
 		}
 		if len(leases) != 0 {
-			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeSuccess, "", 0, len(leases), publisher.limits.ClaimGroups, 0, int64(len(leases)))
+			events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationPublisherClaim, events.OutcomeSuccess, "", 0, len(leases), claimOptions.Groups, 0, int64(len(leases)))
 		}
 		if len(leases) == 0 {
 			loopFailures = 0
@@ -256,6 +256,13 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 	}
 }
 
+func (publisher *Publisher) claimGroups() int {
+	if publisher.limits.Concurrency < publisher.limits.ClaimGroups {
+		return publisher.limits.Concurrency
+	}
+	return publisher.limits.ClaimGroups
+}
+
 func (publisher *Publisher) observeDepth(ctx context.Context, depth eventprovider.DepthSnapshot) {
 	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthPending, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Pending)
 	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthBlocked, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Blocked)
@@ -263,36 +270,21 @@ func (publisher *Publisher) observeDepth(ctx context.Context, depth eventprovide
 }
 
 func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovider.Lease) error {
-	work := make(chan eventprovider.Lease)
 	errorsChannel := make(chan error, len(leases))
-	workers := publisher.limits.Concurrency
-	if workers > len(leases) {
-		workers = len(leases)
-	}
 	var wait sync.WaitGroup
-	for index := 0; index < workers; index++ {
+	for _, lease := range leases {
 		wait.Add(1)
 		go func() {
 			defer wait.Done()
-			for lease := range work {
-				if err := publisher.publishLease(ctx, lease); err != nil {
-					errorsChannel <- err
-				}
+			if ctx.Err() != nil {
+				publisher.releaseLease(lease)
+				return
+			}
+			if err := publisher.publishLease(ctx, lease); err != nil {
+				errorsChannel <- err
 			}
 		}()
 	}
-	feedDone := make(chan struct{})
-	go func() {
-		defer close(feedDone)
-		defer close(work)
-		for _, lease := range leases {
-			select {
-			case work <- lease:
-			case <-ctx.Done():
-				return
-			}
-		}
-	}()
 	done := make(chan struct{})
 	go func() { wait.Wait(); close(done) }()
 	select {
@@ -306,7 +298,6 @@ func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovid
 			return nil
 		}
 	}
-	<-feedDone
 	// All workers have exited, so the bounded channel has no future senders.
 	// Drain its current contents without closing it: on the shutdown-grace path
 	// workers may still own their send capability after this function returns.
