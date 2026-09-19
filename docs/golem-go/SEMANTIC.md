@@ -122,6 +122,29 @@ path and nothing else. Rows changed by raw SQL, a restore, or another writer
 are never noticed. Set an interval if anything writes to your database that is
 not golem.
 
+## When the provider fails
+
+**Only a refusal the provider marks as invalid input quarantines a row.** A
+batch refused that way is retried one row at a time, so the row it cannot
+embed is quarantined and its neighbours are stored.
+
+**Every other failure leaves the rows pending and the drain retries later
+without spending an attempt.** That covers an outage, a rate limit, a malformed
+response and an error golem cannot classify. The retry waits for the time the
+job has already waited, between five seconds and five minutes, so an outage of
+any length never dead-letters the drain.
+
+**One row the provider keeps refusing does not hold up the rest.** A pass
+carries on past the batch that failed, stores the batches after it, and
+reports the failure at the end. That row stays pending and is retried on every
+pass until the provider accepts it or refuses it as invalid input.
+
+**An outage costs two provider calls per pass.** Once two batches in a row
+fail with nothing stored between them, the pass stops calling the provider for
+the rest of its page. Each deferred pass is observed as a
+`semantic.refresh` retry whose aggregate count is the number of rows it left
+pending.
+
 ## Ranking is exact
 
 Both providers rank exactly. PostgreSQL deliberately keeps the planner off the
