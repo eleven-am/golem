@@ -2,7 +2,6 @@ package postgresql
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
 	"github.com/eleven-am/golem/go/internal/queue/provider/providertest"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestClaimIsExclusiveUnderConcurrency(t *testing.T) {
@@ -173,19 +173,12 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 
 func runQueueGate(t *testing.T, gate func(testing.TB, providertest.Fixture)) {
 	t.Helper()
-	required := os.Getenv("GOLEM_P8_REQUIRE_POSTGRESQL") == "1"
 	for _, profile := range []struct{ name, environment string }{
 		{name: "c", environment: "GOLEM_TEST_POSTGRES_DSN"},
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
 	} {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.environment))
-			if dsn == "" {
-				if required {
-					t.Fatalf("required PostgreSQL queue profile %s is not configured", profile.environment)
-				}
-				t.Skip(profile.environment + " is not configured; queue store evidence requires this live profile, so this run proves SQLite parity only")
-			}
+			dsn := testenv.PostgreSQLDSN(t, profile.environment)
 			gate(t, newQueueFixture(t, dsn))
 		})
 	}
@@ -218,17 +211,28 @@ func newQueueFixture(t *testing.T, dsn string) providertest.Fixture {
 	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return providertest.Fixture{Store: store, Database: database}
+	return providertest.Fixture{Store: store, Database: database, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
+		if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS `+qualified(namespace, physical.PhysicalName(shape.Name))); err != nil {
+			return err
+		}
+		statement := `CREATE `
+		if shape.Unique {
+			statement += `UNIQUE `
+		}
+		statement += `INDEX "` + shape.Name + `" ON ` + qualified(namespace, "golem_queue") + ` ("` + strings.Join(shape.Columns, `","`) + `")`
+		if shape.Predicate != "" {
+			statement += ` WHERE ` + shape.Predicate
+		}
+		_, err := database.ExecContext(ctx, statement)
+		return err
+	}}
 }
 
 // TestQueueStorageIsToleratedByDriftDetection proves the lowered unmanaged
 // allowlist admits the queue store's own relation into the reviewed system
 // namespace. Removing it turns the queue table into drift.
 func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not configured; queue drift evidence requires this live profile")
-	}
+	dsn := testenv.PostgreSQLDSN(t, testenv.PostgreSQLDSNVariable)
 	ctx := context.Background()
 	provider := New()
 	database, _, err := provider.Open(ctx, dsn)
@@ -269,4 +273,61 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 
 func TestIdentityBoundIsOwnedByTheQueueContract(t *testing.T) {
 	runQueueGate(t, providertest.IdentityBoundIsOwnedByTheQueueContract)
+}
+
+func TestMalformedDedupeIndexIsRefused(t *testing.T) {
+	runQueueGate(t, providertest.MalformedDedupeIndexIsRefused)
+}
+
+func TestDedupedEnqueueSurvivesConcurrentTerminalTransition(t *testing.T) {
+	runQueueGate(t, providertest.DedupedEnqueueSurvivesConcurrentTerminalTransition)
+}
+
+func TestQueueTableWithoutIdentityKeyIsRefused(t *testing.T) {
+	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
+		ctx := context.Background()
+		store, ok := fixture.Store.(*queueStore)
+		if !ok {
+			t.Fatal("queue store has unexpected type")
+		}
+		var constraint string
+		if err := fixture.Database.GetContext(ctx, &constraint, `SELECT con.conname FROM pg_catalog.pg_constraint con WHERE con.conrelid=$1::regclass AND con.contype='p'`, store.table()); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fixture.Database.ExecContext(ctx, `ALTER TABLE `+store.table()+` DROP CONSTRAINT "`+constraint+`"`); err != nil {
+			t.Fatal(err)
+		}
+		if err := store.EnsureSchema(ctx); err == nil || !strings.Contains(err.Error(), "primary key") {
+			t.Fatalf("bootstrap accepted a queue table without its identity key: %v", err)
+		}
+	})
+}
+
+func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
+	runQueueGate(t, func(t testing.TB, fixture providertest.Fixture) {
+		ctx := context.Background()
+		store, ok := fixture.Store.(*queueStore)
+		if !ok {
+			t.Fatal("queue store has unexpected type")
+		}
+		if _, err := fixture.Database.ExecContext(ctx, `DROP TABLE `+store.table()); err != nil {
+			t.Fatal(err)
+		}
+		for _, statement := range []string{
+			`CREATE TABLE IF NOT EXISTS ` + store.table() + ` ("id" TEXT PRIMARY KEY NOT NULL,"type" TEXT NOT NULL,"payload" BYTEA NOT NULL,"status" TEXT NOT NULL,"attempt_count" BIGINT NOT NULL DEFAULT 0,"max_attempts" BIGINT NOT NULL,"available_at" TIMESTAMPTZ NOT NULL,"lease_token" TEXT,"lease_until" TIMESTAMPTZ,"resource_name" TEXT,"resource_cost" BIGINT,"resource_capacity" BIGINT,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" TIMESTAMPTZ,"last_code" TEXT,"enqueued_at" TIMESTAMPTZ NOT NULL,"finished_at" TIMESTAMPTZ,"updated_at" TIMESTAMPTZ NOT NULL)`,
+			`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_name" TEXT`,
+			`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_cost" BIGINT`,
+			`ALTER TABLE ` + store.table() + ` ADD COLUMN IF NOT EXISTS "resource_capacity" BIGINT`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_claim" ON ` + store.table() + ` ("status","available_at","type")`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS "golem_queue_dedupe" ON ` + store.table() + ` ("dedupe_key") WHERE "status" IN ('pending','leased')`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_exclusive" ON ` + store.table() + ` ("exclusive_key") WHERE "status"='leased'`,
+			`INSERT INTO ` + store.table() + ` ("id","type","payload","status","max_attempts","available_at","dedupe_key","enqueued_at","updated_at") VALUES ('legacy-live','gate.legacy','\x7b7d','pending',5,now(),'legacy-live',now(),now())`,
+			`INSERT INTO ` + store.table() + ` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","last_code","enqueued_at","finished_at","updated_at") VALUES ('legacy-done','gate.legacy','\x7b7d','succeeded',1,5,now(),'legacy-done','done',now(),now(),now())`,
+		} {
+			if _, err := fixture.Database.ExecContext(ctx, statement); err != nil {
+				t.Fatal(err)
+			}
+		}
+		providertest.LegacySchemaUpgradesInPlace(t, fixture, "legacy-live", "legacy-done")
+	})
 }

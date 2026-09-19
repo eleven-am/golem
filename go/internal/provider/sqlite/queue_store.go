@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -19,6 +20,8 @@ const (
 	sqliteQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	sqliteQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=?)`
 	sqliteQueueFence   = ` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">` + sqliteDatabaseMicros
+
+	sqliteQueueDedupeDefinition = `CREATE UNIQUE INDEX "golem_queue_dedupe" ON "golem_queue" ("dedupe_key") WHERE "status" IN ('pending','leased')`
 )
 
 var sqliteQueueSchema = []string{
@@ -60,8 +63,34 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 	if err := store.ensureQueueLeaseColumns(ctx); err != nil {
 		return err
 	}
+	if err := store.verifyQueueGuarantees(ctx); err != nil {
+		return err
+	}
 	if _, err := store.database.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
 		return fmt.Errorf("QUEUE_SQLITE_STORE: align existing lease eligibility: %w", err)
+	}
+	return nil
+}
+
+func (store *queueStore) verifyQueueGuarantees(ctx context.Context) error {
+	var keys []string
+	if err := store.database.SelectContext(ctx, &keys, `SELECT "name" FROM pragma_table_info('golem_queue','main') WHERE "pk">0`); err != nil {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect queue identity: %w", err)
+	}
+	if len(keys) != 1 || keys[0] != "id" {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: existing golem_queue table has primary key %v, want [id]", keys)
+	}
+	var definition sql.NullString
+	if err := store.database.GetContext(ctx, &definition, `SELECT "sql" FROM "main"."sqlite_master" WHERE "type"='index' AND "name"='golem_queue_dedupe'`); err != nil {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect golem_queue_dedupe: %w", err)
+	}
+	expected, err := parseDDL(sqliteQueueDedupeDefinition)
+	if err != nil {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: parse golem_queue_dedupe contract: %w", err)
+	}
+	actual, err := parseDDL(definition.String)
+	if err != nil || !reflect.DeepEqual(expected, actual) {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: existing golem_queue_dedupe index %q does not enforce %q; drop it so the queue can create its own", definition.String, sqliteQueueDedupeDefinition)
 	}
 	return nil
 }
@@ -128,26 +157,29 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 	if err := executor.QueryRowContext(ctx, "SELECT "+sqliteDatabaseMicros).Scan(&now); err != nil {
 		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: read database time: %w", err)
 	}
-	result, err := executor.ExecContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
-		request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), optionalText(request.DedupeKey), optionalText(request.ExclusiveKey), now, now)
-	if err != nil {
-		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert job: %w", err)
-	}
-	inserted, err := result.RowsAffected()
-	if err != nil {
-		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert result: %w", err)
-	}
-	if inserted == 1 {
+	if request.DedupeKey == "" {
+		result, err := executor.ExecContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT DO NOTHING`,
+			request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), nil, optionalText(request.ExclusiveKey), now, now)
+		if err != nil {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert job: %w", err)
+		}
+		inserted, err := result.RowsAffected()
+		if err != nil {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert result: %w", err)
+		}
+		if inserted != 1 {
+			return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is already durable")
+		}
 		return queueprovider.EnqueueResult{ID: request.ID, State: queueprovider.StatePending, Inserted: true}, nil
 	}
-	if request.DedupeKey == "" {
-		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: job identity is already durable")
+	var stored queueprovider.EnqueueResult
+	err := executor.QueryRowContext(ctx, `INSERT INTO `+sqliteQueueTable+` ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","exclusive_key","enqueued_at","updated_at") VALUES (?,?,?,'pending',0,?,?,?,?,?,?) ON CONFLICT ("dedupe_key") WHERE "status" IN ('pending','leased') DO UPDATE SET "dedupe_key"=excluded."dedupe_key" RETURNING "id","status"`,
+		request.ID, request.Type, request.Payload, request.MaxAttempts, now+request.Delay.Microseconds(), request.DedupeKey, optionalText(request.ExclusiveKey), now, now).Scan(&stored.ID, &stored.State)
+	if err != nil {
+		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: insert or coalesce job: %w", err)
 	}
-	var existing queueprovider.EnqueueResult
-	if err := executor.QueryRowContext(ctx, `SELECT "id","status" FROM `+sqliteQueueTable+` WHERE "dedupe_key"=? AND "status" IN ('pending','leased')`, request.DedupeKey).Scan(&existing.ID, &existing.State); err != nil {
-		return queueprovider.EnqueueResult{}, fmt.Errorf("QUEUE_SQLITE_STORE: resolve coalesced job: %w", err)
-	}
-	return existing, nil
+	stored.Inserted = stored.ID == request.ID
+	return stored, nil
 }
 
 func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {

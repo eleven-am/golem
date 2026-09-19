@@ -21,6 +21,8 @@ const (
 	postgresqlQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
 	postgresqlQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
 	postgresqlQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=clock_timestamp())`
+
+	postgresqlQueueDedupePredicate = `(status = ANY (ARRAY['pending'::text, 'leased'::text]))`
 )
 
 type queueStore struct {
@@ -76,8 +78,38 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: create durable job storage: %w", err)
 		}
 	}
+	if err := store.verifyQueueGuarantees(ctx); err != nil {
+		return err
+	}
 	if _, err := store.database.ExecContext(ctx, `UPDATE `+store.table()+` SET "available_at"="lease_until" WHERE "status"='leased' AND "lease_until" IS NOT NULL AND "available_at"<>"lease_until"`); err != nil {
 		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: align existing lease eligibility: %w", err)
+	}
+	return nil
+}
+
+func (store *queueStore) verifyQueueGuarantees(ctx context.Context) error {
+	var keys []string
+	if err := store.database.SelectContext(ctx, &keys, `SELECT a.attname FROM pg_catalog.pg_constraint con CROSS JOIN LATERAL unnest(con.conkey) AS key(attnum) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE con.conrelid=$1::regclass AND con.contype='p' ORDER BY a.attname`, store.table()); err != nil {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect queue identity: %w", err)
+	}
+	if len(keys) != 1 || keys[0] != "id" {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing golem_queue table has primary key %v, want [id]", keys)
+	}
+	var shape struct {
+		Table         string `db:"table_name"`
+		Method        string `db:"method"`
+		Unique        bool   `db:"indisunique"`
+		Valid         bool   `db:"indisvalid"`
+		Ready         bool   `db:"indisready"`
+		NullsDistinct bool   `db:"nulls_distinct"`
+		Columns       string `db:"columns"`
+		Predicate     string `db:"predicate"`
+	}
+	if err := store.database.GetContext(ctx, &shape, `SELECT ct.relname AS "table_name",am.amname AS "method",i.indisunique,i.indisvalid,i.indisready,NOT i.indnullsnotdistinct AS "nulls_distinct",COALESCE((SELECT string_agg(COALESCE(a.attname,'<expression>'),',' ORDER BY key.position) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS key(attnum,position) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=key.attnum),'') AS "columns",COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') AS "predicate" FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE ci.relnamespace=$1::regnamespace AND ci.relname='golem_queue_dedupe'`, `"`+string(store.namespace)+`"`); err != nil {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect golem_queue_dedupe: %w", err)
+	}
+	if shape.Table != "golem_queue" || shape.Method != "btree" || !shape.Unique || !shape.Valid || !shape.Ready || !shape.NullsDistinct || shape.Columns != "dedupe_key" || shape.Predicate != postgresqlQueueDedupePredicate {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing golem_queue_dedupe index (table=%s method=%s unique=%t valid=%t ready=%t nulls_distinct=%t columns=%s predicate=%q) does not enforce UNIQUE (dedupe_key) WHERE %s; drop it so the queue can create its own", shape.Table, shape.Method, shape.Unique, shape.Valid, shape.Ready, shape.NullsDistinct, shape.Columns, shape.Predicate, postgresqlQueueDedupePredicate)
 	}
 	return nil
 }

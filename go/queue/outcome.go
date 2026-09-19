@@ -133,21 +133,27 @@ func Classify(err error) Outcome {
 }
 
 // Delay returns the wait before the given one-based attempt is retried, as
-// exponential full jitter under the configured ceiling.
+// exponential full jitter under the configured ceiling. It is defined for every
+// value: a zero or negative Base or Cap takes the package default, a Base above
+// Cap is held to Cap, and an attempt below one is the first attempt.
 func (backoff Backoff) Delay(attempt int) time.Duration {
-	base := orDefaultDuration(backoff.Base, defaultBackoffBase)
-	ceiling := orDefaultDuration(backoff.Cap, defaultBackoffCap)
-	if attempt < 1 {
-		attempt = 1
-	}
-	window := base
+	ceiling := positiveOrDefault(backoff.Cap, defaultBackoffCap)
+	window := min(positiveOrDefault(backoff.Base, defaultBackoffBase), ceiling)
 	for step := 1; step < attempt && window < ceiling; step++ {
+		if window > ceiling/2 {
+			window = ceiling
+			break
+		}
 		window *= 2
 	}
-	if window > ceiling || window <= 0 {
-		window = ceiling
-	}
 	return time.Duration(rand.Int64N(int64(window)))
+}
+
+func positiveOrDefault(value, fallback time.Duration) time.Duration {
+	if value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 func canonicalCode(code string) string {

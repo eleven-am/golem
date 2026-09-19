@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -131,7 +132,21 @@ func newQueueFixture(t *testing.T) providertest.Fixture {
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return providertest.Fixture{Store: store, Database: database}
+	return providertest.Fixture{Store: store, Database: database, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
+		if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS "main"."`+shape.Name+`"`); err != nil {
+			return err
+		}
+		statement := `CREATE `
+		if shape.Unique {
+			statement += `UNIQUE `
+		}
+		statement += `INDEX "main"."` + shape.Name + `" ON "golem_queue" ("` + strings.Join(shape.Columns, `","`) + `")`
+		if shape.Predicate != "" {
+			statement += ` WHERE ` + shape.Predicate
+		}
+		_, err := database.ExecContext(ctx, statement)
+		return err
+	}}
 }
 
 // TestQueueStorageIsToleratedByDriftDetection proves the lowered unmanaged
@@ -162,4 +177,63 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 
 func TestIdentityBoundIsOwnedByTheQueueContract(t *testing.T) {
 	providertest.IdentityBoundIsOwnedByTheQueueContract(t, newQueueFixture(t))
+}
+
+func TestMalformedDedupeIndexIsRefused(t *testing.T) {
+	providertest.MalformedDedupeIndexIsRefused(t, newQueueFixture(t))
+}
+
+func TestDedupedEnqueueSurvivesConcurrentTerminalTransition(t *testing.T) {
+	providertest.DedupedEnqueueSurvivesConcurrentTerminalTransition(t, newQueueFixture(t))
+}
+
+func TestQueueTableWithoutIdentityKeyIsRefused(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	database, _, err := provider.Open(ctx, filepath.Join(t.TempDir(), "queue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	keyless := strings.Replace(sqliteQueueSchema[0], `"id" TEXT PRIMARY KEY NOT NULL`, `"id" TEXT NOT NULL`, 1)
+	if keyless == sqliteQueueSchema[0] {
+		t.Fatal("queue table contract no longer declares its identity key inline")
+	}
+	if _, err := database.ExecContext(ctx, keyless); err != nil {
+		t.Fatal(err)
+	}
+	store, err := provider.QueueStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.EnsureSchema(ctx); err == nil || !strings.Contains(err.Error(), "primary key") {
+		t.Fatalf("bootstrap accepted a queue table without its identity key: %v", err)
+	}
+}
+
+func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	database, _, err := provider.Open(ctx, filepath.Join(t.TempDir(), "queue.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	for _, statement := range []string{
+		`CREATE TABLE IF NOT EXISTS "main"."golem_queue" ("id" TEXT PRIMARY KEY NOT NULL,"type" TEXT NOT NULL,"payload" BLOB NOT NULL,"status" TEXT NOT NULL,"attempt_count" INTEGER NOT NULL DEFAULT 0,"max_attempts" INTEGER NOT NULL,"available_at" INTEGER NOT NULL,"lease_token" TEXT,"lease_until" INTEGER,"resource_name" TEXT,"resource_cost" INTEGER,"resource_capacity" INTEGER,"dedupe_key" TEXT,"exclusive_key" TEXT,"cancel_requested_at" INTEGER,"last_code" TEXT,"enqueued_at" INTEGER NOT NULL,"finished_at" INTEGER,"updated_at" INTEGER NOT NULL)`,
+		`CREATE INDEX IF NOT EXISTS "main"."golem_queue_claim" ON "golem_queue" ("status","available_at","type")`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS "main"."golem_queue_dedupe" ON "golem_queue" ("dedupe_key") WHERE "status" IN ('pending','leased')`,
+		`CREATE INDEX IF NOT EXISTS "main"."golem_queue_exclusive" ON "golem_queue" ("exclusive_key") WHERE "status"='leased'`,
+		`INSERT INTO "main"."golem_queue" ("id","type","payload","status","max_attempts","available_at","dedupe_key","enqueued_at","updated_at") VALUES ('legacy-live','gate.legacy',X'7B7D','pending',5,1,'legacy-live',1,1)`,
+		`INSERT INTO "main"."golem_queue" ("id","type","payload","status","attempt_count","max_attempts","available_at","dedupe_key","last_code","enqueued_at","finished_at","updated_at") VALUES ('legacy-done','gate.legacy',X'7B7D','succeeded',1,5,1,'legacy-done','done',1,2,2)`,
+	} {
+		if _, err := database.ExecContext(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store, err := provider.QueueStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providertest.LegacySchemaUpgradesInPlace(t, providertest.Fixture{Store: store, Database: database}, "legacy-live", "legacy-done")
 }

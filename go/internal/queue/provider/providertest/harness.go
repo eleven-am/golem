@@ -5,6 +5,7 @@ package providertest
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -20,8 +21,16 @@ import (
 // Fixture is one isolated live store and the database it owns, supplied by a
 // provider package.
 type Fixture struct {
-	Store    queueprovider.Store
-	Database *sqlx.DB
+	Store        queueprovider.Store
+	Database     *sqlx.DB
+	ReplaceIndex func(ctx context.Context, shape IndexShape) error
+}
+
+type IndexShape struct {
+	Name      string
+	Unique    bool
+	Columns   []string
+	Predicate string
 }
 
 const (
@@ -1020,5 +1029,137 @@ func IdentityBoundIsOwnedByTheQueueContract(t testing.TB, fixture Fixture) {
 	}
 	if _, err := fixture.Store.Enqueue(ctx, nil, queueprovider.EnqueueRequest{ID: longest, Type: "gate.identity", Payload: []byte(`{}`), MaxAttempts: 1}); err != nil {
 		t.Errorf("Enqueue rejected a %d-byte identity the contract permits: %v", len(longest), err)
+	}
+}
+
+func MalformedDedupeIndexIsRefused(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	live := `"status" IN ('pending','leased')`
+	for _, shape := range []IndexShape{
+		{Name: "golem_queue_dedupe", Columns: []string{"dedupe_key"}, Predicate: live},
+		{Name: "golem_queue_dedupe", Unique: true, Columns: []string{"dedupe_key"}},
+		{Name: "golem_queue_dedupe", Unique: true, Columns: []string{"dedupe_key"}, Predicate: `"status" IN ('pending','leased','succeeded')`},
+		{Name: "golem_queue_dedupe", Unique: true, Columns: []string{"dedupe_key", "type"}, Predicate: live},
+		{Name: "golem_queue_dedupe", Unique: true, Columns: []string{"type"}, Predicate: live},
+	} {
+		if err := fixture.ReplaceIndex(ctx, shape); err != nil {
+			t.Fatal(err)
+		}
+		err := fixture.Store.EnsureSchema(ctx)
+		if err == nil || !strings.Contains(err.Error(), "golem_queue_dedupe") {
+			t.Fatalf("bootstrap accepted malformed dedupe index %#v: %v", shape, err)
+		}
+	}
+	if err := fixture.ReplaceIndex(ctx, IndexShape{Name: "golem_queue_dedupe", Unique: true, Columns: []string{"dedupe_key"}, Predicate: live}); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.Store.EnsureSchema(ctx); err != nil {
+		t.Fatalf("bootstrap refused the canonical dedupe index: %v", err)
+	}
+	first := enqueue(t, fixture, "gate.dedupe-shape", request{dedupe: "shape-key"})
+	if second := enqueue(t, fixture, "gate.dedupe-shape", request{dedupe: "shape-key"}); second != first {
+		t.Fatalf("canonical dedupe index did not coalesce: %s beside %s", second, first)
+	}
+}
+
+func DedupedEnqueueSurvivesConcurrentTerminalTransition(t testing.TB, fixture Fixture) {
+	t.Helper()
+	ctx := context.Background()
+	holder := enqueue(t, fixture, "gate.dedupe-race", request{dedupe: "race-key"})
+	leased := claimOne(t, fixture, "gate.dedupe-race", longLease)
+	if leased.ID != holder {
+		t.Fatalf("claimed %s, want %s", leased.ID, holder)
+	}
+	finish := func() {
+		if changed, err := fixture.Store.Succeed(ctx, leased.ID, leased.LeaseToken, "done"); err != nil || !changed {
+			t.Fatalf("succeed changed=%t error=%v", changed, err)
+		}
+	}
+	executor := &interleavingExecutor{inner: fixture.Database, between: finish}
+	successor := newRequest(t, "gate.dedupe-race", request{dedupe: "race-key"})
+	result, err := fixture.Store.Enqueue(ctx, executor, successor)
+	if err != nil {
+		t.Fatalf("enqueue failed after the holder finished mid-decision: %v", err)
+	}
+	if !executor.fired {
+		finish()
+	}
+	switch {
+	case result.Inserted:
+		if result.ID != successor.ID || result.State != queueprovider.StatePending {
+			t.Fatalf("inserted result=%#v", result)
+		}
+		if stored := inspect(t, fixture, successor.ID); stored.State != queueprovider.StatePending || stored.DedupeKey != "race-key" {
+			t.Fatalf("successor=%#v", stored)
+		}
+	case result.ID == holder:
+		if result.State != queueprovider.StateLeased {
+			t.Fatalf("coalesced onto a holder that was not live: %#v", result)
+		}
+	default:
+		t.Fatalf("enqueue result=%#v names neither the holder nor the successor", result)
+	}
+	if terminal := inspect(t, fixture, holder); terminal.State != queueprovider.StateSucceeded {
+		t.Fatalf("holder=%#v", terminal)
+	}
+}
+
+type interleavingExecutor struct {
+	inner    queueprovider.Executor
+	between  func()
+	inserted bool
+	fired    bool
+}
+
+func (executor *interleavingExecutor) before(query string) {
+	if executor.inserted && !executor.fired {
+		executor.fired = true
+		executor.between()
+	}
+	if strings.Contains(query, "INSERT") {
+		executor.inserted = true
+	}
+}
+
+func (executor *interleavingExecutor) ExecContext(ctx context.Context, query string, arguments ...any) (sql.Result, error) {
+	executor.before(query)
+	return executor.inner.ExecContext(ctx, query, arguments...)
+}
+
+func (executor *interleavingExecutor) QueryRowContext(ctx context.Context, query string, arguments ...any) *sql.Row {
+	executor.before(query)
+	return executor.inner.QueryRowContext(ctx, query, arguments...)
+}
+
+func LegacySchemaUpgradesInPlace(t testing.TB, fixture Fixture, live, finished string) {
+	t.Helper()
+	ctx := context.Background()
+	if err := fixture.Store.EnsureSchema(ctx); err != nil {
+		t.Fatalf("bootstrap refused a released queue schema: %v", err)
+	}
+	if record := inspect(t, fixture, live); record.State != queueprovider.StatePending || record.DedupeKey != "legacy-live" {
+		t.Fatalf("live legacy job=%#v", record)
+	}
+	if record := inspect(t, fixture, finished); record.State != queueprovider.StateSucceeded || record.DedupeKey != "legacy-done" {
+		t.Fatalf("finished legacy job=%#v", record)
+	}
+	coalesced, err := fixture.Store.Enqueue(ctx, nil, newRequest(t, "gate.legacy", request{dedupe: "legacy-live"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if coalesced.Inserted || coalesced.ID != live || coalesced.State != queueprovider.StatePending {
+		t.Fatalf("enqueue over a live legacy job=%#v, want coalesced onto %s", coalesced, live)
+	}
+	successor, err := fixture.Store.Enqueue(ctx, nil, newRequest(t, "gate.legacy", request{dedupe: "legacy-done"}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !successor.Inserted || successor.ID == finished {
+		t.Fatalf("enqueue over a finished legacy job=%#v, want a successor", successor)
+	}
+	claimed := claimOne(t, fixture, "gate.legacy", longLease)
+	if claimed.ID != live && claimed.ID != successor.ID {
+		t.Fatalf("claimed %s from an upgraded schema", claimed.ID)
 	}
 }
