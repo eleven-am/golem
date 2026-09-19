@@ -354,7 +354,9 @@ func CallerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 	if err != nil {
 		return golem.Row[M]{}, err
 	}
-	frozenTarget, frozenCreate, frozenUpdate, err := freezeVersionedUpsertInputs(caller.app.registry, target, create, update)
+	frozenTarget, frozenCreate, frozenUpdate, err := freezeVersionedUpsertInputs(caller.app.registry, target, create, update, func(input golem.FrozenMutationInput) ([]golem.FieldID, error) {
+		return callerCreatePreHookOwnedFields(caller.app, input)
+	})
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, descriptor.Metadata().ModelID(), err)
 	}
@@ -379,7 +381,7 @@ func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A]
 	if err != nil {
 		return golem.Row[M]{}, err
 	}
-	frozenTarget, frozenCreate, frozenUpdate, err := freezeVersionedUpsertInputs(system.app.registry, target, create, update)
+	frozenTarget, frozenCreate, frozenUpdate, err := freezeVersionedUpsertInputs(system.app.registry, target, create, update, nil)
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, descriptor.Metadata().ModelID(), err)
 	}
@@ -403,7 +405,7 @@ func SystemTxUpsertVersioned[P, A, M any](ctx context.Context, transaction *Syst
 	return SystemUpsertVersioned(ctx, transaction.system, descriptor, target, expected, create, update, projections...)
 }
 
-func freezeVersionedUpsertInputs[M any](registry *schema.Registry, target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M]) (golem.FrozenMutationTarget, golem.FrozenMutationInput, golem.FrozenMutationInput, error) {
+func freezeVersionedUpsertInputs[M any](registry *schema.Registry, target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], hookOwned func(golem.FrozenMutationInput) ([]golem.FieldID, error)) (golem.FrozenMutationTarget, golem.FrozenMutationInput, golem.FrozenMutationInput, error) {
 	frozenTarget, err := golem.RuntimeFreezeMutationTarget(target)
 	if err != nil {
 		return golem.FrozenMutationTarget{}, golem.FrozenMutationInput{}, golem.FrozenMutationInput{}, err
@@ -419,7 +421,14 @@ func freezeVersionedUpsertInputs[M any](registry *schema.Registry, target golem.
 	if len(frozenCreate.Relations()) != 0 || len(frozenUpdate.Relations()) != 0 {
 		return golem.FrozenMutationTarget{}, golem.FrozenMutationInput{}, golem.FrozenMutationInput{}, fmt.Errorf("versioned nested upsert requires an expectation for every written row")
 	}
-	if _, err := mutationbind.CreateInput(frozenCreate, registry); err != nil {
+	var deferred []golem.FieldID
+	if hookOwned != nil {
+		deferred, err = hookOwned(frozenCreate)
+		if err != nil {
+			return golem.FrozenMutationTarget{}, golem.FrozenMutationInput{}, golem.FrozenMutationInput{}, err
+		}
+	}
+	if _, _, err := mutationbind.CreateInputWithRuntimeOwnedFields(frozenCreate, registry, deferred); err != nil {
 		return golem.FrozenMutationTarget{}, golem.FrozenMutationInput{}, golem.FrozenMutationInput{}, err
 	}
 	if _, err := mutationbind.UpdateInput(frozenUpdate, registry); err != nil {
@@ -477,7 +486,7 @@ func executeCallerAbsentVersionedUpsert[P, A, M any](ctx context.Context, caller
 	}
 	prepared, err := prepareCallerRootUpsert(caller, rootUpsertPrepareRequest{
 		model: model, target: target, create: create, update: update, result: requirements,
-		runtimeValues: newMutationRuntimeValues(), concurrencyAbsent: true,
+		runtimeValues: newMutationRuntimeValues(), concurrencyAbsent: true, deferHookOwned: true,
 	})
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, golem.ModelID(model), err)
@@ -742,7 +751,7 @@ func prepareCallerVersionedScalarExecution[P, A, M any](caller *Caller[P, A], de
 			if transformedInput != nil && len(transformedInput.Relations()) != 0 {
 				return fmt.Errorf("versioned nested mutation requires an expectation for every written row")
 			}
-			next, prepareErr := prepareCallerVersionedScalarProgram(caller, scalarMutationPrepareRequest{operation: operation, model: model, input: transformedInput, target: transformedTarget, result: requirements, runtimeValues: runtimeValues})
+			next, prepareErr := prepareCallerVersionedScalarProgram(caller, scalarMutationPrepareRequest{operation: operation, model: model, input: transformedInput, target: transformedTarget, result: requirements, runtimeValues: runtimeValues, hookAuthored: hookAuthoredSystemFields(caller.app.registry, input, transformedInput)})
 			if prepareErr == nil {
 				prepared = next
 			}
