@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.3.3
+go get github.com/eleven-am/golem/go@v0.4.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -13,7 +13,7 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ---
 
-## Unreleased
+## go/v0.4.0
 
 **Security: a caller can no longer set a moded foreign key through a
 relation.** Writing `author_id` directly was refused when the field was
