@@ -10,3 +10,4 @@ typescript/packages/queue/test/sqlite/out
 typescript/packages/queue/test/postgres/out
 .golem-prospective-*.mod
 .golem-prospective-*.sum
+go/internal/publicapi/surface.actual.txt
