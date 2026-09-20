@@ -1332,6 +1332,15 @@ func (transaction *systemNestedTransaction[P, A]) hookSource(node mutationir.Nod
 	return mutationnested.HookSource{}, false
 }
 
+func hookRequestAuthoredSystemFields(registry *schema.Registry, original, transformed golem.RuntimeMutationHookRequest) []golem.FieldID {
+	prior, priorOK := original.Input()
+	input, ok := transformed.Input()
+	if !priorOK || !ok {
+		return nil
+	}
+	return hookAuthoredSystemFields(registry, &prior, &input)
+}
+
 func nestedBeforeHookRequest(node mutationir.Node, source mutationnested.HookSource) (golem.RuntimeMutationHookRequest, error) {
 	branch, ok := source.Branch()
 	if !ok {
@@ -1477,7 +1486,7 @@ func exactNestedTargetMatchesWork(target golem.FrozenMutationTarget, work mutati
 	return nil
 }
 
-func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(request mutationnested.TransformRequest, source mutationnested.HookSource, transformed golem.RuntimeMutationHookRequest) (mutationnested.Result, mutationnested.SubtreeReplacement, error) {
+func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(request mutationnested.TransformRequest, source mutationnested.HookSource, transformed golem.RuntimeMutationHookRequest, hookAuthored []golem.FieldID) (mutationnested.Result, mutationnested.SubtreeReplacement, error) {
 	if transformed.ModelID() != source.TargetModelID() {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: transformed request changed model identity")
 	}
@@ -1501,7 +1510,7 @@ func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(r
 	}
 	if !ownerOK {
 		if request.Node().ExecutesBeforeParent() && transformed.Operation() == golem.HookCreate {
-			return transaction.compileBeforeParentHookReplacement(request.Node(), transformed)
+			return transaction.compileBeforeParentHookReplacement(request.Node(), transformed, hookAuthored)
 		}
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: selected branch owner context is absent")
 	}
@@ -1517,7 +1526,8 @@ func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(r
 		},
 		SourceOffset: transaction.nextSource,
 		MaxDepth:     uint16(transaction.app.mutationLimits.nestedDepth), MaxRows: uint32(transaction.app.mutationLimits.touchedRows),
-		RuntimeValues: nestedRuntimeValueResolver(transaction.runtimeValues, transaction.app.registry),
+		RuntimeValues:     nestedRuntimeValueResolver(transaction.runtimeValues, transaction.app.registry),
+		EntryHookAuthored: hookAuthored,
 	})
 	if err != nil {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
@@ -1530,7 +1540,7 @@ func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(r
 	return built, replacement, err
 }
 
-func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplacement(original mutationir.Node, transformed golem.RuntimeMutationHookRequest) (mutationnested.Result, mutationnested.SubtreeReplacement, error) {
+func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplacement(original mutationir.Node, transformed golem.RuntimeMutationHookRequest, hookAuthored []golem.FieldID) (mutationnested.Result, mutationnested.SubtreeReplacement, error) {
 	input, ok := transformed.Input()
 	if !ok || transformed.ModelID() != golem.ModelID(original.ModelID()) || transformed.Operation() != golem.HookCreate {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: pre-parent replacement changed create shape")
@@ -1539,7 +1549,7 @@ func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplace
 	if err != nil {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
 	}
-	bound, _, err := mutationbind.CreateInputWithRuntimeOwnedFields(input, transaction.app.registry, ownedFields)
+	bound, _, err := mutationbind.CreateInputFromHook(input, transaction.app.registry, ownedFields, hookAuthored)
 	if err != nil {
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
 	}
@@ -1634,7 +1644,7 @@ func nestedReplacementAnchorInput(owner mutationnested.AppliedNode, model policy
 	return input, nil
 }
 
-func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(source mutationnested.HookSource, work mutationnested.RuntimeWork, transformed golem.RuntimeMutationHookRequest, preauthorizedCurrentDelete bool) (*mutationnested.Result, mutationnested.SubtreeReplacement, error) {
+func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(source mutationnested.HookSource, work mutationnested.RuntimeWork, transformed golem.RuntimeMutationHookRequest, preauthorizedCurrentDelete bool, hookAuthored []golem.FieldID) (*mutationnested.Result, mutationnested.SubtreeReplacement, error) {
 	target, ok := transformed.Target()
 	if !ok {
 		return nil, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: exact-row transformed target is absent")
@@ -1668,7 +1678,7 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		if !present {
 			return nil, mutationnested.SubtreeReplacement{}, fmt.Errorf("P4_RUNTIME_NESTED_HOOK: exact update input is absent")
 		}
-		boundInput, bindErr := mutationbind.UpdateInput(input, transaction.app.registry)
+		boundInput, bindErr := mutationbind.UpdateInputFromHook(input, transaction.app.registry, hookAuthored)
 		if bindErr != nil {
 			return nil, mutationnested.SubtreeReplacement{}, bindErr
 		}
@@ -1761,7 +1771,7 @@ func (transaction *systemNestedTransaction[P, A]) transformExactPosition(ctx con
 			return fmt.Errorf("P4_RUNTIME_NESTED_HOOK: transformed exact request changed model or operation")
 		}
 		var compileErr error
-		candidate, replacement, compileErr = transaction.compileExactHookReplacement(source, work, transformed, preauthorizedCurrentDelete)
+		candidate, replacement, compileErr = transaction.compileExactHookReplacement(source, work, transformed, preauthorizedCurrentDelete, hookRequestAuthoredSystemFields(transaction.app.registry, original, transformed))
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)
@@ -1833,7 +1843,7 @@ func (transaction *systemNestedTransaction[P, A]) TransformNested(ctx context.Co
 	var replacement mutationnested.SubtreeReplacement
 	validate := func(transformed golem.RuntimeMutationHookRequest) error {
 		var compileErr error
-		candidate, replacement, compileErr = transaction.compileNestedHookReplacement(request, source, transformed)
+		candidate, replacement, compileErr = transaction.compileNestedHookReplacement(request, source, transformed, hookRequestAuthoredSystemFields(transaction.app.registry, original, transformed))
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)
@@ -1951,7 +1961,7 @@ func (transaction *systemNestedTransaction[P, A]) transformMembership(ctx contex
 			return err
 		}
 		var compileErr error
-		candidate, replacement, compileErr = transaction.compileExactHookReplacement(source, work, transformed, false)
+		candidate, replacement, compileErr = transaction.compileExactHookReplacement(source, work, transformed, false, hookRequestAuthoredSystemFields(transaction.app.registry, original, transformed))
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)

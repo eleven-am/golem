@@ -275,7 +275,7 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 			}
 			for _, record := range records {
 				if ctx.Err() != nil {
-					worker.release(ctx, record)
+					worker.release(ctx, observer, record)
 					continue
 				}
 				claimed++
@@ -324,7 +324,7 @@ func (worker *Worker) cohort(group claimGroup, capped bool) (cohort, bool) {
 func (worker *Worker) start(ctx context.Context, record queueprovider.Record, observer observe.Observer, handlers *sync.WaitGroup) {
 	registration, found := worker.registry.Lookup(record.Type)
 	if !found {
-		worker.release(ctx, record)
+		worker.release(ctx, observer, record)
 		return
 	}
 	worker.mutex.Lock()
@@ -349,7 +349,7 @@ func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
 
 func (worker *Worker) run(ctx context.Context, record queueprovider.Record, registration queue.Registration, observer observe.Observer) {
 	if record.CancelRequested {
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.MarkCanceled(book, record.ID, record.LeaseToken, codeCanceled)
 		})
 		if changed {
@@ -453,7 +453,7 @@ func (worker *Worker) renew(ctx context.Context, record queueprovider.Record) (q
 
 func (worker *Worker) record(ctx context.Context, observer observe.Observer, record queueprovider.Record, registration queue.Registration, err, cause error, canceled bool, duration time.Duration) {
 	if canceled {
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.MarkCanceled(book, record.ID, record.LeaseToken, codeCanceled)
 		})
 		if changed {
@@ -464,21 +464,21 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 	outcome := queue.Classify(err)
 	switch {
 	case outcome.Resolution == queue.ResolutionSucceeded:
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.Succeed(book, record.ID, record.LeaseToken, outcome.Code)
 		})
 		if changed {
 			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeSuccess, observe.ReasonNone, duration)
 		}
 	case outcome.Resolution == queue.ResolutionFailed:
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.Fail(book, record.ID, record.LeaseToken, codeTerminal)
 		})
 		if changed {
 			worker.emit(observer, record, observe.PhaseFinish, observe.OutcomeFailure, observationReason(err, cause), duration)
 		}
 	case !outcome.Uncounted && record.AttemptCount >= record.MaxAttempts:
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.Fail(book, record.ID, record.LeaseToken, codeAttemptsExhausted)
 		})
 		if changed {
@@ -493,7 +493,7 @@ func (worker *Worker) record(ctx context.Context, observer observe.Observer, rec
 		if errors.Is(err, errHandlerPanic) {
 			code = codePanic
 		}
-		changed, _ := worker.finalize(ctx, func(book context.Context) (bool, error) {
+		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.RetryAt(book, record.ID, record.LeaseToken, delay.Truncate(time.Microsecond), code, outcome.Uncounted)
 		})
 		if changed {
@@ -532,18 +532,24 @@ func (worker *Worker) runObserver() (observe.Observer, func()) {
 	}
 }
 
-func (worker *Worker) release(ctx context.Context, record queueprovider.Record) {
-	_, _ = worker.finalize(ctx, func(book context.Context) (bool, error) {
+func (worker *Worker) release(ctx context.Context, observer observe.Observer, record queueprovider.Record) {
+	worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 		return worker.store.Release(book, record.ID, record.LeaseToken)
 	})
 }
 
 // finalize runs one durable transition on a context shutdown cannot cancel, so
 // completion bookkeeping survives the cancellation that ended the handler.
-func (worker *Worker) finalize(ctx context.Context, transition func(context.Context) (bool, error)) (bool, error) {
+func (worker *Worker) finalize(ctx context.Context, observer observe.Observer, record queueprovider.Record, transition func(context.Context) (bool, error)) bool {
 	book, cancel := worker.bookkeeping(ctx)
 	defer cancel()
-	return transition(book)
+	started := time.Now()
+	changed, err := transition(book)
+	if err != nil {
+		worker.emit(observer, record, observe.PhaseCommit, observe.OutcomeFailure, observe.ReasonProvider, time.Since(started))
+		return false
+	}
+	return changed
 }
 
 func (worker *Worker) bookkeeping(ctx context.Context) (context.Context, context.CancelFunc) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"fmt"
+	"time"
 
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/golem"
@@ -520,6 +521,11 @@ const (
 	semanticReconcileJobType = semanticruntime.ReconcileJobType
 )
 
+const (
+	semanticOutageBackoffFloor = 5 * time.Second
+	semanticOutageBackoffCap   = 5 * time.Minute
+)
+
 type semanticJob struct {
 	Model string `json:"model"`
 	Index string `json:"index"`
@@ -563,6 +569,9 @@ func (app *App[P, A]) runSemanticDrain(ctx context.Context, job queue.Job[semant
 		return err
 	}
 	pending, err := app.semantic.Drain(ctx, ir.ModelID(job.Payload.Model), job.Payload.Index)
+	if semanticruntime.ProviderDeferred(err) {
+		return queue.RetryInWithoutAttempt(semanticOutageBackoff(time.Since(job.EnqueuedAt)), err)
+	}
 	if err != nil {
 		return err
 	}
@@ -575,6 +584,10 @@ func (app *App[P, A]) runSemanticDrain(ctx context.Context, job queue.Job[semant
 	chained := semanticJobKey(semanticDrainJobType, job.Payload) + ":" + string(job.ID)
 	_, err = app.enqueueSemanticJob(ctx, nil, app.semanticDrain, job.Payload, chained)
 	return err
+}
+
+func semanticOutageBackoff(waited time.Duration) time.Duration {
+	return min(max(waited, semanticOutageBackoffFloor), semanticOutageBackoffCap)
 }
 
 func (app *App[P, A]) runSemanticReconcile(ctx context.Context, job queue.Job[semanticJob]) error {

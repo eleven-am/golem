@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"database/sql"
@@ -51,6 +52,7 @@ const (
 	semanticKeyChunk      = 128
 	semanticMarkChunk     = 128
 	semanticMarkBinds     = 900
+	semanticOutageBatches = 2
 )
 
 // IdentityScan decodes one ranked row's owner identity columns. The caller owns
@@ -396,49 +398,14 @@ func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (a
 }
 
 func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+	statement := manager.exactSQLiteRankStatement(index, candidates, exclude != "")
 	if manager.provider == ir.PostgreSQL {
-		statement := manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
-		if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
-			return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
-		}
-		return manager.rankExact(ctx, index, statement, vector, candidates, exclude, take)
+		statement = manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
 	}
-	statement := manager.sqliteRankStatement(index, candidates, exclude != "")
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 	}
-	ranks, err := manager.rankSQLite(ctx, index, statement, vector, candidates, exclude, take, semanticANNProbe(take))
-	if err != nil || len(ranks) >= take {
-		return ranks, err
-	}
-	exact := manager.exactSQLiteRankStatement(index, candidates, exclude != "")
-	if err := readsql.ValidateStatementComplexity(candidates.Model, exact, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
-	}
-	return manager.rankExact(ctx, index, exact, vector, candidates, exclude, take)
-}
-
-func semanticANNProbe(take int) int {
-	probe := take * 32
-	if probe < semanticStaleProbe {
-		probe = semanticStaleProbe
-	}
-	if probe > 4096 {
-		probe = 4096
-	}
-	return probe
-}
-
-func (manager *Manager) rankSQLite(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take, probe int) ([]Rank, error) {
-	arguments := make([]any, 0, len(candidates.Args)+5)
-	arguments = append(arguments, vector, probe)
-	arguments = append(arguments, candidates.Args...)
-	arguments = append(arguments, hex.EncodeToString(index.SpaceFingerprint[:]))
-	if exclude != "" {
-		arguments = append(arguments, exclude)
-	}
-	arguments = append(arguments, take)
-	return manager.queryRanks(ctx, statement, arguments, take, candidates)
+	return manager.rankExact(ctx, index, statement, vector, candidates, exclude, take)
 }
 
 func (manager *Manager) rankExact(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
@@ -461,32 +428,6 @@ func (manager *Manager) queryRanks(ctx context.Context, statement string, argume
 	}
 	defer rows.Close()
 	return decodeRanks(rows, take, candidates)
-}
-
-// sqliteRankStatement binds the query vector first, the authorized candidate
-// subquery next, then the active space, optional excluded source key, and page
-// size.
-func (manager *Manager) sqliteRankStatement(index Index, candidates Candidates, exclude bool) string {
-	vectors, state := manager.hidden(index, "_vec"), manager.hidden(index, "_state")
-	identity := make([]string, len(index.Descriptor.Identity))
-	joins := make([]string, len(index.Descriptor.Identity))
-	for position, column := range index.Descriptor.Identity {
-		identity[position] = "golem_ss." + manager.quote(column.Name)
-		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
-	}
-	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 2, policyir.ProviderSQLite)
-	statement := "WITH golem_sn AS MATERIALIZED (SELECT record_key,distance FROM " + vectors + " WHERE embedding MATCH " + manager.placeholder(1) + " AND k=" + manager.placeholder(2) + ")" +
-		" SELECT golem_sn.record_key,golem_sn.distance," + strings.Join(identity, ",") +
-		" FROM golem_sn" +
-		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sn.record_key" +
-		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
-	position := len(candidates.Args) + 3
-	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
-	if exclude {
-		position++
-		statement += " AND golem_sn.record_key<>" + manager.placeholder(position)
-	}
-	return statement + " ORDER BY golem_sn.distance,golem_sn.record_key LIMIT " + manager.placeholder(position+1)
 }
 
 func (manager *Manager) exactPostgreSQLRankStatement(index Index, candidates Candidates, exclude bool) string {
@@ -921,7 +862,8 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	// outcomes are guarded against the same window: whatever the pass decided
 	// about a record only lands while that record still looks the way it did
 	// when the pass read it.
-	if err := manager.embedDirty(ctx, index, fingerprint, dirty); err != nil {
+	pass := &embedPass{}
+	if err := manager.embedDirty(ctx, index, fingerprint, dirty, pass); err != nil {
 		return err
 	}
 	if err := manager.markReady(ctx, index, unchanged); err != nil {
@@ -930,7 +872,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
 	}
-	return nil
+	return pass.finish(ctx, index)
 }
 
 func (manager *Manager) reconcile(ctx context.Context, index Index, span *observeexec.Span) error {
@@ -940,6 +882,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	var aggregate int64
+	pass := &embedPass{}
 	var sourceCursor []any
 	dirtyPending := make([]sourceRecord, 0, index.Specification.MaximumBatch())
 	for {
@@ -974,7 +917,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 		dirtyPending = append(dirtyPending, dirty...)
 		flush := len(dirtyPending) / index.Specification.MaximumBatch() * index.Specification.MaximumBatch()
 		if flush != 0 {
-			if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending[:flush]); err != nil {
+			if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending[:flush], pass); err != nil {
 				return err
 			}
 			copy(dirtyPending, dirtyPending[flush:])
@@ -988,7 +931,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 			break
 		}
 	}
-	if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending); err != nil {
+	if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending, pass); err != nil {
 		return err
 	}
 
@@ -1026,16 +969,36 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 		}
 	}
 	span.SetAggregateCount(aggregate)
-	return nil
+	return pass.finish(ctx, index)
 }
 
-// embedDirty embeds one provider batch at a time and isolates a document the
-// provider will not accept. A refused batch is retried one record at a time, so
-// an un-embeddable document costs its own batch a single extra pass through the
-// provider and quarantines exactly itself: every other record in that batch, and
-// every later batch, is still embedded and stored. A refusal that arrives after
-// the context ended is not evidence about any document, so it fails the pass.
-func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint string, dirty []sourceRecord) error {
+type embedPass struct {
+	deferred    error
+	consecutive int
+	pending     int
+}
+
+func (pass *embedPass) settled() {
+	pass.consecutive = 0
+}
+
+func (pass *embedPass) deferBatch(err error, records int) {
+	pass.deferred = cmp.Or(pass.deferred, err)
+	pass.consecutive++
+	pass.pending += records
+}
+
+func (pass *embedPass) finish(ctx context.Context, index Index) error {
+	if pass.deferred == nil {
+		return nil
+	}
+	_, span := observeexec.BeginChild(ctx, semanticObservationModel(index.Descriptor.ModelID), observe.KindSemantic, observe.OperationSemanticRefresh, observe.PhaseRetry)
+	span.SetAggregateCount(int64(pass.pending))
+	observeexec.Finish(span, observe.OutcomeRetrying, observe.ReasonProvider)
+	return pass.deferred
+}
+
+func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint string, dirty []sourceRecord, pass *embedPass) error {
 	maximum := index.Specification.MaximumBatch()
 	for offset := 0; offset < len(dirty); offset += maximum {
 		end := offset + maximum
@@ -1061,17 +1024,23 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 		if len(batch) == 0 {
 			continue
 		}
+		if pass.consecutive >= semanticOutageBatches {
+			pass.pending += len(batch)
+			continue
+		}
 		vectors, embedErr := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, inputs)
 		if embedErr != nil {
 			if ctx.Err() != nil {
 				return embedErr
 			}
-			if code, ok := embedding.CodeOf(embedErr); ok && code == embedding.CodeUnavailable {
-				return embedErr
+			if code, ok := embedding.CodeOf(embedErr); !ok || code != embedding.CodeInvalidInput {
+				pass.deferBatch(providerDeferral{err: embedErr}, len(batch))
+				continue
 			}
+			pass.settled()
 			if len(batch) > 1 {
 				for _, record := range batch {
-					if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}); err != nil {
+					if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
 						return err
 					}
 				}
@@ -1085,8 +1054,20 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 		if err := manager.storeBatch(ctx, index, fingerprint, batch, vectors); err != nil {
 			return fmt.Errorf("P9_SEMANTIC_REFRESH: vector storage failed")
 		}
+		pass.settled()
 	}
 	return nil
+}
+
+type providerDeferral struct{ err error }
+
+func (deferral providerDeferral) Error() string { return deferral.err.Error() }
+
+func (deferral providerDeferral) Unwrap() error { return deferral.err }
+
+func ProviderDeferred(err error) bool {
+	var deferral providerDeferral
+	return errors.As(err, &deferral)
 }
 
 // quarantine parks one record no provider call can settle. Its stored hash and

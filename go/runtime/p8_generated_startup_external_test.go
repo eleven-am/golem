@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -105,6 +106,7 @@ import (
 	} {
 		administrativeDSN := strings.TrimSpace(os.Getenv(profile.environment))
 		if administrativeDSN == "" {
+			testenv.FailMissingPostgreSQLIfRequired(t, profile.environment+" is not configured")
 			continue
 		}
 		dsn := p8CreateExternalPostgreSQLDatabase(t, administrativeDSN, profile.name)

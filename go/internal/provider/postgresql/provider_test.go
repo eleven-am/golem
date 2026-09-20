@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestSemanticIndexRendersPGVectorStorage(t *testing.T) {
@@ -476,7 +477,7 @@ func TestCatalogFixedBaselineFactsFailClosed(t *testing.T) {
 func TestLiveBlankSchemaRoundTrip(t *testing.T) {
 	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not set")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
 	}
 	provider := New()
 	db, report, err := provider.Open(context.Background(), dsn)
@@ -514,7 +515,7 @@ func TestLiveBlankSchemaRoundTrip(t *testing.T) {
 func TestLiveOptimisticConcurrencyIntrospectionRequiresExactCatalogProof(t *testing.T) {
 	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not set")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
 	}
 	provider := New()
 	database, _, err := provider.Open(context.Background(), dsn)

@@ -14,12 +14,13 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
 	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not configured")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
 	}
 	ctx := context.Background()
 	fixture := schematest.New(t)
@@ -167,7 +168,7 @@ func TestPostgreSQLLiveOrderingAgreesAcrossCollationProfiles(t *testing.T) {
 	cDefault := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
 	linguistic := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
 	if cDefault == "" || linguistic == "" {
-		t.Skip("both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
+		testenv.SkipMissingPostgreSQL(t, "both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
 	}
 	cOrder := postgresLiveSystemNameOrder(t, cDefault, "c")
 	linguisticOrder := postgresLiveSystemNameOrder(t, linguistic, "linguistic")

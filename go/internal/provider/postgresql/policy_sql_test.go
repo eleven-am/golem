@@ -15,6 +15,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPolicyDialectSupportInventoryIsClosedAndComplete(t *testing.T) {
@@ -384,7 +385,7 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 func TestPostgreSQLPolicyNamedMutationsLive(t *testing.T) {
 	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
 	if dsn == "" {
-		t.Skip("GOLEM_TEST_POSTGRES_DSN is not configured")
+		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
 	}
 	ctx := context.Background()
 	database, _, err := New().Open(ctx, dsn)

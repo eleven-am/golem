@@ -83,7 +83,8 @@ type Request struct {
 	// RuntimeValues materializes application-owned defaults/updated fields
 	// after stable runtime source slots have been assigned and before semantic
 	// graph ordinals are frozen. Nil means no runtime-owned materialization.
-	RuntimeValues func(mutationir.NodeInput) (mutationir.NodeInput, error)
+	RuntimeValues     func(mutationir.NodeInput) (mutationir.NodeInput, error)
+	EntryHookAuthored []golem.FieldID
 }
 
 // PositionAudit is proof that one selector/filter position was classified

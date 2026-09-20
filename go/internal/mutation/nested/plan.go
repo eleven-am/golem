@@ -21,7 +21,7 @@ func (builder *builder) updateNode(endpoint schema.RelationEndpoint, branch gole
 	if !ok {
 		return mutationir.NodeInput{}, fail(CodeShape, branch.ModelID(), endpoint.FieldID(), "update branch has no input", nil)
 	}
-	boundInput, err := mutationbind.UpdateInput(input, builder.request.Registry)
+	boundInput, err := mutationbind.UpdateInputFromHook(input, builder.request.Registry, builder.entryHookAuthored(depth))
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested update input did not bind", err)
 	}
@@ -58,7 +58,7 @@ func (builder *builder) updateManyNode(endpoint schema.RelationEndpoint, branch 
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested update-many predicate did not bind", err)
 	}
-	boundInput, err := mutationbind.UpdateManyInput(input, builder.request.Registry)
+	boundInput, err := mutationbind.UpdateManyInputFromHook(input, builder.request.Registry, builder.entryHookAuthored(depth))
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested update-many input did not bind", err)
 	}
@@ -353,6 +353,9 @@ func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.C
 		node.Selection = &selection
 	}
 	for _, operation := range node.ScalarOperations {
+		if operation.HookAuthored() {
+			continue
+		}
 		condition, conditionErr := resolve.FieldCondition(policy, action, node.Model, operation.FieldID())
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition could not resolve", conditionErr)
@@ -380,7 +383,7 @@ func (builder *builder) refuseSystemOwnedWrites(node mutationir.NodeInput) error
 			continue
 		}
 		field, ok := builder.request.Registry.Field(golem.ModelID(node.Model), golem.FieldID(operation.FieldID()))
-		if !ok {
+		if !ok || operation.HookAuthored() {
 			continue
 		}
 		if compilerir.HasMode(field.Modes(), compilerir.ModeSystem) {

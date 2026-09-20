@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
 
@@ -13,7 +14,7 @@ func TestCountAndAggregateCountAuthorizedScopeOracle(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			actor := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -50,7 +51,7 @@ func TestCountFieldClassifiesNullDistributionButCountAllDoesNot(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			caller, err := harness.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
@@ -98,7 +99,7 @@ func TestCountMissingInvisibleAndSystemStances(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			harness := newP5SocialGeneratedHarness(t, profile)
 			caller, err := harness.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})

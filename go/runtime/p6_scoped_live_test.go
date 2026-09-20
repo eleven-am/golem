@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
 )
@@ -22,7 +23,7 @@ func TestScopedSystemAndTransactionParity(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -72,7 +73,7 @@ func TestScopedLeftJoinMissingAndInvisibleTargetAreIndistinguishable(t *testing.
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			caller, err := h.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
@@ -118,7 +119,7 @@ func TestScopedToManyJoinCountsAuthorizedPairsWithoutImplicitDeduplication(t *te
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			caller, err := h.app.ForPrincipal(context.Background(), p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}})
@@ -176,7 +177,7 @@ func TestScopedAuditSuccessFailureCancellationAndTx(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
@@ -272,7 +273,7 @@ func TestScopedLimitAndCancellationCorpus(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			principal := p5social.Principal{Valid: true, UserID: golem.UUID{15: 1}}
 			cases := []struct {

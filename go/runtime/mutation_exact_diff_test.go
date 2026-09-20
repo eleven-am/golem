@@ -17,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -131,7 +132,7 @@ func TestUpdateFieldAuthorizationUsesExactPersistedDiff(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for exact persisted-diff evidence", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for exact persisted-diff evidence", profile.env)
 			}
 			fixture := schematest.NewLogicalDiff(t)
 			sequence := mutationOutboxNamespaceSequence.Add(1)

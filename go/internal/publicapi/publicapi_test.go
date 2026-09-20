@@ -1,16 +1,16 @@
 package publicapi
 
 import (
-	"bytes"
-	"go/ast"
-	"go/parser"
-	"go/printer"
-	"go/token"
+	"fmt"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
+
+	"golang.org/x/tools/go/packages"
 )
 
 var publicPackages = []string{
@@ -54,153 +54,450 @@ func TestPublicSurfaceMatchesItsRecord(t *testing.T) {
 		strings.Join(limit(removed), "\n  "), strings.Join(limit(added), "\n  "))
 }
 
+type recorder struct {
+	module  string
+	public  map[string]bool
+	lines   map[string]bool
+	reached map[string]*types.TypeName
+	done    map[string]bool
+}
+
+type renderer struct {
+	*recorder
+	current string
+}
+
 func exportedSurface(t *testing.T, root string) []string {
 	t.Helper()
-	var surface []string
+	patterns := make([]string, len(publicPackages))
+	for index, packagePath := range publicPackages {
+		patterns[index] = "./" + packagePath
+	}
+	loaded, err := packages.Load(&packages.Config{
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedModule,
+		Dir:  root,
+	}, patterns...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if packages.PrintErrors(loaded) > 0 {
+		t.Fatal("the public packages did not type-check")
+	}
+	if len(loaded) != len(publicPackages) {
+		t.Fatalf("loaded %d public packages, want %d", len(loaded), len(publicPackages))
+	}
+	state := &recorder{
+		public:  make(map[string]bool, len(publicPackages)),
+		lines:   make(map[string]bool),
+		reached: make(map[string]*types.TypeName),
+		done:    make(map[string]bool),
+	}
 	for _, packagePath := range publicPackages {
-		directory := filepath.Join(root, filepath.FromSlash(packagePath))
-		set := token.NewFileSet()
-		packages, err := parser.ParseDir(set, directory, func(entry os.FileInfo) bool {
-			return !strings.HasSuffix(entry.Name(), "_test.go")
-		}, 0)
-		if err != nil {
-			t.Fatalf("parse %s: %v", packagePath, err)
+		state.public[packagePath] = true
+	}
+	for _, loadedPackage := range loaded {
+		if loadedPackage.Module == nil {
+			t.Fatalf("%s has no module", loadedPackage.PkgPath)
 		}
-		for _, parsed := range packages {
-			for _, file := range parsed.Files {
-				for _, declaration := range file.Decls {
-					surface = append(surface, declarationNames(packagePath, declaration)...)
-				}
+		state.module = loadedPackage.Module.Path
+	}
+	for _, loadedPackage := range loaded {
+		state.recordPackage(loadedPackage.Types)
+	}
+	for {
+		pending := make([]string, 0)
+		for key := range state.reached {
+			if !state.done[key] {
+				pending = append(pending, key)
 			}
 		}
+		if len(pending) == 0 {
+			break
+		}
+		sort.Strings(pending)
+		for _, key := range pending {
+			state.done[key] = true
+			object := state.reached[key]
+			scope := &renderer{recorder: state, current: object.Pkg().Path()}
+			scope.recordType(object)
+		}
+	}
+	surface := make([]string, 0, len(state.lines))
+	for line := range state.lines {
+		surface = append(surface, line)
 	}
 	sort.Strings(surface)
 	return surface
 }
 
-func declarationNames(packagePath string, declaration ast.Decl) []string {
-	var names []string
-	switch typed := declaration.(type) {
-	case *ast.FuncDecl:
-		if !typed.Name.IsExported() {
-			return nil
-		}
-		receiver := ""
-		if typed.Recv != nil && len(typed.Recv.List) > 0 {
-			receiver = "(" + strings.TrimPrefix(exprString(typed.Recv.List[0].Type), "*") + ")."
-			if !exportedReceiver(typed.Recv.List[0].Type) {
-				return nil
-			}
-		}
-		names = append(names, packagePath+"."+receiver+typed.Name.Name+signature(typed.Type))
-	case *ast.GenDecl:
-		for _, spec := range typed.Specs {
-			switch value := spec.(type) {
-			case *ast.TypeSpec:
-				if value.Name.IsExported() {
-					names = append(names, packagePath+"."+value.Name.Name+" "+underlying(value))
-					names = append(names, structFieldNames(packagePath, value)...)
-					names = append(names, interfaceMemberNames(packagePath, value)...)
-				}
-			case *ast.ValueSpec:
-				for index, name := range value.Names {
-					if name.IsExported() {
-						names = append(names, packagePath+"."+name.Name+" "+valueType(value, index))
-					}
-				}
-			}
-		}
+func (state *recorder) relative(path string) string {
+	if path == state.module {
+		return "."
 	}
-	return names
+	return strings.TrimPrefix(path, state.module+"/")
 }
 
-func structFieldNames(packagePath string, spec *ast.TypeSpec) []string {
-	structure, ok := spec.Type.(*ast.StructType)
-	if !ok || structure.Fields == nil {
-		return nil
-	}
-	var names []string
-	for _, field := range structure.Fields.List {
-		for _, name := range field.Names {
-			if name.IsExported() {
-				names = append(names, packagePath+"."+spec.Name.Name+"."+name.Name+" "+render(field.Type))
-			}
-		}
-	}
-	return names
+func (state *recorder) owned(path string) bool {
+	return path == state.module || strings.HasPrefix(path, state.module+"/")
 }
 
-func signature(function *ast.FuncType) string {
-	rendered := render(function)
-	return strings.TrimPrefix(rendered, "func")
-}
-
-func underlying(spec *ast.TypeSpec) string {
-	switch spec.Type.(type) {
-	case *ast.StructType:
-		return "struct"
-	case *ast.InterfaceType:
-		return "interface"
-	}
-	return render(spec.Type)
-}
-
-func interfaceMemberNames(packagePath string, spec *ast.TypeSpec) []string {
-	declared, ok := spec.Type.(*ast.InterfaceType)
-	if !ok || declared.Methods == nil {
-		return nil
-	}
-	var names []string
-	for _, member := range declared.Methods.List {
-		if len(member.Names) == 0 {
-			names = append(names, packagePath+"."+spec.Name.Name+" embeds "+render(member.Type))
+func (state *recorder) recordPackage(pkg *types.Package) {
+	scope := &renderer{recorder: state, current: pkg.Path()}
+	for _, name := range pkg.Scope().Names() {
+		object := pkg.Scope().Lookup(name)
+		if !object.Exported() {
 			continue
 		}
-		for _, name := range member.Names {
-			names = append(names, packagePath+"."+spec.Name.Name+"."+name.Name+strings.TrimPrefix(render(member.Type), "func"))
+		prefix := state.relative(pkg.Path()) + "." + name
+		switch typed := object.(type) {
+		case *types.Func:
+			signature := typed.Type().(*types.Signature)
+			scope.emit(prefix + " func" + scope.signature(signature, signature.TypeParams()))
+		case *types.Const:
+			scope.emit(prefix + " const " + scope.render(typed.Type()) + " = " + typed.Val().ExactString())
+		case *types.Var:
+			scope.emit(prefix + " var " + scope.render(typed.Type()))
+		case *types.TypeName:
+			state.done[prefix] = true
+			scope.recordType(typed)
 		}
 	}
-	return names
 }
 
-func valueType(spec *ast.ValueSpec, index int) string {
-	if spec.Type != nil {
-		return render(spec.Type)
-	}
-	if index < len(spec.Values) {
-		return "= " + render(spec.Values[index])
-	}
-	return "untyped"
+func (scope *renderer) emit(line string) {
+	scope.lines[line] = true
 }
 
-func render(node ast.Node) string {
-	var buffer bytes.Buffer
-	if err := printer.Fprint(&buffer, token.NewFileSet(), node); err != nil {
-		return "?"
+func (scope *renderer) recordType(object *types.TypeName) {
+	packagePath := scope.relative(object.Pkg().Path())
+	display := packagePath + "." + object.Name()
+	if object.IsAlias() {
+		parameters := ""
+		if alias, ok := object.Type().(*types.Alias); ok {
+			parameters = scope.typeParameters(alias.TypeParams())
+		}
+		scope.emit(display + parameters + " = " + scope.render(types.Unalias(object.Type())))
+		return
 	}
-	return strings.Join(strings.Fields(buffer.String()), " ")
+	named, ok := object.Type().(*types.Named)
+	if !ok {
+		scope.emit(display + " type " + scope.render(object.Type()))
+		return
+	}
+	parameters := scope.typeParameters(named.TypeParams())
+	switch underlying := named.Underlying().(type) {
+	case *types.Struct:
+		scope.emit(display + parameters + " type struct")
+		scope.recordStruct(display, object, named, underlying)
+	case *types.Interface:
+		scope.emit(display + parameters + " type " + scope.interfaceHeader(underlying))
+		scope.recordInterface(display, underlying)
+		return
+	default:
+		scope.emit(display + parameters + " type " + scope.render(underlying))
+	}
+	if types.Comparable(named) {
+		scope.emit(display + " comparable")
+	}
+	scope.recordMethods(packagePath, object.Name(), named)
 }
 
-func exportedReceiver(expression ast.Expr) bool {
-	name := strings.TrimPrefix(exprString(expression), "*")
-	if index := strings.IndexByte(name, '['); index >= 0 {
-		name = name[:index]
+func (scope *renderer) recordStruct(display string, object *types.TypeName, named *types.Named, structure *types.Struct) {
+	allExported := true
+	order := make([]string, 0, structure.NumFields())
+	for index := 0; index < structure.NumFields(); index++ {
+		field := structure.Field(index)
+		if !field.Exported() {
+			allExported = false
+			continue
+		}
+		order = append(order, field.Name())
+		line := display + "." + field.Name() + " field " + scope.render(field.Type())
+		if field.Embedded() {
+			line += " embedded"
+		}
+		if tag := structure.Tag(index); tag != "" {
+			line += " tag " + strconv.Quote(tag)
+		}
+		scope.emit(line)
 	}
-	return name != "" && name[0] >= 'A' && name[0] <= 'Z'
+	if allExported && object.Exported() {
+		scope.emit(display + " unkeyed literal {" + strings.Join(order, ", ") + "}")
+	}
+	for _, name := range promotedFieldNames(structure) {
+		found, path, _ := types.LookupFieldOrMethod(named, false, object.Pkg(), name)
+		field, ok := found.(*types.Var)
+		if !ok || !field.IsField() || len(path) < 2 {
+			continue
+		}
+		scope.emit(display + "." + name + " promoted field " + scope.render(field.Type()))
+	}
 }
 
-func exprString(expression ast.Expr) string {
-	switch typed := expression.(type) {
-	case *ast.Ident:
-		return typed.Name
-	case *ast.StarExpr:
-		return "*" + exprString(typed.X)
-	case *ast.IndexExpr:
-		return exprString(typed.X)
-	case *ast.IndexListExpr:
-		return exprString(typed.X)
+func promotedFieldNames(structure *types.Struct) []string {
+	names := make(map[string]bool)
+	visited := make(map[*types.Named]bool)
+	var walk func(current *types.Struct, depth int)
+	walk = func(current *types.Struct, depth int) {
+		for index := 0; index < current.NumFields(); index++ {
+			field := current.Field(index)
+			if depth > 0 && field.Exported() {
+				names[field.Name()] = true
+			}
+			if !field.Embedded() {
+				continue
+			}
+			embedded := types.Unalias(field.Type())
+			if pointer, ok := embedded.(*types.Pointer); ok {
+				embedded = types.Unalias(pointer.Elem())
+			}
+			if named, ok := embedded.(*types.Named); ok {
+				if visited[named] {
+					continue
+				}
+				visited[named] = true
+			}
+			if inner, ok := embedded.Underlying().(*types.Struct); ok {
+				walk(inner, depth+1)
+			}
+		}
 	}
-	return ""
+	walk(structure, 0)
+	sorted := make([]string, 0, len(names))
+	for name := range names {
+		sorted = append(sorted, name)
+	}
+	sort.Strings(sorted)
+	return sorted
+}
+
+func (scope *renderer) recordMethods(packagePath, name string, named *types.Named) {
+	for _, receiver := range []struct {
+		label string
+		typ   types.Type
+	}{
+		{"(" + name + ")", named},
+		{"(*" + name + ")", types.NewPointer(named)},
+	} {
+		set := types.NewMethodSet(receiver.typ)
+		for index := 0; index < set.Len(); index++ {
+			method := set.At(index).Obj()
+			if !method.Exported() {
+				continue
+			}
+			signature := set.At(index).Type().(*types.Signature)
+			scope.emit(packagePath + "." + receiver.label + "." + method.Name() + " func" + scope.signature(signature, nil))
+		}
+	}
+}
+
+func (scope *renderer) interfaceHeader(declared *types.Interface) string {
+	names := make([]string, 0, declared.NumMethods())
+	sealed := false
+	for index := 0; index < declared.NumMethods(); index++ {
+		method := declared.Method(index)
+		if !method.Exported() {
+			sealed = true
+			continue
+		}
+		names = append(names, method.Name())
+	}
+	header := "interface {" + strings.Join(names, ", ") + "}"
+	if sealed {
+		header += " sealed"
+	}
+	return header
+}
+
+func (scope *renderer) recordInterface(display string, declared *types.Interface) {
+	for index := 0; index < declared.NumMethods(); index++ {
+		method := declared.Method(index)
+		if !method.Exported() {
+			continue
+		}
+		scope.emit(display + "." + method.Name() + " func" + scope.signature(method.Type().(*types.Signature), nil))
+	}
+	for _, element := range scope.typeSetElements(declared) {
+		scope.emit(display + " element " + element)
+	}
+}
+
+func (scope *renderer) typeSetElements(declared *types.Interface) []string {
+	var elements []string
+	for index := 0; index < declared.NumEmbeddeds(); index++ {
+		embedded := declared.EmbeddedType(index)
+		if inner, ok := embedded.Underlying().(*types.Interface); ok && inner.IsMethodSet() {
+			continue
+		}
+		elements = append(elements, scope.render(embedded))
+	}
+	sort.Strings(elements)
+	return elements
+}
+
+func (scope *renderer) typeParameters(list *types.TypeParamList) string {
+	if list == nil || list.Len() == 0 {
+		return ""
+	}
+	parts := make([]string, list.Len())
+	for index := 0; index < list.Len(); index++ {
+		parameter := list.At(index)
+		parts[index] = parameter.Obj().Name() + " " + scope.render(parameter.Constraint())
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func (scope *renderer) signature(signature *types.Signature, parameters *types.TypeParamList) string {
+	params := signature.Params()
+	inputs := make([]string, params.Len())
+	for index := 0; index < params.Len(); index++ {
+		parameter := params.At(index).Type()
+		if signature.Variadic() && index == params.Len()-1 {
+			inputs[index] = "..." + scope.render(parameter.(*types.Slice).Elem())
+			continue
+		}
+		inputs[index] = scope.render(parameter)
+	}
+	rendered := scope.typeParameters(parameters) + "(" + strings.Join(inputs, ", ") + ")"
+	results := signature.Results()
+	switch results.Len() {
+	case 0:
+		return rendered
+	case 1:
+		return rendered + " " + scope.render(results.At(0).Type())
+	}
+	outputs := make([]string, results.Len())
+	for index := 0; index < results.Len(); index++ {
+		outputs[index] = scope.render(results.At(index).Type())
+	}
+	return rendered + " (" + strings.Join(outputs, ", ") + ")"
+}
+
+func (scope *renderer) render(typ types.Type) string {
+	switch typed := typ.(type) {
+	case *types.Alias:
+		return scope.render(types.Unalias(typed))
+	case *types.Basic:
+		if typed.Kind() == types.UnsafePointer {
+			return "unsafe.Pointer"
+		}
+		return types.Typ[typed.Kind()].Name()
+	case *types.Pointer:
+		return "*" + scope.render(typed.Elem())
+	case *types.Slice:
+		return "[]" + scope.render(typed.Elem())
+	case *types.Array:
+		return fmt.Sprintf("[%d]%s", typed.Len(), scope.render(typed.Elem()))
+	case *types.Map:
+		return "map[" + scope.render(typed.Key()) + "]" + scope.render(typed.Elem())
+	case *types.Chan:
+		element := scope.render(typed.Elem())
+		switch typed.Dir() {
+		case types.SendOnly:
+			return "chan<- " + element
+		case types.RecvOnly:
+			return "<-chan " + element
+		}
+		if inner, ok := typed.Elem().(*types.Chan); ok && inner.Dir() == types.RecvOnly {
+			return "chan (" + element + ")"
+		}
+		return "chan " + element
+	case *types.Signature:
+		return "func" + scope.signature(typed, typed.TypeParams())
+	case *types.Struct:
+		fields := make([]string, typed.NumFields())
+		for index := 0; index < typed.NumFields(); index++ {
+			field := typed.Field(index)
+			rendered := scope.render(field.Type())
+			if !field.Embedded() {
+				rendered = scope.fieldName(field) + " " + rendered
+			}
+			if tag := typed.Tag(index); tag != "" {
+				rendered += " " + strconv.Quote(tag)
+			}
+			fields[index] = rendered
+		}
+		return "struct{" + strings.Join(fields, "; ") + "}"
+	case *types.Interface:
+		return scope.renderInterface(typed)
+	case *types.Union:
+		terms := make([]string, typed.Len())
+		for index := 0; index < typed.Len(); index++ {
+			term := typed.Term(index)
+			terms[index] = scope.render(term.Type())
+			if term.Tilde() {
+				terms[index] = "~" + terms[index]
+			}
+		}
+		return strings.Join(terms, " | ")
+	case *types.TypeParam:
+		return typed.Obj().Name()
+	case *types.Named:
+		return scope.renderNamed(typed)
+	}
+	return typ.String()
+}
+
+func (scope *renderer) fieldName(field *types.Var) string {
+	if field.Exported() || field.Pkg() == nil {
+		return field.Name()
+	}
+	return scope.relative(field.Pkg().Path()) + "." + field.Name()
+}
+
+func (scope *renderer) renderInterface(declared *types.Interface) string {
+	if declared.IsImplicit() && declared.NumEmbeddeds() == 1 {
+		return scope.render(declared.EmbeddedType(0))
+	}
+	var elements []string
+	for index := 0; index < declared.NumMethods(); index++ {
+		method := declared.Method(index)
+		elements = append(elements, scope.methodName(method)+scope.signature(method.Type().(*types.Signature), nil))
+	}
+	elements = append(elements, scope.typeSetElements(declared)...)
+	if len(elements) == 0 {
+		return "any"
+	}
+	return "interface{" + strings.Join(elements, "; ") + "}"
+}
+
+func (scope *renderer) methodName(method *types.Func) string {
+	if method.Exported() || method.Pkg() == nil {
+		return method.Name()
+	}
+	return scope.relative(method.Pkg().Path()) + "." + method.Name()
+}
+
+func (scope *renderer) renderNamed(named *types.Named) string {
+	object := named.Obj()
+	name := object.Name()
+	if object.Pkg() != nil {
+		path := object.Pkg().Path()
+		if scope.owned(path) {
+			relative := scope.relative(path)
+			if !scope.public[relative] || !object.Exported() {
+				origin := named.Origin().Obj()
+				key := relative + "." + origin.Name()
+				if _, seen := scope.reached[key]; !seen {
+					scope.reached[key] = origin
+				}
+			}
+			if path != scope.current {
+				name = relative + "." + name
+			}
+		} else {
+			name = path + "." + name
+		}
+	}
+	arguments := named.TypeArgs()
+	if arguments == nil || arguments.Len() == 0 {
+		return name
+	}
+	parts := make([]string, arguments.Len())
+	for index := 0; index < arguments.Len(); index++ {
+		parts[index] = scope.render(arguments.At(index))
+	}
+	return name + "[" + strings.Join(parts, ", ") + "]"
 }
 
 func difference(from, against []string) []string {

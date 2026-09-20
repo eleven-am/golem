@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestGraphQLMutationAndNestedOraclePostgreSQLProfiles(t *testing.T) {
@@ -21,7 +22,7 @@ func TestGraphQLMutationAndNestedOraclePostgreSQLProfiles(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			t.Run("six-root-scalar-parity", func(t *testing.T) {
 				assertP5GraphQLPostgresRootMutations(t, profile)

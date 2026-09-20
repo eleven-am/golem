@@ -105,6 +105,10 @@ type stubStore struct {
 	renew     func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error)
 	claim     func(context.Context, queueprovider.ClaimOptions) ([]queueprovider.Record, error)
 	succeed   func(context.Context, string, string, string) (bool, error)
+	fail      func(context.Context, string, string, string) (bool, error)
+	retryAt   func(context.Context, string, string, time.Duration, string, bool) (bool, error)
+	canceled  func(context.Context, string, string, string) (bool, error)
+	release   func(context.Context, string, string) (bool, error)
 	retention func(context.Context, queueprovider.RetentionPolicy) (int, error)
 }
 
@@ -127,6 +131,34 @@ func (stub stubStore) Succeed(ctx context.Context, id, token, code string) (bool
 		return stub.succeed(ctx, id, token, code)
 	}
 	return stub.Store.Succeed(ctx, id, token, code)
+}
+
+func (stub stubStore) Fail(ctx context.Context, id, token, code string) (bool, error) {
+	if stub.fail != nil {
+		return stub.fail(ctx, id, token, code)
+	}
+	return stub.Store.Fail(ctx, id, token, code)
+}
+
+func (stub stubStore) RetryAt(ctx context.Context, id, token string, delay time.Duration, code string, uncounted bool) (bool, error) {
+	if stub.retryAt != nil {
+		return stub.retryAt(ctx, id, token, delay, code, uncounted)
+	}
+	return stub.Store.RetryAt(ctx, id, token, delay, code, uncounted)
+}
+
+func (stub stubStore) MarkCanceled(ctx context.Context, id, token, code string) (bool, error) {
+	if stub.canceled != nil {
+		return stub.canceled(ctx, id, token, code)
+	}
+	return stub.Store.MarkCanceled(ctx, id, token, code)
+}
+
+func (stub stubStore) Release(ctx context.Context, id, token string) (bool, error) {
+	if stub.release != nil {
+		return stub.release(ctx, id, token)
+	}
+	return stub.Store.Release(ctx, id, token)
 }
 
 func (stub stubStore) RunRetention(ctx context.Context, policy queueprovider.RetentionPolicy) (int, error) {

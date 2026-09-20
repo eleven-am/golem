@@ -218,6 +218,14 @@ func success(operation observe.Operation, statements int, aggregate int64) obser
   return observed{operation: operation, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: statements, aggregate: aggregate}
 }
 
+func exactSearchRank(aggregate int64) observed {
+  return success(observe.OperationSemanticRank, 1, aggregate)
+}
+
+func exactSimilarRank(aggregate int64) observed {
+  return success(observe.OperationSemanticRank, 2, aggregate)
+}
+
 func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   ctx := context.Background()
   database, err := providersqlite.Open(ctx, providersqlite.Config{DataSourceName: %q})
@@ -274,7 +282,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 2, 0),
+    exactSearchRank(0),
   )
   ranked, err := caller.Posts.SearchRelated(ctx, "alpha", 10)
   if err != nil { t.Fatal(err) }
@@ -289,7 +297,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 5 { t.Fatalf("initial provider calls=%%d want=5", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 2, 2),
+    exactSearchRank(2),
   )
   sourceID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000001")
   if err != nil { t.Fatal(err) }
@@ -306,7 +314,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     if strings.Contains(title, "private") { t.Fatalf("similarity disclosed an unauthorized row: %%q", title) }
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 3, 1),
+    exactSimilarRank(1),
   )
   hiddenID, err := golem.ParseUUID("10000000-0000-0000-0000-000000000002")
   if err != nil { t.Fatal(err) }
@@ -335,13 +343,13 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 2, 3),
+    exactSearchRank(3),
   )
   if _, err := caller.Posts.SearchRelated(ctx, "alpha", 1); err != nil { t.Fatal(err) }
   if provider.count() != 7 { t.Fatalf("unchanged rows were re-embedded: calls=%%d", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 1),
+    exactSearchRank(1),
   )
   // A write through the raw handle is a write Golem never saw: it marks
   // nothing, so no drain carries it and search keeps serving the last good
@@ -351,7 +359,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 8 { t.Fatalf("search embedded a source document: calls=%%d want=8", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 1, 1),
+    exactSearchRank(1),
   )
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   if provider.count() != 9 { t.Fatalf("reconcile calls=%%d want=9", provider.count()) }
@@ -372,7 +380,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 2, 1),
+    exactSearchRank(1),
   )
 
   server, err := application.GraphQL(app.GraphQLConfig[string]{
@@ -417,7 +425,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
 	}
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRank, 2, 1),
+    exactSearchRank(1),
   )
 
   // The similarity root is compiled and bound by different code than search:
@@ -451,7 +459,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("similarity GraphQL embedded a query: calls=%%d want=%%d", provider.count(), beforeSimilarGraphQL)
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 3, 1),
+    exactSimilarRank(1),
   )
 
   defaulted := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}) { title } }\"}"))
@@ -470,7 +478,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
     t.Fatalf("defaulted-take similarity GraphQL embedded a query: calls=%%d", provider.count())
   }
   assertSemanticTrace(t, observations,
-    success(observe.OperationSemanticRank, 3, 1),
+    exactSimilarRank(1),
   )
 }
 `, "file:"+databasePath))

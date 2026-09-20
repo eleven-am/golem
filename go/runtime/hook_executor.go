@@ -6,7 +6,6 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
-	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
@@ -69,11 +68,13 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 			}
 			next.create = *input
 			next.deferHookOwned = false
+			next.createHookAuthored = hookAuthoredSystemFields(executor.caller.app.registry, &executor.prepared.request.create, input)
 		} else {
 			if input == nil || target == nil {
 				return fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: transformed upsert update branch is invalid")
 			}
 			next.update, next.target = *input, *target
+			next.updateHookAuthored = hookAuthoredSystemFields(executor.caller.app.registry, &executor.prepared.request.update, input)
 		}
 		replanned, err := prepareCallerRootUpsert(executor.caller, next)
 		if err == nil {
@@ -241,7 +242,7 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 		targetPointer = &target
 	}
 	if operation == mutationir.Create && inputPointer != nil && len(inputPointer.Relations()) == 0 {
-		if _, err := mutationbind.CreateInput(*inputPointer, caller.app.registry); err != nil {
+		if err := prepareCallerCreatePreHookInput(caller, *inputPointer); err != nil {
 			return golem.RuntimeHookExecutorResult{}, err
 		}
 	}
@@ -278,6 +279,7 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 			operation: operation, model: policyir.ModelID(request.ModelID()),
 			input: transformedInput, target: transformedTarget,
 			result: requirements, forceHookSnapshot: true, runtimeValues: runtimeValues,
+			hookAuthored: hookAuthoredSystemFields(caller.app.registry, inputPointer, transformedInput),
 		})
 		if err == nil {
 			program = prepared

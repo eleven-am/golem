@@ -140,6 +140,16 @@ limits := queue.DefaultLimits()
 limits.RetentionEvery = queue.RetentionDisabled
 ```
 
+## The queue's own tables
+
+Golem creates `golem_queue` and its indexes on first use and checks, every time
+the queue starts, that the two objects carrying a guarantee have the shape it
+relies on: the primary key is exactly `id`, and `golem_queue_dedupe` is a
+unique index on `dedupe_key` covering only pending and leased jobs. A
+same-named table or index with any other shape stops startup with an error
+naming it. Drop that object and let golem recreate it; accepting it would
+quietly turn off deduplication.
+
 ## Timeouts and abandonment
 
 When a handler exceeds its `Timeout`, its context is cancelled. Go cannot kill

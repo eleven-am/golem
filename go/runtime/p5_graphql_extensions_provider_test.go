@@ -21,6 +21,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5extensions"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -57,7 +58,7 @@ func TestGeneratedGraphQLExtensionsUseOneCallerAndOperationLocalLoadersAcrossPro
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture, database, resolutions := newP5ExtensionProviderFixture(t, profile)
 			seedP5ExtensionUsers(t, database, profile.provider)
@@ -111,7 +112,7 @@ func TestGeneratedCustomMutationTransactionAndWriteInvalidationAcrossProviders(t
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			server, database, resolutions := newP5ExtensionProviderFixture(t, profile)
 			p5extensions.ResetProbe()
@@ -176,7 +177,7 @@ func TestGeneratedGraphQLPrincipalRefusalsIssueZeroSQLAcrossProviders(t *testing
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			server, trace, resolutions := newP5ExtensionTracedProviderFixture(t, profile)
 			query := `query Refused { users(where: {all: true}) { id } }`
@@ -318,7 +319,7 @@ func TestGeneratedBatchedComputedCancellationReachesLoaderAcrossProviders(t *tes
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			server, database, resolutions := newP5ExtensionProviderFixture(t, profile)
 			seedP5ExtensionUsers(t, database, profile.provider)

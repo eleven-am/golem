@@ -18,6 +18,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresqlprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 // TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle is an
@@ -25,13 +26,7 @@ import (
 // permission to install pgvector; completion evidence runs it against the
 // official pgvector/pgvector:pg17 image.
 func TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle(t *testing.T) {
-	dsn := os.Getenv("GOLEM_TEST_PGVECTOR_DSN")
-	if dsn == "" {
-		if os.Getenv("GOLEM_REQUIRE_PGVECTOR") == "1" {
-			t.Fatal("GOLEM_TEST_PGVECTOR_DSN is required")
-		}
-		t.Skip("GOLEM_TEST_PGVECTOR_DSN is not configured")
-	}
+	dsn := testenv.PGVectorDSN(t)
 	ctx := context.Background()
 	const namespace = "semantic_pg_acceptance"
 	root := t.TempDir()

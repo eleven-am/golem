@@ -48,7 +48,9 @@ type rootUpsertPrepareRequest struct {
 	// concurrencyAbsent selects the expectation-aware create-only branch. The
 	// ordinary update renderer is intentionally not available for a versioned
 	// model; the authorized/private probes decide whether create may run.
-	concurrencyAbsent bool
+	concurrencyAbsent  bool
+	createHookAuthored []golem.FieldID
+	updateHookAuthored []golem.FieldID
 }
 
 func missingRuntimeOwnedFields(input golem.FrozenMutationInput, candidates []golem.FieldID) []golem.FieldID {
@@ -119,11 +121,11 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 			ownedFields = mergeRuntimeOwnedFields(ownedFields, missing)
 		}
 	}
-	boundCreate, _, err := mutationbind.CreateInputWithRuntimeOwnedFields(request.create, app.registry, ownedFields)
+	boundCreate, _, err := mutationbind.CreateInputFromHook(request.create, app.registry, ownedFields, request.createHookAuthored)
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
-	boundUpdate, err := mutationbind.UpdateInput(request.update, app.registry)
+	boundUpdate, err := mutationbind.UpdateInputFromHook(request.update, app.registry, request.updateHookAuthored)
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
@@ -186,7 +188,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	var createNested, updateNested *mutationnested.Result
 	var createNestedPolicy, updateNestedPolicy error
 	if len(request.create.Relations()) != 0 {
-		compiled, compileErr := prepareNestedCompilation(app, policies, stance, mutationir.Create, &request.create, nil, request.result, request.runtimeValues)
+		compiled, compileErr := prepareNestedCompilationFromHook(app, policies, stance, mutationir.Create, &request.create, nil, request.result, request.createHookAuthored, request.runtimeValues)
 		if compileErr != nil {
 			var nestedFailure *mutationnested.Error
 			if stance != mutationir.Caller || !errors.As(compileErr, &nestedFailure) || nestedFailure.Code != mutationnested.CodePolicy {
@@ -198,7 +200,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 		}
 	}
 	if len(request.update.Relations()) != 0 {
-		compiled, compileErr := prepareNestedCompilation(app, policies, stance, mutationir.Update, &request.update, &request.target, request.result, request.runtimeValues)
+		compiled, compileErr := prepareNestedCompilationFromHook(app, policies, stance, mutationir.Update, &request.update, &request.target, request.result, request.updateHookAuthored, request.runtimeValues)
 		if compileErr != nil {
 			var nestedFailure *mutationnested.Error
 			if stance != mutationir.Caller || !errors.As(compileErr, &nestedFailure) || nestedFailure.Code != mutationnested.CodePolicy {
@@ -585,11 +587,13 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 				}
 				next.create = *input
 				next.deferHookOwned = false
+				next.createHookAuthored = hookAuthoredSystemFields(executor.app.registry, &executor.prepared.request.create, input)
 			} else {
 				if transformed.Operation() != golem.HookUpdate || input == nil || target == nil {
 					return fmt.Errorf("upsert update hook changed branch shape")
 				}
 				next.update, next.target = *input, *target
+				next.updateHookAuthored = hookAuthoredSystemFields(executor.app.registry, &executor.prepared.request.update, input)
 			}
 			replanned, err := prepareRootUpsert(next, mutationir.Caller, executor.app, executor.policies, executor.binding)
 			if err == nil {

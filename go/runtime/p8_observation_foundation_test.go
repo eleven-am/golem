@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/observe"
 )
 
@@ -343,7 +344,7 @@ func TestObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T) 
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := os.Getenv(profile.environment)
 			if dsn == "" {
-				t.Skip(profile.environment + " is required")
+				testenv.SkipMissingPostgreSQL(t, profile.environment+" is required")
 			}
 			base := newMutationResultFixtureWithHooks(t, MutationLimits{}, hookFactory, func(context.Context, golem.AfterCommitFailure) {})
 			fixture, _, _ := newPostgreSQLMutationOracleFixtureFromBase(t, dsn, profile.namespace, base)

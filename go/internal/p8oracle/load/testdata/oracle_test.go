@@ -501,13 +501,13 @@ func (f *fixture) eventResourceBounds() {
 	}
 	defer stream.Close()
 	waitForObservation(f.t, eventTrace, observe.OperationSubscriptionMembership, 1)
+	for index := 0; index < 16; index++ {
+		f.createLoadEventPost(eventApp.System(), index)
+	}
 	publisherContext, cancelPublisher := context.WithCancel(f.ctx)
 	publisherDone := make(chan error, 1)
 	go func() { publisherDone <- eventApp.RunEventPublisher(publisherContext) }()
 	waitForPublisher(f.t, eventApp)
-	for index := 0; index < 16; index++ {
-		f.createLoadEventPost(eventApp.System(), index)
-	}
 	waitForDeliveredFacts(f.t, f.database, 16)
 	waitForObservation(f.t, eventTrace, observe.OperationSubscriptionOverflow, 1)
 	cancelPublisher()
@@ -520,6 +520,7 @@ func (f *fixture) eventResourceBounds() {
 		f.t.Fatal("bounded publisher did not stop")
 	}
 
+	claimBound := min(config.EventLimits.ClaimRows, config.EventLimits.PublisherConcurrency)
 	claims, attempts, acknowledgements, evaluations, overflows := 0, 0, 0, 0, 0
 	for _, value := range eventTrace.snapshot() {
 		if value.QueueLimit != 0 && value.QueueDepth > value.QueueLimit {
@@ -528,7 +529,7 @@ func (f *fixture) eventResourceBounds() {
 		switch value.Operation {
 		case observe.OperationEventPublisherClaim:
 			claims++
-			if value.Aggregate < 1 || value.Aggregate > 4 || value.Statements != 0 {
+			if value.Aggregate < 1 || value.Aggregate > int64(claimBound) || value.QueueLimit != claimBound || value.Statements != 0 {
 				f.t.Fatalf("claim observation=%v", value)
 			}
 		case observe.OperationEventPublisherAttempt:
@@ -544,7 +545,7 @@ func (f *fixture) eventResourceBounds() {
 			}
 		}
 	}
-	if claims != 4 || attempts != 16 || acknowledgements != 16 || evaluations < 1 || evaluations > 16 || overflows != 1 {
+	if claims != 16/claimBound || attempts != 16 || acknowledgements != 16 || evaluations < 1 || evaluations > 16 || overflows != 1 {
 		f.t.Fatalf("event resources claims=%d attempts=%d acknowledgements=%d evaluations=%d overflows=%d observations=%v", claims, attempts, acknowledgements, evaluations, overflows, eventTrace.snapshot())
 	}
 	if _, err := stream.Recv(f.ctx); eventErrorCode(err) != events.CodeSubscriptionOverflow {

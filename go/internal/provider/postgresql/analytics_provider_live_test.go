@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPostgreSQLExactNumericAndBinaryAnalyticsProfiles(t *testing.T) {
@@ -18,7 +20,7 @@ func TestPostgreSQLExactNumericAndBinaryAnalyticsProfiles(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := os.Getenv(profile.env)
 			if dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			database, report, err := New().Open(context.Background(), dsn)
 			if err != nil {

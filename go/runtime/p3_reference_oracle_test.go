@@ -17,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -121,7 +122,7 @@ func TestP3IndependentReferenceOraclePostgreSQLProfiles(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.environment))
 			if dsn == "" {
-				t.Skip(profile.environment + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.environment+" is not configured")
 			}
 			for _, indexed := range []bool{false, true} {
 				strategy := "batched"

@@ -9,6 +9,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 func TestPublicBatchMutationCallerAndSystemExecuteExactSet(t *testing.T) {
@@ -225,7 +226,7 @@ func forEachMutationResultProvider(t *testing.T, limits MutationLimits, run func
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture, _ := newMutationResultPostgresFixtureWithLimits(t, context.Background(), profile, limits)
 			run(t, fixture)

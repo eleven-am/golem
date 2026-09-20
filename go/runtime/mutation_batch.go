@@ -177,7 +177,7 @@ func prepareBatchProgram[P, A, M any](app *App[P, A], policies mutationplan.Poli
 		}
 		frozenInput = &value
 	}
-	return prepareFrozenBatchProgram(app, policies, stance, operation, descriptor.Metadata().ModelID(), frozenPredicate, frozenInput, newMutationRuntimeValues())
+	return prepareFrozenBatchProgram(app, policies, stance, operation, descriptor.Metadata().ModelID(), frozenPredicate, frozenInput, nil, newMutationRuntimeValues())
 }
 
 func prepareCallerBatchHooks[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], request golem.RuntimeMutationHookRequest) (mutationbatch.Program, error) {
@@ -187,12 +187,17 @@ func prepareCallerBatchHooks[P, A, M any](ctx context.Context, caller *Caller[P,
 func prepareCallerFrozenBatchHooks[P, A any](ctx context.Context, caller *Caller[P, A], model golem.ModelID, request golem.RuntimeMutationHookRequest) (mutationbatch.Program, error) {
 	var program mutationbatch.Program
 	runtimeValues := newMutationRuntimeValues()
+	var callerInput *golem.FrozenMutationInput
+	if value, ok := request.Input(); ok {
+		callerInput = &value
+	}
 	validate := func(transformed golem.RuntimeMutationHookRequest) error {
 		predicate, input, err := batchRequestParts(transformed)
 		if err != nil {
 			return err
 		}
-		prepared, err := prepareFrozenBatchProgram(caller.app, caller.policies, mutationir.Caller, hookMutationOperation(transformed.Operation()), model, predicate, input, runtimeValues)
+		hookAuthored := hookAuthoredSystemFields(caller.app.registry, callerInput, input)
+		prepared, err := prepareFrozenBatchProgram(caller.app, caller.policies, mutationir.Caller, hookMutationOperation(transformed.Operation()), model, predicate, input, hookAuthored, runtimeValues)
 		if err == nil {
 			program = prepared
 		}
@@ -243,7 +248,7 @@ func hookMutationOperation(operation golem.HookOperation) mutationir.Operation {
 	return 0
 }
 
-func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, model golem.ModelID, frozenPredicate golem.FrozenPredicate, input *golem.FrozenMutationInput, runtimeValues *mutationRuntimeValues) (mutationbatch.Program, error) {
+func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.PolicySet, stance mutationir.Stance, operation mutationir.Operation, model golem.ModelID, frozenPredicate golem.FrozenPredicate, input *golem.FrozenMutationInput, hookAuthored []golem.FieldID, runtimeValues *mutationRuntimeValues) (mutationbatch.Program, error) {
 	predicate, err := mutationbind.BatchPredicate(frozenPredicate, model, app.registry)
 	if err != nil {
 		return mutationbatch.Program{}, err
@@ -264,7 +269,7 @@ func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.P
 		if input == nil {
 			return mutationbatch.Program{}, fmt.Errorf("update-many input is absent")
 		}
-		bound, bindErr := mutationbind.UpdateManyInput(*input, app.registry)
+		bound, bindErr := mutationbind.UpdateManyInputFromHook(*input, app.registry, hookAuthored)
 		if bindErr != nil {
 			return mutationbatch.Program{}, bindErr
 		}

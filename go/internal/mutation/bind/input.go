@@ -206,6 +206,11 @@ func UpdateManyInput(frozen golem.FrozenMutationInput, registry *schema.Registry
 	return input, err
 }
 
+func UpdateManyInputFromHook(frozen golem.FrozenMutationInput, registry *schema.Registry, hookAuthored []golem.FieldID) (ScalarInput, error) {
+	input, _, err := bindInput(InputUpdateMany, frozen, registry, nil, hookAuthored)
+	return input, err
+}
+
 func hookAuthoredSet(modelID golem.ModelID, registry *schema.Registry, fields []golem.FieldID) (map[golem.FieldID]struct{}, error) {
 	if len(fields) == 0 {
 		return nil, nil

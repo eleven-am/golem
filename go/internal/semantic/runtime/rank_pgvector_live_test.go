@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -19,6 +18,7 @@ import (
 	readsql "github.com/eleven-am/golem/go/internal/read/sql"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
@@ -40,13 +40,7 @@ func openPGVectorRankFixture(t *testing.T) pgvectorRankFixture {
 
 func openPGVectorRankFixtureOf(t *testing.T, dimensions int, buildIndex bool) pgvectorRankFixture {
 	t.Helper()
-	dsn := os.Getenv("GOLEM_TEST_PGVECTOR_DSN")
-	if dsn == "" {
-		if os.Getenv("GOLEM_REQUIRE_PGVECTOR") == "1" {
-			t.Fatal("GOLEM_TEST_PGVECTOR_DSN is required")
-		}
-		t.Skip("GOLEM_TEST_PGVECTOR_DSN is not configured")
-	}
+	dsn := testenv.PGVectorDSN(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -412,13 +406,7 @@ type pgvectorDrainFixture struct {
 
 func openPGVectorDrainFixture(t *testing.T) pgvectorDrainFixture {
 	t.Helper()
-	dsn := os.Getenv("GOLEM_TEST_PGVECTOR_DSN")
-	if dsn == "" {
-		if os.Getenv("GOLEM_REQUIRE_PGVECTOR") == "1" {
-			t.Fatal("GOLEM_TEST_PGVECTOR_DSN is required")
-		}
-		t.Skip("GOLEM_TEST_PGVECTOR_DSN is not configured")
-	}
+	dsn := testenv.PGVectorDSN(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -583,13 +571,7 @@ func TestPGVectorDrainAdvancesOnlyMarkedRecords(t *testing.T) {
 // Asserting the record was embedded is what rejects that, per kind.
 func TestPGVectorMarkStaleEmbedsBrandNewRecordsOfEveryIdentityKind(t *testing.T) {
 	ctx := context.Background()
-	dsn := os.Getenv("GOLEM_TEST_PGVECTOR_DSN")
-	if dsn == "" {
-		if os.Getenv("GOLEM_REQUIRE_PGVECTOR") == "1" {
-			t.Fatal("GOLEM_TEST_PGVECTOR_DSN is required")
-		}
-		t.Skip("GOLEM_TEST_PGVECTOR_DSN is not configured")
-	}
+	dsn := testenv.PGVectorDSN(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)

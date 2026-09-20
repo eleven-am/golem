@@ -53,7 +53,7 @@ func TestNormalizeLimitsNamesEveryViolatedBound(t *testing.T) {
 		"WebSocketPongTimeout":          {WebSocketPongTimeout: -1},
 		"ShutdownGrace":                 {ShutdownGrace: maximumLimits.ShutdownGrace + 1},
 		"RetentionAge":                  {RetentionAge: -1},
-		"RetentionEvery":                {RetentionEvery: -1},
+		"RetentionEvery":                {RetentionEvery: -time.Minute},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := NormalizeLimits(limits)

@@ -27,6 +27,7 @@ import (
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
@@ -187,7 +188,7 @@ func TestPostgreSQLNestedCreateManyPersistsDistinctApplicationUUIDDefaults(t *te
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			namespace := physical.PhysicalName(fmt.Sprintf("golem_runtime_nested_%s_%d_%d", profile.name, os.Getpid(), sequence))
@@ -398,7 +399,7 @@ func TestNestedMembershipRefreshesUpdatedFieldAcrossProvidersAndHookReplacement(
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			namespace := physical.PhysicalName(fmt.Sprintf("golem_runtime_membership_%s_%d_%d", profile.name, os.Getpid(), sequence))
@@ -479,7 +480,7 @@ func TestPostgreSQLRuntimeValuesPersistOnCreateAndRefreshOnUpdate(t *testing.T) 
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required", profile.env)
 			}
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			namespace := physical.PhysicalName(fmt.Sprintf("golem_runtime_values_%d_%d", os.Getpid(), sequence))

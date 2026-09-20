@@ -17,6 +17,7 @@ import (
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
@@ -80,7 +81,7 @@ func TestCallerNestedSelectedChildHooksTransformAndDeliverReverseResults(t *test
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresCallerNestedSelectedChildHooksTransform(t, profile)
 		})
@@ -145,7 +146,7 @@ func TestTransactionAfterHookUpsertExecutesSelectedNestedCreateAndUpdateBranches
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgresTransactionAfterHookNestedUpsert(t, profile)
 		})
@@ -453,7 +454,7 @@ func TestTransactionAfterHookUsesSameTransactionAndReverseNodeOrder(t *testing.T
 		profile := profile
 		t.Run("postgresql-c", func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			schema := schematest.NewSubscribedGraph(t)
 			assertTransactionAfterHookUsesSameTransactionAndReverseNodeOrder(t, schema, func(hooks []golem.HookBinding[graphMutationActor]) graphMutationFixture {
@@ -838,7 +839,7 @@ func TestNestedGuardedBranchesPostgreSQLProfiles(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			fixture, namespace := newMutationResultPostgresFixture(t, ctx, profile)
@@ -904,7 +905,7 @@ func TestTwoModelNestedMutationVocabularyExecutesEveryOperationAcrossProviders(t
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			fixture, _ := newMutationResultPostgresFixture(t, context.Background(), profile)
 			assertPublicNestedMutationVocabulary(t, fixture)

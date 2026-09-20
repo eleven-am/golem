@@ -22,6 +22,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
@@ -1245,7 +1246,7 @@ func forEachFinalGraphProvider(t *testing.T, run func(testing.TB, graphMutationF
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			run(t, newPostgresGraphMutationFixtureWithHooks(t, profile, golem.ModelID{}, nil))
 		})
@@ -1259,7 +1260,7 @@ func forEachFinalRecursiveProvider(t *testing.T, run func(testing.TB, recursiveM
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			run(t, newPostgresRecursiveMutationFixture(t, profile))
 		})
@@ -1286,7 +1287,7 @@ func forEachFinalAdversarialSocialProvider(t *testing.T, hookFactory func(schema
 		profile := profile
 		t.Run("postgresql-"+profile.name, func(t *testing.T) {
 			if profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			ctx := context.Background()
 			suffix := time.Now().UnixNano()

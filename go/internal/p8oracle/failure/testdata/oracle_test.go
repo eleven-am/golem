@@ -117,7 +117,12 @@ func (f *failureFixture) close() {
 
 func testCancellationAndSlowClient(t *testing.T) {
 	baseline := runtime.NumGoroutine()
-	f := newFailureFixture(t, nil, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, ClaimRows: 4, PublisherConcurrency: 1}, nil)
+	memory, err := events.NewMemoryTransport(events.MemoryLimits{Buffer: 32})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &subscribeSignalTransport{EventTransport: memory, subscribed: make(chan struct{}, 1)}
+	f := newFailureFixture(t, nil, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, ClaimRows: 4, PublisherConcurrency: 1}, transport)
 	defer f.close()
 	f.createPost(f.ctx, 1, "cancel-base")
 
@@ -164,7 +169,7 @@ func testCancellationAndSlowClient(t *testing.T) {
 	if recovered := executeGraphQL(t, graph.Handler(), f.ctx, `query { posts(take: 1) { id } }`); len(recovered.Errors) != 0 {
 		t.Fatalf("GraphQL did not recover after cancellation: %+v", recovered)
 	}
-	testDisconnectedSlowWebSocket(t, f, graph, probe)
+	testDisconnectedSlowWebSocket(t, f, graph, probe, transport)
 	settleFailureGoroutines()
 	if current := runtime.NumGoroutine(); current > baseline+5 {
 		t.Fatalf("cancellation goroutines baseline=%d current=%d", baseline, current)
@@ -185,7 +190,7 @@ func (loader *cancelledLoader) ObservePostDisplayCodeLoad(ctx context.Context, _
 	return ctx.Err()
 }
 
-func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *social.GraphQLServer, probe *cancelledLoader) {
+func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *social.GraphQLServer, probe *cancelledLoader, transport *subscribeSignalTransport) {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		ctx := social.WithPostDisplayCodeLoaderObserver(request.Context(), probe)
@@ -211,6 +216,11 @@ func testDisconnectedSlowWebSocket(t *testing.T, f *failureFixture, graph *socia
 		},
 	}); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-transport.subscribed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow websocket subscription did not open its event transport stream")
 	}
 	publisherContext, cancelPublisher := context.WithCancel(f.ctx)
 	publisherDone := make(chan error, 1)
@@ -387,6 +397,26 @@ func testPostgreSQLSerializationRecovery(t *testing.T, f *failureFixture) {
 type providerConnection struct{ close func() error }
 
 type panicObserver struct{ calls atomic.Int64 }
+
+type subscribeSignalTransport struct {
+	events.EventTransport
+	subscribed chan struct{}
+}
+
+func (transport *subscribeSignalTransport) Subscribe(ctx context.Context, request events.Subscription) (events.Stream, error) {
+	stream, err := transport.EventTransport.Subscribe(ctx, request)
+	if err == nil {
+		select {
+		case transport.subscribed <- struct{}{}:
+		default:
+		}
+	}
+	return stream, err
+}
+
+func (transport *subscribeSignalTransport) TransportCapabilities() events.TransportCapabilities {
+	return events.CapabilitiesOf(transport.EventTransport)
+}
 
 func (observer *panicObserver) ObserveGolem(context.Context, observe.Observation) {
 	observer.calls.Add(1)

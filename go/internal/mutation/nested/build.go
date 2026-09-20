@@ -27,6 +27,9 @@ func Build(request Request) (Result, error) {
 	if request.Stance == mutationir.Caller && (request.Policies == nil || request.Policies.GenerationDigest() != request.Registry.GenerationDigest()) {
 		return Result{}, fail(CodePolicy, golem.ModelID(request.Root.Model), golem.FieldID{}, "caller policy set is absent or stale", nil)
 	}
+	if len(request.EntryHookAuthored) != 0 && !singleScalarEntry(request) {
+		return Result{}, fail(CodeInput, golem.ModelID(request.Root.Model), golem.FieldID{}, "hook-authored fields require one selected create, update, or update-many entry", nil)
+	}
 	authored := make(map[policyir.FieldID]struct{}, len(request.Root.ScalarOperations))
 	for _, operation := range request.Root.ScalarOperations {
 		if !operation.RuntimeOwned() {
@@ -54,6 +57,21 @@ func Build(request Request) (Result, error) {
 		return Result{}, fail(CodeIR, golem.ModelID(root.Model), golem.FieldID{}, "nested graph is invalid", err)
 	}
 	return Result{graph: graph, audits: builder.audits, sources: builder.sources, sourceUpperBound: builder.nextSource}, nil
+}
+
+func singleScalarEntry(request Request) bool {
+	if request.Stance != mutationir.Caller || len(request.Mutations) != 1 || len(request.Mutations[0].Branches()) != 1 {
+		return false
+	}
+	action := request.Mutations[0].Action()
+	return action == golem.MutationRelationCreate || action == golem.MutationRelationUpdate || action == golem.MutationRelationUpdateMany
+}
+
+func (builder *builder) entryHookAuthored(depth uint16) []golem.FieldID {
+	if depth != 1 {
+		return nil
+	}
+	return builder.request.EntryHookAuthored
 }
 
 func validateRelationCorrelationOwnership(registry *schema.Registry, parent policyir.ModelID, authored map[policyir.FieldID]struct{}, mutations []golem.FrozenNestedMutation) error {
@@ -188,6 +206,9 @@ func (builder *builder) buildRelation(parent policyir.ModelID, parentOperation m
 	}
 	if reason := relationExposure(field, parentOperation); reason != "" {
 		return nil, fail(CodeExposure, frozen.ParentModelID(), frozen.FieldID(), reason, nil)
+	}
+	if err := builder.refuseModedCorrelationWrites(endpoint, frozen.Action(), parentOperation); err != nil {
+		return nil, err
 	}
 	many := endpoint.Kind() == compilerir.RelationHasMany
 	required, err := requiredToOne(builder.request.Registry, endpoint)
@@ -369,7 +390,7 @@ func (builder *builder) createNode(endpoint schema.RelationEndpoint, branch gole
 	if runtimeFieldsErr != nil {
 		return mutationir.NodeInput{}, fail(CodeRelation, branch.ModelID(), endpoint.FieldID(), "nested create runtime-owned fields could not be resolved", runtimeFieldsErr)
 	}
-	bound, runtimeInventory, err := mutationbind.CreateInputWithRuntimeOwnedFields(input, builder.request.Registry, runtimeFields)
+	bound, runtimeInventory, err := mutationbind.CreateInputFromHook(input, builder.request.Registry, runtimeFields, builder.entryHookAuthored(depth))
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodeBinding, branch.ModelID(), endpoint.FieldID(), "nested create input did not bind", err)
 	}
@@ -552,6 +573,52 @@ func relationExposure(field schema.Field, parentOperation mutationir.Operation) 
 		if mode == compilerir.ModeImmutable && parentOperation != mutationir.Create {
 			return "immutable relation is writable only during create"
 		}
+	}
+	return ""
+}
+
+func (builder *builder) refuseModedCorrelationWrites(endpoint schema.RelationEndpoint, action golem.MutationRelationAction, parentOperation mutationir.Operation) error {
+	owner := endpoint.TargetModelID()
+	assigns, update := false, false
+	if endpoint.Role() == compilerir.RelationSource {
+		owner = endpoint.ModelID()
+		assigns, update = relationActionOwnsCorrelation(action), parentOperation != mutationir.Create
+	} else {
+		switch action {
+		case golem.MutationRelationCreate, golem.MutationRelationCreateMany, golem.MutationRelationUpsert:
+			assigns = true
+		case golem.MutationRelationConnect, golem.MutationRelationDisconnect, golem.MutationRelationSet, golem.MutationRelationConnectOrCreate:
+			assigns, update = true, true
+		}
+	}
+	if !assigns {
+		return nil
+	}
+	for _, fieldID := range membershipOwnedFields(endpoint) {
+		field, ok := builder.request.Registry.Field(owner, golem.FieldID(fieldID))
+		if !ok {
+			continue
+		}
+		if reason := correlationExposure(field, update, builder.request.Stance); reason != "" {
+			return fail(CodeExposure, owner, golem.FieldID(fieldID), reason, nil)
+		}
+	}
+	return nil
+}
+
+func correlationExposure(field schema.Field, update bool, stance mutationir.Stance) string {
+	modes := field.Modes()
+	if compilerir.HasMode(modes, compilerir.ModeHidden) {
+		return "hidden field is not writable"
+	}
+	if compilerir.HasMode(modes, compilerir.ModeReadOnly) {
+		return "read-only field is not writable"
+	}
+	if update && compilerir.HasMode(modes, compilerir.ModeImmutable) {
+		return "immutable field is writable only during create"
+	}
+	if stance == mutationir.Caller && compilerir.HasMode(modes, compilerir.ModeSystem) {
+		return "system field is not caller writable"
 	}
 	return ""
 }

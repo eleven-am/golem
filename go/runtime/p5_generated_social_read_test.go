@@ -20,6 +20,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	providerapi "github.com/eleven-am/golem/go/provider"
 	golemruntime "github.com/eleven-am/golem/go/runtime"
 	"github.com/eleven-am/golem/go/runtime/testdata/p5social"
@@ -315,7 +316,7 @@ func TestActiveGeneratedSocialGraphMasksOccurrencesAndCompleteSixModelsAcrossPro
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			response := h.execute(t, p5social.Principal{UserID: golem.UUID{15: 1}, Valid: true}, `query Social($owner: UUID!, $other: UUID!, $withHidden: Boolean!) {
@@ -392,7 +393,7 @@ func TestActiveGeneratedSocialPositionsPagingSelectorsAndZeroSQLAcrossProviders(
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{UserID: golem.UUID{15: 1}, Valid: true}
@@ -451,7 +452,7 @@ func TestActiveGeneratedSocialGraphQLMatchesGeneratedGoCallerAndInvisibleUnique(
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			h := newP5SocialGeneratedHarness(t, profile)
 			principal := p5social.Principal{UserID: golem.UUID{15: 1}, Valid: true}

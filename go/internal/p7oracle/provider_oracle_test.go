@@ -22,6 +22,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -75,7 +76,7 @@ func openOracleHarness(t *testing.T, profile oracleProfile) *oracleHarness {
 		}
 	} else {
 		if profile.dsn == "" {
-			t.Skip(profile.env + " is not configured; P7 final evidence must supply both live profiles")
+			testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured; P7 final evidence must supply both live profiles")
 		}
 		suffix := fmt.Sprintf("%d_%d", os.Getpid(), time.Now().UnixNano())
 		harness.applicationNS = physical.PhysicalName("golem_p7_oracle_" + suffix)
@@ -345,7 +346,7 @@ func TestP7P6ToP7UpgradePreservesExistingOutboxFacts(t *testing.T) {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			if profile.provider == golem.PostgreSQL && profile.dsn == "" {
-				t.Skip(profile.env + " is not configured; P7 final evidence must supply both live profiles")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured; P7 final evidence must supply both live profiles")
 			}
 			ctx := context.Background()
 			var (

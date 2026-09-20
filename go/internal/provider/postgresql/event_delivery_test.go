@@ -19,6 +19,7 @@ import (
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	"github.com/eleven-am/golem/go/internal/event/provider/providertest"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -34,7 +35,7 @@ func TestPostgreSQLDeliveryCoordinatorLiveProfiles(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := os.Getenv(profile.env)
 			if dsn == "" {
-				t.Skip(profile.env + " is not configured; P7 final evidence requires this live profile")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured; P7 final evidence requires this live profile")
 			}
 			testP7PostgreSQLDeliveryCoordinatorLive(t, dsn)
 		})
@@ -50,7 +51,7 @@ func TestPostgreSQLClaimDepthSnapshotLiveProfiles(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := os.Getenv(profile.env)
 			if dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgreSQLClaimDepthSnapshot(t, dsn)
 		})
@@ -531,7 +532,7 @@ func TestPostgreSQLLegacyDeliveryShapeLiveProfiles(t *testing.T) {
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := os.Getenv(profile.env)
 			if dsn == "" {
-				t.Skip(profile.env + " is not configured")
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
 			}
 			assertPostgreSQLLegacyDeliveryShape(t, dsn)
 		})

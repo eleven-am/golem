@@ -17,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
 
 var p4OracleNamespaceSequence atomic.Uint64
@@ -43,7 +44,7 @@ func runMutationProviderAcceptanceProfiles(t *testing.T, operation func(*testing
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := strings.TrimSpace(os.Getenv(profile.env))
 			if dsn == "" {
-				t.Skipf("%s is required for mutation provider acceptance", profile.env)
+				testenv.SkipMissingPostgreSQLf(t, "%s is required for mutation provider acceptance", profile.env)
 			}
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			operation(t, mutationProviderAcceptanceFixture{
@@ -159,7 +160,7 @@ func TestP4IndependentMutationOraclePostgreSQLProfiles(t *testing.T) {
 	for _, profile := range profiles {
 		dsn := strings.TrimSpace(os.Getenv(profile.env))
 		if dsn == "" {
-			t.Skipf("P4 PostgreSQL oracle evidence is incomplete: %s is required", profile.env)
+			testenv.SkipMissingPostgreSQLf(t, "P4 PostgreSQL oracle evidence is incomplete: %s is required", profile.env)
 		}
 		t.Run(profile.name, func(t *testing.T) {
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.name)

@@ -13,6 +13,76 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ---
 
+## Unreleased
+
+**Security: a caller can no longer set a moded foreign key through a
+relation.** Writing `author_id` directly was refused when the field was
+`system`, `readOnly`, `immutable` (on update) or `hidden`, but connecting,
+setting or disconnecting the relation wrote the same key unchecked. Every
+earlier release allowed it. The relation write is now refused with the same
+message and public code as the direct write, whether or not a hook runs. A
+system client may still assign a `system` key. If your application relied on a
+caller connecting over a moded key, that write now fails; give the key the
+mode you actually want it to have, or perform the assignment with
+`SystemEscape`.
+
+**Hooks can author a `system` field on every write path.** v0.3.2 left
+nested-child hooks, upsert, versioned mutations, update-many batches and
+`HookExecutor` refusing one. Each now accepts a field the hook wrote and still
+refuses one the caller's own input named, whatever the hook does to it.
+`HookCreateRow` can now create a row whose required `system` field a hook
+supplies. A versioned upsert on a model with a required `system` field could
+never run; it now does.
+
+**SQLite similarity ranking is exact.** It asked sqlite-vec for a window of
+nearest neighbours and filtered afterwards, and when more rows sat at the same
+distance than the window held, it returned the wrong ones. It now runs the same
+exact query as PostgreSQL. A search is one statement.
+
+**An embedding-provider outage no longer dead-letters the drain.** An outage,
+rate limit or unclassifiable error used to spend an attempt, and after five the
+drain job was dead-lettered; it could also quarantine every row in the batch as
+if the documents were bad. Only a refusal the provider marks as invalid input
+quarantines a row now. Everything else retries without spending an attempt,
+one refused row no longer holds up the rest of the index, and an outage costs
+at most two provider calls per pass. See SEMANTIC.md.
+
+**Event publishers no longer take more leases than they can work.** A publisher
+claimed `ClaimRows` groups at once but ran `PublisherConcurrency` of them, so
+the rest sat leased and unrenewed, and another publisher could take them over
+and deliver the same event twice. A claim is now capped at
+`PublisherConcurrency`; the default `ClaimRows` of 64 behaves as 8 under the
+default concurrency. On shutdown, leases that never started are released
+instead of stranded until they expire. The claim observation reports the size
+actually requested.
+
+**`events.RetentionDisabled` turns event retention off.** There was no way to
+do it. `Limits.RetentionEnabled()` reports it.
+
+**The queue checks its own tables.** A same-named `golem_queue` without its
+primary key, or a `golem_queue_dedupe` of any other shape, was accepted, and
+deduplication quietly stopped working. Startup now refuses it. Tables created
+by v0.3.0 through v0.3.3 pass unchanged. On SQLite a deduplicated enqueue is
+now one statement, so a job finishing mid-enqueue can no longer make it fail.
+
+**Queue finalization failures are observed.** When the store rejected a job's
+completion, retry, cancel or release, the error was discarded. It is now
+observed as a queue commit failure. A lease another worker fenced stays silent,
+as before.
+
+**`queue.Backoff.Delay` is defined for every value.** Negative values panicked,
+and a large base with a large attempt looped for about 2⁶³ iterations. A zero or
+negative `Base` or `Cap` now takes the default.
+
+**Built with Go 1.25.14.** `go.mod` pins the toolchain; 1.25.2 had twenty
+reachable standard-library vulnerabilities.
+
+Outbox rows written by something other than golem — manual SQL, a partial
+restore — are not delivered until the publisher restarts. Restart it after
+inserting them.
+
+---
+
 ## go/v0.3.3
 
 **Take this release if you ever set `queue.RetentionDisabled`.** It did the
