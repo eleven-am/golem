@@ -5,11 +5,82 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.4.0
+go get github.com/eleven-am/golem/go@v0.5.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable.
+
+---
+
+## go/v0.5.0
+
+**Golem can now add a column to its own internal tables on an existing
+database.** A semantic shadow state table carries a declared contract version,
+and a reviewed step between two versions is planned as an additive
+`ALTER TABLE ... ADD COLUMN` rather than a drop and recreate. Your vectors are
+never discarded and nothing is re-embedded. The first use of this is
+`ambiguous_strikes`, which bounds how long the drain retries a document the
+embedding provider keeps refusing without saying why: five strikes, then the
+row is quarantined with `error_code` `EMBEDDING_REFUSED_UNCLASSIFIED`. A strike
+is only ever charged in a pass where a provider call succeeded, so an outage
+can never quarantine a healthy row.
+
+**Three operator-history indexes on `golem_queue`.** Measured on the same
+200,000-row queue on both providers, best of repeated runs:
+
+| Operation | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
+| --- | --- | --- | --- | --- |
+| `List`, no state filter | 146 ms | 0.12 ms | 18.5 ms | 0.03 ms |
+| `List`, `status='succeeded'` | 76 ms | 0.05 ms | 18.5 ms | 0.03 ms |
+| `List`, two states | 11.5 ms | 0.08 ms | 5.1 ms | 0.13 ms |
+| `ListFailed` | 6.8 ms | 0.05 ms | 3.9 ms | 0.05 ms |
+| Retention, periodic batch | 51.9 ms | 0.68 ms | 8.2 ms | 0.82 ms |
+| Retention sweeping half the table | — | — | 11.1 ms | 6.6 ms |
+
+Every shape improves on both providers. The one modest case is a PostgreSQL
+retention run whose cutoff sweeps half the table: a parallel sequential scan is
+genuinely the right plan there, so the index only takes it from 11.1 ms to
+6.6 ms. A periodic retention run, which is what a deployment actually issues,
+is ten times faster.
+
+The index set is `golem_queue_enqueued (enqueued_at, id)`,
+`golem_queue_history (status, enqueued_at, id)` and a covering
+`golem_queue_terminal (status, finished_at, id)`. On SQLite, retention still
+merges one ordered run per state, so its 76x comes from the index being
+covering, not from the sort disappearing. SQLite names the index explicitly, because without
+`ANALYZE` its planner otherwise picks the claim index and sorts; forcing the
+plain `(enqueued_at, id)` index instead would have made a rare-status `List`
+around a thousand times *slower*, which is why the set is shaped this way.
+
+**Both changes require regenerating and applying one migration, and in
+exchange a library upgrade on its own stays reversible.** Golem creates the new
+indexes only when your generated schema admits them, so bumping the module
+without regenerating changes nothing and can be rolled back. Regenerating and
+applying the migration is the deliberate one-way step, exactly like every other
+golem migration. Until you take it you get no speedup and no strike bound. One
+regeneration delivers both.
+
+Golem's migrations are forward-only. If you need to go back *after* applying
+this one, drop `golem_queue_enqueued`, `golem_queue_history` and
+`golem_queue_terminal`, delete this migration's ledger row, and drop
+`ambiguous_strikes` from each `_golem_semantic_*_state` table — on SQLite that
+last one is a table rebuild. Rolling the module back without having applied the
+migration needs none of this.
+
+**A healthy document in a refused batch is now stored instead of waiting.** An
+unclassified refusal is retried one row at a time, so only the culprit stays
+pending. A fresh outage still costs exactly the same two provider calls per
+pass; a pass that has a strike to decide about spends one more, to prove the
+provider is answering before it charges one.
+
+**Startup now verifies every index on `golem_queue`, not just
+`golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are
+checked for the first time, so a database whose claim index was altered by hand
+will now fail startup with an error naming the object and telling you to drop
+it. A database created by any release from go/v0.3.0 through go/v0.4.0 passes
+unchanged. **An index you added to `golem_queue` yourself is now refused** —
+golem owns that table; move the index to one of yours.
 
 ---
 

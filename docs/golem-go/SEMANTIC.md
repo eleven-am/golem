@@ -134,14 +134,42 @@ response and an error golem cannot classify. The retry waits for the time the
 job has already waited, between five seconds and five minutes, so an outage of
 any length never dead-letters the drain.
 
-**One row the provider keeps refusing does not hold up the rest.** A pass
-carries on past the batch that failed, stores the batches after it, and
-reports the failure at the end. That row stays pending and is retried on every
-pass until the provider accepts it or refuses it as invalid input.
+**One row the provider keeps refusing does not hold up the rest.** A batch
+refused for an unclassified reason is retried one row at a time, so the rows
+around the culprit are stored rather than left pending with it.
+
+**A row the provider keeps refusing without saying why is quarantined after
+five strikes.** The count lives in `ambiguous_strikes` on the shadow state
+table and resets to zero whenever the row embeds successfully or is marked
+stale again. At the fifth strike the row's `status` becomes `failed` and its
+`error_code` becomes `EMBEDDING_REFUSED_UNCLASSIFIED`. To bring it back, change
+the indexed source row: the next pass marks it stale, clears the strike count
+and tries again.
+
+**A strike is only ever charged in a pass where a provider call succeeded.**
+An outage cannot spend strikes a healthy pass earned earlier. When the only
+row left to embed is one that already carries a strike, golem re-embeds one
+row it already stored to prove the provider is answering, and charges nothing
+if that probe fails. A provider that reports `EMBEDDING_UNAVAILABLE` never
+strikes at all.
+
+**The strike column requires the migration.** Regenerate and apply it before
+the bound can take effect; until then an unclassified refusal is retried
+forever, as before. That is the same regeneration the queue's operator-history
+indexes need.
+
+**Known limit: the first strike needs a pass that embeds something else.**
+Because a strike is only charged when a provider call succeeded in the same
+pass, a row can only start accruing them in a pass where another row embedded
+or the liveness probe answered. In practice a document becomes stale alongside
+its neighbours, so that pass exists. An index holding exactly one document,
+which the provider refuses without classifying, never reaches the bound and is
+retried forever.
 
 **An outage costs two provider calls per pass.** Once two batches in a row
 fail with nothing stored between them, the pass stops calling the provider for
-the rest of its page. Each deferred pass is observed as a
+the rest of its page. A pass that has a strike to decide about spends one more,
+for the liveness probe above, and charges nothing when that probe fails. Each deferred pass is observed as a
 `semantic.refresh` retry whose aggregate count is the number of rows it left
 pending.
 
