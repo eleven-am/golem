@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/examples/social/social"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 	"github.com/eleven-am/golem/go/provider/sqlite"
 )
@@ -111,10 +112,10 @@ func TestDevelopmentPrincipalAuditIDsRemainDistinct(t *testing.T) {
 }
 
 func TestSocialHostPostgreSQLOpensReviewedApplication(t *testing.T) {
-	dataSourceName := strings.TrimSpace(os.Getenv("GOLEM_P8_SOCIAL_POSTGRES_DSN"))
-	if dataSourceName == "" {
-		t.Skip("GOLEM_P8_SOCIAL_POSTGRES_DSN is not configured")
-	}
+	root := socialHostRoot(t)
+	dataSourceName, cleanup := createP8DisposablePostgreSQLDatabase(t, testenv.SocialPostgreSQLDSN(t), "host")
+	defer cleanup()
+	applyReviewedPostgreSQLMigration(t, root, dataSourceName)
 	database, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: dataSourceName})
 	if err != nil {
 		t.Fatal(err)

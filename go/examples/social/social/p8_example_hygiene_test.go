@@ -11,7 +11,31 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/eleven-am/golem/go/internal/testenv"
 )
+
+const exampleTestHarnessPackage = "github.com/eleven-am/golem/go/internal/testenv"
+
+func TestExampleNamesItsPostgreSQLConnectionOnlyThroughTheSharedHarness(t *testing.T) {
+	root := socialExampleRoot(t)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || entry.IsDir() || filepath.Ext(path) != ".go" {
+			return walkErr
+		}
+		source, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(source), testenv.SocialPostgreSQLDSNVariable) {
+			t.Errorf("example resolves %s itself in %s instead of through %s", testenv.SocialPostgreSQLDSNVariable, path, exampleTestHarnessPackage)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestExampleContainsNoInternalImportOrOrdinaryResolverClone(t *testing.T) {
 	root := socialExampleRoot(t)
@@ -31,14 +55,16 @@ func TestExampleContainsNoInternalImportOrOrdinaryResolverClone(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		harness := strings.HasSuffix(entry.Name(), "_test.go")
 		for _, imported := range parsed.Imports {
 			value, err := strconv.Unquote(imported.Path.Value)
 			if err != nil {
 				return err
 			}
-			if strings.Contains(value, "/internal/") {
-				t.Errorf("public example imports internal package %q from %s", value, path)
+			if !strings.Contains(value, "/internal/") || harness && value == exampleTestHarnessPackage {
+				continue
 			}
+			t.Errorf("public example imports internal package %q from %s", value, path)
 		}
 		parsed, err = parser.ParseFile(token.NewFileSet(), path, nil, parser.SkipObjectResolution)
 		if err != nil {

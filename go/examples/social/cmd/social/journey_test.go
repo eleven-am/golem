@@ -214,11 +214,7 @@ func TestExternalSocialApplicationPostgreSQLJourney(t *testing.T) {
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			base := os.Getenv(profile.env)
-			if base == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
-			}
-			dsn, cleanup := createP8DisposablePostgreSQLDatabase(t, base, profile.name)
+			dsn, cleanup := createP8DisposablePostgreSQLDatabase(t, testenv.PostgreSQLDSN(t, profile.env), profile.name)
 			defer cleanup()
 			applyReviewedPostgreSQLMigration(t, socialHostRoot(t), dsn)
 			database, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: dsn})
@@ -258,51 +254,41 @@ func assertP8ReopenedApplication(t *testing.T, database *provider.Database) {
 
 func createP8DisposablePostgreSQLDatabase(t *testing.T, base, profile string) (string, func()) {
 	t.Helper()
-	admin, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: base})
-	if err != nil {
-		t.Fatalf("open PostgreSQL %s administrative connection: %v", profile, err)
-	}
-	pool := admin.UnsafeSQLX()
-	locale := struct {
-		Collate string `db:"datcollate"`
-		CType   string `db:"datctype"`
-	}{}
-	if err := pool.GetContext(context.Background(), &locale, `SELECT datcollate,datctype FROM pg_database WHERE datname=current_database()`); err != nil {
-		_ = admin.Close()
-		t.Fatal(err)
-	}
-	name := fmt.Sprintf("golem_p8_social_%s_%d", strings.ToLower(profile), time.Now().UnixNano())
-	for _, value := range name {
-		if !((value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '_') {
-			_ = admin.Close()
-			t.Fatalf("unsafe generated database name %q", name)
+	return testenv.DisposablePostgreSQLFrom(t, base), func() {}
+}
+func TestP8DisposablePostgreSQLDatabaseOutlivesNothing(t *testing.T) {
+	base := testenv.SocialPostgreSQLDSN(t)
+	var name string
+	t.Run("disposable", func(t *testing.T) {
+		dsn, cleanup := createP8DisposablePostgreSQLDatabase(t, base, "leak")
+		defer cleanup()
+		parsed, err := url.Parse(dsn)
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	create := fmt.Sprintf(`CREATE DATABASE "%s" TEMPLATE template0 ENCODING 'UTF8' LC_COLLATE %s LC_CTYPE %s`, name, postgresLiteral(locale.Collate), postgresLiteral(locale.CType))
-	if _, err := pool.ExecContext(context.Background(), create); err != nil {
-		_ = admin.Close()
-		t.Fatalf("create isolated PostgreSQL %s database: %v", profile, err)
-	}
-	parsed, err := url.Parse(base)
-	if err != nil {
-		_ = admin.Close()
-		t.Fatal(err)
-	}
-	parsed.Path = "/" + name
-	parsed.RawPath = ""
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, _ = pool.ExecContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, name)
-		if _, err := pool.ExecContext(ctx, `DROP DATABASE "`+name+`"`); err != nil {
-			t.Errorf("drop isolated PostgreSQL database %s: %v", name, err)
+		name = strings.TrimPrefix(parsed.Path, "/")
+		if !postgresDatabaseExists(t, base, name) {
+			t.Fatalf("disposable database %s was never created", name)
 		}
-		_ = admin.Close()
+	})
+	if postgresDatabaseExists(t, base, name) {
+		t.Fatalf("disposable database %s outlived its test", name)
 	}
-	return parsed.String(), cleanup
 }
 
-func postgresLiteral(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
+func postgresDatabaseExists(t *testing.T, base, name string) bool {
+	t.Helper()
+	admin, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: base})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer admin.Close()
+	var present bool
+	if err := admin.UnsafeSQLX().GetContext(context.Background(), &present, `SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname=$1)`, name); err != nil {
+		t.Fatal(err)
+	}
+	return present
+}
 
 func applyReviewedPostgreSQLMigration(t *testing.T, exampleRoot, dsn string) {
 	t.Helper()
