@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -29,9 +30,10 @@ type wsMessage struct {
 }
 
 type wsOperation struct {
-	cancel context.CancelFunc
-	stop   func() bool
-	stream ResponseStream
+	cancel  context.CancelFunc
+	stop    func() bool
+	stream  ResponseStream
+	stopped *atomic.Bool
 }
 
 type wsConnection[P any] struct {
@@ -193,14 +195,15 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				state.operationError(message.ID, PresentError(opCtx, subscribeErr, nil, server.config.ReportInternalError))
 				continue
 			}
+			stopped := &atomic.Bool{}
 			state.mu.Lock()
-			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream}
+			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream, stopped: stopped}
 			state.mu.Unlock()
 			state.ops.Add(1)
-			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span) {
+			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 				defer state.ops.Done()
-				state.runOperation(id, requestValue, prepared, stream, opCtx, observation)
-			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation)
+				state.runOperation(id, requestValue, prepared, stream, opCtx, observation, stopped)
+			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation, stopped)
 		case "complete":
 			state.stopOperation(message.ID)
 		}
@@ -230,7 +233,7 @@ func validWSSubscriptionRequest(prepared preparedRequest, failure *Response) boo
 	return failure == nil && prepared.Operation.Definition != nil && prepared.Operation.Definition.Operation == ast.Subscription
 }
 
-func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span) {
+func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 	var operationErr error
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -245,6 +248,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		response, err := stream.Recv(ctx)
 		if err != nil {
 			operationErr = err
+			if stopped != nil && stopped.Load() {
+				operationErr = context.Canceled
+				return
+			}
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
 				state.operationError(id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
 				return
@@ -404,6 +411,13 @@ func (state *wsConnection[P]) finishOperation(id string) {
 	if !present {
 		return
 	}
+	state.releaseOperation(operation)
+}
+
+func (state *wsConnection[P]) releaseOperation(operation wsOperation) {
+	if operation.stopped != nil {
+		operation.stopped.Store(true)
+	}
 	if operation.stop != nil {
 		operation.stop()
 	}
@@ -421,15 +435,7 @@ func (state *wsConnection[P]) closeOperations() {
 	state.operations = map[string]wsOperation{}
 	state.mu.Unlock()
 	for _, operation := range operations {
-		if operation.stop != nil {
-			operation.stop()
-		}
-		if operation.cancel != nil {
-			operation.cancel()
-		}
-		if operation.stream != nil {
-			state.closeStream(operation.stream)
-		}
+		state.releaseOperation(operation)
 	}
 	state.ops.Wait()
 }
