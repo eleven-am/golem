@@ -62,12 +62,12 @@ func TestSemanticDrainDefersAnUnclassifiedProviderFailureWithoutQuarantine(t *te
 		t.Fatalf("an unclassified provider failure was not deferred as systemic: %v", err)
 	}
 	assertDrainErrorIsClosed(t, err)
-	// An unclassified failure is isolated once, inside the pass's existing
-	// outage budget, so the culprit can be attributed. The budget itself is
-	// unchanged: a provider that is down is still contacted at most
-	// semanticOutageBatches times per pass.
-	if failing.calls != semanticOutageBatches {
-		t.Fatalf("provider calls=%d want=%d: unclassified isolation escaped the outage budget", failing.calls, semanticOutageBatches)
+	// One refused batch plus the isolation that decides whether the provider is
+	// down or one record is poisoned. The batch call is not counted against the
+	// budget, because counting it would let one refused record exhaust the
+	// budget and starve every record behind it.
+	if want := 1 + semanticOutageBatches; failing.calls != want {
+		t.Fatalf("provider calls=%d want=%d: unclassified isolation escaped the outage budget", failing.calls, want)
 	}
 	for _, id := range []string{"a", "b"} {
 		if status, code, attempts := fixture.failure(t, id); status != "pending" || code.Valid || attempts != before {
@@ -227,8 +227,8 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 	if err := fixture.manager.Refresh(ctx, "post", "related"); !ProviderDeferred(err) {
 		t.Fatalf("reconcile error=%v, want the outage deferred", err)
 	}
-	if down.calls != 2 {
-		t.Fatalf("reconcile provider calls=%d want=2 during an outage spanning 5 batches", down.calls)
+	if want := 1 + semanticOutageBatches; down.calls != want {
+		t.Fatalf("reconcile provider calls=%d want=%d during an outage spanning 5 batches", down.calls, want)
 	}
 	fixture.manager.indexes[0].Provider = fixture.embedder
 	if err := fixture.manager.Refresh(ctx, "post", "related"); err != nil {
@@ -255,8 +255,8 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 		if _, err := fixture.manager.Drain(ctx, "post", "related"); !ProviderDeferred(err) {
 			t.Fatalf("pass %d error=%v, want the outage deferred", pass, err)
 		}
-		if down.calls != 2 {
-			t.Fatalf("pass %d provider calls=%d want=2 during an outage spanning 5 batches", pass, down.calls)
+		if want := 1 + semanticOutageBatches; down.calls != want {
+			t.Fatalf("pass %d provider calls=%d want=%d during an outage spanning 5 batches", pass, down.calls, want)
 		}
 	}
 	for _, id := range ids {

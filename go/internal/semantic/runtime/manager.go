@@ -1003,8 +1003,12 @@ func (pass *embedPass) settled() {
 	pass.consecutive = 0
 }
 
-func (pass *embedPass) deferCall(err error) {
+func (pass *embedPass) note(err error) {
 	pass.deferred = cmp.Or(pass.deferred, err)
+}
+
+func (pass *embedPass) deferCall(err error) {
+	pass.note(err)
 	pass.consecutive++
 }
 
@@ -1073,7 +1077,11 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 					continue
 				}
 				if len(batch) > 1 {
-					pass.deferCall(providerDeferral{err: embedErr})
+					// A refused batch and the isolation it triggers are one piece
+					// of evidence about the provider. Counting the batch call as
+					// well would let a single refused record exhaust the outage
+					// budget and starve every record behind it.
+					pass.note(providerDeferral{err: embedErr})
 					for _, record := range batch {
 						if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
 							return err

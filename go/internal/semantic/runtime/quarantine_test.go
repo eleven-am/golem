@@ -317,3 +317,84 @@ func TestAnOutageAfterAHealthyPeriodNeverQuarantines(t *testing.T) {
 		}
 	}
 }
+
+func openPagedQuarantineFixture(t *testing.T, count int, poison string, code embedding.Code) quarantineFixture {
+	t.Helper()
+	handle, err := sqlitevec.Open("file:" + t.TempDir() + "/paged.db?_pragma=foreign_keys(1)&_txlock=immediate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = handle.Close() })
+	database := sqlx.NewDb(handle, "sqlite3")
+	if _, err := database.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
+CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL,"ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)) STRICT;
+CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < count; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		title := "healthy " + id
+		if id == poison {
+			title = "poisondoc " + id
+		}
+		if _, err := database.Exec(`INSERT INTO "posts" (id,title) VALUES (?,?)`, id, title); err != nil {
+			t.Fatal(err)
+		}
+	}
+	schema := semanticSchema(t, 3)
+	schema.Namespace = physical.Namespace{Name: "main"}
+	schema.Tables = []physical.PhysicalTable{{
+		ID: "post", Name: "posts",
+		Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "title", Name: "title", Ordinal: 1, Nullable: true, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+		},
+		PrimaryKey: &physical.PhysicalKey{ID: "post-primary", Name: "pk_posts", Columns: []ir.FieldID{"id"}},
+	}}
+	specification, _ := embedding.NewSpecification("test", "model", "v1", 3, 8)
+	embedder := &refusingProvider{specification: specification, refuse: []string{"poisondoc"}, code: code}
+	registry, _ := embedding.NewRegistry(map[string]embedding.Provider{"content": embedder})
+	inventory, err := NewInventory(schema, registry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewManager(database, ir.SQLite, schema, inventory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return quarantineFixture{manager: manager, database: database, provider: embedder}
+}
+
+// TestAPoisonedFirstRecordNeverStarvesThePage pins the property the isolation
+// path exists to protect: a document the provider refuses must not stop the
+// records after it being embedded, whether they share its batch or fall in a
+// later one, and however many passes run.
+func TestAPoisonedFirstRecordNeverStarvesThePage(t *testing.T) {
+	const records = 20
+	fixture := openPagedQuarantineFixture(t, records, "p00", embedding.CodeProvider)
+	ctx := context.Background()
+	_ = fixture.manager.Refresh(ctx, "post", "related")
+	rows := fixture.rows(t)
+	for index := 1; index < records; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		row, present := rows[id]
+		if !present || row.Status != "ready" {
+			t.Fatalf("one pass left %s behind the poisoned first record: present=%v row=%+v", id, present, row)
+		}
+	}
+	if culprit := rows["p00"]; culprit.Status == "ready" || culprit.Strikes == 0 {
+		t.Fatalf("the poisoned first record was not isolated and struck: %+v", culprit)
+	}
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound; attempt++ {
+		_ = fixture.manager.Refresh(ctx, "post", "related")
+	}
+	rows = fixture.rows(t)
+	if culprit := rows["p00"]; culprit.Status != "failed" || culprit.Code == nil || *culprit.Code != semanticUnclassifiedRefusalCode {
+		t.Fatalf("the poisoned first record never reached the bound: %+v", culprit)
+	}
+	for index := 1; index < records; index++ {
+		if row := rows[fmt.Sprintf("p%02d", index)]; row.Status != "ready" {
+			t.Fatalf("later passes disturbed healthy record p%02d: %+v", index, row)
+		}
+	}
+}
