@@ -303,7 +303,7 @@ INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 	if err != nil {
 		t.Fatal(err)
 	}
-	store, err := sqliteprovider.New().QueueStore(database)
+	store, err := sqliteprovider.New().QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

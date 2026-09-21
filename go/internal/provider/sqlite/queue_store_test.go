@@ -125,7 +125,7 @@ func newQueueFixture(t *testing.T) providertest.Fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -173,7 +173,7 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 	allowlisted.Unmanaged = physical.QueueUnmanagedObjects()
 	allowlisted = normalizeMigrationFixture(t, allowlisted)
 	database := openMigrationFixture(t, provider, allowlisted, "queue-drift.db")
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,7 +215,7 @@ func TestQueueTableWithoutIdentityKeyIsRefused(t *testing.T) {
 	if _, err := database.ExecContext(ctx, keyless); err != nil {
 		t.Fatal(err)
 	}
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,7 +244,7 @@ func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

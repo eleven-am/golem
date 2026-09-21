@@ -242,7 +242,7 @@ func newQueueFixture(t *testing.T, dsn string) providertest.Fixture {
 	t.Cleanup(func() {
 		_, _ = database.Exec(`DROP SCHEMA IF EXISTS "` + string(namespace) + `" CASCADE`)
 	})
-	store, err := provider.QueueStoreAt(database, namespace)
+	store, err := provider.QueueStoreAt(database, namespace, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +306,7 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 	if err := provider.ApplyInitial(ctx, database, allowlisted); err != nil {
 		t.Fatal(err)
 	}
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -28,6 +28,7 @@ const (
 type queueStore struct {
 	database  *sqlx.DB
 	namespace physical.PhysicalName
+	history   bool
 }
 
 type postgresqlSelectedClaim struct {
@@ -40,25 +41,25 @@ type postgresqlSelectedClaim struct {
 
 // QueueStore binds the durable job state machine to a live PostgreSQL database
 // in the default system namespace.
-func (*Provider) QueueStore(database *sqlx.DB) (queueprovider.Store, error) {
-	return newQueueStore(database, "_golem")
+func (*Provider) QueueStore(database *sqlx.DB, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
+	return newQueueStore(database, "_golem", unmanaged)
 }
 
 // QueueStoreAt exists for generated schemas whose reviewed system namespace
 // differs from the default. The namespace must already be a closed physical
 // identifier; no application value can become SQL.
-func (*Provider) QueueStoreAt(database *sqlx.DB, namespace physical.PhysicalName) (queueprovider.Store, error) {
-	return newQueueStore(database, namespace)
+func (*Provider) QueueStoreAt(database *sqlx.DB, namespace physical.PhysicalName, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
+	return newQueueStore(database, namespace, unmanaged)
 }
 
-func newQueueStore(database *sqlx.DB, namespace physical.PhysicalName) (queueprovider.Store, error) {
+func newQueueStore(database *sqlx.DB, namespace physical.PhysicalName, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
 	if database == nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: database is nil")
 	}
 	if !eventNamespacePattern.MatchString(string(namespace)) {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: system namespace is invalid")
 	}
-	return &queueStore{database: database, namespace: namespace}, nil
+	return &queueStore{database: database, namespace: namespace, history: physical.QueueHistoryAdmitted(unmanaged)}, nil
 }
 
 func (store *queueStore) table() string { return qualified(store.namespace, "golem_queue") }
@@ -72,6 +73,13 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS "golem_queue_claim" ON ` + store.table() + ` ("status","available_at","type")`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS "golem_queue_dedupe" ON ` + store.table() + ` ("dedupe_key") WHERE "status" IN ('pending','leased')`,
 		`CREATE INDEX IF NOT EXISTS "golem_queue_exclusive" ON ` + store.table() + ` ("exclusive_key") WHERE "status"='leased'`,
+	}
+	if store.history {
+		statements = append(statements,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_enqueued" ON `+store.table()+` ("enqueued_at","id")`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_history" ON `+store.table()+` ("status","enqueued_at","id")`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_terminal" ON `+store.table()+` ("status","finished_at","id")`,
+		)
 	}
 	for _, statement := range statements {
 		if _, err := store.database.ExecContext(ctx, statement); err != nil {
