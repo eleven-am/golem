@@ -547,6 +547,14 @@ func operationFacts(plan migration.Plan, operation migration.Operation, before, 
 			return identity, facts, false
 		}
 		facts.extensionRecreation = operation.Risk == migration.RiskRewrite && facts.beforePresent != facts.afterPresent
+	case migration.UpgradeSemanticState:
+		_, beforePresent := before.extensions[ir.ExtensionID(id)]
+		_, afterPresent := after.extensions[ir.ExtensionID(id)]
+		if !beforePresent || !afterPresent {
+			return identity, facts, false
+		}
+		identity.extensionID = ir.ExtensionID(id)
+		facts.beforePresent, facts.afterPresent = true, true
 	case migration.ValidateConstraint:
 		left, beforePresent := before.columns[ir.FieldID(id)]
 		right, afterPresent := after.columns[ir.FieldID(id)]

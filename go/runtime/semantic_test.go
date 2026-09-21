@@ -282,7 +282,7 @@ func newSemanticJobFixture(t *testing.T, hook func(*sqlx.DB)) semanticJobFixture
 	database := sqlx.NewDb(handle, "sqlite3")
 	if _, err := database.Exec(`
 CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
-CREATE TABLE "` + semanticJobStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
+CREATE TABLE "` + semanticJobStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT;
 CREATE INDEX "_golem_semantic_semantic-post-related_state_stale" ON "` + semanticJobStateTable + `" ("record_key" ASC) WHERE "status" <> 'ready';
 CREATE VIRTUAL TABLE "` + semanticJobVectorTable + `" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
 INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {

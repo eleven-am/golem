@@ -31,7 +31,7 @@ func TestLowerDecodeSemanticStorageRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Descriptor{ID: "semantic-id", ModelID: "model-id", Name: "related", Space: "content", Dimensions: 3, Fields: []ir.FieldID{"field-a", "field-b"}, Metric: "cosine", Storage: "_golem_semantic_semantic-id", Identity: []IdentityColumn{
+	want := Descriptor{ID: "semantic-id", ModelID: "model-id", Name: "related", Space: "content", Dimensions: 3, Fields: []ir.FieldID{"field-a", "field-b"}, Metric: "cosine", Storage: "_golem_semantic_semantic-id", StateVersion: StateVersionCurrent, Identity: []IdentityColumn{
 		{Name: "tenant", Storage: physicalpkg.StorageType{Kind: physicalpkg.StoragePostgreSQLVarchar, Length: 40}, NotNull: true},
 		{Name: "serial", Storage: physicalpkg.StorageType{Kind: physicalpkg.StoragePostgreSQLBigInt}, NotNull: true},
 	}}
@@ -82,7 +82,7 @@ func TestDecodeAcceptsRetainedSixAttributeSnapshots(t *testing.T) {
 	legacy := current
 	legacy.Attributes = nil
 	for _, attribute := range current.Attributes {
-		if attribute.Name != attributeIdentity {
+		if attribute.Name != attributeIdentity && attribute.Name != attributeStateVersion {
 			legacy.Attributes = append(legacy.Attributes, attribute)
 		}
 	}

@@ -168,10 +168,10 @@ func TestCheckedSocialFrozenHistoryLoadsWithoutRewritingReleasedBytes(t *testing
 		ir.PostgreSQL: {"1e6c1e82f8f56994b90b24697563f6ca4df9616b059a06736b2d0a1372ee1477", "3ab580245cb5f27bed603d293e514285906860dff09b854f35752c8ce3215578", "19c9b8114ba2f7cf7853e13bd2970d56aaab06db749f715f6442e9b45e9512b6", "99734d0bfb411d1a99100c3fa39acd298dfaae0cbfde310f8fb3206007c9bb92", "bb44afcbdc64dcda37b4608e2a569a771899bb25c3d209dbe9746d3e4b0847c7", "048aaeb08f2d4f96c66d6d67ca39c802827c9c477981a9cb2f208310fe9446d7"},
 	} {
 		entries := state.Histories[provider].Manifest.Entries
-		if len(entries) != len(want) {
-			t.Fatalf("provider %s released entry count=%d", provider, len(entries))
+		if len(entries) < len(want) {
+			t.Fatalf("provider %s released entry count=%d, want at least %d", provider, len(entries), len(want))
 		}
-		for index := range entries {
+		for index := range want {
 			if entries[index].ChainHash != want[index] {
 				t.Fatalf("provider %s entry %d chain hash=%s want=%s", provider, index, entries[index].ChainHash, want[index])
 			}

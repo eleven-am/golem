@@ -43,6 +43,7 @@ const (
 	RenameIndex                 OperationKind = "renameIndex"
 	CreateProviderExtension     OperationKind = "createProviderExtension"
 	DropProviderExtension       OperationKind = "dropProviderExtension"
+	UpgradeSemanticState        OperationKind = "upgradeSemanticState"
 	BackfillColumn              OperationKind = "backfillColumn"
 	InitializeConcurrencyColumn OperationKind = "initializeConcurrencyColumn"
 	RebuildTable                OperationKind = "rebuildTable"

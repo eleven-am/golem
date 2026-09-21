@@ -111,6 +111,10 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 		identityKeys[index] = quote(column.Name) + " ASC"
 	}
 	names := semanticStateIndexNames(descriptor)
+	strikes := ""
+	if descriptor.StateVersion >= semanticstorage.StateVersionStrikes {
+		strikes = semanticStrikeColumnDefinition + ", "
+	}
 	statements := []string{
 		"CREATE TABLE " + quote(state) + " (" +
 			quote("record_key") + " TEXT NOT NULL, " +
@@ -120,7 +124,7 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 			quote("attempt_count") + " INTEGER NOT NULL DEFAULT 0, " +
 			quote("error_code") + " TEXT, " +
 			quote("updated_at") + " INTEGER NOT NULL, " +
-			strings.Join(identityColumns, "") +
+			strings.Join(identityColumns, "") + strikes +
 			"PRIMARY KEY (" + quote("record_key") + "), " +
 			"CHECK (" + quote("status") + " IN ('pending','ready','failed')), " +
 			"CHECK (" + quote("attempt_count") + " >= 0), " +
@@ -136,6 +140,23 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 		"record_key TEXT PRIMARY KEY, "+
 		"embedding float["+strconv.Itoa(int(descriptor.Dimensions))+"] distance_metric=cosine)")
 	return statements, nil
+}
+
+const semanticStrikeColumnDefinition = `"ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)`
+
+func renderSemanticStateUpgrade(before, after physical.Extension) ([]string, error) {
+	previous, err := semanticstorage.Decode(before)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: %w", before.ID, err)
+	}
+	next, err := semanticstorage.Decode(after)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: %w", after.ID, err)
+	}
+	if !semanticstorage.RegisteredStateUpgrade(previous, next) {
+		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: transition %d to %d is not a registered additive upgrade", after.ID, previous.StateVersion, next.StateVersion)
+	}
+	return []string{"ALTER TABLE " + quote(physical.PhysicalName(string(next.Storage)+"_state")) + " ADD COLUMN " + semanticStrikeColumnDefinition}, nil
 }
 
 // semanticStateIndexNames returns the identity and staleness index names of one
