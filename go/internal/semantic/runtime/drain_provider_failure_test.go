@@ -62,8 +62,12 @@ func TestSemanticDrainDefersAnUnclassifiedProviderFailureWithoutQuarantine(t *te
 		t.Fatalf("an unclassified provider failure was not deferred as systemic: %v", err)
 	}
 	assertDrainErrorIsClosed(t, err)
-	if failing.calls != 1 {
-		t.Fatalf("provider calls=%d want=1: an unclassified failure fanned out into per-record retries", failing.calls)
+	// An unclassified failure is isolated once, inside the pass's existing
+	// outage budget, so the culprit can be attributed. The budget itself is
+	// unchanged: a provider that is down is still contacted at most
+	// semanticOutageBatches times per pass.
+	if failing.calls != semanticOutageBatches {
+		t.Fatalf("provider calls=%d want=%d: unclassified isolation escaped the outage budget", failing.calls, semanticOutageBatches)
 	}
 	for _, id := range []string{"a", "b"} {
 		if status, code, attempts := fixture.failure(t, id); status != "pending" || code.Valid || attempts != before {
@@ -191,7 +195,18 @@ func TestSemanticReconcileContinuesPastADocumentTheProviderKeepsRefusing(t *test
 			t.Fatalf("record %q after the refused batch status=%q: one refused document stalled reconcile", id, status)
 		}
 	}
-	if fixture.count(t, drainStateTable) != 1+len(ids)-8 {
+	// Isolating the refused batch lets every healthy document in it settle, so
+	// only the poisoned one is left pending.
+	for _, id := range ids {
+		want := "ready"
+		if id == "p02" {
+			want = "pending"
+		}
+		if status := fixture.status(t, id); status != want {
+			t.Fatalf("record %q status=%q want %q", id, status, want)
+		}
+	}
+	if fixture.count(t, drainStateTable) != 1+len(ids) {
 		t.Fatalf("state rows=%d: reconcile skipped cleanup of a record whose owner is gone", fixture.count(t, drainStateTable))
 	}
 }

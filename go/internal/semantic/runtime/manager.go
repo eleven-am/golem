@@ -53,6 +53,9 @@ const (
 	semanticMarkChunk     = 128
 	semanticMarkBinds     = 900
 	semanticOutageBatches = 2
+
+	semanticAmbiguousStrikeBound    = 5
+	semanticUnclassifiedRefusalCode = "EMBEDDING_REFUSED_UNCLASSIFIED"
 )
 
 // IdentityScan decodes one ranked row's owner identity columns. The caller owns
@@ -755,6 +758,12 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 	if chunk < 1 {
 		return fmt.Errorf("P9_SEMANTIC_MARK: identity is too wide to mark")
 	}
+	strikes := manager.tracksStrikes(index)
+	strikeColumn, strikeReset := "", ""
+	if strikes {
+		strikeColumn = "," + manager.quote("ambiguous_strikes")
+		strikeReset = "," + manager.quote("ambiguous_strikes") + "=0"
+	}
 	for offset := 0; offset < len(rows); offset += chunk {
 		end := offset + chunk
 		if end > len(rows) {
@@ -775,14 +784,17 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 			if width > 0 {
 				tuple += "," + strings.Join(slots, ",")
 			}
+			if strikes {
+				tuple += ",0"
+			}
 			tuples = append(tuples, tuple+")")
 		}
 		statement := "INSERT INTO " + manager.hidden(index, "_state") +
 			" (" + manager.quote("record_key") + "," + manager.quote("source_hash") + "," + manager.quote("space_fingerprint") + "," +
-			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + ")" +
+			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + strikeColumn + ")" +
 			" VALUES " + strings.Join(tuples, ",") +
 			" ON CONFLICT(" + manager.quote("record_key") + ") DO UPDATE SET " +
-			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=" + generation
+			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=" + generation + strikeReset
 		observeexec.RecordStatement(ctx)
 		if _, err := executor.ExecContext(ctx, statement, arguments...); err != nil {
 			return fmt.Errorf("P9_SEMANTIC_MARK: stale mark failed")
@@ -909,6 +921,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 				dirty = append(dirty, record)
 				continue
 			}
+			if pass.liveness == "" && state.status == "ready" {
+				pass.liveness = record.text
+			}
 			if state.status != "ready" {
 				unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
 			}
@@ -969,6 +984,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 		}
 	}
 	span.SetAggregateCount(aggregate)
+	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
+		return err
+	}
 	return pass.finish(ctx, index)
 }
 
@@ -976,16 +994,28 @@ type embedPass struct {
 	deferred    error
 	consecutive int
 	pending     int
+	succeeded   bool
+	refused     []sourceRecord
+	liveness    string
 }
 
 func (pass *embedPass) settled() {
 	pass.consecutive = 0
 }
 
-func (pass *embedPass) deferBatch(err error, records int) {
+func (pass *embedPass) deferCall(err error) {
 	pass.deferred = cmp.Or(pass.deferred, err)
 	pass.consecutive++
-	pass.pending += records
+}
+
+func (pass *embedPass) deferBatch(err error, batch []sourceRecord) {
+	pass.deferCall(err)
+	pass.pending += len(batch)
+}
+
+func (pass *embedPass) refuse(err error, record sourceRecord) {
+	pass.deferBatch(err, []sourceRecord{record})
+	pass.refused = append(pass.refused, record)
 }
 
 func (pass *embedPass) finish(ctx context.Context, index Index) error {
@@ -996,6 +1026,10 @@ func (pass *embedPass) finish(ctx context.Context, index Index) error {
 	span.SetAggregateCount(int64(pass.pending))
 	observeexec.Finish(span, observe.OutcomeRetrying, observe.ReasonProvider)
 	return pass.deferred
+}
+
+func (manager *Manager) tracksStrikes(index Index) bool {
+	return index.Descriptor.StateVersion >= semanticstorage.StateVersionStrikes
 }
 
 func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint string, dirty []sourceRecord, pass *embedPass) error {
@@ -1034,7 +1068,20 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 				return embedErr
 			}
 			if code, ok := embedding.CodeOf(embedErr); !ok || code != embedding.CodeInvalidInput {
-				pass.deferBatch(providerDeferral{err: embedErr}, len(batch))
+				if ok && code == embedding.CodeUnavailable {
+					pass.deferBatch(providerDeferral{err: embedErr}, batch)
+					continue
+				}
+				if len(batch) > 1 {
+					pass.deferCall(providerDeferral{err: embedErr})
+					for _, record := range batch {
+						if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
+							return err
+						}
+					}
+					continue
+				}
+				pass.refuse(providerDeferral{err: embedErr}, batch[0])
 				continue
 			}
 			pass.settled()
@@ -1055,6 +1102,118 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			return fmt.Errorf("P9_SEMANTIC_REFRESH: vector storage failed")
 		}
 		pass.settled()
+		pass.succeeded = true
+	}
+	return nil
+}
+
+// strikeRefusals charges one strike to each record the provider refused alone
+// for an unclassified reason. Isolation happens inside the pass's existing call
+// budget, so a provider that is down is still contacted no more often than
+// before and never causes a strike.
+func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *embedPass) error {
+	refused := pass.refused
+	pass.refused = nil
+	if len(refused) == 0 {
+		return nil
+	}
+	if !pass.succeeded {
+		suspect, err := manager.anyRefusalIsAlreadySuspect(ctx, index, refused)
+		if err != nil {
+			return err
+		}
+		if !suspect || !manager.proveLiveness(ctx, index, pass) {
+			return nil
+		}
+	}
+	for _, record := range refused {
+		if err := manager.recordAmbiguousRefusal(ctx, index, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// anyRefusalIsAlreadySuspect reports whether a refused record has survived an
+// earlier strike. Only then is one liveness probe worth the provider call: a
+// pass with nothing to decide costs exactly what it always did.
+func (manager *Manager) anyRefusalIsAlreadySuspect(ctx context.Context, index Index, refused []sourceRecord) (bool, error) {
+	if !manager.tracksStrikes(index) {
+		return false, nil
+	}
+	arguments := make([]any, 0, len(refused))
+	marks := make([]string, 0, len(refused))
+	for _, record := range refused {
+		arguments = append(arguments, record.key)
+		marks = append(marks, manager.placeholder(len(arguments)))
+	}
+	query := "SELECT COUNT(*) FROM " + manager.hidden(index, "_state") +
+		" WHERE " + manager.quote("ambiguous_strikes") + ">0 AND " + manager.quote("record_key") + " IN (" + strings.Join(marks, ",") + ")"
+	observeexec.RecordStatement(ctx)
+	var suspects int64
+	if err := manager.database.GetContext(ctx, &suspects, query, arguments...); err != nil {
+		return false, fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
+	}
+	return suspects > 0, nil
+}
+
+// proveLiveness re-embeds one document this pass already found settled. Only a
+// provider call that succeeds here can turn a refusal into a strike, so an
+// outage can never spend a strike a healthy pass earned earlier. Its result is
+// discarded: the record is already stored and unchanged.
+func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *embedPass) bool {
+	if pass.liveness == "" {
+		return false
+	}
+	input, inputErr := embedding.NewInput("source-0", pass.liveness)
+	if inputErr != nil {
+		return false
+	}
+	if _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
+		return false
+	}
+	pass.succeeded = true
+	return true
+}
+
+func (manager *Manager) recordAmbiguousRefusal(ctx context.Context, index Index, record sourceRecord) error {
+	if !manager.tracksStrikes(index) {
+		return nil
+	}
+	strikes := manager.quote("ambiguous_strikes")
+	reached := strikes + "+1>=" + strconv.Itoa(semanticAmbiguousStrikeBound)
+	now := time.Now().UTC().UnixMicro()
+	if record.updatedAt == semanticUnobserved {
+		columns := ""
+		values := ""
+		arguments := []any{record.key, []byte{}, hex.EncodeToString(index.SpaceFingerprint[:]), now}
+		for position, column := range index.Descriptor.Identity {
+			columns += "," + manager.quote(column.Name)
+			arguments = append(arguments, record.identity[position])
+			values += "," + manager.placeholder(len(arguments))
+		}
+		statement := "INSERT INTO " + manager.hidden(index, "_state") +
+			" (" + manager.quote("record_key") + "," + manager.quote("source_hash") + "," + manager.quote("space_fingerprint") + "," +
+			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + "," + strikes + ")" +
+			" VALUES (" + manager.placeholder(1) + "," + manager.placeholder(2) + "," + manager.placeholder(3) + ",'pending',0,NULL," + manager.placeholder(4) + values + ",1)" +
+			" ON CONFLICT(" + manager.quote("record_key") + ") DO NOTHING"
+		observeexec.RecordStatement(ctx)
+		if _, err := manager.database.ExecContext(ctx, statement, arguments...); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
+		}
+		return nil
+	}
+	statement := "UPDATE " + manager.hidden(index, "_state") +
+		" SET " + strikes + "=" + strikes + "+1," +
+		manager.quote("status") + "=CASE WHEN " + reached + " THEN 'failed' ELSE " + manager.quote("status") + " END," +
+		manager.quote("error_code") + "=CASE WHEN " + reached + " THEN " + manager.placeholder(1) + " ELSE " + manager.quote("error_code") + " END," +
+		manager.quote("attempt_count") + "=CASE WHEN " + reached + " THEN " + manager.quote("attempt_count") + "+1 ELSE " + manager.quote("attempt_count") + " END," +
+		manager.quote("updated_at") + "=" + manager.placeholder(2) +
+		" WHERE " + manager.quote("record_key") + "=" + manager.placeholder(3) +
+		" AND " + manager.quote("updated_at") + "=" + manager.placeholder(4)
+	observeexec.RecordStatement(ctx)
+	if _, err := manager.database.ExecContext(ctx, statement, semanticUnclassifiedRefusalCode, now, record.key, record.updatedAt); err != nil {
+		return fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
 	}
 	return nil
 }
@@ -1438,6 +1597,9 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, index Index, fingerprint string, records []sourceRecord, vectors []embedding.Vector) error {
 	columns := []string{"record_key", "source_hash", "space_fingerprint", "status", "attempt_count", "error_code", "updated_at"}
 	assignments := []string{"source_hash=excluded.source_hash", "space_fingerprint=excluded.space_fingerprint", "status='ready'", "error_code=NULL", "updated_at=excluded.updated_at"}
+	if manager.tracksStrikes(index) {
+		assignments = append(assignments, "ambiguous_strikes=0")
+	}
 	for _, column := range index.Descriptor.Identity {
 		name := manager.quote(column.Name)
 		columns = append(columns, name)
