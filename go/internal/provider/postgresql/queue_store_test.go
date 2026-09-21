@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,7 +139,7 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 		if _, err := store.Enqueue(ctx, nil, queueprovider.EnqueueRequest{ID: identity, Type: "gate.cancel.lock", Payload: []byte(`{}`), MaxAttempts: 2}); err != nil {
 			t.Fatal(err)
 		}
-		claimed, err := store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.cancel.lock"}, Limit: 1, LeaseDuration: 150 * time.Millisecond})
+		claimed, err := store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.cancel.lock"}, Limit: 1, LeaseDuration: 250 * time.Millisecond})
 		if err != nil || len(claimed) != 1 {
 			t.Fatalf("claim=%#v error=%v", claimed, err)
 		}
@@ -158,7 +159,8 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 			result <- canceled
 			failure <- cancelErr
 		}()
-		time.Sleep(300 * time.Millisecond)
+		awaitRowLockWaiter(t, fixture, store.table())
+		awaitDatabaseClockPastLease(t, fixture, store.table(), identity)
 		if err := transaction.Commit(); err != nil {
 			t.Fatal(err)
 		}
@@ -171,6 +173,42 @@ func TestCancelUsesTimeAfterRowLock(t *testing.T) {
 	})
 }
 
+func awaitRowLockWaiter(t testing.TB, fixture providertest.Fixture, table string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var waiting int
+		if err := fixture.Database.GetContext(context.Background(), &waiting, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND strpos(query,$1)>0`, table); err != nil {
+			t.Fatal(err)
+		}
+		if waiting != 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("cancellation never blocked on the locked row")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func awaitDatabaseClockPastLease(t testing.TB, fixture providertest.Fixture, table, identity string) {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		var expired bool
+		if err := fixture.Database.GetContext(context.Background(), &expired, `SELECT clock_timestamp()>"lease_until" FROM `+table+` WHERE "id"=$1`, identity); err != nil {
+			t.Fatal(err)
+		}
+		if expired {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("database clock never passed the lease")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func runQueueGate(t *testing.T, gate func(testing.TB, providertest.Fixture)) {
 	t.Helper()
 	for _, profile := range []struct{ name, environment string }{
@@ -178,7 +216,7 @@ func runQueueGate(t *testing.T, gate func(testing.TB, providertest.Fixture)) {
 		{name: "linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
 	} {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := testenv.PostgreSQLDSN(t, profile.environment)
+			dsn := testenv.DisposablePostgreSQL(t, profile.environment)
 			gate(t, newQueueFixture(t, dsn))
 		})
 	}
@@ -211,7 +249,19 @@ func newQueueFixture(t *testing.T, dsn string) providertest.Fixture {
 	if err := store.EnsureSchema(ctx); err != nil {
 		t.Fatal(err)
 	}
-	return providertest.Fixture{Store: store, Database: database, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
+	return providertest.Fixture{Store: store, Database: database, ExpireLease: func(ctx context.Context, ids ...string) error {
+		if len(ids) == 0 {
+			return nil
+		}
+		marks := make([]string, len(ids))
+		arguments := make([]any, len(ids))
+		for index, identity := range ids {
+			marks[index] = "$" + strconv.Itoa(index+1)
+			arguments[index] = identity
+		}
+		_, err := database.ExecContext(ctx, `UPDATE `+qualified(namespace, "golem_queue")+` SET "lease_until"=clock_timestamp()-interval '1 hour',"available_at"=clock_timestamp()-interval '1 hour' WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased'`, arguments...)
+		return err
+	}, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
 		if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS `+qualified(namespace, physical.PhysicalName(shape.Name))); err != nil {
 			return err
 		}
@@ -232,7 +282,7 @@ func newQueueFixture(t *testing.T, dsn string) providertest.Fixture {
 // allowlist admits the queue store's own relation into the reviewed system
 // namespace. Removing it turns the queue table into drift.
 func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
-	dsn := testenv.PostgreSQLDSN(t, testenv.PostgreSQLDSNVariable)
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	ctx := context.Background()
 	provider := New()
 	database, _, err := provider.Open(ctx, dsn)

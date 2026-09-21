@@ -132,7 +132,20 @@ func newQueueFixture(t *testing.T) providertest.Fixture {
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return providertest.Fixture{Store: store, Database: database, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
+	return providertest.Fixture{Store: store, Database: database, ExpireLease: func(ctx context.Context, ids ...string) error {
+		if len(ids) == 0 {
+			return nil
+		}
+		marks := make([]string, len(ids))
+		arguments := make([]any, len(ids))
+		for index, identity := range ids {
+			marks[index] = "?"
+			arguments[index] = identity
+		}
+		past := `(` + sqliteDatabaseMicros + ` - 3600000000)`
+		_, err := database.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "lease_until"=`+past+`,"available_at"=`+past+` WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased'`, arguments...)
+		return err
+	}, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
 		if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS "main"."`+shape.Name+`"`); err != nil {
 			return err
 		}

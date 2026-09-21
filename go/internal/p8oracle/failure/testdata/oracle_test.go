@@ -35,6 +35,12 @@ import (
 
 const failureUserID = "c0000000-0000-0000-0000-000000000001"
 
+const (
+	failureHostStartupGrace = 15 * time.Second
+	failureHostReadyBudget  = 4 * failureHostStartupGrace
+	failureHostProbeTimeout = 5 * time.Second
+)
+
 type failureFixture struct {
 	t        *testing.T
 	ctx      context.Context
@@ -666,13 +672,13 @@ func testPublisherCDCAndMigrationCrash(t *testing.T) {
 	}
 
 	crashed := startFailureHost(t, example, hostBinary)
-	assertFailureHostReady(t, crashed.address)
+	assertFailureHostReady(t, crashed)
 	stopFailureHost(t, crashed, syscall.SIGKILL)
 	database := openFailureDatabase(t, context.Background(), 0)
 	defer database.Close()
 	restarted := startFailureHost(t, example, hostBinary)
-	assertFailureHostReady(t, restarted.address)
-	waitFailureDeliveryDeadline(t, database, 1, 45*time.Second)
+	assertFailureHostReady(t, restarted)
+	waitFailureDeliveryDeadline(t, database, 1, 45*time.Second, restarted)
 	stopFailureHost(t, restarted, syscall.SIGTERM)
 	memory, err := events.NewMemoryTransport(events.MemoryLimits{Buffer: 8})
 	if err != nil {
@@ -1125,16 +1131,17 @@ func countFailureFacts(t *testing.T, database *provider.Database) int {
 }
 
 func waitFailureDelivery(t *testing.T, database *provider.Database, want int) {
-	waitFailureDeliveryDeadline(t, database, want, 10*time.Second)
+	waitFailureDeliveryDeadline(t, database, want, 10*time.Second, nil)
 }
 
-func waitFailureDeliveryDeadline(t *testing.T, database *provider.Database, want int, timeout time.Duration) {
+func waitFailureDeliveryDeadline(t *testing.T, database *provider.Database, want int, timeout time.Duration, host *failureHost) {
 	t.Helper()
 	table := `"_golem_outbox_delivery"`
 	if database.Provider() == golem.PostgreSQL {
 		table = `"_golem"."_golem_outbox_delivery"`
 	}
-	deadline := time.Now().Add(timeout)
+	started := time.Now()
+	deadline := started.Add(timeout)
 	for time.Now().Before(deadline) {
 		var count int
 		if err := database.UnsafeSQLX().GetContext(context.Background(), &count, "SELECT COUNT(*) FROM "+table+" WHERE status='delivered'"); err != nil {
@@ -1143,9 +1150,55 @@ func waitFailureDeliveryDeadline(t *testing.T, database *provider.Database, want
 		if count == want {
 			return
 		}
+		if count > want {
+			t.Fatalf("delivered facts overshot %d to %d after %s: deliveries=%s%s", want, count, time.Since(started), failureDeliveryState(t, database), failureHostLog(host))
+		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatalf("delivered facts did not reach %d", want)
+	t.Fatalf("delivered facts did not reach %d within %s: deliveries=%s%s", want, timeout, failureDeliveryState(t, database), failureHostLog(host))
+}
+
+func failureHostLog(host *failureHost) string {
+	if host == nil {
+		return ""
+	}
+	return " host=" + host.output.String()
+}
+
+func failureDeliveryState(t *testing.T, database *provider.Database) string {
+	t.Helper()
+	table := `"_golem_outbox_delivery"`
+	if database.Provider() == golem.PostgreSQL {
+		table = `"_golem"."_golem_outbox_delivery"`
+	}
+	rows, err := database.UnsafeSQLX().QueryxContext(context.Background(), `SELECT causation_id,status,attempt_count,available_at,lease_until,last_failure_code FROM `+table)
+	if err != nil {
+		return "unreadable: " + err.Error()
+	}
+	defer rows.Close()
+	states := []string{}
+	for rows.Next() {
+		values, scanErr := rows.SliceScan()
+		if scanErr != nil {
+			return "unreadable: " + scanErr.Error()
+		}
+		fields := make([]string, 0, len(values))
+		for _, value := range values {
+			if raw, ok := value.([]byte); ok {
+				fields = append(fields, string(raw))
+				continue
+			}
+			fields = append(fields, fmt.Sprintf("%v", value))
+		}
+		states = append(states, "{"+strings.Join(fields, " ")+"}")
+	}
+	if err := rows.Err(); err != nil {
+		return "unreadable: " + err.Error()
+	}
+	if len(states) == 0 {
+		return "none"
+	}
+	return strings.Join(states, ",")
 }
 
 func waitFailurePublisher(t *testing.T, app *social.App[social.Principal]) {
@@ -1192,8 +1245,8 @@ func testGracefulAndForcedShutdown(t *testing.T) {
 	}
 
 	first := startFailureHost(t, example, binary)
-	assertFailureHostReady(t, first.address)
-	waitFailureDeliveryDeadline(t, database, 1, 10*time.Second)
+	assertFailureHostReady(t, first)
+	waitFailureDeliveryDeadline(t, database, 1, 10*time.Second, first)
 	stopFailureHost(t, first, syscall.SIGTERM)
 	delivered := readShutdownState(t, database)
 	assertSameShutdownIdentity(t, pending, delivered)
@@ -1202,12 +1255,12 @@ func testGracefulAndForcedShutdown(t *testing.T) {
 	}
 
 	forced := startFailureHost(t, example, binary)
-	assertFailureHostReady(t, forced.address)
+	assertFailureHostReady(t, forced)
 	stopFailureHost(t, forced, syscall.SIGKILL)
 	assertSameShutdownIdentity(t, delivered, readShutdownState(t, database))
 
 	restarted := startFailureHost(t, example, binary)
-	assertFailureHostReady(t, restarted.address)
+	assertFailureHostReady(t, restarted)
 	response := failureHTTPGraphQL(t, restarted.address, `query { posts(take: 1) { id } }`)
 	if !bytes.Contains(response, []byte(`"posts"`)) || bytes.Contains(response, []byte(`"errors"`)) {
 		t.Fatalf("post-kill GraphQL response=%s", response)
@@ -1248,10 +1301,27 @@ type failureHost struct {
 	command *exec.Cmd
 	exited  chan struct{}
 	address string
-	output  *strings.Builder
+	output  *failureHostOutput
 	stopped atomic.Bool
 	errMu   sync.Mutex
 	err     error
+}
+
+type failureHostOutput struct {
+	mu      sync.Mutex
+	builder strings.Builder
+}
+
+func (output *failureHostOutput) Write(payload []byte) (int, error) {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.builder.Write(payload)
+}
+
+func (output *failureHostOutput) String() string {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.builder.String()
 }
 
 func startFailureHost(t *testing.T, directory, binary string) *failureHost {
@@ -1267,7 +1337,7 @@ func startFailureHost(t *testing.T, directory, binary string) *failureHost {
 	command.Env = failureEnvironment(os.Environ(), "GOLEM_PROVIDER", os.Getenv("P8_ORACLE_PROVIDER"))
 	command.Env = failureEnvironment(command.Env, "GOLEM_DATABASE_DSN", os.Getenv("P8_ORACLE_DSN"))
 	command.Env = failureEnvironment(command.Env, "GOLEM_HTTP_ADDRESS", address)
-	output := &strings.Builder{}
+	output := &failureHostOutput{}
 	command.Stdout, command.Stderr = output, output
 	if err := command.Start(); err != nil {
 		t.Fatal(err)
@@ -1292,11 +1362,18 @@ func startFailureHost(t *testing.T, directory, binary string) *failureHost {
 	return host
 }
 
-func assertFailureHostReady(t *testing.T, address string) {
+func assertFailureHostReady(t *testing.T, host *failureHost) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		response, err := http.Get("http://" + address + "/health/ready")
+	probe := &http.Client{Timeout: failureHostProbeTimeout}
+	started := time.Now()
+	deadline := started.Add(failureHostReadyBudget)
+	for {
+		select {
+		case <-host.exited:
+			t.Fatalf("host %s exited after %s without reporting ready: %s", host.address, time.Since(started), host.output)
+		default:
+		}
+		response, err := probe.Get("http://" + host.address + "/health/ready")
 		if err == nil {
 			body, _ := io.ReadAll(response.Body)
 			_ = response.Body.Close()
@@ -1304,9 +1381,11 @@ func assertFailureHostReady(t *testing.T, address string) {
 				return
 			}
 		}
+		if time.Now().After(deadline) {
+			t.Fatalf("host %s stayed alive without reporting ready for %s, beyond its own %s startup grace", host.address, time.Since(started), failureHostStartupGrace)
+		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("host %s did not become ready", address)
 }
 
 func stopFailureHost(t *testing.T, host *failureHost, signal syscall.Signal) {

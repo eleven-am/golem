@@ -29,9 +29,10 @@ import (
 )
 
 const (
-	eventUserText    = "91000000-0000-0000-0000-000000000001"
-	eventSessionText = "92000000-0000-0000-0000-000000000001"
-	eventToken       = "p8-event-oracle-token"
+	eventUserText     = "91000000-0000-0000-0000-000000000001"
+	eventSessionText  = "92000000-0000-0000-0000-000000000001"
+	eventToken        = "p8-event-oracle-token"
+	eventArrivalGrace = 30 * time.Second
 )
 
 type principalKey struct{}
@@ -578,10 +579,10 @@ func (f *fixture) overflowCancellationIdentity() {
 	if f.observer.overflows.Load() < 2 {
 		f.t.Fatalf("caller and GraphQL queues did not independently overflow: observations=%d", f.observer.overflows.Load())
 	}
-	overflowCtx, cancelOverflow := context.WithTimeout(f.ctx, 2*time.Second)
+	overflowCtx, cancelOverflow := context.WithTimeout(f.ctx, eventArrivalGrace)
 	defer cancelOverflow()
 	if _, err := overflowStream.Recv(overflowCtx); eventCode(err) != events.CodeSubscriptionOverflow {
-		f.t.Fatalf("caller overflow code=%q error=%v", eventCode(err), err)
+		f.t.Fatalf("caller overflow code=%q error=%v deadline=%v", eventCode(err), err, overflowCtx.Err())
 	}
 	close(f.display.release)
 	var graphOverflowFrame wsFrame
@@ -625,7 +626,7 @@ func (f *fixture) overflowCancellationIdentity() {
 	f.awaitMemberships(7)
 	f.createPost(f.caller.Posts, f.userID, canaryID, "connection-canary", "connection body", true)
 	assertCancellationCanaryRouterRegression(f.t, canaryID.String())
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(eventArrivalGrace)
 	router := cancellationCanaryRouter{canaryID: canaryID.String()}
 	var canary wsFrame
 	for {
@@ -939,7 +940,7 @@ func (f *fixture) openGraphQLSubscription(id, query string, variables map[string
 
 func readFrame(t *testing.T, connection *websocket.Conn) wsFrame {
 	t.Helper()
-	return readFrameBefore(t, connection, time.Now().Add(5*time.Second))
+	return readFrameBefore(t, connection, time.Now().Add(eventArrivalGrace))
 }
 
 func readFrameBefore(t *testing.T, connection *websocket.Conn, deadline time.Time) wsFrame {
@@ -947,6 +948,9 @@ func readFrameBefore(t *testing.T, connection *websocket.Conn, deadline time.Tim
 	_ = connection.SetReadDeadline(deadline)
 	var frame wsFrame
 	if err := connection.ReadJSON(&frame); err != nil {
+		if errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("GraphQL frame did not arrive before its read deadline: %v", err)
+		}
 		t.Fatal(err)
 	}
 	return frame
@@ -970,10 +974,14 @@ func recvGraphEvent(t *testing.T, connection *websocket.Conn) graphEventEnvelope
 
 func recvCaller(t *testing.T, stream golem.EventStream[social.PostEvent]) social.PostEvent {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), eventArrivalGrace)
 	defer cancel()
+	started := time.Now()
 	value, err := stream.Recv(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			t.Fatalf("caller event did not arrive in %s: code=%q error=%v", time.Since(started), eventCode(err), err)
+		}
 		t.Fatal(err)
 	}
 	return value
