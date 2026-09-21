@@ -5,9 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -123,10 +121,7 @@ func TestNoOpUpdateDoesNotRequireUnchangedFieldPermission(t *testing.T) {
 	for _, profile := range []struct{ name, env string }{{"postgresql-c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for exact no-op authorization evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture := schematest.NewIndexedExact(t)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_noop_%d", sequence))

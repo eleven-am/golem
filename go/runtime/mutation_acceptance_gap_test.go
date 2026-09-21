@@ -168,10 +168,7 @@ func runMutationBoundaryProfiles(t *testing.T, evidence string, run func(*testin
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for %s", profile.env, evidence)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture, _, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			database, counts := openMutationBoundaryPostgreSQL(t, dsn)
 			t.Cleanup(func() { _ = database.Close() })
@@ -452,10 +449,7 @@ func TestRequiredInverseHasOneDisconnectRefusesBeforeSQLAcrossProviders(t *testi
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for required inverse has-one refusal evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := fmt.Sprintf("golem_p4_inverse_%s_%d_%d", profile.namespace, os.Getpid(), sequence)
 			systemNamespace := fmt.Sprintf("golem_p4_inverse_system_%s_%d_%d", profile.namespace, os.Getpid(), sequence)
@@ -817,10 +811,7 @@ func runRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixtur
 	for _, value := range []struct{ name, profile, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		value := value
 		t.Run(value.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(value.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for direction-specific delete evidence", value.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, value.env)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := fmt.Sprintf("golem_p4_%s_%s_%d_%d", prefix, value.profile, os.Getpid(), sequence)
 			systemNamespace := fmt.Sprintf("golem_p4_%s_system_%s_%d_%d", prefix, value.profile, os.Getpid(), sequence)
@@ -1342,10 +1333,7 @@ func TestMutationExactValuesAgreeAcrossProviders(t *testing.T) {
 	for _, profile := range []struct{ name, env string }{{"postgresql-c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for exact mutation parity evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture := schematest.NewMutationExactValues(t)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_exact_%d", sequence))
@@ -1455,10 +1443,7 @@ func runCreateDefaultPostgreSQLProfiles(t *testing.T, fieldPolicy bool) {
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for persisted-default create evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_create_%d", sequence))
 			systemNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_create_system_%d", sequence))
@@ -1612,10 +1597,7 @@ func TestSystemOutboxV1MigratesIntrospectsAndFingerprintsBothProviders(t *testin
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for live outbox migration/introspection evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_outbox_%d", sequence))
 			systemNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_outbox_system_%d", sequence))
@@ -1713,10 +1695,7 @@ func TestPostgreSQLUpsertSameSelectorMultiConnection(t *testing.T) {
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for PostgreSQL same-selector connection evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture, applicationNamespace, _ := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			const workers = 4
 			systems := make([]System[mutationResultPrincipal, mutationResultActor], workers)
@@ -1775,10 +1754,7 @@ func TestUpsertRetriesWholeEngineAttemptAndExhaustsAsConflict(t *testing.T) {
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for PostgreSQL retry-exhaustion evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			var attempts atomic.Int64
 			userPolicy := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultUser](fixture.schema.User, func(mutationResultActor) (golem.FrozenPolicy, error) {

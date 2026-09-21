@@ -84,7 +84,7 @@ func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, fragment := range []string{
-		`"updated_at" INTEGER NOT NULL, "tenant_id" TEXT NOT NULL, "id" TEXT NOT NULL, PRIMARY KEY ("record_key")`,
+		`"updated_at" INTEGER NOT NULL, "tenant_id" TEXT NOT NULL, "id" TEXT NOT NULL, "ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0), PRIMARY KEY ("record_key")`,
 		`CREATE INDEX "` + base + `_state_identity" ON "` + base + `_state" ("tenant_id" ASC, "id" ASC)`,
 		`CREATE INDEX "` + base + `_state_stale" ON "` + base + `_state" ("record_key" ASC) WHERE "status" <> 'ready'`,
 	} {
@@ -110,7 +110,7 @@ func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {
 	legacy.Extensions = append([]physical.Extension(nil), schema.Extensions...)
 	legacy.Extensions[0].Attributes = nil
 	for _, attribute := range schema.Extensions[0].Attributes {
-		if attribute.Name != "identity" {
+		if attribute.Name != "identity" && attribute.Name != "state_version" {
 			legacy.Extensions[0].Attributes = append(legacy.Extensions[0].Attributes, attribute)
 		}
 	}

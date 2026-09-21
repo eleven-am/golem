@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -120,10 +119,7 @@ func TestP3IndependentReferenceOraclePostgreSQLProfiles(t *testing.T) {
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.environment))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.environment+" is not configured")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.environment)
 			for _, indexed := range []bool{false, true} {
 				strategy := "batched"
 				namespaceStrategy := "b"

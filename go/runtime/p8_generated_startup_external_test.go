@@ -2,21 +2,16 @@ package runtime_test
 
 import (
 	"bytes"
-	"context"
 	"crypto/sha256"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	goruntime "runtime"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/eleven-am/golem/go/internal/testenv"
-	"github.com/jackc/pgx/v5"
 )
 
 func TestGeneratedAppOpenUsesVerifiedDatabaseHandleInExternalModule(t *testing.T) {
@@ -109,7 +104,7 @@ import (
 			testenv.FailMissingPostgreSQLIfRequired(t, profile.environment+" is not configured")
 			continue
 		}
-		dsn := p8CreateExternalPostgreSQLDatabase(t, administrativeDSN, profile.name)
+		dsn := testenv.DisposablePostgreSQLFrom(t, administrativeDSN)
 		environment = append(environment, profile.environment+"="+dsn)
 		if bothProviders {
 			p8RunExternalCommand(t, module, environment, binary, "migration", "apply", "--provider", "postgresql", "--dsn", dsn)
@@ -134,92 +129,6 @@ import (
 		t.Fatal(err)
 	}
 	p8RunExternalCommand(t, module, environment, "go", "test", "./app", "-run", "^"+name+"$", "-count=1")
-}
-
-var p8ExternalPostgreSQLDatabasePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
-var p8ExternalPostgreSQLDBNameParameterPattern = regexp.MustCompile(`(?i)(^|[ \t\r\n])dbname[ \t\r\n]*=[ \t\r\n]*(?:'(?:\\.|[^'])*'|(?:\\.|[^ \t\r\n])*)`)
-
-func p8CreateExternalPostgreSQLDatabase(t *testing.T, administrativeDSN, profile string) string {
-	t.Helper()
-	name := fmt.Sprintf("golem_p8_row4_%s_%d_%d", profile, os.Getpid(), time.Now().UnixNano())
-	if !p8ExternalPostgreSQLDatabasePattern.MatchString(name) {
-		t.Fatalf("invalid generated PostgreSQL database name %q", name)
-	}
-	config, err := pgx.ParseConfig(administrativeDSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	connection, err := pgx.ConnectConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var encoding, collate, characterType string
-	if err := connection.QueryRow(ctx, `SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&encoding, &collate, &characterType); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatal(err)
-	}
-	statement := fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 ENCODING %s LC_COLLATE %s LC_CTYPE %s", p8QuoteExternalPostgreSQLIdentifier(name), p8QuoteExternalPostgreSQLLiteral(encoding), p8QuoteExternalPostgreSQLLiteral(collate), p8QuoteExternalPostgreSQLLiteral(characterType))
-	if _, err := connection.Exec(ctx, statement); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("create disposable PostgreSQL database: %v", err)
-	}
-	if err := connection.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cleanupCancel()
-		admin, openErr := pgx.ConnectConfig(cleanupCtx, config)
-		if openErr != nil {
-			t.Errorf("open PostgreSQL cleanup connection: %v", openErr)
-			return
-		}
-		defer admin.Close(cleanupCtx)
-		if _, terminateErr := admin.Exec(cleanupCtx, `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); terminateErr != nil {
-			t.Errorf("terminate disposable PostgreSQL sessions: %v", terminateErr)
-			return
-		}
-		if _, dropErr := admin.Exec(cleanupCtx, "DROP DATABASE "+p8QuoteExternalPostgreSQLIdentifier(name)); dropErr != nil {
-			t.Errorf("drop disposable PostgreSQL database: %v", dropErr)
-		}
-	})
-	derived, err := p8ExternalPostgreSQLDSNForDatabase(administrativeDSN, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return derived
-}
-
-func p8ExternalPostgreSQLDSNForDatabase(value, database string) (string, error) {
-	if !p8ExternalPostgreSQLDatabasePattern.MatchString(database) {
-		return "", fmt.Errorf("invalid generated PostgreSQL database identifier")
-	}
-	if strings.Contains(value, "://") {
-		parsed, err := url.Parse(value)
-		if err != nil {
-			return "", err
-		}
-		parsed.Path = "/" + database
-		parsed.RawPath = ""
-		return parsed.String(), nil
-	}
-	location := p8ExternalPostgreSQLDBNameParameterPattern.FindStringIndex(value)
-	if location == nil {
-		return "", fmt.Errorf("PostgreSQL keyword DSN has no explicit dbname")
-	}
-	prefix := value[location[0]:location[1]]
-	leading := prefix[:len(prefix)-len(strings.TrimLeft(prefix, " \t\r\n"))]
-	return value[:location[0]] + leading + "dbname=" + database + value[location[1]:], nil
-}
-
-func p8QuoteExternalPostgreSQLIdentifier(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
-}
-
-func p8QuoteExternalPostgreSQLLiteral(value string) string {
-	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
 }
 
 func p8WriteExternalFile(t *testing.T, root, name, content string) {

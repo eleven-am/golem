@@ -26,11 +26,11 @@ func TestRuntimeRequiresExactReviewedMigrationLedgerPostgreSQL(t *testing.T) {
 	}
 	ran := false
 	for profileIndex, profile := range profiles {
-		dsn := strings.TrimSpace(os.Getenv(profile.environment))
-		if dsn == "" {
+		if strings.TrimSpace(os.Getenv(profile.environment)) == "" {
 			testenv.FailMissingPostgreSQLIfRequired(t, profile.environment+" is not configured")
 			continue
 		}
+		dsn := testenv.DisposablePostgreSQL(t, profile.environment)
 		ran = true
 		t.Run(profile.name, func(t *testing.T) {
 			configuration, err := pgx.ParseConfig(dsn)

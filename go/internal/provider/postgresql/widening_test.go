@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -708,11 +707,8 @@ func TestPostgreSQLWideningRollbackLeavesSchemaDataAndLedgerUnchanged(t *testing
 }
 
 func TestPostgreSQLWideningCAndLinguisticProfilesProduceIdenticalTruth(t *testing.T) {
-	c := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
-	linguistic := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
-	if c == "" || linguistic == "" {
-		testenv.SkipMissingPostgreSQL(t, "both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
-	}
+	c := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	linguistic := testenv.DisposablePostgreSQL(t, testenv.LinguisticDSNVariable)
 	var truth []string
 	var corpus []string
 	for _, profile := range []struct{ name, dsn string }{{"c", c}, {"linguistic", linguistic}} {
@@ -901,11 +897,7 @@ func forEachPostgreSQLProfile(t *testing.T, run func(*testing.T, string, *sqlx.D
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.environment))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is not set", profile.environment)
-			}
-			database, _, err := New().Open(context.Background(), dsn)
+			database, _, err := New().Open(context.Background(), testenv.DisposablePostgreSQL(t, profile.environment))
 			if err != nil {
 				t.Fatal(err)
 			}

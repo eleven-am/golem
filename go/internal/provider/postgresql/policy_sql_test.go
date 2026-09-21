@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"math"
-	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -383,10 +382,7 @@ func TestPostgreSQLPolicyCapabilitiesAreManifestedAndFingerprintBound(t *testing
 }
 
 func TestPostgreSQLPolicyNamedMutationsLive(t *testing.T) {
-	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
-	}
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	ctx := context.Background()
 	database, _, err := New().Open(ctx, dsn)
 	if err != nil {

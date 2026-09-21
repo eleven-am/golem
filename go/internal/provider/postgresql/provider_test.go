@@ -3,7 +3,6 @@ package postgresql
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"testing"
 
@@ -41,7 +40,7 @@ func TestSemanticIndexRendersPGVectorStorage(t *testing.T) {
 		`CREATE TABLE "social"."` + base + `_state"`,
 		`CREATE TABLE "social"."` + base + `_vec"`,
 		`"embedding" vector(384) NOT NULL`,
-		`"updated_at" bigint NOT NULL CHECK ("updated_at" >= 0), "id" uuid NOT NULL)`,
+		`"updated_at" bigint NOT NULL CHECK ("updated_at" >= 0), "id" uuid NOT NULL, "ambiguous_strikes" integer NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0))`,
 		`CREATE INDEX "` + base + `_state_identity" ON "social"."` + base + `_state" ("id")`,
 		`CREATE INDEX "` + base + `_state_stale" ON "social"."` + base + `_state" ("record_key") WHERE "status" <> 'ready'`,
 	} {
@@ -70,7 +69,7 @@ func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {
 	legacy.Extensions = append([]physical.Extension(nil), schema.Extensions...)
 	legacy.Extensions[0].Attributes = nil
 	for _, attribute := range schema.Extensions[0].Attributes {
-		if attribute.Name != "identity" {
+		if attribute.Name != "identity" && attribute.Name != "state_version" {
 			legacy.Extensions[0].Attributes = append(legacy.Extensions[0].Attributes, attribute)
 		}
 	}
@@ -475,10 +474,7 @@ func TestCatalogFixedBaselineFactsFailClosed(t *testing.T) {
 }
 
 func TestLiveBlankSchemaRoundTrip(t *testing.T) {
-	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
-	}
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	provider := New()
 	db, report, err := provider.Open(context.Background(), dsn)
 	if err != nil {
@@ -513,10 +509,7 @@ func TestLiveBlankSchemaRoundTrip(t *testing.T) {
 }
 
 func TestLiveOptimisticConcurrencyIntrospectionRequiresExactCatalogProof(t *testing.T) {
-	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
-	}
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	provider := New()
 	database, _, err := provider.Open(context.Background(), dsn)
 	if err != nil {

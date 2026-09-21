@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"reflect"
-	"strings"
 	"testing"
 	"time"
 
@@ -18,10 +16,7 @@ import (
 )
 
 func TestPostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
-	}
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	ctx := context.Background()
 	fixture := schematest.New(t)
 	provider := postgresprovider.New()
@@ -165,11 +160,8 @@ func TestPostgreSQLLiveAuthorizedReadGraph(t *testing.T) {
 }
 
 func TestPostgreSQLLiveOrderingAgreesAcrossCollationProfiles(t *testing.T) {
-	cDefault := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
-	linguistic := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
-	if cDefault == "" || linguistic == "" {
-		testenv.SkipMissingPostgreSQL(t, "both GOLEM_TEST_POSTGRES_DSN and GOLEM_TEST_POSTGRES_LINGUISTIC_DSN are required")
-	}
+	cDefault := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	linguistic := testenv.DisposablePostgreSQL(t, testenv.LinguisticDSNVariable)
 	cOrder := postgresLiveSystemNameOrder(t, cDefault, "c")
 	linguisticOrder := postgresLiveSystemNameOrder(t, linguistic, "linguistic")
 	want := []string{"Z", "a", "é", "É"}

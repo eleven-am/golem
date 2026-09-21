@@ -141,7 +141,7 @@ func TestQueryPlanPostgreSQLLiveBoundPlanningWithoutExecution(t *testing.T) {
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := testenv.PostgreSQLDSN(t, profile.environment)
+			dsn := testenv.DisposablePostgreSQL(t, profile.environment)
 			fixture := schematest.NewIndexed(t)
 			table := postgresPhysicalTable(t, fixture.PostgreSQL, fixture.Post)
 			if table.PrimaryKey == nil {

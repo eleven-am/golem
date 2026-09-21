@@ -3,7 +3,6 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 	"testing"
 	"time"
@@ -342,10 +341,7 @@ func TestObservationCoverageMutationHookAndSystemTransactionEdges(t *testing.T) 
 	for _, profile := range []struct{ name, namespace, environment string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := os.Getenv(profile.environment)
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.environment+" is required")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.environment)
 			base := newMutationResultFixtureWithHooks(t, MutationLimits{}, hookFactory, func(context.Context, golem.AfterCommitFailure) {})
 			fixture, _, _ := newPostgreSQLMutationOracleFixtureFromBase(t, dsn, profile.namespace, base)
 			run(t, fixture)

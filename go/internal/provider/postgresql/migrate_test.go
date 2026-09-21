@@ -744,10 +744,7 @@ func reviewedPostgreSQLEntry(t *testing.T, migrationID migration.MigrationID, be
 }
 
 func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
-	dsn := os.Getenv("GOLEM_TEST_POSTGRES_DSN")
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not set")
-	}
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
 	provider := New()
 	database, _, err := provider.Open(context.Background(), dsn)
 	if err != nil {

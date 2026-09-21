@@ -113,7 +113,7 @@ func newP5ReadProviderHarness(t *testing.T, profile p5ReadProviderProfile) *p5Re
 		}
 		bundle = fixture.Bundle
 	} else {
-		configuration, err := pgx.ParseConfig(profile.dsn)
+		configuration, err := pgx.ParseConfig(testenv.DisposablePostgreSQL(t, profile.env))
 		if err != nil {
 			t.Fatal(err)
 		}

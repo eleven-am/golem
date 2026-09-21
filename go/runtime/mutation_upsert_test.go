@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -569,10 +567,7 @@ func TestUpsertHiddenExistingNeverFallsThroughToUnauthorizedUpdate(t *testing.T)
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for hidden-existing upsert evidence", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			run(t, fixture, oracleQualified(applicationNamespace, "posts"), oracleQualified(systemNamespace, "_golem_upsert_guard"), func(index int) string { return "$" + fmt.Sprint(index) })
 		})

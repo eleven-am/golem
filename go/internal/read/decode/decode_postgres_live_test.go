@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,19 +16,11 @@ import (
 )
 
 func TestExactDecoderPostgreSQLLiveDriverRepresentations(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_DSN is not configured")
-	}
-	runExactDecoderPostgreSQLLive(t, dsn, "c")
+	runExactDecoderPostgreSQLLive(t, testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable), "c")
 }
 
 func TestExactDecoderPostgreSQLLiveLinguisticDriverRepresentations(t *testing.T) {
-	dsn := strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))
-	if dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN is not configured")
-	}
-	runExactDecoderPostgreSQLLive(t, dsn, "linguistic")
+	runExactDecoderPostgreSQLLive(t, testenv.DisposablePostgreSQL(t, testenv.LinguisticDSNVariable), "linguistic")
 }
 
 func runExactDecoderPostgreSQLLive(t *testing.T, dsn, profile string) {

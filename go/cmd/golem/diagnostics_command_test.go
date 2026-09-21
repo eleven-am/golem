@@ -27,7 +27,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/testenv"
 	publicprovider "github.com/eleven-am/golem/go/provider"
 	providersqlite "github.com/eleven-am/golem/go/provider/sqlite"
-	"github.com/jackc/pgx/v5"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -431,7 +430,7 @@ func exerciseP8DoctorPostgreSQLMatrix(t *testing.T, administrativeDSN string) {
 	module := writePostgreSQLProviderModule(t)
 	assertDoctorState(t, module, "postgresql", missingDSN, doctorState{capabilities: "fail", history: "incomplete", schema: "unreachable", generation: "incompatible"})
 
-	databaseDSN := createP8PostgreSQLDatabase(t, administrativeDSN)
+	databaseDSN := testenv.DisposablePostgreSQLFrom(t, administrativeDSN)
 	assertDoctorState(t, module, "postgresql", databaseDSN, doctorState{capabilities: "pass", history: "incomplete", schema: "drift", generation: "incompatible"})
 
 	runP8Command(t, module, "migration", "new", "--name", "initial")
@@ -556,59 +555,6 @@ var p8PostgreSQLDBNameParameterPattern = regexp.MustCompile(`(?i)(^|[ \t\r\n])db
 
 func p8PostgreSQLDatabaseName() string {
 	return fmt.Sprintf("golem_p8_%d_%d", os.Getpid(), time.Now().UnixNano())
-}
-
-func createP8PostgreSQLDatabase(t *testing.T, administrativeDSN string) string {
-	t.Helper()
-	name := p8PostgreSQLDatabaseName()
-	if !p8PostgreSQLDatabaseNamePattern.MatchString(name) {
-		t.Fatalf("invalid generated PostgreSQL database identifier %q", name)
-	}
-	config, err := pgx.ParseConfig(administrativeDSN)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
-	defer cancel()
-	connection, err := pgx.ConnectConfig(ctx, config)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var encoding, collate, characterType string
-	if err := connection.QueryRow(ctx, `SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&encoding, &collate, &characterType); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatal(err)
-	}
-	statement := fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 ENCODING %s LC_COLLATE %s LC_CTYPE %s", quoteP8PostgreSQLIdentifier(name), quoteP8PostgreSQLLiteral(encoding), quoteP8PostgreSQLLiteral(collate), quoteP8PostgreSQLLiteral(characterType))
-	if _, err := connection.Exec(ctx, statement); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("configured PostgreSQL profile cannot create its required disposable evidence database: %v", err)
-	}
-	if err := connection.Close(ctx); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cleanupCancel()
-		admin, openErr := pgx.ConnectConfig(cleanupCtx, config)
-		if openErr != nil {
-			t.Errorf("open PostgreSQL profile for cleanup: %v", openErr)
-			return
-		}
-		defer admin.Close(cleanupCtx)
-		if _, terminateErr := admin.Exec(cleanupCtx, `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); terminateErr != nil {
-			t.Errorf("terminate exact disposable PostgreSQL database sessions: %v", terminateErr)
-			return
-		}
-		if _, dropErr := admin.Exec(cleanupCtx, "DROP DATABASE "+quoteP8PostgreSQLIdentifier(name)); dropErr != nil {
-			t.Errorf("drop exact disposable PostgreSQL database: %v", dropErr)
-		}
-	})
-	derived, err := postgreSQLDSNForDatabase(administrativeDSN, name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return derived
 }
 
 func postgreSQLDSNForDatabase(value, database string) (string, error) {

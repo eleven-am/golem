@@ -33,10 +33,7 @@ func TestPostgreSQLDeliveryCoordinatorLiveProfiles(t *testing.T) {
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := os.Getenv(profile.env)
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured; P7 final evidence requires this live profile")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			testP7PostgreSQLDeliveryCoordinatorLive(t, dsn)
 		})
 	}
@@ -49,10 +46,7 @@ func TestPostgreSQLClaimDepthSnapshotLiveProfiles(t *testing.T) {
 	}
 	for _, profile := range []struct{ name, env string }{{"c", "GOLEM_TEST_POSTGRES_DSN"}, {"linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := os.Getenv(profile.env)
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			assertPostgreSQLClaimDepthSnapshot(t, dsn)
 		})
 	}
@@ -530,10 +524,7 @@ func postgresqlDeliveryUUID(value int) string {
 func TestPostgreSQLLegacyDeliveryShapeLiveProfiles(t *testing.T) {
 	for _, profile := range []struct{ name, env string }{{"c", "GOLEM_TEST_POSTGRES_DSN"}, {"linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := os.Getenv(profile.env)
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			assertPostgreSQLLegacyDeliveryShape(t, dsn)
 		})
 	}

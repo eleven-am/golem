@@ -87,7 +87,7 @@ func TestPostgreSQLProviderAgreementLiveProfiles(t *testing.T) {
 		t.Run(profile.Name, func(t *testing.T) {
 			ctx := context.Background()
 			provider := postgresql.New()
-			database, _, err := provider.Open(ctx, profile.DSN)
+			database, _, err := provider.Open(ctx, testenv.DisposablePostgreSQL(t, profile.Environment))
 			if err != nil {
 				t.Fatal(err)
 			}
