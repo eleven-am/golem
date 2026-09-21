@@ -136,7 +136,9 @@ any length never dead-letters the drain.
 
 **One row the provider keeps refusing does not hold up the rest.** A batch
 refused for an unclassified reason is retried one row at a time, so the rows
-around the culprit are stored rather than left pending with it.
+around the culprit are stored rather than left pending with it. This holds
+wherever the culprit falls: the rows after it in its own batch, and every later
+batch in the page, are still attempted.
 
 **A row the provider keeps refusing without saying why is quarantined after
 five strikes.** The count lives in `ambiguous_strikes` on the shadow state
@@ -166,10 +168,11 @@ its neighbours, so that pass exists. An index holding exactly one document,
 which the provider refuses without classifying, never reaches the bound and is
 retried forever.
 
-**An outage costs two provider calls per pass.** Once two batches in a row
-fail with nothing stored between them, the pass stops calling the provider for
-the rest of its page. A pass that has a strike to decide about spends one more,
-for the liveness probe above, and charges nothing when that probe fails. Each deferred pass is observed as a
+**An outage costs at most three provider calls per pass.** The refused batch
+is one call, and isolating it costs two more before two failures in a row with
+nothing stored between them stop the pass for the rest of its page. A pass that
+has a strike to decide about spends one further call for the liveness probe
+above, and charges nothing when that probe fails. Each deferred pass is observed as a
 `semantic.refresh` retry whose aggregate count is the number of rows it left
 pending.
 

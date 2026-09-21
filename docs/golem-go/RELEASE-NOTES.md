@@ -70,12 +70,15 @@ migration needs none of this.
 
 **A healthy document in a refused batch is now stored instead of waiting.** An
 unclassified refusal is retried one row at a time, so only the culprit stays
-pending. A fresh outage still costs exactly the same two provider calls per
-pass; a pass that has a strike to decide about spends one more, to prove the
-provider is answering before it charges one.
+pending — including the rows after it in its own batch and every later batch in
+the page. The outage budget grew to pay for that: a total outage now costs at
+most three provider calls per pass rather than two, because the refused batch
+and the two isolation probes that establish it really is an outage are counted
+separately. A pass that has a strike to decide about spends one further call to
+prove the provider is answering before charging one.
 
-**Startup now verifies every index on `golem_queue`, not just
-`golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are
+**Startup now verifies every index on `golem_queue` on both providers, not
+just `golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are
 checked for the first time, so a database whose claim index was altered by hand
 will now fail startup with an error naming the object and telling you to drop
 it. A database created by any release from go/v0.3.0 through go/v0.4.0 passes
