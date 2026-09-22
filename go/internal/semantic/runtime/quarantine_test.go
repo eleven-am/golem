@@ -755,3 +755,90 @@ func TestTwoLeadingCulpritsDoNotStallAFreshIndex(t *testing.T) {
 		}
 	}
 }
+
+// TestACulpritInEachOfTwoBatchesDoesNotStallAFreshIndex covers a fresh index
+// whose first two batches each hold one refused document: the two deferred
+// batches must not close the pass to the isolation that follows them.
+func TestACulpritInEachOfTwoBatchesDoesNotStallAFreshIndex(t *testing.T) {
+	const records = 20
+	fixture := openPagedQuarantineFixture(t, records, "p00", embedding.CodeProvider)
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p08' WHERE "id"='p08'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.refuseOnly("poisondoc")
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture.markStale(t, ids...)
+	for attempt := 0; attempt < 6; attempt++ {
+		fixture.drain(t)
+	}
+	rows := fixture.rows(t)
+	for index := 0; index < records; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		if id == "p00" || id == "p08" {
+			continue
+		}
+		if row := rows[id]; row.Status != "ready" {
+			t.Fatalf("a culprit in each of the first two batches left %s at %q", id, row.Status)
+		}
+	}
+}
+
+// TestIsolationSpendsABoundedNumberOfCallsPerPass covers two refused batches
+// whose culprits sit behind healthy records: every isolation call counts
+// against the bound, not only the ones that fail.
+func TestIsolationSpendsABoundedNumberOfCallsPerPass(t *testing.T) {
+	const records = 20
+	fixture := openPagedQuarantineFixture(t, records, "p07", embedding.CodeProvider)
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p15' WHERE "id"='p15'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.settleAllKeyed(t, []string{"p19"})
+	fixture.refuseOnly("poisondoc")
+	ids := make([]string, 0, records)
+	for index := 0; index < records-1; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture.markStale(t, ids...)
+	fixture.provider.mu.Lock()
+	fixture.provider.calls = 0
+	fixture.provider.mu.Unlock()
+	fixture.drain(t)
+	fixture.provider.mu.Lock()
+	calls := fixture.provider.calls
+	fixture.provider.mu.Unlock()
+	if want := semanticOutageBatches + semanticIsolationCalls + semanticLivenessProbes; calls > want {
+		t.Fatalf("one pass made %d provider calls, more than the %d it is bounded to", calls, want)
+	}
+}
+
+// TestAPassProbesItsLivenessCandidatesOnce covers a pass holding both a
+// deferred batch and a refused single record: each asks whether the provider
+// is answering, and the pass must not re-embed the same candidates for each.
+func TestAPassProbesItsLivenessCandidatesOnce(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	fixture.refuseOnly("healthy", "poisondoc")
+	ids := make([]string, 0, 9)
+	for index := 0; index < 9; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"=? WHERE "id"=?`, "healthy "+id+" revised", id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	fixture.markStale(t, ids...)
+	fixture.provider.mu.Lock()
+	fixture.provider.calls = 0
+	fixture.provider.mu.Unlock()
+	fixture.drain(t)
+	fixture.provider.mu.Lock()
+	calls := fixture.provider.calls
+	fixture.provider.mu.Unlock()
+	if want := semanticOutageBatches + semanticLivenessProbes; calls > want {
+		t.Fatalf("a pass against a dead provider made %d calls, more than the %d it is bounded to", calls, want)
+	}
+}

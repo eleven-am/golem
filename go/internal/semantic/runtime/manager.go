@@ -1151,6 +1151,7 @@ type embedPass struct {
 	refused     []sourceRecord
 	spent       map[string]bool
 	exhausted   bool
+	probed      bool
 	isolate     [][]sourceRecord
 	isolated    int
 	after       []livenessProbe
@@ -1222,7 +1223,6 @@ func (pass *embedPass) deferBatch(err error, batch []sourceRecord) {
 func (pass *embedPass) refuse(err error, record sourceRecord) {
 	pass.note(err)
 	pass.pending++
-	pass.isolated++
 	pass.refused = append(pass.refused, record)
 }
 
@@ -1254,14 +1254,19 @@ func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, 
 		// has no such evidence to offer, and there isolation is the experiment.
 		return nil
 	}
+	// The batches that were deferred are what raised the outage streak, and the
+	// evidence the streak stands in for has now arrived, so it no longer
+	// describes anything. Leaving it would close the pass to its own isolation.
+	pass.settled()
 	batches := pass.isolate
 	pass.isolate = nil
 	for _, batch := range batches {
-		for _, record := range batch {
+		for position, record := range batch {
 			if pass.isolated >= semanticIsolationCalls {
-				pass.pending += len(batch)
+				pass.pending += len(batch) - position
 				return nil
 			}
+			pass.isolated++
 			if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
 				return err
 			}
@@ -1380,6 +1385,10 @@ func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *e
 // the provider has stopped accepting cannot pin the probe. Results are
 // discarded: the records are already stored and unchanged.
 func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *embedPass) bool {
+	if pass.probed {
+		return pass.succeeded
+	}
+	pass.probed = true
 	for _, candidate := range pass.livenessSet() {
 		input, inputErr := embedding.NewInput("source-0", candidate.text)
 		if inputErr != nil {
