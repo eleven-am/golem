@@ -59,6 +59,7 @@ const (
 	semanticAmbiguousStrikeBound    = 5
 	semanticLivenessProbes          = 3
 	semanticLivenessSpent           = 12
+	semanticIsolationCalls          = 8
 	semanticUnclassifiedRefusalCode = "EMBEDDING_REFUSED_UNCLASSIFIED"
 )
 
@@ -1020,12 +1021,15 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
 	}
-	if len(pass.refused) != 0 && !pass.succeeded && !pass.hasLiveness() {
+	if (len(pass.refused) != 0 || len(pass.isolate) != 0) && !pass.succeeded && !pass.hasLiveness() {
 		candidates, candidateErr := manager.livenessCandidates(ctx, index, table)
 		if candidateErr != nil {
 			return candidateErr
 		}
 		pass.adoptLiveness(candidates)
+	}
+	if err := manager.isolateRefusedBatches(ctx, index, fingerprint, pass); err != nil {
+		return err
 	}
 	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
 		return err
@@ -1095,6 +1099,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending, pass); err != nil {
 		return err
 	}
+	if err := manager.isolateRefusedBatches(ctx, index, fingerprint, pass); err != nil {
+		return err
+	}
 
 	stateCursor := ""
 	for {
@@ -1144,6 +1151,8 @@ type embedPass struct {
 	refused     []sourceRecord
 	spent       map[string]bool
 	exhausted   bool
+	isolate     [][]sourceRecord
+	isolated    int
 	after       []livenessProbe
 	before      []livenessProbe
 }
@@ -1211,7 +1220,9 @@ func (pass *embedPass) deferBatch(err error, batch []sourceRecord) {
 }
 
 func (pass *embedPass) refuse(err error, record sourceRecord) {
-	pass.deferBatch(err, []sourceRecord{record})
+	pass.note(err)
+	pass.pending++
+	pass.isolated++
 	pass.refused = append(pass.refused, record)
 }
 
@@ -1227,6 +1238,36 @@ func (pass *embedPass) finish(ctx context.Context, index Index) error {
 
 func (manager *Manager) tracksStrikes(index Index) bool {
 	return index.Descriptor.StateVersion >= semanticstorage.StateVersionStrikes
+}
+
+// isolateRefusedBatches finds the culprit in each batch the pass could not
+// place while the provider was silent. It runs only once something has
+// succeeded, and spends a bounded number of calls, so a batch larger than that
+// budget is finished by later passes rather than in one.
+func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, fingerprint string, pass *embedPass) error {
+	if len(pass.isolate) == 0 {
+		return nil
+	}
+	if !pass.succeeded && !manager.proveLiveness(ctx, index, pass) && pass.hasLiveness() {
+		// The provider answered nothing and this index has documents that could
+		// have shown otherwise, so the batch waits. An index with nothing stored
+		// has no such evidence to offer, and there isolation is the experiment.
+		return nil
+	}
+	batches := pass.isolate
+	pass.isolate = nil
+	for _, batch := range batches {
+		for _, record := range batch {
+			if pass.isolated >= semanticIsolationCalls {
+				pass.pending += len(batch)
+				return nil
+			}
+			if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint string, dirty []sourceRecord, pass *embedPass) error {
@@ -1270,16 +1311,14 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 					continue
 				}
 				if len(batch) > 1 {
-					// A refused batch and the isolation it triggers are one piece
-					// of evidence about the provider. Counting the batch call as
-					// well would let a single refused record exhaust the outage
-					// budget and starve every record behind it.
-					pass.note(providerDeferral{err: embedErr})
-					for _, record := range batch {
-						if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
-							return err
-						}
-					}
+					// Isolating a batch decides which record is at fault, and a
+					// pass may not reach a verdict about a record before the
+					// provider has answered: on a dead provider every singleton
+					// fails, which says nothing. The batch waits until something
+					// in this pass succeeds, so the records behind it are still
+					// reached and can supply that evidence.
+					pass.deferBatch(providerDeferral{err: embedErr}, batch)
+					pass.isolate = append(pass.isolate, batch)
 					continue
 				}
 				pass.refuse(providerDeferral{err: embedErr}, batch[0])

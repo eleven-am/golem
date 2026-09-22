@@ -170,12 +170,15 @@ probe can borrow. An index whose only document is the one the provider refuses,
 with nothing else ever stored, has neither, so it never reaches the bound and
 is retried forever.
 
-**An outage costs at most six provider calls per pass.** The refused batch is
-one call, isolating it costs two more before two failures in a row with nothing
-stored between them stop the pass for the rest of its page, and proving
-liveness costs up to three re-embeds of documents already stored. A pass with
-nothing stored yet has no candidates to probe and stops at three. The count
-never grows with the number of batches in the page. Each deferred pass is observed as a
+**An outage costs at most five provider calls per pass.** Two batch calls
+failing with nothing stored between them stop the pass for the rest of its
+page, and proving liveness costs up to three re-embeds of documents already
+stored. Finding which document in a refused batch is at fault happens only once
+the provider has answered, so it costs nothing while the provider is down; when
+it does run it is bounded at eight calls a pass, and a batch larger than that is
+finished by later passes. A pass with nothing stored yet has no candidates to
+probe, and there isolating the batch is the only way to learn anything, so it
+runs. The count never grows with the number of batches in the page. Each deferred pass is observed as a
 `semantic.refresh` retry whose aggregate count is the number of rows it left
 pending.
 

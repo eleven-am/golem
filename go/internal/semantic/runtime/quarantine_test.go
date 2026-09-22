@@ -727,3 +727,31 @@ func TestLivenessProgressesPastManyOwnerlessCandidates(t *testing.T) {
 		t.Fatal("liveness never reached a usable candidate past the ownerless ones")
 	}
 }
+
+// TestTwoLeadingCulpritsDoNotStallAFreshIndex covers a fresh index whose first
+// two documents the provider refuses: isolating them must not consume the
+// outage budget for the healthy documents behind them, which are the only
+// thing that can ever prove the provider is answering.
+func TestTwoLeadingCulpritsDoNotStallAFreshIndex(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p00", embedding.CodeProvider)
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p01' WHERE "id"='p01'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.refuseOnly("poisondoc")
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture.markStale(t, ids...)
+	for attempt := 0; attempt < 4; attempt++ {
+		fixture.drain(t)
+	}
+	rows := fixture.rows(t)
+	for index := 2; index < records; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		if row := rows[id]; row.Status != "ready" {
+			t.Fatalf("two refused documents at the head left %s at %q", id, row.Status)
+		}
+	}
+}
