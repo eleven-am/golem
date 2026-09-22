@@ -235,3 +235,59 @@ func TestAPostgreSQLQueueFromV030ThroughV040PassesIndexVerification(t *testing.T
 		}
 	}
 }
+
+// TestPostgreSQLRefusesAMissingQueueIndex covers the schema-scoped-name hole:
+// PostgreSQL index names are unique per schema, so an index of the same name on
+// a different table makes CREATE INDEX IF NOT EXISTS skip creation silently.
+func TestPostgreSQLRefusesAMissingQueueIndex(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"golem_queue_claim", "golem_queue_dedupe", "golem_queue_exclusive", "golem_queue_enqueued", "golem_queue_history", "golem_queue_terminal"} {
+		t.Run(name, func(t *testing.T) {
+			namespace := "queue_missing_" + name
+			store, database := openQueueHistoryNamespace(t, namespace, true)
+			if _, err := database.ExecContext(ctx, `DROP INDEX "`+namespace+`"."`+name+`"`); err != nil {
+				t.Fatal(err)
+			}
+			err := queueStoreOf(t, store).verifyQueueGuarantees(ctx)
+			if err == nil {
+				t.Fatalf("a missing %s was accepted", name)
+			}
+			for _, fragment := range []string{name, "golem"} {
+				if !strings.Contains(err.Error(), fragment) {
+					t.Fatalf("refusal must name the absent object, got: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestPostgreSQLNameCollisionOnAnotherTableIsCaught(t *testing.T) {
+	ctx := context.Background()
+	const namespace = "queue_name_collision"
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	database, err := sqlx.Open("pgx", dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { database.Close() })
+	if _, err := database.ExecContext(ctx, `CREATE SCHEMA "`+namespace+`"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `CREATE TABLE "`+namespace+`"."decoy" ("status" TEXT, "available_at" TIMESTAMPTZ, "type" TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(ctx, `CREATE INDEX "golem_queue_claim" ON "`+namespace+`"."decoy" ("status")`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New().QueueStoreAt(database, physical.PhysicalName(namespace), physical.QueueUnmanagedObjects())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.EnsureSchema(ctx)
+	if err == nil {
+		t.Fatal("a queue whose claim index name was taken by another table started anyway")
+	}
+	if !strings.Contains(err.Error(), "golem_queue_claim") {
+		t.Fatalf("refusal must name the absent index, got: %v", err)
+	}
+}

@@ -155,14 +155,24 @@ func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error 
 		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect queue indexes: %w", err)
 	}
 	definitions := postgresqlQueueIndexDefinitions()
+	required := map[string]bool{"golem_queue_pkey": true, "golem_queue_claim": true, "golem_queue_dedupe": true, "golem_queue_exclusive": true}
+	if store.history {
+		for _, object := range physical.QueueHistoryIndexes() {
+			required[string(object.Name)] = true
+		}
+	}
 	for _, row := range rows {
 		want, known := definitions[row.Name]
 		if !known {
 			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: index %q on golem_queue was not created by golem; drop it", row.Name)
 		}
+		delete(required, row.Name)
 		if row.Method != "btree" || row.Unique != want.unique || !row.Valid || !row.Ready || row.Columns != want.columns || row.Predicate != want.predicate {
 			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing %s index (method=%s unique=%t valid=%t ready=%t columns=%s predicate=%q) does not match golem's (method=btree unique=%t columns=%s predicate=%q); drop it so the queue can create its own", row.Name, row.Method, row.Unique, row.Valid, row.Ready, row.Columns, row.Predicate, want.unique, want.columns, want.predicate)
 		}
+	}
+	for name := range required {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: golem index %q is absent from golem_queue; a relation of that name elsewhere in schema %q blocks its creation, so drop that relation and let the queue create its own", name, store.namespace)
 	}
 	return nil
 }

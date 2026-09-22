@@ -435,3 +435,48 @@ func TestEveryNamedIndexExistsWheneverTheStoreNamesOne(t *testing.T) {
 		}
 	}
 }
+
+// TestSQLiteRefusesAMissingQueueIndex covers the same database-scoped-name hole
+// PostgreSQL has: SQLite index names are unique per database, so an index of
+// that name on another table makes CREATE INDEX IF NOT EXISTS skip silently.
+func TestSQLiteRefusesAMissingQueueIndex(t *testing.T) {
+	ctx := context.Background()
+	for _, name := range []string{"golem_queue_claim", "golem_queue_exclusive", "golem_queue_enqueued", "golem_queue_history", "golem_queue_terminal"} {
+		t.Run(name, func(t *testing.T) {
+			store, database := openQueueHistoryStore(t, true)
+			if _, err := database.Exec(`DROP INDEX "` + name + `"`); err != nil {
+				t.Fatal(err)
+			}
+			err := store.verifyQueueGuarantees(ctx)
+			if err == nil {
+				t.Fatalf("a missing %s was accepted", name)
+			}
+			if !strings.Contains(err.Error(), name) {
+				t.Fatalf("refusal must name the absent object, got: %v", err)
+			}
+		})
+	}
+}
+
+func TestSQLiteNameCollisionOnAnotherTableIsCaught(t *testing.T) {
+	ctx := context.Background()
+	database := sqlx.MustOpen("sqlite", "file:"+t.TempDir()+"/collision.db?_pragma=foreign_keys(1)&_txlock=immediate")
+	t.Cleanup(func() { database.Close() })
+	if _, err := database.Exec(`CREATE TABLE "decoy" ("status" TEXT, "available_at" INTEGER, "type" TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE INDEX "golem_queue_claim" ON "decoy" ("status")`); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New().QueueStore(database, physical.QueueUnmanagedObjects())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.EnsureSchema(ctx)
+	if err == nil {
+		t.Fatal("a queue whose claim index name was taken by another table started anyway")
+	}
+	if !strings.Contains(err.Error(), "golem_queue_claim") {
+		t.Fatalf("refusal must name the absent index, got: %v", err)
+	}
+}

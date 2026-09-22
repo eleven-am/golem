@@ -140,11 +140,18 @@ func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error 
 		return fmt.Errorf("QUEUE_SQLITE_STORE: inspect queue indexes: %w", err)
 	}
 	definitions := sqliteQueueIndexDefinitions()
+	required := map[string]bool{"golem_queue_claim": true, "golem_queue_dedupe": true, "golem_queue_exclusive": true}
+	if store.history {
+		for _, object := range physical.QueueHistoryIndexes() {
+			required[string(object.Name)] = true
+		}
+	}
 	for _, row := range rows {
 		definition, known := definitions[row.Name]
 		if !known {
 			return fmt.Errorf("QUEUE_SQLITE_STORE: index %q on golem_queue was not created by golem; drop it", row.Name)
 		}
+		delete(required, row.Name)
 		expected, err := parseDDL(definition)
 		if err != nil {
 			return fmt.Errorf("QUEUE_SQLITE_STORE: parse %s contract: %w", row.Name, err)
@@ -153,6 +160,9 @@ func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error 
 		if err != nil || !reflect.DeepEqual(expected, actual) {
 			return fmt.Errorf("QUEUE_SQLITE_STORE: existing %s index %q does not match %q; drop it so the queue can create its own", row.Name, row.SQL.String, definition)
 		}
+	}
+	for name := range required {
+		return fmt.Errorf("QUEUE_SQLITE_STORE: golem index %q is absent from golem_queue; an object of that name elsewhere in the database blocks its creation, so drop that object and let the queue create its own", name)
 	}
 	return nil
 }
