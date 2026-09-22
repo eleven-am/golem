@@ -678,3 +678,28 @@ func TestLivenessRotatesWhenKeyLengthReordersTheEncoding(t *testing.T) {
 		t.Fatal("liveness never reached the viable candidate the key encoding sorts below the failing ones")
 	}
 }
+
+// TestLivenessSkipsCandidatesWhoseOwnerIsGone covers ready shadow rows whose
+// source row was deleted outside golem: they yield no probe at all, so a
+// rotation that only remembers candidates the provider answered for would
+// choose them for ever.
+func TestLivenessSkipsCandidatesWhoseOwnerIsGone(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	if _, err := fixture.database.Exec(`DELETE FROM "posts" WHERE "id" IN ('p00','p01','p02')`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.refuseOnly("poisondoc")
+
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p11")
+	for attempt := 0; attempt < 3; attempt++ {
+		fixture.drain(t)
+	}
+	if strikes := fixture.rows(t)["p11"].Strikes; strikes == 0 {
+		t.Fatal("liveness never looked past the ready rows whose owner is gone")
+	}
+}

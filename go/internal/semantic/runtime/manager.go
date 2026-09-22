@@ -891,35 +891,49 @@ func (manager *Manager) clearLivenessCandidates(index Index) {
 // and stops being the first choice as soon as another one answers.
 func (manager *Manager) livenessCandidates(ctx context.Context, index Index, table physical.PhysicalTable) ([]livenessProbe, error) {
 	spent := manager.livenessExhausted(index)
-	keys, err := manager.readyKeys(ctx, index, spent, semanticLivenessProbes)
-	if err != nil {
-		return nil, err
-	}
-	if len(keys) == 0 && len(spent) != 0 {
-		keys, err = manager.readyKeys(ctx, index, nil, semanticLivenessProbes)
+	// A ready row whose source row was deleted outside golem yields no probe,
+	// so a draw that returned only those would choose them again next pass.
+	// Such a key is spent by the draw itself and the draw looks again, within
+	// the same bound as the probes themselves.
+	for attempt := 0; attempt < semanticLivenessProbes; attempt++ {
+		keys, err := manager.readyKeys(ctx, index, spent, semanticLivenessProbes)
 		if err != nil {
 			return nil, err
 		}
-		manager.clearLivenessCandidates(index)
-	}
-	if len(keys) == 0 {
-		return nil, nil
-	}
-	stale := make([]staleRecord, 0, len(keys))
-	for _, key := range keys {
-		stale = append(stale, staleRecord{key: key})
-	}
-	owners, err := manager.scanOwners(ctx, table, index, stale)
-	if err != nil {
-		return nil, err
-	}
-	candidates := make([]livenessProbe, 0, len(keys))
-	for _, key := range keys {
-		if source, exists := owners[key]; exists {
+		if len(keys) == 0 && len(spent) != 0 {
+			keys, err = manager.readyKeys(ctx, index, nil, semanticLivenessProbes)
+			if err != nil {
+				return nil, err
+			}
+			manager.clearLivenessCandidates(index)
+			spent = map[string]bool{}
+		}
+		if len(keys) == 0 {
+			return nil, nil
+		}
+		stale := make([]staleRecord, 0, len(keys))
+		for _, key := range keys {
+			stale = append(stale, staleRecord{key: key})
+		}
+		owners, err := manager.scanOwners(ctx, table, index, stale)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]livenessProbe, 0, len(keys))
+		for _, key := range keys {
+			source, exists := owners[key]
+			if !exists {
+				manager.spendLivenessCandidate(index, key)
+				spent[key] = true
+				continue
+			}
 			candidates = append(candidates, livenessProbe{key: key, text: source.text})
 		}
+		if len(candidates) != 0 {
+			return candidates, nil
+		}
 	}
-	return candidates, nil
+	return nil, nil
 }
 
 func (manager *Manager) readyKeys(ctx context.Context, index Index, skip map[string]bool, limit int) ([]string, error) {
