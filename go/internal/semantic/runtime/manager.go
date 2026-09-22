@@ -837,6 +837,21 @@ func (manager *Manager) refresh(ctx context.Context, index Index, span *observee
 	return len(remaining) > 0, nil
 }
 
+func (manager *Manager) livenessCandidate(ctx context.Context, index Index, table physical.PhysicalTable) (string, error) {
+	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
+		" WHERE " + manager.quote("status") + "='ready' ORDER BY " + manager.quote("record_key") + " LIMIT 1"
+	observeexec.RecordStatement(ctx)
+	var key string
+	if err := manager.database.GetContext(ctx, &key, query); err != nil {
+		return "", nil
+	}
+	owners, err := manager.scanOwners(ctx, table, index, []staleRecord{{key: key}})
+	if err != nil {
+		return "", err
+	}
+	return owners[key].text, nil
+}
+
 // applyStale sorts one probed page into the three outcomes a mark can have.
 // A mark carries no evidence that the document actually changed, so the
 // recomputed content hash decides: an unchanged document is flipped back to
@@ -855,6 +870,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	dirty := make([]sourceRecord, 0, len(stale))
 	unchanged := make([]observedRecord, 0, len(stale))
 	absent := make([]observedRecord, 0, len(stale))
+	liveness := ""
 	for _, record := range stale {
 		observed := observedRecord{key: record.key, updatedAt: record.updatedAt}
 		source, exists := owners[record.key]
@@ -864,6 +880,9 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 		}
 		if len(record.hash) == sha256.Size && record.fingerprint == fingerprint && equalBytes(record.hash, source.hash[:]) {
 			unchanged = append(unchanged, observed)
+			if liveness == "" {
+				liveness = source.text
+			}
 			continue
 		}
 		source.updatedAt = record.updatedAt
@@ -874,7 +893,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	// outcomes are guarded against the same window: whatever the pass decided
 	// about a record only lands while that record still looks the way it did
 	// when the pass read it.
-	pass := &embedPass{}
+	pass := &embedPass{liveness: liveness}
 	if err := manager.embedDirty(ctx, index, fingerprint, dirty, pass); err != nil {
 		return err
 	}
@@ -883,6 +902,16 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	}
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
+	}
+	if len(pass.refused) != 0 && !pass.succeeded && pass.liveness == "" {
+		candidate, candidateErr := manager.livenessCandidate(ctx, index, table)
+		if candidateErr != nil {
+			return candidateErr
+		}
+		pass.liveness = candidate
+	}
+	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
+		return err
 	}
 	return pass.finish(ctx, index)
 }

@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	"github.com/jmoiron/sqlx"
 )
@@ -396,5 +397,115 @@ func TestAPoisonedFirstRecordNeverStarvesThePage(t *testing.T) {
 		if row := rows[fmt.Sprintf("p%02d", index)]; row.Status != "ready" {
 			t.Fatalf("later passes disturbed healthy record p%02d: %+v", index, row)
 		}
+	}
+}
+
+func (fixture quarantineFixture) markStale(t *testing.T, ids ...string) {
+	t.Helper()
+	records := make([]MarkRecord, 0, len(ids))
+	for _, id := range ids {
+		key, err := semantickey.Encode([]any{id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		records = append(records, MarkRecord{Key: key, Identity: []any{id}})
+	}
+	if err := fixture.manager.MarkStale(context.Background(), fixture.database, "post", semanticMarkBinds, records); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (fixture quarantineFixture) drain(t *testing.T) {
+	t.Helper()
+	if _, err := fixture.manager.Drain(context.Background(), "post", "related"); err != nil && !ProviderDeferred(err) {
+		t.Fatal(err)
+	}
+}
+
+// TestDrainAppliesStrikesAndQuarantine covers the entry point production uses:
+// the mutation worker calls Drain, and SemanticReconcileInterval defaults to
+// zero, so a bound that only works under Refresh is inert where it matters.
+func TestDrainAppliesStrikesAndQuarantine(t *testing.T) {
+	fixture := openQuarantineFixture(t, []string{"beta"}, embedding.CodeProvider)
+	fixture.markStale(t, "a", "b", "c")
+	fixture.drain(t)
+	if strikes := fixture.rows(t)["b"].Strikes; strikes == 0 {
+		t.Fatal("Drain charged no strike while the provider was demonstrably alive")
+	}
+	for _, id := range []string{"a", "c"} {
+		if status := fixture.rows(t)[id].Status; status != "ready" {
+			t.Fatalf("Drain left healthy record %s at %q", id, status)
+		}
+	}
+	// No re-marking: a pending record stays in the drain's own probe, and a new
+	// mark would deliberately reset the strike count.
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound; attempt++ {
+		fixture.drain(t)
+	}
+	row := fixture.rows(t)["b"]
+	if row.Status != "failed" || row.Code == nil || *row.Code != semanticUnclassifiedRefusalCode {
+		t.Fatalf("Drain never quarantined the culprit: %+v", row)
+	}
+}
+
+func TestDrainNeverQuarantinesDuringAnOutage(t *testing.T) {
+	fixture := openQuarantineFixture(t, []string{"golem-semantic-document"}, embedding.CodeProvider)
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound+3; attempt++ {
+		fixture.markStale(t, "a", "b", "c")
+		fixture.drain(t)
+	}
+	for key, row := range fixture.rows(t) {
+		if row.Status == "failed" || row.Strikes != 0 {
+			t.Fatalf("Drain struck or quarantined %s during a total outage: %+v", key, row)
+		}
+	}
+}
+
+func TestDrainNeverStarvesHealthyRecordsBehindACulprit(t *testing.T) {
+	const records = 20
+	fixture := openPagedQuarantineFixture(t, records, "p00", embedding.CodeProvider)
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture.markStale(t, ids...)
+	fixture.drain(t)
+	rows := fixture.rows(t)
+	for index := 1; index < records; index++ {
+		id := fmt.Sprintf("p%02d", index)
+		if row := rows[id]; row.Status != "ready" {
+			t.Fatalf("Drain left %s behind the poisoned first record: %+v", id, row)
+		}
+	}
+	if culprit := rows["p00"]; culprit.Strikes == 0 {
+		t.Fatalf("Drain did not strike the poisoned first record: %+v", culprit)
+	}
+}
+
+func TestDrainResetsStrikesWhenTheRecordFinallyEmbeds(t *testing.T) {
+	fixture := openQuarantineFixture(t, []string{"beta"}, embedding.CodeProvider)
+	fixture.markStale(t, "a", "b", "c")
+	fixture.drain(t)
+	if strikes := fixture.rows(t)["b"].Strikes; strikes == 0 {
+		t.Fatal("Drain charged no strike to begin with")
+	}
+	fixture.provider.stopRefusing()
+	fixture.drain(t)
+	row := fixture.rows(t)["b"]
+	if row.Status != "ready" || row.Strikes != 0 {
+		t.Fatalf("a successful Drain embed did not clear the strike count: %+v", row)
+	}
+}
+
+func TestDrainSeesAStaleMarkClearTheStrikeCount(t *testing.T) {
+	fixture := openQuarantineFixture(t, []string{"beta"}, embedding.CodeProvider)
+	fixture.markStale(t, "a", "b", "c")
+	fixture.drain(t)
+	if strikes := fixture.rows(t)["b"].Strikes; strikes == 0 {
+		t.Fatal("Drain charged no strike to begin with")
+	}
+	fixture.markStale(t, "b")
+	if strikes := fixture.rows(t)["b"].Strikes; strikes != 0 {
+		t.Fatalf("a new stale mark left %d strikes behind", strikes)
 	}
 }
