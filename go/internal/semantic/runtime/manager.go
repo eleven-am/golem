@@ -33,14 +33,15 @@ import (
 // Manager owns refresh and nearest-neighbour storage operations. Refreshes of
 // one index serialize, while unrelated indexes may advance concurrently.
 type Manager struct {
-	database      *sqlx.DB
-	provider      ir.Provider
-	schema        physical.PhysicalSchema
-	indexes       []Index
-	observer      observe.Observer
-	mu            sync.Mutex
-	refreshLocks  map[string]*sync.Mutex
-	livenessSpent map[string]map[string]bool
+	database       *sqlx.DB
+	provider       ir.Provider
+	schema         physical.PhysicalSchema
+	indexes        []Index
+	observer       observe.Observer
+	mu             sync.Mutex
+	refreshLocks   map[string]*sync.Mutex
+	livenessSpent  map[string]map[string]bool
+	livenessCursor map[string]string
 }
 
 const MaximumResults = 1000
@@ -878,6 +879,28 @@ func (manager *Manager) spendLivenessCandidate(index Index, record string) {
 	spent[record] = true
 }
 
+// livenessCursorFor walks the draw through record-key order, which is the order
+// the draw itself selects in, so progress past a candidate that yields nothing
+// is monotonic and does not depend on remembering it. The exclusion set cannot
+// do that job: it is bounded, and an index can hold more useless candidates
+// than it has room for.
+func (manager *Manager) livenessCursorFor(index Index) string {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.livenessCursor[key]
+}
+
+func (manager *Manager) advanceLivenessCursor(index Index, record string) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.livenessCursor == nil {
+		manager.livenessCursor = make(map[string]string)
+	}
+	manager.livenessCursor[key] = record
+}
+
 func (manager *Manager) clearLivenessCandidates(index Index) {
 	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
 	manager.mu.Lock()
@@ -890,26 +913,19 @@ func (manager *Manager) clearLivenessCandidates(index Index) {
 // a record the provider has stopped accepting is tried at most once per pass
 // and stops being the first choice as soon as another one answers.
 func (manager *Manager) livenessCandidates(ctx context.Context, index Index, table physical.PhysicalTable) ([]livenessProbe, error) {
-	spent := manager.livenessExhausted(index)
-	// A ready row whose source row was deleted outside golem yields no probe,
-	// so a draw that returned only those would choose them again next pass.
-	// Such a key is spent by the draw itself and the draw looks again, within
-	// the same bound as the probes themselves.
+	cursor := manager.livenessCursorFor(index)
 	for attempt := 0; attempt < semanticLivenessProbes; attempt++ {
-		keys, err := manager.readyKeys(ctx, index, spent, semanticLivenessProbes)
+		keys, err := manager.readyKeys(ctx, index, cursor, semanticLivenessProbes)
 		if err != nil {
 			return nil, err
 		}
-		if len(keys) == 0 && len(spent) != 0 {
-			keys, err = manager.readyKeys(ctx, index, nil, semanticLivenessProbes)
-			if err != nil {
-				return nil, err
-			}
-			manager.clearLivenessCandidates(index)
-			spent = map[string]bool{}
-		}
 		if len(keys) == 0 {
-			return nil, nil
+			if cursor == "" {
+				return nil, nil
+			}
+			cursor = ""
+			manager.advanceLivenessCursor(index, "")
+			continue
 		}
 		stale := make([]staleRecord, 0, len(keys))
 		for _, key := range keys {
@@ -921,10 +937,10 @@ func (manager *Manager) livenessCandidates(ctx context.Context, index Index, tab
 		}
 		candidates := make([]livenessProbe, 0, len(keys))
 		for _, key := range keys {
+			cursor = key
+			manager.advanceLivenessCursor(index, key)
 			source, exists := owners[key]
 			if !exists {
-				manager.spendLivenessCandidate(index, key)
-				spent[key] = true
 				continue
 			}
 			candidates = append(candidates, livenessProbe{key: key, text: source.text})
@@ -936,16 +952,16 @@ func (manager *Manager) livenessCandidates(ctx context.Context, index Index, tab
 	return nil, nil
 }
 
-func (manager *Manager) readyKeys(ctx context.Context, index Index, skip map[string]bool, limit int) ([]string, error) {
+func (manager *Manager) readyKeys(ctx context.Context, index Index, after string, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
 		" WHERE " + manager.quote("status") + "='ready'"
 	arguments := []any{}
-	for candidate := range skip {
-		query += " AND " + manager.quote("record_key") + "<>" + manager.placeholder(len(arguments)+1)
-		arguments = append(arguments, candidate)
+	if after != "" {
+		query += " AND " + manager.quote("record_key") + ">" + manager.placeholder(1)
+		arguments = append(arguments, after)
 	}
 	query += " ORDER BY " + manager.quote("record_key") + " LIMIT " + strconv.Itoa(limit)
 	observeexec.RecordStatement(ctx)

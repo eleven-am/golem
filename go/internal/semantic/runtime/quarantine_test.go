@@ -703,3 +703,27 @@ func TestLivenessSkipsCandidatesWhoseOwnerIsGone(t *testing.T) {
 		t.Fatal("liveness never looked past the ready rows whose owner is gone")
 	}
 }
+
+// TestLivenessProgressesPastManyOwnerlessCandidates covers more ownerless ready
+// rows than any bounded exclusion set can hold: progress has to be monotonic
+// rather than remembered.
+func TestLivenessProgressesPastManyOwnerlessCandidates(t *testing.T) {
+	const records = 30
+	fixture := openPagedQuarantineFixture(t, records, "p29", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	if _, err := fixture.database.Exec(`DELETE FROM "posts" WHERE "id" < 'p22'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.refuseOnly("poisondoc")
+
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p29 revised' WHERE "id"='p29'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p29")
+	for attempt := 0; attempt < 6; attempt++ {
+		fixture.drain(t)
+	}
+	if strikes := fixture.rows(t)["p29"].Strikes; strikes == 0 {
+		t.Fatal("liveness never reached a usable candidate past the ownerless ones")
+	}
+}
