@@ -235,15 +235,15 @@ func validWSSubscriptionRequest(prepared preparedRequest, failure *Response) boo
 
 func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 	var operationErr error
+	defer state.finishOperation(id)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			operationErr = errors.New("GraphQL subscription operation panicked")
 			state.server.config.ReportInternalError(ctx, errors.New("GraphQL subscription operation panicked"))
-			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
+			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 		}
 		finishGraphQLChild(observation, operationErr)
 	}()
-	defer state.finishOperation(id)
 	for {
 		response, err := stream.Recv(ctx)
 		if err != nil {
@@ -253,12 +253,12 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 				return
 			}
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
-				state.operationError(id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
+				state.operationErrorUnlessStopped(stopped, id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
 				return
 			}
 			if errors.Is(err, io.EOF) {
 				operationErr = nil
-				_ = state.write(wsMessage{ID: id, Type: "complete"})
+				_ = state.writeOperation(stopped, wsMessage{ID: id, Type: "complete"})
 			}
 			return
 		}
@@ -269,10 +269,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		payload, err := json.Marshal(serialized)
 		if err != nil {
 			operationErr = err
-			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
+			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 			return
 		}
-		if err := state.write(wsMessage{ID: id, Type: "next", Payload: payload}); err != nil {
+		if err := state.writeOperation(stopped, wsMessage{ID: id, Type: "next", Payload: payload}); err != nil {
 			operationErr = err
 			return
 		}
@@ -384,8 +384,35 @@ func decodeWSMessage(payload []byte) (wsMessage, error) {
 func (state *wsConnection[P]) write(message wsMessage) error {
 	state.writeMu.Lock()
 	defer state.writeMu.Unlock()
+	return state.writeLocked(message)
+}
+
+func (state *wsConnection[P]) writeLocked(message wsMessage) error {
 	_ = state.conn.SetWriteDeadline(time.Now().Add(state.server.eventLimits.ShutdownGrace))
 	return state.conn.WriteJSON(message)
+}
+
+func (state *wsConnection[P]) writeOperation(stopped *atomic.Bool, message wsMessage) error {
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	if stopped != nil && stopped.Load() {
+		return nil
+	}
+	return state.writeLocked(message)
+}
+
+func (state *wsConnection[P]) markStopped(stopped *atomic.Bool) {
+	if stopped == nil {
+		return
+	}
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	stopped.Store(true)
+}
+
+func (state *wsConnection[P]) operationErrorUnlessStopped(stopped *atomic.Bool, id string, failure Error) {
+	payload, _ := json.Marshal([]Error{failure})
+	_ = state.writeOperation(stopped, wsMessage{ID: id, Type: "error", Payload: payload})
 }
 
 func (state *wsConnection[P]) close(code int, reason string) {
@@ -415,9 +442,7 @@ func (state *wsConnection[P]) finishOperation(id string) {
 }
 
 func (state *wsConnection[P]) releaseOperation(operation wsOperation) {
-	if operation.stopped != nil {
-		operation.stopped.Store(true)
-	}
+	state.markStopped(operation.stopped)
 	if operation.stop != nil {
 		operation.stop()
 	}
