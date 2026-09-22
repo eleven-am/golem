@@ -235,7 +235,7 @@ func validWSSubscriptionRequest(prepared preparedRequest, failure *Response) boo
 
 func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 	var operationErr error
-	defer state.finishOperation(id)
+	defer state.finishOperation(id, stopped)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			operationErr = errors.New("GraphQL subscription operation panicked")
@@ -426,13 +426,19 @@ func (state *wsConnection[P]) operationError(id string, failure Error) {
 	_ = state.write(wsMessage{ID: id, Type: "error", Payload: payload})
 }
 
-func (state *wsConnection[P]) stopOperation(id string) { state.finishOperation(id) }
+func (state *wsConnection[P]) stopOperation(id string) { state.finishOperation(id, nil) }
 
-func (state *wsConnection[P]) finishOperation(id string) {
+// finishOperation releases the operation registered under id, and when it is
+// given an instance, only that instance: a client may complete an id and
+// subscribe again with the same id, so the goroutine of the operation that has
+// already been stopped must not take down its replacement as it unwinds.
+func (state *wsConnection[P]) finishOperation(id string, instance *atomic.Bool) {
 	state.mu.Lock()
 	operation, present := state.operations[id]
-	if present {
+	if present && (instance == nil || operation.stopped == instance) {
 		delete(state.operations, id)
+	} else {
+		present = false
 	}
 	state.mu.Unlock()
 	if !present {

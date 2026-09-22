@@ -295,3 +295,63 @@ func TestWebSocketStoppedOperationWritesNoFrameIssuedAfterTheStopWasProcessed(t 
 		host.Close()
 	}
 }
+
+// TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding covers a
+// client that completes an id and immediately subscribes again with the same
+// id, which the protocol permits once the first is complete. The first
+// operation is still unwinding when the replacement is admitted.
+func TestWebSocketReusedOperationIDSurvivesTheOldOperationUnwinding(t *testing.T) {
+	executor := &stopRaceExecutor{created: make(chan ResponseStream, 4)}
+	server, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
+		PrincipalFromContext: func(ctx context.Context) (int, bool) {
+			value, ok := ctx.Value(wsAuthKey{}).(int)
+			return value, ok
+		},
+		WebSocketInit: func(context.Context, json.RawMessage) (context.Context, error) {
+			return context.WithValue(context.Background(), wsAuthKey{}, 41), nil
+		},
+		ReportInternalError: func(context.Context, error) {},
+	}, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	writeWS(t, connection, wsMessage{Type: "connection_init", Payload: json.RawMessage(`{"token":"valid"}`)})
+	if ack := readWS(t, connection); ack.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", ack)
+	}
+
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	first := (<-executor.created).(*stopRaceStream)
+	<-first.value.entered
+
+	writeWS(t, connection, wsMessage{ID: "one", Type: "complete"})
+	<-first.closed
+
+	writeWS(t, connection, wsMessage{ID: "one", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	second := (<-executor.created).(*clientStopStream)
+	close(first.value.release)
+
+	select {
+	case <-second.closed:
+		t.Fatal("the replacement subscription was closed by the previous operation's cleanup")
+	case <-time.After(250 * time.Millisecond):
+	}
+	second.values <- Response{Data: map[string]any{"ticks": int32(11)}}
+	for {
+		frame := readWS(t, connection)
+		if frame.Type == "next" && frame.ID == "one" {
+			return
+		}
+		if frame.Type == "complete" || frame.Type == "error" {
+			t.Fatalf("the replacement subscription was terminated: %#v", frame)
+		}
+	}
+}
