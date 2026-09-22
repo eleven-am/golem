@@ -26,7 +26,7 @@ import (
 // permission to install pgvector; completion evidence runs it against the
 // official pgvector/pgvector:pg17 image.
 func TestFreshGeneratedSemanticPostgreSQLApplicationOwnsPGVectorLifecycle(t *testing.T) {
-	dsn := testenv.PGVectorDSN(t)
+	dsn := testenv.DisposablePGVector(t)
 	ctx := context.Background()
 	const namespace = "semantic_pg_acceptance"
 	root := t.TempDir()

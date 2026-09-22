@@ -40,7 +40,7 @@ func openPGVectorRankFixture(t *testing.T) pgvectorRankFixture {
 
 func openPGVectorRankFixtureOf(t *testing.T, dimensions int, buildIndex bool) pgvectorRankFixture {
 	t.Helper()
-	dsn := testenv.PGVectorDSN(t)
+	dsn := testenv.DisposablePGVector(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -406,7 +406,7 @@ type pgvectorDrainFixture struct {
 
 func openPGVectorDrainFixture(t *testing.T) pgvectorDrainFixture {
 	t.Helper()
-	dsn := testenv.PGVectorDSN(t)
+	dsn := testenv.DisposablePGVector(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -571,7 +571,7 @@ func TestPGVectorDrainAdvancesOnlyMarkedRecords(t *testing.T) {
 // Asserting the record was embedded is what rejects that, per kind.
 func TestPGVectorMarkStaleEmbedsBrandNewRecordsOfEveryIdentityKind(t *testing.T) {
 	ctx := context.Background()
-	dsn := testenv.PGVectorDSN(t)
+	dsn := testenv.DisposablePGVector(t)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		t.Fatal(err)
