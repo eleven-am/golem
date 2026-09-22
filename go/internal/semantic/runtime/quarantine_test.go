@@ -325,6 +325,15 @@ func TestAnOutageAfterAHealthyPeriodNeverQuarantines(t *testing.T) {
 
 func openPagedQuarantineFixture(t *testing.T, count int, poison string, code embedding.Code) quarantineFixture {
 	t.Helper()
+	ids := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	return openKeyedQuarantineFixture(t, ids, poison, code)
+}
+
+func openKeyedQuarantineFixture(t *testing.T, ids []string, poison string, code embedding.Code) quarantineFixture {
+	t.Helper()
 	handle, err := sqlitevec.Open("file:" + t.TempDir() + "/paged.db?_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
@@ -336,8 +345,7 @@ CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT 
 CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
 		t.Fatal(err)
 	}
-	for index := 0; index < count; index++ {
-		id := fmt.Sprintf("p%02d", index)
+	for _, id := range ids {
 		title := "healthy " + id
 		if id == poison {
 			title = "poisondoc " + id
@@ -524,11 +532,16 @@ func (fixture quarantineFixture) refuseOnly(texts ...string) {
 // ready rows for the liveness probe to draw on.
 func (fixture quarantineFixture) settleAll(t *testing.T, count int) {
 	t.Helper()
-	fixture.refuseOnly()
 	ids := make([]string, 0, count)
 	for index := 0; index < count; index++ {
 		ids = append(ids, fmt.Sprintf("p%02d", index))
 	}
+	fixture.settleAllKeyed(t, ids)
+}
+
+func (fixture quarantineFixture) settleAllKeyed(t *testing.T, ids []string) {
+	t.Helper()
+	fixture.refuseOnly()
 	fixture.markStale(t, ids...)
 	fixture.drain(t)
 	for _, id := range ids {
@@ -641,5 +654,27 @@ func TestReconcileLivenessIsNotPinnedToItsFirstCandidates(t *testing.T) {
 	row := fixture.rows(t)["p11"]
 	if row.Status != "failed" || row.Code == nil || *row.Code != semanticUnclassifiedRefusalCode {
 		t.Fatalf("the culprit never reached quarantine under reconcile: %+v", row)
+	}
+}
+
+// TestLivenessRotatesWhenKeyLengthReordersTheEncoding covers identities whose
+// record keys sort differently from the source scan: the key encoding is
+// length prefixed, so "b" encodes below "aaa" while the scan reaches it after.
+func TestLivenessRotatesWhenKeyLengthReordersTheEncoding(t *testing.T) {
+	ids := []string{"a", "aa", "aaa", "b", "poison"}
+	fixture := openKeyedQuarantineFixture(t, ids, "poison", embedding.CodeProvider)
+	fixture.settleAllKeyed(t, ids)
+	fixture.refuseOnly("poisondoc", "healthy a", "healthy aa", "healthy aaa")
+
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc poison revised' WHERE "id"='poison'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "poison")
+	ctx := context.Background()
+	for attempt := 0; attempt < 4; attempt++ {
+		_ = fixture.manager.Refresh(ctx, "post", "related")
+	}
+	if strikes := fixture.rows(t)["poison"].Strikes; strikes == 0 {
+		t.Fatal("liveness never reached the viable candidate the key encoding sorts below the failing ones")
 	}
 }

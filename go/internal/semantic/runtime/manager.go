@@ -33,14 +33,14 @@ import (
 // Manager owns refresh and nearest-neighbour storage operations. Refreshes of
 // one index serialize, while unrelated indexes may advance concurrently.
 type Manager struct {
-	database       *sqlx.DB
-	provider       ir.Provider
-	schema         physical.PhysicalSchema
-	indexes        []Index
-	observer       observe.Observer
-	mu             sync.Mutex
-	refreshLocks   map[string]*sync.Mutex
-	livenessAnchor map[string]string
+	database      *sqlx.DB
+	provider      ir.Provider
+	schema        physical.PhysicalSchema
+	indexes       []Index
+	observer      observe.Observer
+	mu            sync.Mutex
+	refreshLocks  map[string]*sync.Mutex
+	livenessSpent map[string]map[string]bool
 }
 
 const MaximumResults = 1000
@@ -57,6 +57,7 @@ const (
 
 	semanticAmbiguousStrikeBound    = 5
 	semanticLivenessProbes          = 3
+	semanticLivenessSpent           = 12
 	semanticUnclassifiedRefusalCode = "EMBEDDING_REFUSED_UNCLASSIFIED"
 )
 
@@ -839,21 +840,49 @@ func (manager *Manager) refresh(ctx context.Context, index Index, span *observee
 	return len(remaining) > 0, nil
 }
 
-func (manager *Manager) livenessAnchorFor(index Index) string {
+// livenessExhausted names the candidates whose most recent probe failed, so the
+// next pass draws different ones. Rotation cannot be expressed as a cursor: a
+// record key is length prefixed, so its order is not the order a source scan
+// visits records in, and a cursor would exclude a viable candidate for good.
+// A candidate that answers clears the set, because a failure during an outage
+// says nothing about the candidate itself.
+func (manager *Manager) livenessExhausted(index Index) map[string]bool {
 	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.livenessAnchor[key]
+	exhausted := make(map[string]bool, len(manager.livenessSpent[key]))
+	for candidate := range manager.livenessSpent[key] {
+		exhausted[candidate] = true
+	}
+	return exhausted
 }
 
-func (manager *Manager) setLivenessAnchor(index Index, record string) {
+func (manager *Manager) spendLivenessCandidate(index Index, record string) {
 	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	if manager.livenessAnchor == nil {
-		manager.livenessAnchor = make(map[string]string)
+	if manager.livenessSpent == nil {
+		manager.livenessSpent = make(map[string]map[string]bool)
 	}
-	manager.livenessAnchor[key] = record
+	spent := manager.livenessSpent[key]
+	if spent == nil {
+		spent = make(map[string]bool, semanticLivenessSpent)
+		manager.livenessSpent[key] = spent
+	}
+	if len(spent) >= semanticLivenessSpent {
+		for candidate := range spent {
+			delete(spent, candidate)
+			break
+		}
+	}
+	spent[record] = true
+}
+
+func (manager *Manager) clearLivenessCandidates(index Index) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	delete(manager.livenessSpent, key)
 }
 
 // livenessCandidates draws a bounded set of already-stored documents for the
@@ -861,25 +890,17 @@ func (manager *Manager) setLivenessAnchor(index Index, record string) {
 // a record the provider has stopped accepting is tried at most once per pass
 // and stops being the first choice as soon as another one answers.
 func (manager *Manager) livenessCandidates(ctx context.Context, index Index, table physical.PhysicalTable) ([]livenessProbe, error) {
-	anchor := manager.livenessAnchorFor(index)
-	keys, err := manager.readyKeys(ctx, index, anchor, semanticLivenessProbes)
+	spent := manager.livenessExhausted(index)
+	keys, err := manager.readyKeys(ctx, index, spent, semanticLivenessProbes)
 	if err != nil {
 		return nil, err
 	}
-	if len(keys) < semanticLivenessProbes && anchor != "" {
-		wrapped, wrapErr := manager.readyKeys(ctx, index, "", semanticLivenessProbes-len(keys))
-		if wrapErr != nil {
-			return nil, wrapErr
+	if len(keys) == 0 && len(spent) != 0 {
+		keys, err = manager.readyKeys(ctx, index, nil, semanticLivenessProbes)
+		if err != nil {
+			return nil, err
 		}
-		seen := make(map[string]bool, len(keys))
-		for _, key := range keys {
-			seen[key] = true
-		}
-		for _, key := range wrapped {
-			if !seen[key] {
-				keys = append(keys, key)
-			}
-		}
+		manager.clearLivenessCandidates(index)
 	}
 	if len(keys) == 0 {
 		return nil, nil
@@ -901,16 +922,16 @@ func (manager *Manager) livenessCandidates(ctx context.Context, index Index, tab
 	return candidates, nil
 }
 
-func (manager *Manager) readyKeys(ctx context.Context, index Index, after string, limit int) ([]string, error) {
+func (manager *Manager) readyKeys(ctx context.Context, index Index, skip map[string]bool, limit int) ([]string, error) {
 	if limit <= 0 {
 		return nil, nil
 	}
 	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
 		" WHERE " + manager.quote("status") + "='ready'"
 	arguments := []any{}
-	if after != "" {
-		query += " AND " + manager.quote("record_key") + ">" + manager.placeholder(1)
-		arguments = append(arguments, after)
+	for candidate := range skip {
+		query += " AND " + manager.quote("record_key") + "<>" + manager.placeholder(len(arguments)+1)
+		arguments = append(arguments, candidate)
 	}
 	query += " ORDER BY " + manager.quote("record_key") + " LIMIT " + strconv.Itoa(limit)
 	observeexec.RecordStatement(ctx)
@@ -939,7 +960,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	dirty := make([]sourceRecord, 0, len(stale))
 	unchanged := make([]observedRecord, 0, len(stale))
 	absent := make([]observedRecord, 0, len(stale))
-	pass := &embedPass{anchor: manager.livenessAnchorFor(index)}
+	pass := &embedPass{spent: manager.livenessExhausted(index)}
 	for _, record := range stale {
 		observed := observedRecord{key: record.key, updatedAt: record.updatedAt}
 		source, exists := owners[record.key]
@@ -989,7 +1010,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	var aggregate int64
-	pass := &embedPass{anchor: manager.livenessAnchorFor(index)}
+	pass := &embedPass{spent: manager.livenessExhausted(index)}
 	var sourceCursor []any
 	dirtyPending := make([]sourceRecord, 0, index.Specification.MaximumBatch())
 	for {
@@ -1091,13 +1112,14 @@ type embedPass struct {
 	pending     int
 	succeeded   bool
 	refused     []sourceRecord
-	anchor      string
+	spent       map[string]bool
+	exhausted   bool
 	after       []livenessProbe
 	before      []livenessProbe
 }
 
 func (pass *embedPass) considerLiveness(probe livenessProbe) {
-	if probe.key > pass.anchor && len(pass.after) < semanticLivenessProbes {
+	if !pass.spent[probe.key] && len(pass.after) < semanticLivenessProbes {
 		pass.after = append(pass.after, probe)
 		return
 	}
@@ -1115,7 +1137,12 @@ func (pass *embedPass) hasLiveness() bool {
 	return len(pass.after)+len(pass.before) > 0
 }
 
+// livenessSet prefers candidates whose last probe did not fail. Falling back to
+// spent ones means the index has nothing else to offer, so the pass reports
+// that and the record of past failures is forgotten: it has stopped narrowing
+// the choice and would otherwise pin the next pass to the same candidates.
 func (pass *embedPass) livenessSet() []livenessProbe {
+	pass.exhausted = len(pass.after) == 0 && len(pass.before) != 0
 	set := make([]livenessProbe, 0, semanticLivenessProbes)
 	for _, probe := range append(append([]livenessProbe{}, pass.after...), pass.before...) {
 		if len(set) == semanticLivenessProbes {
@@ -1261,7 +1288,11 @@ func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *e
 	if len(refused) == 0 {
 		return nil
 	}
-	if !pass.succeeded && !manager.proveLiveness(ctx, index, pass) {
+	proven := pass.succeeded || manager.proveLiveness(ctx, index, pass)
+	if pass.exhausted {
+		manager.clearLivenessCandidates(index)
+	}
+	if !proven {
 		return nil
 	}
 	for _, record := range refused {
@@ -1289,10 +1320,9 @@ func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *em
 			if ctx.Err() != nil {
 				return false
 			}
-			manager.setLivenessAnchor(index, candidate.key)
+			manager.spendLivenessCandidate(index, candidate.key)
 			continue
 		}
-		manager.setLivenessAnchor(index, candidate.key)
 		pass.succeeded = true
 		return true
 	}
