@@ -613,3 +613,33 @@ func TestLivenessProbesAreBoundedPerPass(t *testing.T) {
 		t.Fatalf("a pass spent %d provider calls, more than the bound of %d", calls, want)
 	}
 }
+
+// TestReconcileLivenessIsNotPinnedToItsFirstCandidates covers the same changed
+// acceptance policy on the reconcile path, which collects candidates from its
+// own scan rather than through livenessCandidates.
+func TestReconcileLivenessIsNotPinnedToItsFirstCandidates(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	fixture.refuseOnly("poisondoc", "healthy p00", "healthy p01", "healthy p02")
+
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p11")
+	ctx := context.Background()
+	// The probe budget is three, so the pass that meets three unacceptable
+	// candidates proves nothing; the anchor must move it past them by the next.
+	_ = fixture.manager.Refresh(ctx, "post", "related")
+	_ = fixture.manager.Refresh(ctx, "post", "related")
+	if strikes := fixture.rows(t)["p11"].Strikes; strikes == 0 {
+		t.Fatal("reconcile liveness stayed pinned to its first candidates, so no strike was charged")
+	}
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound; attempt++ {
+		_ = fixture.manager.Refresh(ctx, "post", "related")
+	}
+	row := fixture.rows(t)["p11"]
+	if row.Status != "failed" || row.Code == nil || *row.Code != semanticUnclassifiedRefusalCode {
+		t.Fatalf("the culprit never reached quarantine under reconcile: %+v", row)
+	}
+}

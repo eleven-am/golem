@@ -939,7 +939,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	dirty := make([]sourceRecord, 0, len(stale))
 	unchanged := make([]observedRecord, 0, len(stale))
 	absent := make([]observedRecord, 0, len(stale))
-	liveness := make([]livenessProbe, 0, semanticLivenessProbes)
+	pass := &embedPass{anchor: manager.livenessAnchorFor(index)}
 	for _, record := range stale {
 		observed := observedRecord{key: record.key, updatedAt: record.updatedAt}
 		source, exists := owners[record.key]
@@ -949,9 +949,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 		}
 		if len(record.hash) == sha256.Size && record.fingerprint == fingerprint && equalBytes(record.hash, source.hash[:]) {
 			unchanged = append(unchanged, observed)
-			if len(liveness) < semanticLivenessProbes {
-				liveness = append(liveness, livenessProbe{key: record.key, text: source.text})
-			}
+			pass.considerLiveness(livenessProbe{key: record.key, text: source.text})
 			continue
 		}
 		source.updatedAt = record.updatedAt
@@ -962,7 +960,6 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	// outcomes are guarded against the same window: whatever the pass decided
 	// about a record only lands while that record still looks the way it did
 	// when the pass read it.
-	pass := &embedPass{liveness: liveness}
 	if err := manager.embedDirty(ctx, index, fingerprint, dirty, pass); err != nil {
 		return err
 	}
@@ -972,12 +969,12 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
 	}
-	if len(pass.refused) != 0 && !pass.succeeded && len(pass.liveness) == 0 {
+	if len(pass.refused) != 0 && !pass.succeeded && !pass.hasLiveness() {
 		candidates, candidateErr := manager.livenessCandidates(ctx, index, table)
 		if candidateErr != nil {
 			return candidateErr
 		}
-		pass.liveness = candidates
+		pass.adoptLiveness(candidates)
 	}
 	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
 		return err
@@ -992,7 +989,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	var aggregate int64
-	pass := &embedPass{}
+	pass := &embedPass{anchor: manager.livenessAnchorFor(index)}
 	var sourceCursor []any
 	dirtyPending := make([]sourceRecord, 0, index.Specification.MaximumBatch())
 	for {
@@ -1019,8 +1016,8 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 				dirty = append(dirty, record)
 				continue
 			}
-			if len(pass.liveness) < semanticLivenessProbes && state.status == "ready" {
-				pass.liveness = append(pass.liveness, livenessProbe{key: record.key, text: record.text})
+			if state.status == "ready" {
+				pass.considerLiveness(livenessProbe{key: record.key, text: record.text})
 			}
 			if state.status != "ready" {
 				unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
@@ -1094,7 +1091,39 @@ type embedPass struct {
 	pending     int
 	succeeded   bool
 	refused     []sourceRecord
-	liveness    []livenessProbe
+	anchor      string
+	after       []livenessProbe
+	before      []livenessProbe
+}
+
+func (pass *embedPass) considerLiveness(probe livenessProbe) {
+	if probe.key > pass.anchor && len(pass.after) < semanticLivenessProbes {
+		pass.after = append(pass.after, probe)
+		return
+	}
+	if len(pass.before) < semanticLivenessProbes {
+		pass.before = append(pass.before, probe)
+	}
+}
+
+func (pass *embedPass) adoptLiveness(candidates []livenessProbe) {
+	pass.after = candidates
+	pass.before = nil
+}
+
+func (pass *embedPass) hasLiveness() bool {
+	return len(pass.after)+len(pass.before) > 0
+}
+
+func (pass *embedPass) livenessSet() []livenessProbe {
+	set := make([]livenessProbe, 0, semanticLivenessProbes)
+	for _, probe := range append(append([]livenessProbe{}, pass.after...), pass.before...) {
+		if len(set) == semanticLivenessProbes {
+			break
+		}
+		set = append(set, probe)
+	}
+	return set
 }
 
 // livenessProbe is one already-stored document a pass may re-embed to decide
@@ -1251,7 +1280,7 @@ func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *e
 // the provider has stopped accepting cannot pin the probe. Results are
 // discarded: the records are already stored and unchanged.
 func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *embedPass) bool {
-	for _, candidate := range pass.liveness {
+	for _, candidate := range pass.livenessSet() {
 		input, inputErr := embedding.NewInput("source-0", candidate.text)
 		if inputErr != nil {
 			continue
