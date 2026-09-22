@@ -21,6 +21,7 @@ type refusingProvider struct {
 	refuse        []string
 	code          embedding.Code
 	calls         int
+	inputs        []string
 }
 
 func (p *refusingProvider) Specification() embedding.Specification { return p.specification }
@@ -29,6 +30,9 @@ func (p *refusingProvider) Embed(_ context.Context, inputs []embedding.Input) ([
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.calls++
+	for _, input := range inputs {
+		p.inputs = append(p.inputs, input.Text())
+	}
 	for _, input := range inputs {
 		for _, fragment := range p.refuse {
 			if strings.Contains(input.Text(), fragment) {
@@ -507,5 +511,105 @@ func TestDrainSeesAStaleMarkClearTheStrikeCount(t *testing.T) {
 	fixture.markStale(t, "b")
 	if strikes := fixture.rows(t)["b"].Strikes; strikes != 0 {
 		t.Fatalf("a new stale mark left %d strikes behind", strikes)
+	}
+}
+
+func (fixture quarantineFixture) refuseOnly(texts ...string) {
+	fixture.provider.mu.Lock()
+	defer fixture.provider.mu.Unlock()
+	fixture.provider.refuse = texts
+}
+
+// settleAll embeds every record so the shadow table holds a population of
+// ready rows for the liveness probe to draw on.
+func (fixture quarantineFixture) settleAll(t *testing.T, count int) {
+	t.Helper()
+	fixture.refuseOnly()
+	ids := make([]string, 0, count)
+	for index := 0; index < count; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture.markStale(t, ids...)
+	fixture.drain(t)
+	for _, id := range ids {
+		if row := fixture.rows(t)[id]; row.Status != "ready" {
+			t.Fatalf("setup left %s at %q", id, row.Status)
+		}
+	}
+}
+
+// TestLivenessIsNotPinnedToOneFailingCandidate covers a provider whose
+// acceptance policy changed after a document was stored: the first ready record
+// can no longer embed, so a probe that always chose it would never prove
+// liveness and the culprit would stay pending for ever.
+func TestLivenessIsNotPinnedToOneFailingCandidate(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	fixture.refuseOnly("poisondoc", "healthy p00")
+
+	// A mark alone is not enough: an unchanged document is flipped back to
+	// ready without reaching the provider, so the culprit's text must change.
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p11")
+	fixture.drain(t)
+	if strikes := fixture.rows(t)["p11"].Strikes; strikes == 0 {
+		t.Fatal("liveness stayed pinned to the first ready record, so no strike was charged")
+	}
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound; attempt++ {
+		fixture.drain(t)
+	}
+	row := fixture.rows(t)["p11"]
+	if row.Status != "failed" || row.Code == nil || *row.Code != semanticUnclassifiedRefusalCode {
+		t.Fatalf("the culprit never reached quarantine behind a failing probe candidate: %+v", row)
+	}
+	if probe := fixture.rows(t)["p00"]; probe.Status != "ready" {
+		t.Fatalf("probing must not disturb the candidate it borrows: %+v", probe)
+	}
+}
+
+func TestEveryProbeCandidateFailingChargesNothing(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	fixture.refuseOnly("golem-semantic-document")
+
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p11")
+	for attempt := 0; attempt < semanticAmbiguousStrikeBound+3; attempt++ {
+		fixture.drain(t)
+	}
+	for key, row := range fixture.rows(t) {
+		if row.Status == "failed" {
+			t.Fatalf("a total outage quarantined %s: %+v", key, row)
+		}
+		if row.Strikes != 0 {
+			t.Fatalf("a total outage charged %d strikes to %s", row.Strikes, key)
+		}
+	}
+}
+
+func TestLivenessProbesAreBoundedPerPass(t *testing.T) {
+	const records = 12
+	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
+	fixture.settleAll(t, records)
+	fixture.refuseOnly("golem-semantic-document")
+	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
+		t.Fatal(err)
+	}
+	fixture.markStale(t, "p11")
+	fixture.provider.mu.Lock()
+	fixture.provider.calls = 0
+	fixture.provider.mu.Unlock()
+	fixture.drain(t)
+	fixture.provider.mu.Lock()
+	calls := fixture.provider.calls
+	fixture.provider.mu.Unlock()
+	if want := 1 + semanticOutageBatches + semanticLivenessProbes; calls > want {
+		t.Fatalf("a pass spent %d provider calls, more than the bound of %d", calls, want)
 	}
 }

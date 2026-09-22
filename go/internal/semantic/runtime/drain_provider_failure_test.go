@@ -66,8 +66,8 @@ func TestSemanticDrainDefersAnUnclassifiedProviderFailureWithoutQuarantine(t *te
 	// down or one record is poisoned. The batch call is not counted against the
 	// budget, because counting it would let one refused record exhaust the
 	// budget and starve every record behind it.
-	if want := 1 + semanticOutageBatches; failing.calls != want {
-		t.Fatalf("provider calls=%d want=%d: unclassified isolation escaped the outage budget", failing.calls, want)
+	if want := 1 + semanticOutageBatches + semanticLivenessProbes; failing.calls > want {
+		t.Fatalf("provider calls=%d exceeds the bound of %d: unclassified isolation escaped the outage budget", failing.calls, want)
 	}
 	for _, id := range []string{"a", "b"} {
 		if status, code, attempts := fixture.failure(t, id); status != "pending" || code.Valid || attempts != before {
@@ -227,8 +227,12 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 	if err := fixture.manager.Refresh(ctx, "post", "related"); !ProviderDeferred(err) {
 		t.Fatalf("reconcile error=%v, want the outage deferred", err)
 	}
-	if want := 1 + semanticOutageBatches; down.calls != want {
-		t.Fatalf("reconcile provider calls=%d want=%d during an outage spanning 5 batches", down.calls, want)
+	// One refused batch, the isolation that decides whether the provider is
+	// down or one record is poisoned, and at most semanticLivenessProbes
+	// re-embeds of already-stored documents. The count does not grow with the
+	// number of batches, which is what this test exists to protect.
+	if want := 1 + semanticOutageBatches + semanticLivenessProbes; down.calls > want {
+		t.Fatalf("reconcile provider calls=%d exceeds the bound of %d during an outage spanning 5 batches", down.calls, want)
 	}
 	fixture.manager.indexes[0].Provider = fixture.embedder
 	if err := fixture.manager.Refresh(ctx, "post", "related"); err != nil {
@@ -255,8 +259,8 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 		if _, err := fixture.manager.Drain(ctx, "post", "related"); !ProviderDeferred(err) {
 			t.Fatalf("pass %d error=%v, want the outage deferred", pass, err)
 		}
-		if want := 1 + semanticOutageBatches; down.calls != want {
-			t.Fatalf("pass %d provider calls=%d want=%d during an outage spanning 5 batches", pass, down.calls, want)
+		if want := 1 + semanticOutageBatches + semanticLivenessProbes; down.calls > want {
+			t.Fatalf("pass %d provider calls=%d exceeds the bound of %d during an outage spanning 5 batches", pass, down.calls, want)
 		}
 	}
 	for _, id := range ids {

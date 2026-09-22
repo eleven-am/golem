@@ -33,13 +33,14 @@ import (
 // Manager owns refresh and nearest-neighbour storage operations. Refreshes of
 // one index serialize, while unrelated indexes may advance concurrently.
 type Manager struct {
-	database     *sqlx.DB
-	provider     ir.Provider
-	schema       physical.PhysicalSchema
-	indexes      []Index
-	observer     observe.Observer
-	mu           sync.Mutex
-	refreshLocks map[string]*sync.Mutex
+	database       *sqlx.DB
+	provider       ir.Provider
+	schema         physical.PhysicalSchema
+	indexes        []Index
+	observer       observe.Observer
+	mu             sync.Mutex
+	refreshLocks   map[string]*sync.Mutex
+	livenessAnchor map[string]string
 }
 
 const MaximumResults = 1000
@@ -55,6 +56,7 @@ const (
 	semanticOutageBatches = 2
 
 	semanticAmbiguousStrikeBound    = 5
+	semanticLivenessProbes          = 3
 	semanticUnclassifiedRefusalCode = "EMBEDDING_REFUSED_UNCLASSIFIED"
 )
 
@@ -837,19 +839,86 @@ func (manager *Manager) refresh(ctx context.Context, index Index, span *observee
 	return len(remaining) > 0, nil
 }
 
-func (manager *Manager) livenessCandidate(ctx context.Context, index Index, table physical.PhysicalTable) (string, error) {
-	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
-		" WHERE " + manager.quote("status") + "='ready' ORDER BY " + manager.quote("record_key") + " LIMIT 1"
-	observeexec.RecordStatement(ctx)
-	var key string
-	if err := manager.database.GetContext(ctx, &key, query); err != nil {
-		return "", nil
+func (manager *Manager) livenessAnchorFor(index Index) string {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.livenessAnchor[key]
+}
+
+func (manager *Manager) setLivenessAnchor(index Index, record string) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.livenessAnchor == nil {
+		manager.livenessAnchor = make(map[string]string)
 	}
-	owners, err := manager.scanOwners(ctx, table, index, []staleRecord{{key: key}})
+	manager.livenessAnchor[key] = record
+}
+
+// livenessCandidates draws a bounded set of already-stored documents for the
+// drain to probe. It starts from the candidate that last answered and wraps, so
+// a record the provider has stopped accepting is tried at most once per pass
+// and stops being the first choice as soon as another one answers.
+func (manager *Manager) livenessCandidates(ctx context.Context, index Index, table physical.PhysicalTable) ([]livenessProbe, error) {
+	anchor := manager.livenessAnchorFor(index)
+	keys, err := manager.readyKeys(ctx, index, anchor, semanticLivenessProbes)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	return owners[key].text, nil
+	if len(keys) < semanticLivenessProbes && anchor != "" {
+		wrapped, wrapErr := manager.readyKeys(ctx, index, "", semanticLivenessProbes-len(keys))
+		if wrapErr != nil {
+			return nil, wrapErr
+		}
+		seen := make(map[string]bool, len(keys))
+		for _, key := range keys {
+			seen[key] = true
+		}
+		for _, key := range wrapped {
+			if !seen[key] {
+				keys = append(keys, key)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	stale := make([]staleRecord, 0, len(keys))
+	for _, key := range keys {
+		stale = append(stale, staleRecord{key: key})
+	}
+	owners, err := manager.scanOwners(ctx, table, index, stale)
+	if err != nil {
+		return nil, err
+	}
+	candidates := make([]livenessProbe, 0, len(keys))
+	for _, key := range keys {
+		if source, exists := owners[key]; exists {
+			candidates = append(candidates, livenessProbe{key: key, text: source.text})
+		}
+	}
+	return candidates, nil
+}
+
+func (manager *Manager) readyKeys(ctx context.Context, index Index, after string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
+		" WHERE " + manager.quote("status") + "='ready'"
+	arguments := []any{}
+	if after != "" {
+		query += " AND " + manager.quote("record_key") + ">" + manager.placeholder(1)
+		arguments = append(arguments, after)
+	}
+	query += " ORDER BY " + manager.quote("record_key") + " LIMIT " + strconv.Itoa(limit)
+	observeexec.RecordStatement(ctx)
+	var keys []string
+	if err := manager.database.SelectContext(ctx, &keys, query, arguments...); err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_REFRESH: liveness candidate scan failed")
+	}
+	return keys, nil
 }
 
 // applyStale sorts one probed page into the three outcomes a mark can have.
@@ -870,7 +939,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	dirty := make([]sourceRecord, 0, len(stale))
 	unchanged := make([]observedRecord, 0, len(stale))
 	absent := make([]observedRecord, 0, len(stale))
-	liveness := ""
+	liveness := make([]livenessProbe, 0, semanticLivenessProbes)
 	for _, record := range stale {
 		observed := observedRecord{key: record.key, updatedAt: record.updatedAt}
 		source, exists := owners[record.key]
@@ -880,8 +949,8 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 		}
 		if len(record.hash) == sha256.Size && record.fingerprint == fingerprint && equalBytes(record.hash, source.hash[:]) {
 			unchanged = append(unchanged, observed)
-			if liveness == "" {
-				liveness = source.text
+			if len(liveness) < semanticLivenessProbes {
+				liveness = append(liveness, livenessProbe{key: record.key, text: source.text})
 			}
 			continue
 		}
@@ -903,12 +972,12 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
 	}
-	if len(pass.refused) != 0 && !pass.succeeded && pass.liveness == "" {
-		candidate, candidateErr := manager.livenessCandidate(ctx, index, table)
+	if len(pass.refused) != 0 && !pass.succeeded && len(pass.liveness) == 0 {
+		candidates, candidateErr := manager.livenessCandidates(ctx, index, table)
 		if candidateErr != nil {
 			return candidateErr
 		}
-		pass.liveness = candidate
+		pass.liveness = candidates
 	}
 	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
 		return err
@@ -950,8 +1019,8 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 				dirty = append(dirty, record)
 				continue
 			}
-			if pass.liveness == "" && state.status == "ready" {
-				pass.liveness = record.text
+			if len(pass.liveness) < semanticLivenessProbes && state.status == "ready" {
+				pass.liveness = append(pass.liveness, livenessProbe{key: record.key, text: record.text})
 			}
 			if state.status != "ready" {
 				unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
@@ -1025,7 +1094,16 @@ type embedPass struct {
 	pending     int
 	succeeded   bool
 	refused     []sourceRecord
-	liveness    string
+	liveness    []livenessProbe
+}
+
+// livenessProbe is one already-stored document a pass may re-embed to decide
+// whether the provider is answering. A probe that fails is evidence about the
+// candidate as much as about the provider, so a pass never reuses one and the
+// next pass starts from whichever candidate last answered.
+type livenessProbe struct {
+	key  string
+	text string
 }
 
 func (pass *embedPass) settled() {
@@ -1154,14 +1232,8 @@ func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *e
 	if len(refused) == 0 {
 		return nil
 	}
-	if !pass.succeeded {
-		suspect, err := manager.anyRefusalIsAlreadySuspect(ctx, index, refused)
-		if err != nil {
-			return err
-		}
-		if !suspect || !manager.proveLiveness(ctx, index, pass) {
-			return nil
-		}
+	if !pass.succeeded && !manager.proveLiveness(ctx, index, pass) {
+		return nil
 	}
 	for _, record := range refused {
 		if err := manager.recordAmbiguousRefusal(ctx, index, record); err != nil {
@@ -1171,46 +1243,31 @@ func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *e
 	return nil
 }
 
-// anyRefusalIsAlreadySuspect reports whether a refused record has survived an
-// earlier strike. Only then is one liveness probe worth the provider call: a
-// pass with nothing to decide costs exactly what it always did.
-func (manager *Manager) anyRefusalIsAlreadySuspect(ctx context.Context, index Index, refused []sourceRecord) (bool, error) {
-	if !manager.tracksStrikes(index) {
-		return false, nil
-	}
-	arguments := make([]any, 0, len(refused))
-	marks := make([]string, 0, len(refused))
-	for _, record := range refused {
-		arguments = append(arguments, record.key)
-		marks = append(marks, manager.placeholder(len(arguments)))
-	}
-	query := "SELECT COUNT(*) FROM " + manager.hidden(index, "_state") +
-		" WHERE " + manager.quote("ambiguous_strikes") + ">0 AND " + manager.quote("record_key") + " IN (" + strings.Join(marks, ",") + ")"
-	observeexec.RecordStatement(ctx)
-	var suspects int64
-	if err := manager.database.GetContext(ctx, &suspects, query, arguments...); err != nil {
-		return false, fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
-	}
-	return suspects > 0, nil
-}
-
-// proveLiveness re-embeds one document this pass already found settled. Only a
-// provider call that succeeds here can turn a refusal into a strike, so an
-// outage can never spend a strike a healthy pass earned earlier. Its result is
-// discarded: the record is already stored and unchanged.
+// proveLiveness re-embeds documents this index already stored until one of
+// them answers. Only a provider call that succeeds here can turn a refusal into
+// a strike, so an outage can never spend a strike a healthy pass earned
+// earlier. A candidate that fails is not tried again in this pass, and the
+// candidate that answers becomes the next pass's first choice, so a document
+// the provider has stopped accepting cannot pin the probe. Results are
+// discarded: the records are already stored and unchanged.
 func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *embedPass) bool {
-	if pass.liveness == "" {
-		return false
+	for _, candidate := range pass.liveness {
+		input, inputErr := embedding.NewInput("source-0", candidate.text)
+		if inputErr != nil {
+			continue
+		}
+		if _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			manager.setLivenessAnchor(index, candidate.key)
+			continue
+		}
+		manager.setLivenessAnchor(index, candidate.key)
+		pass.succeeded = true
+		return true
 	}
-	input, inputErr := embedding.NewInput("source-0", pass.liveness)
-	if inputErr != nil {
-		return false
-	}
-	if _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
-		return false
-	}
-	pass.succeeded = true
-	return true
+	return false
 }
 
 func (manager *Manager) recordAmbiguousRefusal(ctx context.Context, index Index, record sourceRecord) error {

@@ -149,30 +149,33 @@ the indexed source row: the next pass marks it stale, clears the strike count
 and tries again.
 
 **A strike is only ever charged in a pass where a provider call succeeded.**
-An outage cannot spend strikes a healthy pass earned earlier. When the only
-row left to embed is one that already carries a strike, golem re-embeds one
-row it already stored to prove the provider is answering, and charges nothing
-if that probe fails. A provider that reports `EMBEDDING_UNAVAILABLE` never
-strikes at all.
+An outage cannot spend strikes a healthy pass earned earlier. When nothing else
+in the pass embedded, golem re-embeds documents it already stored to prove the
+provider is answering, and charges nothing if they all fail. It tries up to
+three distinct ones and never the same one twice in a pass, so a document the
+provider has stopped accepting cannot pin the probe; whichever one answers
+becomes the next pass's first choice. Those re-embeds are discarded, and the
+rows they borrow are left exactly as they were. A provider that reports
+`EMBEDDING_UNAVAILABLE` never strikes at all.
 
 **The strike column requires the migration.** Regenerate and apply it before
 the bound can take effect; until then an unclassified refusal is retried
 forever, as before. That is the same regeneration the queue's operator-history
 indexes need.
 
-**Known limit: the first strike needs a pass that embeds something else.**
-Because a strike is only charged when a provider call succeeded in the same
-pass, a row can only start accruing them in a pass where another row embedded
-or the liveness probe answered. In practice a document becomes stale alongside
-its neighbours, so that pass exists. An index holding exactly one document,
-which the provider refuses without classifying, never reaches the bound and is
-retried forever.
+**Known limit: an index with nothing stored cannot charge a strike.** Because
+a strike is only charged when a provider call succeeded in the same pass, the
+pass needs either another row that embedded or a stored document the liveness
+probe can borrow. An index whose only document is the one the provider refuses,
+with nothing else ever stored, has neither, so it never reaches the bound and
+is retried forever.
 
-**An outage costs at most three provider calls per pass.** The refused batch
-is one call, and isolating it costs two more before two failures in a row with
-nothing stored between them stop the pass for the rest of its page. A pass that
-has a strike to decide about spends one further call for the liveness probe
-above, and charges nothing when that probe fails. Each deferred pass is observed as a
+**An outage costs at most six provider calls per pass.** The refused batch is
+one call, isolating it costs two more before two failures in a row with nothing
+stored between them stop the pass for the rest of its page, and proving
+liveness costs up to three re-embeds of documents already stored. A pass with
+nothing stored yet has no candidates to probe and stops at three. The count
+never grows with the number of batches in the page. Each deferred pass is observed as a
 `semantic.refresh` retry whose aggregate count is the number of rows it left
 pending.
 

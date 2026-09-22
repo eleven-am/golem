@@ -72,10 +72,11 @@ migration needs none of this.
 unclassified refusal is retried one row at a time, so only the culprit stays
 pending — including the rows after it in its own batch and every later batch in
 the page. The outage budget grew to pay for that: a total outage now costs at
-most three provider calls per pass rather than two, because the refused batch
-and the two isolation probes that establish it really is an outage are counted
-separately. A pass that has a strike to decide about spends one further call to
-prove the provider is answering before charging one.
+most six provider calls per pass rather than two — one refused batch, two isolation
+probes that establish it really is an outage, and up to three re-embeds of
+already-stored documents that prove the provider is answering before any strike
+is charged. A pass with nothing stored yet has nothing to probe and stops at
+three. The count never grows with the number of batches in the page.
 
 **Startup now verifies every index on `golem_queue` on both providers, not
 just `golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are
