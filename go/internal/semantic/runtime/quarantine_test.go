@@ -12,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -907,5 +908,47 @@ func TestABatchWhoseRecordsAllEmbedAloneReportsNothingPending(t *testing.T) {
 		if row := fixture.rows(t)[id]; row.Status != "ready" {
 			t.Fatalf("%s is %q", id, row.Status)
 		}
+	}
+}
+
+// TestIsolationRunningOutOfBudgetReportsEveryRecordItLeft covers a page with
+// more refused batches than isolation can finish: the records it never reached
+// are pending too, in the batch it stopped inside and in the batches after it.
+func TestIsolationRunningOutOfBudgetReportsEveryRecordItLeft(t *testing.T) {
+	const records = 33
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture := openBatchedQuarantineFixture(t, ids, "p00", embedding.CodeProvider, 16)
+	fixture.settleAllKeyed(t, ids)
+	for _, id := range ids {
+		if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"=? WHERE "id"=?`, "healthy "+id+" revised", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.provider.mu.Lock()
+	fixture.provider.refuseBatch = true
+	fixture.provider.mu.Unlock()
+	collector := &semanticObservationCollector{}
+	fixture.manager.observer = collector
+
+	fixture.markStale(t, ids...)
+	fixture.drain(t)
+
+	pending := 0
+	for _, id := range ids {
+		if row := fixture.rows(t)[id]; row.Status != "ready" {
+			pending++
+		}
+	}
+	reported := int64(-1)
+	for _, observed := range collector.take() {
+		if observed.kind == observe.KindSemantic && observed.operation == observe.OperationSemanticRefresh && observed.outcome == observe.OutcomeRetrying {
+			reported = observed.aggregate
+		}
+	}
+	if reported != int64(pending) {
+		t.Fatalf("the pass reported %d records left pending, but %d are not ready", reported, pending)
 	}
 }

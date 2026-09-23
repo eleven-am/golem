@@ -1289,10 +1289,10 @@ func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, 
 	pass.isolate = nil
 	pass.isolating = true
 	defer func() { pass.isolating = false }()
-	for _, batch := range batches {
+	for remaining, batch := range batches {
 		for position, record := range batch {
 			if pass.isolated >= semanticIsolationCalls {
-				pass.deferIsolation([][]sourceRecord{batch[position:]})
+				pass.deferIsolation(append([][]sourceRecord{batch[position:]}, batches[remaining+1:]...))
 				return nil
 			}
 			pass.isolated++
