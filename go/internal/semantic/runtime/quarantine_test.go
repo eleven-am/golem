@@ -19,6 +19,7 @@ type refusingProvider struct {
 	specification embedding.Specification
 	mu            sync.Mutex
 	refuse        []string
+	refuseBatch   bool
 	code          embedding.Code
 	calls         int
 	inputs        []string
@@ -32,6 +33,9 @@ func (p *refusingProvider) Embed(_ context.Context, inputs []embedding.Input) ([
 	p.calls++
 	for _, input := range inputs {
 		p.inputs = append(p.inputs, input.Text())
+	}
+	if p.refuseBatch && len(inputs) > 1 {
+		return nil, embedding.NewError(p.code, fmt.Errorf("refused"))
 	}
 	for _, input := range inputs {
 		for _, fragment := range p.refuse {
@@ -334,6 +338,11 @@ func openPagedQuarantineFixture(t *testing.T, count int, poison string, code emb
 
 func openKeyedQuarantineFixture(t *testing.T, ids []string, poison string, code embedding.Code) quarantineFixture {
 	t.Helper()
+	return openBatchedQuarantineFixture(t, ids, poison, code, 8)
+}
+
+func openBatchedQuarantineFixture(t *testing.T, ids []string, poison string, code embedding.Code, batch int) quarantineFixture {
+	t.Helper()
 	handle, err := sqlitevec.Open("file:" + t.TempDir() + "/paged.db?_pragma=foreign_keys(1)&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
@@ -364,7 +373,7 @@ CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(reco
 		},
 		PrimaryKey: &physical.PhysicalKey{ID: "post-primary", Name: "pk_posts", Columns: []ir.FieldID{"id"}},
 	}}
-	specification, _ := embedding.NewSpecification("test", "model", "v1", 3, 8)
+	specification, _ := embedding.NewSpecification("test", "model", "v1", 3, batch)
 	embedder := &refusingProvider{specification: specification, refuse: []string{"poisondoc"}, code: code}
 	registry, _ := embedding.NewRegistry(map[string]embedding.Provider{"content": embedder})
 	inventory, err := NewInventory(schema, registry)
@@ -840,5 +849,63 @@ func TestAPassProbesItsLivenessCandidatesOnce(t *testing.T) {
 	fixture.provider.mu.Unlock()
 	if want := semanticOutageBatches + semanticLivenessProbes; calls > want {
 		t.Fatalf("a pass against a dead provider made %d calls, more than the %d it is bounded to", calls, want)
+	}
+}
+
+// TestAProviderThatTakesOneRecordAtATimeStillStopsDuringAnOutage covers a
+// specification whose maximum batch is one: every failure is a single-record
+// call, and nothing else bounds the pass.
+func TestAProviderThatTakesOneRecordAtATimeStillStopsDuringAnOutage(t *testing.T) {
+	const records = 20
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture := openBatchedQuarantineFixture(t, ids, "p00", embedding.CodeProvider, 1)
+	fixture.refuseOnly("healthy", "poisondoc")
+	fixture.markStale(t, ids...)
+	fixture.provider.mu.Lock()
+	fixture.provider.calls = 0
+	fixture.provider.mu.Unlock()
+	fixture.drain(t)
+	fixture.provider.mu.Lock()
+	calls := fixture.provider.calls
+	fixture.provider.mu.Unlock()
+	if want := semanticOutageBatches + semanticLivenessProbes; calls > want {
+		t.Fatalf("a one-record-at-a-time provider was called %d times in one pass, more than the %d bound", calls, want)
+	}
+}
+
+// TestABatchWhoseRecordsAllEmbedAloneReportsNothingPending covers the
+// accounting after a refused batch is rescued: every record stored, so the
+// pass owes no retry and no pending work.
+func TestABatchWhoseRecordsAllEmbedAloneReportsNothingPending(t *testing.T) {
+	const records = 6
+	ids := make([]string, 0, records)
+	for index := 0; index < records; index++ {
+		ids = append(ids, fmt.Sprintf("p%02d", index))
+	}
+	fixture := openKeyedQuarantineFixture(t, ids, "p00", embedding.CodeProvider)
+	fixture.settleAllKeyed(t, ids)
+	fixture.provider.mu.Lock()
+	fixture.provider.refuseBatch = true
+	fixture.provider.mu.Unlock()
+	for _, id := range ids {
+		if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"=? WHERE "id"=?`, "healthy "+id+" revised", id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fixture.markStale(t, ids...)
+	remaining, err := fixture.manager.Drain(context.Background(), "post", "related")
+	if err != nil {
+		t.Fatalf("a batch whose records all embedded alone still reported an error: %v", err)
+	}
+	if remaining {
+		t.Fatal("a batch whose records all embedded alone still reported stale work")
+	}
+	for _, id := range ids {
+		if row := fixture.rows(t)[id]; row.Status != "ready" {
+			t.Fatalf("%s is %q", id, row.Status)
+		}
 	}
 }

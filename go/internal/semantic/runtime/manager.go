@@ -1152,6 +1152,8 @@ type embedPass struct {
 	spent       map[string]bool
 	exhausted   bool
 	probed      bool
+	isolating   bool
+	isolateErr  error
 	isolate     [][]sourceRecord
 	isolated    int
 	after       []livenessProbe
@@ -1220,10 +1222,33 @@ func (pass *embedPass) deferBatch(err error, batch []sourceRecord) {
 	pass.pending += len(batch)
 }
 
+// refuse records a record the provider named on its own. Outside isolation the
+// call that refused it is the pass's own attempt and counts against the outage
+// budget, which is the only thing bounding a provider whose maximum batch is
+// one. Inside isolation it must not: the pass has already established that the
+// provider answers, and counting there is what starved the records behind a
+// culprit.
 func (pass *embedPass) refuse(err error, record sourceRecord) {
 	pass.note(err)
 	pass.pending++
+	if !pass.isolating {
+		pass.consecutive++
+	}
 	pass.refused = append(pass.refused, record)
+}
+
+// deferIsolation accounts for records a refused batch left behind: those the
+// pass never isolated, and those isolation ran out of budget for. A batch whose
+// records all embed on their own leaves nothing here, so the pass reports no
+// pending work and no error for it.
+func (pass *embedPass) deferIsolation(batches [][]sourceRecord) {
+	for _, batch := range batches {
+		if len(batch) == 0 {
+			continue
+		}
+		pass.note(pass.isolateErr)
+		pass.pending += len(batch)
+	}
 }
 
 func (pass *embedPass) finish(ctx context.Context, index Index) error {
@@ -1252,6 +1277,8 @@ func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, 
 		// The provider answered nothing and this index has documents that could
 		// have shown otherwise, so the batch waits. An index with nothing stored
 		// has no such evidence to offer, and there isolation is the experiment.
+		pass.deferIsolation(pass.isolate)
+		pass.isolate = nil
 		return nil
 	}
 	// The batches that were deferred are what raised the outage streak, and the
@@ -1260,10 +1287,12 @@ func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, 
 	pass.settled()
 	batches := pass.isolate
 	pass.isolate = nil
+	pass.isolating = true
+	defer func() { pass.isolating = false }()
 	for _, batch := range batches {
 		for position, record := range batch {
 			if pass.isolated >= semanticIsolationCalls {
-				pass.pending += len(batch) - position
+				pass.deferIsolation([][]sourceRecord{batch[position:]})
 				return nil
 			}
 			pass.isolated++
@@ -1322,7 +1351,8 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 					// fails, which says nothing. The batch waits until something
 					// in this pass succeeds, so the records behind it are still
 					// reached and can supply that evidence.
-					pass.deferBatch(providerDeferral{err: embedErr}, batch)
+					pass.consecutive++
+					pass.isolateErr = cmp.Or(pass.isolateErr, error(providerDeferral{err: embedErr}))
 					pass.isolate = append(pass.isolate, batch)
 					continue
 				}
