@@ -3,11 +3,9 @@ package golemtest
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -32,8 +30,6 @@ const externalApplicationGate = "TestExternalGeneratedApplicationPolicyKitMatche
 const externalQueryPlanApplicationGate = "TestExternalGeneratedApplicationQueryPlanIsCallerOnlyTypedAndRedacted"
 const externalOptimisticConcurrencyApplicationGate = "TestExternalGeneratedApplicationOptimisticConcurrencyRaces"
 const externalQueueApplicationGate = "TestExternalGeneratedApplicationQueueIsUsable"
-
-var externalDatabasePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
 type externalProfile struct {
 	name      string
@@ -181,66 +177,22 @@ func externalPostgreSQLDatabase(t *testing.T, administrative string, profile ext
 	if err != nil {
 		t.Fatalf("open the %s PostgreSQL profile: %v", profile.name, err)
 	}
-	var encoding, collate, characterType string
-	if err := connection.QueryRow(ctx, `SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&encoding, &collate, &characterType); err != nil {
+	var collate, characterType string
+	if err := connection.QueryRow(ctx, `SELECT datcollate, datctype FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&collate, &characterType); err != nil {
 		_ = connection.Close(ctx)
 		t.Fatal(err)
-	}
-	if profile.collation == "C" && (collate != "C" || characterType != "C") {
-		_ = connection.Close(ctx)
-		t.Fatalf("the %s profile has collation=%q ctype=%q", profile.name, collate, characterType)
-	}
-	if profile.collation == "linguistic" && (collate == "C" || characterType == "C") {
-		_ = connection.Close(ctx)
-		t.Fatalf("the %s profile requires a non-C collation and ctype; got collation=%q ctype=%q", profile.name, collate, characterType)
-	}
-	name := fmt.Sprintf("golem_kit_gate_%s_%d_%d", profile.name, os.Getpid(), time.Now().UnixNano())
-	if !externalDatabasePattern.MatchString(name) {
-		_ = connection.Close(ctx)
-		t.Fatalf("invalid generated PostgreSQL database name %q", name)
-	}
-	statement := fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 ENCODING %s LC_COLLATE %s LC_CTYPE %s",
-		externalPostgreSQLIdentifier(name), externalPostgreSQLLiteral(encoding), externalPostgreSQLLiteral(collate), externalPostgreSQLLiteral(characterType))
-	if _, err := connection.Exec(ctx, statement); err != nil {
-		_ = connection.Close(ctx)
-		t.Fatalf("create disposable PostgreSQL database: %v", err)
 	}
 	if err := connection.Close(ctx); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		cleanupContext, cleanupCancel := context.WithTimeout(context.Background(), 20*time.Second)
-		defer cleanupCancel()
-		admin, openErr := pgx.ConnectConfig(cleanupContext, configuration)
-		if openErr != nil {
-			t.Errorf("open PostgreSQL cleanup connection: %v", openErr)
-			return
-		}
-		defer admin.Close(cleanupContext)
-		if _, terminateErr := admin.Exec(cleanupContext, `SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); terminateErr != nil {
-			t.Errorf("terminate disposable PostgreSQL sessions: %v", terminateErr)
-			return
-		}
-		if _, dropErr := admin.Exec(cleanupContext, "DROP DATABASE "+externalPostgreSQLIdentifier(name)); dropErr != nil {
-			t.Errorf("drop disposable PostgreSQL database: %v", dropErr)
-		}
-	})
-	parsed, err := url.Parse(administrative)
-	if err != nil {
-		t.Fatal(err)
+	if profile.collation == "C" && (collate != "C" || characterType != "C") {
+		t.Fatalf("the %s profile has collation=%q ctype=%q", profile.name, collate, characterType)
 	}
-	parsed.Path, parsed.RawPath = "/"+name, ""
-	return parsed.String()
+	if profile.collation == "linguistic" && (collate == "C" || characterType == "C") {
+		t.Fatalf("the %s profile requires a non-C collation and ctype; got collation=%q ctype=%q", profile.name, collate, characterType)
+	}
+	return testenv.DisposablePostgreSQLFrom(t, administrative)
 }
-
-func externalPostgreSQLIdentifier(value string) string {
-	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
-}
-
-func externalPostgreSQLLiteral(value string) string {
-	return `'` + strings.ReplaceAll(value, `'`, `''`) + `'`
-}
-
 func writeExternalFile(t *testing.T, root, name, content string) {
 	t.Helper()
 	path := filepath.Join(root, filepath.FromSlash(name))

@@ -28,6 +28,7 @@ const (
 type queueStore struct {
 	database  *sqlx.DB
 	namespace physical.PhysicalName
+	history   bool
 }
 
 type postgresqlSelectedClaim struct {
@@ -40,25 +41,25 @@ type postgresqlSelectedClaim struct {
 
 // QueueStore binds the durable job state machine to a live PostgreSQL database
 // in the default system namespace.
-func (*Provider) QueueStore(database *sqlx.DB) (queueprovider.Store, error) {
-	return newQueueStore(database, "_golem")
+func (*Provider) QueueStore(database *sqlx.DB, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
+	return newQueueStore(database, "_golem", unmanaged)
 }
 
 // QueueStoreAt exists for generated schemas whose reviewed system namespace
 // differs from the default. The namespace must already be a closed physical
 // identifier; no application value can become SQL.
-func (*Provider) QueueStoreAt(database *sqlx.DB, namespace physical.PhysicalName) (queueprovider.Store, error) {
-	return newQueueStore(database, namespace)
+func (*Provider) QueueStoreAt(database *sqlx.DB, namespace physical.PhysicalName, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
+	return newQueueStore(database, namespace, unmanaged)
 }
 
-func newQueueStore(database *sqlx.DB, namespace physical.PhysicalName) (queueprovider.Store, error) {
+func newQueueStore(database *sqlx.DB, namespace physical.PhysicalName, unmanaged []physical.UnmanagedObject) (queueprovider.Store, error) {
 	if database == nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: database is nil")
 	}
 	if !eventNamespacePattern.MatchString(string(namespace)) {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: system namespace is invalid")
 	}
-	return &queueStore{database: database, namespace: namespace}, nil
+	return &queueStore{database: database, namespace: namespace, history: physical.QueueHistoryAdmitted(unmanaged)}, nil
 }
 
 func (store *queueStore) table() string { return qualified(store.namespace, "golem_queue") }
@@ -72,6 +73,13 @@ func (store *queueStore) EnsureSchema(ctx context.Context) error {
 		`CREATE INDEX IF NOT EXISTS "golem_queue_claim" ON ` + store.table() + ` ("status","available_at","type")`,
 		`CREATE UNIQUE INDEX IF NOT EXISTS "golem_queue_dedupe" ON ` + store.table() + ` ("dedupe_key") WHERE "status" IN ('pending','leased')`,
 		`CREATE INDEX IF NOT EXISTS "golem_queue_exclusive" ON ` + store.table() + ` ("exclusive_key") WHERE "status"='leased'`,
+	}
+	if store.history {
+		statements = append(statements,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_enqueued" ON `+store.table()+` ("enqueued_at","id")`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_history" ON `+store.table()+` ("status","enqueued_at","id")`,
+			`CREATE INDEX IF NOT EXISTS "golem_queue_terminal" ON `+store.table()+` ("status","finished_at","id")`,
+		)
 	}
 	for _, statement := range statements {
 		if _, err := store.database.ExecContext(ctx, statement); err != nil {
@@ -110,6 +118,61 @@ func (store *queueStore) verifyQueueGuarantees(ctx context.Context) error {
 	}
 	if shape.Table != "golem_queue" || shape.Method != "btree" || !shape.Unique || !shape.Valid || !shape.Ready || !shape.NullsDistinct || shape.Columns != "dedupe_key" || shape.Predicate != postgresqlQueueDedupePredicate {
 		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing golem_queue_dedupe index (table=%s method=%s unique=%t valid=%t ready=%t nulls_distinct=%t columns=%s predicate=%q) does not enforce UNIQUE (dedupe_key) WHERE %s; drop it so the queue can create its own", shape.Table, shape.Method, shape.Unique, shape.Valid, shape.Ready, shape.NullsDistinct, shape.Columns, shape.Predicate, postgresqlQueueDedupePredicate)
+	}
+	return store.verifyQueueIndexDefinitions(ctx)
+}
+
+type postgresqlQueueIndex struct {
+	unique    bool
+	columns   string
+	predicate string
+}
+
+func postgresqlQueueIndexDefinitions() map[string]postgresqlQueueIndex {
+	return map[string]postgresqlQueueIndex{
+		"golem_queue_pkey":      {unique: true, columns: "id"},
+		"golem_queue_claim":     {columns: "status,available_at,type"},
+		"golem_queue_dedupe":    {unique: true, columns: "dedupe_key", predicate: postgresqlQueueDedupePredicate},
+		"golem_queue_exclusive": {columns: "exclusive_key", predicate: `(status = 'leased'::text)`},
+		"golem_queue_enqueued":  {columns: "enqueued_at,id"},
+		"golem_queue_history":   {columns: "status,enqueued_at,id"},
+		"golem_queue_terminal":  {columns: "status,finished_at,id"},
+	}
+}
+
+func (store *queueStore) verifyQueueIndexDefinitions(ctx context.Context) error {
+	var rows []struct {
+		Name      string `db:"relname"`
+		Unique    bool   `db:"indisunique"`
+		Valid     bool   `db:"indisvalid"`
+		Ready     bool   `db:"indisready"`
+		Method    string `db:"amname"`
+		Columns   string `db:"columns"`
+		Predicate string `db:"predicate"`
+	}
+	const indexesSQL = `SELECT ci.relname,i.indisunique,i.indisvalid,i.indisready,am.amname,COALESCE((SELECT string_agg(COALESCE(a.attname,'<expression>'),',' ORDER BY key.position) FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS key(attnum,position) LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid=i.indrelid AND a.attnum=key.attnum),'') AS "columns",COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') AS "predicate" FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE ci.relnamespace=$1::regnamespace AND ct.relname='golem_queue' ORDER BY ci.relname`
+	if err := store.database.SelectContext(ctx, &rows, indexesSQL, `"`+string(store.namespace)+`"`); err != nil {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: inspect queue indexes: %w", err)
+	}
+	definitions := postgresqlQueueIndexDefinitions()
+	required := map[string]bool{"golem_queue_pkey": true, "golem_queue_claim": true, "golem_queue_dedupe": true, "golem_queue_exclusive": true}
+	if store.history {
+		for _, object := range physical.QueueHistoryIndexes() {
+			required[string(object.Name)] = true
+		}
+	}
+	for _, row := range rows {
+		want, known := definitions[row.Name]
+		if !known {
+			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: index %q on golem_queue was not created by golem; drop it", row.Name)
+		}
+		delete(required, row.Name)
+		if row.Method != "btree" || row.Unique != want.unique || !row.Valid || !row.Ready || row.Columns != want.columns || row.Predicate != want.predicate {
+			return fmt.Errorf("QUEUE_POSTGRESQL_STORE: existing %s index (method=%s unique=%t valid=%t ready=%t columns=%s predicate=%q) does not match golem's (method=btree unique=%t columns=%s predicate=%q); drop it so the queue can create its own", row.Name, row.Method, row.Unique, row.Valid, row.Ready, row.Columns, row.Predicate, want.unique, want.columns, want.predicate)
+		}
+	}
+	for name := range required {
+		return fmt.Errorf("QUEUE_POSTGRESQL_STORE: golem index %q is absent from golem_queue; a relation of that name elsewhere in schema %q blocks its creation, so drop that relation and let the queue create its own", name, store.namespace)
 	}
 	return nil
 }

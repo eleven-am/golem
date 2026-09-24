@@ -411,6 +411,14 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			"DROP TABLE " + qualified(r.schema.Namespace.Name, physical.PhysicalName(string(descriptor.Storage)+"_state")),
 		}, nil
 	}
+	if operation.Kind == migration.UpgradeSemanticState {
+		before, hadBefore := r.beforeExtensions[ir.ExtensionID(operation.ObjectID)]
+		after, hasAfter := postgresqlExtension(r.schema.Extensions, ir.ExtensionID(operation.ObjectID))
+		if !hadBefore || !hasAfter {
+			return nil, fmt.Errorf("semantic extension target is absent")
+		}
+		return renderSemanticStateUpgrade(r.schema.Namespace.Name, before, after)
+	}
 	tableID, exists := owners[operation.ID]
 	if !exists {
 		return nil, fmt.Errorf("cannot resolve owning table")
@@ -766,7 +774,7 @@ func postgresqlOperationOwners(before, after physical.PhysicalSchema, operations
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range operations {
-		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension || operation.Kind == migration.UpgradeSemanticState {
 			continue
 		}
 		owner, exists := owners[operation.ObjectID]

@@ -347,7 +347,7 @@ func seedMaskRows(t *testing.T, database *sqlx.DB, users, posts string) {
 func openPostgresAcceptanceSchema(t *testing.T, ctx context.Context, profile postgresAcceptanceProfile, bundle golem.SchemaBundle, postgresSchema physical.PhysicalSchema, purpose string) (*sqlx.DB, golem.SchemaBundle, physical.PhysicalName) {
 	t.Helper()
 	provider := postgresprovider.New()
-	database, _, err := provider.Open(ctx, profile.dsn)
+	database, _, err := provider.Open(ctx, testenv.DisposablePostgreSQL(t, profile.env))
 	if err != nil {
 		t.Fatal(err)
 	}

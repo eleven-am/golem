@@ -2,7 +2,6 @@ package postgresql
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/testenv"
@@ -18,10 +17,7 @@ func TestPostgreSQLExactNumericAndBinaryAnalyticsProfiles(t *testing.T) {
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := os.Getenv(profile.env)
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			database, report, err := New().Open(context.Background(), dsn)
 			if err != nil {
 				t.Fatal(err)

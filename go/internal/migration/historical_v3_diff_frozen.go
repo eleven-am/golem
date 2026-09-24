@@ -191,6 +191,12 @@ func (b *historicalV3DiffBuilder) extensions() error {
 			if left.Kind != historicalV3SemanticIndexKind || right.Kind != historicalV3SemanticIndexKind || left.Version != historicalV3SemanticVersion || right.Version != historicalV3SemanticVersion || left.Owner != right.Owner || left.Provider != right.Provider {
 				return fmt.Errorf("provider extension %s cannot change in place", id)
 			}
+			if registeredSemanticStateUpgrade(left, right) {
+				if err := b.add(UpgradeSemanticState, 45, string(id), left, right, RiskSafe); err != nil {
+					return err
+				}
+				continue
+			}
 			if err := b.add(DropProviderExtension, 44, string(id), left, nil, RiskRewrite); err != nil {
 				return err
 			}
@@ -967,6 +973,9 @@ func (b *historicalV3DiffBuilder) dependencies() {
 		if op.Kind == CreateProviderExtension {
 			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
 			addDep(op, DropProviderExtension, op.ObjectID)
+		}
+		if op.Kind == UpgradeSemanticState {
+			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
 		}
 		if op.Kind == DropTable {
 			for extensionID, modelID := range extensionModels {

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -29,9 +30,10 @@ type wsMessage struct {
 }
 
 type wsOperation struct {
-	cancel context.CancelFunc
-	stop   func() bool
-	stream ResponseStream
+	cancel  context.CancelFunc
+	stop    func() bool
+	stream  ResponseStream
+	stopped *atomic.Bool
 }
 
 type wsConnection[P any] struct {
@@ -193,14 +195,15 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 				state.operationError(message.ID, PresentError(opCtx, subscribeErr, nil, server.config.ReportInternalError))
 				continue
 			}
+			stopped := &atomic.Bool{}
 			state.mu.Lock()
-			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream}
+			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream, stopped: stopped}
 			state.mu.Unlock()
 			state.ops.Add(1)
-			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span) {
+			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 				defer state.ops.Done()
-				state.runOperation(id, requestValue, prepared, stream, opCtx, observation)
-			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation)
+				state.runOperation(id, requestValue, prepared, stream, opCtx, observation, stopped)
+			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation, stopped)
 		case "complete":
 			state.stopOperation(message.ID)
 		}
@@ -230,28 +233,32 @@ func validWSSubscriptionRequest(prepared preparedRequest, failure *Response) boo
 	return failure == nil && prepared.Operation.Definition != nil && prepared.Operation.Definition.Operation == ast.Subscription
 }
 
-func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span) {
+func (state *wsConnection[P]) runOperation(id string, request Request, prepared preparedRequest, stream ResponseStream, ctx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 	var operationErr error
+	defer state.finishOperation(id, stopped)
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			operationErr = errors.New("GraphQL subscription operation panicked")
 			state.server.config.ReportInternalError(ctx, errors.New("GraphQL subscription operation panicked"))
-			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
+			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 		}
 		finishGraphQLChild(observation, operationErr)
 	}()
-	defer state.finishOperation(id)
 	for {
 		response, err := stream.Recv(ctx)
 		if err != nil {
 			operationErr = err
+			if stopped != nil && stopped.Load() {
+				operationErr = context.Canceled
+				return
+			}
 			if !errors.Is(err, context.Canceled) && !errors.Is(err, io.EOF) {
-				state.operationError(id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
+				state.operationErrorUnlessStopped(stopped, id, PresentError(ctx, err, nil, state.server.config.ReportInternalError))
 				return
 			}
 			if errors.Is(err, io.EOF) {
 				operationErr = nil
-				_ = state.write(wsMessage{ID: id, Type: "complete"})
+				_ = state.writeOperation(stopped, wsMessage{ID: id, Type: "complete"})
 			}
 			return
 		}
@@ -262,10 +269,10 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 		payload, err := json.Marshal(serialized)
 		if err != nil {
 			operationErr = err
-			state.operationError(id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
+			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
 			return
 		}
-		if err := state.write(wsMessage{ID: id, Type: "next", Payload: payload}); err != nil {
+		if err := state.writeOperation(stopped, wsMessage{ID: id, Type: "next", Payload: payload}); err != nil {
 			operationErr = err
 			return
 		}
@@ -377,8 +384,35 @@ func decodeWSMessage(payload []byte) (wsMessage, error) {
 func (state *wsConnection[P]) write(message wsMessage) error {
 	state.writeMu.Lock()
 	defer state.writeMu.Unlock()
+	return state.writeLocked(message)
+}
+
+func (state *wsConnection[P]) writeLocked(message wsMessage) error {
 	_ = state.conn.SetWriteDeadline(time.Now().Add(state.server.eventLimits.ShutdownGrace))
 	return state.conn.WriteJSON(message)
+}
+
+func (state *wsConnection[P]) writeOperation(stopped *atomic.Bool, message wsMessage) error {
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	if stopped != nil && stopped.Load() {
+		return nil
+	}
+	return state.writeLocked(message)
+}
+
+func (state *wsConnection[P]) markStopped(stopped *atomic.Bool) {
+	if stopped == nil {
+		return
+	}
+	state.writeMu.Lock()
+	defer state.writeMu.Unlock()
+	stopped.Store(true)
+}
+
+func (state *wsConnection[P]) operationErrorUnlessStopped(stopped *atomic.Bool, id string, failure Error) {
+	payload, _ := json.Marshal([]Error{failure})
+	_ = state.writeOperation(stopped, wsMessage{ID: id, Type: "error", Payload: payload})
 }
 
 func (state *wsConnection[P]) close(code int, reason string) {
@@ -392,18 +426,29 @@ func (state *wsConnection[P]) operationError(id string, failure Error) {
 	_ = state.write(wsMessage{ID: id, Type: "error", Payload: payload})
 }
 
-func (state *wsConnection[P]) stopOperation(id string) { state.finishOperation(id) }
+func (state *wsConnection[P]) stopOperation(id string) { state.finishOperation(id, nil) }
 
-func (state *wsConnection[P]) finishOperation(id string) {
+// finishOperation releases the operation registered under id, and when it is
+// given an instance, only that instance: a client may complete an id and
+// subscribe again with the same id, so the goroutine of the operation that has
+// already been stopped must not take down its replacement as it unwinds.
+func (state *wsConnection[P]) finishOperation(id string, instance *atomic.Bool) {
 	state.mu.Lock()
 	operation, present := state.operations[id]
-	if present {
+	if present && (instance == nil || operation.stopped == instance) {
 		delete(state.operations, id)
+	} else {
+		present = false
 	}
 	state.mu.Unlock()
 	if !present {
 		return
 	}
+	state.releaseOperation(operation)
+}
+
+func (state *wsConnection[P]) releaseOperation(operation wsOperation) {
+	state.markStopped(operation.stopped)
 	if operation.stop != nil {
 		operation.stop()
 	}
@@ -421,15 +466,7 @@ func (state *wsConnection[P]) closeOperations() {
 	state.operations = map[string]wsOperation{}
 	state.mu.Unlock()
 	for _, operation := range operations {
-		if operation.stop != nil {
-			operation.stop()
-		}
-		if operation.cancel != nil {
-			operation.cancel()
-		}
-		if operation.stream != nil {
-			state.closeStream(operation.stream)
-		}
+		state.releaseOperation(operation)
 	}
 	state.ops.Wait()
 }

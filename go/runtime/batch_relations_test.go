@@ -3,9 +3,7 @@ package runtime
 import (
 	"context"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -193,12 +191,9 @@ func TestBatchChunkMagnitudePostgreSQLProfiles(t *testing.T) {
 	if testing.Short() {
 		t.Skip("70,000-parent live PostgreSQL batch oracle")
 	}
-	profiles := []struct{ name, dsn string }{
-		{"c", strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_DSN"))},
-		{"linguistic", strings.TrimSpace(os.Getenv("GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"))},
-	}
-	if profiles[0].dsn == "" || profiles[1].dsn == "" {
-		testenv.SkipMissingPostgreSQL(t, "both PostgreSQL profile DSNs are required")
+	profiles := []struct{ name, environment string }{
+		{"c", testenv.PostgreSQLDSNVariable},
+		{"linguistic", testenv.LinguisticDSNVariable},
 	}
 	for _, profile := range profiles {
 		t.Run(profile.name, func(t *testing.T) {
@@ -206,7 +201,7 @@ func TestBatchChunkMagnitudePostgreSQLProfiles(t *testing.T) {
 			ctx := context.Background()
 			fixture := schematest.New(t)
 			provider := postgresprovider.New()
-			database, _, err := provider.Open(ctx, profile.dsn)
+			database, _, err := provider.Open(ctx, testenv.DisposablePostgreSQL(t, profile.environment))
 			if err != nil {
 				t.Fatal(err)
 			}

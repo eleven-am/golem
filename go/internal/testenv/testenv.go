@@ -13,6 +13,8 @@ const (
 	PostgreSQLDSNVariable      = "GOLEM_TEST_POSTGRES_DSN"
 	LinguisticDSNVariable      = "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"
 	PGVectorDSNVariable        = "GOLEM_TEST_PGVECTOR_DSN"
+
+	SocialPostgreSQLDSNVariable = "GOLEM_P8_SOCIAL_POSTGRES_DSN"
 )
 
 func PostgreSQLRequired() bool {
@@ -30,6 +32,17 @@ func PostgreSQLDSN(t testing.TB, variable string) string {
 		SkipMissingPostgreSQL(t, variable+" is not configured")
 	}
 	return dsn
+}
+
+func SocialPostgreSQLDSN(t testing.TB) string {
+	t.Helper()
+	for _, variable := range []string{SocialPostgreSQLDSNVariable, PostgreSQLDSNVariable} {
+		if dsn := strings.TrimSpace(os.Getenv(variable)); dsn != "" {
+			return dsn
+		}
+	}
+	SkipMissingPostgreSQL(t, "neither "+SocialPostgreSQLDSNVariable+" nor "+PostgreSQLDSNVariable+" is configured")
+	return ""
 }
 
 func PGVectorDSN(t testing.TB) string {

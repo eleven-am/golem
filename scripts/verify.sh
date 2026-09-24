@@ -94,6 +94,8 @@ gate() {
 		"$GO_DIR" "$social" "$GO_DIR" >"$work" || return 1
 	(cd "$social" && GOWORK="$work" "$GO_DIR/bin/golem" check \
 		--schema ./social --app-out ./social --migrations migrations) || return 1
+	(cd "$social" && GOWORK="$work" "$GO" vet ./...) || return 1
+	(cd "$social" && GOWORK="$work" "$GO" test -p=1 -count=1 -timeout=30m ./...) || return 1
 	go_test_matching 1 "$GATE_GOLDEN_TEST" ./cmd/golem || return 1
 	go_test_matching 4 "$GATE_IDENTITY_TESTS" ./runtime || return 1
 	go_test -count=1 "${GATE_PACKAGES[@]}"

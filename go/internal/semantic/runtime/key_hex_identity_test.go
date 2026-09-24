@@ -25,7 +25,7 @@ func newHexIdentityFixture(t *testing.T) drainFixture {
 	db := sqlx.NewDb(database, "sqlite3")
 	if _, err := db.Exec(`
 CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
-CREATE TABLE "` + drainStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
+CREATE TABLE "` + drainStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT;
 CREATE INDEX "_golem_semantic_semantic-post-related_state_stale" ON "` + drainStateTable + `" ("record_key" ASC) WHERE "status" <> 'ready';
 CREATE VIRTUAL TABLE "` + drainVectorTable + `" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
 INSERT INTO "posts" (id,title) VALUES ('` + hexIdentityUpper + `','alpha'),('` + hexIdentityLower + `','beta')`); err != nil {

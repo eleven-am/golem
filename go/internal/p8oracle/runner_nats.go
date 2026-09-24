@@ -265,8 +265,7 @@ replace github.com/eleven-am/golem/go/examples/social v0.0.0 => %s
 	for _, profile := range requiredNATSProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn, cleanup := provisionProfile(t, profile)
-			defer cleanup()
+			dsn := provisionProfile(t, profile)
 			runProcess(t, canonicalExample, environment, cli, "migration", "apply", "--provider", profile.provider, "--dsn", dsn, "--migrations", "migrations")
 			prefix := order7SubjectPrefix(t, profile.name)
 			childEnvironment := setEnvironment(environment, "P8_ORACLE_PROVIDER", profile.provider)

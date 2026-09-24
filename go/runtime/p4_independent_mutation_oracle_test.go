@@ -42,10 +42,7 @@ func runMutationProviderAcceptanceProfiles(t *testing.T, operation func(*testing
 	for _, profile := range []struct{ name, namespace, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required for mutation provider acceptance", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.namespace)
 			operation(t, mutationProviderAcceptanceFixture{
 				fixture: fixture, provider: golem.PostgreSQL, posts: oracleQualified(applicationNamespace, "posts"), outbox: oracleQualified(systemNamespace, "_golem_outbox"),
@@ -158,10 +155,7 @@ func TestP4IndependentMutationOraclePostgreSQLProfiles(t *testing.T) {
 		{name: "linguistic", env: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
 	}
 	for _, profile := range profiles {
-		dsn := strings.TrimSpace(os.Getenv(profile.env))
-		if dsn == "" {
-			testenv.SkipMissingPostgreSQLf(t, "P4 PostgreSQL oracle evidence is incomplete: %s is required", profile.env)
-		}
+		dsn := testenv.DisposablePostgreSQL(t, profile.env)
 		t.Run(profile.name, func(t *testing.T) {
 			fixture, applicationNamespace, systemNamespace := newPostgreSQLMutationOracleFixture(t, dsn, profile.name)
 			ctx := context.Background()

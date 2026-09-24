@@ -10,6 +10,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
+	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
 // Diff compares validated normalized physical schemas by stable IDs. It never
@@ -280,6 +281,12 @@ func (b *diffBuilder) extensions() error {
 			if left.Kind != semanticcontract.IndexKind || right.Kind != semanticcontract.IndexKind || left.Version != semanticcontract.Version || right.Version != semanticcontract.Version || left.Owner != right.Owner || left.Provider != right.Provider {
 				return fmt.Errorf("provider extension %s cannot change in place", id)
 			}
+			if registeredSemanticStateUpgrade(left, right) {
+				if err := b.add(UpgradeSemanticState, 45, string(id), left, right, RiskSafe); err != nil {
+					return err
+				}
+				continue
+			}
 			// Semantic shadow state is derived entirely from the unchanged owner
 			// rows. A reviewed projection or dimension change therefore rebuilds
 			// the same stable extension identity by dropping its old state/vector
@@ -295,6 +302,18 @@ func (b *diffBuilder) extensions() error {
 		}
 	}
 	return nil
+}
+
+func registeredSemanticStateUpgrade(before, after physical.Extension) bool {
+	previous, err := semanticstorage.Decode(before)
+	if err != nil {
+		return false
+	}
+	next, err := semanticstorage.Decode(after)
+	if err != nil {
+		return false
+	}
+	return semanticstorage.RegisteredStateUpgrade(previous, next)
 }
 
 func systemObjectAdditions(before, after physical.SystemSchema) ([]physical.SystemObject, error) {
@@ -1081,6 +1100,9 @@ func (b *diffBuilder) dependencies() {
 		if op.Kind == CreateProviderExtension {
 			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
 			addDep(op, DropProviderExtension, op.ObjectID)
+		}
+		if op.Kind == UpgradeSemanticState {
+			addDep(op, CreateTable, string(extensionModels[op.ObjectID]))
 		}
 		if op.Kind == DropTable {
 			for extensionID, modelID := range extensionModels {

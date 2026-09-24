@@ -7,7 +7,6 @@ import (
 	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -18,6 +17,7 @@ import (
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/examples/social/social"
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider"
 	"github.com/eleven-am/golem/go/provider/postgresql"
 	"github.com/eleven-am/golem/go/provider/sqlite"
@@ -92,10 +92,8 @@ func TestOrder7SocialHostRejectsSQLiteNATSBeforeOpeningTransport(t *testing.T) {
 }
 
 func TestOrder7SocialHostPostgreSQLNATSOpensOnceThroughVerifiedDatabaseLive(t *testing.T) {
-	dataSourceName := os.Getenv("GOLEM_P8_SOCIAL_POSTGRES_DSN")
-	if dataSourceName == "" {
-		t.Skip("GOLEM_P8_SOCIAL_POSTGRES_DSN is not configured")
-	}
+	dataSourceName, cleanup := createP8DisposablePostgreSQLDatabase(t, testenv.SocialPostgreSQLDSN(t), "order7")
+	defer cleanup()
 	database, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: dataSourceName})
 	if err != nil {
 		t.Fatal(err)

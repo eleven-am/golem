@@ -377,8 +377,9 @@ func newP5ExtensionProviderFixture(t *testing.T, profile p5ExtensionProviderProf
 		p5ExtensionPostgreSQLFixtureLock.Lock()
 		t.Cleanup(p5ExtensionPostgreSQLFixtureLock.Unlock)
 		provider := postgresprovider.New()
+		disposable := testenv.DisposablePostgreSQL(t, profile.env)
 		var err error
-		database, _, err = provider.Open(ctx, profile.dsn)
+		database, _, err = provider.Open(ctx, disposable)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -390,7 +391,7 @@ func newP5ExtensionProviderFixture(t *testing.T, profile p5ExtensionProviderProf
 		}
 		apply = provider.ApplyInitial
 		t.Cleanup(func() {
-			p5CleanupExtensionPostgreSQLSchemas(t, profile.dsn)
+			p5CleanupExtensionPostgreSQLSchemas(t, disposable)
 		})
 	}
 	t.Cleanup(func() { _ = database.Close() })
@@ -463,7 +464,8 @@ func newP5ExtensionTracedProviderFixtureWithLimits(t *testing.T, profile p5Exten
 	} else {
 		p5ExtensionPostgreSQLFixtureLock.Lock()
 		t.Cleanup(p5ExtensionPostgreSQLFixtureLock.Unlock)
-		configuration, err := pgx.ParseConfig(profile.dsn)
+		disposable := testenv.DisposablePostgreSQL(t, profile.env)
+		configuration, err := pgx.ParseConfig(disposable)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -483,7 +485,7 @@ func newP5ExtensionTracedProviderFixtureWithLimits(t *testing.T, profile p5Exten
 		}
 		apply = postgresprovider.New().ApplyInitial
 		t.Cleanup(func() {
-			p5CleanupExtensionPostgreSQLSchemas(t, profile.dsn)
+			p5CleanupExtensionPostgreSQLSchemas(t, disposable)
 		})
 	}
 	database.SetMaxOpenConns(4)

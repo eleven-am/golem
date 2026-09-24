@@ -32,7 +32,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

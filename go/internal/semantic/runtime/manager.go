@@ -33,13 +33,15 @@ import (
 // Manager owns refresh and nearest-neighbour storage operations. Refreshes of
 // one index serialize, while unrelated indexes may advance concurrently.
 type Manager struct {
-	database     *sqlx.DB
-	provider     ir.Provider
-	schema       physical.PhysicalSchema
-	indexes      []Index
-	observer     observe.Observer
-	mu           sync.Mutex
-	refreshLocks map[string]*sync.Mutex
+	database       *sqlx.DB
+	provider       ir.Provider
+	schema         physical.PhysicalSchema
+	indexes        []Index
+	observer       observe.Observer
+	mu             sync.Mutex
+	refreshLocks   map[string]*sync.Mutex
+	livenessSpent  map[string]map[string]bool
+	livenessCursor map[string]string
 }
 
 const MaximumResults = 1000
@@ -53,6 +55,12 @@ const (
 	semanticMarkChunk     = 128
 	semanticMarkBinds     = 900
 	semanticOutageBatches = 2
+
+	semanticAmbiguousStrikeBound    = 5
+	semanticLivenessProbes          = 3
+	semanticLivenessSpent           = 12
+	semanticIsolationCalls          = 8
+	semanticUnclassifiedRefusalCode = "EMBEDDING_REFUSED_UNCLASSIFIED"
 )
 
 // IdentityScan decodes one ranked row's owner identity columns. The caller owns
@@ -755,6 +763,12 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 	if chunk < 1 {
 		return fmt.Errorf("P9_SEMANTIC_MARK: identity is too wide to mark")
 	}
+	strikes := manager.tracksStrikes(index)
+	strikeColumn, strikeReset := "", ""
+	if strikes {
+		strikeColumn = "," + manager.quote("ambiguous_strikes")
+		strikeReset = "," + manager.quote("ambiguous_strikes") + "=0"
+	}
 	for offset := 0; offset < len(rows); offset += chunk {
 		end := offset + chunk
 		if end > len(rows) {
@@ -775,14 +789,17 @@ func (manager *Manager) markIndex(ctx context.Context, executor sqlx.ExecerConte
 			if width > 0 {
 				tuple += "," + strings.Join(slots, ",")
 			}
+			if strikes {
+				tuple += ",0"
+			}
 			tuples = append(tuples, tuple+")")
 		}
 		statement := "INSERT INTO " + manager.hidden(index, "_state") +
 			" (" + manager.quote("record_key") + "," + manager.quote("source_hash") + "," + manager.quote("space_fingerprint") + "," +
-			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + ")" +
+			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + strikeColumn + ")" +
 			" VALUES " + strings.Join(tuples, ",") +
 			" ON CONFLICT(" + manager.quote("record_key") + ") DO UPDATE SET " +
-			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=" + generation
+			manager.quote("status") + "='pending'," + manager.quote("updated_at") + "=" + generation + strikeReset
 		observeexec.RecordStatement(ctx)
 		if _, err := executor.ExecContext(ctx, statement, arguments...); err != nil {
 			return fmt.Errorf("P9_SEMANTIC_MARK: stale mark failed")
@@ -825,6 +842,137 @@ func (manager *Manager) refresh(ctx context.Context, index Index, span *observee
 	return len(remaining) > 0, nil
 }
 
+// livenessExhausted names the candidates whose most recent probe failed, so the
+// next pass draws different ones. Rotation cannot be expressed as a cursor: a
+// record key is length prefixed, so its order is not the order a source scan
+// visits records in, and a cursor would exclude a viable candidate for good.
+// A candidate that answers clears the set, because a failure during an outage
+// says nothing about the candidate itself.
+func (manager *Manager) livenessExhausted(index Index) map[string]bool {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	exhausted := make(map[string]bool, len(manager.livenessSpent[key]))
+	for candidate := range manager.livenessSpent[key] {
+		exhausted[candidate] = true
+	}
+	return exhausted
+}
+
+func (manager *Manager) spendLivenessCandidate(index Index, record string) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.livenessSpent == nil {
+		manager.livenessSpent = make(map[string]map[string]bool)
+	}
+	spent := manager.livenessSpent[key]
+	if spent == nil {
+		spent = make(map[string]bool, semanticLivenessSpent)
+		manager.livenessSpent[key] = spent
+	}
+	if len(spent) >= semanticLivenessSpent {
+		for candidate := range spent {
+			delete(spent, candidate)
+			break
+		}
+	}
+	spent[record] = true
+}
+
+// livenessCursorFor walks the draw through record-key order, which is the order
+// the draw itself selects in, so progress past a candidate that yields nothing
+// is monotonic and does not depend on remembering it. The exclusion set cannot
+// do that job: it is bounded, and an index can hold more useless candidates
+// than it has room for.
+func (manager *Manager) livenessCursorFor(index Index) string {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.livenessCursor[key]
+}
+
+func (manager *Manager) advanceLivenessCursor(index Index, record string) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	if manager.livenessCursor == nil {
+		manager.livenessCursor = make(map[string]string)
+	}
+	manager.livenessCursor[key] = record
+}
+
+func (manager *Manager) clearLivenessCandidates(index Index) {
+	key := string(index.Descriptor.ModelID) + "\x00" + index.Descriptor.Name
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	delete(manager.livenessSpent, key)
+}
+
+// livenessCandidates draws a bounded set of already-stored documents for the
+// drain to probe. It starts from the candidate that last answered and wraps, so
+// a record the provider has stopped accepting is tried at most once per pass
+// and stops being the first choice as soon as another one answers.
+func (manager *Manager) livenessCandidates(ctx context.Context, index Index, table physical.PhysicalTable) ([]livenessProbe, error) {
+	cursor := manager.livenessCursorFor(index)
+	for attempt := 0; attempt < semanticLivenessProbes; attempt++ {
+		keys, err := manager.readyKeys(ctx, index, cursor, semanticLivenessProbes)
+		if err != nil {
+			return nil, err
+		}
+		if len(keys) == 0 {
+			if cursor == "" {
+				return nil, nil
+			}
+			cursor = ""
+			manager.advanceLivenessCursor(index, "")
+			continue
+		}
+		stale := make([]staleRecord, 0, len(keys))
+		for _, key := range keys {
+			stale = append(stale, staleRecord{key: key})
+		}
+		owners, err := manager.scanOwners(ctx, table, index, stale)
+		if err != nil {
+			return nil, err
+		}
+		candidates := make([]livenessProbe, 0, len(keys))
+		for _, key := range keys {
+			cursor = key
+			manager.advanceLivenessCursor(index, key)
+			source, exists := owners[key]
+			if !exists {
+				continue
+			}
+			candidates = append(candidates, livenessProbe{key: key, text: source.text})
+		}
+		if len(candidates) != 0 {
+			return candidates, nil
+		}
+	}
+	return nil, nil
+}
+
+func (manager *Manager) readyKeys(ctx context.Context, index Index, after string, limit int) ([]string, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	query := "SELECT " + manager.quote("record_key") + " FROM " + manager.hidden(index, "_state") +
+		" WHERE " + manager.quote("status") + "='ready'"
+	arguments := []any{}
+	if after != "" {
+		query += " AND " + manager.quote("record_key") + ">" + manager.placeholder(1)
+		arguments = append(arguments, after)
+	}
+	query += " ORDER BY " + manager.quote("record_key") + " LIMIT " + strconv.Itoa(limit)
+	observeexec.RecordStatement(ctx)
+	var keys []string
+	if err := manager.database.SelectContext(ctx, &keys, query, arguments...); err != nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_REFRESH: liveness candidate scan failed")
+	}
+	return keys, nil
+}
+
 // applyStale sorts one probed page into the three outcomes a mark can have.
 // A mark carries no evidence that the document actually changed, so the
 // recomputed content hash decides: an unchanged document is flipped back to
@@ -843,6 +991,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	dirty := make([]sourceRecord, 0, len(stale))
 	unchanged := make([]observedRecord, 0, len(stale))
 	absent := make([]observedRecord, 0, len(stale))
+	pass := &embedPass{spent: manager.livenessExhausted(index)}
 	for _, record := range stale {
 		observed := observedRecord{key: record.key, updatedAt: record.updatedAt}
 		source, exists := owners[record.key]
@@ -852,6 +1001,7 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 		}
 		if len(record.hash) == sha256.Size && record.fingerprint == fingerprint && equalBytes(record.hash, source.hash[:]) {
 			unchanged = append(unchanged, observed)
+			pass.considerLiveness(livenessProbe{key: record.key, text: source.text})
 			continue
 		}
 		source.updatedAt = record.updatedAt
@@ -862,7 +1012,6 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	// outcomes are guarded against the same window: whatever the pass decided
 	// about a record only lands while that record still looks the way it did
 	// when the pass read it.
-	pass := &embedPass{}
 	if err := manager.embedDirty(ctx, index, fingerprint, dirty, pass); err != nil {
 		return err
 	}
@@ -871,6 +1020,19 @@ func (manager *Manager) applyStale(ctx context.Context, index Index, table physi
 	}
 	if err := manager.deleteRecords(ctx, index, absent); err != nil {
 		return fmt.Errorf("P9_SEMANTIC_REFRESH: stale vector cleanup failed")
+	}
+	if (len(pass.refused) != 0 || len(pass.isolate) != 0) && !pass.succeeded && !pass.hasLiveness() {
+		candidates, candidateErr := manager.livenessCandidates(ctx, index, table)
+		if candidateErr != nil {
+			return candidateErr
+		}
+		pass.adoptLiveness(candidates)
+	}
+	if err := manager.isolateRefusedBatches(ctx, index, fingerprint, pass); err != nil {
+		return err
+	}
+	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
+		return err
 	}
 	return pass.finish(ctx, index)
 }
@@ -882,7 +1044,7 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 	}
 	fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
 	var aggregate int64
-	pass := &embedPass{}
+	pass := &embedPass{spent: manager.livenessExhausted(index)}
 	var sourceCursor []any
 	dirtyPending := make([]sourceRecord, 0, index.Specification.MaximumBatch())
 	for {
@@ -909,6 +1071,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 				dirty = append(dirty, record)
 				continue
 			}
+			if state.status == "ready" {
+				pass.considerLiveness(livenessProbe{key: record.key, text: record.text})
+			}
 			if state.status != "ready" {
 				unchanged = append(unchanged, observedRecord{key: record.key, updatedAt: state.updatedAt})
 			}
@@ -932,6 +1097,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 		}
 	}
 	if err := manager.embedDirty(ctx, index, fingerprint, dirtyPending, pass); err != nil {
+		return err
+	}
+	if err := manager.isolateRefusedBatches(ctx, index, fingerprint, pass); err != nil {
 		return err
 	}
 
@@ -969,6 +1137,9 @@ func (manager *Manager) reconcile(ctx context.Context, index Index, span *observ
 		}
 	}
 	span.SetAggregateCount(aggregate)
+	if err := manager.strikeRefusals(ctx, index, pass); err != nil {
+		return err
+	}
 	return pass.finish(ctx, index)
 }
 
@@ -976,16 +1147,108 @@ type embedPass struct {
 	deferred    error
 	consecutive int
 	pending     int
+	succeeded   bool
+	refused     []sourceRecord
+	spent       map[string]bool
+	exhausted   bool
+	probed      bool
+	isolating   bool
+	isolateErr  error
+	isolate     [][]sourceRecord
+	isolated    int
+	after       []livenessProbe
+	before      []livenessProbe
+}
+
+func (pass *embedPass) considerLiveness(probe livenessProbe) {
+	if !pass.spent[probe.key] && len(pass.after) < semanticLivenessProbes {
+		pass.after = append(pass.after, probe)
+		return
+	}
+	if len(pass.before) < semanticLivenessProbes {
+		pass.before = append(pass.before, probe)
+	}
+}
+
+func (pass *embedPass) adoptLiveness(candidates []livenessProbe) {
+	pass.after = candidates
+	pass.before = nil
+}
+
+func (pass *embedPass) hasLiveness() bool {
+	return len(pass.after)+len(pass.before) > 0
+}
+
+// livenessSet prefers candidates whose last probe did not fail. Falling back to
+// spent ones means the index has nothing else to offer, so the pass reports
+// that and the record of past failures is forgotten: it has stopped narrowing
+// the choice and would otherwise pin the next pass to the same candidates.
+func (pass *embedPass) livenessSet() []livenessProbe {
+	pass.exhausted = len(pass.after) == 0 && len(pass.before) != 0
+	set := make([]livenessProbe, 0, semanticLivenessProbes)
+	for _, probe := range append(append([]livenessProbe{}, pass.after...), pass.before...) {
+		if len(set) == semanticLivenessProbes {
+			break
+		}
+		set = append(set, probe)
+	}
+	return set
+}
+
+// livenessProbe is one already-stored document a pass may re-embed to decide
+// whether the provider is answering. A probe that fails is evidence about the
+// candidate as much as about the provider, so a pass never reuses one and the
+// next pass starts from whichever candidate last answered.
+type livenessProbe struct {
+	key  string
+	text string
 }
 
 func (pass *embedPass) settled() {
 	pass.consecutive = 0
 }
 
-func (pass *embedPass) deferBatch(err error, records int) {
+func (pass *embedPass) note(err error) {
 	pass.deferred = cmp.Or(pass.deferred, err)
+}
+
+func (pass *embedPass) deferCall(err error) {
+	pass.note(err)
 	pass.consecutive++
-	pass.pending += records
+}
+
+func (pass *embedPass) deferBatch(err error, batch []sourceRecord) {
+	pass.deferCall(err)
+	pass.pending += len(batch)
+}
+
+// refuse records a record the provider named on its own. Outside isolation the
+// call that refused it is the pass's own attempt and counts against the outage
+// budget, which is the only thing bounding a provider whose maximum batch is
+// one. Inside isolation it must not: the pass has already established that the
+// provider answers, and counting there is what starved the records behind a
+// culprit.
+func (pass *embedPass) refuse(err error, record sourceRecord) {
+	pass.note(err)
+	pass.pending++
+	if !pass.isolating {
+		pass.consecutive++
+	}
+	pass.refused = append(pass.refused, record)
+}
+
+// deferIsolation accounts for records a refused batch left behind: those the
+// pass never isolated, and those isolation ran out of budget for. A batch whose
+// records all embed on their own leaves nothing here, so the pass reports no
+// pending work and no error for it.
+func (pass *embedPass) deferIsolation(batches [][]sourceRecord) {
+	for _, batch := range batches {
+		if len(batch) == 0 {
+			continue
+		}
+		pass.note(pass.isolateErr)
+		pass.pending += len(batch)
+	}
 }
 
 func (pass *embedPass) finish(ctx context.Context, index Index) error {
@@ -996,6 +1259,49 @@ func (pass *embedPass) finish(ctx context.Context, index Index) error {
 	span.SetAggregateCount(int64(pass.pending))
 	observeexec.Finish(span, observe.OutcomeRetrying, observe.ReasonProvider)
 	return pass.deferred
+}
+
+func (manager *Manager) tracksStrikes(index Index) bool {
+	return index.Descriptor.StateVersion >= semanticstorage.StateVersionStrikes
+}
+
+// isolateRefusedBatches finds the culprit in each batch the pass could not
+// place while the provider was silent. It runs only once something has
+// succeeded, and spends a bounded number of calls, so a batch larger than that
+// budget is finished by later passes rather than in one.
+func (manager *Manager) isolateRefusedBatches(ctx context.Context, index Index, fingerprint string, pass *embedPass) error {
+	if len(pass.isolate) == 0 {
+		return nil
+	}
+	if !pass.succeeded && !manager.proveLiveness(ctx, index, pass) && pass.hasLiveness() {
+		// The provider answered nothing and this index has documents that could
+		// have shown otherwise, so the batch waits. An index with nothing stored
+		// has no such evidence to offer, and there isolation is the experiment.
+		pass.deferIsolation(pass.isolate)
+		pass.isolate = nil
+		return nil
+	}
+	// The batches that were deferred are what raised the outage streak, and the
+	// evidence the streak stands in for has now arrived, so it no longer
+	// describes anything. Leaving it would close the pass to its own isolation.
+	pass.settled()
+	batches := pass.isolate
+	pass.isolate = nil
+	pass.isolating = true
+	defer func() { pass.isolating = false }()
+	for remaining, batch := range batches {
+		for position, record := range batch {
+			if pass.isolated >= semanticIsolationCalls {
+				pass.deferIsolation(append([][]sourceRecord{batch[position:]}, batches[remaining+1:]...))
+				return nil
+			}
+			pass.isolated++
+			if err := manager.embedDirty(ctx, index, fingerprint, []sourceRecord{record}, pass); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint string, dirty []sourceRecord, pass *embedPass) error {
@@ -1034,7 +1340,23 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 				return embedErr
 			}
 			if code, ok := embedding.CodeOf(embedErr); !ok || code != embedding.CodeInvalidInput {
-				pass.deferBatch(providerDeferral{err: embedErr}, len(batch))
+				if ok && code == embedding.CodeUnavailable {
+					pass.deferBatch(providerDeferral{err: embedErr}, batch)
+					continue
+				}
+				if len(batch) > 1 {
+					// Isolating a batch decides which record is at fault, and a
+					// pass may not reach a verdict about a record before the
+					// provider has answered: on a dead provider every singleton
+					// fails, which says nothing. The batch waits until something
+					// in this pass succeeds, so the records behind it are still
+					// reached and can supply that evidence.
+					pass.consecutive++
+					pass.isolateErr = cmp.Or(pass.isolateErr, error(providerDeferral{err: embedErr}))
+					pass.isolate = append(pass.isolate, batch)
+					continue
+				}
+				pass.refuse(providerDeferral{err: embedErr}, batch[0])
 				continue
 			}
 			pass.settled()
@@ -1055,6 +1377,104 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			return fmt.Errorf("P9_SEMANTIC_REFRESH: vector storage failed")
 		}
 		pass.settled()
+		pass.succeeded = true
+	}
+	return nil
+}
+
+// strikeRefusals charges one strike to each record the provider refused alone
+// for an unclassified reason. Isolation happens inside the pass's existing call
+// budget, so a provider that is down is still contacted no more often than
+// before and never causes a strike.
+func (manager *Manager) strikeRefusals(ctx context.Context, index Index, pass *embedPass) error {
+	refused := pass.refused
+	pass.refused = nil
+	if len(refused) == 0 {
+		return nil
+	}
+	proven := pass.succeeded || manager.proveLiveness(ctx, index, pass)
+	if pass.exhausted {
+		manager.clearLivenessCandidates(index)
+	}
+	if !proven {
+		return nil
+	}
+	for _, record := range refused {
+		if err := manager.recordAmbiguousRefusal(ctx, index, record); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// proveLiveness re-embeds documents this index already stored until one of
+// them answers. Only a provider call that succeeds here can turn a refusal into
+// a strike, so an outage can never spend a strike a healthy pass earned
+// earlier. A candidate that fails is not tried again in this pass, and the
+// candidate that answers becomes the next pass's first choice, so a document
+// the provider has stopped accepting cannot pin the probe. Results are
+// discarded: the records are already stored and unchanged.
+func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *embedPass) bool {
+	if pass.probed {
+		return pass.succeeded
+	}
+	pass.probed = true
+	for _, candidate := range pass.livenessSet() {
+		input, inputErr := embedding.NewInput("source-0", candidate.text)
+		if inputErr != nil {
+			continue
+		}
+		if _, err := manager.embed(ctx, semanticObservationModel(index.Descriptor.ModelID), index.Provider, index.Specification, []embedding.Input{input}); err != nil {
+			if ctx.Err() != nil {
+				return false
+			}
+			manager.spendLivenessCandidate(index, candidate.key)
+			continue
+		}
+		pass.succeeded = true
+		return true
+	}
+	return false
+}
+
+func (manager *Manager) recordAmbiguousRefusal(ctx context.Context, index Index, record sourceRecord) error {
+	if !manager.tracksStrikes(index) {
+		return nil
+	}
+	strikes := manager.quote("ambiguous_strikes")
+	reached := strikes + "+1>=" + strconv.Itoa(semanticAmbiguousStrikeBound)
+	now := time.Now().UTC().UnixMicro()
+	if record.updatedAt == semanticUnobserved {
+		columns := ""
+		values := ""
+		arguments := []any{record.key, []byte{}, hex.EncodeToString(index.SpaceFingerprint[:]), now}
+		for position, column := range index.Descriptor.Identity {
+			columns += "," + manager.quote(column.Name)
+			arguments = append(arguments, record.identity[position])
+			values += "," + manager.placeholder(len(arguments))
+		}
+		statement := "INSERT INTO " + manager.hidden(index, "_state") +
+			" (" + manager.quote("record_key") + "," + manager.quote("source_hash") + "," + manager.quote("space_fingerprint") + "," +
+			manager.quote("status") + "," + manager.quote("attempt_count") + "," + manager.quote("error_code") + "," + manager.quote("updated_at") + columns + "," + strikes + ")" +
+			" VALUES (" + manager.placeholder(1) + "," + manager.placeholder(2) + "," + manager.placeholder(3) + ",'pending',0,NULL," + manager.placeholder(4) + values + ",1)" +
+			" ON CONFLICT(" + manager.quote("record_key") + ") DO NOTHING"
+		observeexec.RecordStatement(ctx)
+		if _, err := manager.database.ExecContext(ctx, statement, arguments...); err != nil {
+			return fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
+		}
+		return nil
+	}
+	statement := "UPDATE " + manager.hidden(index, "_state") +
+		" SET " + strikes + "=" + strikes + "+1," +
+		manager.quote("status") + "=CASE WHEN " + reached + " THEN 'failed' ELSE " + manager.quote("status") + " END," +
+		manager.quote("error_code") + "=CASE WHEN " + reached + " THEN " + manager.placeholder(1) + " ELSE " + manager.quote("error_code") + " END," +
+		manager.quote("attempt_count") + "=CASE WHEN " + reached + " THEN " + manager.quote("attempt_count") + "+1 ELSE " + manager.quote("attempt_count") + " END," +
+		manager.quote("updated_at") + "=" + manager.placeholder(2) +
+		" WHERE " + manager.quote("record_key") + "=" + manager.placeholder(3) +
+		" AND " + manager.quote("updated_at") + "=" + manager.placeholder(4)
+	observeexec.RecordStatement(ctx)
+	if _, err := manager.database.ExecContext(ctx, statement, semanticUnclassifiedRefusalCode, now, record.key, record.updatedAt); err != nil {
+		return fmt.Errorf("P9_SEMANTIC_REFRESH: strike accounting failed")
 	}
 	return nil
 }
@@ -1438,6 +1858,9 @@ func (manager *Manager) storeBatch(ctx context.Context, index Index, fingerprint
 func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, index Index, fingerprint string, records []sourceRecord, vectors []embedding.Vector) error {
 	columns := []string{"record_key", "source_hash", "space_fingerprint", "status", "attempt_count", "error_code", "updated_at"}
 	assignments := []string{"source_hash=excluded.source_hash", "space_fingerprint=excluded.space_fingerprint", "status='ready'", "error_code=NULL", "updated_at=excluded.updated_at"}
+	if manager.tracksStrikes(index) {
+		assignments = append(assignments, "ambiguous_strikes=0")
+	}
 	for _, column := range index.Descriptor.Identity {
 		name := manager.quote(column.Name)
 		columns = append(columns, name)

@@ -145,8 +145,7 @@ replace github.com/eleven-am/golem/go/examples/social v0.0.0 => %s
 		profile := profile
 		b.Run(profile.name, func(b *testing.B) {
 			b.StopTimer()
-			dsn, cleanup := provisionProfile(b, profile)
-			defer cleanup()
+			dsn := provisionProfile(b, profile)
 			runProcess(b, canonicalExample, environment, cli, "migration", "apply", "--provider", profile.provider, "--dsn", dsn, "--migrations", "migrations")
 			childEnvironment := setEnvironment(environment, "P8_ORACLE_PROVIDER", profile.provider)
 			childEnvironment = setEnvironment(childEnvironment, "P8_ORACLE_DSN", dsn)
@@ -209,8 +208,7 @@ replace github.com/eleven-am/golem/go/examples/social v0.0.0 => %s
 	for _, profile := range requiredProfiles() {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn, cleanup := provisionProfile(t, profile)
-			defer cleanup()
+			dsn := provisionProfile(t, profile)
 			runProcess(t, canonicalExample, environment, cli, "migration", "apply", "--provider", profile.provider, "--dsn", dsn, "--migrations", "migrations")
 			childEnvironment := setEnvironment(environment, "P8_ORACLE_PROVIDER", profile.provider)
 			childEnvironment = setEnvironment(childEnvironment, "P8_ORACLE_DSN", dsn)
@@ -273,11 +271,11 @@ func requiredProfiles() []liveProfile {
 	}
 }
 
-func provisionProfile(t testing.TB, profile liveProfile) (string, func()) {
+func provisionProfile(t testing.TB, profile liveProfile) string {
 	t.Helper()
 	if profile.provider == "sqlite" {
 		location := &url.URL{Scheme: "file", Path: filepath.ToSlash(filepath.Join(t.TempDir(), "oracle.sqlite"))}
-		return location.String(), func() {}
+		return location.String()
 	}
 	admin, err := postgresql.Open(context.Background(), postgresql.Config{DataSourceName: profile.baseDSN})
 	if err != nil {
@@ -288,40 +286,17 @@ func provisionProfile(t testing.TB, profile liveProfile) (string, func()) {
 		_ = admin.Close()
 		t.Fatal(err)
 	}
+	if err := admin.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if profile.collation == "C" && (collate != "C" || ctype != "C") {
-		_ = admin.Close()
 		t.Fatalf("%s has collation=%q ctype=%q", profile.name, collate, ctype)
 	}
 	if profile.collation == "linguistic" && (collate == "C" || ctype == "C") {
-		_ = admin.Close()
 		t.Fatalf("%s requires non-C collation and ctype; got collation=%q ctype=%q", profile.name, collate, ctype)
 	}
-	name := fmt.Sprintf("p8_read_%d_%d", os.Getpid(), time.Now().UnixNano())
-	statement := fmt.Sprintf("CREATE DATABASE %s TEMPLATE template0 LC_COLLATE %s LC_CTYPE %s", postgresIdentifier(name), postgresLiteral(collate), postgresLiteral(ctype))
-	if _, err := admin.UnsafeSQLX().ExecContext(context.Background(), statement); err != nil {
-		_ = admin.Close()
-		t.Fatal(err)
-	}
-	parsed, err := url.Parse(profile.baseDSN)
-	if err != nil {
-		_ = admin.Close()
-		t.Fatal(err)
-	}
-	parsed.Path, parsed.RawPath = "/"+name, ""
-	cleanup := func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_, _ = admin.UnsafeSQLX().ExecContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname=$1 AND pid<>pg_backend_pid()`, name)
-		if _, err := admin.UnsafeSQLX().ExecContext(ctx, "DROP DATABASE "+postgresIdentifier(name)); err != nil {
-			t.Errorf("drop disposable PostgreSQL database: %v", err)
-		}
-		if err := admin.Close(); err != nil {
-			t.Errorf("close PostgreSQL administrator: %v", err)
-		}
-	}
-	return parsed.String(), cleanup
+	return testenv.DisposablePostgreSQLFrom(t, profile.baseDSN)
 }
-
 func postgresIdentifier(value string) string {
 	return `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 }

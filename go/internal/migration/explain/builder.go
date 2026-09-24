@@ -259,7 +259,8 @@ func knownOperationKinds() []migration.OperationKind {
 		migration.AddPrimaryKey, migration.DropPrimaryKey, migration.AddUnique, migration.DropUnique,
 		migration.AddForeignKey, migration.DropForeignKey, migration.AddCheck, migration.DropCheck,
 		migration.CreateIndex, migration.DropIndex, migration.RenameIndex,
-		migration.CreateProviderExtension, migration.DropProviderExtension, migration.BackfillColumn,
+		migration.CreateProviderExtension, migration.DropProviderExtension, migration.UpgradeSemanticState,
+		migration.BackfillColumn,
 		migration.InitializeConcurrencyColumn,
 		migration.RebuildTable, migration.ValidateConstraint, migration.ManualStep,
 		migration.RecordSchemaVersion,
@@ -324,7 +325,7 @@ func classifyEffect(kind migration.OperationKind, facts effectInput) (Effect, []
 		}
 	case migration.RenameTable, migration.RenameColumn, migration.AlterColumnNullability,
 		migration.SetColumnDefault, migration.DropColumnDefault, migration.RenameIndex,
-		migration.ValidateConstraint, migration.RecordSchemaVersion:
+		migration.ValidateConstraint, migration.RecordSchemaVersion, migration.UpgradeSemanticState:
 		if facts.beforePresent && facts.afterPresent && facts.preservation == preservationUnspecified && !facts.extensionRecreation {
 			return EffectSchemaOnly, nil, nil
 		}
@@ -359,7 +360,7 @@ func buildIdentity(kind migration.OperationKind, input identityInput, display di
 		allowed.modelID, allowed.checkID = input.modelID, input.checkID
 	case migration.CreateIndex, migration.DropIndex, migration.RenameIndex:
 		allowed.modelID, allowed.indexID = input.modelID, input.indexID
-	case migration.CreateProviderExtension, migration.DropProviderExtension:
+	case migration.CreateProviderExtension, migration.DropProviderExtension, migration.UpgradeSemanticState:
 		allowed.extensionID = input.extensionID
 	case migration.ValidateConstraint:
 		allowed.modelID = input.modelID

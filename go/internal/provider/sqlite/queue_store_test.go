@@ -125,14 +125,27 @@ func newQueueFixture(t *testing.T) providertest.Fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := store.EnsureSchema(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	return providertest.Fixture{Store: store, Database: database, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
+	return providertest.Fixture{Store: store, Database: database, ExpireLease: func(ctx context.Context, ids ...string) error {
+		if len(ids) == 0 {
+			return nil
+		}
+		marks := make([]string, len(ids))
+		arguments := make([]any, len(ids))
+		for index, identity := range ids {
+			marks[index] = "?"
+			arguments[index] = identity
+		}
+		past := `(` + sqliteDatabaseMicros + ` - 3600000000)`
+		_, err := database.ExecContext(ctx, `UPDATE `+sqliteQueueTable+` SET "lease_until"=`+past+`,"available_at"=`+past+` WHERE "id" IN (`+strings.Join(marks, ",")+`) AND "status"='leased'`, arguments...)
+		return err
+	}, ReplaceIndex: func(ctx context.Context, shape providertest.IndexShape) error {
 		if _, err := database.ExecContext(ctx, `DROP INDEX IF EXISTS "main"."`+shape.Name+`"`); err != nil {
 			return err
 		}
@@ -160,7 +173,7 @@ func TestQueueStorageIsToleratedByDriftDetection(t *testing.T) {
 	allowlisted.Unmanaged = physical.QueueUnmanagedObjects()
 	allowlisted = normalizeMigrationFixture(t, allowlisted)
 	database := openMigrationFixture(t, provider, allowlisted, "queue-drift.db")
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -202,7 +215,7 @@ func TestQueueTableWithoutIdentityKeyIsRefused(t *testing.T) {
 	if _, err := database.ExecContext(ctx, keyless); err != nil {
 		t.Fatal(err)
 	}
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,7 +244,7 @@ func TestReleasedQueueSchemaUpgradesInPlace(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	store, err := provider.QueueStore(database)
+	store, err := provider.QueueStore(database, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

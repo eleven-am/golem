@@ -1097,12 +1097,12 @@ func TestLegacySemanticSnapshotRebuildsShadowStorage(t *testing.T) {
 	legacy := current
 	legacy.Attributes = nil
 	for _, attribute := range current.Attributes {
-		if attribute.Name == "identity" {
+		if attribute.Name == "identity" || attribute.Name == "state_version" {
 			continue
 		}
 		legacy.Attributes = append(legacy.Attributes, attribute)
 	}
-	if len(legacy.Attributes) != 6 || len(current.Attributes) != 7 {
+	if len(legacy.Attributes) != 6 || len(current.Attributes) != 8 {
 		t.Fatalf("legacy attributes=%d current attributes=%d", len(legacy.Attributes), len(current.Attributes))
 	}
 	retained, err := semanticstorage.Decode(legacy)

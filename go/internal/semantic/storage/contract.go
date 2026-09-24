@@ -4,6 +4,7 @@ package storage
 
 import (
 	"fmt"
+	"reflect"
 	"strconv"
 	"strings"
 
@@ -13,14 +14,37 @@ import (
 )
 
 const (
-	attributeDimensions = "dimensions"
-	attributeFields     = "fields"
-	attributeIdentity   = "identity"
-	attributeMetric     = "metric"
-	attributeName       = "name"
-	attributeSpace      = "space"
-	attributeStorage    = "storage"
+	attributeDimensions   = "dimensions"
+	attributeFields       = "fields"
+	attributeIdentity     = "identity"
+	attributeMetric       = "metric"
+	attributeName         = "name"
+	attributeSpace        = "space"
+	attributeStateVersion = "state_version"
+	attributeStorage      = "storage"
 )
+
+const (
+	StateVersionIdentity uint16 = 1
+	StateVersionStrikes  uint16 = 2
+	StateVersionCurrent         = StateVersionStrikes
+)
+
+func registeredStateVersion(value uint16) bool {
+	return value == StateVersionIdentity || value == StateVersionStrikes
+}
+
+var registeredStateUpgrades = map[[2]uint16]bool{
+	{StateVersionIdentity, StateVersionStrikes}: true,
+}
+
+func RegisteredStateUpgrade(before, after Descriptor) bool {
+	if !registeredStateUpgrades[[2]uint16{before.StateVersion, after.StateVersion}] {
+		return false
+	}
+	before.StateVersion, after.StateVersion = 0, 0
+	return reflect.DeepEqual(before, after)
+}
 
 // IdentityColumn is one owner primary-key column mirrored into the semantic
 // shadow state table. It carries the owner's physical name, provider storage
@@ -33,15 +57,16 @@ type IdentityColumn struct {
 }
 
 type Descriptor struct {
-	ID         ir.ExtensionID
-	ModelID    ir.ModelID
-	Name       string
-	Space      string
-	Dimensions uint16
-	Fields     []ir.FieldID
-	Metric     string
-	Storage    physical.PhysicalName
-	Identity   []IdentityColumn
+	ID           ir.ExtensionID
+	ModelID      ir.ModelID
+	Name         string
+	Space        string
+	Dimensions   uint16
+	Fields       []ir.FieldID
+	Metric       string
+	Storage      physical.PhysicalName
+	Identity     []IdentityColumn
+	StateVersion uint16
 }
 
 var identityStorageKinds = map[physical.StorageKind]bool{
@@ -60,6 +85,7 @@ var identityStorageKinds = map[physical.StorageKind]bool{
 var reservedIdentityColumns = map[string]bool{
 	"record_key": true, "source_hash": true, "space_fingerprint": true,
 	"status": true, "attempt_count": true, "error_code": true, "updated_at": true,
+	"ambiguous_strikes": true,
 }
 
 func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (physical.Extension, error) {
@@ -88,6 +114,7 @@ func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (phys
 			{Name: attributeMetric, Value: physical.SemanticValue{Kind: physical.ValueString, String: index.Metric}},
 			{Name: attributeName, Value: physical.SemanticValue{Kind: physical.ValueString, String: index.Name}},
 			{Name: attributeSpace, Value: physical.SemanticValue{Kind: physical.ValueString, String: index.Space}},
+			{Name: attributeStateVersion, Value: physical.SemanticValue{Kind: physical.ValueInteger, Integer: int64(StateVersionCurrent)}},
 			{Name: attributeStorage, Value: physical.SemanticValue{Kind: physical.ValueString, String: storage}},
 		},
 	}, nil
@@ -165,11 +192,8 @@ func Decode(extension physical.Extension) (Descriptor, error) {
 	if extension.Kind != semanticcontract.IndexKind || extension.Version != semanticcontract.Version || extension.Owner.Kind != ir.ObjectModel || extension.Owner.ModelID == "" {
 		return Descriptor{}, fmt.Errorf("semantic storage: invalid physical extension header")
 	}
-	// Historical snapshots predate the identity projection and are replayed
-	// verbatim. They decode with an empty Identity; only a current compile can
-	// carry the seventh attribute.
-	if len(extension.Attributes) != 6 && len(extension.Attributes) != 7 {
-		return Descriptor{}, fmt.Errorf("semantic storage: physical extension requires six or seven attributes")
+	if len(extension.Attributes) < 6 || len(extension.Attributes) > 8 {
+		return Descriptor{}, fmt.Errorf("semantic storage: physical extension requires six, seven, or eight attributes")
 	}
 	attributes := make(map[string]physical.SemanticValue, len(extension.Attributes))
 	for _, attribute := range extension.Attributes {
@@ -217,17 +241,37 @@ func Decode(extension physical.Extension) (Descriptor, error) {
 		}
 		fields[index] = ir.FieldID(field)
 	}
+	encodedIdentity, identityPresent := attributes[attributeIdentity]
+	encodedStateVersion, stateVersionPresent := attributes[attributeStateVersion]
+	expectedAttributes := 6
+	if identityPresent {
+		expectedAttributes++
+	}
+	if stateVersionPresent {
+		expectedAttributes++
+	}
+	if len(extension.Attributes) != expectedAttributes {
+		return Descriptor{}, fmt.Errorf("semantic storage: physical extension carries an unregistered attribute")
+	}
+	if stateVersionPresent && !identityPresent {
+		return Descriptor{}, fmt.Errorf("semantic storage: shadow state version requires an identity projection")
+	}
 	var identity []IdentityColumn
-	if encoded, present := attributes[attributeIdentity]; present {
-		if encoded.Kind != physical.ValueString || encoded.String == "" {
+	if identityPresent {
+		if encodedIdentity.Kind != physical.ValueString || encodedIdentity.String == "" {
 			return Descriptor{}, fmt.Errorf("semantic storage: invalid identity attribute")
 		}
-		identity, err = decodeIdentity(encoded.String)
+		identity, err = decodeIdentity(encodedIdentity.String)
 		if err != nil {
 			return Descriptor{}, err
 		}
-	} else if len(extension.Attributes) != 6 {
-		return Descriptor{}, fmt.Errorf("semantic storage: invalid identity attribute")
 	}
-	return Descriptor{ID: extension.ID, ModelID: extension.Owner.ModelID, Name: name, Space: space, Dimensions: uint16(dimensions.Integer), Fields: fields, Metric: metric, Storage: physical.PhysicalName(storage), Identity: identity}, nil
+	stateVersion := StateVersionIdentity
+	if stateVersionPresent {
+		if encodedStateVersion.Kind != physical.ValueInteger || encodedStateVersion.Integer < 1 || encodedStateVersion.Integer > int64(^uint16(0)) || !registeredStateVersion(uint16(encodedStateVersion.Integer)) {
+			return Descriptor{}, fmt.Errorf("semantic storage: invalid state version attribute")
+		}
+		stateVersion = uint16(encodedStateVersion.Integer)
+	}
+	return Descriptor{ID: extension.ID, ModelID: extension.Owner.ModelID, Name: name, Space: space, Dimensions: uint16(dimensions.Integer), Fields: fields, Metric: metric, Storage: physical.PhysicalName(storage), Identity: identity, StateVersion: stateVersion}, nil
 }

@@ -422,6 +422,9 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 			}
 			wantState += "," + string(column.Name) + ":" + storage + ":" + strconv.FormatBool(column.NotNull)
 		}
+		if descriptor.StateVersion >= semanticstorage.StateVersionStrikes {
+			wantState += ",ambiguous_strikes:integer:true"
+		}
 		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
 		if stateColumns != wantState || vectorColumns != wantVectors {
 			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)

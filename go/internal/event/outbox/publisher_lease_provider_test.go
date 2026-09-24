@@ -2,11 +2,7 @@ package outbox
 
 import (
 	"context"
-	cryptorand "crypto/rand"
-	"encoding/hex"
-	"net/url"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -104,10 +100,9 @@ func forEachLeaseProvider(t *testing.T, groups int, check func(*testing.T, schem
 		{name: "postgresql-linguistic", environment: "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"},
 	} {
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := testenv.PostgreSQLDSN(t, profile.environment)
 			fixture := schematest.NewSubscribedIndexed(t)
 			provider := postgresql.New()
-			database, _, err := provider.Open(context.Background(), disposableLeaseDatabase(t, dsn))
+			database, _, err := provider.Open(context.Background(), testenv.DisposablePostgreSQL(t, profile.environment))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -156,48 +151,6 @@ func seedLeaseProviderStore(t *testing.T, fixture schematest.Fixture, database *
 		}
 	}
 	return store
-}
-
-func disposableLeaseDatabase(t *testing.T, administrative string) string {
-	t.Helper()
-	suffix := make([]byte, 8)
-	if _, err := cryptorand.Read(suffix); err != nil {
-		t.Fatal(err)
-	}
-	name := "golem_outbox_leases_" + hex.EncodeToString(suffix)
-	admin, _, err := postgresql.New().Open(context.Background(), administrative)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer admin.Close()
-	var encoding, collate, characterType string
-	if err := admin.QueryRow(`SELECT pg_encoding_to_char(encoding), datcollate, datctype FROM pg_catalog.pg_database WHERE datname = current_database()`).Scan(&encoding, &collate, &characterType); err != nil {
-		t.Fatal(err)
-	}
-	literal := func(value string) string { return "'" + strings.ReplaceAll(value, "'", "''") + "'" }
-	if _, err := admin.Exec(`CREATE DATABASE "` + name + `" TEMPLATE template0 ENCODING ` + literal(encoding) + ` LC_COLLATE ` + literal(collate) + ` LC_CTYPE ` + literal(characterType)); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		cleanup, _, err := postgresql.New().Open(context.Background(), administrative)
-		if err != nil {
-			t.Errorf("open PostgreSQL cleanup connection: %v", err)
-			return
-		}
-		defer cleanup.Close()
-		if _, err := cleanup.Exec(`SELECT pg_catalog.pg_terminate_backend(pid) FROM pg_catalog.pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, name); err != nil {
-			t.Errorf("terminate disposable PostgreSQL sessions: %v", err)
-		}
-		if _, err := cleanup.Exec(`DROP DATABASE IF EXISTS "` + name + `"`); err != nil {
-			t.Errorf("drop disposable PostgreSQL database: %v", err)
-		}
-	})
-	parsed, err := url.Parse(administrative)
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsed.Path = "/" + name
-	return parsed.String()
 }
 
 func TestPublisherNeverHoldsLeasesItCannotRenewOnProviders(t *testing.T) {

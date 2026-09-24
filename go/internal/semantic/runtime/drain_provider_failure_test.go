@@ -62,8 +62,12 @@ func TestSemanticDrainDefersAnUnclassifiedProviderFailureWithoutQuarantine(t *te
 		t.Fatalf("an unclassified provider failure was not deferred as systemic: %v", err)
 	}
 	assertDrainErrorIsClosed(t, err)
-	if failing.calls != 1 {
-		t.Fatalf("provider calls=%d want=1: an unclassified failure fanned out into per-record retries", failing.calls)
+	// One refused batch plus the isolation that decides whether the provider is
+	// down or one record is poisoned. The batch call is not counted against the
+	// budget, because counting it would let one refused record exhaust the
+	// budget and starve every record behind it.
+	if want := 1 + semanticOutageBatches + semanticLivenessProbes; failing.calls > want {
+		t.Fatalf("provider calls=%d exceeds the bound of %d: unclassified isolation escaped the outage budget", failing.calls, want)
 	}
 	for _, id := range []string{"a", "b"} {
 		if status, code, attempts := fixture.failure(t, id); status != "pending" || code.Valid || attempts != before {
@@ -191,7 +195,18 @@ func TestSemanticReconcileContinuesPastADocumentTheProviderKeepsRefusing(t *test
 			t.Fatalf("record %q after the refused batch status=%q: one refused document stalled reconcile", id, status)
 		}
 	}
-	if fixture.count(t, drainStateTable) != 1+len(ids)-8 {
+	// Isolating the refused batch lets every healthy document in it settle, so
+	// only the poisoned one is left pending.
+	for _, id := range ids {
+		want := "ready"
+		if id == "p02" {
+			want = "pending"
+		}
+		if status := fixture.status(t, id); status != want {
+			t.Fatalf("record %q status=%q want %q", id, status, want)
+		}
+	}
+	if fixture.count(t, drainStateTable) != 1+len(ids) {
 		t.Fatalf("state rows=%d: reconcile skipped cleanup of a record whose owner is gone", fixture.count(t, drainStateTable))
 	}
 }
@@ -212,8 +227,12 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 	if err := fixture.manager.Refresh(ctx, "post", "related"); !ProviderDeferred(err) {
 		t.Fatalf("reconcile error=%v, want the outage deferred", err)
 	}
-	if down.calls != 2 {
-		t.Fatalf("reconcile provider calls=%d want=2 during an outage spanning 5 batches", down.calls)
+	// One refused batch, the isolation that decides whether the provider is
+	// down or one record is poisoned, and at most semanticLivenessProbes
+	// re-embeds of already-stored documents. The count does not grow with the
+	// number of batches, which is what this test exists to protect.
+	if want := 1 + semanticOutageBatches + semanticLivenessProbes; down.calls > want {
+		t.Fatalf("reconcile provider calls=%d exceeds the bound of %d during an outage spanning 5 batches", down.calls, want)
 	}
 	fixture.manager.indexes[0].Provider = fixture.embedder
 	if err := fixture.manager.Refresh(ctx, "post", "related"); err != nil {
@@ -240,8 +259,8 @@ func TestSemanticPassStopsCallingAProviderThatIsDownAcrossBatches(t *testing.T) 
 		if _, err := fixture.manager.Drain(ctx, "post", "related"); !ProviderDeferred(err) {
 			t.Fatalf("pass %d error=%v, want the outage deferred", pass, err)
 		}
-		if down.calls != 2 {
-			t.Fatalf("pass %d provider calls=%d want=2 during an outage spanning 5 batches", pass, down.calls)
+		if want := 1 + semanticOutageBatches + semanticLivenessProbes; down.calls > want {
+			t.Fatalf("pass %d provider calls=%d exceeds the bound of %d during an outage spanning 5 batches", pass, down.calls, want)
 		}
 	}
 	for _, id := range ids {

@@ -71,7 +71,7 @@ postgres-up: ## Start the PostgreSQL test servers, creating them when absent
 	@for spec in \
 		"golem-pg-c|postgres:17|55433|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=C" \
 		"golem-pg-linguistic|postgres:17|55432|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=en_US.utf8" \
-		"golem-pgvector|pgvector/pgvector:pg17|55434|-e POSTGRES_PASSWORD=golem"; do \
+		"golem-pgvector|pgvector/pgvector:pg17|55434|--shm-size=256m -e POSTGRES_PASSWORD=golem"; do \
 		name=$${spec%%|*}; rest=$${spec#*|}; image=$${rest%%|*}; rest=$${rest#*|}; port=$${rest%%|*}; env=$${rest#*|}; \
 		if [ -n "$$(docker ps -q -f name=^$$name$$)" ]; then continue; fi; \
 		if [ -n "$$(docker ps -aq -f name=^$$name$$)" ]; then \

@@ -24,6 +24,17 @@ type Fixture struct {
 	Store        queueprovider.Store
 	Database     *sqlx.DB
 	ReplaceIndex func(ctx context.Context, shape IndexShape) error
+	ExpireLease  func(ctx context.Context, ids ...string) error
+}
+
+func expireLeases(t testing.TB, fixture Fixture, ids ...string) {
+	t.Helper()
+	if fixture.ExpireLease == nil {
+		t.Fatal("fixture does not expose lease expiry")
+	}
+	if err := fixture.ExpireLease(context.Background(), ids...); err != nil {
+		t.Fatal(err)
+	}
 }
 
 type IndexShape struct {
@@ -38,6 +49,7 @@ const (
 	shortLease = 80 * time.Millisecond
 	expiry     = 200 * time.Millisecond
 	crashLease = 2 * time.Second
+	leaseSkew  = 5 * time.Second
 )
 
 // ClaimIsExclusiveUnderConcurrency proves concurrent claimers over one backlog
@@ -155,14 +167,20 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	if changed, err := fixture.Store.Release(ctx, holder[0].ID, holder[0].LeaseToken); err != nil || !changed {
 		t.Fatalf("release holder changed=%t error=%v", changed, err)
 	}
-	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: crashLease, Resource: &weighted})
+	expiring, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.holder"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted})
 	if err != nil || len(expiring) != 1 {
 		t.Fatalf("expiring holder=%#v error=%v", expiring, err)
+	}
+	if expiring[0].LeaseUntil == nil {
+		t.Fatalf("claim left lease_until unset on %#v", expiring[0])
+	}
+	if horizon := expiring[0].LeaseUntil.Sub(expiring[0].UpdatedAt); horizon < longLease-leaseSkew || horizon > longLease+leaseSkew {
+		t.Fatalf("claim wrote a %s lease horizon for a %s lease duration", horizon, longLease)
 	}
 	if blocked, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted}); err != nil || len(blocked) != 0 {
 		t.Fatalf("live resource holder admitted=%#v error=%v", blocked, err)
 	}
-	time.Sleep(crashLease + expiry)
+	expireLeases(t, fixture, expiring[0].ID)
 	afterExpiry, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.heavy"}, Limit: 1, LeaseDuration: longLease, Resource: &weighted})
 	if err != nil || len(afterExpiry) != 1 || afterExpiry[0].ID != heavy {
 		t.Fatalf("expired resource holder admission=%#v error=%v", afterExpiry, err)
@@ -215,10 +233,13 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	canceledID := enqueue(t, fixture, "gate.resource.cleanup.canceled", request{})
 	exhaustedID := enqueue(t, fixture, "gate.resource.cleanup.exhausted", request{maxAttempts: 1})
 	enqueue(t, fixture, "gate.resource.cleanup.holder", request{})
+	expiringCleanup := make([]string, 0, 2)
 	for _, jobType := range []string{"gate.resource.cleanup.canceled", "gate.resource.cleanup.exhausted"} {
-		if records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{jobType}, Limit: 1, LeaseDuration: shortLease, Resource: &cleanup}); err != nil || len(records) != 1 {
+		records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{jobType}, Limit: 1, LeaseDuration: longLease, Resource: &cleanup})
+		if err != nil || len(records) != 1 {
 			t.Fatalf("cleanup expiring claim type=%s records=%#v error=%v", jobType, records, err)
 		}
+		expiringCleanup = append(expiringCleanup, records[0].ID)
 	}
 	if holder, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.cleanup.holder"}, Limit: 1, LeaseDuration: longLease, Resource: &cleanup}); err != nil || len(holder) != 1 {
 		t.Fatalf("cleanup holder=%#v error=%v", holder, err)
@@ -226,7 +247,7 @@ func SharedResourceCapacityIsAtomicAndWeighted(t testing.TB, fixture Fixture) {
 	if canceled, err := fixture.Store.Cancel(ctx, canceledID); err != nil || !canceled.Changed || canceled.Terminal {
 		t.Fatalf("cleanup cancellation=%#v error=%v", canceled, err)
 	}
-	time.Sleep(expiry)
+	expireLeases(t, fixture, expiringCleanup...)
 	full := queueprovider.ClaimResource{Name: cleanup.Name, Concurrency: 1, Costs: cleanup.Costs}
 	if records, err := fixture.Store.Claim(ctx, queueprovider.ClaimOptions{Types: []string{"gate.resource.cleanup.canceled", "gate.resource.cleanup.exhausted"}, Limit: 1, LeaseDuration: longLease, Resource: &full}); err != nil || len(records) != 0 {
 		t.Fatalf("full resource cleanup records=%#v error=%v", records, err)

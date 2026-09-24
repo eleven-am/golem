@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"os"
 	"reflect"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -478,10 +477,7 @@ func TestPostgreSQLRuntimeValuesPersistOnCreateAndRefreshOnUpdate(t *testing.T) 
 	for _, profile := range profiles {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
-			dsn := strings.TrimSpace(os.Getenv(profile.env))
-			if dsn == "" {
-				testenv.SkipMissingPostgreSQLf(t, "%s is required", profile.env)
-			}
+			dsn := testenv.DisposablePostgreSQL(t, profile.env)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			namespace := physical.PhysicalName(fmt.Sprintf("golem_runtime_values_%d_%d", os.Getpid(), sequence))
 			fixture := newRuntimeValuesSchemaFixture(t, namespace)

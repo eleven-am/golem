@@ -236,7 +236,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		if operation.Kind == migration.AddSystemObject {
 			continue
 		}
-		if operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
+		if operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension || operation.Kind == migration.UpgradeSemanticState {
 			continue
 		}
 		tableID, ok := owners[operation.ID]
@@ -338,6 +338,19 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 				"DROP TABLE " + quote(physical.PhysicalName(string(descriptor.Storage)+"_vec")),
 				"DROP TABLE " + quote(physical.PhysicalName(string(descriptor.Storage)+"_state")),
 			}})
+			continue
+		}
+		if operation.Kind == migration.UpgradeSemanticState {
+			before, hadBefore := findPhysicalExtension(entry.BeforeSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
+			after, hasAfter := findPhysicalExtension(entry.AfterSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
+			if !hadBefore || !hasAfter {
+				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
+			}
+			statements, renderErr := renderSemanticStateUpgrade(before, after)
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			plan.steps = append(plan.steps, migrationStep{statements: statements})
 			continue
 		}
 		tableID := owners[operation.ID]
@@ -621,7 +634,7 @@ func operationOwners(before, after physical.PhysicalSchema) (map[migration.Opera
 	}
 	result := map[migration.OperationID]ir.ModelID{}
 	for _, operation := range plan.Operations {
-		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension {
+		if operation.Kind == migration.RecordSchemaVersion || operation.Kind == migration.AddSystemObject || operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension || operation.Kind == migration.UpgradeSemanticState {
 			continue
 		}
 		owner, exists := objectOwners[operation.ObjectID]

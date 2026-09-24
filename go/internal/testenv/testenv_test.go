@@ -97,3 +97,36 @@ func TestMissingPGVectorFollowsItsOwnFlag(t *testing.T) {
 		t.Fatalf("optional pgvector: fatal=%t skipped=%t", result.fatal, result.skipped)
 	}
 }
+
+func TestSocialPostgreSQLDSNPrefersItsOwnVariable(t *testing.T) {
+	t.Setenv(PostgreSQLRequiredVariable, "1")
+	t.Setenv(SocialPostgreSQLDSNVariable, "  postgresql://social  ")
+	t.Setenv(PostgreSQLDSNVariable, "postgresql://shared")
+	if got := SocialPostgreSQLDSN(t); got != "postgresql://social" {
+		t.Fatalf("dsn=%q", got)
+	}
+}
+
+func TestSocialPostgreSQLDSNFallsBackToTheSharedVariable(t *testing.T) {
+	t.Setenv(PostgreSQLRequiredVariable, "1")
+	t.Setenv(SocialPostgreSQLDSNVariable, "")
+	t.Setenv(PostgreSQLDSNVariable, "  postgresql://shared  ")
+	if got := SocialPostgreSQLDSN(t); got != "postgresql://shared" {
+		t.Fatalf("dsn=%q", got)
+	}
+}
+
+func TestMissingSocialPostgreSQLFollowsTheRequireFlag(t *testing.T) {
+	t.Setenv(SocialPostgreSQLDSNVariable, "")
+	t.Setenv(PostgreSQLDSNVariable, "")
+	t.Setenv(PostgreSQLRequiredVariable, "1")
+	result := observe(func(tb testing.TB) { SocialPostgreSQLDSN(tb) })
+	if !result.fatal || result.skipped || !strings.Contains(result.message, PostgreSQLRequiredVariable) ||
+		!strings.Contains(result.message, SocialPostgreSQLDSNVariable) || !strings.Contains(result.message, PostgreSQLDSNVariable) {
+		t.Fatalf("required: fatal=%t skipped=%t message=%q", result.fatal, result.skipped, result.message)
+	}
+	t.Setenv(PostgreSQLRequiredVariable, "")
+	if result := observe(func(tb testing.TB) { SocialPostgreSQLDSN(tb) }); result.fatal || !result.skipped {
+		t.Fatalf("optional: fatal=%t skipped=%t", result.fatal, result.skipped)
+	}
+}

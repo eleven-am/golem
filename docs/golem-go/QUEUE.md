@@ -143,12 +143,32 @@ limits.RetentionEvery = queue.RetentionDisabled
 ## The queue's own tables
 
 Golem creates `golem_queue` and its indexes on first use and checks, every time
-the queue starts, that the two objects carrying a guarantee have the shape it
-relies on: the primary key is exactly `id`, and `golem_queue_dedupe` is a
-unique index on `dedupe_key` covering only pending and leased jobs. A
-same-named table or index with any other shape stops startup with an error
-naming it. Drop that object and let golem recreate it; accepting it would
-quietly turn off deduplication.
+the queue starts, that the primary key is exactly `id` and that **every index
+on `golem_queue` is one golem itself defined, with golem's exact definition**.
+A same-named index with a different shape, or any other index on the table,
+stops startup with an error naming the object. Drop it and let golem recreate
+its own; accepting a wrong-shaped `golem_queue_dedupe` would quietly turn off
+deduplication.
+
+If you added your own index to `golem_queue`, startup now refuses it. Golem
+owns this table, so move that index to a table you own.
+
+### Operator-history indexes
+
+Three indexes serve the operator surface rather than the claim loop:
+
+| Index | Columns | Serves |
+| --- | --- | --- |
+| `golem_queue_enqueued` | `(enqueued_at, id)` | `List` with no state filter |
+| `golem_queue_history` | `(status, enqueued_at, id)` | `List` filtered by state |
+| `golem_queue_terminal` | `(status, finished_at, id)` | `ListFailed` and retention |
+
+**Golem creates them only when your generated schema admits them.** That
+happens when you regenerate and author the migration that records them, so a
+library upgrade on its own changes nothing and stays reversible. Until you
+regenerate, the queue behaves exactly as it did before, with no speedup. The
+same regeneration also delivers the semantic strike column, so one action
+delivers both.
 
 ## Timeouts and abandonment
 

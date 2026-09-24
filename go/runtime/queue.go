@@ -72,9 +72,9 @@ func (app *App[P, A]) queueStoreFor() (queueprovider.Store, error) {
 		if namespace != "main" {
 			return nil, fmt.Errorf("SQLite queue system namespace is not main")
 		}
-		return sqliteprovider.New().QueueStore(app.database)
+		return sqliteprovider.New().QueueStore(app.database, app.queueUnmanaged)
 	case golem.PostgreSQL:
-		return postgresprovider.New().QueueStoreAt(app.database, namespace)
+		return postgresprovider.New().QueueStoreAt(app.database, namespace, app.queueUnmanaged)
 	default:
 		return nil, fmt.Errorf("queue provider is unsupported")
 	}

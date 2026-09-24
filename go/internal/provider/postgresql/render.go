@@ -138,6 +138,10 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 		identityKeys[position] = quote(column.Name)
 	}
 	names := semanticStateIndexNames(descriptor)
+	strikes := ""
+	if descriptor.StateVersion >= semanticstorage.StateVersionStrikes {
+		strikes = ", " + semanticStrikeColumnDefinition
+	}
 	statements := []string{
 		"CREATE TABLE " + qualified(namespace, state) + " (" +
 			quote("record_key") + " text NOT NULL PRIMARY KEY, " +
@@ -147,7 +151,7 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 			quote("attempt_count") + " integer NOT NULL DEFAULT 0 CHECK (" + quote("attempt_count") + " >= 0), " +
 			quote("error_code") + " text, " +
 			quote("updated_at") + " bigint NOT NULL CHECK (" + quote("updated_at") + " >= 0)" +
-			strings.Join(identityColumns, "") + ")",
+			strings.Join(identityColumns, "") + strikes + ")",
 	}
 	if len(names) != 0 {
 		statements = append(statements,
@@ -161,6 +165,24 @@ func renderPostgreSQLSemanticExtension(namespace physical.PhysicalName, extensio
 			quote("embedding")+" vector("+strconv.Itoa(int(descriptor.Dimensions))+") NOT NULL)",
 	)
 	return statements, nil
+}
+
+const semanticStrikeColumnDefinition = `"ambiguous_strikes" integer NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)`
+
+func renderSemanticStateUpgrade(namespace physical.PhysicalName, before, after physical.Extension) ([]string, error) {
+	previous, err := semanticstorage.Decode(before)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: %w", before.ID, err)
+	}
+	next, err := semanticstorage.Decode(after)
+	if err != nil {
+		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: %w", after.ID, err)
+	}
+	if !semanticstorage.RegisteredStateUpgrade(previous, next) {
+		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: transition %d to %d is not a registered additive upgrade", after.ID, previous.StateVersion, next.StateVersion)
+	}
+	state := physical.PhysicalName(string(next.Storage) + "_state")
+	return []string{"ALTER TABLE " + qualified(namespace, state) + " ADD COLUMN " + semanticStrikeColumnDefinition}, nil
 }
 
 func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {
