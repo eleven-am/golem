@@ -40,7 +40,7 @@ func (p *refusingProvider) Embed(_ context.Context, inputs []embedding.Input) ([
 	}
 	for _, input := range inputs {
 		for _, fragment := range p.refuse {
-			if strings.Contains(input.Text(), fragment) {
+			if fragment == "*" || strings.Contains(input.Text(), fragment) {
 				return nil, embedding.NewError(p.code, fmt.Errorf("refused"))
 			}
 		}
@@ -79,7 +79,7 @@ func openQuarantineFixture(t *testing.T, refuse []string, code embedding.Code) q
 	database := sqlx.NewDb(handle, "sqlite3")
 	if _, err := database.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL,"ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)) STRICT;
-CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta'),('c','gamma')`); err != nil {
@@ -136,7 +136,7 @@ func (fixture quarantineFixture) rows(t *testing.T) map[string]shadowRow {
 }
 
 func TestProviderOutageNeverQuarantinesAndNeverStrikes(t *testing.T) {
-	fixture := openQuarantineFixture(t, []string{"golem-semantic-document"}, embedding.CodeUnavailable)
+	fixture := openQuarantineFixture(t, []string{"*"}, embedding.CodeUnavailable)
 	ctx := context.Background()
 	for attempt := 0; attempt < semanticAmbiguousStrikeBound+3; attempt++ {
 		if err := fixture.manager.Refresh(ctx, "post", "related"); err == nil {
@@ -217,7 +217,7 @@ func TestANewStaleMarkClearsTheStrikeCount(t *testing.T) {
 }
 
 func TestUnclassifiedTotalOutageNeverQuarantines(t *testing.T) {
-	fixture := openQuarantineFixture(t, []string{"golem-semantic-document"}, embedding.CodeProvider)
+	fixture := openQuarantineFixture(t, []string{"*"}, embedding.CodeProvider)
 	ctx := context.Background()
 	for attempt := 0; attempt < semanticAmbiguousStrikeBound+3; attempt++ {
 		_ = fixture.manager.Refresh(ctx, "post", "related")
@@ -248,7 +248,7 @@ func TestUnupgradedShadowStateNeverNamesTheStrikeColumn(t *testing.T) {
 	database := sqlx.NewDb(handle, "sqlite3")
 	if _, err := database.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL) STRICT;
-CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := database.Exec(`INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
@@ -309,7 +309,7 @@ func TestAnOutageAfterAHealthyPeriodNeverQuarantines(t *testing.T) {
 		t.Fatal("no strike was earned during the healthy period")
 	}
 	fixture.provider.mu.Lock()
-	fixture.provider.refuse = []string{"golem-semantic-document"}
+	fixture.provider.refuse = []string{"*"}
 	fixture.provider.mu.Unlock()
 	for attempt := 0; attempt < semanticAmbiguousStrikeBound+5; attempt++ {
 		_ = fixture.manager.Refresh(ctx, "post", "related")
@@ -352,7 +352,7 @@ func openBatchedQuarantineFixture(t *testing.T, ids []string, poison string, cod
 	database := sqlx.NewDb(handle, "sqlite3")
 	if _, err := database.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,"id" TEXT NOT NULL,"ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)) STRICT;
-CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range ids {
@@ -471,7 +471,7 @@ func TestDrainAppliesStrikesAndQuarantine(t *testing.T) {
 }
 
 func TestDrainNeverQuarantinesDuringAnOutage(t *testing.T) {
-	fixture := openQuarantineFixture(t, []string{"golem-semantic-document"}, embedding.CodeProvider)
+	fixture := openQuarantineFixture(t, []string{"*"}, embedding.CodeProvider)
 	for attempt := 0; attempt < semanticAmbiguousStrikeBound+3; attempt++ {
 		fixture.markStale(t, "a", "b", "c")
 		fixture.drain(t)
@@ -597,7 +597,7 @@ func TestEveryProbeCandidateFailingChargesNothing(t *testing.T) {
 	const records = 12
 	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
 	fixture.settleAll(t, records)
-	fixture.refuseOnly("golem-semantic-document")
+	fixture.refuseOnly("*")
 
 	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
 		t.Fatal(err)
@@ -620,7 +620,7 @@ func TestLivenessProbesAreBoundedPerPass(t *testing.T) {
 	const records = 12
 	fixture := openPagedQuarantineFixture(t, records, "p11", embedding.CodeProvider)
 	fixture.settleAll(t, records)
-	fixture.refuseOnly("golem-semantic-document")
+	fixture.refuseOnly("*")
 	if _, err := fixture.database.Exec(`UPDATE "posts" SET "title"='poisondoc p11 revised' WHERE "id"='p11'`); err != nil {
 		t.Fatal(err)
 	}

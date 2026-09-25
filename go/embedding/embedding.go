@@ -128,14 +128,41 @@ func (value Specification) FingerprintInput() string {
 	return fmt.Sprintf("embedding-space:v1\x00%d:%s\x00%d:%s\x00%d:%s\x00%d\x00%d", len(value.provider), value.provider, len(value.model), value.model, len(value.revision), value.revision, value.dimensions, value.maximum)
 }
 
-// Input is one canonical document. Key is an opaque job-local correlation key;
+// Purpose tells a provider whether an input is indexed content or a search
+// query. Providers whose upstream API distinguishes those tasks must preserve
+// this value when selecting the upstream embedding mode.
+type Purpose string
+
+const (
+	PurposeDocument Purpose = "document"
+	PurposeQuery    Purpose = "query"
+)
+
+// Input is one document or query. Key is an opaque job-local correlation key;
 // providers must not interpret or retain it.
 type Input struct {
-	key  string
-	text string
+	key     string
+	text    string
+	purpose Purpose
 }
 
+// NewInput constructs an indexed-document input. It is retained as the
+// compatibility spelling for providers built before task purpose was exposed.
 func NewInput(key, text string) (Input, error) {
+	return NewDocumentInput(key, text)
+}
+
+// NewDocumentInput constructs content that will be stored and searched.
+func NewDocumentInput(key, text string) (Input, error) {
+	return newInput(key, text, PurposeDocument)
+}
+
+// NewQueryInput constructs search text to compare with stored documents.
+func NewQueryInput(key, text string) (Input, error) {
+	return newInput(key, text, PurposeQuery)
+}
+
+func newInput(key, text string, purpose Purpose) (Input, error) {
 	if key == "" {
 		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: key is empty")
 	}
@@ -154,11 +181,15 @@ func NewInput(key, text string) (Input, error) {
 	if !utf8.ValidString(text) {
 		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: text is not valid UTF-8")
 	}
-	return Input{key: key, text: text}, nil
+	if purpose != PurposeDocument && purpose != PurposeQuery {
+		return Input{}, fmt.Errorf("EMBEDDING_INPUT_INVALID: purpose is not recognized")
+	}
+	return Input{key: key, text: text, purpose: purpose}, nil
 }
 
-func (value Input) Key() string  { return value.key }
-func (value Input) Text() string { return value.text }
+func (value Input) Key() string      { return value.key }
+func (value Input) Text() string     { return value.text }
+func (value Input) Purpose() Purpose { return value.purpose }
 
 // Vector is an immutable finite single-precision embedding.
 type Vector struct{ values []float32 }
@@ -198,7 +229,7 @@ func ValidateResult(specification Specification, inputs []Input, vectors []Vecto
 		return fmt.Errorf("EMBEDDING_RESULT_INVALID: result count does not match input count")
 	}
 	for index, input := range inputs {
-		if _, err := NewInput(input.key, input.text); err != nil {
+		if _, err := newInput(input.key, input.text, input.purpose); err != nil {
 			return fmt.Errorf("EMBEDDING_BATCH_INVALID: input %d is invalid", index)
 		}
 		if len(vectors[index].values) != specification.Dimensions() {

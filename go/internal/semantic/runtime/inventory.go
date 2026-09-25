@@ -12,6 +12,8 @@ import (
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
 
+const semanticEmbeddingContract = "golem-semantic-input:v2"
+
 type Index struct {
 	Descriptor       semanticstorage.Descriptor
 	Provider         embedding.Provider
@@ -44,7 +46,7 @@ func NewInventory(schema physical.PhysicalSchema, registry embedding.Registry) (
 		}
 		result.indexes = append(result.indexes, Index{
 			Descriptor: descriptor, Provider: provider, Specification: specification,
-			SpaceFingerprint: sha256.Sum256([]byte(specification.FingerprintInput())),
+			SpaceFingerprint: sha256.Sum256([]byte(specification.FingerprintInput() + "\x00" + semanticEmbeddingContract)),
 		})
 	}
 	sort.Slice(result.indexes, func(i, j int) bool {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,7 @@ type deterministicProvider struct {
 	mu            sync.Mutex
 	inputs        []string
 	keys          []string
+	purposes      []embedding.Purpose
 	panicEmbed    bool
 	rejectText    string
 	beforeEmbed   func(*sqlx.DB)
@@ -134,6 +136,7 @@ func (provider *deterministicProvider) Embed(_ context.Context, inputs []embeddi
 	for index, input := range inputs {
 		provider.inputs = append(provider.inputs, input.Text())
 		provider.keys = append(provider.keys, input.Key())
+		provider.purposes = append(provider.purposes, input.Purpose())
 		values := []float32{0, 0, 1}
 		if strings.Contains(input.Text(), "alpha") {
 			values = []float32{1, 0, 0}
@@ -235,6 +238,12 @@ func (provider *deterministicProvider) correlationKeys() []string {
 	return append([]string(nil), provider.keys...)
 }
 
+func (provider *deterministicProvider) inputPurposes() []embedding.Purpose {
+	provider.mu.Lock()
+	defer provider.mu.Unlock()
+	return append([]embedding.Purpose(nil), provider.purposes...)
+}
+
 func TestManagerSelectedRefreshNeverTouchesUnrelatedIndex(t *testing.T) {
 	ctx := context.Background()
 	database, err := sqlitevec.Open("file:" + t.TempDir() + "/selected.db?_pragma=foreign_keys(1)&_txlock=immediate")
@@ -247,9 +256,9 @@ func TestManagerSelectedRefreshNeverTouchesUnrelatedIndex(t *testing.T) {
 CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "other" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT;
-CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT;
 CREATE TABLE "_golem_semantic_semantic-other-unrelated_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT;
-CREATE VIRTUAL TABLE "_golem_semantic_semantic-other-unrelated_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+CREATE TABLE "_golem_semantic_semantic-other-unrelated_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT;
 INSERT INTO "posts" (id,title) VALUES ('a','alpha');
 INSERT INTO "other" (id,title) VALUES ('b','beta');`); err != nil {
 		t.Fatal(err)
@@ -307,7 +316,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	db := sqlx.NewDb(database, "sqlite3")
-	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT; CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(`INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
@@ -351,6 +360,12 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 			t.Fatalf("provider correlation key disclosed database identity: %q", key)
 		}
 	}
+	if purposes := embedder.inputPurposes(); !reflect.DeepEqual(purposes, []embedding.Purpose{embedding.PurposeDocument, embedding.PurposeDocument}) {
+		t.Fatalf("refresh purposes=%v", purposes)
+	}
+	if texts := embedder.texts(); !reflect.DeepEqual(texts, []string{"alpha", "beta"}) {
+		t.Fatalf("provider received framed storage text instead of readable documents: %q", texts)
+	}
 	if err := manager.RefreshAll(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -360,7 +375,7 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 
 	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
 	var nearest string
-	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" WHERE embedding MATCH ? AND k=1 ORDER BY distance`, query); err != nil {
+	if err := db.Get(&nearest, `SELECT record_key FROM "_golem_semantic_semantic-post-related_vec" ORDER BY vec_distance_cosine(vec_f32(embedding),vec_f32(?)),record_key LIMIT 1`, query); err != nil {
 		t.Fatal(err)
 	}
 	if nearest != "golem-semantic-key:v1|5:s:1:a" {
@@ -373,6 +388,9 @@ func TestManagerRefreshesOnlyChangedSQLiteSourcesAndRemovesDeletedRows(t *testin
 	}
 	if len(ranked) != 1 || ranked[0].Key != betaKey || ranked[0].Distance < 0.99 || ranked[0].Distance > 1.01 {
 		t.Fatalf("authorized ranking=%#v", ranked)
+	}
+	if purposes := embedder.inputPurposes(); purposes[len(purposes)-1] != embedding.PurposeQuery {
+		t.Fatalf("search purpose=%q want=%q", purposes[len(purposes)-1], embedding.PurposeQuery)
 	}
 
 	if _, err := db.Exec(`UPDATE "posts" SET title='alpha revised' WHERE id='a'; DELETE FROM "posts" WHERE id='b'`); err != nil {
@@ -404,7 +422,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	db := sqlx.NewDb(database, "sqlite3")
-	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT; CREATE VIRTUAL TABLE "_golem_semantic_semantic-post-related_vec" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine); INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
+	if _, err := db.Exec(`CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT); CREATE TABLE "_golem_semantic_semantic-post-related_state" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT; CREATE INDEX "_golem_semantic_semantic-post-related_state_identity" ON "_golem_semantic_semantic-post-related_state" ("id"); CREATE TABLE "_golem_semantic_semantic-post-related_vec" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT; INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 		t.Fatal(err)
 	}
 	schema := semanticSchema(t, 3)
@@ -436,7 +454,7 @@ func TestSemanticObservationCountsSQLiteRefreshProviderAndRank(t *testing.T) {
 	}
 	assertSemanticObservations(t, collector.take(), []semanticObservation{
 		{kind: observe.KindSemantic, operation: observe.OperationSemanticProvider, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 0, aggregate: 2},
-		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 7, aggregate: 2},
+		{kind: observe.KindSemantic, operation: observe.OperationSemanticRefresh, outcome: observe.OutcomeSuccess, reason: observe.ReasonNone, statements: 6, aggregate: 2},
 	})
 	if lockObserver.wasBlocked() {
 		t.Fatal("semantic observer was invoked while the refresh mutex was held")
@@ -597,7 +615,7 @@ CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "` + drainStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL,
   CHECK (status IN ('pending','ready','failed'))) STRICT;
 CREATE INDEX "_golem_semantic_semantic-post-related_state_stale" ON "` + drainStateTable + `" ("record_key" ASC) WHERE "status" <> 'ready';
-CREATE VIRTUAL TABLE "` + drainVectorTable + `" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+CREATE TABLE "` + drainVectorTable + `" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT;
 INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 		t.Fatal(err)
 	}
@@ -1335,7 +1353,7 @@ CREATE TABLE "parts" ("id" TEXT NOT NULL,"serial" INTEGER NOT NULL,"tag" BLOB NO
 CREATE TABLE "` + markStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL,"serial" INTEGER NOT NULL,"tag" BLOB NOT NULL,
   CHECK (status IN ('pending','ready','failed'))) STRICT;
 CREATE INDEX "_golem_semantic_semantic-part-related_state_stale" ON "` + markStateTable + `" ("record_key" ASC) WHERE "status" <> 'ready';
-CREATE VIRTUAL TABLE "` + markVectorTable + `" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine)`); err != nil {
+CREATE TABLE "` + markVectorTable + `" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT`); err != nil {
 		t.Fatal(err)
 	}
 	table := physical.PhysicalTable{

@@ -1,9 +1,9 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -26,10 +26,10 @@ func openVectorDatabase(t *testing.T) *sqlx.DB {
 	return database
 }
 
-func TestSemanticStateUpgradePreservesVectorsAndRows(t *testing.T) {
+func TestSemanticExactVectorUpgradeInvalidatesLegacyVectorsAndPreservesRows(t *testing.T) {
 	database := openVectorDatabase(t)
-	before := semanticUpgradeExtension(t, semanticstorage.StateVersionIdentity)
-	after := semanticUpgradeExtension(t, semanticstorage.StateVersionStrikes)
+	before := semanticUpgradeExtension(t, semanticstorage.StateVersionStrikes)
+	after := semanticUpgradeExtension(t, semanticstorage.StateVersionExactVectors)
 
 	original, err := renderSemanticExtension(before, false)
 	if err != nil {
@@ -62,12 +62,26 @@ func TestSemanticStateUpgradePreservesVectorsAndRows(t *testing.T) {
 		}
 	}
 
-	var stored []byte
-	if err := database.Get(&stored, `SELECT "embedding" FROM "_golem_semantic_semanticid_vec" WHERE "record_key"='k'`); err != nil {
-		t.Fatalf("the vector did not survive the upgrade: %v", err)
+	var vectors int
+	if err := database.Get(&vectors, `SELECT COUNT(*) FROM "_golem_semantic_semanticid_vec"`); err != nil {
+		t.Fatal(err)
 	}
-	if !bytes.Equal(stored, vector) {
-		t.Fatalf("the stored vector changed across the upgrade: got %x want %x", stored, vector)
+	if vectors != 0 {
+		t.Fatalf("upgrade retained %d vectors produced under the old embedding contract", vectors)
+	}
+	var vectorDDL string
+	if err := database.Get(&vectorDDL, `SELECT "sql" FROM "main"."sqlite_master" WHERE "type"='table' AND "name"='_golem_semantic_semanticid_vec'`); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := renderSemanticExtension(after, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(vectorDDL) != fresh[len(fresh)-1] {
+		t.Fatalf("upgraded vector table does not converge with a fresh table\nupgraded=%s\nfresh   =%s", vectorDDL, fresh[len(fresh)-1])
+	}
+	if _, err := database.Exec(`INSERT INTO "_golem_semantic_semanticid_vec" ("record_key","embedding") VALUES ('wrong',X'00')`); err == nil {
+		t.Fatal("exact vector storage accepted the wrong dimensions")
 	}
 
 	var row struct {
@@ -80,7 +94,7 @@ func TestSemanticStateUpgradePreservesVectorsAndRows(t *testing.T) {
 	if err := database.Get(&row, `SELECT "status","attempt_count","ambiguous_strikes","updated_at","tenant" FROM "_golem_semantic_semanticid_state" WHERE "record_key"='k'`); err != nil {
 		t.Fatal(err)
 	}
-	if row.Status != "ready" || row.Attempts != 3 || row.Updated != 77 || row.Tenant != "acme" {
+	if row.Status != "pending" || row.Attempts != 0 || row.Updated != 77 || row.Tenant != "acme" {
 		t.Fatalf("existing shadow row changed across the upgrade: %+v", row)
 	}
 	if row.Strikes != 0 {
@@ -123,7 +137,14 @@ func TestSemanticStateUpgradeIsRenderedByTheReviewedMigrationPipeline(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{`ALTER TABLE "_golem_semantic_` + id(70) + `_state" ADD COLUMN ` + semanticStrikeColumnDefinition}
+	base := `_golem_semantic_` + id(70)
+	want := []string{
+		`ALTER TABLE "` + base + `_state" ADD COLUMN ` + semanticStrikeColumnDefinition,
+		`UPDATE "` + base + `_state" SET "status"='pending', "attempt_count"=0, "error_code"=NULL, "ambiguous_strikes"=0`,
+		`CREATE TABLE "` + base + `_vec_exact_upgrade" ("record_key" TEXT NOT NULL PRIMARY KEY, "embedding" BLOB NOT NULL, CHECK (length("embedding") = 12)) STRICT`,
+		`DROP TABLE "` + base + `_vec"`,
+		`ALTER TABLE "` + base + `_vec_exact_upgrade" RENAME TO "` + base + `_vec"`,
+	}
 	if !reflect.DeepEqual(script.statements, want) {
 		t.Fatalf("reviewed migration statements=%#v want=%#v", script.statements, want)
 	}

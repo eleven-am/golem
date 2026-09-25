@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -11,6 +12,30 @@ import (
 	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/jmoiron/sqlx"
 )
+
+func TestSemanticExactVectorVersionKeepsPostgreSQLStorageShapeAndInvalidatesRows(t *testing.T) {
+	before := semanticUpgradeExtension(t, semanticstorage.StateVersionStrikes)
+	after := semanticUpgradeExtension(t, semanticstorage.StateVersionExactVectors)
+	upgrade, err := renderSemanticStateUpgrade("semantic", before, after)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{`UPDATE "semantic"."_golem_semantic_semanticid_state" SET "status"='pending', "attempt_count"=0, "error_code"=NULL, "ambiguous_strikes"=0`}
+	if !reflect.DeepEqual(upgrade, want) {
+		t.Fatalf("PostgreSQL exact-vector upgrade=%v want=%v", upgrade, want)
+	}
+	previous, err := renderPostgreSQLSemanticExtension("semantic", before, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := renderPostgreSQLSemanticExtension("semantic", after, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(previous, current) {
+		t.Fatalf("PostgreSQL storage changed across a metadata-only semantic version\nprevious=%v\ncurrent=%v", previous, current)
+	}
+}
 
 const semanticUpgradeNamespace = "semantic_state_upgrade"
 
@@ -86,7 +111,7 @@ func TestSemanticStateUpgradeIsAcceptedByIntrospectionOnPostgreSQL(t *testing.T)
 	database := openSemanticUpgradeFixture(t, semanticUpgradeNamespace)
 	ctx := context.Background()
 	before := semanticUpgradeExtension(t, semanticstorage.StateVersionIdentity)
-	after := semanticUpgradeExtension(t, semanticstorage.StateVersionStrikes)
+	after := semanticUpgradeExtension(t, semanticstorage.StateVersionCurrent)
 
 	statements, err := renderPostgreSQLSemanticExtension(physical.PhysicalName(semanticUpgradeNamespace), before, false)
 	if err != nil {
@@ -102,7 +127,7 @@ func TestSemanticStateUpgradeIsAcceptedByIntrospectionOnPostgreSQL(t *testing.T)
 		t.Fatalf("original shadow state was refused at its own version: %v", err)
 	}
 	if err := introspectSemanticExtensions(ctx, database, semanticUpgradeSchema(semanticUpgradeNamespace, after), false); err == nil {
-		t.Fatal("the upgraded contract accepted a table that still lacks the strike column")
+		t.Fatal("the current contract accepted storage that has not been upgraded")
 	}
 
 	upgrade, err := renderSemanticStateUpgrade(physical.PhysicalName(semanticUpgradeNamespace), before, after)
@@ -129,7 +154,7 @@ func TestSemanticStateUpgradeConvergesWithAFreshlyCreatedTableOnPostgreSQL(t *te
 	created := openSemanticUpgradeFixture(t, fresh)
 	ctx := context.Background()
 	before := semanticUpgradeExtension(t, semanticstorage.StateVersionIdentity)
-	after := semanticUpgradeExtension(t, semanticstorage.StateVersionStrikes)
+	after := semanticUpgradeExtension(t, semanticstorage.StateVersionCurrent)
 
 	original, err := renderPostgreSQLSemanticExtension(physical.PhysicalName(semanticUpgradeNamespace+"_alter"), before, false)
 	if err != nil {

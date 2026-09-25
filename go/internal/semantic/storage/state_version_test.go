@@ -58,8 +58,8 @@ func TestLowerCarriesCurrentShadowStateVersion(t *testing.T) {
 	if descriptor.StateVersion != StateVersionCurrent {
 		t.Fatalf("descriptor state version=%d want %d", descriptor.StateVersion, StateVersionCurrent)
 	}
-	if StateVersionCurrent != 2 {
-		t.Fatalf("current shadow state version=%d want 2", StateVersionCurrent)
+	if StateVersionCurrent != 3 {
+		t.Fatalf("current semantic storage version=%d want 3", StateVersionCurrent)
 	}
 }
 
@@ -89,7 +89,7 @@ func TestDecodeTreatsAbsentStateVersionAsTheOriginalShape(t *testing.T) {
 func TestDecodeRefusesUnregisteredOrUngroundedStateVersion(t *testing.T) {
 	current := stateVersionExtension(t)
 	for name, extension := range map[string]physicalpkg.Extension{
-		"unregistered version": withAttribute(current, attributeStateVersion, physicalpkg.SemanticValue{Kind: physicalpkg.ValueInteger, Integer: 3}),
+		"unregistered version": withAttribute(current, attributeStateVersion, physicalpkg.SemanticValue{Kind: physicalpkg.ValueInteger, Integer: 4}),
 		"zero version":         withAttribute(current, attributeStateVersion, physicalpkg.SemanticValue{Kind: physicalpkg.ValueInteger, Integer: 0}),
 		"negative version":     withAttribute(current, attributeStateVersion, physicalpkg.SemanticValue{Kind: physicalpkg.ValueInteger, Integer: -1}),
 		"wrong value kind":     withAttribute(current, attributeStateVersion, physicalpkg.SemanticValue{Kind: physicalpkg.ValueString, String: "2"}),

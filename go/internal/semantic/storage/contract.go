@@ -25,17 +25,20 @@ const (
 )
 
 const (
-	StateVersionIdentity uint16 = 1
-	StateVersionStrikes  uint16 = 2
-	StateVersionCurrent         = StateVersionStrikes
+	StateVersionIdentity     uint16 = 1
+	StateVersionStrikes      uint16 = 2
+	StateVersionExactVectors uint16 = 3
+	StateVersionCurrent             = StateVersionExactVectors
 )
 
 func registeredStateVersion(value uint16) bool {
-	return value == StateVersionIdentity || value == StateVersionStrikes
+	return value == StateVersionIdentity || value == StateVersionStrikes || value == StateVersionExactVectors
 }
 
 var registeredStateUpgrades = map[[2]uint16]bool{
-	{StateVersionIdentity, StateVersionStrikes}: true,
+	{StateVersionIdentity, StateVersionStrikes}:      true,
+	{StateVersionIdentity, StateVersionExactVectors}: true,
+	{StateVersionStrikes, StateVersionExactVectors}:  true,
 }
 
 func RegisteredStateUpgrade(before, after Descriptor) bool {

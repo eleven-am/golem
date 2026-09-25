@@ -144,6 +144,40 @@ func (manager *Manager) IndexRefs() []IndexRef {
 	return result
 }
 
+// MarkSpaceChanges invalidates stored vectors whose embedding contract no
+// longer matches the configured space and returns the indexes that need work.
+func (manager *Manager) MarkSpaceChanges(ctx context.Context) ([]IndexRef, error) {
+	if manager == nil || ctx == nil {
+		return nil, fmt.Errorf("P9_SEMANTIC_RUNTIME: context and manager are required")
+	}
+	changed := make([]IndexRef, 0, len(manager.indexes))
+	for _, index := range manager.indexes {
+		fingerprint := hex.EncodeToString(index.SpaceFingerprint[:])
+		var exists bool
+		query := "SELECT EXISTS(SELECT 1 FROM " + manager.hidden(index, "_state") + " WHERE " + manager.quote("space_fingerprint") + "<>" + manager.placeholder(1) + ")"
+		if err := manager.database.GetContext(ctx, &exists, query, fingerprint); err != nil {
+			return nil, fmt.Errorf("P9_SEMANTIC_REFRESH: space invalidation check failed")
+		}
+		if !exists {
+			continue
+		}
+		assignments := manager.quote("status") + "='pending'," +
+			manager.quote("attempt_count") + "=0," +
+			manager.quote("error_code") + "=NULL," +
+			manager.quote("updated_at") + "=" + manager.quote("updated_at") + "+1"
+		if manager.tracksStrikes(index) {
+			assignments += "," + manager.quote("ambiguous_strikes") + "=0"
+		}
+		statement := "UPDATE " + manager.hidden(index, "_state") + " SET " + assignments +
+			" WHERE " + manager.quote("space_fingerprint") + "<>" + manager.placeholder(1)
+		if _, err := manager.database.ExecContext(ctx, statement, fingerprint); err != nil {
+			return nil, fmt.Errorf("P9_SEMANTIC_REFRESH: space invalidation failed")
+		}
+		changed = append(changed, IndexRef{Model: index.Descriptor.ModelID, Name: index.Descriptor.Name})
+	}
+	return changed, nil
+}
+
 func (manager *Manager) RefreshAll(ctx context.Context) error {
 	if manager == nil || ctx == nil {
 		return fmt.Errorf("P9_SEMANTIC_RUNTIME: context and manager are required")
@@ -267,7 +301,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if err := validateCandidates(selected, candidates); err != nil {
 		return nil, err
 	}
-	input, err := embedding.NewInput("query", query)
+	input, err := embedding.NewQueryInput("query", query)
 	if err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic query text of %d bytes is not a valid embedding input", len(query))
 	}
@@ -469,14 +503,16 @@ func (manager *Manager) exactSQLiteRankStatement(index Index, candidates Candida
 		identity[position] = "golem_ss." + manager.quote(column.Name)
 		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
 	}
-	distance := "vec_distance_cosine(golem_sv.embedding," + manager.placeholder(1) + ")"
+	distance := "vec_distance_cosine(vec_f32(golem_sv.embedding),vec_f32(" + manager.placeholder(1) + "))"
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
 	statement := "SELECT golem_sv.record_key," + distance + " AS distance," + strings.Join(identity, ",") +
-		" FROM " + vectors + " AS golem_sv" +
-		" JOIN " + state + " AS golem_ss ON golem_ss.record_key=golem_sv.record_key" +
-		" JOIN (" + candidateSQL + ") AS golem_sq ON " + strings.Join(joins, " AND ")
+		" FROM (" + candidateSQL + ") AS golem_sq" +
+		" CROSS JOIN " + state + " AS golem_ss" +
+		" CROSS JOIN " + vectors + " AS golem_sv"
 	position := len(candidates.Args) + 2
-	statement += " WHERE golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
+	statement += " WHERE " + strings.Join(joins, " AND ") +
+		" AND golem_sv.record_key=golem_ss.record_key" +
+		" AND golem_ss.space_fingerprint=" + manager.placeholder(position) + " AND golem_ss.status='ready'"
 	if exclude {
 		position++
 		statement += " AND golem_sv.record_key<>" + manager.placeholder(position)
@@ -1317,7 +1353,7 @@ func (manager *Manager) embedDirty(ctx context.Context, index Index, fingerprint
 			// Provider results are positional. Use a batch-local correlation key so
 			// the provider never receives the canonical database identity retained
 			// by Golem's private state and vector tables.
-			input, inputErr := embedding.NewInput("source-"+strconv.Itoa(position), record.text)
+			input, inputErr := embedding.NewDocumentInput("source-"+strconv.Itoa(position), record.text)
 			if inputErr != nil {
 				if err := manager.quarantine(ctx, index, record, embedding.Failf(embedding.CodeInvalidInput, inputErr, "indexed document text of %d bytes is not a valid embedding input", len(record.text))); err != nil {
 					return err
@@ -1420,7 +1456,7 @@ func (manager *Manager) proveLiveness(ctx context.Context, index Index, pass *em
 	}
 	pass.probed = true
 	for _, candidate := range pass.livenessSet() {
-		input, inputErr := embedding.NewInput("source-0", candidate.text)
+		input, inputErr := embedding.NewDocumentInput("source-0", candidate.text)
 		if inputErr != nil {
 			continue
 		}
@@ -1747,18 +1783,27 @@ func (manager *Manager) decodeSources(ctx context.Context, table physical.Physic
 		if err != nil {
 			return nil, err
 		}
+		var canonical strings.Builder
+		canonical.WriteString(semanticEmbeddingContract)
 		var document strings.Builder
-		document.WriteString("golem-semantic-document:v1")
 		for _, field := range index.Descriptor.Fields {
 			text, present, err := semanticText(values[projection.positions[field]])
 			if err != nil {
 				return nil, err
 			}
-			fmt.Fprintf(&document, "\x00%s\x00%t\x00%d:", field, present, len(text))
-			document.WriteString(text)
+			fmt.Fprintf(&canonical, "\x00%s\x00%t\x00%d:", field, present, len(text))
+			canonical.WriteString(text)
+			if present {
+				if document.Len() != 0 {
+					document.WriteByte('\n')
+				}
+				document.WriteString(text)
+			}
 		}
-		canonical := document.String()
-		result = append(result, sourceRecord{key: key, text: canonical, hash: sha256.Sum256([]byte(canonical)), identity: keys})
+		if document.Len() == 0 {
+			document.WriteByte(' ')
+		}
+		result = append(result, sourceRecord{key: key, text: document.String(), hash: sha256.Sum256([]byte(canonical.String())), identity: keys})
 	}
 	return result, rows.Err()
 }
@@ -1956,7 +2001,7 @@ func (manager *Manager) storeChunk(ctx context.Context, transaction *sqlx.Tx, in
 		return nil
 	}
 	vectorTable := manager.hidden(index, "_vec")
-	if manager.provider == ir.SQLite {
+	if manager.provider == ir.SQLite && index.Descriptor.StateVersion < semanticstorage.StateVersionExactVectors {
 		marks := make([]string, len(keys))
 		keyArguments := make([]any, len(keys))
 		for position, key := range keys {

@@ -65,6 +65,23 @@ func TestInvalidAndMismatchedResultsFailClosed(t *testing.T) {
 	}
 }
 
+func TestInputPurposeDistinguishesDocumentsFromQueries(t *testing.T) {
+	document, err := NewInput("document", "indexed text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	query, err := NewQueryInput("query", "search text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if document.Purpose() != PurposeDocument || query.Purpose() != PurposeQuery {
+		t.Fatalf("purposes document=%q query=%q", document.Purpose(), query.Purpose())
+	}
+	if _, err := newInput("invalid", "text", Purpose("rerank")); err == nil {
+		t.Fatal("unknown input purpose was accepted")
+	}
+}
+
 func TestClosedErrorsRetainTrustedCauseWithoutDisclosingIt(t *testing.T) {
 	cause := errors.New("secret provider response")
 	err := NewError(CodeUnavailable, cause)

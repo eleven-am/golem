@@ -1,6 +1,7 @@
 embedding.(*Error).Error func() string
 embedding.(*Error).Unwrap func() error
 embedding.(*Input).Key func() string
+embedding.(*Input).Purpose func() Purpose
 embedding.(*Input).Text func() string
 embedding.(*Registry).Lookup func(string) (Provider, bool)
 embedding.(*Registry).Names func() []string
@@ -15,6 +16,7 @@ embedding.(*Specification).Validate func() error
 embedding.(*Vector).Dimensions func() int
 embedding.(*Vector).Values func() []float32
 embedding.(Input).Key func() string
+embedding.(Input).Purpose func() Purpose
 embedding.(Input).Text func() string
 embedding.(Registry).Lookup func(string) (Provider, bool)
 embedding.(Registry).Names func() []string
@@ -42,14 +44,20 @@ embedding.Input type struct
 embedding.MaximumBatchSize const untyped int = 2048
 embedding.MaximumDimensions const untyped int = 2000
 embedding.MaximumInputBytes const untyped int = 16777216
+embedding.NewDocumentInput func(string, string) (Input, error)
 embedding.NewError func(Code, error) error
 embedding.NewInput func(string, string) (Input, error)
+embedding.NewQueryInput func(string, string) (Input, error)
 embedding.NewRegistry func(map[string]Provider) (Registry, error)
 embedding.NewSpecification func(string, string, string, int, int) (Specification, error)
 embedding.NewVector func([]float32) (Vector, error)
 embedding.Provider type interface {Embed, Specification}
 embedding.Provider.Embed func(context.Context, []Input) ([]Vector, error)
 embedding.Provider.Specification func() Specification
+embedding.Purpose comparable
+embedding.Purpose type string
+embedding.PurposeDocument const Purpose = "document"
+embedding.PurposeQuery const Purpose = "query"
 embedding.Registry type struct
 embedding.Specification comparable
 embedding.Specification type struct

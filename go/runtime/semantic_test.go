@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"database/sql"
 	"encoding/hex"
 	"errors"
 	"path/filepath"
@@ -284,7 +285,7 @@ func newSemanticJobFixture(t *testing.T, hook func(*sqlx.DB)) semanticJobFixture
 CREATE TABLE "posts" ("id" TEXT NOT NULL PRIMARY KEY,"title" TEXT);
 CREATE TABLE "` + semanticJobStateTable + `" (record_key TEXT NOT NULL PRIMARY KEY,source_hash BLOB NOT NULL,space_fingerprint TEXT NOT NULL,status TEXT NOT NULL,attempt_count INTEGER NOT NULL DEFAULT 0,error_code TEXT,updated_at INTEGER NOT NULL,ambiguous_strikes INTEGER NOT NULL DEFAULT 0,"id" TEXT NOT NULL) STRICT;
 CREATE INDEX "_golem_semantic_semantic-post-related_state_stale" ON "` + semanticJobStateTable + `" ("record_key" ASC) WHERE "status" <> 'ready';
-CREATE VIRTUAL TABLE "` + semanticJobVectorTable + `" USING vec0(record_key TEXT PRIMARY KEY,embedding float[3] distance_metric=cosine);
+CREATE TABLE "` + semanticJobVectorTable + `" (record_key TEXT NOT NULL PRIMARY KEY,embedding BLOB NOT NULL) STRICT;
 INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 		t.Fatal(err)
 	}
@@ -358,6 +359,9 @@ func TestSemanticStartupRefusesAnUnqueuedIndex(t *testing.T) {
 	if fixture.jobs(t, semanticReconcileJobType) != 0 {
 		t.Fatal("a refused startup still enqueued work")
 	}
+	if fixture.jobs(t, semanticDrainJobType) != 0 {
+		t.Fatal("a refused startup still enqueued a drain")
+	}
 	empty := &App[testPrincipal, testActor]{}
 	if err := empty.startSemanticJobs(ctx); err != nil {
 		t.Fatalf("application without a semantic index was refused: %v", err)
@@ -384,6 +388,9 @@ func TestSemanticStartupEnqueuesOneDedupedReconcilePerIndex(t *testing.T) {
 	if got := fixture.jobs(t, semanticReconcileJobType); got != 1 {
 		t.Fatalf("startup reconcile jobs=%d want=1", got)
 	}
+	if got := fixture.jobs(t, semanticDrainJobType); got != 0 {
+		t.Fatalf("unchanged startup recovery drains=%d want=0", got)
+	}
 }
 
 func TestSemanticStartupDoesNotScheduleFullScansByDefault(t *testing.T) {
@@ -393,6 +400,34 @@ func TestSemanticStartupDoesNotScheduleFullScansByDefault(t *testing.T) {
 	}
 	if got := fixture.jobs(t, semanticReconcileJobType); got != 0 {
 		t.Fatalf("default startup reconcile jobs=%d want=0", got)
+	}
+	if got := fixture.jobs(t, semanticDrainJobType); got != 0 {
+		t.Fatalf("default startup recovery drains=%d want=0", got)
+	}
+}
+
+func TestSemanticStartupInvalidatesRowsFromAnotherEmbeddingSpace(t *testing.T) {
+	fixture := newSemanticJobFixture(t, nil)
+	if _, err := fixture.database.Exec(`UPDATE "` + semanticJobStateTable + `" SET space_fingerprint='old',status='ready',attempt_count=4,error_code='old',ambiguous_strikes=3`); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.app.startSemanticJobs(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	var state struct {
+		Status   string         `db:"status"`
+		Attempts int            `db:"attempt_count"`
+		Code     sql.NullString `db:"error_code"`
+		Strikes  int            `db:"ambiguous_strikes"`
+	}
+	if err := fixture.database.Get(&state, `SELECT status,attempt_count,error_code,ambiguous_strikes FROM "`+semanticJobStateTable+`" LIMIT 1`); err != nil {
+		t.Fatal(err)
+	}
+	if state.Status != "pending" || state.Attempts != 0 || state.Code.Valid || state.Strikes != 0 {
+		t.Fatalf("space change was not reset for re-embedding: %+v", state)
+	}
+	if got := fixture.jobs(t, semanticDrainJobType); got != 1 {
+		t.Fatalf("space change recovery drains=%d want=1", got)
 	}
 }
 

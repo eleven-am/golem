@@ -13,6 +13,29 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ---
 
+## Unreleased
+
+**Semantic search no longer makes SQLite scan a `vec0` virtual table before
+authorization.** Current SQLite semantic vectors use a strict,
+dimension-checked BLOB table, and the exact ranking statement drives from the
+authorized candidate query before calculating cosine distance. PostgreSQL
+continues to use `pgvector` and exact ranking. A reviewed migration replaces
+the derived SQLite vector cache, marks existing semantic rows pending on both
+providers, and a deduplicated startup drain rebuilds them with the current
+embedding contract. Existing semantic rows remain unavailable to ranking until
+that rebuild succeeds, so the embedding provider must be available during the
+upgrade.
+
+**Embedding providers can distinguish indexed documents from search queries.**
+`embedding.Input.Purpose()` reports `PurposeDocument` or `PurposeQuery`, so
+providers can correctly map vendor APIs that require separate document and
+query modes. Indexed text is now readable newline-separated values; Golem
+retains its binary-safe framing only for change detection. The embedding-contract
+version participates in the space fingerprint, so vectors produced under the
+old contract never mix with new results.
+
+---
+
 ## go/v0.5.0
 
 **Golem can now add a column to its own internal tables on an existing

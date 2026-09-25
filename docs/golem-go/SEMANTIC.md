@@ -48,6 +48,14 @@ and register one per space:
 registry, err := embedding.NewRegistry(map[string]embedding.Provider{"content": provider})
 ```
 
+Each input carries a `Purpose()`: `embedding.PurposeDocument` for indexed
+content and `embedding.PurposeQuery` for search text. Providers whose vendor
+API distinguishes `search_document` from `search_query` (or equivalent) must
+map that purpose instead of guessing from the key or text. `NewInput` remains
+the compatibility spelling for a document input. The document text is the
+indexed values separated by newlines; Golem's binary-safe change-detection
+framing is never sent to the provider.
+
 `Specification` declares provider, model, revision, dimensions and maximum
 batch. The revision participates in a fingerprint, so changing it marks every
 row stale rather than silently mixing vectors from two different models in one
@@ -122,6 +130,16 @@ path and nothing else. Rows changed by raw SQL, a restore, or another writer
 are never noticed. Set an interval if anything writes to your database that is
 not golem.
 
+Startup checks the private state table for vectors from another embedding-space
+fingerprint. Only when it finds one does it mark those rows pending and enqueue
+a deduplicated drain; an unchanged startup remains read-only. This is distinct
+from the optional full owner-table reconcile.
+
+If you add a semantic index to a model whose rows already exist, there are no
+state rows for startup's fingerprint check to find. Run
+`RefreshSemanticIndexes` once after deploying that schema change, or configure
+`SemanticReconcileInterval`, to create the initial vectors.
+
 ## When the provider fails
 
 **Only a refusal the provider marks as invalid input quarantines a row.** A
@@ -178,9 +196,9 @@ the provider has answered, so it costs nothing while the provider is down; when
 it does run it is bounded at eight calls a pass, and a batch larger than that is
 finished by later passes. A pass with nothing stored yet has no candidates to
 probe, and there isolating the batch is the only way to learn anything, so it
-runs. The count never grows with the number of batches in the page. Each deferred pass is observed as a
-`semantic.refresh` retry whose aggregate count is the number of rows it left
-pending.
+runs. The count never grows with the number of batches in the page. Each
+deferred pass is observed as a `semantic.refresh` retry whose aggregate count
+is the number of rows it left pending.
 
 ## Ranking is exact
 
@@ -190,11 +208,22 @@ plausible neighbours while silently omitting nearer ones — and a page that is
 confidently wrong is worse than a slow one for a feature whose whole purpose is
 "these are the closest".
 
+SQLite stores current vectors in a strict, dimension-checked BLOB table and
+drives ranking from the authorized candidate query before calculating cosine
+distance. The previous `vec0` virtual-table shape forced the opposite join
+order and made a selective policy scan the entire vector table. PostgreSQL
+keeps `pgvector` storage but uses an exact distance expression rather than
+HNSW, because a full approximate page does not reveal which true neighbours it
+missed.
+
 ## Cost
 
-No new tables beyond the index's own storage. A search costs one authorized
-read and one ranking; a similarity request costs two authorized reads and one
-ranking, and no provider call.
+No new tables beyond the index's own storage. A search costs one provider call
+plus one authorized ranking statement; a similarity request costs one source
+read plus one ranking statement and no provider call. Exact ranking work grows
+with the authorized candidate set. Predicates therefore improve SQLite cost as
+well as narrowing results; large public corpora trade latency for the exactness
+guarantee on both providers.
 
 ## The whole program
 
