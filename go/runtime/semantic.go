@@ -615,10 +615,8 @@ func (app *App[P, A]) semanticJobTarget(payload semanticJob) error {
 }
 
 // startSemanticJobs refuses an application that declares a semantic index
-// without a durable queue, then hands every index one reconcile only when a
-// reconcile interval is configured; the default interval of zero schedules
-// none. Golem can see that no queue is configured; it cannot see whether a
-// worker will ever run, so this refusal covers the configuration only.
+// without a durable queue. A changed embedding-space fingerprint receives one
+// deduplicated drain; full owner-table reconciliation remains opt-in.
 func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
 	references := app.semantic.IndexRefs()
 	if len(references) == 0 {
@@ -627,13 +625,25 @@ func (app *App[P, A]) startSemanticJobs(ctx context.Context) error {
 	if app.queueStore == nil {
 		return fmt.Errorf("P9_SEMANTIC_CONFIG: a semantic index requires the durable job queue; set Config.Queue")
 	}
-	if app.semanticReconcileInterval == 0 {
-		return nil
+	changes, err := app.semantic.MarkSpaceChanges(ctx)
+	if err != nil {
+		return err
+	}
+	changed := make(map[string]bool, len(changes))
+	for _, reference := range changes {
+		changed[string(reference.Model)+"\x00"+reference.Name] = true
 	}
 	for _, reference := range references {
 		payload := semanticJob{Model: string(reference.Model), Index: reference.Name}
-		if _, err := app.enqueueSemanticJob(ctx, nil, app.semanticReconcile, payload, semanticJobKey(semanticReconcileJobType, payload)); err != nil {
-			return err
+		if changed[string(reference.Model)+"\x00"+reference.Name] {
+			if _, err := app.enqueueSemanticJob(ctx, nil, app.semanticDrain, payload, semanticJobKey(semanticDrainJobType, payload)); err != nil {
+				return err
+			}
+		}
+		if app.semanticReconcileInterval != 0 {
+			if _, err := app.enqueueSemanticJob(ctx, nil, app.semanticReconcile, payload, semanticJobKey(semanticReconcileJobType, payload)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

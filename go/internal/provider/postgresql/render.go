@@ -179,10 +179,18 @@ func renderSemanticStateUpgrade(namespace physical.PhysicalName, before, after p
 		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: %w", after.ID, err)
 	}
 	if !semanticstorage.RegisteredStateUpgrade(previous, next) {
-		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: transition %d to %d is not a registered additive upgrade", after.ID, previous.StateVersion, next.StateVersion)
+		return nil, fmt.Errorf("postgresql render semantic state upgrade %s: transition %d to %d is not a registered upgrade", after.ID, previous.StateVersion, next.StateVersion)
 	}
-	state := physical.PhysicalName(string(next.Storage) + "_state")
-	return []string{"ALTER TABLE " + qualified(namespace, state) + " ADD COLUMN " + semanticStrikeColumnDefinition}, nil
+	statements := []string(nil)
+	if previous.StateVersion < semanticstorage.StateVersionStrikes && next.StateVersion >= semanticstorage.StateVersionStrikes {
+		state := physical.PhysicalName(string(next.Storage) + "_state")
+		statements = append(statements, "ALTER TABLE "+qualified(namespace, state)+" ADD COLUMN "+semanticStrikeColumnDefinition)
+	}
+	if previous.StateVersion < semanticstorage.StateVersionExactVectors && next.StateVersion >= semanticstorage.StateVersionExactVectors {
+		state := physical.PhysicalName(string(next.Storage) + "_state")
+		statements = append(statements, "UPDATE "+qualified(namespace, state)+" SET "+quote("status")+"='pending', "+quote("attempt_count")+"=0, "+quote("error_code")+"=NULL, "+quote("ambiguous_strikes")+"=0")
+	}
+	return statements, nil
 }
 
 func semanticStateIndexNames(descriptor semanticstorage.Descriptor) []physical.PhysicalName {

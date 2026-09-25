@@ -270,7 +270,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 3),
-    success(observe.OperationSemanticRefresh, 7, 3),
+    success(observe.OperationSemanticRefresh, 6, 3),
   )
 
   caller, err := application.ForPrincipal(ctx, "public")
@@ -365,7 +365,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if provider.count() != 9 { t.Fatalf("reconcile calls=%%d want=9", provider.count()) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRefresh, 7, 1),
+    success(observe.OperationSemanticRefresh, 6, 1),
   )
   if _, err := database.UnsafeSQLX().Exec("DELETE FROM \"posts\" WHERE \"title\"='public beta'"); err != nil { t.Fatal(err) }
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
@@ -435,7 +435,7 @@ func TestGeneratedSemanticSearchIsAuthorizedAndIncremental(t *testing.T) {
   if err := application.RefreshSemanticIndexes(ctx); err != nil { t.Fatal(err) }
   assertSemanticTrace(t, observations,
     success(observe.OperationSemanticProvider, 0, 1),
-    success(observe.OperationSemanticRefresh, 7, 1),
+    success(observe.OperationSemanticRefresh, 6, 1),
   )
   beforeSimilarGraphQL := provider.count()
   similarRequest := httptest.NewRequest("POST", "/graphql", bytes.NewBufferString("{\"query\":\"query { similarPostsByRelated(source: {ID: \\\"10000000-0000-0000-0000-000000000001\\\"}, take: 10) { title } }\"}"))

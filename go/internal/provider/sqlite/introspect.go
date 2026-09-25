@@ -131,6 +131,10 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 				expectedObjects["index\x00"+string(name)] = statements[index+1]
 			}
 			vectorKey := "table\x00" + vectorName
+			if descriptor.StateVersion >= semanticstorage.StateVersionExactVectors {
+				expectedObjects[vectorKey] = statements[len(statements)-1]
+				continue
+			}
 			vector, exists := actual[vectorKey]
 			if !exists || strings.TrimSpace(vector.SQL) != statements[len(statements)-1] {
 				return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic vector table %s", vectorName)

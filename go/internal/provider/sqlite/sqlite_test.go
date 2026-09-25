@@ -15,7 +15,7 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
+func TestSemanticIndexUsesManagedExactVectorStorage(t *testing.T) {
 	provider := New()
 	model := socialModelIR()
 	payload, err := semanticcontract.Encode(semanticcontract.Index{
@@ -59,7 +59,7 @@ func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
 	}
 	query, _ := sqlitevec.Serialize([]float32{1, 0, 0}, 3)
 	var keys []string
-	rows, err := database.Queryx(`SELECT record_key FROM "`+base+`_vec" WHERE embedding MATCH ? AND k = 3 ORDER BY distance`, query)
+	rows, err := database.Queryx(`SELECT record_key FROM "`+base+`_vec" ORDER BY vec_distance_cosine(embedding,?),record_key`, query)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,6 +87,7 @@ func TestSemanticIndexUsesManagedSQLiteVecStorage(t *testing.T) {
 		`"updated_at" INTEGER NOT NULL, "tenant_id" TEXT NOT NULL, "id" TEXT NOT NULL, "ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0), PRIMARY KEY ("record_key")`,
 		`CREATE INDEX "` + base + `_state_identity" ON "` + base + `_state" ("tenant_id" ASC, "id" ASC)`,
 		`CREATE INDEX "` + base + `_state_stale" ON "` + base + `_state" ("record_key" ASC) WHERE "status" <> 'ready'`,
+		`CREATE TABLE "` + base + `_vec" ("record_key" TEXT NOT NULL PRIMARY KEY, "embedding" BLOB NOT NULL, CHECK (length("embedding") = 12)) STRICT`,
 	} {
 		if !strings.Contains(script.SQL(), fragment) {
 			t.Fatalf("semantic shadow DDL missing %q:\n%s", fragment, script.SQL())

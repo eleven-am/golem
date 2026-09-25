@@ -112,6 +112,15 @@ func TestSemanticStateVersionOneRendersTheOriginalShape(t *testing.T) {
 	if strings.Index(statements[0], "ambiguous_strikes") > strings.Index(statements[0], "PRIMARY KEY") {
 		t.Fatalf("strike column must precede the table constraints: %s", statements[0])
 	}
+	current := semanticUpgradeExtension(t, semanticstorage.StateVersionExactVectors)
+	statements, err = renderSemanticExtension(current, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vector := statements[len(statements)-1]
+	if !strings.Contains(vector, `"embedding" BLOB NOT NULL`) || !strings.Contains(vector, `CHECK (length("embedding") = 16)`) || strings.Contains(vector, "vec0") {
+		t.Fatalf("state version 3 did not render exact vector storage: %s", vector)
+	}
 }
 
 func TestSemanticStateUpgradeRefusesUnregisteredTransitions(t *testing.T) {

@@ -136,13 +136,24 @@ func renderSemanticExtension(extension physical.Extension, reviewedReplay bool) 
 			"CREATE INDEX "+quote(names[1])+" ON "+quote(state)+" ("+quote("record_key")+" ASC) WHERE "+quote("status")+" <> 'ready'",
 		)
 	}
-	statements = append(statements, "CREATE VIRTUAL TABLE "+quote(vectors)+" USING vec0("+
-		"record_key TEXT PRIMARY KEY, "+
-		"embedding float["+strconv.Itoa(int(descriptor.Dimensions))+"] distance_metric=cosine)")
+	if descriptor.StateVersion >= semanticstorage.StateVersionExactVectors {
+		statements = append(statements, renderExactVectorTable(vectors, descriptor.Dimensions))
+	} else {
+		statements = append(statements, "CREATE VIRTUAL TABLE "+quote(vectors)+" USING vec0("+
+			"record_key TEXT PRIMARY KEY, "+
+			"embedding float["+strconv.Itoa(int(descriptor.Dimensions))+"] distance_metric=cosine)")
+	}
 	return statements, nil
 }
 
 const semanticStrikeColumnDefinition = `"ambiguous_strikes" INTEGER NOT NULL DEFAULT 0 CHECK ("ambiguous_strikes" >= 0)`
+
+func renderExactVectorTable(name physical.PhysicalName, dimensions uint16) string {
+	return "CREATE TABLE " + quote(name) + " (" +
+		quote("record_key") + " TEXT NOT NULL PRIMARY KEY, " +
+		quote("embedding") + " BLOB NOT NULL, " +
+		"CHECK (length(" + quote("embedding") + ") = " + strconv.Itoa(int(dimensions)*4) + ")) STRICT"
+}
 
 func renderSemanticStateUpgrade(before, after physical.Extension) ([]string, error) {
 	previous, err := semanticstorage.Decode(before)
@@ -154,9 +165,24 @@ func renderSemanticStateUpgrade(before, after physical.Extension) ([]string, err
 		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: %w", after.ID, err)
 	}
 	if !semanticstorage.RegisteredStateUpgrade(previous, next) {
-		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: transition %d to %d is not a registered additive upgrade", after.ID, previous.StateVersion, next.StateVersion)
+		return nil, fmt.Errorf("sqlite render semantic state upgrade %s: transition %d to %d is not a registered upgrade", after.ID, previous.StateVersion, next.StateVersion)
 	}
-	return []string{"ALTER TABLE " + quote(physical.PhysicalName(string(next.Storage)+"_state")) + " ADD COLUMN " + semanticStrikeColumnDefinition}, nil
+	statements := []string(nil)
+	if previous.StateVersion < semanticstorage.StateVersionStrikes && next.StateVersion >= semanticstorage.StateVersionStrikes {
+		statements = append(statements, "ALTER TABLE "+quote(physical.PhysicalName(string(next.Storage)+"_state"))+" ADD COLUMN "+semanticStrikeColumnDefinition)
+	}
+	if previous.StateVersion < semanticstorage.StateVersionExactVectors && next.StateVersion >= semanticstorage.StateVersionExactVectors {
+		state := physical.PhysicalName(string(next.Storage) + "_state")
+		vectors := physical.PhysicalName(string(next.Storage) + "_vec")
+		temporary := physical.PhysicalName(string(vectors) + "_exact_upgrade")
+		statements = append(statements,
+			"UPDATE "+quote(state)+" SET "+quote("status")+"='pending', "+quote("attempt_count")+"=0, "+quote("error_code")+"=NULL, "+quote("ambiguous_strikes")+"=0",
+			renderExactVectorTable(temporary, next.Dimensions),
+			"DROP TABLE "+quote(vectors),
+			"ALTER TABLE "+quote(temporary)+" RENAME TO "+quote(vectors),
+		)
+	}
+	return statements, nil
 }
 
 // semanticStateIndexNames returns the identity and staleness index names of one
