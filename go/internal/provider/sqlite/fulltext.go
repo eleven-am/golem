@@ -107,6 +107,8 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	}
 	docidOld := "(SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchOld, " AND ") + ")"
 	docidNew := "(SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchNew, " AND ") + ")"
+	conflictingNew := strings.Join(identityMatchNew, " AND ") + " AND NOT (" + strings.Join(identityMatchOld, " AND ") + ")"
+	conflictingDocid := "(SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + conflictingNew + ")"
 	insertIndex := "INSERT INTO " + quote(names.index) + " (rowid," + strings.Join(fieldNames, ",") + ") VALUES (" + docidNew + "," + strings.Join(newFields, ",") + ")"
 	updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
 	if err != nil {
@@ -120,7 +122,7 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 		"CREATE TABLE " + quote(names.keys) + " (" + quote("docid") + " INTEGER PRIMARY KEY, " + strings.Join(keyColumns, ", ") + ", UNIQUE (" + strings.Join(keyNames, ", ") + ")) STRICT",
 		"CREATE VIRTUAL TABLE " + quote(names.index) + " USING fts5(" + strings.Join(fieldNames, ",") + "," + strings.Join(options, ",") + ")",
 		"CREATE TRIGGER " + quote(names.insert) + " AFTER INSERT ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidNew + "; INSERT OR IGNORE INTO " + quote(names.keys) + " (" + strings.Join(keyNames, ",") + ") VALUES (" + strings.Join(newIdentity, ",") + "); " + insertIndex + "; END",
-		"CREATE TRIGGER " + quote(names.update) + " AFTER UPDATE OF " + strings.Join(updateColumns, ",") + " ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; UPDATE " + quote(names.keys) + " SET (" + strings.Join(keyNames, ",") + ")=(" + strings.Join(newIdentity, ",") + ") WHERE " + strings.Join(identityMatchOld, " AND ") + "; " + insertIndex + "; END",
+		"CREATE TRIGGER " + quote(names.update) + " AFTER UPDATE OF " + strings.Join(updateColumns, ",") + " ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + conflictingDocid + "; DELETE FROM " + quote(names.keys) + " WHERE " + conflictingNew + "; DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; UPDATE " + quote(names.keys) + " SET (" + strings.Join(keyNames, ",") + ")=(" + strings.Join(newIdentity, ",") + ") WHERE " + strings.Join(identityMatchOld, " AND ") + "; " + insertIndex + "; END",
 		"CREATE TRIGGER " + quote(names.delete) + " AFTER DELETE ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; DELETE FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchOld, " AND ") + "; END",
 	}, nil
 }

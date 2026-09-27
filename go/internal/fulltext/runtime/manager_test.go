@@ -219,3 +219,10 @@ func TestQueryParserMeasuresTheFinalPrefixLexeme(t *testing.T) {
 		t.Fatalf("terms=%#v", terms)
 	}
 }
+
+func TestPostgreSQLWeightsNormalizeRelativeValues(t *testing.T) {
+	index := fulltextcontract.Index{Fields: []fulltextcontract.Field{{ID: "title", Weight: fulltextcontract.MaximumWeight}, {ID: "body", Weight: fulltextcontract.MaximumWeight / 2}}}
+	if got, want := postgresqlWeights(index), "ARRAY[0,0,0.5,1]::real[]"; got != want {
+		t.Fatalf("weights=%q, want %q", got, want)
+	}
+}

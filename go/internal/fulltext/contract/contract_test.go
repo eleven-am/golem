@@ -23,4 +23,8 @@ func TestWeightsStayWithinThePortableDatabaseRange(t *testing.T) {
 	if _, err := Encode(index); err == nil {
 		t.Fatalf("weight above %g accepted", MaximumWeight)
 	}
+	index.Fields = []Field{{ID: "title", Weight: MaximumWeight}, {ID: "body", Weight: MinimumWeight}}
+	if _, err := Encode(index); err == nil {
+		t.Fatal("unrepresentable relative weights accepted")
+	}
 }

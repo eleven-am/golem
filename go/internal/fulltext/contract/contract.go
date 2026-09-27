@@ -123,11 +123,18 @@ func validate(index Index) error {
 		return fmt.Errorf("full-text contract: invalid index")
 	}
 	seenFields := make(map[string]bool, len(index.Fields))
+	maximumWeight := float64(0)
 	for _, field := range index.Fields {
 		if field.ID == "" || strings.ContainsAny(field.ID, "\x00,") || field.Weight < MinimumWeight || field.Weight > MaximumWeight || math.IsNaN(field.Weight) || math.IsInf(field.Weight, 0) || seenFields[field.ID] {
 			return fmt.Errorf("full-text contract: invalid field")
 		}
 		seenFields[field.ID] = true
+		maximumWeight = math.Max(maximumWeight, field.Weight)
+	}
+	for _, field := range index.Fields {
+		if field.Weight/maximumWeight < MinimumWeight {
+			return fmt.Errorf("full-text contract: field weights exceed the portable relative range")
+		}
 	}
 	seenPrefix := make(map[uint8]bool, len(index.Prefix))
 	for position, length := range index.Prefix {

@@ -172,10 +172,24 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 	assertMatches("renee", 0)
 	assertMatches("other", 1)
-	if _, err := database.Exec(`DELETE FROM users WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000002','loser@example.test',4)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR REPLACE users SET id='00000000-0000-4000-8000-000000000002',email='winner@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
 		t.Fatal(err)
 	}
 	assertMatches("other", 0)
+	assertMatches("loser", 0)
+	assertMatches("winner", 1)
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000003','reused@example.test',5)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("reused", 1)
+	if _, err := database.Exec(`DELETE FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("winner", 0)
+	assertMatches("reused", 0)
 }
 
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {

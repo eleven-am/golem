@@ -214,7 +214,7 @@ func postgresqlWeights(index fulltextcontract.Index) string {
 	sort.Sort(sort.Reverse(sort.Float64Slice(values)))
 	byClass := [4]float64{}
 	for position, value := range values {
-		byClass[position] = value
+		byClass[position] = value / values[0]
 	}
 	return "ARRAY[" + strconv.FormatFloat(byClass[3], 'g', -1, 64) + "," + strconv.FormatFloat(byClass[2], 'g', -1, 64) + "," + strconv.FormatFloat(byClass[1], 'g', -1, 64) + "," + strconv.FormatFloat(byClass[0], 'g', -1, 64) + "]::real[]"
 }
