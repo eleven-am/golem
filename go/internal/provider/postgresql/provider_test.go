@@ -103,6 +103,22 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	function := base + "_sync"
+	var primaryKey string
+	if err := database.Get(&primaryKey, `SELECT con.conname FROM pg_catalog.pg_constraint con WHERE con.conrelid='"golem_fulltext_live"."`+base+`_fts"'::pg_catalog.regclass AND con.contype='p'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" DROP CONSTRAINT "` + primaryKey + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "primary key drift") {
+		t.Fatalf("missing shadow primary key error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD PRIMARY KEY ("id")`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	updateTrigger := base + "_au"
 	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."users" DISABLE TRIGGER "` + updateTrigger + `"`); err != nil {
 		t.Fatal(err)

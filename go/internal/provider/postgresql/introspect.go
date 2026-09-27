@@ -491,17 +491,24 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 			byID[column.ID] = column
 		}
 		want := make([]string, 0, len(owner.PrimaryKey.Columns)+1)
-		for _, field := range owner.PrimaryKey.Columns {
+		identityNames := make([]string, len(owner.PrimaryKey.Columns))
+		for position, field := range owner.PrimaryKey.Columns {
 			column := byID[field]
 			storage, storageErr := renderStorage(column.Storage)
 			if storageErr != nil {
 				return storageErr
 			}
 			want = append(want, string(column.Name)+":"+storage+":true")
+			identityNames[position] = string(column.Name)
 		}
 		want = append(want, "document:tsvector:true")
 		if columns != strings.Join(want, ",") {
 			return fmt.Errorf("postgresql full-text introspect: column drift extension=%s", extension.ID)
+		}
+		var primaryKey string
+		const primaryKeySQL = `SELECT string_agg(a.attname,',' ORDER BY key.ordinality) FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid AND i.indrelid=con.conrelid CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE n.nspname=$1 AND c.relname=$2 AND con.contype='p' AND con.convalidated AND NOT con.condeferrable AND NOT con.condeferred AND i.indisprimary AND i.indisunique AND i.indisvalid AND i.indisready GROUP BY con.oid`
+		if err := query.QueryRowxContext(ctx, primaryKeySQL, string(expected.Namespace.Name), string(names.table)).Scan(&primaryKey); err != nil || primaryKey != strings.Join(identityNames, ",") {
+			return fmt.Errorf("postgresql full-text introspect: primary key drift extension=%s", extension.ID)
 		}
 		var indexCount int
 		const indexSQL = `SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class x ON x.oid=i.indexrelid JOIN pg_catalog.pg_class t ON t.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace JOIN pg_catalog.pg_am am ON am.oid=x.relam JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid AND a.attnum=i.indkey[0] WHERE n.nspname=$1 AND t.relname=$2 AND x.relname=$3 AND am.amname='gin' AND i.indisvalid AND i.indisready AND i.indnkeyatts=1 AND i.indnatts=1 AND i.indexprs IS NULL AND i.indpred IS NULL AND a.attname='document'`

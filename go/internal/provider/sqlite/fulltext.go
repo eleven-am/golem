@@ -72,7 +72,7 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	fieldNames := make([]string, len(fields))
 	newFields := make([]string, len(fields))
 	for position, column := range fields {
-		fieldNames[position] = quote(column.Name)
+		fieldNames[position] = quote(sqliteFullTextFieldName(position))
 		newFields[position] = "COALESCE(NEW." + quote(column.Name) + ",'')"
 	}
 	tokenizer := "unicode61 remove_diacritics 2"
@@ -130,13 +130,17 @@ func renderFullTextBackfill(extension physical.Extension, owner physical.Physica
 	fieldSelect := make([]string, len(descriptor.Index.Fields))
 	for position, field := range descriptor.Index.Fields {
 		column := columns[ir.FieldID(field.ID)]
-		fieldNames[position] = quote(column.Name)
+		fieldNames[position] = quote(sqliteFullTextFieldName(position))
 		fieldSelect[position] = "COALESCE(o." + quote(column.Name) + ",'')"
 	}
 	return []string{
 		"INSERT INTO " + quote(names.keys) + " (" + strings.Join(identityNames, ",") + ") SELECT " + strings.Join(identitySelect, ",") + " FROM " + quote(owner.Name) + " AS o",
 		"INSERT INTO " + quote(names.index) + " (rowid," + strings.Join(fieldNames, ",") + ") SELECT k." + quote("docid") + "," + strings.Join(fieldSelect, ",") + " FROM " + quote(owner.Name) + " AS o JOIN " + quote(names.keys) + " AS k ON " + strings.Join(identityJoin, " AND "),
 	}, nil
+}
+
+func sqliteFullTextFieldName(position int) physical.PhysicalName {
+	return physical.PhysicalName("_golem_field_" + strconv.Itoa(position))
 }
 
 func dropFullTextExtension(extension physical.Extension) ([]string, error) {
