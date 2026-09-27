@@ -419,6 +419,44 @@ func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
 	}
 }
 
+func TestPlanIncrementalDropsFullTextTriggersFromRenamedOwner(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.Tables = append([]physical.PhysicalTable(nil), before.Tables...)
+	for index := range after.Tables {
+		if after.Tables[index].ID == ir.ModelID(id(2)) {
+			after.Tables[index].Name = "posts_v2"
+		}
+	}
+	after.Extensions = nil
+	after = normalizePostgreSQLMigrationSchema(t, after)
+	entry := reviewedPostgreSQLEntry(t, "002_rename_fulltext_drop", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	rename := `ALTER TABLE "reviewed"."posts" RENAME TO "posts_v2"`
+	drop := `DROP TRIGGER "_golem_fulltext_` + id(74) + `_ai" ON "reviewed"."posts_v2"`
+	positions := []int{strings.Index(sql, rename), strings.Index(sql, drop)}
+	if positions[0] < 0 || positions[1] <= positions[0] {
+		t.Fatalf("renamed full-text drop order=%v:\n%s", positions, sql)
+	}
+	if strings.Contains(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai" ON "reviewed"."posts"`) {
+		t.Fatalf("full-text drop targeted the pre-rename owner:\n%s", sql)
+	}
+}
+
 func TestPlanIncrementalRebuildsChangedSemanticPgvectorStorageInOrder(t *testing.T) {
 	provider := New()
 	model := fixtureModel()

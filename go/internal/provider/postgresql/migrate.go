@@ -545,6 +545,9 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			if !ownerExists {
 				return nil, fmt.Errorf("full-text extension owner is absent")
 			}
+			if renamed, exists := afterTables[extension.Owner.ModelID]; exists {
+				owner = renamed
+			}
 			return dropPostgreSQLFullTextExtension(r.schema.Namespace.Name, extension, owner)
 		}
 		descriptor, err := semanticstorage.Decode(extension)
