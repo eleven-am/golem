@@ -159,6 +159,20 @@ func TestNoReleasedSnapshotCarriesTheShadowStateVersionAttribute(t *testing.T) {
 	}
 }
 
+func TestNoReleasedSnapshotCarriesFullTextExtension(t *testing.T) {
+	for provider, manifest := range releasedSocialManifests(t) {
+		for _, entry := range manifest.Entries {
+			for _, snapshot := range []physical.PhysicalSchema{entry.BeforeSnapshot, entry.AfterSnapshot} {
+				for _, extension := range snapshot.Extensions {
+					if extension.Kind == "golem.fulltext-index" {
+						t.Fatalf("provider %s migration %s already carries full-text extension %s", provider, entry.ID, extension.ID)
+					}
+				}
+			}
+		}
+	}
+}
+
 func TestReleasedSocialChainsReplayToTheirRecordedOperationGraph(t *testing.T) {
 	for provider, manifest := range releasedSocialManifests(t) {
 		for _, entry := range manifest.Entries {
