@@ -157,7 +157,7 @@ func UpdateColumns(extension physical.Extension, owner physical.PhysicalTable) (
 	for _, column := range owner.Columns {
 		columns[column.ID] = column
 	}
-	result := make([]physical.PhysicalColumn, 0, len(owner.PrimaryKey.Columns)+len(descriptor.Index.Fields))
+	result := make([]physical.PhysicalColumn, 0, len(owner.PrimaryKey.Columns)+len(owner.Uniques)+len(descriptor.Index.Fields))
 	seen := make(map[ir.FieldID]bool, cap(result))
 	add := func(field ir.FieldID) (physical.PhysicalColumn, error) {
 		column, exists := columns[field]
@@ -173,6 +173,13 @@ func UpdateColumns(extension physical.Extension, owner physical.PhysicalTable) (
 	for _, field := range owner.PrimaryKey.Columns {
 		if _, addErr := add(field); addErr != nil {
 			return nil, addErr
+		}
+	}
+	for _, key := range owner.Uniques {
+		for _, field := range key.Columns {
+			if _, addErr := add(field); addErr != nil {
+				return nil, addErr
+			}
 		}
 	}
 	visiting := make(map[ir.FieldID]bool)

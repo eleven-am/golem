@@ -25,6 +25,7 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Generated: generated},
 		},
 		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+		Uniques:    []physical.PhysicalKey{{Columns: []ir.FieldID{"source"}}},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -37,6 +38,7 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Generated: generated},
 		},
 		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+		Uniques:    []physical.PhysicalKey{{Columns: []ir.FieldID{"source"}}},
 	}
 	before, err := ProjectOwner(extension, owner)
 	if err != nil {
@@ -66,7 +68,7 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 	if reflect.DeepEqual(before, afterIndexedRename) || reflect.DeepEqual(before, afterIdentityStorage) || reflect.DeepEqual(before, afterDependencyRename) {
 		t.Fatal("owner projection did not expose a full-text storage dependency")
 	}
-	if got := []ir.FieldID{before.Updates[0].ID, before.Updates[1].ID, before.Updates[2].ID}; !reflect.DeepEqual(got, []ir.FieldID{"id", "body", "source"}) {
+	if got := []ir.FieldID{before.Updates[0].ID, before.Updates[1].ID, before.Updates[2].ID}; !reflect.DeepEqual(got, []ir.FieldID{"id", "source", "body"}) {
 		t.Fatalf("update dependencies=%v", got)
 	}
 }

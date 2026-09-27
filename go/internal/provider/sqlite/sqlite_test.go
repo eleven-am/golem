@@ -185,6 +185,24 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertMatches("reused", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000004','reused@example.test',6)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("reused", 1)
+	if err := database.Get(&indexedRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if indexedRows != 2 {
+		t.Fatalf("secondary replacement left %d indexed rows, want 2", indexedRows)
+	}
+	if _, err := database.Exec(`INSERT OR IGNORE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000005','reused@example.test',7)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR IGNORE users SET email='reused@example.test' WHERE id='00000000-0000-4000-8000-000000000002'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("winner", 1)
+	assertMatches("reused", 1)
 	if _, err := database.Exec(`DELETE FROM users`); err != nil {
 		t.Fatal(err)
 	}
