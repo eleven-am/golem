@@ -36,10 +36,10 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 	for _, statement := range []string{
 		`CREATE TABLE docs(id TEXT PRIMARY KEY, allowed INTEGER NOT NULL, title TEXT NOT NULL) STRICT`,
 		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
-		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(title,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 2')`,
-		`INSERT INTO docs VALUES('a',1,'Renée alpha'),('b',0,'alpha alpha alpha'),('c',1,'literal OR token')`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(title,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+		`INSERT INTO docs VALUES('a',1,'Renée alpha Καφές'),('b',0,'alpha alpha alpha'),('c',1,'literal OR token')`,
 		`INSERT INTO _golem_fulltext_x_keys(docid,id) VALUES(1,'a'),(2,'b'),(3,'c')`,
-		`INSERT INTO _golem_fulltext_x_fts(rowid,title) VALUES(1,'Renée alpha'),(2,'alpha alpha alpha'),(3,'literal OR token')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,title) SELECT 1,golem_fulltext_fold('Renée alpha Καφές') UNION ALL SELECT 2,golem_fulltext_fold('alpha alpha alpha') UNION ALL SELECT 3,golem_fulltext_fold('literal OR token')`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -67,6 +67,10 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 	ranks, err = manager.Query(context.Background(), "m", "content", "renee", candidates, 10)
 	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("folded ranks=%#v err=%v", ranks, err)
+	}
+	ranks, err = manager.Query(context.Background(), "m", "content", "Καφές", candidates, 10)
+	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
+		t.Fatalf("cross-script folded ranks=%#v err=%v", ranks, err)
 	}
 }
 

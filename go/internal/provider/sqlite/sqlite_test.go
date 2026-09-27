@@ -139,6 +139,23 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 		}
 	}
 	assertMatches("renee", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Καφές@example.test',2)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("Καφες", 1)
+	var indexedRows int
+	if err := database.Get(&indexedRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if indexedRows != 1 {
+		t.Fatalf("replacement left %d indexed rows, want 1", indexedRows)
+	}
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Renée@example.test',3)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("Καφες", 0)
+	assertMatches("renee", 1)
 	transaction, err := database.Beginx()
 	if err != nil {
 		t.Fatal(err)
@@ -484,6 +501,7 @@ func TestOpenRejectsCallerPragmaOverrides(t *testing.T) {
 		"file:test.db?_pragma=foreign_keys(0)",
 		"file:test.db?_%70ragma=foreign%5fkeys(0)",
 		"file:test.db?_pragma=BUSY%5fTIMEOUT%3d1",
+		"file:test.db?_pragma=recursive_triggers(0)",
 		"file:test.db?_txlock=deferred",
 		"file:test.db?_%74xlock=exclusive",
 		"file:private?mode=memory",

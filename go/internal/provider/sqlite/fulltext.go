@@ -1,15 +1,33 @@
 package sqlite
 
 import (
+	"database/sql/driver"
 	"fmt"
 	"strconv"
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextfolding "github.com/eleven-am/golem/go/internal/fulltext/folding"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
+
+const fullTextFoldFunction = "golem_fulltext_fold"
+
+func sqliteFullTextFold(arguments []driver.Value) (driver.Value, error) {
+	if len(arguments) != 1 {
+		return nil, fmt.Errorf("%s: arity", fullTextFoldFunction)
+	}
+	if arguments[0] == nil {
+		return nil, nil
+	}
+	value, ok := arguments[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected TEXT", fullTextFoldFunction)
+	}
+	return fulltextfolding.Diacritics(value), nil
+}
 
 type sqliteFullTextObjects struct {
 	keys, index physical.PhysicalName
@@ -74,11 +92,11 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	for position, column := range fields {
 		fieldNames[position] = quote(sqliteFullTextFieldName(position))
 		newFields[position] = "COALESCE(NEW." + quote(column.Name) + ",'')"
+		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
+			newFields[position] = fullTextFoldFunction + "(" + newFields[position] + ")"
+		}
 	}
-	tokenizer := "unicode61 remove_diacritics 2"
-	if descriptor.Index.Folding == fulltextcontract.FoldingNone {
-		tokenizer = "unicode61 remove_diacritics 0"
-	}
+	tokenizer := "unicode61 remove_diacritics 0"
 	options := []string{"content=''", "contentless_delete=1", "tokenize=" + quoteLiteral(tokenizer)}
 	if len(descriptor.Index.Prefix) != 0 {
 		parts := make([]string, len(descriptor.Index.Prefix))
@@ -132,6 +150,9 @@ func renderFullTextBackfill(extension physical.Extension, owner physical.Physica
 		column := columns[ir.FieldID(field.ID)]
 		fieldNames[position] = quote(sqliteFullTextFieldName(position))
 		fieldSelect[position] = "COALESCE(o." + quote(column.Name) + ",'')"
+		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
+			fieldSelect[position] = fullTextFoldFunction + "(" + fieldSelect[position] + ")"
+		}
 	}
 	return []string{
 		"INSERT INTO " + quote(names.keys) + " (" + strings.Join(identityNames, ",") + ") SELECT " + strings.Join(identitySelect, ",") + " FROM " + quote(owner.Name) + " AS o",

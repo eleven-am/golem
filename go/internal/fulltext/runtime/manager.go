@@ -11,6 +11,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextfolding "github.com/eleven-am/golem/go/internal/fulltext/folding"
 	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -125,7 +126,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 			arguments = append(arguments, item.value)
 		}
 	} else {
-		arguments = append(arguments, compileSQLite(parsed))
+		arguments = append(arguments, compileSQLite(parsed, index.Descriptor.Index.Folding))
 	}
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured complexity")
@@ -310,10 +311,14 @@ func parse(input string) ([]term, error) {
 	return result, nil
 }
 
-func compileSQLite(terms []term) string {
+func compileSQLite(terms []term, folding string) string {
 	parts := make([]string, len(terms))
 	for position, item := range terms {
-		parts[position] = `"` + strings.ReplaceAll(item.value, `"`, `""`) + `"`
+		value := item.value
+		if folding == fulltextcontract.FoldingDiacritics {
+			value = fulltextfolding.Diacritics(value)
+		}
+		parts[position] = `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 		if item.prefix {
 			parts[position] += "*"
 		}

@@ -24,6 +24,7 @@ func registerSQLiteFunctions(connection *sqlite3.Conn) error {
 		call  func([]driver.Value) (driver.Value, error)
 	}{
 		{policyASCIIFoldFunction, 1, sqliteASCIIFold},
+		{fullTextFoldFunction, 1, sqliteFullTextFold},
 		{policyListFunction, 4, sqlitePolicyList},
 		{policyJSONFunction, 6, sqlitePolicyJSON},
 		{AnalyticsNumericCompareFunction, 2, analyticsNumericCompare},
