@@ -501,7 +501,6 @@ func TestOpenRejectsCallerPragmaOverrides(t *testing.T) {
 		"file:test.db?_pragma=foreign_keys(0)",
 		"file:test.db?_%70ragma=foreign%5fkeys(0)",
 		"file:test.db?_pragma=BUSY%5fTIMEOUT%3d1",
-		"file:test.db?_pragma=recursive_triggers(0)",
 		"file:test.db?_txlock=deferred",
 		"file:test.db?_%74xlock=exclusive",
 		"file:private?mode=memory",
@@ -524,6 +523,28 @@ func TestOpenRejectsCallerPragmaOverrides(t *testing.T) {
 	}
 	if !strings.HasSuffix(configured, "&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate") {
 		t.Fatalf("provider parameters are not canonical: %q", configured)
+	}
+}
+
+func TestOpenPreservesDefaultRecursiveTriggerBehavior(t *testing.T) {
+	database, _, err := New().Open(context.Background(), filepath.Join(t.TempDir(), "recursive-triggers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE items(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT`,
+		`CREATE TRIGGER items_au AFTER UPDATE ON items BEGIN UPDATE items SET revision=revision+1 WHERE id=NEW.id; END`,
+		`INSERT INTO items VALUES(1,0)`,
+		`UPDATE items SET revision=1 WHERE id=1`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var revision int
+	if err := database.Get(&revision, `SELECT revision FROM items WHERE id=1`); err != nil || revision != 2 {
+		t.Fatalf("revision=%d error=%v", revision, err)
 	}
 }
 

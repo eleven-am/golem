@@ -44,9 +44,6 @@ func initializeProviderConnection(connection *sqlite3.Conn) error {
 	if err := connection.Exec("PRAGMA synchronous=FULL;"); err != nil {
 		return fmt.Errorf("sqlite open: provider-owned synchronous configuration failed: %w", err)
 	}
-	if err := connection.Exec("PRAGMA recursive_triggers=ON;"); err != nil {
-		return fmt.Errorf("sqlite open: provider-owned trigger configuration failed: %w", err)
-	}
 	return nil
 }
 
@@ -169,13 +166,6 @@ func verifyProviderOwnedDurability(ctx context.Context, database *sqlx.DB, width
 		if synchronous != synchronousFull {
 			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA synchronous=%d, want %d", index+1, synchronous, synchronousFull)
 		}
-		var recursiveTriggers int
-		if err := connection.GetContext(ctx, &recursiveTriggers, "PRAGMA recursive_triggers"); err != nil {
-			return fmt.Errorf("sqlite durability verification connection %d recursive_triggers: %w", index+1, err)
-		}
-		if recursiveTriggers != 1 {
-			return fmt.Errorf("sqlite durability verification pooled connection %d: PRAGMA recursive_triggers=%d, want 1", index+1, recursiveTriggers)
-		}
 	}
 	if database.Stats().WaitCount != waitCount {
 		return fmt.Errorf("sqlite durability verification observed concurrent pool use")
@@ -231,7 +221,7 @@ func configureDataSourceName(dataSourceName string) (string, error) {
 		}
 		for _, value := range values {
 			if providerOwnedPragma(value) {
-				return "", fmt.Errorf("sqlite open: journal_mode, synchronous, foreign_keys, busy_timeout and recursive_triggers pragmas are provider-owned")
+				return "", fmt.Errorf("sqlite open: journal_mode, synchronous, foreign_keys and busy_timeout pragmas are provider-owned")
 			}
 		}
 	}
@@ -297,7 +287,7 @@ func providerOwnedPragma(value string) bool {
 	}
 	value = strings.Trim(value, "\"'`[]")
 	switch value {
-	case "journal_mode", "synchronous", "foreign_keys", "busy_timeout", "recursive_triggers":
+	case "journal_mode", "synchronous", "foreign_keys", "busy_timeout":
 		return true
 	default:
 		return false

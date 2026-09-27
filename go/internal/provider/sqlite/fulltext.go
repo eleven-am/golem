@@ -119,7 +119,7 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	return []string{
 		"CREATE TABLE " + quote(names.keys) + " (" + quote("docid") + " INTEGER PRIMARY KEY, " + strings.Join(keyColumns, ", ") + ", UNIQUE (" + strings.Join(keyNames, ", ") + ")) STRICT",
 		"CREATE VIRTUAL TABLE " + quote(names.index) + " USING fts5(" + strings.Join(fieldNames, ",") + "," + strings.Join(options, ",") + ")",
-		"CREATE TRIGGER " + quote(names.insert) + " AFTER INSERT ON " + quote(owner.Name) + " BEGIN INSERT INTO " + quote(names.keys) + " (" + strings.Join(keyNames, ",") + ") VALUES (" + strings.Join(newIdentity, ",") + "); " + insertIndex + "; END",
+		"CREATE TRIGGER " + quote(names.insert) + " AFTER INSERT ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidNew + "; INSERT OR IGNORE INTO " + quote(names.keys) + " (" + strings.Join(keyNames, ",") + ") VALUES (" + strings.Join(newIdentity, ",") + "); " + insertIndex + "; END",
 		"CREATE TRIGGER " + quote(names.update) + " AFTER UPDATE OF " + strings.Join(updateColumns, ",") + " ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; UPDATE " + quote(names.keys) + " SET (" + strings.Join(keyNames, ",") + ")=(" + strings.Join(newIdentity, ",") + ") WHERE " + strings.Join(identityMatchOld, " AND ") + "; " + insertIndex + "; END",
 		"CREATE TRIGGER " + quote(names.delete) + " AFTER DELETE ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; DELETE FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchOld, " AND ") + "; END",
 	}, nil
