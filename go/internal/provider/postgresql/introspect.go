@@ -493,7 +493,7 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 		names := postgresqlFullTextNames(descriptor)
 		var columns string
-		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
+		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text||':'||(a.attcollation=0 OR EXISTS (SELECT 1 FROM pg_catalog.pg_collation dc JOIN pg_catalog.pg_namespace dn ON dn.oid=dc.collnamespace WHERE dc.oid=a.attcollation AND dn.nspname='pg_catalog' AND dc.collname='default'))::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
 		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), string(names.table)).Scan(&columns); err != nil {
 			return err
 		}
@@ -509,10 +509,10 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 			if storageErr != nil {
 				return storageErr
 			}
-			want = append(want, string(column.Name)+":"+storage+":true")
+			want = append(want, string(column.Name)+":"+storage+":true:true")
 			identityNames[position] = string(column.Name)
 		}
-		want = append(want, "document:tsvector:true")
+		want = append(want, "document:tsvector:true:true")
 		if columns != strings.Join(want, ",") {
 			return fmt.Errorf("postgresql full-text introspect: column drift extension=%s", extension.ID)
 		}

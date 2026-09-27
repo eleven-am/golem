@@ -35,6 +35,8 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 
 	model := fixtureModel()
+	model.Models[0].Fields[0].Scalar.Type = ir.LogicalTypeIR{Kind: ir.TypeString}
+	model.Models[1].Fields[2].Scalar.Type = ir.LogicalTypeIR{Kind: ir.TypeString}
 	email := ir.FieldID(id(12))
 	model.Models[0].Fields = append(model.Models[0].Fields, scalarField(email, "Email", 1, "email", ir.LogicalTypeIR{Kind: ir.TypeString}, false))
 	generatedID := ir.FieldID(id(13))
@@ -138,6 +140,18 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 		t.Fatalf("missing shadow primary key error=%v", err)
 	}
 	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD PRIMARY KEY ("id")`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ALTER COLUMN "id" TYPE text COLLATE pg_catalog."und-x-icu"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "column drift") {
+		t.Fatalf("shadow identity collation error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ALTER COLUMN "id" TYPE text COLLATE pg_catalog."default"`); err != nil {
 		t.Fatal(err)
 	}
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
