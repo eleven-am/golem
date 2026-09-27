@@ -116,6 +116,9 @@ func renderFullTextCandidates[P, A any](app *App[P, A], prepared PreparedRead, p
 	if !ok {
 		return renderedSemanticCandidates{}, fmt.Errorf("P9_FULLTEXT_SCHEMA: requested index is absent")
 	}
+	if app.provider == policyir.ProviderSQLite {
+		enclosingParameters += len(fields)
+	}
 	conditions := make([]policyir.Condition, 0, len(fields))
 	if !prepared.system {
 		policy, present := prepared.policies.Policy(planned.ModelID())

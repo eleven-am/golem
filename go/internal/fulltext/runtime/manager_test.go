@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -36,10 +37,10 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 	for _, statement := range []string{
 		`CREATE TABLE docs(id TEXT PRIMARY KEY, allowed INTEGER NOT NULL, title TEXT NOT NULL) STRICT`,
 		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
-		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(title,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(_golem_field_0,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
 		`INSERT INTO docs VALUES('a',1,'Renée alpha Καφές Łódź'),('b',0,'alpha alpha alpha'),('c',1,'literal OR token')`,
 		`INSERT INTO _golem_fulltext_x_keys(docid,id) VALUES(1,'a'),(2,'b'),(3,'c')`,
-		`INSERT INTO _golem_fulltext_x_fts(rowid,title) SELECT 1,golem_fulltext_fold('Renée alpha Καφές Łódź') UNION ALL SELECT 2,golem_fulltext_fold('alpha alpha alpha') UNION ALL SELECT 3,golem_fulltext_fold('literal OR token')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0) SELECT 1,golem_fulltext_fold('Renée alpha Καφές Łódź') UNION ALL SELECT 2,golem_fulltext_fold('alpha alpha alpha') UNION ALL SELECT 3,golem_fulltext_fold('literal OR token')`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -79,6 +80,53 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 	ranks, err = manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10)
 	if err != nil || len(ranks) != 0 {
 		t.Fatalf("non-diacritic transliteration ranks=%#v err=%v", ranks, err)
+	}
+}
+
+func TestSQLiteRankingIgnoresUnauthorizedCorpus(t *testing.T) {
+	provider := sqliteprovider.New()
+	database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "fulltext-policy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE docs(id TEXT PRIMARY KEY, allowed INTEGER NOT NULL) STRICT`,
+		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
+		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(_golem_field_0,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
+		`INSERT INTO docs VALUES('a',1),('b',1)`,
+		`INSERT INTO _golem_fulltext_x_keys VALUES(1,'a'),(2,'b')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0) VALUES(1,'alpha'),(2,'beta')`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manager := &Manager{database: database, provider: ir.SQLite, indexes: []Index{{
+		Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "title", Weight: 1}}}},
+		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
+	}}}
+	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 1000, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+	before, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1)
+	if err != nil || len(before) != 1 || before[0].Identity[0] != "a" {
+		t.Fatalf("initial ranks=%#v err=%v", before, err)
+	}
+	for index := 0; index < 100; index++ {
+		key := "hidden-" + strconv.Itoa(index)
+		docID := index + 3
+		if _, err := database.Exec(`INSERT INTO docs VALUES(?,0)`, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO _golem_fulltext_x_keys VALUES(?,?)`, docID, key); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO _golem_fulltext_x_fts(rowid,_golem_field_0) VALUES(?,'alpha')`, docID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after, err := manager.Query(context.Background(), "m", "content", "alpha beta", candidates, 1)
+	if err != nil || len(after) != 1 || after[0].Key != before[0].Key || after[0].Score != before[0].Score {
+		t.Fatalf("hidden corpus changed ranks: before=%#v after=%#v err=%v", before, after, err)
 	}
 }
 

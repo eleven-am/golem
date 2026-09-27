@@ -70,9 +70,9 @@ an index through a reviewed migration backfills existing rows before the
 migration commits.
 
 Scores are only for ordering within one query. They are not comparable across
-providers, indexes or corpus revisions. Both providers use corpus-wide text
-statistics, so hidden rows cannot appear or displace visible rows, but aggregate
-document frequencies may influence the numeric scores.
+providers or indexes. SQLite ranks weighted field matches without corpus-wide
+statistics; PostgreSQL uses per-document `ts_rank_cd`. Hidden rows therefore
+cannot appear, alter visible ordering or influence a returned score.
 
 Full-text search does not provide semantic similarity, stemming, synonyms,
 snippets or highlighting. Use a semantic index for meaning-based search and

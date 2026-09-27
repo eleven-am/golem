@@ -87,6 +87,7 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 	}
 	semanticTables := map[string]bool{}
 	fullTextTables := map[string]bool{}
+	fullTextIndexes := map[string]physical.PhysicalName{}
 	allowedBehaviorByTable := map[string]map[string]bool{}
 	if expectedNormalized.Version != 1 || expectedNormalized.CanonicalVersion != 1 {
 		for _, extension := range expectedNormalized.Extensions {
@@ -97,6 +98,7 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 				}
 				names := postgresqlFullTextNames(descriptor)
 				fullTextTables[string(names.table)] = true
+				fullTextIndexes[string(names.table)] = names.document
 				owner, exists := postgresqlOwnerTable(expectedNormalized, descriptor.ModelID)
 				if !exists {
 					return physical.PhysicalSchema{}, fmt.Errorf("postgresql full-text owner %s is absent", descriptor.ModelID)
@@ -124,6 +126,7 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 	tableOIDByName := map[string]int64{}
 	strictBehaviorTables := map[int64]physical.PhysicalName{}
 	strictConstraintTables := map[int64]physical.PhysicalName{}
+	strictIndexTables := map[int64]map[string]bool{}
 	rows, err := query.QueryxContext(ctx, `SELECT c.oid::bigint, c.relname,c.relkind::text,c.relpersistence::text,c.relrowsecurity,c.relforcerowsecurity
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual.Namespace.Name))
@@ -151,6 +154,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 			strictBehaviorTables[oid] = physical.PhysicalName(name)
 			if fullTextTables[name] {
 				strictConstraintTables[oid] = physical.PhysicalName(name)
+				strictIndexTables[oid] = map[string]bool{string(fullTextIndexes[name]): true}
 			}
 			continue
 		}
@@ -353,7 +357,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 	if err = introspectConstraints(ctx, query, actual.Namespace.Name, expectedTables, tableByOID, strictConstraintTables, columnsByAttnum); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
-	if err = introspectIndexes(ctx, query, actual.Namespace.Name, expectedTables, tableByOID, columnsByAttnum); err != nil {
+	if err = introspectIndexes(ctx, query, actual.Namespace.Name, expectedTables, tableByOID, strictIndexTables, columnsByAttnum); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
 	actual.System, err = introspectSystem(ctx, query, expectedNormalized.System, allowed)
@@ -714,7 +718,7 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 	return rows.Err()
 }
 
-func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, columns map[int64]map[int]physical.PhysicalColumn) error {
+func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, strictTables map[int64]map[string]bool, columns map[int64]map[int]physical.PhysicalColumn) error {
 	rows, err := q.QueryxContext(ctx, `SELECT i.indrelid::bigint,i.indexrelid::bigint,ci.relname,i.indisunique,am.amname,i.indkey::text,i.indoption::text,i.indnkeyatts::integer,i.indnatts::integer,i.indisvalid,i.indisready,i.indnullsnotdistinct,EXISTS(SELECT 1 FROM unnest(i.indclass::oid[]) value(opcoid) JOIN pg_catalog.pg_opclass opc ON opc.oid=value.opcoid WHERE NOT opc.opcdefault),EXISTS(SELECT 1 FROM unnest(i.indcollation::oid[]) value(collid) LEFT JOIN pg_catalog.pg_collation coll ON coll.oid=value.collid LEFT JOIN pg_catalog.pg_namespace coll_namespace ON coll_namespace.oid=coll.collnamespace WHERE value.collid<>0 AND NOT (coll_namespace.nspname='pg_catalog' AND coll.collname='default')),COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE n.nspname=$1 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ct.relname,ci.relname`, string(namespace))
 	if err != nil {
 		return err
@@ -742,6 +746,12 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		return err
 	}
 	for _, item := range catalogIndexes {
+		if allowed, strict := strictTables[item.tableOID]; strict {
+			if !allowed[item.name] {
+				return fmt.Errorf("postgresql managed table has unexpected index %q", item.name)
+			}
+			continue
+		}
 		table := tables[item.tableOID]
 		if table == nil {
 			continue

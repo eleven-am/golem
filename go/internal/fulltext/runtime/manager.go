@@ -118,7 +118,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if err != nil {
 		return nil, err
 	}
-	arguments := make([]any, 0, len(parsed)+len(candidates.Args)+1)
+	arguments := make([]any, 0, len(parsed)+len(index.Descriptor.Index.Fields)+len(candidates.Args)+1)
 	statement := manager.sqliteStatement(index, candidates)
 	if manager.provider == ir.PostgreSQL {
 		statement = manager.postgresqlStatement(index, parsed, candidates)
@@ -131,6 +131,9 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 		}
 	} else {
 		arguments = append(arguments, compileSQLite(parsed, index.Descriptor.Index.Folding))
+		for position := range index.Descriptor.Index.Fields {
+			arguments = append(arguments, compileSQLiteField(parsed, index.Descriptor.Index.Folding, position))
+		}
 	}
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured complexity")
@@ -170,16 +173,17 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 	base := string(index.Descriptor.Storage)
 	fts, keys := manager.quote(base+"_fts"), manager.quote(base+"_keys")
 	identity, joins := manager.identitySQL(index, "golem_fk", "golem_fc", candidates)
-	weights := make([]string, len(index.Descriptor.Index.Fields))
+	scores := make([]string, len(index.Descriptor.Index.Fields))
 	for position, field := range index.Descriptor.Index.Fields {
-		weights[position] = strconv.FormatFloat(field.Weight, 'g', -1, 64)
+		alias := "golem_fs" + strconv.Itoa(position)
+		scores[position] = "CASE WHEN EXISTS(SELECT 1 FROM " + fts + " AS " + alias + " WHERE " + alias + ".rowid=golem_ff.rowid AND " + fts + " MATCH ?" + strconv.Itoa(position+2) + ") THEN " + strconv.FormatFloat(field.Weight, 'g', -1, 64) + " ELSE 0 END"
 	}
-	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
-	limit := "?" + strconv.Itoa(len(candidates.Args)+2)
-	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(identity, ",") +
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(index.Descriptor.Index.Fields)+1, policyir.ProviderSQLite)
+	limit := "?" + strconv.Itoa(len(index.Descriptor.Index.Fields)+len(candidates.Args)+2)
+	return "SELECT " + strings.Join(scores, "+") + " AS score," + strings.Join(identity, ",") +
 		" FROM " + fts + " AS golem_ff JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
-		" WHERE " + fts + " MATCH ?1 ORDER BY bm25(" + fts + "," + strings.Join(weights, ",") + ")," + strings.Join(identity, ",") + " LIMIT " + limit
+		" WHERE " + fts + " MATCH ?1 ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
 }
 
 func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates) string {
@@ -328,4 +332,8 @@ func compileSQLite(terms []term, folding string) string {
 		}
 	}
 	return strings.Join(parts, " OR ")
+}
+
+func compileSQLiteField(terms []term, folding string, position int) string {
+	return "_golem_field_" + strconv.Itoa(position) + " : (" + compileSQLite(terms, folding) + ")"
 }

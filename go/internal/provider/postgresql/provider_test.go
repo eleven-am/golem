@@ -152,6 +152,18 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.Exec(`CREATE UNIQUE INDEX "unexpected_fulltext_index" ON "golem_fulltext_live"."` + base + `_fts" ((document::text))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected index") {
+		t.Fatalf("unexpected shadow index error=%v", err)
+	}
+	if _, err := database.Exec(`DROP INDEX "golem_fulltext_live"."unexpected_fulltext_index"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		`CREATE FUNCTION "golem_fulltext_live"."reject_fulltext_write"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NULL; END$golem$`,
 		`CREATE TRIGGER "unexpected_shadow_trigger" BEFORE INSERT ON "golem_fulltext_live"."` + base + `_fts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`,
