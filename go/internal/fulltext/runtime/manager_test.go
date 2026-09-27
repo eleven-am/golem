@@ -186,7 +186,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 }
 
 func TestQueryParserRejectsUnsafeShapes(t *testing.T) {
-	for _, query := range []string{"", `"unterminated`, "x*", string([]byte{'a', 0, 'b'})} {
+	for _, query := range []string{"", `"unterminated`, "x*", "a.*", "a\u0301*", string([]byte{'a', 0, 'b'})} {
 		if _, err := parse(query); err == nil {
 			t.Fatalf("query %q accepted", query)
 		}
@@ -206,6 +206,16 @@ func TestQueryParserRecognizesUnicodeWhitespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(terms) != 3 || terms[0].value != "alpha" || terms[1].value != "beta" || terms[2].value != "gamma delta" || !terms[2].phrase {
+		t.Fatalf("terms=%#v", terms)
+	}
+}
+
+func TestQueryParserMeasuresTheFinalPrefixLexeme(t *testing.T) {
+	terms, err := parse("invoice.pdf*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terms) != 1 || terms[0].value != "invoice.pdf" || !terms[0].prefix {
 		t.Fatalf("terms=%#v", terms)
 	}
 }

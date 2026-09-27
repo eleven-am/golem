@@ -309,7 +309,7 @@ func parse(input string) ([]term, error) {
 			if strings.HasSuffix(item.value, "*") {
 				item.prefix = true
 				item.value = strings.TrimSuffix(item.value, "*")
-				if utf8.RuneCountInString(item.value) < 2 {
+				if prefixLexemeLength(item.value) < 2 {
 					return nil, fmt.Errorf("P9_FULLTEXT_QUERY: prefix terms require at least two characters")
 				}
 			}
@@ -326,6 +326,21 @@ func parse(input string) ([]term, error) {
 		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: query has no terms")
 	}
 	return result, nil
+}
+
+func prefixLexemeLength(value string) int {
+	length, latest := 0, 0
+	for _, item := range value {
+		switch {
+		case unicode.IsLetter(item) || unicode.IsNumber(item):
+			length++
+			latest = length
+		case unicode.IsMark(item):
+		default:
+			length = 0
+		}
+	}
+	return latest
 }
 
 func compileSQLite(terms []term, folding string) string {
