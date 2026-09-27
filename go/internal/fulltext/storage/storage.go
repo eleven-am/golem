@@ -30,6 +30,7 @@ type ProjectedColumn struct {
 type OwnerProjection struct {
 	Identity []ProjectedColumn
 	Fields   []ProjectedColumn
+	Updates  []ProjectedColumn
 }
 
 func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (physical.Extension, error) {
@@ -125,6 +126,94 @@ func ProjectOwner(extension physical.Extension, owner physical.PhysicalTable) (O
 			return OwnerProjection{}, projectErr
 		}
 		result.Fields[position] = column
+	}
+	updates, updateErr := UpdateColumns(extension, owner)
+	if updateErr != nil {
+		return OwnerProjection{}, updateErr
+	}
+	result.Updates = make([]ProjectedColumn, len(updates))
+	for position, column := range updates {
+		result.Updates[position] = ProjectedColumn{ID: column.ID, Name: column.Name, Storage: column.Storage, Nullable: column.Nullable}
+	}
+	return result, nil
+}
+
+func UpdateColumns(extension physical.Extension, owner physical.PhysicalTable) ([]physical.PhysicalColumn, error) {
+	descriptor, err := Decode(extension)
+	if err != nil {
+		return nil, err
+	}
+	if owner.ID != descriptor.ModelID || owner.PrimaryKey == nil || len(owner.PrimaryKey.Columns) == 0 {
+		return nil, fmt.Errorf("full-text storage: update owner has no primary identity")
+	}
+	columns := make(map[ir.FieldID]physical.PhysicalColumn, len(owner.Columns))
+	for _, column := range owner.Columns {
+		columns[column.ID] = column
+	}
+	result := make([]physical.PhysicalColumn, 0, len(owner.PrimaryKey.Columns)+len(descriptor.Index.Fields))
+	seen := make(map[ir.FieldID]bool, cap(result))
+	add := func(field ir.FieldID) (physical.PhysicalColumn, error) {
+		column, exists := columns[field]
+		if !exists {
+			return physical.PhysicalColumn{}, fmt.Errorf("full-text storage: update column %s is absent", field)
+		}
+		if !seen[field] {
+			seen[field] = true
+			result = append(result, column)
+		}
+		return column, nil
+	}
+	for _, field := range owner.PrimaryKey.Columns {
+		if _, addErr := add(field); addErr != nil {
+			return nil, addErr
+		}
+	}
+	visiting := make(map[ir.FieldID]bool)
+	var addGeneratedDependencies func(ir.FieldID) error
+	addGeneratedDependencies = func(field ir.FieldID) error {
+		column, exists := columns[field]
+		if !exists {
+			return fmt.Errorf("full-text storage: generated dependency %s is absent", field)
+		}
+		if column.Generated == nil {
+			return nil
+		}
+		if visiting[field] {
+			return fmt.Errorf("full-text storage: generated dependency cycle at %s", field)
+		}
+		visiting[field] = true
+		var walk func(physical.Expression) error
+		walk = func(expression physical.Expression) error {
+			if expression.Column != nil {
+				dependency, addErr := add(*expression.Column)
+				if addErr != nil {
+					return addErr
+				}
+				if dependency.Generated != nil {
+					if dependencyErr := addGeneratedDependencies(dependency.ID); dependencyErr != nil {
+						return dependencyErr
+					}
+				}
+			}
+			for _, operand := range expression.Operands {
+				if walkErr := walk(operand); walkErr != nil {
+					return walkErr
+				}
+			}
+			return nil
+		}
+		walkErr := walk(column.Generated.Expression)
+		delete(visiting, field)
+		return walkErr
+	}
+	for _, field := range descriptor.Index.Fields {
+		fieldID := ir.FieldID(field.ID)
+		if _, addErr := add(fieldID); addErr != nil {
+			return nil, addErr
+		}
+		if dependencyErr := addGeneratedDependencies(fieldID); dependencyErr != nil {
+			return nil, dependencyErr
+		}
 	}
 	return result, nil
 }

@@ -36,7 +36,12 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	model := fixtureModel()
 	email := ir.FieldID(id(12))
 	model.Models[0].Fields = append(model.Models[0].Fields, scalarField(email, "Email", 1, "email", ir.LogicalTypeIR{Kind: ir.TypeString}, false))
-	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: id(12), Weight: 1}}})
+	generatedID := ir.FieldID(id(13))
+	emailType := model.Models[0].Fields[1].Scalar.Type
+	emailExpr := ir.SchemaExprIR{Kind: ir.SchemaExprField, ResultType: emailType, Field: &email, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
+	lowerExpr := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: emailType, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{emailExpr}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
+	model.Models[0].Fields = append(model.Models[0].Fields, ir.FieldIR{ID: generatedID, GoName: "SearchEmail", DeclarationOrder: 2, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_email", Type: emailType, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpr, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}})
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,6 +103,45 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 		t.Fatal(err)
 	}
 	function := base + "_sync"
+	updateTrigger := base + "_au"
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."users" DISABLE TRIGGER "` + updateTrigger + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("disabled trigger error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."users" ENABLE TRIGGER "` + updateTrigger + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER "` + updateTrigger + `" AFTER UPDATE OF "id" ON "golem_fulltext_live"."users" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("reduced update trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	owner, exists := postgresqlOwnerTable(schema, ir.ModelID(model.Extensions[0].Owner))
+	if !exists {
+		t.Fatal("full-text owner is absent")
+	}
+	rendered, err := renderPostgreSQLFullTextExtension(schema.Namespace.Name, schema.Extensions[0], owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(rendered[4]); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(`CREATE OR REPLACE FUNCTION "golem_fulltext_live"."` + function + `"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NEW; END$golem$`); err != nil {
 		t.Fatal(err)
 	}

@@ -10,6 +10,8 @@ import (
 )
 
 func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
+	sourceID := ir.FieldID("source")
+	generated := &physical.GeneratedExpression{Kind: physical.GeneratedStored, Expression: physical.Expression{Kind: physical.ExpressionColumn, Type: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Column: &sourceID}}
 	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
@@ -18,7 +20,8 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 		ID: "document",
 		Columns: []physical.PhysicalColumn{
 			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLUUID}},
-			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true},
+			{ID: "source", Name: "source", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true},
+			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Generated: generated},
 		},
 		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
 	})
@@ -29,7 +32,8 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 		ID: "document",
 		Columns: []physical.PhysicalColumn{
 			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLUUID}},
-			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true},
+			{ID: "source", Name: "source", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true},
+			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Generated: generated},
 		},
 		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
 	}
@@ -39,7 +43,7 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 	}
 	indexedRename := owner
 	indexedRename.Columns = append([]physical.PhysicalColumn(nil), owner.Columns...)
-	indexedRename.Columns[1].Name = "content"
+	indexedRename.Columns[2].Name = "content"
 	afterIndexedRename, err := ProjectOwner(extension, indexedRename)
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +55,17 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if reflect.DeepEqual(before, afterIndexedRename) || reflect.DeepEqual(before, afterIdentityStorage) {
+	dependencyRename := owner
+	dependencyRename.Columns = append([]physical.PhysicalColumn(nil), owner.Columns...)
+	dependencyRename.Columns[1].Name = "raw_content"
+	afterDependencyRename, err := ProjectOwner(extension, dependencyRename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reflect.DeepEqual(before, afterIndexedRename) || reflect.DeepEqual(before, afterIdentityStorage) || reflect.DeepEqual(before, afterDependencyRename) {
 		t.Fatal("owner projection did not expose a full-text storage dependency")
+	}
+	if got := []ir.FieldID{before.Updates[0].ID, before.Updates[1].ID, before.Updates[2].ID}; !reflect.DeepEqual(got, []ir.FieldID{"id", "body", "source"}) {
+		t.Fatalf("update dependencies=%v", got)
 	}
 }

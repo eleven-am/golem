@@ -522,21 +522,39 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function)).Scan(&functionBody); err != nil || functionBody != parts[1] {
 			return fmt.Errorf("postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
 		}
-		expectedTriggers := map[string]int{string(names.insert): 5, string(names.update): 17, string(names.delete): 9, string(names.truncate): 32}
-		const triggerSQL = `SELECT t.tgname,t.tgtype::integer FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal AND t.tgname IN($3,$4,$5,$6) AND pn.nspname=$1 AND p.proname=$7 ORDER BY t.tgname`
+		updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
+		if err != nil {
+			return err
+		}
+		updateNames := make([]string, len(updateFields))
+		for position, column := range updateFields {
+			updateNames[position] = string(column.Name)
+		}
+		type expectedTrigger struct {
+			kind    int
+			columns string
+		}
+		expectedTriggers := map[string]expectedTrigger{
+			string(names.insert):   {kind: 5},
+			string(names.update):   {kind: 17, columns: strings.Join(updateNames, ",")},
+			string(names.delete):   {kind: 9},
+			string(names.truncate): {kind: 32},
+		}
+		const triggerSQL = `SELECT t.tgname,t.tgtype::integer,t.tgenabled,COALESCE((SELECT string_agg(a.attname,',' ORDER BY dependency.ordinality) FROM unnest(t.tgattr) WITH ORDINALITY AS dependency(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=t.tgrelid AND a.attnum=dependency.attnum),'') FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal AND t.tgname IN($3,$4,$5,$6) AND pn.nspname=$1 AND p.proname=$7 ORDER BY t.tgname`
 		rows, err := query.QueryxContext(ctx, triggerSQL, string(expected.Namespace.Name), string(owner.Name), string(names.insert), string(names.update), string(names.delete), string(names.truncate), string(names.function))
 		if err != nil {
 			return err
 		}
 		seenTriggers := make(map[string]bool, len(expectedTriggers))
 		for rows.Next() {
-			var name string
+			var name, enabled, columns string
 			var triggerType int
-			if err := rows.Scan(&name, &triggerType); err != nil {
+			if err := rows.Scan(&name, &triggerType, &enabled, &columns); err != nil {
 				_ = rows.Close()
 				return err
 			}
-			if expectedTriggers[name] != triggerType || seenTriggers[name] {
+			expectedTrigger, exists := expectedTriggers[name]
+			if !exists || expectedTrigger.kind != triggerType || expectedTrigger.columns != columns || enabled != "O" || seenTriggers[name] {
 				_ = rows.Close()
 				return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
 			}

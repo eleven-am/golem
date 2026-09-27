@@ -66,7 +66,6 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 	identityNames := make([]string, len(identity))
 	newIdentity := make([]string, len(identity))
 	oldMatch := make([]string, len(identity))
-	updateColumns := make([]string, 0, len(identity)+len(fields))
 	for position, column := range identity {
 		storage, storageErr := renderStorage(column.Storage)
 		if storageErr != nil {
@@ -76,14 +75,19 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 		identityNames[position] = quote(column.Name)
 		newIdentity[position] = "NEW." + quote(column.Name)
 		oldMatch[position] = quote(column.Name) + "=OLD." + quote(column.Name)
-		updateColumns = append(updateColumns, quote(column.Name))
 	}
 	vectors := make([]string, len(fields))
 	for position, column := range fields {
 		vectors[position] = postgresqlFullTextVector("NEW."+quote(column.Name), descriptor.Index.Folding, classes[position])
-		updateColumns = append(updateColumns, quote(column.Name))
 	}
-	updateColumns = uniquePostgreSQLNames(updateColumns)
+	updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
+	if err != nil {
+		return nil, err
+	}
+	updateColumns := make([]string, len(updateFields))
+	for position, column := range updateFields {
+		updateColumns[position] = quote(column.Name)
+	}
 	deleteOld := "DELETE FROM " + qualified(namespace, names.table) + " WHERE " + strings.Join(oldMatch, " AND ")
 	insertNew := "INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") VALUES (" + strings.Join(newIdentity, ",") + "," + strings.Join(vectors, " || ") + ")"
 	clear := "DELETE FROM " + qualified(namespace, names.table)
@@ -97,18 +101,6 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 		"CREATE TRIGGER " + quote(names.delete) + " AFTER DELETE ON " + qualified(namespace, owner.Name) + " FOR EACH ROW EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
 		"CREATE TRIGGER " + quote(names.truncate) + " AFTER TRUNCATE ON " + qualified(namespace, owner.Name) + " FOR EACH STATEMENT EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
 	}, nil
-}
-
-func uniquePostgreSQLNames(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]bool, len(values))
-	for _, value := range values {
-		if !seen[value] {
-			seen[value] = true
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func renderPostgreSQLFullTextBackfill(namespace physical.PhysicalName, extension physical.Extension, owner physical.PhysicalTable) ([]string, error) {

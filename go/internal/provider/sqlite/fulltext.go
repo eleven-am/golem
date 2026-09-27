@@ -90,7 +90,14 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	docidOld := "(SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchOld, " AND ") + ")"
 	docidNew := "(SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchNew, " AND ") + ")"
 	insertIndex := "INSERT INTO " + quote(names.index) + " (rowid," + strings.Join(fieldNames, ",") + ") VALUES (" + docidNew + "," + strings.Join(newFields, ",") + ")"
-	updateColumns := uniqueSQLNames(append(append([]string(nil), keyNames...), fieldNames...))
+	updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
+	if err != nil {
+		return nil, err
+	}
+	updateColumns := make([]string, len(updateFields))
+	for position, column := range updateFields {
+		updateColumns[position] = quote(column.Name)
+	}
 	return []string{
 		"CREATE TABLE " + quote(names.keys) + " (" + quote("docid") + " INTEGER PRIMARY KEY, " + strings.Join(keyColumns, ", ") + ", UNIQUE (" + strings.Join(keyNames, ", ") + ")) STRICT",
 		"CREATE VIRTUAL TABLE " + quote(names.index) + " USING fts5(" + strings.Join(fieldNames, ",") + "," + strings.Join(options, ",") + ")",
@@ -98,18 +105,6 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 		"CREATE TRIGGER " + quote(names.update) + " AFTER UPDATE OF " + strings.Join(updateColumns, ",") + " ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; UPDATE " + quote(names.keys) + " SET (" + strings.Join(keyNames, ",") + ")=(" + strings.Join(newIdentity, ",") + ") WHERE " + strings.Join(identityMatchOld, " AND ") + "; " + insertIndex + "; END",
 		"CREATE TRIGGER " + quote(names.delete) + " AFTER DELETE ON " + quote(owner.Name) + " BEGIN DELETE FROM " + quote(names.index) + " WHERE rowid=" + docidOld + "; DELETE FROM " + quote(names.keys) + " WHERE " + strings.Join(identityMatchOld, " AND ") + "; END",
 	}, nil
-}
-
-func uniqueSQLNames(values []string) []string {
-	result := make([]string, 0, len(values))
-	seen := make(map[string]bool, len(values))
-	for _, value := range values {
-		if !seen[value] {
-			seen[value] = true
-			result = append(result, value)
-		}
-	}
-	return result
 }
 
 func renderFullTextBackfill(extension physical.Extension, owner physical.PhysicalTable) ([]string, error) {

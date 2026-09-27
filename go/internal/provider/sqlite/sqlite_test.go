@@ -99,9 +99,14 @@ func TestSemanticIndexUsesManagedExactVectorStorage(t *testing.T) {
 func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	provider := New()
 	model := socialModelIR()
+	email := model.Models[0].Fields[1]
+	generatedID := ir.FieldID(id(19))
+	emailExpr := schemaField(email.ID, email.Scalar.Type, email.Scalar.Nullable)
+	lowerExpr := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: email.Scalar.Type, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{emailExpr}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email.ID}}
+	model.Models[0].Fields = append(model.Models[0].Fields, ir.FieldIR{ID: generatedID, GoName: "SearchEmail", DeclarationOrder: uint32(len(model.Models[0].Fields)), Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_email", Type: email.Scalar.Type, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpr, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}})
 	payload, err := fulltextcontract.Encode(fulltextcontract.Index{
 		Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3},
-		Fields: []fulltextcontract.Field{{ID: id(12), Weight: 3}},
+		Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 3}},
 	})
 	if err != nil {
 		t.Fatal(err)
