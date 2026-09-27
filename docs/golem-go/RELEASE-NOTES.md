@@ -25,10 +25,10 @@ candidate authorization. User query text is parsed as literal OR terms,
 phrases and bounded prefixes rather than passed to FTS5 or `tsquery`.
 
 SQLite uses contentless-delete FTS5 storage and PostgreSQL uses a `tsvector`
-side table with a GIN index. PostgreSQL installations using the default
-diacritic folding need the trusted `unaccent` extension in the `public`
-schema. Regenerate and apply the reviewed migration before calling generated
-full-text methods.
+side table with a GIN index. Both providers share canonical Unicode diacritic
+folding. PostgreSQL requires UTF-8 and the deterministic
+`pg_catalog."und-x-icu"` collation. Regenerate and apply the reviewed migration
+before calling generated full-text methods.
 
 **SQLite predicates no longer wrap every condition in `CASE`.** Equality adds
 the one required `IS NOT NULL` guard, while other predicates retain their own

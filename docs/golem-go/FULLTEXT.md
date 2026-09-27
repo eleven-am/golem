@@ -28,11 +28,11 @@ uses a contentless FTS5 index; PostgreSQL uses a trigger-maintained `tsvector`
 side table and GIN index. Both are updated in the same database transaction as
 the model row, including cascades and writes outside Golem's runtime.
 
-`FoldDiacritics` is the default. PostgreSQL installs and verifies the trusted
-`unaccent` extension in the `public` schema for that mode. Use `FoldNone` when
-accents must remain distinct. PostgreSQL
-supports at most four distinct weights because `tsvector` has four weight
-classes.
+`FoldDiacritics` is the default. Both providers use the same canonical Unicode
+decomposition and remove Unicode mark characters. Use `FoldNone` when accents
+must remain distinct. PostgreSQL requires UTF-8 and the deterministic
+`pg_catalog."und-x-icu"` collation, and supports at most four distinct weights
+because `tsvector` has four weight classes.
 
 ## Querying
 
