@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
@@ -58,6 +59,12 @@ func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (phys
 		column, exists := columns[field]
 		if !exists || column.Nullable {
 			return physical.Extension{}, fmt.Errorf("full-text storage: primary identity column %s is invalid", field)
+		}
+		if extension.Provider == ir.PostgreSQL && column.Name == "document" {
+			return physical.Extension{}, fmt.Errorf("full-text storage: PostgreSQL primary identity column %s uses reserved name document", field)
+		}
+		if extension.Provider == ir.SQLite && strings.EqualFold(string(column.Name), "docid") {
+			return physical.Extension{}, fmt.Errorf("full-text storage: SQLite primary identity column %s uses reserved name docid", field)
 		}
 	}
 	storage := "_golem_fulltext_" + string(extension.ID)

@@ -2,6 +2,7 @@ package storage
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -67,5 +68,36 @@ func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 	}
 	if got := []ir.FieldID{before.Updates[0].ID, before.Updates[1].ID, before.Updates[2].ID}; !reflect.DeepEqual(got, []ir.FieldID{"id", "body", "source"}) {
 		t.Fatalf("update dependencies=%v", got)
+	}
+}
+
+func TestLowerRejectsProviderReservedIdentityNames(t *testing.T) {
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name     string
+		provider ir.Provider
+		identity physical.PhysicalName
+		storage  physical.StorageKind
+		want     string
+	}{
+		{name: "PostgreSQL document", provider: ir.PostgreSQL, identity: "document", storage: physical.StoragePostgreSQLText, want: "reserved name document"},
+		{name: "SQLite docid", provider: ir.SQLite, identity: "DoCiD", storage: physical.StorageSQLiteText, want: "reserved name docid"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, lowerErr := Lower(ir.ProviderExtensionIR{ID: "index", Provider: test.provider, Kind: fulltextcontract.IndexKind, Version: fulltextcontract.Version, Owner: "document", Payload: payload}, physical.PhysicalTable{
+				ID: "document",
+				Columns: []physical.PhysicalColumn{
+					{ID: "id", Name: test.identity, Storage: physical.StorageType{Kind: test.storage}},
+					{ID: "body", Name: "body", Storage: physical.StorageType{Kind: test.storage}, Nullable: true},
+				},
+				PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+			})
+			if lowerErr == nil || !strings.Contains(lowerErr.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", lowerErr, test.want)
+			}
+		})
 	}
 }
