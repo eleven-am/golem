@@ -203,6 +203,14 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 	assertMatches("winner", 1)
 	assertMatches("reused", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000004','fresh@example.test',8)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000005','reused@example.test',9)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("fresh", 1)
+	assertMatches("reused", 1)
 	if _, err := database.Exec(`DELETE FROM users`); err != nil {
 		t.Fatal(err)
 	}
