@@ -412,7 +412,7 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 				return nil, decodeErr
 			}
 			if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-				preamble = []string{"CREATE EXTENSION IF NOT EXISTS unaccent"}
+				preamble = renderPostgreSQLUnaccentExtension()
 			}
 		} else {
 			statements, err = renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)

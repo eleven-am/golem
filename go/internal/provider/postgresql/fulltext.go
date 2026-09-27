@@ -149,6 +149,14 @@ func postgresqlFullTextVector(value, folding string, class byte) string {
 	return "setweight(to_tsvector('simple'," + value + "),'" + string(class) + "')"
 }
 
+func renderPostgreSQLUnaccentExtension() []string {
+	guard := "BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='unaccent' AND n.nspname<>'public') THEN RAISE EXCEPTION 'golem full-text search requires extension unaccent in schema public'; END IF; END"
+	return []string{
+		"DO " + quoteDollar(guard),
+		"CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public",
+	}
+}
+
 func dropPostgreSQLFullTextExtension(namespace physical.PhysicalName, extension physical.Extension, owner physical.PhysicalTable) ([]string, error) {
 	descriptor, err := fulltextstorage.Decode(extension)
 	if err != nil {

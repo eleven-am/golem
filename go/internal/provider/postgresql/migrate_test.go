@@ -406,7 +406,8 @@ func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
 	}
 	base := "_golem_fulltext_" + string(extensionID)
 	for _, fragment := range []string{
-		"CREATE EXTENSION IF NOT EXISTS unaccent",
+		"requires extension unaccent in schema public",
+		"CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public",
 		`CREATE TABLE "reviewed"."` + base + `_fts"`,
 		`CREATE INDEX "` + base + `_fts_document"`,
 		`CREATE TRIGGER "` + base + `_ai"`,

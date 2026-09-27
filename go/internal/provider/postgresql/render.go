@@ -70,7 +70,7 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS vector")
 	}
 	if hasFoldedFullText {
-		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS unaccent")
+		statements = append(statements, renderPostgreSQLUnaccentExtension()...)
 	}
 	statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.Namespace.Name)))
 	if normalized.System.Version != 0 {

@@ -79,7 +79,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_runtime_live" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_runtime_live" CASCADE`)
 	for _, statement := range []string{
-		`CREATE EXTENSION IF NOT EXISTS unaccent`,
+		`CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public`,
 		`CREATE SCHEMA "golem_fulltext_runtime_live"`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."docs" ("id" text PRIMARY KEY,"allowed" boolean NOT NULL,"title" text NOT NULL)`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" ("id" text PRIMARY KEY,"document" tsvector NOT NULL)`,
@@ -100,7 +100,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		}},
 	}
 	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "inv*", "OR"} {
+	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "OR"} {
 		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10)
 		if err != nil {
 			t.Fatalf("query %q: %v", query, err)
@@ -112,6 +112,16 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		if len(ranks) != 1 || ranks[0].Identity[0] != want {
 			t.Fatalf("query %q ranks=%#v", query, ranks)
 		}
+	}
+}
+
+func TestPostgreSQLPrefixModifierTargetsTheFinalLexeme(t *testing.T) {
+	parsed, err := parse("invoice.pdf*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := compilePostgreSQL(parsed), "('invoice' <-> 'pdf':*)"; got != want {
+		t.Fatalf("compiled query=%q want %q", got, want)
 	}
 }
 

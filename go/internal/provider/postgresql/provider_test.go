@@ -26,6 +26,12 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	if _, err := database.Exec(`DROP EXTENSION IF EXISTS unaccent`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`SET search_path TO "golem_fulltext_live", public`); err != nil {
+		t.Fatal(err)
+	}
 
 	model := fixtureModel()
 	email := ir.FieldID(id(12))
@@ -97,6 +103,38 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
 		t.Fatalf("drifted trigger function error=%v", err)
+	}
+}
+
+func TestLiveFullTextRefusesUnaccentOutsidePublic(t *testing.T) {
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	provider := New()
+	database, _, err := provider.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`DROP EXTENSION IF EXISTS unaccent`,
+		`CREATE SCHEMA extensions`,
+		`CREATE EXTENSION unaccent WITH SCHEMA extensions`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "golem_fulltext_wrong_unaccent"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ApplyInitial(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "requires extension unaccent in schema public") {
+		t.Fatalf("unaccent outside public error=%v", err)
 	}
 }
 

@@ -331,10 +331,10 @@ func compilePostgreSQL(terms []term) string {
 		for position, word := range words {
 			lexemes[position] = "'" + strings.ReplaceAll(word, "'", "''") + "'"
 		}
-		part := strings.Join(lexemes, " <-> ")
 		if item.prefix {
-			part += ":*"
+			lexemes[len(lexemes)-1] += ":*"
 		}
+		part := strings.Join(lexemes, " <-> ")
 		parts = append(parts, "("+part+")")
 	}
 	return strings.Join(parts, " | ")
