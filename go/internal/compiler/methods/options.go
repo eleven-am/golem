@@ -3,7 +3,9 @@ package methods
 import (
 	"go/ast"
 	"go/constant"
+	"math"
 	"regexp"
+	"sort"
 
 	analyticscontract "github.com/eleven-am/golem/go/internal/analytics/contract"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
@@ -11,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
@@ -205,6 +208,12 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 			return
 		}
 		in.evalSemanticIndex(call)
+	case "FullTextIndex":
+		if scope != ir.ProviderScopePortable {
+			in.errorAt("P9_FULLTEXT_INDEX_PROVIDER_SCOPE", "FullTextIndex is portable and cannot be provider-scoped", call)
+			return
+		}
+		in.evalFullTextIndex(call)
 	case "Check":
 		in.evalCheck(call, scope)
 	case "Generated":
@@ -220,6 +229,143 @@ func (in *interpreter) evalOption(expression ast.Expr, scope ir.ProviderScope) {
 		}
 		in.errorAt("P1_METHOD_OPTION_CALL", "call is not a recognized golem model-option constructor", expression)
 	}
+}
+
+func (in *interpreter) evalFullTextIndex(call *ast.CallExpr) {
+	if len(call.Args) < 2 {
+		in.errorAt("P9_FULLTEXT_INDEX_ARITY", "FullTextIndex requires a name and at least one FullTextField", call)
+		return
+	}
+	name, valid := in.constString(call.Args[0])
+	if !valid || !semanticIndexNamePattern.MatchString(name) {
+		in.errorAt("P9_FULLTEXT_INDEX_NAME", "full-text index name must be a constant matching [a-z][a-z0-9_-]{0,62}", call.Args[0])
+		return
+	}
+	if in.fullTextIndexes[name] {
+		in.errorAt("P9_FULLTEXT_INDEX_DUPLICATE", "full-text index names must be unique within a model", call.Args[0])
+		return
+	}
+	index := fulltextcontract.Index{Name: name, Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}}
+	seenFields := make(map[ir.FieldID]bool)
+	seenFolding, seenPrefix := false, false
+	for _, expression := range call.Args[1:] {
+		option, ok := unparen(expression).(*ast.CallExpr)
+		if !ok {
+			in.errorAt("P9_FULLTEXT_INDEX_OPTION", "FullTextIndex options must be direct constructor calls", expression)
+			continue
+		}
+		switch in.callOperation(option) {
+		case "FullTextField":
+			if len(option.Args) != 2 {
+				in.errorAt("P9_FULLTEXT_INDEX_FIELD_ARITY", "FullTextField requires a field and positive weight", option)
+				continue
+			}
+			symbol, resolved := in.resolveHandle(option.Args[0])
+			if !resolved || symbol.Kind != "field" || symbol.ModelID != in.model.ID {
+				in.errorAt("P9_FULLTEXT_INDEX_FIELD", "FullTextField accepts only a scalar field handle of this model", option.Args[0])
+				continue
+			}
+			field, exists := semanticField(in.model, symbol.FieldID)
+			if !exists || field.Scalar == nil || field.Scalar.Type.Kind != ir.TypeString {
+				in.errorAt("P9_FULLTEXT_INDEX_FIELD_TYPE", "FullTextField requires logical type String", option.Args[0])
+				continue
+			}
+			if seenFields[symbol.FieldID] {
+				in.errorAt("P9_FULLTEXT_INDEX_FIELD_DUPLICATE", "FullTextIndex lists a field more than once", option.Args[0])
+				continue
+			}
+			weight, ok := in.positiveFloat(option.Args[1])
+			if !ok {
+				in.errorAt("P9_FULLTEXT_INDEX_WEIGHT", "FullTextField weight must be a positive finite constant", option.Args[1])
+				continue
+			}
+			seenFields[symbol.FieldID] = true
+			index.Fields = append(index.Fields, fulltextcontract.Field{ID: string(symbol.FieldID), Weight: weight})
+		case "TextFolding":
+			if seenFolding || len(option.Args) != 1 {
+				in.errorAt("P9_FULLTEXT_INDEX_FOLDING", "TextFolding may be declared once", option)
+				continue
+			}
+			seenFolding = true
+			switch in.constantName(option.Args[0]) {
+			case "FoldDiacritics":
+				index.Folding = fulltextcontract.FoldingDiacritics
+			case "FoldNone":
+				index.Folding = fulltextcontract.FoldingNone
+			default:
+				in.errorAt("P9_FULLTEXT_INDEX_FOLDING", "TextFolding requires FoldDiacritics or FoldNone", option.Args[0])
+			}
+		case "TextPrefix":
+			if seenPrefix || len(option.Args) == 0 {
+				in.errorAt("P9_FULLTEXT_INDEX_PREFIX", "TextPrefix may be declared once with at least one length", option)
+				continue
+			}
+			seenPrefix = true
+			seen := make(map[uint8]bool)
+			for _, argument := range option.Args {
+				value, ok := in.uint8Constant(argument)
+				if !ok || value < 1 || value > 32 || seen[value] {
+					in.errorAt("P9_FULLTEXT_INDEX_PREFIX", "prefix lengths must be distinct constants in 1..32", argument)
+					continue
+				}
+				seen[value] = true
+				index.Prefix = append(index.Prefix, value)
+			}
+			sort.Slice(index.Prefix, func(i, j int) bool { return index.Prefix[i] < index.Prefix[j] })
+		default:
+			in.errorAt("P9_FULLTEXT_INDEX_OPTION", "call is not a recognized FullTextIndex option", option)
+		}
+	}
+	if len(index.Fields) == 0 {
+		return
+	}
+	postgresql := false
+	for _, provider := range in.config.Compilation.Model.Providers {
+		postgresql = postgresql || provider == ir.PostgreSQL
+	}
+	if postgresql {
+		distinct := make(map[float64]bool)
+		for _, field := range index.Fields {
+			distinct[field.Weight] = true
+		}
+		if len(distinct) > 4 {
+			in.errorAt("P9_FULLTEXT_INDEX_POSTGRESQL_WEIGHTS", "PostgreSQL full-text indexes support at most four distinct weights", call)
+			return
+		}
+	}
+	payload, err := fulltextcontract.Encode(index)
+	if err != nil {
+		in.errorAt("P9_FULLTEXT_INDEX_ENCODE", err.Error(), call)
+		return
+	}
+	for _, provider := range in.config.Compilation.Model.Providers {
+		canonical := ir.OwnedIdentity(string(in.model.ID), fulltextcontract.IndexKind+"\x00"+string(provider)+"\x00"+name)
+		identity, diagnostic := in.config.IDRegistry.Register(ir.ObjectExtension, canonical, in.span(call))
+		if diagnostic != nil {
+			in.diagnostics = append(in.diagnostics, *diagnostic)
+			continue
+		}
+		in.extensions = append(in.extensions, ir.ProviderExtensionIR{ID: ir.ExtensionIDFrom(identity), Provider: provider, Version: fulltextcontract.Version, Owner: ir.ObjectID(in.model.ID), Kind: fulltextcontract.IndexKind, Payload: payload})
+	}
+	in.fullTextIndexes[name] = true
+}
+
+func (in *interpreter) positiveFloat(expression ast.Expr) (float64, bool) {
+	value := in.pkg.TypesInfo.Types[expression].Value
+	if value == nil {
+		return 0, false
+	}
+	result, _ := constant.Float64Val(constant.ToFloat(value))
+	return result, result > 0 && !math.IsInf(result, 0) && !math.IsNaN(result)
+}
+
+func (in *interpreter) uint8Constant(expression ast.Expr) (uint8, bool) {
+	value := in.pkg.TypesInfo.Types[expression].Value
+	if value == nil || value.Kind() != constant.Int {
+		return 0, false
+	}
+	integer, exact := constant.Uint64Val(value)
+	return uint8(integer), exact && integer <= 255
 }
 
 func (in *interpreter) evalOptimisticConcurrency(call *ast.CallExpr, scope ir.ProviderScope) {

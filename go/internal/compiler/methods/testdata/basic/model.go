@@ -38,6 +38,7 @@ func (User) GolemModel() g.ModelSpec[User] {
 		g.PrimaryKey("pk_users", Users.ID),
 		g.Unique("uq_users_name", Users.Name),
 		g.SemanticIndex("profile", "content", Users.Name),
+		g.FullTextIndex("directory", g.FullTextField(Users.Name, 2), g.TextFolding(g.FoldDiacritics), g.TextPrefix(2, 3)),
 		g.Index[User]("idx_users_name_age").Keys(
 			g.IndexColumn(Users.Name).Desc(),
 			g.IndexExpr(g.Lower(Users.Name)),

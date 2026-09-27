@@ -18,6 +18,7 @@ import (
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
@@ -358,6 +359,34 @@ func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 	}
 	if strings.Count(source, "SearchRelatedPosts(") != 2 || strings.Count(source, "SimilarRelatedPosts(") != 2 {
 		t.Fatalf("provider definitions duplicated semantic methods:\n%s", source)
+	}
+}
+
+func TestEmitFullTextIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
+	modelID := ir.ModelID("10000000000000000000000000000000")
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "mail_content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: "20000000000000000000000000000000", Weight: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := ir.ModelIR{FormatVersion: ir.ModelFormatVersion, Models: []ir.ModelDeclIR{{ID: modelID, CanonicalIdentity: string(modelID), Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Message"}, LogicalName: "Message"}}, Extensions: []ir.ProviderExtensionIR{
+		{ID: "30000000000000000000000000000000", Provider: ir.SQLite, Version: 1, Owner: ir.ObjectID(modelID), Kind: fulltextcontract.IndexKind, Payload: payload},
+		{ID: "40000000000000000000000000000000", Provider: ir.PostgreSQL, Version: 1, Owner: ir.ObjectID(modelID), Kind: fulltextcontract.IndexKind, Payload: payload},
+	}}
+	contract := ir.ContractIR{FormatVersion: ir.ContractFormatVersion}
+	modelFingerprint, _ := ir.ModelFingerprint(model)
+	contractFingerprint, _ := ir.ContractFingerprint(contract)
+	file, err := Emit(Request{AppPackage: modelcodegen.PackageSpec{ImportPath: "example.test/app", PackageName: "app"}, ModelPackages: []modelcodegen.PackageSpec{{ImportPath: "example.test/app", PackageName: "app"}}, Actor: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Actor"}, GenerationDigest: strings.Repeat("a", 64), GeneratorVersion: "test", TemplateABIVersion: "test", Schema: SchemaInput{Model: model, Contract: contract, ModelFingerprint: modelFingerprint, ContractFingerprint: contractFingerprint}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(file.Source)
+	for _, fragment := range []string{"func (client CallerMessageClient[P]) TextSearchMailContent(", "golemruntime.CallerTextSearch", "[]golem.FullTextResult", "func (client SystemMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTextSearch"} {
+		if !strings.Contains(source, fragment) {
+			t.Fatalf("full-text generated surface missing %q:\n%s", fragment, source)
+		}
+	}
+	if strings.Count(source, "TextSearchMailContent(") != 2 {
+		t.Fatalf("provider definitions duplicated full-text methods:\n%s", source)
 	}
 }
 

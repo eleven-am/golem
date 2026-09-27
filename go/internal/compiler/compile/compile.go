@@ -151,6 +151,9 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddSemanticSearchOperations(&resolved.Compilation)...)
 	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, graphqlextension.AddFullTextSearchOperations(&resolved.Compilation)...)
+	}
 	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
 }
 
@@ -216,6 +219,9 @@ func CompileRawWithPrevious(raw ir.RawDeclIR, previous *ir.ModelIR) Result {
 	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddSemanticSearchOperations(&resolved.Compilation)...)
+	}
+	if !hasErrors(diagnostics) {
+		diagnostics = append(diagnostics, graphqlextension.AddFullTextSearchOperations(&resolved.Compilation)...)
 	}
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, validateComplete(resolved.Compilation)...)

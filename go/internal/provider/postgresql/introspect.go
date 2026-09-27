@@ -14,7 +14,10 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
+	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
@@ -83,8 +86,22 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 		expectedTables[string(table.Name)] = table
 	}
 	semanticTables := map[string]bool{}
+	fullTextTables := map[string]bool{}
 	if expectedNormalized.Version != 1 || expectedNormalized.CanonicalVersion != 1 {
 		for _, extension := range expectedNormalized.Extensions {
+			if extension.Kind == fulltextcontract.IndexKind {
+				descriptor, decodeErr := fulltextstorage.Decode(extension)
+				if decodeErr != nil {
+					return physical.PhysicalSchema{}, decodeErr
+				}
+				names := postgresqlFullTextNames(descriptor)
+				fullTextTables[string(names.table)] = true
+				allowed["trigger\x00"+string(names.insert)] = true
+				allowed["trigger\x00"+string(names.update)] = true
+				allowed["trigger\x00"+string(names.delete)] = true
+				allowed["trigger\x00"+string(names.truncate)] = true
+				continue
+			}
 			descriptor, decodeErr := semanticstorage.Decode(extension)
 			if decodeErr != nil {
 				return physical.PhysicalSchema{}, decodeErr
@@ -112,7 +129,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 		if allowed["table\x00"+name] {
 			continue
 		}
-		if semanticTables[name] {
+		if semanticTables[name] || fullTextTables[name] {
 			if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
 				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
 			}
@@ -331,6 +348,9 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 		if err := introspectSemanticExtensions(ctx, query, expectedNormalized, reviewedReplay); err != nil {
 			return physical.PhysicalSchema{}, err
 		}
+		if err := introspectFullTextExtensions(ctx, query, expectedNormalized); err != nil {
+			return physical.PhysicalSchema{}, err
+		}
 	}
 	actual.Extensions = append([]physical.Extension(nil), expectedNormalized.Extensions...)
 	actualNormalized, err := physical.NormalizeHistorical(actual)
@@ -389,7 +409,11 @@ func reconcileOptimisticConcurrency(expected, actual physical.PhysicalSchema) (p
 }
 
 func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema, reviewedReplay bool) error {
-	if len(expected.Extensions) == 0 {
+	hasSemantic := false
+	for _, extension := range expected.Extensions {
+		hasSemantic = hasSemantic || extension.Kind == semanticcontract.IndexKind
+	}
+	if !hasSemantic {
 		return nil
 	}
 	var vectorVersion string
@@ -397,6 +421,9 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		return fmt.Errorf("postgresql semantic introspect: pgvector >=0.8.0 is required")
 	}
 	for _, extension := range expected.Extensions {
+		if extension.Kind != semanticcontract.IndexKind {
+			continue
+		}
 		descriptor, err := semanticstorage.Decode(extension)
 		if err != nil {
 			return err
@@ -431,6 +458,107 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 	}
 	return nil
+}
+
+func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema) error {
+	for _, extension := range expected.Extensions {
+		if extension.Kind != fulltextcontract.IndexKind {
+			continue
+		}
+		descriptor, err := fulltextstorage.Decode(extension)
+		if err != nil {
+			return err
+		}
+		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
+			var unaccentCount int
+			const unaccentSQL = `SELECT count(*) FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='unaccent' AND n.nspname='public'`
+			if err := query.QueryRowxContext(ctx, unaccentSQL).Scan(&unaccentCount); err != nil || unaccentCount != 1 {
+				return fmt.Errorf("postgresql full-text introspect: unaccent must be installed in public extension=%s", extension.ID)
+			}
+		}
+		owner, exists := postgresqlOwnerTable(expected, descriptor.ModelID)
+		if !exists {
+			return fmt.Errorf("postgresql full-text introspect: owner is absent extension=%s", extension.ID)
+		}
+		names := postgresqlFullTextNames(descriptor)
+		var columns string
+		const columnsSQL = `SELECT COALESCE(string_agg(a.attname||':'||pg_catalog.format_type(a.atttypid,a.atttypmod)||':'||a.attnotnull::text,',' ORDER BY a.attnum),'') FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped`
+		if err := query.QueryRowxContext(ctx, columnsSQL, string(expected.Namespace.Name), string(names.table)).Scan(&columns); err != nil {
+			return err
+		}
+		byID := make(map[ir.FieldID]physical.PhysicalColumn, len(owner.Columns))
+		for _, column := range owner.Columns {
+			byID[column.ID] = column
+		}
+		want := make([]string, 0, len(owner.PrimaryKey.Columns)+1)
+		for _, field := range owner.PrimaryKey.Columns {
+			column := byID[field]
+			storage, storageErr := renderStorage(column.Storage)
+			if storageErr != nil {
+				return storageErr
+			}
+			want = append(want, string(column.Name)+":"+storage+":true")
+		}
+		want = append(want, "document:tsvector:true")
+		if columns != strings.Join(want, ",") {
+			return fmt.Errorf("postgresql full-text introspect: column drift extension=%s", extension.ID)
+		}
+		var indexCount int
+		const indexSQL = `SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class x ON x.oid=i.indexrelid JOIN pg_catalog.pg_class t ON t.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace JOIN pg_catalog.pg_am am ON am.oid=x.relam JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid AND a.attnum=i.indkey[0] WHERE n.nspname=$1 AND t.relname=$2 AND x.relname=$3 AND am.amname='gin' AND i.indisvalid AND i.indisready AND i.indnkeyatts=1 AND i.indnatts=1 AND i.indexprs IS NULL AND i.indpred IS NULL AND a.attname='document'`
+		if err := query.QueryRowxContext(ctx, indexSQL, string(expected.Namespace.Name), string(names.table), string(names.document)).Scan(&indexCount); err != nil || indexCount != 1 {
+			return fmt.Errorf("postgresql full-text introspect: GIN index drift extension=%s", extension.ID)
+		}
+		rendered, err := renderPostgreSQLFullTextExtension(expected.Namespace.Name, extension, owner)
+		if err != nil {
+			return err
+		}
+		const delimiter = "$golem$"
+		parts := strings.Split(rendered[2], delimiter)
+		if len(parts) != 3 {
+			return fmt.Errorf("postgresql full-text introspect: function definition is invalid extension=%s", extension.ID)
+		}
+		var functionBody string
+		const functionSQL = `SELECT p.prosrc FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
+		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function)).Scan(&functionBody); err != nil || functionBody != parts[1] {
+			return fmt.Errorf("postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
+		}
+		expectedTriggers := map[string]int{string(names.insert): 5, string(names.update): 17, string(names.delete): 9, string(names.truncate): 32}
+		const triggerSQL = `SELECT t.tgname,t.tgtype::integer FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal AND t.tgname IN($3,$4,$5,$6) AND pn.nspname=$1 AND p.proname=$7 ORDER BY t.tgname`
+		rows, err := query.QueryxContext(ctx, triggerSQL, string(expected.Namespace.Name), string(owner.Name), string(names.insert), string(names.update), string(names.delete), string(names.truncate), string(names.function))
+		if err != nil {
+			return err
+		}
+		seenTriggers := make(map[string]bool, len(expectedTriggers))
+		for rows.Next() {
+			var name string
+			var triggerType int
+			if err := rows.Scan(&name, &triggerType); err != nil {
+				_ = rows.Close()
+				return err
+			}
+			if expectedTriggers[name] != triggerType || seenTriggers[name] {
+				_ = rows.Close()
+				return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
+			}
+			seenTriggers[name] = true
+		}
+		if err := rows.Close(); err != nil {
+			return err
+		}
+		if err := rows.Err(); err != nil || len(seenTriggers) != len(expectedTriggers) {
+			return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
+		}
+	}
+	return nil
+}
+
+func postgresqlOwnerTable(schema physical.PhysicalSchema, model ir.ModelID) (physical.PhysicalTable, bool) {
+	for _, table := range schema.Tables {
+		if table.ID == model {
+			return table, true
+		}
+	}
+	return physical.PhysicalTable{}, false
 }
 
 func supportedPGVectorVersion(version string) bool {

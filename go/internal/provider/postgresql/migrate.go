@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/migration"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -391,16 +393,47 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		if !exists {
 			return nil, fmt.Errorf("semantic extension target is absent")
 		}
-		statements, err := renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)
+		var statements []string
+		var err error
+		preamble := []string(nil)
+		if extension.Kind == fulltextcontract.IndexKind {
+			owner, ownerExists := afterTables[extension.Owner.ModelID]
+			if !ownerExists {
+				return nil, fmt.Errorf("full-text extension owner is absent")
+			}
+			statements, err = renderPostgreSQLFullTextExtension(r.schema.Namespace.Name, extension, owner)
+			if err == nil {
+				var backfill []string
+				backfill, err = renderPostgreSQLFullTextBackfill(r.schema.Namespace.Name, extension, owner)
+				statements = append(statements, backfill...)
+			}
+			descriptor, decodeErr := fulltextstorage.Decode(extension)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
+				preamble = []string{"CREATE EXTENSION IF NOT EXISTS unaccent"}
+			}
+		} else {
+			statements, err = renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)
+			preamble = []string{"CREATE EXTENSION IF NOT EXISTS vector"}
+		}
 		if err != nil {
 			return nil, err
 		}
-		return append([]string{"CREATE EXTENSION IF NOT EXISTS vector"}, statements...), nil
+		return append(preamble, statements...), nil
 	}
 	if operation.Kind == migration.DropProviderExtension {
 		extension, exists := r.beforeExtensions[ir.ExtensionID(operation.ObjectID)]
 		if !exists {
 			return nil, fmt.Errorf("semantic extension target is absent")
+		}
+		if extension.Kind == fulltextcontract.IndexKind {
+			owner, ownerExists := beforeTables[extension.Owner.ModelID]
+			if !ownerExists {
+				return nil, fmt.Errorf("full-text extension owner is absent")
+			}
+			return dropPostgreSQLFullTextExtension(r.schema.Namespace.Name, extension, owner)
 		}
 		descriptor, err := semanticstorage.Decode(extension)
 		if err != nil {

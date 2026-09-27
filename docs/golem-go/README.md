@@ -18,6 +18,8 @@ Every page here is executed by a test. The code on them is code that ran.
   so enqueueing shares a transaction with the write that caused it.
 - **[SEMANTIC.md](./SEMANTIC.md)** — search by text and find rows like this
   row, authorized before ranking.
+- **[FULLTEXT.md](./FULLTEXT.md)** — transactionally maintained ranked term,
+  phrase and prefix search on SQLite and PostgreSQL.
 - **[RENDER.md](./RENDER.md)** — serve a single-page application with
   per-route metadata for crawlers.
 

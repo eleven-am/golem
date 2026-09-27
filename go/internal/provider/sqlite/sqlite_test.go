@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
@@ -93,6 +94,66 @@ func TestSemanticIndexUsesManagedExactVectorStorage(t *testing.T) {
 			t.Fatalf("semantic shadow DDL missing %q:\n%s", fragment, script.SQL())
 		}
 	}
+}
+
+func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
+	provider := New()
+	model := socialModelIR()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{
+		Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3},
+		Fields: []fulltextcontract.Field{{ID: id(12), Weight: 3}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(70)), Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "fulltext.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + id(70)
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Renée@example.test',1)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches := func(query string, want int) {
+		t.Helper()
+		var got int
+		if err := database.Get(&got, `SELECT count(*) FROM "`+base+`_fts" WHERE "`+base+`_fts" MATCH ?`, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("query %q matched %d rows, want %d", query, got, want)
+		}
+	}
+	assertMatches("renee", 1)
+	transaction, err := database.Beginx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Exec(`UPDATE users SET email='other@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 1)
+	if _, err := database.Exec(`UPDATE users SET email='other@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("other", 1)
+	if _, err := database.Exec(`DELETE FROM users WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("other", 0)
 }
 
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {

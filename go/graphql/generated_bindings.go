@@ -260,6 +260,13 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 			}
 			return row, nil
 		}
+		if fulltext, ok := value.(golem.FullTextResult[M]); ok {
+			row, err := golem.RuntimeFullTextRowFromResult(fulltext)
+			if err != nil {
+				return nil, err
+			}
+			return row, nil
+		}
 		row, ok := value.(golem.Row[M])
 		if !ok {
 			return nil, fmt.Errorf("custom model result has value %T", value)

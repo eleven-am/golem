@@ -11,6 +11,8 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/scalar"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
@@ -85,14 +87,20 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		if extension.Kind == semanticcontract.SpaceKind {
 			continue
 		}
-		if extension.Kind != semanticcontract.IndexKind {
+		if extension.Kind != semanticcontract.IndexKind && extension.Kind != fulltextcontract.IndexKind {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower: unsupported registered extension %q owned by %s", extension.Kind, extension.Owner)
 		}
 		owner, exists := semanticOwnerTable(schema.Tables, ir.ModelID(extension.Owner))
 		if !exists {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower extension %s: owner model %s is absent", extension.ID, extension.Owner)
 		}
-		lowered, err := semanticstorage.Lower(extension, owner)
+		var lowered physical.Extension
+		var err error
+		if extension.Kind == fulltextcontract.IndexKind {
+			lowered, err = fulltextstorage.Lower(extension, owner)
+		} else {
+			lowered, err = semanticstorage.Lower(extension, owner)
+		}
 		if err != nil {
 			return physical.PhysicalSchema{}, fmt.Errorf("postgresql lower extension %s: %w", extension.ID, err)
 		}

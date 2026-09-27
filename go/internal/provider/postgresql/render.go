@@ -9,6 +9,8 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
@@ -53,8 +55,22 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		renderer.tables[table.ID] = table
 	}
 	statements := make([]string, 0, len(normalized.Tables)+len(normalized.Extensions)*4+2)
-	if len(normalized.Extensions) != 0 {
+	hasSemantic, hasFoldedFullText := false, false
+	for _, extension := range normalized.Extensions {
+		hasSemantic = hasSemantic || extension.Kind == "golem.semantic-index"
+		if extension.Kind == fulltextcontract.IndexKind {
+			descriptor, decodeErr := fulltextstorage.Decode(extension)
+			if decodeErr != nil {
+				return Script{}, decodeErr
+			}
+			hasFoldedFullText = hasFoldedFullText || descriptor.Index.Folding == fulltextcontract.FoldingDiacritics
+		}
+	}
+	if hasSemantic {
 		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS vector")
+	}
+	if hasFoldedFullText {
+		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS unaccent")
 	}
 	statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.Namespace.Name)))
 	if normalized.System.Version != 0 {
@@ -105,7 +121,17 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		}
 	}
 	for _, extension := range normalized.Extensions {
-		rendered, renderErr := renderPostgreSQLSemanticExtension(normalized.Namespace.Name, extension, reviewedReplay)
+		var rendered []string
+		var renderErr error
+		if extension.Kind == fulltextcontract.IndexKind {
+			owner, exists := renderer.tables[extension.Owner.ModelID]
+			if !exists {
+				return Script{}, fmt.Errorf("postgresql render full-text extension %s: owner is absent", extension.ID)
+			}
+			rendered, renderErr = renderPostgreSQLFullTextExtension(normalized.Namespace.Name, extension, owner)
+		} else {
+			rendered, renderErr = renderPostgreSQLSemanticExtension(normalized.Namespace.Name, extension, reviewedReplay)
+		}
 		if renderErr != nil {
 			return Script{}, renderErr
 		}

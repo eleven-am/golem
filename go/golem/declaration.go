@@ -104,6 +104,46 @@ func DefineModel[M any](_ ...ModelOption[M]) ModelSpec[M] { return ModelSpec[M]{
 // storage, refresh, similarity queries, and authorization.
 func SemanticIndex[M any](_, _ string, _ ...Column[M]) ModelOption[M] { return modelOption[M]{} }
 
+// TextFoldingMode selects portable full-text normalization.
+type TextFoldingMode string
+
+const (
+	// FoldDiacritics makes accented and unaccented forms match.
+	FoldDiacritics TextFoldingMode = "diacritics"
+	// FoldNone preserves diacritics while tokenizing text.
+	FoldNone TextFoldingMode = "none"
+)
+
+// FullTextOption configures one full-text index.
+type FullTextOption interface{ fullTextOption() }
+type fullTextOption struct{}
+
+// FullTextFieldOption is a model-bound full-text field declaration.
+type FullTextFieldOption[M any] struct{ _ [0]*M }
+
+func (fullTextOption) fullTextOption()         {}
+func (FullTextFieldOption[M]) fullTextOption() {}
+
+// FullTextIndex declares a transactionally maintained ranked text index.
+func FullTextIndex[M any](_ string, _ FullTextFieldOption[M], _ ...FullTextOption) ModelOption[M] {
+	return modelOption[M]{}
+}
+
+// FullTextField adds one local String field with a positive ranking weight.
+func FullTextField[M any](_ Column[M], _ float64) FullTextFieldOption[M] {
+	return FullTextFieldOption[M]{}
+}
+
+// TextFolding selects the index's portable normalization mode.
+func TextFolding(_ TextFoldingMode) FullTextOption {
+	return fullTextOption{}
+}
+
+// TextPrefix enables prefix indexes for the declared token lengths.
+func TextPrefix(_ ...uint8) FullTextOption {
+	return fullTextOption{}
+}
+
 type GraphQLOperation string
 
 const (

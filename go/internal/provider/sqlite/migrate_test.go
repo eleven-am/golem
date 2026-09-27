@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -131,6 +133,39 @@ func TestSQLiteIncrementalSemanticIndexCreatesManagedVec0Atomically(t *testing.T
 	var version string
 	if err := database.GetContext(ctx, &version, "SELECT vec_version()"); err != nil || version == "" {
 		t.Fatalf("sqlite-vec version=%q error=%v", version, err)
+	}
+}
+
+func TestSQLiteIncrementalFullTextIndexBackfillsAndVerifies(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	before := incrementalFixtureSchema(t, false)
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: string(fixtureItemNameField), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := fulltextstorage.Lower(ir.ProviderExtensionIR{ID: "70000000000000000000000000000002", Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: fulltextcontract.IndexKind, Payload: payload}, migrationFixtureTable(t, before, fixtureItemTable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := normalizeMigrationFixture(t, before)
+	after.Extensions = []physical.Extension{extension}
+	after = normalizeMigrationFixture(t, after)
+	database := openMigrationFixture(t, provider, before, "fulltext-index.db")
+	table := migrationFixtureTable(t, before, fixtureItemTable)
+	if _, err := database.ExecContext(ctx, "INSERT INTO "+quote(table.Name)+" (\"id\",\"name\") VALUES (?,?)", 1, "Renée mailbox"); err != nil {
+		t.Fatal(err)
+	}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_fulltext_index.sql", nil)
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(ctx, database, after); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := database.GetContext(ctx, &count, `SELECT count(*) FROM "_golem_fulltext_70000000000000000000000000000002_fts" WHERE "_golem_fulltext_70000000000000000000000000000002_fts" MATCH 'renee'`); err != nil || count != 1 {
+		t.Fatalf("backfilled full-text rows=%d err=%v", count, err)
 	}
 }
 

@@ -105,10 +105,10 @@ func (PolicyDialect) Encode(bound policysql.BoundValue) (any, error) {
 func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.Binder) (string, error) {
 	column := policyColumn(leaf.Column)
 	if leaf.Operator == ir.OperatorIsNull {
-		return booleanSQL(column + " IS NULL"), nil
+		return column + " IS NULL", nil
 	}
 	if leaf.Operator == ir.OperatorIsNotNull {
-		return booleanSQL(column + " IS NOT NULL"), nil
+		return column + " IS NOT NULL", nil
 	}
 
 	comparison := func(value ir.Value, operator string) (string, error) {
@@ -134,14 +134,11 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 		if err != nil {
 			return "", err
 		}
-		if leaf.Operator == ir.OperatorNotEqual {
-			predicate = column + " IS NULL OR NOT (" + predicate + ")"
-		}
-		return booleanSQL(predicate), nil
+		return nullClosedComparison(column, predicate, leaf.Operator == ir.OperatorNotEqual), nil
 	case ir.OperatorIn, ir.OperatorNotIn:
 		values, _ := leaf.Operand.Many()
 		if len(values) == 0 {
-			return booleanSQL(strconv.FormatBool(leaf.Operator == ir.OperatorNotIn)), nil
+			return strconv.FormatBool(leaf.Operator == ir.OperatorNotIn), nil
 		}
 		predicates := make([]string, len(values))
 		for index, value := range values {
@@ -151,10 +148,7 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 			}
 			predicates[index] = predicate
 		}
-		if leaf.Operator == ir.OperatorIn {
-			return booleanSQL(column + " IS NOT NULL AND (" + strings.Join(predicates, " OR ") + ")"), nil
-		}
-		return booleanSQL(column + " IS NULL OR NOT (" + strings.Join(predicates, " OR ") + ")"), nil
+		return nullClosedComparison(column, strings.Join(predicates, " OR "), leaf.Operator == ir.OperatorNotIn), nil
 	case ir.OperatorLessThan, ir.OperatorLessThanOrEqual, ir.OperatorGreaterThan, ir.OperatorGreaterThanOrEqual:
 		value, _ := leaf.Operand.One()
 		token := map[ir.OperatorID]string{ir.OperatorLessThan: "<", ir.OperatorLessThanOrEqual: "<=", ir.OperatorGreaterThan: ">", ir.OperatorGreaterThanOrEqual: ">="}[leaf.Operator]
@@ -162,7 +156,7 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 		if err != nil {
 			return "", err
 		}
-		return booleanSQL(column + " IS NOT NULL AND (" + predicate + ")"), nil
+		return nullClosedComparison(column, predicate, false), nil
 	case ir.OperatorContains, ir.OperatorStartsWith, ir.OperatorEndsWith:
 		value, _ := leaf.Operand.One()
 		argument, err := binder.Value(value, leaf.Field.Type)
@@ -180,7 +174,7 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 		if leaf.Operator == ir.OperatorEndsWith {
 			predicate = "length(" + right + ") = 0 OR substr(" + left + ", -length(" + right + ")) = " + right
 		}
-		return booleanSQL(column + " IS NOT NULL AND (" + predicate + ")"), nil
+		return nullClosedComparison(column, predicate, false), nil
 	default:
 		return "", fmt.Errorf("sqlite policy scalar: unsupported operator %d", leaf.Operator)
 	}
@@ -189,10 +183,10 @@ func (PolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.B
 func (PolicyDialect) RenderList(leaf policysql.ListLeaf, binder *policysql.Binder) (string, error) {
 	column := policyColumn(leaf.Column)
 	if leaf.Operator == ir.OperatorListIsNull {
-		return booleanSQL(column + " IS NULL"), nil
+		return column + " IS NULL", nil
 	}
 	if leaf.Operator == ir.OperatorListIsNotNull {
-		return booleanSQL(column + " IS NOT NULL"), nil
+		return column + " IS NOT NULL", nil
 	}
 	element, ok := leaf.Field.Type.Element()
 	if !ok {
@@ -254,10 +248,10 @@ func (PolicyDialect) RenderList(leaf policysql.ListLeaf, binder *policysql.Binde
 func (PolicyDialect) RenderJSON(leaf policysql.JSONLeaf, binder *policysql.Binder) (string, error) {
 	column := policyColumn(leaf.Column)
 	if leaf.Operator == ir.OperatorJSONIsNull {
-		return booleanSQL(column + " IS NULL"), nil
+		return column + " IS NULL", nil
 	}
 	if leaf.Operator == ir.OperatorJSONIsNotNull {
-		return booleanSQL(column + " IS NOT NULL"), nil
+		return column + " IS NOT NULL", nil
 	}
 	path, err := encodePolicyPath(leaf.Path)
 	if err != nil {
@@ -289,7 +283,13 @@ func (PolicyDialect) RenderJSON(leaf policysql.JSONLeaf, binder *policysql.Binde
 func policyColumn(column policysql.Column) string {
 	return quote(column.Alias) + "." + quote(column.Name)
 }
-func booleanSQL(predicate string) string { return "CASE WHEN (" + predicate + ") THEN 1 ELSE 0 END" }
+
+func nullClosedComparison(column, predicate string, negated bool) string {
+	if negated {
+		return column + " IS NULL OR NOT (" + predicate + ")"
+	}
+	return column + " IS NOT NULL AND (" + predicate + ")"
+}
 
 func scaleDecimal(coefficient int64, from uint8, to uint16) (int64, error) {
 	if uint16(from) > to {

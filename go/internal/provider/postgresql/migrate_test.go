@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -378,6 +380,41 @@ func TestPlanIncrementalCreatesSemanticPgvectorStorage(t *testing.T) {
 	}
 	if strings.Contains(plan.SQL(), "USING hnsw") {
 		t.Fatalf("exact semantic storage created an unused HNSW index:\n%s", plan.SQL())
+	}
+}
+
+func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.Extensions = nil
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "002_fulltext", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + string(extensionID)
+	for _, fragment := range []string{
+		"CREATE EXTENSION IF NOT EXISTS unaccent",
+		`CREATE TABLE "reviewed"."` + base + `_fts"`,
+		`CREATE INDEX "` + base + `_fts_document"`,
+		`CREATE TRIGGER "` + base + `_ai"`,
+		`INSERT INTO "reviewed"."` + base + `_fts"`,
+	} {
+		if !strings.Contains(plan.SQL(), fragment) {
+			t.Fatalf("full-text incremental SQL missing %q:\n%s", fragment, plan.SQL())
+		}
 	}
 }
 
@@ -863,6 +900,49 @@ func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
 		ledger, err := provider.ReadLedger(context.Background(), database)
 		if err != nil || len(ledger) != 2 {
 			t.Fatalf("ledger=%#v error=%v", ledger, err)
+		}
+	})
+
+	t.Run("full-text index backfills existing rows", func(t *testing.T) {
+		const namespace = "golem_fulltext_migrate_live"
+		cleanup(namespace)
+		defer cleanup(namespace)
+		empty := canonicalEmptyPostgreSQLMigrationSchema(t, namespace)
+		initial := livePostgreSQLMigrationSchema(t, namespace, false, false)
+		first := reviewedPostgreSQLEntry(t, "001_initial", empty, initial, nil)
+		first, firstFiles := finalizePostgreSQLEntry(t, provider, first)
+		if err := provider.ApplyMigration(context.Background(), database, reviewedPostgreSQLManifest(provider, first), firstFiles); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO "golem_fulltext_migrate_live"."items" ("id","name") VALUES (1,'Renée mailbox')`); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: id(952), Weight: 1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		extensionID := ir.ExtensionID(id(956))
+		extension, err := fulltextstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(950)), Kind: fulltextcontract.IndexKind, Payload: payload}, *postgresqlTablePointer(&initial, ir.ModelID(id(950))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := initial
+		after.Extensions = []physical.Extension{extension}
+		after = normalizePostgreSQLMigrationSchema(t, after)
+		second := reviewedPostgreSQLEntry(t, "002_fulltext", initial, after, &first)
+		second, secondFiles := finalizePostgreSQLEntry(t, provider, second)
+		manifest := reviewedPostgreSQLManifest(provider, first, second)
+		files := mergePostgreSQLMigrationFiles(firstFiles, secondFiles)
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.Verify(context.Background(), database, after); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		base := "_golem_fulltext_" + string(extensionID)
+		if err := database.Get(&count, `SELECT count(*) FROM "golem_fulltext_migrate_live"."`+base+`_fts" WHERE "document" @@ to_tsquery('simple','renee')`); err != nil || count != 1 {
+			t.Fatalf("backfilled full-text rows=%d err=%v", count, err)
 		}
 	})
 

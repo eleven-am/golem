@@ -8,6 +8,8 @@ import (
 	"strings"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
@@ -74,6 +76,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 		actual[row.Type+"\x00"+row.Name] = row
 	}
 	expectedObjects := make(map[string]string)
+	expectedTokenObjects := make(map[string]string)
 	for _, object := range normalized.System.Objects {
 		statement, renderErr := renderSystemObject(object)
 		if renderErr != nil {
@@ -112,6 +115,37 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	}
 	if normalized.Version != 1 || normalized.CanonicalVersion != 1 {
 		for _, extension := range normalized.Extensions {
+			if extension.Kind == fulltextcontract.IndexKind {
+				descriptor, decodeErr := fulltextstorage.Decode(extension)
+				if decodeErr != nil {
+					return physical.PhysicalSchema{}, decodeErr
+				}
+				owner, exists := tableMap[descriptor.ModelID]
+				if !exists {
+					return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect full-text extension %s: owner is absent", extension.ID)
+				}
+				statements, renderErr := renderFullTextExtension(extension, owner)
+				if renderErr != nil {
+					return physical.PhysicalSchema{}, renderErr
+				}
+				if len(statements) != 5 {
+					return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect full-text statement registry mismatch for %s", extension.ID)
+				}
+				names := sqliteFullTextNames(descriptor)
+				expectedObjects["table\x00"+string(names.keys)] = statements[0]
+				expectedTokenObjects["table\x00"+string(names.index)] = statements[1]
+				expectedTokenObjects["trigger\x00"+string(names.insert)] = statements[2]
+				expectedTokenObjects["trigger\x00"+string(names.update)] = statements[3]
+				expectedTokenObjects["trigger\x00"+string(names.delete)] = statements[4]
+				for _, suffix := range []string{"_config", "_data", "_docsize", "_idx"} {
+					key := "table\x00" + string(names.index) + suffix
+					if _, exists := actual[key]; !exists {
+						return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: full-text shadow table %s%s", names.index, suffix)
+					}
+					delete(actual, key)
+				}
+				continue
+			}
 			statements, renderErr := renderSemanticExtension(extension, reviewedReplay)
 			if renderErr != nil {
 				return physical.PhysicalSchema{}, renderErr
@@ -152,8 +186,25 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	for _, unmanaged := range normalized.Unmanaged {
 		delete(actual, unmanaged.Kind+"\x00"+string(unmanaged.Name))
 	}
-	if len(actual) != len(expectedObjects) {
-		return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: object count got=%d want=%d", len(actual), len(expectedObjects))
+	if len(actual) != len(expectedObjects)+len(expectedTokenObjects) {
+		return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: object count got=%d want=%d objects=%v", len(actual), len(expectedObjects)+len(expectedTokenObjects), sortedSchemaObjectKeys(actual))
+	}
+	for key, expectedSQL := range expectedTokenObjects {
+		row, exists := actual[key]
+		if !exists {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: missing %s", key)
+		}
+		expectedTokens, lexErr := lexDDL(expectedSQL)
+		if lexErr != nil {
+			return physical.PhysicalSchema{}, lexErr
+		}
+		actualTokens, lexErr := lexDDL(row.SQL)
+		if lexErr != nil {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect parse %s: %w", key, lexErr)
+		}
+		if !reflect.DeepEqual(expectedTokens, actualTokens) {
+			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: full-text definition changed for %s", key)
+		}
 	}
 	for key, expectedSQL := range expectedObjects {
 		row, exists := actual[key]
@@ -186,6 +237,15 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	// Stable IDs and registered expression identities are reattached only after
 	// every catalog fact and parsed semantic definition has matched.
 	return normalized, nil
+}
+
+func sortedSchemaObjectKeys(objects map[string]schemaRow) []string {
+	keys := make([]string, 0, len(objects))
+	for key := range objects {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 func inspectColumns(ctx context.Context, database catalogQuerier, table physical.PhysicalTable) error {

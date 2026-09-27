@@ -15,6 +15,7 @@ import (
 
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -75,6 +76,13 @@ func Emit(request Request) (File, error) {
 		return File{}, fmt.Errorf("registry codegen: %w", err)
 	}
 	if err := validateSemanticMethodNames(semantic); err != nil {
+		return File{}, err
+	}
+	fulltext, err := fulltextcontract.IndexesByModel(request.Schema.Model)
+	if err != nil {
+		return File{}, fmt.Errorf("registry codegen: %w", err)
+	}
+	if err := validateFullTextMethodNames(fulltext); err != nil {
 		return File{}, err
 	}
 	packages := append([]modelcodegen.PackageSpec(nil), request.ModelPackages...)
@@ -209,7 +217,7 @@ func Emit(request Request) (File, error) {
 		}
 		source.WriteString("\t)\n}\n")
 	}
-	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic)
+	emitRuntimeSurface(&source, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golem, golemRuntime, queryplanAlias, eventsAlias, observeAlias, models, modelAliases, contractModels(request.Schema.Contract), semantic, fulltext)
 	formatted, err := format.Source(source.Bytes())
 	if err != nil {
 		return File{}, fmt.Errorf("registry codegen: format: %w\n%s", err, source.String())
@@ -221,7 +229,7 @@ func Emit(request Request) (File, error) {
 	return File{ImportPath: request.AppPackage.ImportPath, PackageName: request.AppPackage.PackageName, Path: path, Source: formatted}, nil
 }
 
-func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index) {
+func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias, providerAlias, embeddingAlias, queueAlias, golemAlias, runtimeAlias, queryplanAlias, eventsAlias, observeAlias string, models []ir.ModelDeclIR, aliases map[string]string, contracts map[ir.ModelID]ir.ModelContractIR, semantic map[ir.ModelID][]semanticcontract.Index, fulltext map[ir.ModelID][]fulltextcontract.Index) {
 	fmt.Fprintf(source, "\ntype Config[P any] struct {\n")
 	fmt.Fprintf(source, "\tDatabase *%s.Database\n", providerAlias)
 	fmt.Fprintf(source, "\tEmbeddings %s.Registry\n", embeddingAlias)
@@ -280,6 +288,9 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
+		for _, index := range fulltext[model.ID] {
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, fullTextSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
 		if contract.Subscriptions {
 			eventType := model.Go.Name + "Event"
 			if alias := aliases[model.Go.PackagePath]; alias != "" {
@@ -300,6 +311,9 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		for _, index := range semantic[model.ID] {
 			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
+		for _, index := range fulltext[model.ID] {
+			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, fullTextSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		emitAnalyticsClientMethods(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
@@ -517,6 +531,28 @@ func semanticSearchMethodName(name string) string {
 func semanticSimilarMethodName(name string) string {
 	exported, _ := semanticcontract.ExportedIndexName(name)
 	return "Similar" + exported
+}
+
+func validateFullTextMethodNames(indexes map[ir.ModelID][]fulltextcontract.Index) error {
+	for modelID := range indexes {
+		methods := make(map[string]string)
+		for _, index := range indexes[modelID] {
+			if _, ok := fulltextcontract.ExportedIndexName(index.Name); !ok {
+				return fmt.Errorf("registry codegen: full-text index name %q cannot form a Go method", index.Name)
+			}
+			method := fullTextSearchMethodName(index.Name)
+			if previous, collision := methods[method]; collision && previous != index.Name {
+				return fmt.Errorf("registry codegen: full-text index names %q and %q collide in Go", previous, index.Name)
+			}
+			methods[method] = index.Name
+		}
+	}
+	return nil
+}
+
+func fullTextSearchMethodName(name string) string {
+	exported, _ := fulltextcontract.ExportedIndexName(name)
+	return "TextSearch" + exported
 }
 
 type preparedDocument struct {

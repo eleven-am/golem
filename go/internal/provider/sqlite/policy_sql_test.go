@@ -2,6 +2,8 @@ package sqlite
 
 import (
 	"context"
+	"fmt"
+	"math/rand"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -227,6 +229,220 @@ func TestPolicySQLiteNamedScalarMutationMatrix(t *testing.T) {
 	}
 }
 
+type legacySQLitePolicyDialect struct{ PolicyDialect }
+
+func (legacySQLitePolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.Binder) (string, error) {
+	predicate, err := (PolicyDialect{}).RenderScalar(leaf, binder)
+	if err != nil {
+		return "", err
+	}
+	if leaf.Operator == ir.OperatorEqual {
+		column := policyColumn(leaf.Column)
+		prefix := column + " IS NOT NULL AND ("
+		if !strings.HasPrefix(predicate, prefix) || !strings.HasSuffix(predicate, ")") {
+			return "", fmt.Errorf("legacy sqlite policy: unexpected equality predicate %q", predicate)
+		}
+		predicate = strings.TrimSuffix(strings.TrimPrefix(predicate, prefix), ")")
+	}
+	return "CASE WHEN (" + predicate + ") THEN 1 ELSE 0 END", nil
+}
+
+func (legacySQLitePolicyDialect) RenderList(leaf policysql.ListLeaf, binder *policysql.Binder) (string, error) {
+	predicate, err := (PolicyDialect{}).RenderList(leaf, binder)
+	if err != nil {
+		return "", err
+	}
+	if leaf.Operator == ir.OperatorListIsNull || leaf.Operator == ir.OperatorListIsNotNull {
+		return "CASE WHEN (" + predicate + ") THEN 1 ELSE 0 END", nil
+	}
+	return predicate, nil
+}
+
+func (legacySQLitePolicyDialect) RenderJSON(leaf policysql.JSONLeaf, binder *policysql.Binder) (string, error) {
+	predicate, err := (PolicyDialect{}).RenderJSON(leaf, binder)
+	if err != nil {
+		return "", err
+	}
+	if leaf.Operator == ir.OperatorJSONIsNull || leaf.Operator == ir.OperatorJSONIsNotNull {
+		return "CASE WHEN (" + predicate + ") THEN 1 ELSE 0 END", nil
+	}
+	return predicate, nil
+}
+
+func TestPolicySQLiteSargablePredicatesPreserveLegacyTruthSets(t *testing.T) {
+	ctx := context.Background()
+	database, _, err := New().Open(ctx, filepath.Join(t.TempDir(), "sargable-equivalence.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY, name TEXT) STRICT`); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := database.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	statement, err := transaction.Prepare(`INSERT INTO probe(id,name) VALUES (?,?)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	random := rand.New(rand.NewSource(7))
+	for id := 1; id <= 2048; id++ {
+		var name any
+		if id%7 != 0 {
+			name = fmt.Sprintf("value-%03d-%c", random.Intn(128), 'a'+rune(random.Intn(6)))
+		}
+		if _, err := statement.Exec(id, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := statement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Commit(); err != nil {
+		t.Fatal(err)
+	}
+
+	resolver := newSQLitePolicyTestResolver(t)
+	proof, err := New().PolicyCapabilityProof(ctx, database, resolver.fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	operators := []ir.OperatorID{
+		ir.OperatorEqual, ir.OperatorNotEqual, ir.OperatorIn, ir.OperatorNotIn,
+		ir.OperatorLessThan, ir.OperatorLessThanOrEqual, ir.OperatorGreaterThan, ir.OperatorGreaterThanOrEqual,
+		ir.OperatorContains, ir.OperatorStartsWith, ir.OperatorEndsWith, ir.OperatorIsNull, ir.OperatorIsNotNull,
+	}
+	leaf := func(operatorID ir.OperatorID) ir.Condition {
+		operand := ir.NoOperand()
+		if operatorID == ir.OperatorIn || operatorID == ir.OperatorNotIn {
+			values := make([]ir.Value, 1+random.Intn(3))
+			for index := range values {
+				values[index], err = ir.StringValue(fmt.Sprintf("value-%03d-%c", random.Intn(128), 'a'+rune(random.Intn(6))))
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			operand, err = ir.ManyOperand(values)
+		} else if operatorID != ir.OperatorIsNull && operatorID != ir.OperatorIsNotNull {
+			value := "value-"
+			if operatorID == ir.OperatorContains || operatorID == ir.OperatorStartsWith || operatorID == ir.OperatorEndsWith {
+				value = []string{"value-", "-a", "-b", "037"}[random.Intn(4)]
+			} else {
+				value = fmt.Sprintf("value-%03d-%c", random.Intn(128), 'a'+rune(random.Intn(6)))
+			}
+			var wrapped ir.Value
+			wrapped, err = ir.StringValue(value)
+			if err == nil {
+				operand, err = ir.OneOperand(wrapped)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		requirements, err := operator.ValidateShape(operatorID, operator.Shape{Node: ir.ConditionScalar, FieldType: resolver.textType, Operand: operand, Mode: ir.ComparisonSensitive, Providers: ir.PortableProviders()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		condition, err := ir.NewScalar(resolver.modelID, resolver.nameID, resolver.textType, operatorID, ir.ComparisonSensitive, operand, requirements)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return condition
+	}
+	compile := func(condition ir.Condition, dialect policysql.Dialect) policysql.Fragment {
+		fragment, err := policysql.Compile(policysql.Request{Condition: condition, Provider: ir.ProviderSQLite, Resolver: resolver, Dialect: dialect, Capabilities: proof, BoundFingerprint: resolver.fingerprint, RootAlias: "root"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return fragment
+	}
+	for iteration := 0; iteration < 256; iteration++ {
+		left := leaf(operators[random.Intn(len(operators))])
+		right := leaf(operators[random.Intn(len(operators))])
+		logical := ir.LogicalAnd
+		if random.Intn(2) == 1 {
+			logical = ir.LogicalOr
+		}
+		condition, err := ir.NewLogical(resolver.modelID, logical, []ir.Condition{left, right})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if random.Intn(2) == 1 {
+			condition, err = ir.NewLogical(resolver.modelID, ir.LogicalNot, []ir.Condition{condition})
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		current := compile(condition, NewPolicyDialect())
+		legacy := compile(condition, legacySQLitePolicyDialect{})
+		var currentIDs, legacyIDs []int
+		if err := database.Select(&currentIDs, `SELECT id FROM probe AS "root" WHERE `+current.SQL()+` ORDER BY id`, current.Args()...); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Select(&legacyIDs, `SELECT id FROM probe AS "root" WHERE `+legacy.SQL()+` ORDER BY id`, legacy.Args()...); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(currentIDs, legacyIDs) {
+			t.Fatalf("iteration %d differs: current=%v legacy=%v\ncurrent SQL=%s\nlegacy SQL=%s", iteration, currentIDs, legacyIDs, current.SQL(), legacy.SQL())
+		}
+		var unknown int
+		if err := database.Get(&unknown, `SELECT count(*) FROM probe AS "root" WHERE (`+current.SQL()+`) IS NULL`, current.Args()...); err != nil {
+			t.Fatal(err)
+		}
+		if unknown != 0 {
+			t.Fatalf("iteration %d returned %d unknown rows: %s", iteration, unknown, current.SQL())
+		}
+	}
+}
+
+func TestPolicySQLiteSargablePredicatesUseIndexes(t *testing.T) {
+	ctx := context.Background()
+	database, _, err := New().Open(ctx, filepath.Join(t.TempDir(), "sargable-plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if _, err := database.Exec(`CREATE TABLE probe (id INTEGER PRIMARY KEY, name TEXT) STRICT; CREATE UNIQUE INDEX probe_name ON probe(name)`); err != nil {
+		t.Fatal(err)
+	}
+	resolver := newSQLitePolicyTestResolver(t)
+	proof, err := New().PolicyCapabilityProof(ctx, database, resolver.fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringValue, _ := ir.StringValue("value-001-a")
+	stringOperand, _ := ir.OneOperand(stringValue)
+	stringRequirements, err := operator.ValidateShape(ir.OperatorEqual, operator.Shape{Node: ir.ConditionScalar, FieldType: resolver.textType, Operand: stringOperand, Mode: ir.ComparisonSensitive, Providers: ir.PortableProviders()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stringCondition, _ := ir.NewScalar(resolver.modelID, resolver.nameID, resolver.textType, ir.OperatorEqual, ir.ComparisonSensitive, stringOperand, stringRequirements)
+	intValue, _ := ir.SignedValue(ir.ValueInt64, 7)
+	intOperand, _ := ir.OneOperand(intValue)
+	intRequirements, err := operator.ValidateShape(ir.OperatorEqual, operator.Shape{Node: ir.ConditionScalar, FieldType: resolver.intType, Operand: intOperand, Mode: ir.ComparisonSensitive, Providers: ir.PortableProviders()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCondition, _ := ir.NewScalar(resolver.modelID, resolver.idID, resolver.intType, ir.OperatorEqual, ir.ComparisonSensitive, intOperand, intRequirements)
+	for name, condition := range map[string]ir.Condition{"primary_key": intCondition, "nullable_unique": stringCondition} {
+		t.Run(name, func(t *testing.T) {
+			fragment, err := policysql.Compile(policysql.Request{Condition: condition, Provider: ir.ProviderSQLite, Resolver: resolver, Dialect: NewPolicyDialect(), Capabilities: proof, BoundFingerprint: resolver.fingerprint, RootAlias: "root"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(fragment.SQL(), "CASE WHEN") {
+				t.Fatalf("policy predicate is not sargable: %s", fragment.SQL())
+			}
+			plan := queryPlan(t, database, `SELECT id FROM probe AS "root" WHERE `+fragment.SQL(), fragment.Args())
+			if !strings.Contains(plan, "SEARCH") || strings.Contains(plan, "SCAN") {
+				t.Fatalf("policy predicate did not use an index: %s\nSQL: %s", plan, fragment.SQL())
+			}
+		})
+	}
+}
+
 func pointer(value string) *string { return &value }
 
 func TestPolicySQLiteJSONAndListFunctionsNeverReturnUnknown(t *testing.T) {
@@ -344,15 +560,20 @@ func TestPolicyDialectCompilesBoundFragmentsAndExecutesBeforeSelection(t *testin
 }
 
 type sqlitePolicyTestResolver struct {
-	modelID                      ir.ModelID
-	nameID, tagsID, docID        ir.FieldID
-	textType, listType, jsonType ir.TypeRef
-	fingerprint                  [32]byte
+	modelID                     ir.ModelID
+	idID, nameID, tagsID, docID ir.FieldID
+	intType, textType           ir.TypeRef
+	listType, jsonType          ir.TypeRef
+	fingerprint                 [32]byte
 }
 
 func newSQLitePolicyTestResolver(t *testing.T) *sqlitePolicyTestResolver {
 	t.Helper()
 	text, err := ir.NewTypeRef(ir.ValueString, true, 0, 0, ir.EnumID{}, nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	integer, err := ir.NewTypeRef(ir.ValueInt64, false, 0, 0, ir.EnumID{}, nil, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -365,7 +586,7 @@ func newSQLitePolicyTestResolver(t *testing.T) *sqlitePolicyTestResolver {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &sqlitePolicyTestResolver{modelID: testModelID(1), nameID: testFieldID(1), tagsID: testFieldID(2), docID: testFieldID(3), textType: text, listType: list, jsonType: jsonType, fingerprint: [32]byte{9, 8, 7}}
+	return &sqlitePolicyTestResolver{modelID: testModelID(1), idID: testFieldID(1), nameID: testFieldID(2), tagsID: testFieldID(3), docID: testFieldID(4), intType: integer, textType: text, listType: list, jsonType: jsonType, fingerprint: [32]byte{9, 8, 7}}
 }
 
 func (resolver *sqlitePolicyTestResolver) Providers() ir.ProviderSet   { return ir.PortableProviders() }
@@ -378,6 +599,8 @@ func (resolver *sqlitePolicyTestResolver) Field(provider ir.Provider, model ir.M
 		return policysql.Field{}, false
 	}
 	switch field {
+	case resolver.idID:
+		return policysql.Field{Model: model, ID: field, Column: "id", Type: resolver.intType, Nullable: false}, true
 	case resolver.nameID:
 		return policysql.Field{Model: model, ID: field, Column: "name", Type: resolver.textType, Nullable: true}, true
 	case resolver.tagsID:

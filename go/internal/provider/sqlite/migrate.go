@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/migration"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -318,7 +319,22 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			if !exists {
 				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
 			}
-			statements, renderErr := renderSemanticExtension(extension, false)
+			var statements []string
+			var renderErr error
+			if extension.Kind == fulltextcontract.IndexKind {
+				owner, ownerExists := afterTables[extension.Owner.ModelID]
+				if !ownerExists {
+					return IncrementalPlan{}, fmt.Errorf("sqlite migration %s full-text owner is absent", entry.ID)
+				}
+				statements, renderErr = renderFullTextExtension(extension, owner)
+				if renderErr == nil {
+					var backfill []string
+					backfill, renderErr = renderFullTextBackfill(extension, owner)
+					statements = append(statements, backfill...)
+				}
+			} else {
+				statements, renderErr = renderSemanticExtension(extension, false)
+			}
 			if renderErr != nil {
 				return IncrementalPlan{}, renderErr
 			}
@@ -329,6 +345,14 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			extension, exists := findPhysicalExtension(entry.BeforeSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
 			if !exists {
 				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
+			}
+			if extension.Kind == fulltextcontract.IndexKind {
+				statements, dropErr := dropFullTextExtension(extension)
+				if dropErr != nil {
+					return IncrementalPlan{}, dropErr
+				}
+				plan.steps = append(plan.steps, migrationStep{statements: statements})
+				continue
 			}
 			descriptor, decodeErr := semanticstorage.Decode(extension)
 			if decodeErr != nil {

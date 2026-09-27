@@ -7,10 +7,98 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/testenv"
 )
+
+func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	provider := New()
+	database, _, err := provider.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	const namespace = "golem_fulltext_live"
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+
+	model := fixtureModel()
+	email := ir.FieldID(id(12))
+	model.Models[0].Fields = append(model.Models[0].Fields, scalarField(email, "Email", 1, "email", ir.LogicalTypeIR{Kind: ir.TypeString}, false))
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: id(12), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + string(extensionID)
+	id := "00000000-0000-4000-8000-000000000001"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "Renée@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches := func(query string, want int) {
+		t.Helper()
+		var got int
+		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + base + `_fts" WHERE "document" @@ to_tsquery('simple',public.unaccent($1))`
+		if err := database.Get(&got, statement, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			var documents []string
+			if err := database.Select(&documents, `SELECT "document"::text FROM "golem_fulltext_live"."`+base+`_fts"`); err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("query %q matched %d rows, want %d; documents=%v", query, got, want, documents)
+		}
+	}
+	assertMatches("renee", 1)
+	transaction, err := database.Beginx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Exec(`UPDATE "golem_fulltext_live"."users" SET "email"='other@example.test' WHERE "id"=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 1)
+	if _, err := database.Exec(`UPDATE "golem_fulltext_live"."users" SET "email"='other@example.test' WHERE "id"=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("other", 1)
+	if _, err := database.Exec(`TRUNCATE "golem_fulltext_live"."users" CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("other", 0)
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "restored@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("restored", 1)
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	function := base + "_sync"
+	if _, err := database.Exec(`CREATE OR REPLACE FUNCTION "golem_fulltext_live"."` + function + `"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NEW; END$golem$`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("drifted trigger function error=%v", err)
+	}
+}
 
 func TestSemanticIndexRendersPGVectorStorage(t *testing.T) {
 	provider := New()
