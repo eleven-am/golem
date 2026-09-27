@@ -524,9 +524,10 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		if len(parts) != 3 {
 			return fmt.Errorf("postgresql full-text introspect: function definition is invalid extension=%s", extension.ID)
 		}
-		var functionBody string
-		const functionSQL = `SELECT p.prosrc FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
-		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function)).Scan(&functionBody); err != nil || functionBody != parts[1] {
+		var functionBody, language, volatility, parallel, functionKind string
+		var securityDefiner, leakproof, strict, returnsSet, defaultConfiguration bool
+		const functionSQL = `SELECT p.prosrc,l.lanname,p.provolatile,p.prosecdef,p.proleakproof,p.proisstrict,p.proretset,p.proparallel,p.prokind,p.proconfig IS NULL FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
+		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function)).Scan(&functionBody, &language, &volatility, &securityDefiner, &leakproof, &strict, &returnsSet, &parallel, &functionKind, &defaultConfiguration); err != nil || functionBody != parts[1] || language != "plpgsql" || volatility != "v" || securityDefiner || leakproof || strict || returnsSet || parallel != "u" || functionKind != "f" || !defaultConfiguration {
 			return fmt.Errorf("postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
 		}
 		updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
@@ -547,7 +548,7 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 			string(names.delete):   {kind: 9},
 			string(names.truncate): {kind: 32},
 		}
-		const triggerSQL = `SELECT t.tgname,t.tgtype::integer,t.tgenabled,COALESCE((SELECT string_agg(a.attname,',' ORDER BY dependency.ordinality) FROM unnest(t.tgattr) WITH ORDINALITY AS dependency(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=t.tgrelid AND a.attnum=dependency.attnum),'') FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal AND t.tgname IN($3,$4,$5,$6) AND pn.nspname=$1 AND p.proname=$7 ORDER BY t.tgname`
+		const triggerSQL = `SELECT t.tgname,t.tgtype::integer,t.tgenabled,COALESCE((SELECT string_agg(a.attname,',' ORDER BY dependency.ordinality) FROM unnest(t.tgattr) WITH ORDINALITY AS dependency(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=t.tgrelid AND a.attnum=dependency.attnum),''),t.tgqual IS NULL AND t.tgnargs=0 AND pg_catalog.octet_length(t.tgargs)=0 AND t.tgconstraint=0 AND NOT t.tgdeferrable AND NOT t.tginitdeferred AND t.tgoldtable IS NULL AND t.tgnewtable IS NULL FROM pg_catalog.pg_trigger t JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_proc p ON p.oid=t.tgfoid JOIN pg_catalog.pg_namespace pn ON pn.oid=p.pronamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT t.tgisinternal AND t.tgname IN($3,$4,$5,$6) AND pn.nspname=$1 AND p.proname=$7 ORDER BY t.tgname`
 		rows, err := query.QueryxContext(ctx, triggerSQL, string(expected.Namespace.Name), string(owner.Name), string(names.insert), string(names.update), string(names.delete), string(names.truncate), string(names.function))
 		if err != nil {
 			return err
@@ -556,12 +557,13 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		for rows.Next() {
 			var name, enabled, columns string
 			var triggerType int
-			if err := rows.Scan(&name, &triggerType, &enabled, &columns); err != nil {
+			var plain bool
+			if err := rows.Scan(&name, &triggerType, &enabled, &columns, &plain); err != nil {
 				_ = rows.Close()
 				return err
 			}
 			expectedTrigger, exists := expectedTriggers[name]
-			if !exists || expectedTrigger.kind != triggerType || expectedTrigger.columns != columns || enabled != "O" || seenTriggers[name] {
+			if !exists || expectedTrigger.kind != triggerType || expectedTrigger.columns != columns || enabled != "O" || !plain || seenTriggers[name] {
 				_ = rows.Close()
 				return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
 			}

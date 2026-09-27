@@ -158,6 +158,33 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER "` + updateTrigger + `" AFTER UPDATE OF "id","search_email","email" ON "golem_fulltext_live"."users" FOR EACH ROW WHEN (false) EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("qualified update trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(rendered[4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() STABLE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("stable trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() VOLATILE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := database.Exec(`CREATE OR REPLACE FUNCTION "golem_fulltext_live"."` + function + `"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NEW; END$golem$`); err != nil {
 		t.Fatal(err)
 	}
