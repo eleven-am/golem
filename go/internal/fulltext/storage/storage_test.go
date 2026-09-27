@@ -116,3 +116,37 @@ func TestLowerRejectsProviderReservedIdentityNames(t *testing.T) {
 		t.Fatalf("unique collision error=%v", err)
 	}
 }
+
+func TestProjectOwnerTracksGeneratedUniqueDependencies(t *testing.T) {
+	sourceID := ir.FieldID("source")
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := physical.PhysicalTable{
+		ID: "document",
+		Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: sourceID, Name: "source", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "slug", Name: "slug", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Generated: &physical.GeneratedExpression{Kind: physical.GeneratedStored, Expression: physical.Expression{Kind: physical.ExpressionColumn, Type: physical.StorageType{Kind: physical.StorageSQLiteText}, Column: &sourceID}}},
+			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+		},
+		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+		Uniques:    []physical.PhysicalKey{{Columns: []ir.FieldID{"slug"}}},
+	}
+	extension, err := Lower(ir.ProviderExtensionIR{ID: "index", Provider: ir.SQLite, Kind: fulltextcontract.IndexKind, Version: fulltextcontract.Version, Owner: "document", Payload: payload}, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection, err := ProjectOwner(extension, owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]ir.FieldID, len(projection.Updates))
+	for position, column := range projection.Updates {
+		got[position] = column.ID
+	}
+	if want := []ir.FieldID{"id", "slug", "source", "body"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("updates=%v, want %v", got, want)
+	}
+}

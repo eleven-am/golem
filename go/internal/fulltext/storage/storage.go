@@ -188,13 +188,6 @@ func UpdateColumns(extension physical.Extension, owner physical.PhysicalTable) (
 			return nil, addErr
 		}
 	}
-	for _, key := range owner.Uniques {
-		for _, field := range key.Columns {
-			if _, addErr := add(field); addErr != nil {
-				return nil, addErr
-			}
-		}
-	}
 	visiting := make(map[ir.FieldID]bool)
 	var addGeneratedDependencies func(ir.FieldID) error
 	addGeneratedDependencies = func(field ir.FieldID) error {
@@ -232,6 +225,16 @@ func UpdateColumns(extension physical.Extension, owner physical.PhysicalTable) (
 		walkErr := walk(column.Generated.Expression)
 		delete(visiting, field)
 		return walkErr
+	}
+	for _, key := range owner.Uniques {
+		for _, field := range key.Columns {
+			if _, addErr := add(field); addErr != nil {
+				return nil, addErr
+			}
+			if dependencyErr := addGeneratedDependencies(field); dependencyErr != nil {
+				return nil, dependencyErr
+			}
+		}
 	}
 	for _, field := range descriptor.Index.Fields {
 		fieldID := ir.FieldID(field.ID)
