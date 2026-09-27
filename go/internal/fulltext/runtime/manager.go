@@ -132,6 +132,9 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	}
 	arguments = append(arguments, candidates.Args...)
 	arguments = append(arguments, take)
+	if candidates.MaxStatementParameters < 1 || len(arguments) > candidates.MaxStatementParameters {
+		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured parameter limit")
+	}
 	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking failed")

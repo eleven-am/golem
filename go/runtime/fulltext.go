@@ -146,6 +146,6 @@ func renderFullTextCandidates[P, A any](app *App[P, A], prepared PreparedRead, p
 	for position, column := range statement.Columns() {
 		columns[position] = string(column)
 	}
-	value := semanticruntime.Candidates{SQL: statement.SQL(), Args: statement.Args(), Columns: columns, Model: planned.ModelID(), MaxStatementBytes: planned.Limits().MaxStatementBytes, MaxStatementAliases: planned.Limits().MaxStatementAliases, NewScan: func() semanticruntime.IdentityScan { return decoder.NewScan() }}
+	value := semanticruntime.Candidates{SQL: statement.SQL(), Args: statement.Args(), Columns: columns, Model: planned.ModelID(), MaxStatementParameters: planned.Limits().MaxStatementParameters, MaxStatementBytes: planned.Limits().MaxStatementBytes, MaxStatementAliases: planned.Limits().MaxStatementAliases, NewScan: func() semanticruntime.IdentityScan { return decoder.NewScan() }}
 	return renderedSemanticCandidates{candidates: value, decoder: decoder, fields: statement.Fields()}, nil
 }

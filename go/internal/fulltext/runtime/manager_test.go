@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -48,7 +49,7 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 		Descriptor: fulltextstorage.Descriptor{ModelID: "m", Storage: "_golem_fulltext_x", Index: fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: "title", Weight: 1}}}},
 		Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}}},
 	}}}
-	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+	candidates := semanticruntime.Candidates{SQL: `SELECT id FROM docs WHERE allowed=?1`, Args: []any{1}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
 	ranks, err := manager.Query(context.Background(), "m", "content", "alpha", candidates, 10)
 	if err != nil {
 		t.Fatal(err)
@@ -100,7 +101,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 			Identity:   []physical.PhysicalColumn{{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StoragePostgreSQLText}}},
 		}},
 	}
-	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
+	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
 	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "Καφές", "東京", "OR"} {
 		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10)
 		if err != nil {
@@ -113,6 +114,11 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		if len(ranks) != 1 || ranks[0].Identity[0] != want {
 			t.Fatalf("query %q ranks=%#v", query, ranks)
 		}
+	}
+	limited := candidates
+	limited.MaxStatementParameters = 3
+	if _, err := manager.Query(context.Background(), "m", "content", "alpha beta", limited, 10); err == nil || !strings.Contains(err.Error(), "parameter limit") {
+		t.Fatalf("parameter limit error=%v", err)
 	}
 }
 
