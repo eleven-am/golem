@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextfolding "github.com/eleven-am/golem/go/internal/fulltext/folding"
 )
 
 const unicodeCollation = `pg_catalog."und-x-icu"`
@@ -11,9 +12,10 @@ const unicodeCollation = `pg_catalog."und-x-icu"`
 func NormalizeText(expression, folding string) string {
 	value := "COALESCE(" + expression + ",'')"
 	if folding == fulltextcontract.FoldingDiacritics {
-		value = "public.unaccent(" + value + ")"
+		marks := strings.ReplaceAll(fulltextfolding.MarkCharacters(), "'", "''")
+		value = "pg_catalog.normalize(pg_catalog.translate(pg_catalog.normalize(" + value + ",'NFD'),'" + marks + "',''),'NFC')"
 	}
-	return "regexp_replace((" + value + " COLLATE " + unicodeCollation + "),'[^[:alnum:]_]+',' ','g')"
+	return "pg_catalog.regexp_replace((" + value + " COLLATE " + unicodeCollation + "),'[^[:alnum:]_]+',' ','g')"
 }
 
 func PhraseQuery(expression, folding string, prefix bool) string {

@@ -27,9 +27,6 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
-	if _, err := database.Exec(`DROP EXTENSION IF EXISTS unaccent`); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := database.Exec(`SET search_path TO "golem_fulltext_live", public`); err != nil {
 		t.Fatal(err)
 	}
@@ -44,7 +41,7 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	emailExpr := ir.SchemaExprIR{Kind: ir.SchemaExprField, ResultType: emailType, Field: &email, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
 	lowerExpr := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: emailType, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{emailExpr}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
 	model.Models[0].Fields = append(model.Models[0].Fields, ir.FieldIR{ID: generatedID, GoName: "SearchEmail", DeclarationOrder: 2, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_email", Type: emailType, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpr, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}})
-	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: string(email), Weight: 1}, {ID: string(generatedID), Weight: 1}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,6 +83,11 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	assertMatches("renee", 1)
 	assertMatches("Καφές", 1)
 	assertMatches("東京", 1)
+	secondID := "00000000-0000-4000-8000-000000000002"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, secondID, "service"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches(`"service service"`, 0)
 	plainBase := "_golem_fulltext_" + string(plainExtensionID)
 	assertPlainMatches := func(query string) {
 		t.Helper()
@@ -228,38 +230,6 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
 		t.Fatalf("drifted trigger function error=%v", err)
-	}
-}
-
-func TestLiveFullTextRefusesUnaccentOutsidePublic(t *testing.T) {
-	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
-	provider := New()
-	database, _, err := provider.Open(context.Background(), dsn)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer database.Close()
-	for _, statement := range []string{
-		`DROP EXTENSION IF EXISTS unaccent`,
-		`CREATE SCHEMA extensions`,
-		`CREATE EXTENSION unaccent WITH SCHEMA extensions`,
-	} {
-		if _, err := database.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
-	}
-	model := fixtureModel()
-	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
-	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "golem_fulltext_wrong_unaccent"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := provider.ApplyInitial(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "requires extension unaccent in schema public") {
-		t.Fatalf("unaccent outside public error=%v", err)
 	}
 }
 

@@ -90,7 +90,7 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 		updateColumns[position] = quote(column.Name)
 	}
 	deleteOld := "DELETE FROM " + qualified(namespace, names.table) + " WHERE " + strings.Join(oldMatch, " AND ")
-	insertNew := "INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") VALUES (" + strings.Join(newIdentity, ",") + "," + strings.Join(vectors, " || ") + ")"
+	insertNew := "INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") VALUES (" + strings.Join(newIdentity, ",") + "," + postgresqlFullTextDocument(vectors) + ")"
 	clear := "DELETE FROM " + qualified(namespace, names.table)
 	body := "BEGIN IF TG_OP='TRUNCATE' THEN " + clear + "; RETURN NULL; END IF; IF TG_OP='DELETE' THEN " + deleteOld + "; RETURN OLD; END IF; IF TG_OP='UPDATE' THEN " + deleteOld + "; END IF; " + insertNew + "; RETURN NEW; END"
 	return []string{
@@ -130,7 +130,12 @@ func renderPostgreSQLFullTextBackfill(namespace physical.PhysicalName, extension
 		vectors[position] = postgresqlFullTextVector("o."+quote(column.Name), descriptor.Index.Folding, classes[position])
 	}
 	names := postgresqlFullTextNames(descriptor)
-	return []string{"INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") SELECT " + strings.Join(identitySelect, ",") + "," + strings.Join(vectors, " || ") + " FROM " + qualified(namespace, owner.Name) + " AS o"}, nil
+	return []string{"INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") SELECT " + strings.Join(identitySelect, ",") + "," + postgresqlFullTextDocument(vectors) + " FROM " + qualified(namespace, owner.Name) + " AS o"}, nil
+}
+
+func postgresqlFullTextDocument(vectors []string) string {
+	const boundary = "'''_golem.fulltext.field.boundary_'':1'::pg_catalog.tsvector"
+	return strings.Join(vectors, " || "+boundary+" || ")
 }
 
 func postgresqlFullTextVector(value, folding string, class byte) string {
@@ -140,14 +145,6 @@ func postgresqlFullTextVector(value, folding string, class byte) string {
 func renderPostgreSQLFullTextPrerequisite() string {
 	guard := "BEGIN IF current_setting('server_encoding')<>'UTF8' THEN RAISE EXCEPTION 'golem full-text search requires UTF8 server encoding'; END IF; IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE n.nspname='pg_catalog' AND c.collname='und-x-icu' AND c.collprovider='i' AND c.collisdeterministic AND c.collencoding IN (-1,pg_catalog.pg_char_to_encoding('UTF8'))) THEN RAISE EXCEPTION 'golem full-text search requires deterministic ICU collation pg_catalog.und-x-icu'; END IF; END"
 	return "DO " + quoteDollar(guard)
-}
-
-func renderPostgreSQLUnaccentExtension() []string {
-	guard := "BEGIN IF EXISTS (SELECT 1 FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='unaccent' AND n.nspname<>'public') THEN RAISE EXCEPTION 'golem full-text search requires extension unaccent in schema public'; END IF; END"
-	return []string{
-		"DO " + quoteDollar(guard),
-		"CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public",
-	}
 }
 
 func dropPostgreSQLFullTextExtension(namespace physical.PhysicalName, extension physical.Extension, owner physical.PhysicalTable) ([]string, error) {

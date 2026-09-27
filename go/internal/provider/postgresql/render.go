@@ -10,7 +10,6 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
-	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
@@ -55,16 +54,11 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		renderer.tables[table.ID] = table
 	}
 	statements := make([]string, 0, len(normalized.Tables)+len(normalized.Extensions)*4+2)
-	hasSemantic, hasFullText, hasFoldedFullText := false, false, false
+	hasSemantic, hasFullText := false, false
 	for _, extension := range normalized.Extensions {
 		hasSemantic = hasSemantic || extension.Kind == "golem.semantic-index"
 		if extension.Kind == fulltextcontract.IndexKind {
 			hasFullText = true
-			descriptor, decodeErr := fulltextstorage.Decode(extension)
-			if decodeErr != nil {
-				return Script{}, decodeErr
-			}
-			hasFoldedFullText = hasFoldedFullText || descriptor.Index.Folding == fulltextcontract.FoldingDiacritics
 		}
 	}
 	if hasSemantic {
@@ -72,9 +66,6 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 	}
 	if hasFullText {
 		statements = append(statements, renderPostgreSQLFullTextPrerequisite())
-	}
-	if hasFoldedFullText {
-		statements = append(statements, renderPostgreSQLUnaccentExtension()...)
 	}
 	statements = append(statements, fmt.Sprintf("CREATE SCHEMA IF NOT EXISTS %s", quote(normalized.Namespace.Name)))
 	if normalized.System.Version != 0 {

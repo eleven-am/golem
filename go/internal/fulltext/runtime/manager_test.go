@@ -37,9 +37,9 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 		`CREATE TABLE docs(id TEXT PRIMARY KEY, allowed INTEGER NOT NULL, title TEXT NOT NULL) STRICT`,
 		`CREATE TABLE _golem_fulltext_x_keys(docid INTEGER PRIMARY KEY,id TEXT NOT NULL UNIQUE) STRICT`,
 		`CREATE VIRTUAL TABLE _golem_fulltext_x_fts USING fts5(title,content='',contentless_delete=1,tokenize='unicode61 remove_diacritics 0')`,
-		`INSERT INTO docs VALUES('a',1,'Renée alpha Καφές'),('b',0,'alpha alpha alpha'),('c',1,'literal OR token')`,
+		`INSERT INTO docs VALUES('a',1,'Renée alpha Καφές Łódź'),('b',0,'alpha alpha alpha'),('c',1,'literal OR token')`,
 		`INSERT INTO _golem_fulltext_x_keys(docid,id) VALUES(1,'a'),(2,'b'),(3,'c')`,
-		`INSERT INTO _golem_fulltext_x_fts(rowid,title) SELECT 1,golem_fulltext_fold('Renée alpha Καφές') UNION ALL SELECT 2,golem_fulltext_fold('alpha alpha alpha') UNION ALL SELECT 3,golem_fulltext_fold('literal OR token')`,
+		`INSERT INTO _golem_fulltext_x_fts(rowid,title) SELECT 1,golem_fulltext_fold('Renée alpha Καφές Łódź') UNION ALL SELECT 2,golem_fulltext_fold('alpha alpha alpha') UNION ALL SELECT 3,golem_fulltext_fold('literal OR token')`,
 	} {
 		if _, err := db.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -72,6 +72,14 @@ func TestSQLiteQueryIsAuthorizedRankedAndLiteral(t *testing.T) {
 	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
 		t.Fatalf("cross-script folded ranks=%#v err=%v", ranks, err)
 	}
+	ranks, err = manager.Query(context.Background(), "m", "content", "Łodz", candidates, 10)
+	if err != nil || len(ranks) != 1 || ranks[0].Identity[0] != "a" {
+		t.Fatalf("canonical folded ranks=%#v err=%v", ranks, err)
+	}
+	ranks, err = manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10)
+	if err != nil || len(ranks) != 0 {
+		t.Fatalf("non-diacritic transliteration ranks=%#v err=%v", ranks, err)
+	}
 }
 
 func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
@@ -85,11 +93,10 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_runtime_live" CASCADE`)
 	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_runtime_live" CASCADE`)
 	for _, statement := range []string{
-		`CREATE EXTENSION IF NOT EXISTS unaccent WITH SCHEMA public`,
 		`CREATE SCHEMA "golem_fulltext_runtime_live"`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."docs" ("id" text PRIMARY KEY,"allowed" boolean NOT NULL,"title" text NOT NULL)`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" ("id" text PRIMARY KEY,"document" tsvector NOT NULL)`,
-		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf Καφές 東京'),('b',false,'alpha alpha alpha'),('c',true,'literal OR token')`,
+		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf Καφές 東京 Łódź'),('b',false,'alpha alpha alpha'),('c',true,'literal OR token')`,
 		`INSERT INTO "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" SELECT "id",setweight(to_tsvector('simple',` + fulltextpostgresql.NormalizeText(`"title"`, fulltextcontract.FoldingDiacritics) + `),'A') FROM "golem_fulltext_runtime_live"."docs"`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
@@ -106,7 +113,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		}},
 	}
 	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementParameters: 100, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "Καφές", "東京", "OR"} {
+	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "Καφές", "東京", "Łodz", "OR"} {
 		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10)
 		if err != nil {
 			t.Fatalf("query %q: %v", query, err)
@@ -118,6 +125,10 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		if len(ranks) != 1 || ranks[0].Identity[0] != want {
 			t.Fatalf("query %q ranks=%#v", query, ranks)
 		}
+	}
+	ranks, err := manager.Query(context.Background(), "m", "content", "Lodz", candidates, 10)
+	if err != nil || len(ranks) != 0 {
+		t.Fatalf("non-diacritic transliteration ranks=%#v err=%v", ranks, err)
 	}
 	limited := candidates
 	limited.MaxStatementParameters = 3

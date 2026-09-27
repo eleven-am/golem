@@ -123,7 +123,11 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if manager.provider == ir.PostgreSQL {
 		statement = manager.postgresqlStatement(index, parsed, candidates)
 		for _, item := range parsed {
-			arguments = append(arguments, item.value)
+			value := item.value
+			if index.Descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
+				value = fulltextfolding.Diacritics(value)
+			}
+			arguments = append(arguments, value)
 		}
 	} else {
 		arguments = append(arguments, compileSQLite(parsed, index.Descriptor.Index.Folding))
@@ -184,7 +188,7 @@ func (manager *Manager) postgresqlStatement(index Index, terms []term, candidate
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(terms), policyir.ProviderPostgreSQL)
 	queries := make([]string, len(terms))
 	for position, item := range terms {
-		queries[position] = fulltextpostgresql.PhraseQuery("$"+strconv.Itoa(position+1), index.Descriptor.Index.Folding, item.prefix)
+		queries[position] = fulltextpostgresql.PhraseQuery("$"+strconv.Itoa(position+1), fulltextcontract.FoldingNone, item.prefix)
 	}
 	query := fulltextpostgresql.JoinQueries(queries)
 	limit := "$" + strconv.Itoa(len(terms)+len(candidates.Args)+1)

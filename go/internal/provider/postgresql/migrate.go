@@ -293,24 +293,14 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			plan.steps = append(plan.steps, incrementalStep{statement: statement})
 		}
 	}
-	hasFullText, hasFoldedFullText := false, false
+	hasFullText := false
 	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
-		for _, extension := range postgresqlFullTextExtensions(after, owner) {
+		for range postgresqlFullTextExtensions(after, owner) {
 			hasFullText = true
-			descriptor, decodeErr := fulltextstorage.Decode(extension)
-			if decodeErr != nil {
-				return IncrementalPlan{}, decodeErr
-			}
-			hasFoldedFullText = hasFoldedFullText || descriptor.Index.Folding == fulltextcontract.FoldingDiacritics
 		}
 	}
 	if hasFullText {
 		plan.steps = append(plan.steps, incrementalStep{statement: renderPostgreSQLFullTextPrerequisite()})
-	}
-	if hasFoldedFullText {
-		for _, statement := range renderPostgreSQLUnaccentExtension() {
-			plan.steps = append(plan.steps, incrementalStep{statement: statement})
-		}
 	}
 	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
 		for _, extension := range postgresqlFullTextExtensions(after, owner) {
@@ -518,14 +508,7 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 				backfill, err = renderPostgreSQLFullTextBackfill(r.schema.Namespace.Name, extension, owner)
 				statements = append(statements, backfill...)
 			}
-			descriptor, decodeErr := fulltextstorage.Decode(extension)
-			if decodeErr != nil {
-				return nil, decodeErr
-			}
 			preamble = []string{renderPostgreSQLFullTextPrerequisite()}
-			if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-				preamble = append(preamble, renderPostgreSQLUnaccentExtension()...)
-			}
 		} else {
 			statements, err = renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)
 			preamble = []string{"CREATE EXTENSION IF NOT EXISTS vector"}

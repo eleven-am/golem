@@ -480,13 +480,6 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		if err != nil {
 			return err
 		}
-		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-			var unaccentCount int
-			const unaccentSQL = `SELECT count(*) FROM pg_catalog.pg_extension e JOIN pg_catalog.pg_namespace n ON n.oid=e.extnamespace WHERE e.extname='unaccent' AND n.nspname='public'`
-			if err := query.QueryRowxContext(ctx, unaccentSQL).Scan(&unaccentCount); err != nil || unaccentCount != 1 {
-				return fmt.Errorf("postgresql full-text introspect: unaccent must be installed in public extension=%s", extension.ID)
-			}
-		}
 		owner, exists := postgresqlOwnerTable(expected, descriptor.ModelID)
 		if !exists {
 			return fmt.Errorf("postgresql full-text introspect: owner is absent extension=%s", extension.ID)
