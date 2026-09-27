@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -272,8 +273,12 @@ func parse(input string) ([]term, error) {
 	}
 	result := make([]term, 0, 8)
 	for position := 0; position < len(input); {
-		for position < len(input) && input[position] <= ' ' {
-			position++
+		for position < len(input) {
+			value, size := utf8.DecodeRuneInString(input[position:])
+			if !unicode.IsSpace(value) {
+				break
+			}
+			position += size
 		}
 		if position == len(input) {
 			break
@@ -293,8 +298,12 @@ func parse(input string) ([]term, error) {
 			position++
 		} else {
 			start := position
-			for position < len(input) && input[position] > ' ' {
-				position++
+			for position < len(input) {
+				value, size := utf8.DecodeRuneInString(input[position:])
+				if unicode.IsSpace(value) {
+					break
+				}
+				position += size
 			}
 			item.value = input[start:position]
 			if strings.HasSuffix(item.value, "*") {

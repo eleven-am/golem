@@ -331,7 +331,14 @@ func postgresqlChangedFullTextProjectionOwners(before, after physical.PhysicalSc
 	}
 	for _, previous := range before.Extensions {
 		current, exists := afterExtensions[previous.ID]
-		if previous.Kind != fulltextcontract.IndexKind || !exists || current.Kind != fulltextcontract.IndexKind || previous.Owner.ModelID != current.Owner.ModelID {
+		if previous.Kind != fulltextcontract.IndexKind {
+			continue
+		}
+		if !exists || current.Kind != fulltextcontract.IndexKind || previous.Owner.ModelID != current.Owner.ModelID {
+			result[previous.Owner.ModelID] = true
+			if exists && current.Kind == fulltextcontract.IndexKind {
+				result[current.Owner.ModelID] = true
+			}
 			continue
 		}
 		beforeTable, beforeExists := beforeTables[previous.Owner.ModelID]

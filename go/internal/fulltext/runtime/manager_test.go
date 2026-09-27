@@ -199,3 +199,13 @@ func TestQueryParserRejectsUnsafeShapes(t *testing.T) {
 		t.Fatal("33 terms accepted")
 	}
 }
+
+func TestQueryParserRecognizesUnicodeWhitespace(t *testing.T) {
+	terms, err := parse("alpha\u00a0beta\u2003\"gamma delta\"")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(terms) != 3 || terms[0].value != "alpha" || terms[1].value != "beta" || terms[2].value != "gamma delta" || !terms[2].phrase {
+		t.Fatalf("terms=%#v", terms)
+	}
+}

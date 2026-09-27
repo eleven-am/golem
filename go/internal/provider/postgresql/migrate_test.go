@@ -445,13 +445,45 @@ func TestPlanIncrementalDropsFullTextTriggersFromRenamedOwner(t *testing.T) {
 	}
 	sql := plan.SQL()
 	rename := `ALTER TABLE "reviewed"."posts" RENAME TO "posts_v2"`
-	drop := `DROP TRIGGER "_golem_fulltext_` + id(74) + `_ai" ON "reviewed"."posts_v2"`
+	drop := `DROP TRIGGER "_golem_fulltext_` + id(74) + `_ai" ON "reviewed"."posts"`
 	positions := []int{strings.Index(sql, rename), strings.Index(sql, drop)}
-	if positions[0] < 0 || positions[1] <= positions[0] {
+	if positions[1] < 0 || positions[0] <= positions[1] {
 		t.Fatalf("renamed full-text drop order=%v:\n%s", positions, sql)
 	}
-	if strings.Contains(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai" ON "reviewed"."posts"`) {
-		t.Fatalf("full-text drop targeted the pre-rename owner:\n%s", sql)
+	if strings.Contains(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai" ON "reviewed"."posts_v2"`) {
+		t.Fatalf("full-text drop targeted the post-rename owner:\n%s", sql)
+	}
+}
+
+func TestPlanIncrementalDropsFullTextTriggersBeforeIndexedColumn(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = nil
+	fields := model.Models[1].Fields
+	model.Models[1].Fields = append(append([]ir.FieldIR(nil), fields[:len(fields)-2]...), fields[len(fields)-1])
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reviewedPostgreSQLEntry(t, "002_drop_fulltext_column", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	dropTrigger := strings.Index(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai"`)
+	dropColumn := strings.Index(sql, `DROP COLUMN "title"`)
+	if dropTrigger < 0 || dropColumn <= dropTrigger {
+		t.Fatalf("full-text trigger was not dropped before its indexed column: trigger=%d column=%d:\n%s", dropTrigger, dropColumn, sql)
 	}
 }
 
