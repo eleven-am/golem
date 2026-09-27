@@ -130,6 +130,28 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
 	}
+	function := base + "_sync"
+	if _, err := database.Exec(`CREATE TRIGGER "` + base + `_ai" AFTER INSERT ON "golem_fulltext_live"."posts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected trigger") {
+		t.Fatalf("full-text trigger on wrong owner error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + base + `_ai" ON "golem_fulltext_live"."posts"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD CONSTRAINT "unexpected_fulltext_check" CHECK (false) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected constraint") {
+		t.Fatalf("unexpected shadow constraint error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" DROP CONSTRAINT "unexpected_fulltext_check"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	for _, statement := range []string{
 		`CREATE FUNCTION "golem_fulltext_live"."reject_fulltext_write"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NULL; END$golem$`,
 		`CREATE TRIGGER "unexpected_shadow_trigger" BEFORE INSERT ON "golem_fulltext_live"."` + base + `_fts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`,
@@ -150,7 +172,6 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
 	}
-	function := base + "_sync"
 	var primaryKey string
 	if err := database.Get(&primaryKey, `SELECT con.conname FROM pg_catalog.pg_constraint con WHERE con.conrelid='"golem_fulltext_live"."`+base+`_fts"'::pg_catalog.regclass AND con.contype='p'`); err != nil {
 		t.Fatal(err)
