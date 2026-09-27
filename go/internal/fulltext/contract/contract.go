@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"sort"
 	"strings"
 	"unicode"
@@ -20,6 +21,8 @@ const (
 const (
 	FoldingDiacritics = "diacritics"
 	FoldingNone       = "none"
+	MinimumWeight     = 0x1p-149
+	MaximumWeight     = 0x1.fffffep+127
 )
 
 type Field struct {
@@ -121,7 +124,7 @@ func validate(index Index) error {
 	}
 	seenFields := make(map[string]bool, len(index.Fields))
 	for _, field := range index.Fields {
-		if field.ID == "" || strings.ContainsAny(field.ID, "\x00,") || field.Weight <= 0 || seenFields[field.ID] {
+		if field.ID == "" || strings.ContainsAny(field.ID, "\x00,") || field.Weight < MinimumWeight || field.Weight > MaximumWeight || math.IsNaN(field.Weight) || math.IsInf(field.Weight, 0) || seenFields[field.ID] {
 			return fmt.Errorf("full-text contract: invalid field")
 		}
 		seenFields[field.ID] = true

@@ -169,6 +169,78 @@ func TestSQLiteIncrementalFullTextIndexBackfillsAndVerifies(t *testing.T) {
 	}
 }
 
+func TestSQLiteOwnerRebuildRecreatesFullTextStorageAfterTheNewTable(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		renameIndexed bool
+		rebuildOwner  bool
+	}{
+		{name: "unchanged projection rebuild", rebuildOwner: true},
+		{name: "changed projection rebuild", renameIndexed: true, rebuildOwner: true},
+		{name: "changed projection direct", renameIndexed: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			provider := New()
+			before := incrementalFixtureSchema(t, test.rebuildOwner)
+			payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: string(fixtureItemNameField), Weight: 1}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			declaration := ir.ProviderExtensionIR{ID: "70000000000000000000000000000002", Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(fixtureItemTable), Kind: fulltextcontract.IndexKind, Payload: payload}
+			beforeExtension, err := fulltextstorage.Lower(declaration, migrationFixtureTable(t, before, fixtureItemTable))
+			if err != nil {
+				t.Fatal(err)
+			}
+			before.Extensions = []physical.Extension{beforeExtension}
+			before = normalizeMigrationFixture(t, before)
+			after := incrementalFixtureSchema(t, false)
+			indexedName := physical.PhysicalName("name")
+			if test.renameIndexed {
+				for tableIndex := range after.Tables {
+					if after.Tables[tableIndex].ID != fixtureItemTable {
+						continue
+					}
+					for columnIndex := range after.Tables[tableIndex].Columns {
+						if after.Tables[tableIndex].Columns[columnIndex].ID == fixtureItemNameField {
+							after.Tables[tableIndex].Columns[columnIndex].Name = "content"
+							indexedName = "content"
+						}
+					}
+				}
+			}
+			afterExtension, err := fulltextstorage.Lower(declaration, migrationFixtureTable(t, after, fixtureItemTable))
+			if err != nil {
+				t.Fatal(err)
+			}
+			after.Extensions = []physical.Extension{afterExtension}
+			after = normalizeMigrationFixture(t, after)
+			database := openMigrationFixture(t, provider, before, strings.ReplaceAll(test.name, " ", "-")+".db")
+			insert := `INSERT INTO "items" ("id","name") VALUES (7,'before rebuild')`
+			if test.rebuildOwner {
+				insert = `INSERT INTO "items" ("id","name","note") VALUES (7,'before rebuild',x'01')`
+			}
+			if _, err := database.ExecContext(ctx, insert); err != nil {
+				t.Fatal(err)
+			}
+			manifest, files := migrationFixtureManifest(t, before, after, "002_rebuild_fulltext.sql", nil)
+			if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+				t.Fatal(err)
+			}
+			if err := provider.Verify(ctx, database, after); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE "items" SET `+quote(indexedName)+`='after rebuilt' WHERE "id"=7`); err != nil {
+				t.Fatal(err)
+			}
+			var count int
+			if err := database.GetContext(ctx, &count, `SELECT count(*) FROM "_golem_fulltext_70000000000000000000000000000002_fts" WHERE "_golem_fulltext_70000000000000000000000000000002_fts" MATCH 'rebuilt'`); err != nil || count != 1 {
+				t.Fatalf("full-text rows after owner rebuild=%d err=%v", count, err)
+			}
+		})
+	}
+}
+
 func TestSQLiteIncrementalSemanticIndexRewritePreservesOwnerRowsAndClearsDerivedState(t *testing.T) {
 	ctx := context.Background()
 	provider := New()

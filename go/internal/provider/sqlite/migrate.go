@@ -15,6 +15,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/migration"
 	migrationfailpoint "github.com/eleven-am/golem/go/internal/migration/failpoint"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -288,6 +289,37 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		plan.Rebuilds = append(plan.Rebuilds, rebuild)
 	}
 	sort.Slice(plan.Rebuilds, func(i, j int) bool { return plan.Rebuilds[i].TableID < plan.Rebuilds[j].TableID })
+	refreshFullTextOwners := make(map[ir.ModelID]bool)
+	for tableID := range rebuildTables {
+		if len(fullTextExtensions(entry.BeforeSnapshot, tableID))+len(fullTextExtensions(entry.AfterSnapshot, tableID)) != 0 {
+			refreshFullTextOwners[tableID] = true
+		}
+	}
+	projectionOwners, err := changedFullTextProjectionOwners(entry.BeforeSnapshot, entry.AfterSnapshot, beforeTables, afterTables)
+	if err != nil {
+		return IncrementalPlan{}, err
+	}
+	for owner := range projectionOwners {
+		refreshFullTextOwners[owner] = true
+	}
+	refreshFullText := make(map[ir.ExtensionID]bool)
+	preRefresh := make([]string, 0)
+	for _, owner := range sortedFullTextOwners(refreshFullTextOwners) {
+		for _, extension := range fullTextExtensions(entry.BeforeSnapshot, owner) {
+			refreshFullText[extension.ID] = true
+			statements, dropErr := dropFullTextExtension(extension)
+			if dropErr != nil {
+				return IncrementalPlan{}, dropErr
+			}
+			preRefresh = append(preRefresh, statements...)
+		}
+		for _, extension := range fullTextExtensions(entry.AfterSnapshot, owner) {
+			refreshFullText[extension.ID] = true
+		}
+	}
+	if len(preRefresh) != 0 {
+		plan.steps = append(plan.steps, migrationStep{statements: preRefresh})
+	}
 
 	emitted := map[ir.ModelID]bool{}
 	for _, operation := range semantic.Operations {
@@ -319,6 +351,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			if !exists {
 				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
 			}
+			if refreshFullText[extension.ID] {
+				continue
+			}
 			var statements []string
 			var renderErr error
 			if extension.Kind == fulltextcontract.IndexKind {
@@ -345,6 +380,9 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			extension, exists := findPhysicalExtension(entry.BeforeSnapshot.Extensions, ir.ExtensionID(operation.ObjectID))
 			if !exists {
 				return IncrementalPlan{}, fmt.Errorf("sqlite migration %s semantic extension %s is absent", entry.ID, operation.ObjectID)
+			}
+			if refreshFullText[extension.ID] {
+				continue
 			}
 			if extension.Kind == fulltextcontract.IndexKind {
 				statements, dropErr := dropFullTextExtension(extension)
@@ -407,7 +445,78 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		}
 		plan.steps = append(plan.steps, migrationStep{statements: statements})
 	}
+	postRefresh := make([]string, 0)
+	for _, owner := range sortedFullTextOwners(refreshFullTextOwners) {
+		for _, extension := range fullTextExtensions(entry.AfterSnapshot, owner) {
+			statements, renderErr := renderFullTextExtension(extension, afterTables[owner])
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			backfill, backfillErr := renderFullTextBackfill(extension, afterTables[owner])
+			if backfillErr != nil {
+				return IncrementalPlan{}, backfillErr
+			}
+			postRefresh = append(postRefresh, statements...)
+			postRefresh = append(postRefresh, backfill...)
+		}
+	}
+	if len(postRefresh) != 0 {
+		plan.steps = append(plan.steps, migrationStep{statements: postRefresh})
+	}
 	return plan, nil
+}
+
+func changedFullTextProjectionOwners(before, after physical.PhysicalSchema, beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable) (map[ir.ModelID]bool, error) {
+	result := make(map[ir.ModelID]bool)
+	afterExtensions := make(map[ir.ExtensionID]physical.Extension)
+	for _, extension := range after.Extensions {
+		if extension.Kind == fulltextcontract.IndexKind {
+			afterExtensions[extension.ID] = extension
+		}
+	}
+	for _, previous := range before.Extensions {
+		current, exists := afterExtensions[previous.ID]
+		if previous.Kind != fulltextcontract.IndexKind || !exists || current.Kind != fulltextcontract.IndexKind || previous.Owner.ModelID != current.Owner.ModelID {
+			continue
+		}
+		beforeTable, beforeExists := beforeTables[previous.Owner.ModelID]
+		afterTable, afterExists := afterTables[current.Owner.ModelID]
+		if !beforeExists || !afterExists {
+			continue
+		}
+		beforeProjection, beforeErr := fulltextstorage.ProjectOwner(previous, beforeTable)
+		if beforeErr != nil {
+			return nil, beforeErr
+		}
+		afterProjection, afterErr := fulltextstorage.ProjectOwner(current, afterTable)
+		if afterErr != nil {
+			return nil, afterErr
+		}
+		if !reflect.DeepEqual(beforeProjection, afterProjection) {
+			result[current.Owner.ModelID] = true
+		}
+	}
+	return result, nil
+}
+
+func sortedFullTextOwners(values map[ir.ModelID]bool) []ir.ModelID {
+	result := make([]ir.ModelID, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func fullTextExtensions(schema physical.PhysicalSchema, owner ir.ModelID) []physical.Extension {
+	result := make([]physical.Extension, 0)
+	for _, extension := range schema.Extensions {
+		if extension.Kind == fulltextcontract.IndexKind && extension.Owner.ModelID == owner {
+			result = append(result, extension)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 func findPhysicalExtension(extensions []physical.Extension, id ir.ExtensionID) (physical.Extension, bool) {

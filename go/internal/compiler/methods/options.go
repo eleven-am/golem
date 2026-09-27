@@ -275,8 +275,8 @@ func (in *interpreter) evalFullTextIndex(call *ast.CallExpr) {
 				continue
 			}
 			weight, ok := in.positiveFloat(option.Args[1])
-			if !ok {
-				in.errorAt("P9_FULLTEXT_INDEX_WEIGHT", "FullTextField weight must be a positive finite constant", option.Args[1])
+			if !ok || weight < fulltextcontract.MinimumWeight || weight > fulltextcontract.MaximumWeight {
+				in.errorAt("P9_FULLTEXT_INDEX_WEIGHT", "FullTextField weight must be a positive constant representable by every supported database", option.Args[1])
 				continue
 			}
 			seenFields[symbol.FieldID] = true

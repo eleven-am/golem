@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
-	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
-	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
@@ -214,63 +212,6 @@ func TestSemanticExtensionChangeIsReviewedOrderedRewrite(t *testing.T) {
 	}
 	if err := ValidatePlan(plan, nil); err != nil {
 		t.Fatalf("derived semantic rewrite required destructive approval: %v", err)
-	}
-}
-
-func TestFullTextOwnerProjectionChangeIsReviewedOrderedRewrite(t *testing.T) {
-	modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
-	identityID := ir.FieldID("1123456789abcdef0123456789abcdef")
-	bodyID := ir.FieldID("1223456789abcdef0123456789abcdef")
-	base := schema()
-	base.Tables = []physical.PhysicalTable{{
-		ID: modelID, Name: "documents",
-		Columns: []physical.PhysicalColumn{
-			{ID: identityID, Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
-			{ID: bodyID, Name: "body", Ordinal: 1, Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
-		},
-		PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_documents", Columns: []ir.FieldID{identityID}},
-	}}
-	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: string(bodyID), Weight: 1}}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	extension := ir.ProviderExtensionIR{ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(modelID), Kind: fulltextcontract.IndexKind, Payload: payload}
-	before := base
-	beforeExtension, err := fulltextstorage.Lower(extension, before.Tables[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	before.Extensions = []physical.Extension{beforeExtension}
-	after := base
-	after.Tables = append([]physical.PhysicalTable(nil), base.Tables...)
-	after.Tables[0].Columns = append([]physical.PhysicalColumn(nil), base.Tables[0].Columns...)
-	after.Tables[0].Columns[1].Name = "content"
-	afterExtension, err := fulltextstorage.Lower(extension, after.Tables[0])
-	if err != nil {
-		t.Fatal(err)
-	}
-	after.Extensions = []physical.Extension{afterExtension}
-	plan, err := Diff(before, after)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var drop, create Operation
-	for _, operation := range plan.Operations {
-		switch operation.Kind {
-		case DropProviderExtension:
-			drop = operation
-		case CreateProviderExtension:
-			create = operation
-		}
-	}
-	if drop.ID == "" || create.ID == "" || drop.Risk != RiskRewrite || create.Risk != RiskRewrite {
-		t.Fatalf("full-text projection rewrite operations=%#v", plan.Operations)
-	}
-	if len(create.Dependencies) != 1 || create.Dependencies[0] != drop.ID {
-		t.Fatalf("full-text recreate does not depend on drop: drop=%#v create=%#v", drop, create)
-	}
-	if err := ValidatePlan(plan, nil); err != nil {
-		t.Fatalf("derived full-text rewrite required destructive approval: %v", err)
 	}
 }
 

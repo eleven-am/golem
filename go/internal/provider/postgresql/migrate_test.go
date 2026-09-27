@@ -945,6 +945,33 @@ func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
 		if err := database.Get(&count, `SELECT count(*) FROM "golem_fulltext_migrate_live"."`+base+`_fts" WHERE "document" @@ to_tsquery('simple','renee')`); err != nil || count != 1 {
 			t.Fatalf("backfilled full-text rows=%d err=%v", count, err)
 		}
+		renamed := after
+		renamed.Tables = append([]physical.PhysicalTable(nil), after.Tables...)
+		for tableIndex := range renamed.Tables {
+			renamed.Tables[tableIndex].Columns = append([]physical.PhysicalColumn(nil), renamed.Tables[tableIndex].Columns...)
+			for columnIndex := range renamed.Tables[tableIndex].Columns {
+				if renamed.Tables[tableIndex].Columns[columnIndex].ID == ir.FieldID(id(952)) {
+					renamed.Tables[tableIndex].Columns[columnIndex].Name = "content"
+				}
+			}
+		}
+		renamed = normalizePostgreSQLMigrationSchema(t, renamed)
+		third := reviewedPostgreSQLEntry(t, "003_rename_indexed_column", after, renamed, &second)
+		third, thirdFiles := finalizePostgreSQLEntry(t, provider, third)
+		manifest = reviewedPostgreSQLManifest(provider, first, second, third)
+		files = mergePostgreSQLMigrationFiles(firstFiles, secondFiles, thirdFiles)
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE "golem_fulltext_migrate_live"."items" SET "content"='renamed mailbox' WHERE "id"=1`); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Get(&count, `SELECT count(*) FROM "golem_fulltext_migrate_live"."`+base+`_fts" WHERE "document" @@ to_tsquery('simple','renamed')`); err != nil || count != 1 {
+			t.Fatalf("full-text rows after indexed-column rename=%d err=%v", count, err)
+		}
+		if err := provider.Verify(context.Background(), database, renamed); err != nil {
+			t.Fatal(err)
+		}
 	})
 
 	t.Run("P6 to P7 delivery upgrade preserves and backfills facts", func(t *testing.T) {

@@ -246,7 +246,30 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled, formatUpgrade: reviewedPostgreSQLV1RepresentationTransition(before, after)}
 	plan := IncrementalPlan{MigrationID: entry.ID}
+	refreshFullTextOwners, err := postgresqlChangedFullTextProjectionOwners(before, after, beforeTables, afterTables)
+	if err != nil {
+		return IncrementalPlan{}, err
+	}
+	refreshFullText := make(map[ir.ExtensionID]bool)
+	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
+		for _, extension := range postgresqlFullTextExtensions(before, owner) {
+			refreshFullText[extension.ID] = true
+			statements, dropErr := dropPostgreSQLFullTextExtension(before.Namespace.Name, extension, beforeTables[owner])
+			if dropErr != nil {
+				return IncrementalPlan{}, dropErr
+			}
+			for _, statement := range statements {
+				plan.steps = append(plan.steps, incrementalStep{statement: statement})
+			}
+		}
+		for _, extension := range postgresqlFullTextExtensions(after, owner) {
+			refreshFullText[extension.ID] = true
+		}
+	}
 	for _, operation := range semantic.Operations {
+		if (operation.Kind == migration.CreateProviderExtension || operation.Kind == migration.DropProviderExtension) && refreshFullText[ir.ExtensionID(operation.ObjectID)] {
+			continue
+		}
 		if operation.Kind == migration.BackfillColumn {
 			plan.steps = append(plan.steps, incrementalStep{backfill: operation.ID})
 			continue
@@ -270,7 +293,91 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			plan.steps = append(plan.steps, incrementalStep{statement: statement})
 		}
 	}
+	hasFoldedFullText := false
+	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
+		for _, extension := range postgresqlFullTextExtensions(after, owner) {
+			descriptor, decodeErr := fulltextstorage.Decode(extension)
+			if decodeErr != nil {
+				return IncrementalPlan{}, decodeErr
+			}
+			hasFoldedFullText = hasFoldedFullText || descriptor.Index.Folding == fulltextcontract.FoldingDiacritics
+		}
+	}
+	if hasFoldedFullText {
+		for _, statement := range renderPostgreSQLUnaccentExtension() {
+			plan.steps = append(plan.steps, incrementalStep{statement: statement})
+		}
+	}
+	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
+		for _, extension := range postgresqlFullTextExtensions(after, owner) {
+			statements, renderErr := renderPostgreSQLFullTextExtension(after.Namespace.Name, extension, afterTables[owner])
+			if renderErr != nil {
+				return IncrementalPlan{}, renderErr
+			}
+			backfill, backfillErr := renderPostgreSQLFullTextBackfill(after.Namespace.Name, extension, afterTables[owner])
+			if backfillErr != nil {
+				return IncrementalPlan{}, backfillErr
+			}
+			statements = append(statements, backfill...)
+			for _, statement := range statements {
+				plan.steps = append(plan.steps, incrementalStep{statement: statement})
+			}
+		}
+	}
 	return plan, nil
+}
+
+func postgresqlChangedFullTextProjectionOwners(before, after physical.PhysicalSchema, beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable) (map[ir.ModelID]bool, error) {
+	result := make(map[ir.ModelID]bool)
+	afterExtensions := make(map[ir.ExtensionID]physical.Extension)
+	for _, extension := range after.Extensions {
+		if extension.Kind == fulltextcontract.IndexKind {
+			afterExtensions[extension.ID] = extension
+		}
+	}
+	for _, previous := range before.Extensions {
+		current, exists := afterExtensions[previous.ID]
+		if previous.Kind != fulltextcontract.IndexKind || !exists || current.Kind != fulltextcontract.IndexKind || previous.Owner.ModelID != current.Owner.ModelID {
+			continue
+		}
+		beforeTable, beforeExists := beforeTables[previous.Owner.ModelID]
+		afterTable, afterExists := afterTables[current.Owner.ModelID]
+		if !beforeExists || !afterExists {
+			continue
+		}
+		beforeProjection, beforeErr := fulltextstorage.ProjectOwner(previous, beforeTable)
+		if beforeErr != nil {
+			return nil, beforeErr
+		}
+		afterProjection, afterErr := fulltextstorage.ProjectOwner(current, afterTable)
+		if afterErr != nil {
+			return nil, afterErr
+		}
+		if !reflect.DeepEqual(beforeProjection, afterProjection) {
+			result[current.Owner.ModelID] = true
+		}
+	}
+	return result, nil
+}
+
+func postgresqlFullTextExtensions(schema physical.PhysicalSchema, owner ir.ModelID) []physical.Extension {
+	result := make([]physical.Extension, 0)
+	for _, extension := range schema.Extensions {
+		if extension.Kind == fulltextcontract.IndexKind && extension.Owner.ModelID == owner {
+			result = append(result, extension)
+		}
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
+}
+
+func postgresqlSortedFullTextOwners(values map[ir.ModelID]bool) []ir.ModelID {
+	result := make([]ir.ModelID, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
 }
 
 // reviewedPostgreSQLV1RepresentationTransition identifies only the retained
