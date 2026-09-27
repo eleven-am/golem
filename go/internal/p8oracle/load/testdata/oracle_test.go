@@ -573,7 +573,10 @@ func (*loadCDC) CorrelatesGolemTransaction(context.Context, events.CDCCorrelatio
 
 func (adapter *loadCDC) Run(ctx context.Context, _ events.CDCEmitter) error {
 	current := adapter.counts.active.Add(1)
-	for current > adapter.counts.peak.Load() && !adapter.counts.peak.CompareAndSwap(adapter.counts.peak.Load(), current) {
+	for observed := adapter.counts.peak.Load(); current > observed; observed = adapter.counts.peak.Load() {
+		if adapter.counts.peak.CompareAndSwap(observed, current) {
+			break
+		}
 	}
 	adapter.counts.starts.Add(1)
 	<-ctx.Done()
