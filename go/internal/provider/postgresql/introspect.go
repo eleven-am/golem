@@ -465,6 +465,17 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		if extension.Kind != fulltextcontract.IndexKind {
 			continue
 		}
+		var compatible bool
+		const prerequisiteSQL = `SELECT current_setting('server_encoding')='UTF8' AND EXISTS (SELECT 1 FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE n.nspname='pg_catalog' AND c.collname='und-x-icu' AND c.collprovider='i' AND c.collisdeterministic AND c.collencoding IN (-1,pg_catalog.pg_char_to_encoding('UTF8')))`
+		if err := query.QueryRowxContext(ctx, prerequisiteSQL).Scan(&compatible); err != nil || !compatible {
+			return fmt.Errorf("postgresql full-text introspect: UTF8 and deterministic ICU collation pg_catalog.und-x-icu are required")
+		}
+		break
+	}
+	for _, extension := range expected.Extensions {
+		if extension.Kind != fulltextcontract.IndexKind {
+			continue
+		}
 		descriptor, err := fulltextstorage.Decode(extension)
 		if err != nil {
 			return err

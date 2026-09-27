@@ -55,10 +55,11 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 		renderer.tables[table.ID] = table
 	}
 	statements := make([]string, 0, len(normalized.Tables)+len(normalized.Extensions)*4+2)
-	hasSemantic, hasFoldedFullText := false, false
+	hasSemantic, hasFullText, hasFoldedFullText := false, false, false
 	for _, extension := range normalized.Extensions {
 		hasSemantic = hasSemantic || extension.Kind == "golem.semantic-index"
 		if extension.Kind == fulltextcontract.IndexKind {
+			hasFullText = true
 			descriptor, decodeErr := fulltextstorage.Decode(extension)
 			if decodeErr != nil {
 				return Script{}, decodeErr
@@ -68,6 +69,9 @@ func (provider *Provider) renderNormalizedInitial(normalized physical.PhysicalSc
 	}
 	if hasSemantic {
 		statements = append(statements, "CREATE EXTENSION IF NOT EXISTS vector")
+	}
+	if hasFullText {
+		statements = append(statements, renderPostgreSQLFullTextPrerequisite())
 	}
 	if hasFoldedFullText {
 		statements = append(statements, renderPostgreSQLUnaccentExtension()...)

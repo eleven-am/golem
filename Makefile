@@ -69,7 +69,7 @@ release-check: postgres-check ## Run before pushing a go/v* tag: the vulnerabili
 postgres-up: ## Start the PostgreSQL test servers, creating them when absent
 	@docker info >/dev/null 2>&1 || { echo "Docker is not running; start it first" >&2; exit 1; }
 	@for spec in \
-		"golem-pg-c|postgres:17|55433|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=C" \
+		"golem-pg-c|postgres:17|55433|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=C.utf8" \
 		"golem-pg-linguistic|postgres:17|55432|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=en_US.utf8" \
 		"golem-pgvector|pgvector/pgvector:pg17|55434|--shm-size=256m -e POSTGRES_PASSWORD=golem"; do \
 		name=$${spec%%|*}; rest=$${spec#*|}; image=$${rest%%|*}; rest=$${rest#*|}; port=$${rest%%|*}; env=$${rest#*|}; \

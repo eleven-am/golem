@@ -8,6 +8,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/testenv"
@@ -47,6 +48,12 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	extensionID := ir.ExtensionID(id(74))
 	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	plainPayload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact_plain", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainExtensionID := ir.ExtensionID(id(75))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: plainExtensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: plainPayload})
 	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: namespace})
 	if err != nil {
 		t.Fatal(err)
@@ -56,13 +63,13 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	base := "_golem_fulltext_" + string(extensionID)
 	id := "00000000-0000-4000-8000-000000000001"
-	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "Renée@example.test"); err != nil {
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "Renée Καφές 東京@example.test"); err != nil {
 		t.Fatal(err)
 	}
 	assertMatches := func(query string, want int) {
 		t.Helper()
 		var got int
-		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + base + `_fts" WHERE "document" @@ to_tsquery('simple',public.unaccent($1))`
+		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + base + `_fts" WHERE "document" @@ ` + fulltextpostgresql.PhraseQuery("$1", fulltextcontract.FoldingDiacritics, false)
 		if err := database.Get(&got, statement, query); err != nil {
 			t.Fatal(err)
 		}
@@ -75,6 +82,23 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 		}
 	}
 	assertMatches("renee", 1)
+	assertMatches("Καφές", 1)
+	assertMatches("東京", 1)
+	plainBase := "_golem_fulltext_" + string(plainExtensionID)
+	assertPlainMatches := func(query string) {
+		t.Helper()
+		var got int
+		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + plainBase + `_fts" WHERE "document" @@ ` + fulltextpostgresql.PhraseQuery("$1", fulltextcontract.FoldingNone, false)
+		if err := database.Get(&got, statement, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != 1 {
+			t.Fatalf("plain query %q matched %d rows, want 1", query, got)
+		}
+	}
+	assertPlainMatches("Renée")
+	assertPlainMatches("Καφές")
+	assertPlainMatches("東京")
 	transaction, err := database.Beginx()
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
@@ -133,12 +134,12 @@ func renderPostgreSQLFullTextBackfill(namespace physical.PhysicalName, extension
 }
 
 func postgresqlFullTextVector(value, folding string, class byte) string {
-	value = "COALESCE(" + value + ",'')"
-	if folding == fulltextcontract.FoldingDiacritics {
-		value = "public.unaccent(" + value + ")"
-	}
-	value = "regexp_replace(" + value + ",'[^[:alnum:]_]+',' ','g')"
-	return "setweight(to_tsvector('simple'," + value + "),'" + string(class) + "')"
+	return "setweight(to_tsvector('simple'," + fulltextpostgresql.NormalizeText(value, folding) + "),'" + string(class) + "')"
+}
+
+func renderPostgreSQLFullTextPrerequisite() string {
+	guard := "BEGIN IF current_setting('server_encoding')<>'UTF8' THEN RAISE EXCEPTION 'golem full-text search requires UTF8 server encoding'; END IF; IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE n.nspname='pg_catalog' AND c.collname='und-x-icu' AND c.collprovider='i' AND c.collisdeterministic AND c.collencoding IN (-1,pg_catalog.pg_char_to_encoding('UTF8'))) THEN RAISE EXCEPTION 'golem full-text search requires deterministic ICU collation pg_catalog.und-x-icu'; END IF; END"
+	return "DO " + quoteDollar(guard)
 }
 
 func renderPostgreSQLUnaccentExtension() []string {

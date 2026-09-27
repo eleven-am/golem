@@ -7,6 +7,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -83,8 +84,8 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		`CREATE SCHEMA "golem_fulltext_runtime_live"`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."docs" ("id" text PRIMARY KEY,"allowed" boolean NOT NULL,"title" text NOT NULL)`,
 		`CREATE TABLE "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" ("id" text PRIMARY KEY,"document" tsvector NOT NULL)`,
-		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf'),('b',false,'alpha alpha alpha'),('c',true,'literal OR token')`,
-		`INSERT INTO "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" SELECT "id",setweight(to_tsvector('simple',regexp_replace(public.unaccent("title"),'[^[:alnum:]_]+',' ','g')),'A') FROM "golem_fulltext_runtime_live"."docs"`,
+		`INSERT INTO "golem_fulltext_runtime_live"."docs" VALUES ('a',true,'Renée alpha invoice.pdf Καφές 東京'),('b',false,'alpha alpha alpha'),('c',true,'literal OR token')`,
+		`INSERT INTO "golem_fulltext_runtime_live"."_golem_fulltext_x_fts" SELECT "id",setweight(to_tsvector('simple',` + fulltextpostgresql.NormalizeText(`"title"`, fulltextcontract.FoldingDiacritics) + `),'A') FROM "golem_fulltext_runtime_live"."docs"`,
 	} {
 		if _, err := database.Exec(statement); err != nil {
 			t.Fatal(err)
@@ -100,7 +101,7 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		}},
 	}
 	candidates := semanticruntime.Candidates{SQL: `SELECT "id" FROM "golem_fulltext_runtime_live"."docs" WHERE "allowed"=$1`, Args: []any{true}, Columns: []string{"id"}, Model: policyir.ModelID{}, MaxStatementBytes: 1 << 20, MaxStatementAliases: 100, NewScan: func() semanticruntime.IdentityScan { return &stringScan{} }}
-	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "OR"} {
+	for _, query := range []string{"alpha", "renee", `invoice.pdf`, `"invoice pdf"`, "invoice.pdf*", "inv*", "Καφές", "東京", "OR"} {
 		ranks, err := manager.Query(context.Background(), "m", "content", query, candidates, 10)
 		if err != nil {
 			t.Fatalf("query %q: %v", query, err)
@@ -112,16 +113,6 @@ func TestPostgreSQLQueryIsAuthorizedRankedAndPortable(t *testing.T) {
 		if len(ranks) != 1 || ranks[0].Identity[0] != want {
 			t.Fatalf("query %q ranks=%#v", query, ranks)
 		}
-	}
-}
-
-func TestPostgreSQLPrefixModifierTargetsTheFinalLexeme(t *testing.T) {
-	parsed, err := parse("invoice.pdf*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got, want := compilePostgreSQL(parsed), "('invoice' <-> 'pdf':*)"; got != want {
-		t.Fatalf("compiled query=%q want %q", got, want)
 	}
 }
 

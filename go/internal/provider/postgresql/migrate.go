@@ -293,15 +293,19 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			plan.steps = append(plan.steps, incrementalStep{statement: statement})
 		}
 	}
-	hasFoldedFullText := false
+	hasFullText, hasFoldedFullText := false, false
 	for _, owner := range postgresqlSortedFullTextOwners(refreshFullTextOwners) {
 		for _, extension := range postgresqlFullTextExtensions(after, owner) {
+			hasFullText = true
 			descriptor, decodeErr := fulltextstorage.Decode(extension)
 			if decodeErr != nil {
 				return IncrementalPlan{}, decodeErr
 			}
 			hasFoldedFullText = hasFoldedFullText || descriptor.Index.Folding == fulltextcontract.FoldingDiacritics
 		}
+	}
+	if hasFullText {
+		plan.steps = append(plan.steps, incrementalStep{statement: renderPostgreSQLFullTextPrerequisite()})
 	}
 	if hasFoldedFullText {
 		for _, statement := range renderPostgreSQLUnaccentExtension() {
@@ -518,8 +522,9 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 			if decodeErr != nil {
 				return nil, decodeErr
 			}
+			preamble = []string{renderPostgreSQLFullTextPrerequisite()}
 			if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-				preamble = renderPostgreSQLUnaccentExtension()
+				preamble = append(preamble, renderPostgreSQLUnaccentExtension()...)
 			}
 		} else {
 			statements, err = renderPostgreSQLSemanticExtension(r.schema.Namespace.Name, extension, false)

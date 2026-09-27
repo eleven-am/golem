@@ -7,11 +7,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -117,17 +117,19 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if err != nil {
 		return nil, err
 	}
-	compiled := compileSQLite(parsed)
+	arguments := make([]any, 0, len(parsed)+len(candidates.Args)+1)
 	statement := manager.sqliteStatement(index, candidates)
 	if manager.provider == ir.PostgreSQL {
-		compiled = compilePostgreSQL(parsed)
-		statement = manager.postgresqlStatement(index, candidates)
+		statement = manager.postgresqlStatement(index, parsed, candidates)
+		for _, item := range parsed {
+			arguments = append(arguments, item.value)
+		}
+	} else {
+		arguments = append(arguments, compileSQLite(parsed))
 	}
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured complexity")
 	}
-	arguments := make([]any, 0, len(candidates.Args)+2)
-	arguments = append(arguments, compiled)
 	arguments = append(arguments, candidates.Args...)
 	arguments = append(arguments, take)
 	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
@@ -172,18 +174,16 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 		" WHERE " + fts + " MATCH ?1 ORDER BY bm25(" + fts + "," + strings.Join(weights, ",") + ")," + strings.Join(identity, ",") + " LIMIT " + limit
 }
 
-func (manager *Manager) postgresqlStatement(index Index, candidates semanticruntime.Candidates) string {
+func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates) string {
 	table := manager.table(string(index.Descriptor.Storage) + "_fts")
 	identity, joins := manager.identitySQL(index, "golem_ff", "golem_fc", candidates)
-	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderPostgreSQL)
-	query := "to_tsquery('simple',"
-	if index.Descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-		query += "public.unaccent($1)"
-	} else {
-		query += "$1"
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(terms), policyir.ProviderPostgreSQL)
+	queries := make([]string, len(terms))
+	for position, item := range terms {
+		queries[position] = fulltextpostgresql.PhraseQuery("$"+strconv.Itoa(position+1), index.Descriptor.Index.Folding, item.prefix)
 	}
-	query += ")"
-	limit := "$" + strconv.Itoa(len(candidates.Args)+2)
+	query := fulltextpostgresql.JoinQueries(queries)
+	limit := "$" + strconv.Itoa(len(terms)+len(candidates.Args)+1)
 	return "SELECT ts_rank_cd(" + postgresqlWeights(index.Descriptor.Index) + ",golem_ff.document," + query + ")::double precision AS score," + strings.Join(identity, ",") +
 		" FROM " + table + " AS golem_ff JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" WHERE golem_ff.document@@" + query + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
@@ -316,26 +316,4 @@ func compileSQLite(terms []term) string {
 		}
 	}
 	return strings.Join(parts, " OR ")
-}
-
-func compilePostgreSQL(terms []term) string {
-	parts := make([]string, 0, len(terms))
-	for _, item := range terms {
-		words := strings.FieldsFunc(item.value, func(character rune) bool {
-			return character != '_' && !unicode.IsLetter(character) && !unicode.IsNumber(character)
-		})
-		if len(words) == 0 {
-			continue
-		}
-		lexemes := make([]string, len(words))
-		for position, word := range words {
-			lexemes[position] = "'" + strings.ReplaceAll(word, "'", "''") + "'"
-		}
-		if item.prefix {
-			lexemes[len(lexemes)-1] += ":*"
-		}
-		part := strings.Join(lexemes, " <-> ")
-		parts = append(parts, "("+part+")")
-	}
-	return strings.Join(parts, " | ")
 }
