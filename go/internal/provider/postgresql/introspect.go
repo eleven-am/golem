@@ -112,6 +112,7 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 	}
 	tableByOID := map[int64]*physical.PhysicalTable{}
 	tableOIDByName := map[string]int64{}
+	strictBehaviorTables := map[int64]physical.PhysicalName{}
 	rows, err := query.QueryxContext(ctx, `SELECT c.oid::bigint, c.relname,c.relkind::text,c.relpersistence::text,c.relrowsecurity,c.relforcerowsecurity
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual.Namespace.Name))
@@ -136,6 +137,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 			if err := validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity); err != nil {
 				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
 			}
+			strictBehaviorTables[oid] = physical.PhysicalName(name)
 			continue
 		}
 		if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
@@ -181,7 +183,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 	for index := range actual.Tables {
 		tableByOID[tableOIDByName[string(actual.Tables[index].Name)]] = &actual.Tables[index]
 	}
-	if err := rejectUnexpectedBehaviorObjects(ctx, query, actual.Namespace.Name, tableByOID, allowed); err != nil {
+	if err := rejectUnexpectedBehaviorObjects(ctx, query, actual.Namespace.Name, tableByOID, strictBehaviorTables, allowed); err != nil {
 		return physical.PhysicalSchema{}, err
 	}
 	columnsByAttnum := map[int64]map[int]physical.PhysicalColumn{}
@@ -1297,7 +1299,7 @@ func validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity bool) error {
 	return nil
 }
 
-func rejectUnexpectedBehaviorObjects(ctx context.Context, query catalogQueryer, namespace physical.PhysicalName, managedTables map[int64]*physical.PhysicalTable, allowed map[string]bool) error {
+func rejectUnexpectedBehaviorObjects(ctx context.Context, query catalogQueryer, namespace physical.PhysicalName, managedTables map[int64]*physical.PhysicalTable, strictTables map[int64]physical.PhysicalName, allowed map[string]bool) error {
 	rows, err := query.QueryxContext(ctx, `SELECT behavior.table_oid,behavior.kind,behavior.name FROM (
   SELECT c.oid::bigint AS table_oid,'trigger'::text AS kind,t.tgname::text AS name
   FROM pg_catalog.pg_trigger t
@@ -1326,6 +1328,9 @@ func rejectUnexpectedBehaviorObjects(ctx context.Context, query catalogQueryer, 
 		var kind, name string
 		if err := rows.Scan(&tableOID, &kind, &name); err != nil {
 			return err
+		}
+		if table, strict := strictTables[tableOID]; strict {
+			return fmt.Errorf("postgresql managed table %s has unexpected %s %q", table, kind, name)
 		}
 		if managedTables[tableOID] == nil {
 			continue

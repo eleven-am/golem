@@ -130,6 +130,26 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	if err := provider.Verify(context.Background(), database, schema); err != nil {
 		t.Fatal(err)
 	}
+	for _, statement := range []string{
+		`CREATE FUNCTION "golem_fulltext_live"."reject_fulltext_write"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NULL; END$golem$`,
+		`CREATE TRIGGER "unexpected_shadow_trigger" BEFORE INSERT ON "golem_fulltext_live"."` + base + `_fts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected trigger") {
+		t.Fatalf("unexpected shadow trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "unexpected_shadow_trigger" ON "golem_fulltext_live"."` + base + `_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DROP FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
 	function := base + "_sync"
 	var primaryKey string
 	if err := database.Get(&primaryKey, `SELECT con.conname FROM pg_catalog.pg_constraint con WHERE con.conrelid='"golem_fulltext_live"."`+base+`_fts"'::pg_catalog.regclass AND con.contype='p'`); err != nil {
