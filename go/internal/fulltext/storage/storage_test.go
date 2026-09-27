@@ -102,4 +102,17 @@ func TestLowerRejectsProviderReservedIdentityNames(t *testing.T) {
 			}
 		})
 	}
+	_, err = Lower(ir.ProviderExtensionIR{ID: "index", Provider: ir.SQLite, Kind: fulltextcontract.IndexKind, Version: fulltextcontract.Version, Owner: "document", Payload: payload}, physical.PhysicalTable{
+		ID: "document",
+		Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Nullable: true},
+			{ID: "slug", Name: "DoCiD", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+		},
+		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+		Uniques:    []physical.PhysicalKey{{Columns: []ir.FieldID{"slug"}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "reserved name docid") {
+		t.Fatalf("unique collision error=%v", err)
+	}
 }

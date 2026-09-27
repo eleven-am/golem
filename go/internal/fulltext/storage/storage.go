@@ -67,6 +67,19 @@ func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (phys
 			return physical.Extension{}, fmt.Errorf("full-text storage: SQLite primary identity column %s uses reserved name docid", field)
 		}
 	}
+	if extension.Provider == ir.SQLite {
+		for _, key := range owner.Uniques {
+			for _, field := range key.Columns {
+				column, exists := columns[field]
+				if !exists {
+					return physical.Extension{}, fmt.Errorf("full-text storage: unique column %s is absent", field)
+				}
+				if strings.EqualFold(string(column.Name), "docid") {
+					return physical.Extension{}, fmt.Errorf("full-text storage: SQLite unique column %s uses reserved name docid", field)
+				}
+			}
+		}
+	}
 	storage := "_golem_fulltext_" + string(extension.ID)
 	return physical.Extension{
 		ID: extension.ID, Provider: extension.Provider, Kind: extension.Kind, Version: extension.Version,
