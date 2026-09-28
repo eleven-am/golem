@@ -108,7 +108,9 @@ func SemanticIndex[M any](_, _ string, _ ...Column[M]) ModelOption[M] { return m
 type TextFoldingMode string
 
 const (
-	// FoldDiacritics makes accented and unaccented forms match.
+	// FoldDiacritics makes accented and unaccented forms match. SQLite writers
+	// must use a connection opened by Golem's SQLite provider so its deterministic
+	// folding function is available to the database-owned maintenance triggers.
 	FoldDiacritics TextFoldingMode = "diacritics"
 	// FoldNone preserves diacritics while tokenizing text.
 	FoldNone TextFoldingMode = "none"

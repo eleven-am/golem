@@ -12,6 +12,10 @@ type Config struct {
 	DataSourceName string
 }
 
+// Open creates a verified SQLite handle and registers every deterministic SQL
+// function required by Golem-owned schema objects. Every connection that writes
+// a Golem database must be opened through this package, including connections
+// in another service and raw SQL writers.
 func Open(ctx context.Context, config Config) (*provider.Database, error) {
 	database, err := providerhandle.OpenSQLite(ctx, config.DataSourceName)
 	if err != nil {

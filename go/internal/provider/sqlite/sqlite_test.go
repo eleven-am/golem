@@ -116,7 +116,8 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "fulltext.db"))
+	databasePath := filepath.Join(t.TempDir(), "fulltext.db")
+	database, _, err := provider.Open(context.Background(), databasePath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -211,6 +212,18 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 	assertMatches("fresh", 1)
 	assertMatches("reused", 1)
+	independentWriter, _, err := provider.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := independentWriter.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000006','Tiếng Việt@example.test',10)`); err != nil {
+		independentWriter.Close()
+		t.Fatal(err)
+	}
+	if err := independentWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("Tieng Viet", 1)
 	if _, err := database.Exec(`DELETE FROM users`); err != nil {
 		t.Fatal(err)
 	}
