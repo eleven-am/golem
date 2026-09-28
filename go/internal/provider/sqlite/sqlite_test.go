@@ -298,6 +298,80 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 }
 
+func TestDetailedCatalogDriftCarriesObjectIdentity(t *testing.T) {
+	provider := New()
+	schema, err := provider.Lower(context.Background(), socialModelIR(), physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := make(map[ir.ModelID]physical.PhysicalTable, len(schema.Tables))
+	for _, table := range schema.Tables {
+		tables[table.ID] = table
+	}
+	posts := findTable(schema, "posts")
+	for _, testCase := range []struct {
+		name   string
+		setup  func(*sqlx.DB) error
+		check  func(*sqlx.DB) error
+		object providerdrift.Object
+	}{
+		{
+			name: "column",
+			setup: func(database *sqlx.DB) error {
+				if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+					return err
+				}
+				_, err := database.Exec(`ALTER TABLE posts ADD COLUMN unexpected TEXT`)
+				return err
+			},
+			check:  func(database *sqlx.DB) error { return inspectColumns(context.Background(), database, posts) },
+			object: providerdrift.Object{Type: "column", Name: "unexpected", Table: "posts"},
+		},
+		{
+			name: "foreign key",
+			setup: func(database *sqlx.DB) error {
+				_, err := database.Exec(`CREATE TABLE posts (tenant_id TEXT NOT NULL, id TEXT NOT NULL, author_id TEXT NOT NULL)`)
+				return err
+			},
+			check: func(database *sqlx.DB) error {
+				return inspectForeignKeys(context.Background(), database, posts, tables)
+			},
+			object: providerdrift.Object{Type: "table", Name: "posts", Table: "posts"},
+		},
+		{
+			name: "index",
+			setup: func(database *sqlx.DB) error {
+				if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+					return err
+				}
+				_, err := database.Exec(`DROP INDEX idx_posts_author`)
+				return err
+			},
+			check:  func(database *sqlx.DB) error { return inspectIndexes(context.Background(), database, posts) },
+			object: providerdrift.Object{Type: "index", Name: "idx_posts_author", Table: "posts"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "drift.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err := testCase.setup(database); err != nil {
+				t.Fatal(err)
+			}
+			err = testCase.check(database)
+			if err == nil {
+				t.Fatal("drifted catalog was accepted")
+			}
+			object, ok := providerdrift.Inspect(err)
+			if !ok || object != testCase.object {
+				t.Fatalf("drift object=%#v ok=%t want=%#v err=%v", object, ok, testCase.object, err)
+			}
+		})
+	}
+}
+
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {
 	provider := New()
 	model := socialModelIR()

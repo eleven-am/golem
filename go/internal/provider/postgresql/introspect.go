@@ -2,6 +2,7 @@ package postgresql
 
 import (
 	"context"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -17,6 +18,7 @@ import (
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
@@ -31,6 +33,11 @@ type catalogQueryer interface {
 // entry inside this package. It prevents active provider entry points from
 // accepting an unverified historical schema as authority.
 type reviewedSnapshot struct{ schema physical.PhysicalSchema }
+
+type strictIndexTable struct {
+	name    physical.PhysicalName
+	allowed map[string]bool
+}
 
 func (provider *Provider) introspect(ctx context.Context, database *sqlx.DB, expected physical.PhysicalSchema) (physical.PhysicalSchema, error) {
 	normalized, err := physical.Normalize(expected)
@@ -126,7 +133,7 @@ func (provider *Provider) introspectNormalizedQuery(ctx context.Context, query c
 	tableOIDByName := map[string]int64{}
 	strictBehaviorTables := map[int64]physical.PhysicalName{}
 	strictConstraintTables := map[int64]physical.PhysicalName{}
-	strictIndexTables := map[int64]map[string]bool{}
+	strictIndexTables := map[int64]strictIndexTable{}
 	rows, err := query.QueryxContext(ctx, `SELECT c.oid::bigint, c.relname,c.relkind::text,c.relpersistence::text,c.relrowsecurity,c.relforcerowsecurity
 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
 WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual.Namespace.Name))
@@ -146,23 +153,23 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 		}
 		if semanticTables[name] || fullTextTables[name] {
 			if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql semantic table %q: %v", name, err)
 			}
 			if err := validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity); err != nil {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql semantic table %q: %w", name, err)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql semantic table %q: %v", name, err)
 			}
 			strictBehaviorTables[oid] = physical.PhysicalName(name)
 			if fullTextTables[name] {
 				strictConstraintTables[oid] = physical.PhysicalName(name)
-				strictIndexTables[oid] = map[string]bool{string(fullTextIndexes[name]): true}
+				strictIndexTables[oid] = strictIndexTable{name: physical.PhysicalName(name), allowed: map[string]bool{string(fullTextIndexes[name]): true}}
 			}
 			continue
 		}
 		if err := validateCatalogTableFacts(relationKind, persistence); err != nil {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql managed table %q: %w", name, err)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql managed table %q: %v", name, err)
 		}
 		if err := validateCatalogBehaviorFlags(rowSecurity, forceRowSecurity); err != nil {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql managed table %q: %w", name, err)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql managed table %q: %v", name, err)
 		}
 		id := ir.ModelID(stableID("catalog-table", string(actual.Namespace.Name), name))
 		if value, ok := expectedTables[name]; ok {
@@ -188,7 +195,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname`, string(actual
 		semantic := map[string]string{"v": "view", "m": "materialized_view", "S": "sequence"}[kind]
 		if !allowed[semantic+"\x00"+name] {
 			otherRows.Close()
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql managed namespace drift: unexpected %s %q", semantic, name)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: semantic, Name: name}, "postgresql managed namespace drift: unexpected %s %q", semantic, name)
 		}
 	}
 	if err := otherRows.Close(); err != nil {
@@ -246,7 +253,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 		storage, parseErr := parseCatalogStorage(typeText)
 		if parseErr != nil {
 			rows.Close()
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog column %s.%s: %w", table.Name, name, parseErr)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(table.Name)}, "postgresql catalog column %s.%s: %v", table.Name, name, parseErr)
 		}
 		fieldID := ir.FieldID(stableID("catalog-column", string(table.ID), name))
 		ordinal := visibleOrdinals[oid]
@@ -265,17 +272,17 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 			actualOwnerColumns[oid] = append(actualOwnerColumns[oid], name)
 		}
 		if !defaultCollation {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog column %s.%s: non-default collation is not baseline", table.Name, name)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(table.Name)}, "postgresql catalog column %s.%s: non-default collation is not baseline", table.Name, name)
 		}
 		if identity != "" {
 			if err := validateIdentityMode(identity); err != nil {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql column %s.%s: %w", table.Name, name, err)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(table.Name)}, "postgresql column %s.%s: %v", table.Name, name, err)
 			}
 			column.Default = physical.PhysicalDefault{Kind: physical.DefaultProvider, Expression: &physical.Expression{Kind: physical.ExpressionFunction, Type: storage, Symbol: postgresSymbol("golem.postgresql.default.identity.v1", ir.SchemaSymbolFunction)}}
 		} else if defaultText != "" && generated == "" {
 			literal, parseErr := parseCatalogLiteral(defaultText, storage)
 			if parseErr != nil {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql default %s.%s: %w", table.Name, name, parseErr)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(table.Name)}, "postgresql default %s.%s: %v", table.Name, name, parseErr)
 			}
 			column.Default = physical.PhysicalDefault{Kind: physical.DefaultLiteral, Literal: &literal}
 		}
@@ -286,7 +293,7 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 		columnsByAttnum[oid][attnum] = column
 		if generated != "" {
 			if err := validateGeneratedMode(generated); err != nil {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql column %s.%s: %w", table.Name, name, err)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(table.Name)}, "postgresql column %s.%s: %v", table.Name, name, err)
 			}
 			table.Columns[len(table.Columns)-1].Default = physical.PhysicalDefault{Kind: physical.DefaultNone}
 			pendingGeneratedExpressions = append(pendingGeneratedExpressions, pendingGenerated{tableOID: oid, attnum: attnum, expression: defaultText})
@@ -314,7 +321,8 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 				}
 			}
 			if !reflect.DeepEqual(actualOwnerColumns[oid], expectedOwners) {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql catalog table %s: non-generated column order differs from the reviewed schema", tableName)
+				name := firstStringDifference(expectedOwners, actualOwnerColumns[oid])
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: tableName}, "postgresql catalog table %s: non-generated column order differs from the reviewed schema", tableName)
 			}
 		} else {
 			expectedVisible := make([]string, 0, len(wanted.Columns))
@@ -326,7 +334,8 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 				actualVisible = append(actualVisible, string(column.Name))
 			}
 			if !reflect.DeepEqual(actualVisible, expectedVisible) {
-				return physical.PhysicalSchema{}, fmt.Errorf("postgresql historical catalog table %s: column order differs from the reviewed schema", tableName)
+				name := firstStringDifference(expectedVisible, actualVisible)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: tableName}, "postgresql historical catalog table %s: column order differs from the reviewed schema", tableName)
 			}
 		}
 	}
@@ -341,11 +350,11 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 			}
 		}
 		if reviewed == nil {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql generated expression has no reviewed owner")
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: string(column.Name), Table: string(table.Name)}, "postgresql generated expression has no reviewed owner")
 		}
 		expression, parseErr := parseCatalogGeneratedExpression(pending.expression, *table, *reviewed)
 		if parseErr != nil {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql generated expression %s.%s: %w", table.Name, column.Name, parseErr)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: string(column.Name), Table: string(table.Name)}, "postgresql generated expression %s.%s: %v", table.Name, column.Name, parseErr)
 		}
 		for index := range table.Columns {
 			if table.Columns[index].ID == column.ID {
@@ -395,7 +404,7 @@ func reconcileOptimisticConcurrency(expected, actual physical.PhysicalSchema) (p
 		}
 		actualIndex, exists := actualTables[expectedTable.ID]
 		if !exists || actual.Tables[actualIndex].Name != expectedTable.Name {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency table %s does not exactly match the reviewed table identity", expectedTable.ID)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: string(expectedTable.Name), Table: string(expectedTable.Name)}, "postgresql optimistic concurrency table %s does not exactly match the reviewed table identity", expectedTable.ID)
 		}
 		actualTable := actual.Tables[actualIndex]
 		field := *expectedTable.OptimisticConcurrency
@@ -413,19 +422,60 @@ func reconcileOptimisticConcurrency(expected, actual physical.PhysicalSchema) (p
 			}
 		}
 		if expectedColumn == nil || actualColumn == nil || !reflect.DeepEqual(*expectedColumn, *actualColumn) {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency column %s.%s does not exactly match the reviewed catalog-backed column", expectedTable.ID, field)
+			name := string(field)
+			if expectedColumn != nil {
+				name = string(expectedColumn.Name)
+			}
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: string(expectedTable.Name)}, "postgresql optimistic concurrency column %s.%s does not exactly match the reviewed catalog-backed column", expectedTable.ID, field)
 		}
 		expectedWithoutDeclaration := expectedTable
 		expectedWithoutDeclaration.OptimisticConcurrency = nil
 		actualWithoutDeclaration := actualTable
 		actualWithoutDeclaration.OptimisticConcurrency = nil
 		if !reflect.DeepEqual(expectedWithoutDeclaration, actualWithoutDeclaration) {
-			return physical.PhysicalSchema{}, fmt.Errorf("postgresql optimistic concurrency table %s does not exactly match the reviewed catalog-backed table", expectedTable.ID)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: string(expectedTable.Name), Table: string(expectedTable.Name)}, "postgresql optimistic concurrency table %s does not exactly match the reviewed catalog-backed table", expectedTable.ID)
 		}
 		value := field
 		actual.Tables[actualIndex].OptimisticConcurrency = &value
 	}
 	return physical.NormalizeHistorical(actual)
+}
+
+func firstStringDifference(expected, actual []string) string {
+	expectedCounts := make(map[string]int, len(expected))
+	actualCounts := make(map[string]int, len(actual))
+	for _, value := range expected {
+		expectedCounts[value]++
+	}
+	for _, value := range actual {
+		actualCounts[value]++
+	}
+	for _, value := range expected {
+		if actualCounts[value] < expectedCounts[value] {
+			return value
+		}
+	}
+	for _, value := range actual {
+		if expectedCounts[value] < actualCounts[value] {
+			return value
+		}
+	}
+	limit := len(expected)
+	if len(actual) < limit {
+		limit = len(actual)
+	}
+	for index := 0; index < limit; index++ {
+		if expected[index] != actual[index] {
+			return expected[index]
+		}
+	}
+	if len(actual) > limit {
+		return actual[limit]
+	}
+	if len(expected) > limit {
+		return expected[limit]
+	}
+	return "column"
 }
 
 func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, expected physical.PhysicalSchema, reviewedReplay bool) error {
@@ -437,8 +487,14 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		return nil
 	}
 	var vectorVersion string
-	if err := query.QueryRowxContext(ctx, `SELECT extversion FROM pg_catalog.pg_extension WHERE extname='vector'`).Scan(&vectorVersion); err != nil || !supportedPGVectorVersion(vectorVersion) {
-		return fmt.Errorf("postgresql semantic introspect: pgvector >=0.8.0 is required")
+	if err := query.QueryRowxContext(ctx, `SELECT extversion FROM pg_catalog.pg_extension WHERE extname='vector'`).Scan(&vectorVersion); err != nil {
+		if err == sql.ErrNoRows {
+			return providerdrift.New(providerdrift.Object{Type: "extension", Name: "vector"}, "postgresql semantic introspect: pgvector >=0.8.0 is required")
+		}
+		return err
+	}
+	if !supportedPGVectorVersion(vectorVersion) {
+		return providerdrift.New(providerdrift.Object{Type: "extension", Name: "vector"}, "postgresql semantic introspect: pgvector >=0.8.0 is required")
 	}
 	for _, extension := range expected.Extensions {
 		if extension.Kind != semanticcontract.IndexKind {
@@ -474,7 +530,11 @@ func introspectSemanticExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 		wantVectors := fmt.Sprintf("record_key:text:true,embedding:vector(%d):true", descriptor.Dimensions)
 		if stateColumns != wantState || vectorColumns != wantVectors {
-			return fmt.Errorf("postgresql semantic introspect: column drift extension=%s", extension.ID)
+			name := state
+			if stateColumns == wantState {
+				name = vectors
+			}
+			return providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql semantic introspect: column drift extension=%s", extension.ID)
 		}
 	}
 	return nil
@@ -487,8 +547,11 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 		var compatible bool
 		const prerequisiteSQL = `SELECT current_setting('server_encoding')='UTF8' AND EXISTS (SELECT 1 FROM pg_catalog.pg_collation c JOIN pg_catalog.pg_namespace n ON n.oid=c.collnamespace WHERE n.nspname='pg_catalog' AND c.collname='und-x-icu' AND c.collprovider='i' AND c.collisdeterministic AND c.collencoding IN (-1,pg_catalog.pg_char_to_encoding('UTF8')))`
-		if err := query.QueryRowxContext(ctx, prerequisiteSQL).Scan(&compatible); err != nil || !compatible {
-			return fmt.Errorf("postgresql full-text introspect: UTF8 and deterministic ICU collation pg_catalog.und-x-icu are required")
+		if err := query.QueryRowxContext(ctx, prerequisiteSQL).Scan(&compatible); err != nil {
+			return err
+		}
+		if !compatible {
+			return providerdrift.New(providerdrift.Object{Type: "collation", Name: "pg_catalog.und-x-icu"}, "postgresql full-text introspect: UTF8 and deterministic ICU collation pg_catalog.und-x-icu are required")
 		}
 		break
 	}
@@ -527,17 +590,26 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 		}
 		want = append(want, "document:tsvector:true:true")
 		if columns != strings.Join(want, ",") {
-			return fmt.Errorf("postgresql full-text introspect: column drift extension=%s", extension.ID)
+			return providerdrift.New(providerdrift.Object{Type: "table", Name: string(names.table), Table: string(names.table)}, "postgresql full-text introspect: column drift extension=%s", extension.ID)
 		}
 		var primaryKey string
 		const primaryKeySQL = `SELECT string_agg(a.attname,',' ORDER BY key.ordinality) FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_index i ON i.indexrelid=con.conindid AND i.indrelid=con.conrelid CROSS JOIN LATERAL unnest(con.conkey) WITH ORDINALITY AS key(attnum,ordinality) JOIN pg_catalog.pg_attribute a ON a.attrelid=con.conrelid AND a.attnum=key.attnum WHERE n.nspname=$1 AND c.relname=$2 AND con.contype='p' AND con.convalidated AND NOT con.condeferrable AND NOT con.condeferred AND i.indisprimary AND i.indisunique AND i.indisvalid AND i.indisready GROUP BY con.oid`
-		if err := query.QueryRowxContext(ctx, primaryKeySQL, string(expected.Namespace.Name), string(names.table)).Scan(&primaryKey); err != nil || primaryKey != strings.Join(identityNames, ",") {
-			return fmt.Errorf("postgresql full-text introspect: primary key drift extension=%s", extension.ID)
+		if err := query.QueryRowxContext(ctx, primaryKeySQL, string(expected.Namespace.Name), string(names.table)).Scan(&primaryKey); err != nil {
+			if err != sql.ErrNoRows {
+				return err
+			}
+			return providerdrift.New(providerdrift.Object{Type: "primary_key", Name: string(names.table) + "_pkey", Table: string(names.table)}, "postgresql full-text introspect: primary key drift extension=%s", extension.ID)
+		}
+		if primaryKey != strings.Join(identityNames, ",") {
+			return providerdrift.New(providerdrift.Object{Type: "primary_key", Name: string(names.table) + "_pkey", Table: string(names.table)}, "postgresql full-text introspect: primary key drift extension=%s", extension.ID)
 		}
 		var indexCount int
 		const indexSQL = `SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class x ON x.oid=i.indexrelid JOIN pg_catalog.pg_class t ON t.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=t.relnamespace JOIN pg_catalog.pg_am am ON am.oid=x.relam JOIN pg_catalog.pg_attribute a ON a.attrelid=t.oid AND a.attnum=i.indkey[0] WHERE n.nspname=$1 AND t.relname=$2 AND x.relname=$3 AND am.amname='gin' AND i.indisvalid AND i.indisready AND i.indnkeyatts=1 AND i.indnatts=1 AND i.indexprs IS NULL AND i.indpred IS NULL AND a.attname='document'`
-		if err := query.QueryRowxContext(ctx, indexSQL, string(expected.Namespace.Name), string(names.table), string(names.document)).Scan(&indexCount); err != nil || indexCount != 1 {
-			return fmt.Errorf("postgresql full-text introspect: GIN index drift extension=%s", extension.ID)
+		if err := query.QueryRowxContext(ctx, indexSQL, string(expected.Namespace.Name), string(names.table), string(names.document)).Scan(&indexCount); err != nil {
+			return err
+		}
+		if indexCount != 1 {
+			return providerdrift.New(providerdrift.Object{Type: "index", Name: string(names.document), Table: string(names.table)}, "postgresql full-text introspect: GIN index drift extension=%s", extension.ID)
 		}
 		rendered, err := renderPostgreSQLFullTextExtension(expected.Namespace.Name, extension, owner)
 		if err != nil {
@@ -555,8 +627,14 @@ p.proconfig=ARRAY['search_path=pg_catalog']::text[],
 p.proowner=(SELECT c.relowner FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace cn ON cn.oid=c.relnamespace WHERE cn.nspname=$1 AND c.relname=$3 AND c.relkind='r'),
 EXISTS(SELECT 1 FROM pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE')
 FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
-		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function), string(names.table)).Scan(&functionBody, &language, &volatility, &securityDefiner, &leakproof, &strict, &returnsSet, &parallel, &functionKind, &safeConfiguration, &ownerMatches, &publicExecute); err != nil || functionBody != parts[1] || language != "plpgsql" || volatility != "v" || !securityDefiner || leakproof || strict || returnsSet || parallel != "u" || functionKind != "f" || !safeConfiguration || !ownerMatches || publicExecute {
-			return fmt.Errorf("postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
+		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function), string(names.table)).Scan(&functionBody, &language, &volatility, &securityDefiner, &leakproof, &strict, &returnsSet, &parallel, &functionKind, &safeConfiguration, &ownerMatches, &publicExecute); err != nil {
+			if err != sql.ErrNoRows {
+				return err
+			}
+			return providerdrift.New(providerdrift.Object{Type: "function", Name: string(names.function), Table: string(names.table)}, "postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
+		}
+		if functionBody != parts[1] || language != "plpgsql" || volatility != "v" || !securityDefiner || leakproof || strict || returnsSet || parallel != "u" || functionKind != "f" || !safeConfiguration || !ownerMatches || publicExecute {
+			return providerdrift.New(providerdrift.Object{Type: "function", Name: string(names.function), Table: string(names.table)}, "postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
 		}
 		updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
 		if err != nil {
@@ -593,15 +671,26 @@ FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
 			expectedTrigger, exists := expectedTriggers[name]
 			if !exists || expectedTrigger.kind != triggerType || expectedTrigger.columns != columns || enabled != "O" || !plain || seenTriggers[name] {
 				_ = rows.Close()
-				return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
+				return providerdrift.New(providerdrift.Object{Type: "trigger", Name: name, Table: string(owner.Name)}, "postgresql full-text introspect: trigger drift extension=%s", extension.ID)
 			}
 			seenTriggers[name] = true
+		}
+		if err := rows.Err(); err != nil {
+			_ = rows.Close()
+			return err
 		}
 		if err := rows.Close(); err != nil {
 			return err
 		}
-		if err := rows.Err(); err != nil || len(seenTriggers) != len(expectedTriggers) {
-			return fmt.Errorf("postgresql full-text introspect: trigger drift extension=%s", extension.ID)
+		if len(seenTriggers) != len(expectedTriggers) {
+			missing := "trigger"
+			for _, name := range []physical.PhysicalName{names.insert, names.update, names.delete, names.truncate} {
+				if !seenTriggers[string(name)] {
+					missing = string(name)
+					break
+				}
+			}
+			return providerdrift.New(providerdrift.Object{Type: "trigger", Name: missing, Table: string(owner.Name)}, "postgresql full-text introspect: trigger drift extension=%s", extension.ID)
 		}
 	}
 	return nil
@@ -655,7 +744,7 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 		}
 		if table, strict := strictTables[oid]; strict {
 			if kind != "p" {
-				return fmt.Errorf("postgresql managed table %s has unexpected constraint %q", table, name)
+				return providerdrift.New(providerdrift.Object{Type: "constraint", Name: name, Table: string(table)}, "postgresql managed table %s has unexpected constraint %q", table, name)
 			}
 			continue
 		}
@@ -665,13 +754,13 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 		}
 		wanted := expected[string(table.Name)]
 		if err := validateCatalogConstraintFacts(kind, matchCode, deferrable, deferred, validated, noInherit, nullsNotDistinct); err != nil {
-			return fmt.Errorf("postgresql constraint %s: %w", name, err)
+			return providerdrift.New(providerdrift.Object{Type: catalogConstraintType(kind), Name: name, Table: string(table.Name)}, "postgresql constraint %s: %v", name, err)
 		}
 		switch kind {
 		case "p", "u":
 			ids, err := fieldIDs(parseCatalogNumbers(localText), columns[oid])
 			if err != nil {
-				return err
+				return providerdrift.New(providerdrift.Object{Type: catalogConstraintType(kind), Name: name, Table: string(table.Name)}, "postgresql constraint %s: %v", name, err)
 			}
 			key := physical.PhysicalKey{ID: keyID(wanted, name, kind, table.ID), Name: physical.PhysicalName(name), Columns: ids}
 			if kind == "p" {
@@ -682,22 +771,22 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 		case "f":
 			local, err := fieldIDs(parseCatalogNumbers(localText), columns[oid])
 			if err != nil {
-				return err
+				return providerdrift.New(providerdrift.Object{Type: "foreign_key", Name: name, Table: string(table.Name)}, "postgresql foreign key %s: %v", name, err)
 			}
 			remote, err := fieldIDs(parseCatalogNumbers(remoteText), columns[remoteOID])
 			if err != nil {
-				return err
+				return providerdrift.New(providerdrift.Object{Type: "foreign_key", Name: name, Table: string(table.Name)}, "postgresql foreign key %s: %v", name, err)
 			}
 			remoteTable := tables[remoteOID]
 			if remoteTable == nil {
-				return fmt.Errorf("postgresql foreign key %s references table outside managed namespace", name)
+				return providerdrift.New(providerdrift.Object{Type: "foreign_key", Name: name, Table: string(table.Name)}, "postgresql foreign key %s references table outside managed namespace", name)
 			}
 			foreign := physical.PhysicalForeignKey{ID: foreignID(wanted, name, table.ID), Name: physical.PhysicalName(name), Columns: local, ReferencedTable: remoteTable.ID, ReferencedColumns: remote, OnUpdate: parseAction(updateCode), OnDelete: parseAction(deleteCode), Deferrable: parseDeferrable(deferrable, deferred)}
 			table.ForeignKeys = append(table.ForeignKeys, foreign)
 		case "c":
 			parsed, err := parseCatalogExpression(expression, *table)
 			if err != nil {
-				return fmt.Errorf("postgresql check %s: %w", name, err)
+				return providerdrift.New(providerdrift.Object{Type: "check", Name: name, Table: string(table.Name)}, "postgresql check %s: %v", name, err)
 			}
 			id := checkID(wanted, name, table.ID)
 			var reviewed *physical.Expression
@@ -708,21 +797,21 @@ func introspectConstraints(ctx context.Context, q catalogQueryer, namespace phys
 				}
 			}
 			if reviewed == nil {
-				return fmt.Errorf("postgresql check has no reviewed expression")
+				return providerdrift.New(providerdrift.Object{Type: "check", Name: name, Table: string(table.Name)}, "postgresql check has no reviewed expression")
 			}
 			parsed, err = normalizeCatalogExpressionAgainstReviewed(parsed, *reviewed)
 			if err != nil {
-				return fmt.Errorf("postgresql check expression: %w", err)
+				return providerdrift.New(providerdrift.Object{Type: "check", Name: name, Table: string(table.Name)}, "postgresql check expression: %v", err)
 			}
 			table.Checks = append(table.Checks, physical.PhysicalCheck{ID: id, Name: physical.PhysicalName(name), Expression: parsed})
 		default:
-			return fmt.Errorf("postgresql constraint %s has unsupported type %q", name, kind)
+			return providerdrift.New(providerdrift.Object{Type: "constraint", Name: name, Table: string(table.Name)}, "postgresql constraint %s has unsupported type %q", name, kind)
 		}
 	}
 	return rows.Err()
 }
 
-func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, strictTables map[int64]map[string]bool, columns map[int64]map[int]physical.PhysicalColumn) error {
+func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, expected map[string]physical.PhysicalTable, tables map[int64]*physical.PhysicalTable, strictTables map[int64]strictIndexTable, columns map[int64]map[int]physical.PhysicalColumn) error {
 	rows, err := q.QueryxContext(ctx, `SELECT i.indrelid::bigint,i.indexrelid::bigint,ci.relname,i.indisunique,am.amname,i.indkey::text,i.indoption::text,i.indnkeyatts::integer,i.indnatts::integer,i.indisvalid,i.indisready,i.indnullsnotdistinct,EXISTS(SELECT 1 FROM unnest(i.indclass::oid[]) value(opcoid) JOIN pg_catalog.pg_opclass opc ON opc.oid=value.opcoid WHERE NOT opc.opcdefault),EXISTS(SELECT 1 FROM unnest(i.indcollation::oid[]) value(collid) LEFT JOIN pg_catalog.pg_collation coll ON coll.oid=value.collid LEFT JOIN pg_catalog.pg_namespace coll_namespace ON coll_namespace.oid=coll.collnamespace WHERE value.collid<>0 AND NOT (coll_namespace.nspname='pg_catalog' AND coll.collname='default')),COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class ci ON ci.oid=i.indexrelid JOIN pg_catalog.pg_class ct ON ct.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=ct.relnamespace JOIN pg_catalog.pg_am am ON am.oid=ci.relam WHERE n.nspname=$1 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ct.relname,ci.relname`, string(namespace))
 	if err != nil {
 		return err
@@ -750,9 +839,9 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		return err
 	}
 	for _, item := range catalogIndexes {
-		if allowed, strict := strictTables[item.tableOID]; strict {
-			if !allowed[item.name] {
-				return fmt.Errorf("postgresql managed table has unexpected index %q", item.name)
+		if strictTable, strict := strictTables[item.tableOID]; strict {
+			if !strictTable.allowed[item.name] {
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(strictTable.name)}, "postgresql managed table has unexpected index %q", item.name)
 			}
 			continue
 		}
@@ -761,7 +850,7 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 			continue
 		}
 		if err := validateCatalogIndexFacts(item.valid, item.ready, item.nullsNotDistinct, item.nondefaultOpclass, item.nondefaultCollation); err != nil {
-			return fmt.Errorf("postgresql index %s: %w", item.name, err)
+			return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql index %s: %v", item.name, err)
 		}
 		keys, options := parseCatalogNumbers(item.keyText), parseCatalogNumbers(item.optionText)
 		index := physical.PhysicalIndex{ID: indexID(expected[string(table.Name)], item.name, table.ID), Name: physical.PhysicalName(item.name), Unique: item.unique, Method: physical.IndexMethod(item.method), CreationMode: physical.IndexTransactional}
@@ -803,14 +892,14 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 				}
 				expression, err := parseCatalogExpression(source, *table)
 				if err != nil {
-					return err
+					return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql index %s expression: %v", item.name, err)
 				}
 				if reviewedIndex == nil || position >= len(reviewedIndex.Keys) || reviewedIndex.Keys[position].Expression == nil {
-					return fmt.Errorf("postgresql expression index has no reviewed key")
+					return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql expression index has no reviewed key")
 				}
 				expression, err = normalizeCatalogExpressionAgainstReviewed(expression, *reviewedIndex.Keys[position].Expression)
 				if err != nil {
-					return fmt.Errorf("postgresql expression index key: %w", err)
+					return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql expression index key: %v", err)
 				}
 				key.Expression = &expression
 				advanced = true
@@ -828,14 +917,14 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		if item.predicateText != "" {
 			predicate, err := parseCatalogExpression(item.predicateText, *table)
 			if err != nil {
-				return err
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql index %s predicate: %v", item.name, err)
 			}
 			if reviewedIndex == nil || reviewedIndex.Predicate == nil {
-				return fmt.Errorf("postgresql partial index has no reviewed predicate")
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql partial index has no reviewed predicate")
 			}
 			predicate, err = normalizeCatalogExpressionAgainstReviewed(predicate, *reviewedIndex.Predicate)
 			if err != nil {
-				return fmt.Errorf("postgresql index predicate: %w", err)
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: item.name, Table: string(table.Name)}, "postgresql index predicate: %v", err)
 			}
 			index.Predicate = &predicate
 			advanced = true
@@ -847,6 +936,21 @@ func introspectIndexes(ctx context.Context, q catalogQueryer, namespace physical
 		table.Indexes = append(table.Indexes, index)
 	}
 	return nil
+}
+
+func catalogConstraintType(kind string) string {
+	switch kind {
+	case "p":
+		return "primary_key"
+	case "u":
+		return "unique"
+	case "f":
+		return "foreign_key"
+	case "c":
+		return "check"
+	default:
+		return "constraint"
+	}
 }
 
 func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.SystemSchema, allowed map[string]bool) (physical.SystemSchema, error) {
@@ -895,7 +999,8 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	}
 	sort.Strings(expectedRelations)
 	if fmt.Sprint(names) != fmt.Sprint(expectedRelations) {
-		return physical.SystemSchema{}, fmt.Errorf("postgresql system schema drift: relations=%v", names)
+		name := firstStringDifference(expectedRelations, names)
+		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql system schema drift: relations=%v", names)
 	}
 	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(expected.Namespace.Name), ledgerName)
 	if err != nil {
@@ -923,24 +1028,41 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 	}
 	wanted := []ledgerColumn{{name: "migration_id", storage: "text", notNull: true}, {name: "parent_chain_hash", storage: "text", notNull: true}, {name: "chain_hash", storage: "text", notNull: true}, {name: "file_checksums", storage: "jsonb", notNull: true}, {name: "before_physical_fingerprint", storage: "text", notNull: true}, {name: "after_physical_fingerprint", storage: "text", notNull: true}, {name: "phases", storage: "jsonb", notNull: true}, {name: "applied_at", storage: "timestamp(6) with time zone", notNull: true}}
 	if fmt.Sprint(actualColumns) != fmt.Sprint(wanted) {
-		return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger column drift")
+		expectedNames := make([]string, len(wanted))
+		actualNames := make([]string, len(actualColumns))
+		for index := range wanted {
+			expectedNames[index] = wanted[index].name
+		}
+		for index := range actualColumns {
+			actualNames[index] = actualColumns[index].name
+		}
+		name := firstStringDifference(expectedNames, actualNames)
+		if name == "column" {
+			for index := range wanted {
+				if !reflect.DeepEqual(wanted[index], actualColumns[index]) {
+					name = wanted[index].name
+					break
+				}
+			}
+		}
+		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: ledgerName}, "postgresql migration ledger column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.conname`, string(expected.Namespace.Name), ledgerName)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.conname`, string(expected.Namespace.Name), ledgerName)
 	if err != nil {
 		return physical.SystemSchema{}, err
 	}
 	constraintCount := 0
 	for constraintRows.Next() {
-		var kind, keys string
+		var constraintName, kind, keys string
 		var deferrable, validated bool
-		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+		if err := constraintRows.Scan(&constraintName, &kind, &keys, &deferrable, &validated); err != nil {
 			constraintRows.Close()
 			return physical.SystemSchema{}, err
 		}
 		constraintCount++
 		if kind != "p" || keys != "{1}" || deferrable || !validated {
 			constraintRows.Close()
-			return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger constraint drift")
+			return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "constraint", Name: constraintName, Table: ledgerName}, "postgresql migration ledger constraint drift")
 		}
 	}
 	if err := constraintRows.Err(); err != nil {
@@ -951,14 +1073,14 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		return physical.SystemSchema{}, err
 	}
 	if constraintCount != 1 {
-		return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger constraint drift: got %d constraints", constraintCount)
+		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "primary_key", Name: ledgerName + "_pkey", Table: ledgerName}, "postgresql migration ledger constraint drift: got %d constraints", constraintCount)
 	}
 	var extraIndexes int
 	if err := q.QueryRowxContext(ctx, `SELECT count(*) FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid)`, string(expected.Namespace.Name), ledgerName).Scan(&extraIndexes); err != nil {
 		return physical.SystemSchema{}, err
 	}
 	if extraIndexes != 0 {
-		return physical.SystemSchema{}, fmt.Errorf("postgresql migration ledger has %d unmanaged indexes", extraIndexes)
+		return physical.SystemSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: ledgerName, Table: ledgerName}, "postgresql migration ledger has %d unmanaged indexes", extraIndexes)
 	}
 	if outboxName != "" {
 		if err := introspectOutbox(ctx, q, expected.Namespace.Name, outboxName); err != nil {
@@ -1010,23 +1132,40 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 		{name: "recorded_at", storage: "timestamp(6) with time zone", notNull: true},
 	}
 	if fmt.Sprint(actualColumns) != fmt.Sprint(wanted) {
-		return fmt.Errorf("postgresql outbox column drift")
+		expectedNames := make([]string, len(wanted))
+		actualNames := make([]string, len(actualColumns))
+		for index := range wanted {
+			expectedNames[index] = wanted[index].name
+		}
+		for index := range actualColumns {
+			actualNames[index] = actualColumns[index].name
+		}
+		column := firstStringDifference(expectedNames, actualNames)
+		if column == "column" {
+			for index := range wanted {
+				if !reflect.DeepEqual(wanted[index], actualColumns[index]) {
+					column = wanted[index].name
+					break
+				}
+			}
+		}
+		return providerdrift.New(providerdrift.Object{Type: "column", Name: column, Table: name}, "postgresql outbox column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
 	if err != nil {
 		return err
 	}
 	actualConstraints := map[string]int{}
 	for constraintRows.Next() {
-		var kind, keys string
+		var constraintName, kind, keys string
 		var deferrable, validated bool
-		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+		if err := constraintRows.Scan(&constraintName, &kind, &keys, &deferrable, &validated); err != nil {
 			constraintRows.Close()
 			return err
 		}
 		if deferrable || !validated {
 			constraintRows.Close()
-			return fmt.Errorf("postgresql outbox constraint drift")
+			return providerdrift.New(providerdrift.Object{Type: "constraint", Name: constraintName, Table: name}, "postgresql outbox constraint drift")
 		}
 		actualConstraints[kind+"\x00"+canonicalSystemConstraintKeys(kind, keys)]++
 	}
@@ -1035,7 +1174,7 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 	}
 	wantedConstraints := map[string]int{"p\x00{1}": 1, "u\x00{9,10}": 1, "c\x00{2}": 1, "c\x00{6}": 1, "c\x00{10}": 1, "c\x00{6,7,8}": 1}
 	if !reflect.DeepEqual(actualConstraints, wantedConstraints) {
-		return fmt.Errorf("postgresql outbox constraint drift")
+		return providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql outbox constraint drift")
 	}
 	indexRows, err := q.QueryxContext(ctx, `SELECT ic.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid WHERE n.nspname=$1 AND c.relname=$2 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ic.relname`, string(namespace), name)
 	if err != nil {
@@ -1051,14 +1190,14 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 		}
 		count++
 		if indexName != "_golem_outbox_pending" || unique || !valid || keys != "13 1" || predicate != "" {
-			return fmt.Errorf("postgresql outbox index drift")
+			return providerdrift.New(providerdrift.Object{Type: "index", Name: indexName, Table: name}, "postgresql outbox index drift")
 		}
 	}
 	if err := indexRows.Err(); err != nil {
 		return err
 	}
 	if count != 1 {
-		return fmt.Errorf("postgresql outbox index drift: got %d indexes", count)
+		return providerdrift.New(providerdrift.Object{Type: "index", Name: "_golem_outbox_pending", Table: name}, "postgresql outbox index drift: got %d indexes", count)
 	}
 	return nil
 }
@@ -1099,23 +1238,40 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		{name: "updated_at", storage: "timestamp(6) with time zone", notNull: true},
 	}
 	if !reflect.DeepEqual(actualColumns, wanted) {
-		return fmt.Errorf("postgresql outbox delivery column drift")
+		expectedNames := make([]string, len(wanted))
+		actualNames := make([]string, len(actualColumns))
+		for index := range wanted {
+			expectedNames[index] = wanted[index].name
+		}
+		for index := range actualColumns {
+			actualNames[index] = actualColumns[index].name
+		}
+		column := firstStringDifference(expectedNames, actualNames)
+		if column == "column" {
+			for index := range wanted {
+				if !reflect.DeepEqual(wanted[index], actualColumns[index]) {
+					column = wanted[index].name
+					break
+				}
+			}
+		}
+		return providerdrift.New(providerdrift.Object{Type: "column", Name: column, Table: name}, "postgresql outbox delivery column drift")
 	}
-	constraintRows, err := q.QueryxContext(ctx, `SELECT con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
+	constraintRows, err := q.QueryxContext(ctx, `SELECT con.conname,con.contype::text,COALESCE(con.conkey::text,''),con.condeferrable,con.convalidated FROM pg_catalog.pg_constraint con JOIN pg_catalog.pg_class c ON c.oid=con.conrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND c.relname=$2 ORDER BY con.contype,con.conkey::text`, string(namespace), name)
 	if err != nil {
 		return err
 	}
 	actualConstraints := map[string]int{}
 	for constraintRows.Next() {
-		var kind, keys string
+		var constraintName, kind, keys string
 		var deferrable, validated bool
-		if err := constraintRows.Scan(&kind, &keys, &deferrable, &validated); err != nil {
+		if err := constraintRows.Scan(&constraintName, &kind, &keys, &deferrable, &validated); err != nil {
 			constraintRows.Close()
 			return err
 		}
 		if deferrable || !validated {
 			constraintRows.Close()
-			return fmt.Errorf("postgresql outbox delivery constraint drift")
+			return providerdrift.New(providerdrift.Object{Type: "constraint", Name: constraintName, Table: name}, "postgresql outbox delivery constraint drift")
 		}
 		actualConstraints[kind+"\x00"+canonicalSystemConstraintKeys(kind, keys)]++
 	}
@@ -1132,7 +1288,7 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		"c\x00{2,6,7,8,9,10,11}": 1,
 	}
 	if !reflect.DeepEqual(actualConstraints, wantedConstraints) {
-		return fmt.Errorf("postgresql outbox delivery constraint drift")
+		return providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: name}, "postgresql outbox delivery constraint drift")
 	}
 	indexRows, err := q.QueryxContext(ctx, `SELECT ic.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_index i JOIN pg_catalog.pg_class c ON c.oid=i.indrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace JOIN pg_catalog.pg_class ic ON ic.oid=i.indexrelid WHERE n.nspname=$1 AND c.relname=$2 AND NOT EXISTS(SELECT 1 FROM pg_catalog.pg_constraint con WHERE con.conindid=i.indexrelid) ORDER BY ic.relname`, string(namespace), name)
 	if err != nil {
@@ -1148,14 +1304,14 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		}
 		count++
 		if indexName != "_golem_outbox_delivery_pending" || unique || !valid || keys != "2 5 3 1" || predicate != "" {
-			return fmt.Errorf("postgresql outbox delivery index drift")
+			return providerdrift.New(providerdrift.Object{Type: "index", Name: indexName, Table: name}, "postgresql outbox delivery index drift")
 		}
 	}
 	if err := indexRows.Err(); err != nil {
 		return err
 	}
 	if count != 1 {
-		return fmt.Errorf("postgresql outbox delivery index drift: got %d indexes", count)
+		return providerdrift.New(providerdrift.Object{Type: "index", Name: "_golem_outbox_delivery_pending", Table: name}, "postgresql outbox delivery index drift: got %d indexes", count)
 	}
 	return nil
 }
@@ -1364,13 +1520,14 @@ func rejectUnexpectedBehaviorObjects(ctx context.Context, query catalogQueryer, 
 			return err
 		}
 		if table, strict := strictTables[tableOID]; strict {
-			return fmt.Errorf("postgresql managed table %s has unexpected %s %q", table, kind, name)
+			return providerdrift.New(providerdrift.Object{Type: kind, Name: name, Table: string(table)}, "postgresql managed table %s has unexpected %s %q", table, kind, name)
 		}
 		if managedTables[tableOID] == nil {
 			continue
 		}
 		if !catalogBehaviorObjectAllowed(kind, name, allowed) && !catalogBehaviorObjectAllowed(kind, name, allowedByTable[string(managedTables[tableOID].Name)]) {
-			return fmt.Errorf("postgresql managed table %s has unexpected %s %q", managedTables[tableOID].Name, kind, name)
+			table := string(managedTables[tableOID].Name)
+			return providerdrift.New(providerdrift.Object{Type: kind, Name: name, Table: table}, "postgresql managed table %s has unexpected %s %q", table, kind, name)
 		}
 	}
 	return rows.Err()

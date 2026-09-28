@@ -500,7 +500,20 @@ func exerciseP8DoctorPostgreSQLMatrix(t *testing.T, administrativeDSN string) {
 		t.Fatal(err)
 	}
 	driftBefore := snapshotPostgreSQLDoctorState(t, databaseDSN)
-	assertDoctorState(t, module, "postgresql", databaseDSN, doctorState{capabilities: "pass", history: "current", schema: "drift", generation: "current"})
+	driftOutput := assertDoctorState(t, module, "postgresql", databaseDSN, doctorState{capabilities: "pass", history: "current", schema: "drift", generation: "current"})
+	foundDrift := false
+	for _, diagnostic := range driftOutput.Diagnostics {
+		if diagnostic.Code != "GOLEM_DOCTOR_SCHEMA_DRIFT" {
+			continue
+		}
+		foundDrift = true
+		if diagnostic.ObjectType != "column" || diagnostic.ObjectName != "p8_doctor_drift" || diagnostic.Table != "users" {
+			t.Fatalf("PostgreSQL drift diagnostic=%#v", diagnostic)
+		}
+	}
+	if !foundDrift {
+		t.Fatal("PostgreSQL drift diagnostic is absent")
+	}
 	if driftAfter := snapshotPostgreSQLDoctorState(t, databaseDSN); !reflect.DeepEqual(driftBefore, driftAfter) {
 		t.Fatalf("drift PostgreSQL doctor modified catalog, ledger, or user data:\nbefore=%#v\nafter=%#v", driftBefore, driftAfter)
 	}

@@ -428,7 +428,10 @@ func inspectDoctorSchema(ctx context.Context, provider ir.Provider, database *pu
 		if !doctorCatalogReadable(ctx, provider, pool) {
 			return doctorSchemaInspection{status: "unreachable"}
 		}
-		object, _ := providerdrift.Inspect(err)
+		object, ok := providerdrift.Inspect(err)
+		if !ok {
+			object = providerdrift.Object{Type: "schema", Name: string(expected.Schema.Namespace.Name)}
+		}
 		return doctorSchemaInspection{status: "drift", object: object}
 	}
 	wantPhysical, wantErr := physical.PhysicalFingerprint(expected.Schema)
@@ -439,7 +442,11 @@ func inspectDoctorSchema(ctx context.Context, provider ir.Provider, database *pu
 		return doctorSchemaInspection{status: "unreachable"}
 	}
 	if wantPhysical != gotPhysical || wantSystem != gotSystem {
-		return doctorSchemaInspection{status: "drift"}
+		object, ok := providerdrift.Between(expected.Schema, actual)
+		if !ok {
+			object = providerdrift.Object{Type: "schema", Name: string(expected.Schema.Namespace.Name)}
+		}
+		return doctorSchemaInspection{status: "drift", object: object}
 	}
 	return doctorSchemaInspection{status: "current"}
 }
