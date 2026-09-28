@@ -106,6 +106,9 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 		shadowNames[position] = quote(column.Name)
 		newShadow[position] = "NEW." + quote(column.Name)
 	}
+	shadowDefinitions = append(shadowDefinitions, quote(fulltextstorage.SQLiteOwnerRowIDColumn)+" INTEGER NOT NULL")
+	shadowNames = append(shadowNames, quote(fulltextstorage.SQLiteOwnerRowIDColumn))
+	newShadow = append(newShadow, "NEW.rowid")
 	uniqueDefinitions := make([]string, len(owner.Uniques))
 	for position, key := range owner.Uniques {
 		names := make([]string, len(key.Columns))
@@ -145,6 +148,7 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 		conflicts[keyPosition] = "(" + strings.Join(parts, " AND ") + ")"
 	}
 	conflictBase := "(" + strings.Join(conflicts, " OR ") + ")"
+	conflictBase = "(" + conflictBase + " OR " + quote(fulltextstorage.SQLiteOwnerRowIDColumn) + "=NEW.rowid)"
 	cleanupConflicts := func(excluded []string) string {
 		predicate := conflictBase + " AND NOT (" + strings.Join(excluded, " AND ") + ")"
 		docids := "SELECT " + quote("docid") + " FROM " + quote(names.keys) + " WHERE " + predicate
@@ -161,7 +165,8 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	for position, column := range updateFields {
 		updateColumns[position] = quote(column.Name)
 	}
-	keyConstraints := append([]string{"UNIQUE (" + strings.Join(keyNames, ", ") + ")"}, uniqueDefinitions...)
+	updateColumns = append(updateColumns, quote("rowid"))
+	keyConstraints := append([]string{"UNIQUE (" + strings.Join(keyNames, ", ") + ")", "UNIQUE (" + quote(fulltextstorage.SQLiteOwnerRowIDColumn) + ")"}, uniqueDefinitions...)
 	refreshShadow := "UPDATE " + quote(names.keys) + " SET (" + strings.Join(shadowNames, ",") + ")=(" + strings.Join(newShadow, ",") + ") WHERE " + strings.Join(identityMatchNew, " AND ")
 	return []string{
 		"CREATE TABLE " + quote(names.keys) + " (" + quote("docid") + " INTEGER PRIMARY KEY, " + strings.Join(shadowDefinitions, ", ") + ", " + strings.Join(keyConstraints, ", ") + ") STRICT",
@@ -206,6 +211,8 @@ func renderFullTextBackfill(extension physical.Extension, owner physical.Physica
 			identityJoin[position] = "k." + quote(column.Name) + "=o." + quote(column.Name)
 		}
 	}
+	identityNames = append(identityNames, quote(fulltextstorage.SQLiteOwnerRowIDColumn))
+	identitySelect = append(identitySelect, "o.rowid")
 	fieldNames := make([]string, len(descriptor.Index.Fields))
 	fieldSelect := make([]string, len(descriptor.Index.Fields))
 	for position, field := range descriptor.Index.Fields {

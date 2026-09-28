@@ -224,6 +224,36 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertMatches("Tieng Viet", 1)
+	if _, err := database.Exec(`INSERT INTO users(rowid,id,email,created_at) VALUES (700,'00000000-0000-4000-8000-000000000007','rowidloser@example.test',11)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(rowid,id,email,created_at) VALUES (700,'00000000-0000-4000-8000-000000000008','rowidvictor@example.test',12)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("rowidloser", 0)
+	assertMatches("rowidvictor", 1)
+	if _, err := database.Exec(`INSERT INTO users(rowid,id,email,created_at) VALUES (701,'00000000-0000-4000-8000-000000000009','update source@example.test',13),(702,'00000000-0000-4000-8000-000000000010','update victim@example.test',14)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR REPLACE users SET rowid=702,email='update survivor@example.test' WHERE id='00000000-0000-4000-8000-000000000009'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("source", 0)
+	assertMatches("victim", 0)
+	assertMatches("survivor", 1)
+	var ownerRows, keyRows, fullTextRows int
+	if err := database.Get(&ownerRows, `SELECT count(*) FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Get(&keyRows, `SELECT count(*) FROM "`+base+`_keys"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Get(&fullTextRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if keyRows != ownerRows || fullTextRows != ownerRows {
+		t.Fatalf("rowid replacements drifted full-text storage: owners=%d keys=%d index=%d", ownerRows, keyRows, fullTextRows)
+	}
 	if _, err := database.Exec(`DELETE FROM users`); err != nil {
 		t.Fatal(err)
 	}

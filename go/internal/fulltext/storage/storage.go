@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	attributeDefinition = "definition"
-	attributeStorage    = "storage"
+	attributeDefinition    = "definition"
+	attributeStorage       = "storage"
+	SQLiteOwnerRowIDColumn = "_golem_owner_rowid"
+	sqliteDocumentIDColumn = "docid"
+	sqliteOwnerRowIDAlias  = "rowid"
 )
 
 type Descriptor struct {
@@ -63,19 +66,30 @@ func Lower(extension ir.ProviderExtensionIR, owner physical.PhysicalTable) (phys
 		if extension.Provider == ir.PostgreSQL && column.Name == "document" {
 			return physical.Extension{}, fmt.Errorf("full-text storage: PostgreSQL primary identity column %s uses reserved name document", field)
 		}
-		if extension.Provider == ir.SQLite && strings.EqualFold(string(column.Name), "docid") {
+		if extension.Provider == ir.SQLite && strings.EqualFold(string(column.Name), sqliteDocumentIDColumn) {
 			return physical.Extension{}, fmt.Errorf("full-text storage: SQLite primary identity column %s uses reserved name docid", field)
+		}
+		if extension.Provider == ir.SQLite && strings.EqualFold(string(column.Name), SQLiteOwnerRowIDColumn) {
+			return physical.Extension{}, fmt.Errorf("full-text storage: SQLite primary identity column %s uses reserved name %s", field, SQLiteOwnerRowIDColumn)
 		}
 	}
 	if extension.Provider == ir.SQLite {
+		for _, column := range owner.Columns {
+			if strings.EqualFold(string(column.Name), sqliteOwnerRowIDAlias) {
+				return physical.Extension{}, fmt.Errorf("full-text storage: SQLite column %s hides reserved rowid alias", column.ID)
+			}
+		}
 		for _, key := range owner.Uniques {
 			for _, field := range key.Columns {
 				column, exists := columns[field]
 				if !exists {
 					return physical.Extension{}, fmt.Errorf("full-text storage: unique column %s is absent", field)
 				}
-				if strings.EqualFold(string(column.Name), "docid") {
+				if strings.EqualFold(string(column.Name), sqliteDocumentIDColumn) {
 					return physical.Extension{}, fmt.Errorf("full-text storage: SQLite unique column %s uses reserved name docid", field)
+				}
+				if strings.EqualFold(string(column.Name), SQLiteOwnerRowIDColumn) {
+					return physical.Extension{}, fmt.Errorf("full-text storage: SQLite unique column %s uses reserved name %s", field, SQLiteOwnerRowIDColumn)
 				}
 			}
 		}

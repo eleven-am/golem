@@ -115,6 +115,32 @@ func TestLowerRejectsProviderReservedIdentityNames(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "reserved name docid") {
 		t.Fatalf("unique collision error=%v", err)
 	}
+	for _, test := range []struct {
+		name, column, want string
+		unique             bool
+	}{
+		{name: "owner rowid alias", column: "RoWiD", want: "reserved rowid alias"},
+		{name: "shadow owner rowid", column: SQLiteOwnerRowIDColumn, want: "reserved name " + SQLiteOwnerRowIDColumn, unique: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			owner := physical.PhysicalTable{
+				ID: "document",
+				Columns: []physical.PhysicalColumn{
+					{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+					{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Nullable: true},
+					{ID: "reserved", Name: physical.PhysicalName(test.column), Storage: physical.StorageType{Kind: physical.StorageSQLiteText}, Nullable: true},
+				},
+				PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+			}
+			if test.unique {
+				owner.Uniques = []physical.PhysicalKey{{Columns: []ir.FieldID{"reserved"}}}
+			}
+			_, lowerErr := Lower(ir.ProviderExtensionIR{ID: "index", Provider: ir.SQLite, Kind: fulltextcontract.IndexKind, Version: fulltextcontract.Version, Owner: "document", Payload: payload}, owner)
+			if lowerErr == nil || !strings.Contains(lowerErr.Error(), test.want) {
+				t.Fatalf("error=%v, want %q", lowerErr, test.want)
+			}
+		})
+	}
 }
 
 func TestProjectOwnerTracksGeneratedUniqueDependencies(t *testing.T) {
