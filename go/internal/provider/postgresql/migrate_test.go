@@ -417,6 +417,63 @@ func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
 	}
 }
 
+func TestPlanIncrementalDefersNewFullTextUntilGeneratedFieldRecreation(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	titleID := ir.FieldID(id(29))
+	generatedID := ir.FieldID(id(61))
+	setSearchTitle := func(max uint32, appendField bool) {
+		t.Helper()
+		fieldType := ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &max}
+		for index := range model.Models[1].Fields {
+			if model.Models[1].Fields[index].ID == titleID {
+				model.Models[1].Fields[index].Scalar.Type = fieldType
+			}
+		}
+		fieldExpression := ir.SchemaExprIR{Kind: ir.SchemaExprField, ResultType: fieldType, Field: &titleID, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{titleID}}
+		lowerExpression := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: fieldType, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{fieldExpression}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{titleID}}
+		generated := ir.FieldIR{ID: generatedID, GoName: "SearchTitle", DeclarationOrder: 11, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_title", Type: fieldType, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpression, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}}
+		if appendField {
+			model.Models[1].Fields = append(model.Models[1].Fields, generated)
+			return
+		}
+		for index := range model.Models[1].Fields {
+			if model.Models[1].Fields[index].ID == generatedID {
+				model.Models[1].Fields[index] = generated
+				return
+			}
+		}
+		t.Fatal("generated search field is absent")
+	}
+	setSearchTitle(120, true)
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSearchTitle(240, false)
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reviewedPostgreSQLEntry(t, "002_generated_fulltext", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	addGenerated := strings.Index(sql, `ALTER TABLE "reviewed"."posts" ADD COLUMN "search_title"`)
+	createFullText := strings.Index(sql, `CREATE TABLE "reviewed"."_golem_fulltext_`+string(extensionID)+`_fts"`)
+	if addGenerated < 0 || createFullText <= addGenerated {
+		t.Fatalf("new full-text storage was not delayed until the generated field was restored: add=%d create=%d:\n%s", addGenerated, createFullText, sql)
+	}
+}
+
 func TestPlanIncrementalDropsFullTextTriggersFromRenamedOwner(t *testing.T) {
 	provider := New()
 	model := fixtureModel()
