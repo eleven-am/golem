@@ -8,6 +8,7 @@ import (
 	"sort"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
@@ -278,10 +279,12 @@ func (b *diffBuilder) extensions() error {
 				return err
 			}
 		case !reflect.DeepEqual(left, right):
-			if left.Kind != semanticcontract.IndexKind || right.Kind != semanticcontract.IndexKind || left.Version != semanticcontract.Version || right.Version != semanticcontract.Version || left.Owner != right.Owner || left.Provider != right.Provider {
+			semanticRewrite := left.Kind == semanticcontract.IndexKind && right.Kind == semanticcontract.IndexKind && left.Version == semanticcontract.Version && right.Version == semanticcontract.Version
+			fullTextRewrite := left.Kind == fulltextcontract.IndexKind && right.Kind == fulltextcontract.IndexKind && left.Version == fulltextcontract.Version && right.Version == fulltextcontract.Version
+			if (!semanticRewrite && !fullTextRewrite) || left.Owner != right.Owner || left.Provider != right.Provider {
 				return fmt.Errorf("provider extension %s cannot change in place", id)
 			}
-			if registeredSemanticStateUpgrade(left, right) {
+			if semanticRewrite && registeredSemanticStateUpgrade(left, right) {
 				if err := b.add(UpgradeSemanticState, 45, string(id), left, right, RiskSafe); err != nil {
 					return err
 				}

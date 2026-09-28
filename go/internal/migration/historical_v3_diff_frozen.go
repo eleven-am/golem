@@ -19,6 +19,8 @@ import (
 const (
 	historicalV3SemanticIndexKind = "golem.semantic-index"
 	historicalV3SemanticVersion   = uint16(1)
+	historicalV3FullTextIndexKind = "golem.fulltext-index"
+	historicalV3FullTextVersion   = uint16(1)
 	historicalV3TemporalPrecision = uint32(6)
 )
 
@@ -188,10 +190,12 @@ func (b *historicalV3DiffBuilder) extensions() error {
 				return err
 			}
 		case !reflect.DeepEqual(left, right):
-			if left.Kind != historicalV3SemanticIndexKind || right.Kind != historicalV3SemanticIndexKind || left.Version != historicalV3SemanticVersion || right.Version != historicalV3SemanticVersion || left.Owner != right.Owner || left.Provider != right.Provider {
+			semanticRewrite := left.Kind == historicalV3SemanticIndexKind && right.Kind == historicalV3SemanticIndexKind && left.Version == historicalV3SemanticVersion && right.Version == historicalV3SemanticVersion
+			fullTextRewrite := left.Kind == historicalV3FullTextIndexKind && right.Kind == historicalV3FullTextIndexKind && left.Version == historicalV3FullTextVersion && right.Version == historicalV3FullTextVersion
+			if (!semanticRewrite && !fullTextRewrite) || left.Owner != right.Owner || left.Provider != right.Provider {
 				return fmt.Errorf("provider extension %s cannot change in place", id)
 			}
-			if registeredSemanticStateUpgrade(left, right) {
+			if semanticRewrite && registeredSemanticStateUpgrade(left, right) {
 				if err := b.add(UpgradeSemanticState, 45, string(id), left, right, RiskSafe); err != nil {
 					return err
 				}

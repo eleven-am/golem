@@ -15,6 +15,26 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ## Unreleased
 
+**First-class full-text indexes are available on SQLite and PostgreSQL.**
+`FullTextIndex` declares weighted local text fields and generates
+`TextSearch…` caller/system methods plus a caller-only GraphQL root. Storage is
+maintained by database triggers in the model write transaction, reviewed
+migrations backfill existing rows, and ranking joins the authorized candidate
+query before applying the result limit. Indexed-field read masks are part of
+candidate authorization. User query text is parsed as literal OR terms,
+phrases and bounded prefixes rather than passed to FTS5 or `tsquery`.
+
+SQLite uses contentless-delete FTS5 storage and PostgreSQL uses a `tsvector`
+side table with a GIN index. Both providers share canonical Unicode diacritic
+folding. PostgreSQL requires UTF-8 and the deterministic
+`pg_catalog."und-x-icu"` collation. Regenerate and apply the reviewed migration
+before calling generated full-text methods.
+
+**SQLite predicates no longer wrap every condition in `CASE`.** Equality adds
+the one required `IS NOT NULL` guard, while other predicates retain their own
+NULL behavior. Indexed primary-key and selective candidate predicates are
+sargable again without changing three-valued policy semantics.
+
 **Semantic search no longer makes SQLite scan a `vec0` virtual table before
 authorization.** Current SQLite semantic vectors use a strict,
 dimension-checked BLOB table, and the exact ranking statement drives from the

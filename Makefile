@@ -69,7 +69,7 @@ release-check: postgres-check ## Run before pushing a go/v* tag: the vulnerabili
 postgres-up: ## Start the PostgreSQL test servers, creating them when absent
 	@docker info >/dev/null 2>&1 || { echo "Docker is not running; start it first" >&2; exit 1; }
 	@for spec in \
-		"golem-pg-c|postgres:17|55433|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=C" \
+		"golem-pg-c|postgres:17|55433|c" \
 		"golem-pg-linguistic|postgres:17|55432|-e POSTGRES_HOST_AUTH_METHOD=trust -e POSTGRES_INITDB_ARGS=--locale=en_US.utf8" \
 		"golem-pgvector|pgvector/pgvector:pg17|55434|--shm-size=256m -e POSTGRES_PASSWORD=golem"; do \
 		name=$${spec%%|*}; rest=$${spec#*|}; image=$${rest%%|*}; rest=$${rest#*|}; port=$${rest%%|*}; env=$${rest#*|}; \
@@ -78,7 +78,11 @@ postgres-up: ## Start the PostgreSQL test servers, creating them when absent
 			docker start "$$name" >/dev/null || exit 1; \
 		else \
 			echo "creating $$name on $$port"; \
-			docker run -d --name "$$name" -p "127.0.0.1:$$port:5432" -e POSTGRES_DB=golem $$env "$$image" >/dev/null || exit 1; \
+			if [ "$$env" = c ]; then \
+				docker run -d --name "$$name" -p "127.0.0.1:$$port:5432" -e POSTGRES_DB=golem -e POSTGRES_HOST_AUTH_METHOD=trust -e "POSTGRES_INITDB_ARGS=--encoding=UTF8 --locale=C" "$$image" >/dev/null || exit 1; \
+			else \
+				docker run -d --name "$$name" -p "127.0.0.1:$$port:5432" -e POSTGRES_DB=golem $$env "$$image" >/dev/null || exit 1; \
+			fi; \
 		fi; \
 	done
 	@for attempt in $$(seq 1 60); do \

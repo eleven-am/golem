@@ -54,10 +54,6 @@ jobs:
       fail-fast: false
       matrix:
         step: ${{ fromJSON(needs.plan.outputs.steps) }}
-    env:
-      GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:55433/golem?sslmode=disable
-      GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:55432/golem?sslmode=disable
-      GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres:golem@127.0.0.1:55434/golem?sslmode=disable
     services:
       postgres:
         image: postgres:17
@@ -66,7 +62,7 @@ jobs:
           POSTGRES_DB: golem
           POSTGRES_INITDB_ARGS: --locale=en_US.utf8
         ports:
-          - 55432:5432
+          - 5432/tcp
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -77,9 +73,9 @@ jobs:
         env:
           POSTGRES_PASSWORD: golem
           POSTGRES_DB: golem
-          POSTGRES_INITDB_ARGS: --locale=C
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
         ports:
-          - 55433:5432
+          - 5432/tcp
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -91,7 +87,7 @@ jobs:
           POSTGRES_PASSWORD: golem
           POSTGRES_DB: golem
         ports:
-          - 55434:5432
+          - 5432/tcp
         options: >-
           --health-cmd pg_isready
           --health-interval 10s
@@ -106,6 +102,9 @@ jobs:
       - run: scripts/verify.sh "$STEP"
         env:
           STEP: ${{ matrix.step }}
+          GOLEM_TEST_POSTGRES_DSN: postgresql://postgres:golem@127.0.0.1:${{ job.services['postgres-c'].ports['5432'] }}/golem?sslmode=disable
+          GOLEM_TEST_POSTGRES_LINGUISTIC_DSN: postgresql://postgres:golem@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/golem?sslmode=disable
+          GOLEM_TEST_PGVECTOR_DSN: postgresql://postgres:golem@127.0.0.1:${{ job.services.pgvector.ports['5432'] }}/golem?sslmode=disable
 
   vulncheck:
     name: Go vulncheck
@@ -207,7 +206,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: golem
           POSTGRES_DB: golem
-          POSTGRES_INITDB_ARGS: --locale=C
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
         ports:
           - 55433:5432
         options: >-

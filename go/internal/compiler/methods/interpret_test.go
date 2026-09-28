@@ -10,6 +10,7 @@ import (
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 )
@@ -43,14 +44,27 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	if len(result.AnalyticsModels) != 1 {
 		t.Fatalf("analytics patches = %#v", result.AnalyticsModels)
 	}
-	if len(result.Extensions) != 2 {
-		t.Fatalf("semantic extensions = %#v", result.Extensions)
+	if len(result.Extensions) != 4 {
+		t.Fatalf("index extensions = %#v", result.Extensions)
 	}
+	semanticCount, fullTextCount := 0, 0
 	for _, extension := range result.Extensions {
+		if extension.Kind == fulltextcontract.IndexKind {
+			index, err := fulltextcontract.Decode(extension.Payload)
+			if err != nil || index.Name != "directory" || index.Folding != fulltextcontract.FoldingDiacritics || !reflect.DeepEqual(index.Prefix, []uint8{2, 3}) || len(index.Fields) != 1 || index.Fields[0].ID != "13000000000000000000000000000000" || index.Fields[0].Weight != 2 {
+				t.Fatalf("full-text extension=%#v index=%#v err=%v", extension, index, err)
+			}
+			fullTextCount++
+			continue
+		}
 		index, err := semanticcontract.DecodeIndex(extension.Payload)
 		if err != nil || extension.Kind != semanticcontract.IndexKind || index.Name != "profile" || index.Space != "content" || index.Dimensions != 384 || !reflect.DeepEqual(index.Fields, []string{"13000000000000000000000000000000"}) {
 			t.Fatalf("semantic extension = %#v, index=%#v, err=%v", extension, index, err)
 		}
+		semanticCount++
+	}
+	if semanticCount != 2 || fullTextCount != 2 {
+		t.Fatalf("extension counts semantic=%d fulltext=%d", semanticCount, fullTextCount)
 	}
 	analytics := result.AnalyticsModels[0]
 	if !analytics.Enabled || !analytics.ScopedReads || analytics.Dimensions == nil || len(*analytics.Dimensions) != 2 || analytics.GraphQLMaxGroups == nil || *analytics.GraphQLMaxGroups != 75 {

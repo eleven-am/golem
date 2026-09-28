@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -378,6 +380,169 @@ func TestPlanIncrementalCreatesSemanticPgvectorStorage(t *testing.T) {
 	}
 	if strings.Contains(plan.SQL(), "USING hnsw") {
 		t.Fatalf("exact semantic storage created an unused HNSW index:\n%s", plan.SQL())
+	}
+}
+
+func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := after
+	before.Extensions = nil
+	before = normalizePostgreSQLMigrationSchema(t, before)
+	entry := reviewedPostgreSQLEntry(t, "002_fulltext", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + string(extensionID)
+	for _, fragment := range []string{
+		`CREATE TABLE "reviewed"."` + base + `_fts"`,
+		`CREATE INDEX "` + base + `_fts_document"`,
+		`SECURITY DEFINER SET search_path TO pg_catalog`,
+		`CREATE TRIGGER "` + base + `_ai"`,
+		`REVOKE ALL ON FUNCTION "reviewed"."` + base + `_sync"() FROM PUBLIC`,
+		`INSERT INTO "reviewed"."` + base + `_fts"`,
+	} {
+		if !strings.Contains(plan.SQL(), fragment) {
+			t.Fatalf("full-text incremental SQL missing %q:\n%s", fragment, plan.SQL())
+		}
+	}
+}
+
+func TestPlanIncrementalDefersNewFullTextUntilGeneratedFieldRecreation(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	titleID := ir.FieldID(id(29))
+	generatedID := ir.FieldID(id(61))
+	setSearchTitle := func(max uint32, appendField bool) {
+		t.Helper()
+		fieldType := ir.LogicalTypeIR{Kind: ir.TypeString, MaxLength: &max}
+		for index := range model.Models[1].Fields {
+			if model.Models[1].Fields[index].ID == titleID {
+				model.Models[1].Fields[index].Scalar.Type = fieldType
+			}
+		}
+		fieldExpression := ir.SchemaExprIR{Kind: ir.SchemaExprField, ResultType: fieldType, Field: &titleID, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{titleID}}
+		lowerExpression := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: fieldType, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{fieldExpression}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{titleID}}
+		generated := ir.FieldIR{ID: generatedID, GoName: "SearchTitle", DeclarationOrder: 11, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_title", Type: fieldType, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpression, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}}
+		if appendField {
+			model.Models[1].Fields = append(model.Models[1].Fields, generated)
+			return
+		}
+		for index := range model.Models[1].Fields {
+			if model.Models[1].Fields[index].ID == generatedID {
+				model.Models[1].Fields[index] = generated
+				return
+			}
+		}
+		t.Fatal("generated search field is absent")
+	}
+	setSearchTitle(120, true)
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setSearchTitle(240, false)
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reviewedPostgreSQLEntry(t, "002_generated_fulltext", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	addGenerated := strings.Index(sql, `ALTER TABLE "reviewed"."posts" ADD COLUMN "search_title"`)
+	createFullText := strings.Index(sql, `CREATE TABLE "reviewed"."_golem_fulltext_`+string(extensionID)+`_fts"`)
+	if addGenerated < 0 || createFullText <= addGenerated {
+		t.Fatalf("new full-text storage was not delayed until the generated field was restored: add=%d create=%d:\n%s", addGenerated, createFullText, sql)
+	}
+}
+
+func TestPlanIncrementalDropsFullTextTriggersFromRenamedOwner(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := before
+	after.Tables = append([]physical.PhysicalTable(nil), before.Tables...)
+	for index := range after.Tables {
+		if after.Tables[index].ID == ir.ModelID(id(2)) {
+			after.Tables[index].Name = "posts_v2"
+		}
+	}
+	after.Extensions = nil
+	after = normalizePostgreSQLMigrationSchema(t, after)
+	entry := reviewedPostgreSQLEntry(t, "002_rename_fulltext_drop", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	rename := `ALTER TABLE "reviewed"."posts" RENAME TO "posts_v2"`
+	drop := `DROP TRIGGER "_golem_fulltext_` + id(74) + `_ai" ON "reviewed"."posts"`
+	positions := []int{strings.Index(sql, rename), strings.Index(sql, drop)}
+	if positions[1] < 0 || positions[0] <= positions[1] {
+		t.Fatalf("renamed full-text drop order=%v:\n%s", positions, sql)
+	}
+	if strings.Contains(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai" ON "reviewed"."posts_v2"`) {
+		t.Fatalf("full-text drop targeted the post-rename owner:\n%s", sql)
+	}
+}
+
+func TestPlanIncrementalDropsFullTextTriggersBeforeIndexedColumn(t *testing.T) {
+	provider := New()
+	model := fixtureModel()
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: id(29), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(74)), Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(2)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	before, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = nil
+	fields := model.Models[1].Fields
+	model.Models[1].Fields = append(append([]ir.FieldIR(nil), fields[:len(fields)-2]...), fields[len(fields)-1])
+	after, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: "reviewed"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := reviewedPostgreSQLEntry(t, "002_drop_fulltext_column", before, after, nil)
+	plan, err := provider.PlanIncremental(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sql := plan.SQL()
+	dropTrigger := strings.Index(sql, `DROP TRIGGER "_golem_fulltext_`+id(74)+`_ai"`)
+	dropColumn := strings.Index(sql, `DROP COLUMN "title"`)
+	if dropTrigger < 0 || dropColumn <= dropTrigger {
+		t.Fatalf("full-text trigger was not dropped before its indexed column: trigger=%d column=%d:\n%s", dropTrigger, dropColumn, sql)
 	}
 }
 
@@ -863,6 +1028,76 @@ func TestLiveReviewedPostgreSQLMigration(t *testing.T) {
 		ledger, err := provider.ReadLedger(context.Background(), database)
 		if err != nil || len(ledger) != 2 {
 			t.Fatalf("ledger=%#v error=%v", ledger, err)
+		}
+	})
+
+	t.Run("full-text index backfills existing rows", func(t *testing.T) {
+		const namespace = "golem_fulltext_migrate_live"
+		cleanup(namespace)
+		defer cleanup(namespace)
+		empty := canonicalEmptyPostgreSQLMigrationSchema(t, namespace)
+		initial := livePostgreSQLMigrationSchema(t, namespace, false, false)
+		first := reviewedPostgreSQLEntry(t, "001_initial", empty, initial, nil)
+		first, firstFiles := finalizePostgreSQLEntry(t, provider, first)
+		if err := provider.ApplyMigration(context.Background(), database, reviewedPostgreSQLManifest(provider, first), firstFiles); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`INSERT INTO "golem_fulltext_migrate_live"."items" ("id","name") VALUES (1,'Renée mailbox')`); err != nil {
+			t.Fatal(err)
+		}
+		payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Fields: []fulltextcontract.Field{{ID: id(952), Weight: 1}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		extensionID := ir.ExtensionID(id(956))
+		extension, err := fulltextstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(950)), Kind: fulltextcontract.IndexKind, Payload: payload}, *postgresqlTablePointer(&initial, ir.ModelID(id(950))))
+		if err != nil {
+			t.Fatal(err)
+		}
+		after := initial
+		after.Extensions = []physical.Extension{extension}
+		after = normalizePostgreSQLMigrationSchema(t, after)
+		second := reviewedPostgreSQLEntry(t, "002_fulltext", initial, after, &first)
+		second, secondFiles := finalizePostgreSQLEntry(t, provider, second)
+		manifest := reviewedPostgreSQLManifest(provider, first, second)
+		files := mergePostgreSQLMigrationFiles(firstFiles, secondFiles)
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatal(err)
+		}
+		if err := provider.Verify(context.Background(), database, after); err != nil {
+			t.Fatal(err)
+		}
+		var count int
+		base := "_golem_fulltext_" + string(extensionID)
+		if err := database.Get(&count, `SELECT count(*) FROM "golem_fulltext_migrate_live"."`+base+`_fts" WHERE "document" @@ to_tsquery('simple','renee')`); err != nil || count != 1 {
+			t.Fatalf("backfilled full-text rows=%d err=%v", count, err)
+		}
+		renamed := after
+		renamed.Tables = append([]physical.PhysicalTable(nil), after.Tables...)
+		for tableIndex := range renamed.Tables {
+			renamed.Tables[tableIndex].Columns = append([]physical.PhysicalColumn(nil), renamed.Tables[tableIndex].Columns...)
+			for columnIndex := range renamed.Tables[tableIndex].Columns {
+				if renamed.Tables[tableIndex].Columns[columnIndex].ID == ir.FieldID(id(952)) {
+					renamed.Tables[tableIndex].Columns[columnIndex].Name = "content"
+				}
+			}
+		}
+		renamed = normalizePostgreSQLMigrationSchema(t, renamed)
+		third := reviewedPostgreSQLEntry(t, "003_rename_indexed_column", after, renamed, &second)
+		third, thirdFiles := finalizePostgreSQLEntry(t, provider, third)
+		manifest = reviewedPostgreSQLManifest(provider, first, second, third)
+		files = mergePostgreSQLMigrationFiles(firstFiles, secondFiles, thirdFiles)
+		if err := provider.ApplyMigration(context.Background(), database, manifest, files); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := database.Exec(`UPDATE "golem_fulltext_migrate_live"."items" SET "content"='renamed mailbox' WHERE "id"=1`); err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Get(&count, `SELECT count(*) FROM "golem_fulltext_migrate_live"."`+base+`_fts" WHERE "document" @@ to_tsquery('simple','renamed')`); err != nil || count != 1 {
+			t.Fatalf("full-text rows after indexed-column rename=%d err=%v", count, err)
+		}
+		if err := provider.Verify(context.Background(), database, renamed); err != nil {
+			t.Fatal(err)
 		}
 	})
 

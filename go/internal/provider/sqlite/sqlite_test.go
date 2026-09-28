@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
@@ -93,6 +94,171 @@ func TestSemanticIndexUsesManagedExactVectorStorage(t *testing.T) {
 			t.Fatalf("semantic shadow DDL missing %q:\n%s", fragment, script.SQL())
 		}
 	}
+}
+
+func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
+	provider := New()
+	model := socialModelIR()
+	email := model.Models[0].Fields[1]
+	generatedID := ir.FieldID(id(19))
+	emailExpr := schemaField(email.ID, email.Scalar.Type, email.Scalar.Nullable)
+	lowerExpr := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: email.Scalar.Type, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{emailExpr}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email.ID}}
+	model.Models[0].Fields = append(model.Models[0].Fields, ir.FieldIR{ID: generatedID, GoName: "SearchEmail", DeclarationOrder: uint32(len(model.Models[0].Fields)), Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "rank", Type: email.Scalar.Type, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpr, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}})
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{
+		Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3},
+		Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 3}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: ir.ExtensionID(id(70)), Provider: ir.SQLite, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	databasePath := filepath.Join(t.TempDir(), "fulltext.db")
+	database, _, err := provider.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + id(70)
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Renée@example.test',1)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches := func(query string, want int) {
+		t.Helper()
+		var got int
+		if err := database.Get(&got, `SELECT count(*) FROM "`+base+`_fts" WHERE "`+base+`_fts" MATCH ?`, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("query %q matched %d rows, want %d", query, got, want)
+		}
+	}
+	assertMatches("renee", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Καφές@example.test',2)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("Καφες", 1)
+	var indexedRows int
+	if err := database.Get(&indexedRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if indexedRows != 1 {
+		t.Fatalf("replacement left %d indexed rows, want 1", indexedRows)
+	}
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000001','Renée@example.test',3)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("Καφες", 0)
+	assertMatches("renee", 1)
+	transaction, err := database.Beginx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Exec(`UPDATE users SET email='other@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 1)
+	if _, err := database.Exec(`UPDATE users SET email='other@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("other", 1)
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000002','loser@example.test',4)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR REPLACE users SET id='00000000-0000-4000-8000-000000000002',email='winner@example.test' WHERE id='00000000-0000-4000-8000-000000000001'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("other", 0)
+	assertMatches("loser", 0)
+	assertMatches("winner", 1)
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000003','reused@example.test',5)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("reused", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000004','reused@example.test',6)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("reused", 1)
+	if err := database.Get(&indexedRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if indexedRows != 2 {
+		t.Fatalf("secondary replacement left %d indexed rows, want 2", indexedRows)
+	}
+	if _, err := database.Exec(`INSERT OR IGNORE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000005','reused@example.test',7)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR IGNORE users SET email='reused@example.test' WHERE id='00000000-0000-4000-8000-000000000002'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("winner", 1)
+	assertMatches("reused", 1)
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000004','fresh@example.test',8)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000005','reused@example.test',9)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("fresh", 1)
+	assertMatches("reused", 1)
+	independentWriter, _, err := provider.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := independentWriter.Exec(`INSERT INTO users(id,email,created_at) VALUES ('00000000-0000-4000-8000-000000000006','Tiếng Việt@example.test',10)`); err != nil {
+		independentWriter.Close()
+		t.Fatal(err)
+	}
+	if err := independentWriter.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("Tieng Viet", 1)
+	if _, err := database.Exec(`INSERT INTO users(rowid,id,email,created_at) VALUES (700,'00000000-0000-4000-8000-000000000007','rowidloser@example.test',11)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`INSERT OR REPLACE INTO users(rowid,id,email,created_at) VALUES (700,'00000000-0000-4000-8000-000000000008','rowidvictor@example.test',12)`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("rowidloser", 0)
+	assertMatches("rowidvictor", 1)
+	if _, err := database.Exec(`INSERT INTO users(rowid,id,email,created_at) VALUES (701,'00000000-0000-4000-8000-000000000009','update source@example.test',13),(702,'00000000-0000-4000-8000-000000000010','update victim@example.test',14)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`UPDATE OR REPLACE users SET rowid=702,email='update survivor@example.test' WHERE id='00000000-0000-4000-8000-000000000009'`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("source", 0)
+	assertMatches("victim", 0)
+	assertMatches("survivor", 1)
+	var ownerRows, keyRows, fullTextRows int
+	if err := database.Get(&ownerRows, `SELECT count(*) FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Get(&keyRows, `SELECT count(*) FROM "`+base+`_keys"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Get(&fullTextRows, `SELECT count(*) FROM "`+base+`_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if keyRows != ownerRows || fullTextRows != ownerRows {
+		t.Fatalf("rowid replacements drifted full-text storage: owners=%d keys=%d index=%d", ownerRows, keyRows, fullTextRows)
+	}
+	if _, err := database.Exec(`DELETE FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("winner", 0)
+	assertMatches("reused", 0)
 }
 
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {
@@ -440,6 +606,28 @@ func TestOpenRejectsCallerPragmaOverrides(t *testing.T) {
 	}
 	if !strings.HasSuffix(configured, "&_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_txlock=immediate") {
 		t.Fatalf("provider parameters are not canonical: %q", configured)
+	}
+}
+
+func TestOpenPreservesDefaultRecursiveTriggerBehavior(t *testing.T) {
+	database, _, err := New().Open(context.Background(), filepath.Join(t.TempDir(), "recursive-triggers.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	for _, statement := range []string{
+		`CREATE TABLE items(id INTEGER PRIMARY KEY, revision INTEGER NOT NULL) STRICT`,
+		`CREATE TRIGGER items_au AFTER UPDATE ON items BEGIN UPDATE items SET revision=revision+1 WHERE id=NEW.id; END`,
+		`INSERT INTO items VALUES(1,0)`,
+		`UPDATE items SET revision=1 WHERE id=1`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var revision int
+	if err := database.Get(&revision, `SELECT revision FROM items WHERE id=1`); err != nil || revision != 2 {
+		t.Fatalf("revision=%d error=%v", revision, err)
 	}
 }
 

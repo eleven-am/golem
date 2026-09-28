@@ -9,6 +9,7 @@ import (
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 )
@@ -82,7 +83,17 @@ func renderNormalizedInitial(normalized physical.PhysicalSchema, reviewedReplay 
 		}
 	}
 	for _, extension := range normalized.Extensions {
-		rendered, renderErr := renderSemanticExtension(extension, reviewedReplay)
+		var rendered []string
+		var renderErr error
+		if extension.Kind == fulltextcontract.IndexKind {
+			owner, exists := tables[extension.Owner.ModelID]
+			if !exists {
+				return Script{}, fmt.Errorf("sqlite render full-text extension %s: owner is absent", extension.ID)
+			}
+			rendered, renderErr = renderFullTextExtension(extension, owner)
+		} else {
+			rendered, renderErr = renderSemanticExtension(extension, reviewedReplay)
+		}
 		if renderErr != nil {
 			return Script{}, renderErr
 		}

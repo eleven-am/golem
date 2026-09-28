@@ -16,6 +16,7 @@ import (
 	"github.com/eleven-am/golem/go/embedding"
 	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
+	fulltextruntime "github.com/eleven-am/golem/go/internal/fulltext/runtime"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/eleven-am/golem/go/internal/policy/evaluate"
@@ -116,6 +117,7 @@ type App[P, A any] struct {
 	reportScopedQuery         func(context.Context, golem.ScopedAuditRecord)
 	nextExecution             atomic.Uint64
 	semantic                  *semanticruntime.Manager
+	fulltext                  *fulltextruntime.Manager
 	semanticDrain             queue.Type[semanticJob]
 	semanticReconcile         queue.Type[semanticJob]
 	semanticReconcileInterval time.Duration
@@ -270,6 +272,11 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonCapability
 		return nil, err
 	}
+	fullTextManager, err := fulltextruntime.NewManager(database, expected.Provider.Provider, expected)
+	if err != nil {
+		openReason = observe.ReasonCapability
+		return nil, err
+	}
 	migrationStartup, err := prepareReviewedMigrationStartup(databaseHandle, config.Bundle, providerIdentity, expected)
 	if err != nil {
 		openReason = observe.ReasonMigrationHistory
@@ -291,7 +298,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 		openReason = observe.ReasonSchemaDrift
 		return nil, fmt.Errorf("P3_RUNTIME_DRIFT: managed database schema is incompatible")
 	}
-	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, queueUnmanaged: expected.Unmanaged}
+	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, queueUnmanaged: expected.Unmanaged}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err

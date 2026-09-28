@@ -40,7 +40,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: golem
           POSTGRES_DB: golem
-          POSTGRES_INITDB_ARGS: --locale=C
+          POSTGRES_INITDB_ARGS: --encoding=UTF8 --locale=C
         ports:
           - 55433:5432
         options: >-

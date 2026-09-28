@@ -14,6 +14,7 @@ import (
 
 	"github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -429,6 +430,13 @@ func renderCustomBindings(compilation *ir.CompilationIR, qualify func(string, st
 			}
 			contract := contracts[modelName]
 			resolver, err = renderSemanticSearchResolver(operation, model, contract, qualify)
+		} else if graphqlextension.IsFullTextSearchOperation(*compilation, operation) {
+			modelName := resultModelName(operation.Result)
+			model, ok := models[modelName]
+			if !ok {
+				return nil, fmt.Errorf("GraphQL full-text search result model %s is absent", modelName)
+			}
+			resolver, err = renderFullTextSearchResolver(operation, model, qualify)
 		} else if graphqlextension.IsSemanticSimilarOperation(*compilation, operation) {
 			modelName := resultModelName(operation.Result)
 			model, ok := models[modelName]
@@ -508,6 +516,22 @@ func renderSemanticSearchResolver(operation ir.CustomOperationContractIR, model 
 		modelType = alias + "." + modelType
 	}
 	return fmt.Sprintf("func(ctx context.Context, caller *Caller[P], args struct { Query string; Take *int32; Where *golem.Predicate[%[1]s] }) ([]golem.SemanticResult[%[1]s], error) { if args.Take == nil { return nil, fmt.Errorf(\"semantic search take is unavailable\") }; take := int(*args.Take); where := make([]golem.Predicate[%[1]s], 0, 1); if args.Where != nil { where = append(where, *args.Where) }; return caller.%[2]s.Search%[3]s(ctx, args.Query, take, where...) }", modelType, plural(model.LogicalName), exported), nil
+}
+
+func renderFullTextSearchResolver(operation ir.CustomOperationContractIR, model ir.ModelDeclIR, qualify func(string, string) string) (string, error) {
+	if operation.Operation != ir.CustomOperationQuery || operation.Resolver.Name == "" || operation.Resolver.Kind != "customquery" {
+		return "", fmt.Errorf("GraphQL full-text search operation %s is invalid", operation.Name)
+	}
+	exported, ok := fulltextcontract.ExportedIndexName(operation.Resolver.Name)
+	if !ok {
+		return "", fmt.Errorf("GraphQL full-text index %q cannot form a Go method", operation.Resolver.Name)
+	}
+	alias := qualify(model.Go.PackagePath, "golemmodels")
+	modelType := model.Go.Name
+	if alias != "" {
+		modelType = alias + "." + modelType
+	}
+	return fmt.Sprintf("func(ctx context.Context, caller *Caller[P], args struct { Query string; Take *int32; Where *golem.Predicate[%[1]s] }) ([]golem.FullTextResult[%[1]s], error) { if args.Take == nil { return nil, fmt.Errorf(\"full-text search take is unavailable\") }; take := int(*args.Take); where := make([]golem.Predicate[%[1]s], 0, 1); if args.Where != nil { where = append(where, *args.Where) }; return caller.%[2]s.TextSearch%[3]s(ctx, args.Query, take, where...) }", modelType, plural(model.LogicalName), exported), nil
 }
 
 func renderSemanticSimilarResolver(operation ir.CustomOperationContractIR, model ir.ModelDeclIR, _ ir.ModelContractIR, qualify func(string, string) string) (string, error) {

@@ -17,7 +17,7 @@ STEPS=(
 
 CLI_PACKAGES=(./cmd/golem ./golemtest)
 DATABASE_PACKAGES=(
-	./runtime ./internal/generate/pipeline ./internal/semantic/runtime ./internal/provider/postgresql
+	./runtime ./internal/generate/pipeline ./internal/semantic/runtime ./internal/fulltext/runtime ./internal/provider/postgresql
 	./internal/read/decode ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
 	./internal/event/outbox
 )

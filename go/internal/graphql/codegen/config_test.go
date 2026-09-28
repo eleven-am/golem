@@ -15,6 +15,7 @@ import (
 	gqlconfig "github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	graphqlschema "github.com/eleven-am/golem/go/internal/graphql/schema"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -66,6 +67,32 @@ func TestRenderSemanticSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing
 	}
 	if strings.Contains(similarBinding, "Query string") {
 		t.Fatalf("similar binding retained the search query argument:\n%s", similarBinding)
+	}
+}
+
+func TestRenderFullTextSearchBindingUsesGeneratedCallerAndReturnsRows(t *testing.T) {
+	compilation := ir.CompilationIR{Model: ir.ModelIR{Schema: ir.SchemaIdentityIR{PackagePath: "example.test/app"}, Models: []ir.ModelDeclIR{{ID: "record", LogicalName: "Record", Go: ir.GoNamedTypeIR{PackagePath: "example.test/app", Name: "Record"}}}}, Contract: ir.ContractIR{Models: []ir.ModelContractIR{{ModelID: "record", GraphQLName: "Record", GraphQLPlural: "Records", Exposed: true, Limits: ir.LimitContractIR{DefaultPageSize: 25, MaxPageSize: 250}}}}}
+	payload, _ := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: "field", Weight: 1}}})
+	compilation.Model.Extensions = []ir.ProviderExtensionIR{{ID: "fulltext", Provider: ir.SQLite, Version: 1, Owner: "record", Kind: fulltextcontract.IndexKind, Payload: payload}}
+	if diagnostics := graphqlextension.AddFullTextSearchOperations(&compilation); len(diagnostics) != 0 {
+		t.Fatalf("full-text diagnostics=%#v", diagnostics)
+	}
+	bindings, err := renderCustomBindings(&compilation, func(path, preferred string) string {
+		if path == "example.test/app" {
+			return ""
+		}
+		return preferred
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bindings) != 1 {
+		t.Fatalf("full-text bindings=%#v", bindings)
+	}
+	for _, fragment := range []string{"*Caller[P]", "Query string", "Take *int32", "Where *golem.Predicate[Record]", "[]golem.FullTextResult[Record]", "return caller.Records.TextSearchContent", "GeneratedCustomPredicateArgument"} {
+		if !strings.Contains(bindings[0], fragment) {
+			t.Fatalf("full-text binding missing %q:\n%s", fragment, bindings[0])
+		}
 	}
 }
 

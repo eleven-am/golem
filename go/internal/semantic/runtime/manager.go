@@ -76,13 +76,14 @@ type IdentityScan interface {
 // subquery projection in physical key order; ranking refuses any projection
 // that does not match the shadow table's identity contract.
 type Candidates struct {
-	SQL                 string
-	Args                []any
-	Columns             []string
-	Model               policyir.ModelID
-	MaxStatementBytes   int
-	MaxStatementAliases int
-	NewScan             func() IdentityScan
+	SQL                    string
+	Args                   []any
+	Columns                []string
+	Model                  policyir.ModelID
+	MaxStatementParameters int
+	MaxStatementBytes      int
+	MaxStatementAliases    int
+	NewScan                func() IdentityScan
 }
 
 type Rank struct {

@@ -7,10 +7,341 @@ import (
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	"github.com/eleven-am/golem/go/internal/physical"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/testenv"
 )
+
+func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
+	dsn := testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+	provider := New()
+	database, _, err := provider.Open(context.Background(), dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	const namespace = "golem_fulltext_live"
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
+	_, _ = database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "golem_fulltext_live" CASCADE`)
+	defer database.Exec(`DROP SCHEMA IF EXISTS "_golem" CASCADE`)
+	if _, err := database.Exec(`SET search_path TO "golem_fulltext_live", public`); err != nil {
+		t.Fatal(err)
+	}
+
+	model := fixtureModel()
+	model.Models[0].Fields[0].Scalar.Type = ir.LogicalTypeIR{Kind: ir.TypeString}
+	model.Models[1].Fields[2].Scalar.Type = ir.LogicalTypeIR{Kind: ir.TypeString}
+	email := ir.FieldID(id(12))
+	model.Models[0].Fields = append(model.Models[0].Fields, scalarField(email, "Email", 1, "email", ir.LogicalTypeIR{Kind: ir.TypeString}, false))
+	generatedID := ir.FieldID(id(13))
+	emailType := model.Models[0].Fields[1].Scalar.Type
+	emailExpr := ir.SchemaExprIR{Kind: ir.SchemaExprField, ResultType: emailType, Field: &email, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
+	lowerExpr := ir.SchemaExprIR{Kind: ir.SchemaExprFunction, ResultType: emailType, Symbol: &ir.SchemaSymbolRef{Identity: "golem.schema.function.lower.v1", Kind: ir.SchemaSymbolFunction, Name: "lower", Version: 1, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true}, Operands: []ir.SchemaExprIR{emailExpr}, Provider: ir.ProviderScopePortable, Volatility: ir.SchemaVolatilityImmutable, Deterministic: true, ReferencedFields: []ir.FieldID{email}}
+	model.Models[0].Fields = append(model.Models[0].Fields, ir.FieldIR{ID: generatedID, GoName: "SearchEmail", DeclarationOrder: 2, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Column: "search_email", Type: emailType, DatabaseReadOnly: true, Generation: &ir.GeneratedColumnIR{Expr: lowerExpr, Storage: ir.GeneratedStored, Provider: ir.ProviderScopePortable}}})
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact", Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{2, 3}, Fields: []fulltextcontract.Field{{ID: string(email), Weight: 1}, {ID: string(generatedID), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extensionID := ir.ExtensionID(id(74))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: extensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: payload})
+	plainPayload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "contact_plain", Folding: fulltextcontract.FoldingNone, Fields: []fulltextcontract.Field{{ID: string(generatedID), Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plainExtensionID := ir.ExtensionID(id(75))
+	model.Extensions = append(model.Extensions, ir.ProviderExtensionIR{ID: plainExtensionID, Provider: ir.PostgreSQL, Version: fulltextcontract.Version, Owner: ir.ObjectID(id(1)), Kind: fulltextcontract.IndexKind, Payload: plainPayload})
+	schema, err := provider.Lower(context.Background(), model, physical.LowerOptions{Namespace: namespace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	base := "_golem_fulltext_" + string(extensionID)
+	id := "00000000-0000-4000-8000-000000000001"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "Renée Καφές 東京@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches := func(query string, want int) {
+		t.Helper()
+		var got int
+		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + base + `_fts" WHERE "document" @@ ` + fulltextpostgresql.PhraseQuery("$1", fulltextcontract.FoldingDiacritics, false)
+		if err := database.Get(&got, statement, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			var documents []string
+			if err := database.Select(&documents, `SELECT "document"::text FROM "golem_fulltext_live"."`+base+`_fts"`); err != nil {
+				t.Fatal(err)
+			}
+			t.Fatalf("query %q matched %d rows, want %d; documents=%v", query, got, want, documents)
+		}
+	}
+	assertMatches("renee", 1)
+	assertMatches("Καφές", 1)
+	assertMatches("東京", 1)
+	const writerRole = "golem_fulltext_writer"
+	_, _ = database.Exec(`DROP ROLE IF EXISTS "` + writerRole + `"`)
+	if _, err := database.Exec(`CREATE ROLE "` + writerRole + `" NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = database.Exec(`RESET ROLE`)
+		_, _ = database.Exec(`DROP OWNED BY "` + writerRole + `"`)
+		_, _ = database.Exec(`DROP ROLE "` + writerRole + `"`)
+	}()
+	for _, statement := range []string{
+		`GRANT USAGE ON SCHEMA "golem_fulltext_live" TO "` + writerRole + `"`,
+		`GRANT INSERT, UPDATE, DELETE ON "golem_fulltext_live"."users" TO "` + writerRole + `"`,
+		`SET ROLE "` + writerRole + `"`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writerID := "00000000-0000-4000-8000-000000000003"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, writerID, "external writer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("external", 1)
+	secondID := "00000000-0000-4000-8000-000000000002"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, secondID, "service"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches(`"service service"`, 0)
+	plainBase := "_golem_fulltext_" + string(plainExtensionID)
+	assertPlainMatches := func(query string) {
+		t.Helper()
+		var got int
+		statement := `SELECT count(*) FROM "golem_fulltext_live"."` + plainBase + `_fts" WHERE "document" @@ ` + fulltextpostgresql.PhraseQuery("$1", fulltextcontract.FoldingNone, false)
+		if err := database.Get(&got, statement, query); err != nil {
+			t.Fatal(err)
+		}
+		if got != 1 {
+			t.Fatalf("plain query %q matched %d rows, want 1", query, got)
+		}
+	}
+	assertPlainMatches("Renée")
+	assertPlainMatches("Καφές")
+	assertPlainMatches("東京")
+	transaction, err := database.Beginx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Exec(`UPDATE "golem_fulltext_live"."users" SET "email"='other@example.test' WHERE "id"=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.Rollback(); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 1)
+	if _, err := database.Exec(`UPDATE "golem_fulltext_live"."users" SET "email"='other@example.test' WHERE "id"=$1`, id); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("renee", 0)
+	assertMatches("other", 1)
+	if _, err := database.Exec(`TRUNCATE "golem_fulltext_live"."users" CASCADE`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("other", 0)
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, id, "restored@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("restored", 1)
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	function := base + "_sync"
+	if _, err := database.Exec(`CREATE TRIGGER "` + base + `_ai" AFTER INSERT ON "golem_fulltext_live"."posts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected trigger") {
+		t.Fatalf("full-text trigger on wrong owner error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + base + `_ai" ON "golem_fulltext_live"."posts"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD CONSTRAINT "unexpected_fulltext_check" CHECK (false) NOT VALID`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected constraint") {
+		t.Fatalf("unexpected shadow constraint error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" DROP CONSTRAINT "unexpected_fulltext_check"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE UNIQUE INDEX "unexpected_fulltext_index" ON "golem_fulltext_live"."` + base + `_fts" ((document::text))`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected index") {
+		t.Fatalf("unexpected shadow index error=%v", err)
+	}
+	if _, err := database.Exec(`DROP INDEX "golem_fulltext_live"."unexpected_fulltext_index"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE FUNCTION "golem_fulltext_live"."reject_fulltext_write"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NULL; END$golem$`,
+		`CREATE TRIGGER "unexpected_shadow_trigger" BEFORE INSERT ON "golem_fulltext_live"."` + base + `_fts" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected trigger") {
+		t.Fatalf("unexpected shadow trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "unexpected_shadow_trigger" ON "golem_fulltext_live"."` + base + `_fts"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DROP FUNCTION "golem_fulltext_live"."reject_fulltext_write"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	var primaryKey string
+	if err := database.Get(&primaryKey, `SELECT con.conname FROM pg_catalog.pg_constraint con WHERE con.conrelid='"golem_fulltext_live"."`+base+`_fts"'::pg_catalog.regclass AND con.contype='p'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" DROP CONSTRAINT "` + primaryKey + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "primary key drift") {
+		t.Fatalf("missing shadow primary key error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD PRIMARY KEY ("id")`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ALTER COLUMN "id" TYPE text COLLATE pg_catalog."und-x-icu"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "column drift") {
+		t.Fatalf("shadow identity collation error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ALTER COLUMN "id" TYPE text COLLATE pg_catalog."default"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	updateTrigger := base + "_au"
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."users" DISABLE TRIGGER "` + updateTrigger + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("disabled trigger error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."users" ENABLE TRIGGER "` + updateTrigger + `"`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER "` + updateTrigger + `" AFTER UPDATE OF "id" ON "golem_fulltext_live"."users" FOR EACH ROW EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("reduced update trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	owner, exists := postgresqlOwnerTable(schema, ir.ModelID(model.Extensions[0].Owner))
+	if !exists {
+		t.Fatal("full-text owner is absent")
+	}
+	rendered, err := renderPostgreSQLFullTextExtension(schema.Namespace.Name, schema.Extensions[0], owner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(rendered[4]); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE TRIGGER "` + updateTrigger + `" AFTER UPDATE OF "id","search_email","email" ON "golem_fulltext_live"."users" FOR EACH ROW WHEN (false) EXECUTE FUNCTION "golem_fulltext_live"."` + function + `"()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger drift") {
+		t.Fatalf("qualified update trigger error=%v", err)
+	}
+	if _, err := database.Exec(`DROP TRIGGER "` + updateTrigger + `" ON "golem_fulltext_live"."users"`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(rendered[4]); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() STABLE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("stable trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() VOLATILE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SECURITY INVOKER`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("invoker trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SECURITY DEFINER`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() RESET ALL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("unconfined trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SET search_path TO pg_catalog`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`GRANT EXECUTE ON FUNCTION "golem_fulltext_live"."` + function + `"() TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("public trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`REVOKE ALL ON FUNCTION "golem_fulltext_live"."` + function + `"() FROM PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE OR REPLACE FUNCTION "golem_fulltext_live"."` + function + `"() RETURNS trigger LANGUAGE plpgsql AS $golem$BEGIN RETURN NEW; END$golem$`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("drifted trigger function error=%v", err)
+	}
+}
 
 func TestSemanticIndexRendersPGVectorStorage(t *testing.T) {
 	provider := New()

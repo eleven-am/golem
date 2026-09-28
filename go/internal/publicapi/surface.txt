@@ -545,6 +545,8 @@ golem.(*FrozenScopedQuery).Where func() (FrozenScopedPredicate, bool)
 golem.(*FrozenUniqueSelector).Fields func() []FieldID
 golem.(*FrozenUniqueSelector).KeyID func() KeyID
 golem.(*FrozenUniqueSelector).ModelID func() ModelID
+golem.(*FullTextResult).Row func() Row[M]
+golem.(*FullTextResult).Score func() float64
 golem.(*GeneratedPolicySet).GenerationDigest func() SchemaDigest
 golem.(*GeneratedPolicySet).Policies func() []FrozenPolicy
 golem.(*GenerationDigestError).Error func() string
@@ -1268,6 +1270,8 @@ golem.(FrozenScopedQuery).Where func() (FrozenScopedPredicate, bool)
 golem.(FrozenUniqueSelector).Fields func() []FieldID
 golem.(FrozenUniqueSelector).KeyID func() KeyID
 golem.(FrozenUniqueSelector).ModelID func() ModelID
+golem.(FullTextResult).Row func() Row[M]
+golem.(FullTextResult).Score func() float64
 golem.(GeneratedPolicySet).GenerationDigest func() SchemaDigest
 golem.(GeneratedPolicySet).Policies func() []FrozenPolicy
 golem.(GraphQLType).NonNull func() GraphQLType[T]
@@ -1969,6 +1973,8 @@ golem.FindManyHookRequest[M any] type struct
 golem.FindManyHookResult[M any] type struct
 golem.FindOneHookRequest[M any] type struct
 golem.FindOneHookResult[M any] type struct
+golem.FoldDiacritics const TextFoldingMode = "diacritics"
+golem.FoldNone const TextFoldingMode = "none"
 golem.ForProvider func[M any](Provider, ...ModelOption[M]) ModelOption[M]
 golem.FreezeCount func[M any](ModelDescriptor[M], ...ReadOption[M]) (FrozenReadRequest, error)
 golem.FreezeError comparable
@@ -2201,6 +2207,12 @@ golem.FrozenValueView.Signed func() (int64, uint8, bool)
 golem.FrozenValueView.String func() (string, bool)
 golem.FrozenValueView.Time func() (Time, bool)
 golem.FrozenValueView.UUID func() (UUID, bool)
+golem.FullTextField func[M any](Column[M], float64) FullTextFieldOption[M]
+golem.FullTextFieldOption comparable
+golem.FullTextFieldOption[M any] type struct
+golem.FullTextIndex func[M any](string, FullTextFieldOption[M], ...FullTextOption) ModelOption[M]
+golem.FullTextOption type interface {} sealed
+golem.FullTextResult[M any] type struct
 golem.Generated func[M any, V any](ScalarColumn[M, V], SchemaExpr[M, V], GeneratedStorage) ModelOption[M]
 golem.GeneratedAfterCommitHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
 golem.GeneratedAfterHookBinding func[A any, M any, Result any](ModelID, HookOperation, func(context.Context, Result) error) HookBinding[A]
@@ -2743,6 +2755,8 @@ golem.RuntimeFreezeScopedQuery func[M any](ScopedQuery[M]) (FrozenScopedQuery, e
 golem.RuntimeFreezeUpdateInput func[M any](UpdateInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeUpdateManyInput func[M any](UpdateManyInput[M]) (FrozenMutationInput, error)
 golem.RuntimeFreezeVersionedMutationRequest func(RuntimeVersionedMutationRequestInput) (RuntimeMutationRequest, error)
+golem.RuntimeFullTextResultWithIdentity func[M any](Row[M], float64, FrozenPredicate, []FieldID, string) (FullTextResult[M], error)
+golem.RuntimeFullTextRowFromResult func[M any](FullTextResult[M]) (RuntimeModelRow, error)
 golem.RuntimeGroupAnd const uint8 = 2
 golem.RuntimeGroupCompare const uint8 = 1
 golem.RuntimeGroupNot const uint8 = 4
@@ -3141,9 +3155,13 @@ golem.TextField unkeyed literal {OrderedField}
 golem.TextField.EqualField promoted field EqualField[M, V]
 golem.TextField.OrderedField field OrderedField[M, V] embedded
 golem.TextField[M any, V ~string] type struct
+golem.TextFolding func(TextFoldingMode) FullTextOption
+golem.TextFoldingMode comparable
+golem.TextFoldingMode type string
 golem.TextMeasureContains func[M any, V ~string](Measure[M, V], V, ComparisonMode) GroupPredicate[M]
 golem.TextMeasureEndsWith func[M any, V ~string](Measure[M, V], V, ComparisonMode) GroupPredicate[M]
 golem.TextMeasureStartsWith func[M any, V ~string](Measure[M, V], V, ComparisonMode) GroupPredicate[M]
+golem.TextPrefix func(...uint8) FullTextOption
 golem.Time comparable
 golem.Time type struct
 golem.ToMany[M any, R any] type struct
@@ -4178,6 +4196,7 @@ runtime.CallerRelationGroupBy func[P any, A any, M any](context.Context, *Caller
 runtime.CallerScoped func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
 runtime.CallerSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerSimilar func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
+runtime.CallerTextSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error) error
 runtime.CallerTx comparable
 runtime.CallerTxAggregate func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
@@ -4291,6 +4310,7 @@ runtime.SystemRelationGroupBy func[P any, A any, M any](context.Context, System[
 runtime.SystemScoped func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
 runtime.SystemSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.SystemSimilar func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
+runtime.SystemTextSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error) error
 runtime.SystemTx comparable
 runtime.SystemTxAggregate func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
