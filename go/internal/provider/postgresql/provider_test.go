@@ -83,6 +83,33 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	assertMatches("renee", 1)
 	assertMatches("Καφές", 1)
 	assertMatches("東京", 1)
+	const writerRole = "golem_fulltext_writer"
+	_, _ = database.Exec(`DROP ROLE IF EXISTS "` + writerRole + `"`)
+	if _, err := database.Exec(`CREATE ROLE "` + writerRole + `" NOLOGIN`); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		_, _ = database.Exec(`RESET ROLE`)
+		_, _ = database.Exec(`DROP OWNED BY "` + writerRole + `"`)
+		_, _ = database.Exec(`DROP ROLE "` + writerRole + `"`)
+	}()
+	for _, statement := range []string{
+		`GRANT USAGE ON SCHEMA "golem_fulltext_live" TO "` + writerRole + `"`,
+		`GRANT INSERT, UPDATE, DELETE ON "golem_fulltext_live"."users" TO "` + writerRole + `"`,
+		`SET ROLE "` + writerRole + `"`,
+	} {
+		if _, err := database.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writerID := "00000000-0000-4000-8000-000000000003"
+	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, writerID, "external writer"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`RESET ROLE`); err != nil {
+		t.Fatal(err)
+	}
+	assertMatches("external", 1)
 	secondID := "00000000-0000-4000-8000-000000000002"
 	if _, err := database.Exec(`INSERT INTO "golem_fulltext_live"."users" ("id","email") VALUES ($1,$2)`, secondID, "service"); err != nil {
 		t.Fatal(err)
@@ -273,6 +300,36 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 		t.Fatalf("stable trigger function error=%v", err)
 	}
 	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() VOLATILE`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SECURITY INVOKER`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("invoker trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SECURITY DEFINER`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() RESET ALL`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("unconfined trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() SET search_path TO pg_catalog`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`GRANT EXECUTE ON FUNCTION "golem_fulltext_live"."` + function + `"() TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
+		t.Fatalf("public trigger function error=%v", err)
+	}
+	if _, err := database.Exec(`REVOKE ALL ON FUNCTION "golem_fulltext_live"."` + function + `"() FROM PUBLIC`); err != nil {
 		t.Fatal(err)
 	}
 	if err := provider.Verify(context.Background(), database, schema); err != nil {

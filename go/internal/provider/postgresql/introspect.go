@@ -549,9 +549,13 @@ func introspectFullTextExtensions(ctx context.Context, query catalogQueryer, exp
 			return fmt.Errorf("postgresql full-text introspect: function definition is invalid extension=%s", extension.ID)
 		}
 		var functionBody, language, volatility, parallel, functionKind string
-		var securityDefiner, leakproof, strict, returnsSet, defaultConfiguration bool
-		const functionSQL = `SELECT p.prosrc,l.lanname,p.provolatile,p.prosecdef,p.proleakproof,p.proisstrict,p.proretset,p.proparallel,p.prokind,p.proconfig IS NULL FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
-		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function)).Scan(&functionBody, &language, &volatility, &securityDefiner, &leakproof, &strict, &returnsSet, &parallel, &functionKind, &defaultConfiguration); err != nil || functionBody != parts[1] || language != "plpgsql" || volatility != "v" || securityDefiner || leakproof || strict || returnsSet || parallel != "u" || functionKind != "f" || !defaultConfiguration {
+		var securityDefiner, leakproof, strict, returnsSet, safeConfiguration, ownerMatches, publicExecute bool
+		const functionSQL = `SELECT p.prosrc,l.lanname,p.provolatile,p.prosecdef,p.proleakproof,p.proisstrict,p.proretset,p.proparallel,p.prokind,
+p.proconfig=ARRAY['search_path=pg_catalog']::text[],
+p.proowner=(SELECT c.relowner FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace cn ON cn.oid=c.relnamespace WHERE cn.nspname=$1 AND c.relname=$3 AND c.relkind='r'),
+EXISTS(SELECT 1 FROM pg_catalog.aclexplode(COALESCE(p.proacl,pg_catalog.acldefault('f',p.proowner))) acl WHERE acl.grantee=0 AND acl.privilege_type='EXECUTE')
+FROM pg_catalog.pg_proc p JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace JOIN pg_catalog.pg_language l ON l.oid=p.prolang WHERE n.nspname=$1 AND p.proname=$2 AND p.pronargs=0 AND p.prorettype='pg_catalog.trigger'::pg_catalog.regtype`
+		if err := query.QueryRowxContext(ctx, functionSQL, string(expected.Namespace.Name), string(names.function), string(names.table)).Scan(&functionBody, &language, &volatility, &securityDefiner, &leakproof, &strict, &returnsSet, &parallel, &functionKind, &safeConfiguration, &ownerMatches, &publicExecute); err != nil || functionBody != parts[1] || language != "plpgsql" || volatility != "v" || !securityDefiner || leakproof || strict || returnsSet || parallel != "u" || functionKind != "f" || !safeConfiguration || !ownerMatches || publicExecute {
 			return fmt.Errorf("postgresql full-text introspect: trigger function drift extension=%s", extension.ID)
 		}
 		updateFields, err := fulltextstorage.UpdateColumns(extension, owner)

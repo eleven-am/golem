@@ -96,11 +96,12 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 	return []string{
 		"CREATE TABLE " + qualified(namespace, names.table) + " (" + strings.Join(identityDefinitions, ", ") + ", " + quote("document") + " tsvector NOT NULL, PRIMARY KEY (" + strings.Join(identityNames, ", ") + "))",
 		"CREATE INDEX " + quote(names.document) + " ON " + qualified(namespace, names.table) + " USING gin (" + quote("document") + ")",
-		"CREATE FUNCTION " + qualified(namespace, names.function) + "() RETURNS trigger LANGUAGE plpgsql AS " + quoteDollar(body),
+		"CREATE FUNCTION " + qualified(namespace, names.function) + "() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path TO pg_catalog AS " + quoteDollar(body),
 		"CREATE TRIGGER " + quote(names.insert) + " AFTER INSERT ON " + qualified(namespace, owner.Name) + " FOR EACH ROW EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
 		"CREATE TRIGGER " + quote(names.update) + " AFTER UPDATE OF " + strings.Join(updateColumns, ",") + " ON " + qualified(namespace, owner.Name) + " FOR EACH ROW EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
 		"CREATE TRIGGER " + quote(names.delete) + " AFTER DELETE ON " + qualified(namespace, owner.Name) + " FOR EACH ROW EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
 		"CREATE TRIGGER " + quote(names.truncate) + " AFTER TRUNCATE ON " + qualified(namespace, owner.Name) + " FOR EACH STATEMENT EXECUTE FUNCTION " + qualified(namespace, names.function) + "()",
+		"REVOKE ALL ON FUNCTION " + qualified(namespace, names.function) + "() FROM PUBLIC",
 	}, nil
 }
 

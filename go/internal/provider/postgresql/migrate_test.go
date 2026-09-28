@@ -408,7 +408,9 @@ func TestPlanIncrementalCreatesFullTextStorageAndBackfill(t *testing.T) {
 	for _, fragment := range []string{
 		`CREATE TABLE "reviewed"."` + base + `_fts"`,
 		`CREATE INDEX "` + base + `_fts_document"`,
+		`SECURITY DEFINER SET search_path TO pg_catalog`,
 		`CREATE TRIGGER "` + base + `_ai"`,
+		`REVOKE ALL ON FUNCTION "reviewed"."` + base + `_sync"() FROM PUBLIC`,
 		`INSERT INTO "reviewed"."` + base + `_fts"`,
 	} {
 		if !strings.Contains(plan.SQL(), fragment) {
