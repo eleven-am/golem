@@ -98,6 +98,8 @@ type observingQueryer struct {
 	transaction *observeexec.Span
 }
 
+func (observingQueryer) GolemRecordsStatements() {}
+
 func (queryer observingQueryer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	observeexec.RecordStatement(ctx, queryer.transaction)
 	return queryer.inner.QueryContext(ctx, query, args...)

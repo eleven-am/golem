@@ -1,6 +1,8 @@
 package sql
 
 import (
+	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -10,8 +12,10 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
+	"github.com/eleven-am/golem/go/internal/provider/sqlite"
 	readbind "github.com/eleven-am/golem/go/internal/read/bind"
 	readplan "github.com/eleven-am/golem/go/internal/read/plan"
+	"github.com/jmoiron/sqlx"
 )
 
 type candidateUser struct{}
@@ -39,6 +43,8 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 	switch operation {
 	case "count":
 		frozen, err = golem.FreezeCount(descriptor)
+	case "filtered":
+		frozen, err = golem.FreezeFindMany(descriptor, golem.Where(name.Eq("requested")), golem.Select[candidateUser](name))
 	case "paged":
 		frozen, err = golem.FreezeFindMany(descriptor, golem.Select[candidateUser](name), golem.Skip[candidateUser](1))
 	case "taken":
@@ -64,6 +70,33 @@ func semanticCandidateFixture(t *testing.T, provider policyir.Provider, operatio
 		t.Fatal(err)
 	}
 	return planned, fixture, proof
+}
+
+func TestSQLiteRenderedFindManyPolicyAndWhereUsesIndex(t *testing.T) {
+	ctx := context.Background()
+	planned, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "filtered", MaxStatementParameters)
+	database, _, err := sqlite.New().Open(ctx, filepath.Join(t.TempDir(), "find-many-plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := sqlite.New().ApplyInitial(ctx, database, fixture.SQLite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE INDEX users_name_sargable ON users(name)`); err != nil {
+		t.Fatal(err)
+	}
+	statement, err := Render(planned, fixture.Registry, policyir.ProviderSQLite, proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(statement.Args()) != 2 {
+		t.Fatalf("policy and where were not both retained: args=%#v SQL=%s", statement.Args(), statement.SQL())
+	}
+	plan := sqliteExplainDetails(t, ctx, database, statement.SQL(), statement.Args())
+	if !strings.Contains(plan, "SEARCH golem_r0 USING INDEX users_name_sargable") || strings.Contains(plan, "SCAN golem_r0") {
+		t.Fatalf("FindMany policy AND where did not use its index: %s\nSQL: %s", plan, statement.SQL())
+	}
 }
 
 // TestRenderSemanticCandidatesProjectsIdentityUnderTheAuthorizedPredicate pins
@@ -101,6 +134,54 @@ func TestRenderSemanticCandidatesProjectsIdentityUnderTheAuthorizedPredicate(t *
 			t.Fatalf("provider %d candidate fields=%#v", provider, fields)
 		}
 	}
+}
+
+func TestSQLiteSemanticCandidateStatementUsesIndexedAuthorizedPredicate(t *testing.T) {
+	ctx := context.Background()
+	planned, fixture, proof := semanticCandidateFixture(t, policyir.ProviderSQLite, "taken", MaxStatementParameters)
+	database, _, err := sqlite.New().Open(ctx, filepath.Join(t.TempDir(), "semantic-candidate-plan.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	if err := sqlite.New().ApplyInitial(ctx, database, fixture.SQLite); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.Exec(`CREATE INDEX users_name_sargable ON users(name)`); err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := RenderSemanticCandidates(planned, fixture.Registry, policyir.ProviderSQLite, proof, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := sqliteExplainDetails(t, ctx, database, candidates.SQL(), candidates.Args())
+	if !strings.Contains(plan, "SEARCH golem_r0 USING INDEX users_name_sargable") || strings.Contains(plan, "SCAN golem_r0") {
+		t.Fatalf("semantic candidate statement did not use its indexed predicate: %s\nSQL: %s", plan, candidates.SQL())
+	}
+}
+
+func sqliteExplainDetails(t *testing.T, ctx context.Context, database interface {
+	QueryxContext(context.Context, string, ...any) (*sqlx.Rows, error)
+}, statement string, arguments []any) string {
+	t.Helper()
+	rows, err := database.QueryxContext(ctx, "EXPLAIN QUERY PLAN "+statement, arguments...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(details, " | ")
 }
 
 // TestRenderSemanticCandidatesRefusesAnAbsentIdentityProjection keeps candidacy

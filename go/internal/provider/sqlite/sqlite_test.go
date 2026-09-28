@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	"github.com/jmoiron/sqlx"
@@ -259,6 +260,116 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 	assertMatches("winner", 0)
 	assertMatches("reused", 0)
+	for _, testCase := range []struct {
+		name   string
+		mutate []string
+		want   providerdrift.Object
+	}{
+		{name: "extra fts table", mutate: []string{`CREATE VIRTUAL TABLE app_fts USING fts5(x)`}, want: providerdrift.Object{Type: "table", Name: "app_fts", Table: "app_fts"}},
+		{name: "missing fts storage", mutate: []string{`DROP TABLE "` + base + `_fts"`}, want: providerdrift.Object{Type: "table", Name: base + "_fts", Table: base + "_fts"}},
+		{name: "missing key sidecar", mutate: []string{`DROP TABLE "` + base + `_keys"`}, want: providerdrift.Object{Type: "table", Name: base + "_keys", Table: base + "_keys"}},
+		{name: "missing fts shadow table", mutate: []string{`DROP TABLE "` + base + `_fts_config"`}, want: providerdrift.Object{Type: "table", Name: base + "_fts_config", Table: base + "_fts"}},
+		{name: "missing delete trigger", mutate: []string{`DROP TRIGGER "` + base + `_ad"`}, want: providerdrift.Object{Type: "trigger", Name: base + "_ad", Table: "users"}},
+		{name: "altered delete trigger", mutate: []string{`DROP TRIGGER "` + base + `_ad"`, `CREATE TRIGGER "` + base + `_ad" AFTER DELETE ON "users" BEGIN SELECT 1; END`}, want: providerdrift.Object{Type: "trigger", Name: base + "_ad", Table: "users"}},
+	} {
+		t.Run("drift "+testCase.name, func(t *testing.T) {
+			driftDatabase, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "drift.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer driftDatabase.Close()
+			if err := provider.ApplyInitial(context.Background(), driftDatabase, schema); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range testCase.mutate {
+				if _, err := driftDatabase.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = provider.Introspect(context.Background(), driftDatabase, schema)
+			if err == nil {
+				t.Fatal("drifted full-text catalog was accepted")
+			}
+			object, ok := providerdrift.Inspect(err)
+			if !ok || object != testCase.want {
+				t.Fatalf("drift object=%#v ok=%t want=%#v err=%v", object, ok, testCase.want, err)
+			}
+		})
+	}
+}
+
+func TestDetailedCatalogDriftCarriesObjectIdentity(t *testing.T) {
+	provider := New()
+	schema, err := provider.Lower(context.Background(), socialModelIR(), physical.LowerOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tables := make(map[ir.ModelID]physical.PhysicalTable, len(schema.Tables))
+	for _, table := range schema.Tables {
+		tables[table.ID] = table
+	}
+	posts := findTable(schema, "posts")
+	for _, testCase := range []struct {
+		name   string
+		setup  func(*sqlx.DB) error
+		check  func(*sqlx.DB) error
+		object providerdrift.Object
+	}{
+		{
+			name: "column",
+			setup: func(database *sqlx.DB) error {
+				if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+					return err
+				}
+				_, err := database.Exec(`ALTER TABLE posts ADD COLUMN unexpected TEXT`)
+				return err
+			},
+			check:  func(database *sqlx.DB) error { return inspectColumns(context.Background(), database, posts) },
+			object: providerdrift.Object{Type: "column", Name: "unexpected", Table: "posts"},
+		},
+		{
+			name: "foreign key",
+			setup: func(database *sqlx.DB) error {
+				_, err := database.Exec(`CREATE TABLE posts (tenant_id TEXT NOT NULL, id TEXT NOT NULL, author_id TEXT NOT NULL)`)
+				return err
+			},
+			check: func(database *sqlx.DB) error {
+				return inspectForeignKeys(context.Background(), database, posts, tables)
+			},
+			object: providerdrift.Object{Type: "table", Name: "posts", Table: "posts"},
+		},
+		{
+			name: "index",
+			setup: func(database *sqlx.DB) error {
+				if err := provider.ApplyInitial(context.Background(), database, schema); err != nil {
+					return err
+				}
+				_, err := database.Exec(`DROP INDEX idx_posts_author`)
+				return err
+			},
+			check:  func(database *sqlx.DB) error { return inspectIndexes(context.Background(), database, posts) },
+			object: providerdrift.Object{Type: "index", Name: "idx_posts_author", Table: "posts"},
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			database, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "drift.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer database.Close()
+			if err := testCase.setup(database); err != nil {
+				t.Fatal(err)
+			}
+			err = testCase.check(database)
+			if err == nil {
+				t.Fatal("drifted catalog was accepted")
+			}
+			object, ok := providerdrift.Inspect(err)
+			if !ok || object != testCase.object {
+				t.Fatalf("drift object=%#v ok=%t want=%#v err=%v", object, ok, testCase.object, err)
+			}
+		})
+	}
 }
 
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {

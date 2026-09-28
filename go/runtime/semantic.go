@@ -45,8 +45,12 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
+	queryer, err := prepared.executor.queryerFor(caller.app.database)
+	if err != nil {
+		return nil, err
+	}
 	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return caller.app.semantic.Query(ctx, model, indexName, query, candidates, take)
+		return caller.app.semantic.QueryOn(ctx, queryer, model, indexName, query, candidates, take)
 	})
 }
 
@@ -74,12 +78,16 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
+	queryer, err := prepared.executor.queryerFor(caller.app.database)
+	if err != nil {
+		return nil, err
+	}
 	sourceCandidates, err := renderSemanticCandidates(caller.app, sourcePrepared.prepared, sourcePrepared.plan, indexName, 2)
 	if err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, caller.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return caller.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
+		return caller.app.semantic.QueryByKeyOn(ctx, queryer, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
 	})
 }
 
@@ -95,8 +103,12 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
+	queryer, err := prepared.executor.queryerFor(system.app.database)
+	if err != nil {
+		return nil, err
+	}
 	return rankSemanticRows(ctx, system.app, descriptor, prepared, "search", indexName, take, 3, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return system.app.semantic.Query(ctx, model, indexName, query, candidates, take)
+		return system.app.semantic.QueryOn(ctx, queryer, model, indexName, query, candidates, take)
 	})
 }
 
@@ -120,13 +132,45 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
+	queryer, err := prepared.executor.queryerFor(system.app.database)
+	if err != nil {
+		return nil, err
+	}
 	sourceCandidates, err := renderSemanticCandidates(system.app, sourcePrepared.prepared, sourcePrepared.plan, indexName, 2)
 	if err != nil {
 		return nil, err
 	}
 	return rankSemanticRows(ctx, system.app, descriptor, prepared, "similar", indexName, take, 4, func(ctx context.Context, model ir.ModelID, candidates semanticruntime.Candidates) ([]semanticruntime.Rank, error) {
-		return system.app.semantic.QueryByKey(ctx, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
+		return system.app.semantic.QueryByKeyOn(ctx, queryer, model, indexName, sourceKey, sourceCandidates.candidates, candidates, take)
 	})
+}
+
+func CallerTxSearch[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if transaction == nil || transaction.caller == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerSearch(ctx, transaction.caller, descriptor, indexName, query, take, predicates...)
+}
+
+func CallerTxSimilar[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if transaction == nil || transaction.caller == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+	}
+	return CallerSimilar(ctx, transaction.caller, descriptor, indexName, source, take, predicates...)
+}
+
+func SystemTxSearch[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if transaction == nil || transaction.system.app == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemSearch(ctx, transaction.system, descriptor, indexName, query, take, predicates...)
+}
+
+func SystemTxSimilar[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
+	if transaction == nil || transaction.system.app == nil {
+		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+	}
+	return SystemSimilar(ctx, transaction.system, descriptor, indexName, source, take, predicates...)
 }
 
 func prepareSystemFindManyRead[P, A, M any](system System[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (PreparedRead, error) {
@@ -151,12 +195,9 @@ func semanticCandidateOptions[M any](predicates []golem.Predicate[M], take int) 
 	if take < 1 || take > semanticruntime.MaximumResults {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic result limit is %d, outside 1..%d", take, semanticruntime.MaximumResults)
 	}
-	if len(predicates) > 1 {
-		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic search accepts at most one predicate, got %d", len(predicates))
-	}
 	options := make([]golem.ReadOption[M], 0, 2)
-	if len(predicates) == 1 {
-		options = append(options, golem.Where(predicates[0]))
+	if len(predicates) > 0 {
+		options = append(options, golem.Where(golem.And(predicates...)))
 	}
 	options = append(options, golem.Take[M](take))
 	return options, nil

@@ -352,12 +352,12 @@ func TestEmitSemanticIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
-	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", "func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", `"related_posts"`} {
+	for _, fragment := range []string{"func (client CallerPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerSearch", "func (client SystemPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemSearch", "func (client CallerPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerSimilar", "func (client SystemPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemSimilar", "func (client CallerTxPostClient[P]) SearchRelatedPosts(", "golemruntime.CallerTxSearch", "func (client CallerTxPostClient[P]) SimilarRelatedPosts(", "golemruntime.CallerTxSimilar", "func (client SystemTxPostClient[P]) SearchRelatedPosts(", "golemruntime.SystemTxSearch", "func (client SystemTxPostClient[P]) SimilarRelatedPosts(", "golemruntime.SystemTxSimilar", `"related_posts"`} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("semantic generated surface missing %q:\n%s", fragment, source)
 		}
 	}
-	if strings.Count(source, "SearchRelatedPosts(") != 2 || strings.Count(source, "SimilarRelatedPosts(") != 2 {
+	if strings.Count(source, "SearchRelatedPosts(") != 4 || strings.Count(source, "SimilarRelatedPosts(") != 4 {
 		t.Fatalf("provider definitions duplicated semantic methods:\n%s", source)
 	}
 }
@@ -380,13 +380,49 @@ func TestEmitFullTextIndexesAsTypedCallerAndSystemMethods(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(file.Source)
-	for _, fragment := range []string{"func (client CallerMessageClient[P]) TextSearchMailContent(", "golemruntime.CallerTextSearch", "[]golem.FullTextResult", "func (client SystemMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTextSearch"} {
+	for _, fragment := range []string{"func (client CallerMessageClient[P]) TextSearchMailContent(", "where ...golem.Predicate", "func (client CallerMessageClient[P]) TextSearchMailContentSelect(", "projection golem.Projection", "golemruntime.CallerTextSearch", "golemruntime.CallerTextSearchSelect", "[]golem.FullTextResult", "func (client SystemMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTextSearch", "func (client CallerTxMessageClient[P]) TextSearchMailContent(", "golemruntime.CallerTxTextSearch", "func (client SystemTxMessageClient[P]) TextSearchMailContent(", "golemruntime.SystemTxTextSearch"} {
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("full-text generated surface missing %q:\n%s", fragment, source)
 		}
 	}
-	if strings.Count(source, "TextSearchMailContent(") != 2 {
+	if strings.Count(source, "TextSearchMailContent(") != 4 {
 		t.Fatalf("provider definitions duplicated full-text methods:\n%s", source)
+	}
+	compileRegistry(t, map[string]string{
+		"app/model.go": `package app
+import golem "github.com/eleven-am/golem/go/golem"
+type Actor struct{}
+type Message struct{}
+type MessageCreateInput = golem.CreateInput[Message]
+type MessageUpdateInput = golem.UpdateInput[Message]
+type MessageUpdateManyInput = golem.UpdateManyInput[Message]
+var GolemGeneratedMessageDescriptor = golem.GeneratedModelDescriptor[Message](golem.ModelID{}, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+func GolemGeneratedBindings() golem.PackageBindings[Actor] { return golem.GeneratedPackageBindings[Actor](nil, nil) }
+func GolemGeneratedDescriptors() golem.PackageDescriptors { return golem.GeneratedPackageDescriptors(GolemGeneratedMessageDescriptor.Metadata()) }
+`,
+		"app/search_compat_test.go": `package app
+import (
+  "context"
+  golem "github.com/eleven-am/golem/go/golem"
+)
+func compileTextSearchCompatibility[P any](caller CallerMessageClient[P], system SystemMessageClient[P], callerTx CallerTxMessageClient[P], systemTx SystemTxMessageClient[P], projection golem.Projection[Message], predicates []golem.Predicate[Message]) {
+  _, _ = caller.TextSearchMailContent(context.Background(), "query", 10, predicates...)
+  _, _ = system.TextSearchMailContent(context.Background(), "query", 10, predicates...)
+  _, _ = callerTx.TextSearchMailContent(context.Background(), "query", 10, predicates...)
+  _, _ = systemTx.TextSearchMailContent(context.Background(), "query", 10, predicates...)
+  _, _ = caller.TextSearchMailContentSelect(context.Background(), "query", 10, projection, predicates...)
+  _, _ = callerTx.TextSearchMailContentSelect(context.Background(), "query", 10, projection, predicates...)
+}
+`,
+	}, "app/"+Filename, file.Source)
+}
+
+func TestFullTextSelectMethodNameCollisionIsRejected(t *testing.T) {
+	err := validateFullTextMethodNames(map[ir.ModelID][]fulltextcontract.Index{
+		"model": {{Name: "mail_content"}, {Name: "mail_content_select"}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "collide in Go") {
+		t.Fatalf("select method collision error=%v", err)
 	}
 }
 

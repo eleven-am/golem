@@ -23,6 +23,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	publicprovider "github.com/eleven-am/golem/go/provider"
@@ -127,8 +128,11 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 }
 
 type doctorDiagnostic struct {
-	Code     string `json:"code"`
-	Severity string `json:"severity"`
+	Code       string `json:"code"`
+	Severity   string `json:"severity"`
+	ObjectType string `json:"objectType,omitempty"`
+	ObjectName string `json:"objectName,omitempty"`
+	Table      string `json:"table,omitempty"`
 }
 
 type doctorOutput struct {
@@ -157,6 +161,10 @@ func newDoctorOutput(provider string) doctorOutput {
 
 func (output *doctorOutput) add(code, severity string) {
 	output.Diagnostics = append(output.Diagnostics, doctorDiagnostic{Code: code, Severity: severity})
+}
+
+func (output *doctorOutput) addObject(code, severity string, object providerdrift.Object) {
+	output.Diagnostics = append(output.Diagnostics, doctorDiagnostic{Code: code, Severity: severity, ObjectType: object.Type, ObjectName: object.Name, Table: object.Table})
 }
 
 func (output doctorOutput) healthy() bool {
@@ -294,13 +302,18 @@ func runDoctor(ctx context.Context, directory string, args []string, stdout, std
 		}
 	}
 
-	switch inspectDoctorSchema(ctx, providerID, database, selected) {
+	inspection := inspectDoctorSchema(ctx, providerID, database, selected)
+	switch inspection.status {
 	case "unreachable":
 		output.Schema = "unreachable"
 		output.add("GOLEM_DOCTOR_SCHEMA_UNREACHABLE", "error")
 	case "drift":
 		output.Schema = "drift"
-		output.add("GOLEM_DOCTOR_SCHEMA_DRIFT", "error")
+		if inspection.object.Name == "" {
+			output.add("GOLEM_DOCTOR_SCHEMA_DRIFT", "error")
+		} else {
+			output.addObject("GOLEM_DOCTOR_SCHEMA_DRIFT", "error", inspection.object)
+		}
 	default:
 		output.Schema = "current"
 		output.add("GOLEM_DOCTOR_SCHEMA_CURRENT", "info")
@@ -391,10 +404,15 @@ func readDoctorLedger(ctx context.Context, provider ir.Provider, database *publi
 	}
 }
 
-func inspectDoctorSchema(ctx context.Context, provider ir.Provider, database *publicprovider.Database, expected pipeline.ProviderResult) string {
+type doctorSchemaInspection struct {
+	status string
+	object providerdrift.Object
+}
+
+func inspectDoctorSchema(ctx context.Context, provider ir.Provider, database *publicprovider.Database, expected pipeline.ProviderResult) doctorSchemaInspection {
 	pool := database.UnsafeSQLX()
 	if pool == nil {
-		return "unreachable"
+		return doctorSchemaInspection{status: "unreachable"}
 	}
 	var actual physical.PhysicalSchema
 	var err error
@@ -404,25 +422,33 @@ func inspectDoctorSchema(ctx context.Context, provider ir.Provider, database *pu
 	case ir.PostgreSQL:
 		actual, err = internalpostgresql.New().Introspect(ctx, pool, expected.Schema)
 	default:
-		return "unreachable"
+		return doctorSchemaInspection{status: "unreachable"}
 	}
 	if err != nil {
 		if !doctorCatalogReadable(ctx, provider, pool) {
-			return "unreachable"
+			return doctorSchemaInspection{status: "unreachable"}
 		}
-		return "drift"
+		object, ok := providerdrift.Inspect(err)
+		if !ok {
+			object = providerdrift.Object{Type: "schema", Name: string(expected.Schema.Namespace.Name)}
+		}
+		return doctorSchemaInspection{status: "drift", object: object}
 	}
 	wantPhysical, wantErr := physical.PhysicalFingerprint(expected.Schema)
 	gotPhysical, gotErr := physical.PhysicalFingerprint(actual)
 	wantSystem, wantSystemErr := physical.SystemFingerprint(expected.Schema.Provider, expected.Schema.System)
 	gotSystem, gotSystemErr := physical.SystemFingerprint(actual.Provider, actual.System)
 	if wantErr != nil || gotErr != nil || wantSystemErr != nil || gotSystemErr != nil {
-		return "unreachable"
+		return doctorSchemaInspection{status: "unreachable"}
 	}
 	if wantPhysical != gotPhysical || wantSystem != gotSystem {
-		return "drift"
+		object, ok := providerdrift.Between(expected.Schema, actual)
+		if !ok {
+			object = providerdrift.Object{Type: "schema", Name: string(expected.Schema.Namespace.Name)}
+		}
+		return doctorSchemaInspection{status: "drift", object: object}
 	}
-	return "current"
+	return doctorSchemaInspection{status: "current"}
 }
 
 func doctorCatalogReadable(ctx context.Context, provider ir.Provider, pool interface {
@@ -488,7 +514,14 @@ func writeDoctorOutput(writer io.Writer, output doctorOutput, jsonOutput bool) e
 		return err
 	}
 	for _, diagnostic := range output.Diagnostics {
-		if _, err := fmt.Fprintf(writer, "  %s %s\n", diagnostic.Code, diagnostic.Severity); err != nil {
+		detail := ""
+		if diagnostic.ObjectName != "" {
+			detail = fmt.Sprintf(" object=%s name=%q", diagnostic.ObjectType, diagnostic.ObjectName)
+			if diagnostic.Table != "" {
+				detail += fmt.Sprintf(" table=%q", diagnostic.Table)
+			}
+		}
+		if _, err := fmt.Fprintf(writer, "  %s %s%s\n", diagnostic.Code, diagnostic.Severity, detail); err != nil {
 			return err
 		}
 	}

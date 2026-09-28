@@ -79,10 +79,16 @@ check_database_tier() {
 }
 
 format() {
-	local unformatted
+	local unformatted latest install notes="$ROOT/docs/golem-go/RELEASE-NOTES.md"
 	unformatted="$(cd "$GO_DIR" && find . -type f -name '*.go' -print0 | xargs -0 gofmt -l)" || return 1
 	[ -z "$unformatted" ] || {
 		printf 'gofmt would rewrite:\n%s\n' "$unformatted" >&2
+		return 1
+	}
+	latest="$(awk '/^## go\/v[0-9]+\.[0-9]+\.[0-9]+$/ { version=$2; sub(/^go\/v/, "", version); split(version, part, "."); if (!seen || part[1] > major || (part[1] == major && part[2] > minor) || (part[1] == major && part[2] == minor && part[3] > patch)) { major=part[1]; minor=part[2]; patch=part[3]; seen=1 } } END { if (seen) printf "v%d.%d.%d\n", major, minor, patch }' "$notes")" || return 1
+	install="$(sed -n 's/^go get github\.com\/eleven-am\/golem\/go@\(v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' "$notes" | head -n 1)" || return 1
+	[ -n "$latest" ] && [ "$install" = "$latest" ] || {
+		printf 'release-note install version %s differs from newest section %s\n' "$install" "$latest" >&2
 		return 1
 	}
 }

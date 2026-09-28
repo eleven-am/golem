@@ -245,9 +245,9 @@ func (in *interpreter) evalFullTextIndex(call *ast.CallExpr) {
 		in.errorAt("P9_FULLTEXT_INDEX_DUPLICATE", "full-text index names must be unique within a model", call.Args[0])
 		return
 	}
-	index := fulltextcontract.Index{Name: name, Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}}
+	index := fulltextcontract.Index{Name: name, Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Ranking: fulltextcontract.RankingTermCount}
 	seenFields := make(map[ir.FieldID]bool)
-	seenFolding, seenPrefix := false, false
+	seenFolding, seenPrefix, seenRanking := false, false, false
 	for _, expression := range call.Args[1:] {
 		option, ok := unparen(expression).(*ast.CallExpr)
 		if !ok {
@@ -312,6 +312,18 @@ func (in *interpreter) evalFullTextIndex(call *ast.CallExpr) {
 				index.Prefix = append(index.Prefix, value)
 			}
 			sort.Slice(index.Prefix, func(i, j int) bool { return index.Prefix[i] < index.Prefix[j] })
+		case "TextRanking":
+			if seenRanking || len(option.Args) != 1 {
+				in.errorAt("P9_FULLTEXT_INDEX_RANKING", "TextRanking may be declared once", option)
+				continue
+			}
+			seenRanking = true
+			switch in.constantName(option.Args[0]) {
+			case "RankBM25":
+				index.Ranking = fulltextcontract.RankingBM25
+			default:
+				in.errorAt("P9_FULLTEXT_INDEX_RANKING", "TextRanking requires RankBM25", option.Args[0])
+			}
 		default:
 			in.errorAt("P9_FULLTEXT_INDEX_OPTION", "call is not a recognized FullTextIndex option", option)
 		}

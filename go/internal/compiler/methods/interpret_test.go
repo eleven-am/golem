@@ -51,7 +51,7 @@ func TestInterpretTypedOverlayAndOptionalMethod(t *testing.T) {
 	for _, extension := range result.Extensions {
 		if extension.Kind == fulltextcontract.IndexKind {
 			index, err := fulltextcontract.Decode(extension.Payload)
-			if err != nil || index.Name != "directory" || index.Folding != fulltextcontract.FoldingDiacritics || !reflect.DeepEqual(index.Prefix, []uint8{2, 3}) || len(index.Fields) != 1 || index.Fields[0].ID != "13000000000000000000000000000000" || index.Fields[0].Weight != 2 {
+			if err != nil || index.Name != "directory" || index.Folding != fulltextcontract.FoldingDiacritics || index.Ranking != fulltextcontract.RankingBM25 || !reflect.DeepEqual(index.Prefix, []uint8{2, 3}) || len(index.Fields) != 1 || index.Fields[0].ID != "13000000000000000000000000000000" || index.Fields[0].Weight != 2 {
 				t.Fatalf("full-text extension=%#v index=%#v err=%v", extension, index, err)
 			}
 			fullTextCount++

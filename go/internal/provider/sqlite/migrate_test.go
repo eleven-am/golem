@@ -22,6 +22,36 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+func TestApplyMigrationRefreshesSQLitePlannerStatistics(t *testing.T) {
+	ctx := context.Background()
+	provider := New()
+	indexed := func(schema physical.PhysicalSchema) physical.PhysicalSchema {
+		name := fixtureItemNameField
+		schema.Tables[0].Indexes = []physical.PhysicalIndex{{
+			ID: "30000000000000000000000000000002", Name: "idx_items_name", Method: physical.IndexBTree,
+			Keys: []physical.IndexKey{{Column: &name, Direction: ir.SortAsc, Nulls: ir.NullsDefault}}, CreationMode: physical.IndexTransactional,
+		}}
+		return normalizeMigrationFixture(t, schema)
+	}
+	before := indexed(incrementalFixtureSchema(t, false))
+	after := indexed(incrementalFixtureSchema(t, true))
+	database := openMigrationFixture(t, provider, before, "planner.db")
+	if _, err := database.ExecContext(ctx, `WITH RECURSIVE seq(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM seq WHERE n<2000) INSERT INTO items(id,name) SELECT n,printf('m%d',n%10) FROM seq`); err != nil {
+		t.Fatal(err)
+	}
+	manifest, files := migrationFixtureManifest(t, before, after, "001_add_note.sql", nil)
+	if err := provider.ApplyMigration(ctx, database, manifest, files); err != nil {
+		t.Fatal(err)
+	}
+	var statistic string
+	if err := database.GetContext(ctx, &statistic, `SELECT stat FROM sqlite_stat1 WHERE tbl='items' AND idx='idx_items_name'`); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(statistic, "2000 ") {
+		t.Fatalf("name statistics=%q", statistic)
+	}
+}
+
 func TestHistoricalV1SQLiteReviewedInitialIgnoresExtensionMetadataAndBindsSealedFacts(t *testing.T) {
 	readSnapshot := func(name string) physical.PhysicalSchema {
 		t.Helper()

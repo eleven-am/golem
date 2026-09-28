@@ -53,6 +53,18 @@ func TestSemanticQueryEncodingFailsBeforeReadPlanning(t *testing.T) {
 	}
 }
 
+func TestTransactionSemanticSearchRefusesMissingCapability(t *testing.T) {
+	fixture := schematest.New(t)
+	descriptor := golem.GeneratedModelDescriptor[semanticLimitUser](fixture.User, golem.GeneratedDescriptorShape(nil, nil, nil, nil))
+	predicates := []golem.Predicate[semanticLimitUser]{}
+	if _, err := CallerTxSearch[string, testActor](context.Background(), nil, descriptor, "content", "go", 1, predicates...); err == nil || !strings.Contains(err.Error(), "caller transaction is unavailable") {
+		t.Fatalf("caller transaction error=%v", err)
+	}
+	if _, err := SystemTxSearch[string, testActor](context.Background(), nil, descriptor, "content", "go", 1, predicates...); err == nil || !strings.Contains(err.Error(), "system transaction is unavailable") {
+		t.Fatalf("system transaction error=%v", err)
+	}
+}
+
 type semanticLimitUser struct{}
 
 func TestSemanticResultLimitUsesReadCaps(t *testing.T) {
@@ -87,6 +99,25 @@ func TestSemanticResultLimitUsesReadCaps(t *testing.T) {
 				t.Fatal("semantic result limit bypassed the read cap")
 			}
 		})
+	}
+}
+
+func TestSemanticCandidateOptionsCombinePredicates(t *testing.T) {
+	fixture := schematest.New(t)
+	descriptor := golem.GeneratedModelDescriptor[semanticLimitUser](fixture.User, golem.GeneratedDescriptorShape([]golem.FieldID{fixture.UserID, fixture.UserName}, nil, nil, nil))
+	id := golem.GeneratedEqualField[semanticLimitUser, golem.UUID](fixture.UserID)
+	name := golem.GeneratedTextField[semanticLimitUser, string](fixture.UserName)
+	options, err := semanticCandidateOptions([]golem.Predicate[semanticLimitUser]{name.Contains("go"), id.Eq(golem.UUID{})}, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := golem.FreezeFindMany(descriptor, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, present := request.Where()
+	if !present || len(where.View().Root().Children()) != 2 {
+		t.Fatalf("combined where=%#v present=%t", where, present)
 	}
 }
 

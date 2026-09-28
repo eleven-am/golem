@@ -17,6 +17,7 @@ import (
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/eleven-am/golem/go/queue"
 )
 
@@ -594,6 +595,90 @@ func TestRolledBackWriteLeavesNoSemanticShadowRowOrDrainJob(t *testing.T) {
 	}
 	if embedder.count() != 0 {
 		t.Fatalf("rolled-back write reached the embedding provider %d times", embedder.count())
+	}
+}
+
+func TestSystemTransactionSemanticSearchObservesUncommittedDelete(t *testing.T) {
+	ctx := context.Background()
+	fixture := newSemanticMarkFixture(t)
+	for _, id := range []byte{63, 64} {
+		if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(id, golem.UUID{15: 1}, "ranked")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fixture.app.RefreshSemanticIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("roll back transaction-bound search fixture")
+	err := SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+		if _, deleteErr := SystemTxDelete(ctx, transaction, fixture.postDescriptor, fixture.target(63)); deleteErr != nil {
+			return deleteErr
+		}
+		rows, searchErr := SystemTxSearch(ctx, transaction, fixture.postDescriptor, schematest.SemanticIndexName, "ranked", 10)
+		if searchErr != nil {
+			return searchErr
+		}
+		if len(rows) != 1 {
+			t.Fatalf("transaction-bound semantic rows=%d want=1", len(rows))
+		}
+		id, present := golem.Value(rows[0].Row(), fixture.postID).Get()
+		if !present || id != (golem.UUID{15: 64}) {
+			t.Fatalf("transaction-bound semantic id=%v present=%t", id, present)
+		}
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("transaction rollback error=%v", err)
+	}
+}
+
+func TestTransactionSemanticRankObservationsCountEachStatementOnce(t *testing.T) {
+	ctx := context.Background()
+	collector := &p8ObservationCollector{}
+	embedder := &semanticMarkEmbedder{}
+	configure := configureSemanticApp(t, embedder)
+	fixture := openConfiguredMutationResultFixture(t, schematest.NewSemanticIndexed(t), MutationLimits{}, nil, nil, nil, true, func(config *Config[mutationResultPrincipal, mutationResultActor]) {
+		configure(config)
+		config.Observer = collector
+	})
+	for _, id := range []byte{65, 66} {
+		if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(id, golem.UUID{15: 1}, "ranked")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := fixture.app.RefreshSemanticIndexes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	source := golem.GeneratedUniqueSelectorValue[mutationResultPost](
+		fixture.schema.Post,
+		fixture.schema.PostKey,
+		golem.GeneratedSelectorComponent(fixture.schema.PostID, golem.UUID{15: 65}),
+	)
+	var searchStatements, similarStatements int64
+	err := SystemTransaction(ctx, fixture.app.System(), func(transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+		spy := &transactionQuerySpy{ExtContext: transaction.system.executor.transaction}
+		transaction.system.executor.executor = spy
+		before := spy.queries.Load()
+		if _, err := SystemTxSearch(ctx, transaction, fixture.postDescriptor, schematest.SemanticIndexName, "ranked", 10); err != nil {
+			return err
+		}
+		searchStatements = spy.queries.Load() - before
+		before = spy.queries.Load()
+		if _, err := SystemTxSimilar(ctx, transaction, fixture.postDescriptor, schematest.SemanticIndexName, source, 10); err != nil {
+			return err
+		}
+		similarStatements = spy.queries.Load() - before
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searchStatements != 2 || similarStatements != 4 {
+		t.Fatalf("transaction SQL counts: search=%d want=2, similar=%d want=4", searchStatements, similarStatements)
+	}
+	ranks := collector.matching(observe.KindSemantic, observe.OperationSemanticRank)
+	if len(ranks) != 2 || ranks[0].statements != 1 || ranks[1].statements != 2 {
+		t.Fatalf("semantic rank observations=%+v, transaction SQL counts search=%d similar=%d", ranks, searchStatements, similarStatements)
 	}
 }
 

@@ -24,7 +24,10 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-const MaximumResults = 1000
+const (
+	MaximumResults            = 1000
+	sqliteDirectBranchMaximum = 32
+)
 
 type Index struct {
 	Descriptor fulltextstorage.Descriptor
@@ -102,27 +105,61 @@ func (manager *Manager) IndexFields(model ir.ModelID, name string) ([]ir.FieldID
 	return fields, true
 }
 
+// QueryParameters returns the exact number of ranking-owned bind parameters
+// for one query, including its result limit but excluding candidate binds.
+func (manager *Manager) QueryParameters(model ir.ModelID, name, query string) (int, error) {
+	if manager == nil {
+		return 0, queryExecutionFailure("full-text execution is unavailable", nil)
+	}
+	index, ok := manager.index(model, name)
+	if !ok {
+		return 0, queryExecutionFailure("full-text index is unavailable", nil)
+	}
+	parsed, err := parse(query)
+	if err != nil {
+		return 0, err
+	}
+	if manager.provider == ir.PostgreSQL {
+		return len(parsed) + 1, nil
+	}
+	if fulltextcontract.EffectiveRanking(index.Descriptor.Index) == fulltextcontract.RankingBM25 {
+		return 2, nil
+	}
+	return len(sqliteRankBranches(index.Descriptor.Index, parsed)) + 1, nil
+}
+
 func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int) ([]Rank, error) {
-	if manager == nil || ctx == nil || take < 1 || take > MaximumResults {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: context, manager, and a result limit in 1..%d are required", MaximumResults)
+	if manager == nil {
+		return nil, queryExecutionFailure("full-text execution is unavailable", nil)
+	}
+	return manager.QueryOn(ctx, manager.database, model, name, query, candidates, take)
+}
+
+func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name, query string, candidates semanticruntime.Candidates, take int) ([]Rank, error) {
+	if manager == nil || ctx == nil || queryer == nil {
+		return nil, queryExecutionFailure("full-text execution is unavailable", nil)
+	}
+	if take < 1 || take > MaximumResults {
+		return nil, InvalidQuery("full-text result limit is %d, outside 1..%d", take, MaximumResults)
 	}
 	index, ok := manager.index(model, name)
 	if !ok || candidates.NewScan == nil || len(candidates.Columns) != len(index.Identity) {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: index or candidate identity is invalid")
+		return nil, queryExecutionFailure("full-text index or candidate identity is invalid", nil)
 	}
 	for position, column := range index.Identity {
 		if candidates.Columns[position] != string(column.Name) {
-			return nil, fmt.Errorf("P9_FULLTEXT_QUERY: candidate identity column does not match the index")
+			return nil, queryExecutionFailure("full-text candidate identity does not match the index", nil)
 		}
 	}
 	parsed, err := parse(query)
 	if err != nil {
 		return nil, err
 	}
-	arguments := make([]any, 0, len(parsed)+len(index.Descriptor.Index.Fields)+len(candidates.Args)+1)
-	statement := manager.sqliteStatement(index, candidates)
+	ranking := fulltextcontract.EffectiveRanking(index.Descriptor.Index)
+	arguments := make([]any, 0, len(parsed)*len(index.Descriptor.Index.Fields)+len(candidates.Args)+1)
+	statement := ""
 	if manager.provider == ir.PostgreSQL {
-		statement = manager.postgresqlStatement(index, parsed, candidates)
+		statement = manager.postgresqlStatement(index, parsed, candidates, ranking)
 		for _, item := range parsed {
 			value := item.value
 			if index.Descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
@@ -130,23 +167,27 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 			}
 			arguments = append(arguments, value)
 		}
-	} else {
+	} else if ranking == fulltextcontract.RankingBM25 {
+		statement = manager.sqliteBM25Statement(index, candidates)
 		arguments = append(arguments, compileSQLite(parsed, index.Descriptor.Index.Folding))
-		for position := range index.Descriptor.Index.Fields {
-			arguments = append(arguments, compileSQLiteField(parsed, index.Descriptor.Index.Folding, position))
+	} else {
+		branches := sqliteRankBranches(index.Descriptor.Index, parsed)
+		statement = manager.sqliteStatement(index, candidates, branches)
+		for _, branch := range branches {
+			arguments = append(arguments, branch.expression)
 		}
 	}
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured complexity")
+		return nil, InvalidQuery("full-text ranking exceeds configured complexity")
 	}
 	arguments = append(arguments, candidates.Args...)
 	arguments = append(arguments, take)
 	if candidates.MaxStatementParameters < 1 || len(arguments) > candidates.MaxStatementParameters {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking statement exceeds configured parameter limit")
+		return nil, InvalidQuery("full-text ranking exceeds configured parameter limit")
 	}
-	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
+	rows, err := queryer.QueryxContext(ctx, statement, arguments...)
 	if err != nil {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking failed")
+		return nil, queryExecutionFailure("full-text ranking execution failed", err)
 	}
 	defer rows.Close()
 	result := make([]Rank, 0, take)
@@ -155,39 +196,90 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 		scan := candidates.NewScan()
 		destinations := append([]any{&score}, scan.Destinations()...)
 		if err := rows.Scan(destinations...); err != nil {
-			return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking decode failed")
+			return nil, queryExecutionFailure("full-text ranking decode failed", err)
 		}
 		identity := scan.RawValues()
 		key, err := semantickey.Encode(identity)
 		if err != nil || math.IsNaN(score) || math.IsInf(score, 0) {
-			return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking row is invalid")
+			return nil, queryExecutionFailure("full-text ranking row is invalid", err)
 		}
 		result = append(result, Rank{Key: key, Score: score, Identity: identity})
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: ranking stream failed")
+		return nil, queryExecutionFailure("full-text ranking stream failed", err)
 	}
 	return result, nil
 }
 
-func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.Candidates) string {
+func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticruntime.Candidates) string {
 	base := string(index.Descriptor.Storage)
 	fts, keys := manager.quote(base+"_fts"), manager.quote(base+"_keys")
 	identity, joins := manager.identitySQL(index, "golem_fk", "golem_fc", candidates)
-	scores := make([]string, len(index.Descriptor.Index.Fields))
+	weights := make([]string, len(index.Descriptor.Index.Fields))
 	for position, field := range index.Descriptor.Index.Fields {
-		alias := "golem_fs" + strconv.Itoa(position)
-		scores[position] = "CASE WHEN EXISTS(SELECT 1 FROM " + fts + " AS " + alias + " WHERE " + alias + ".rowid=golem_ff.rowid AND " + fts + " MATCH ?" + strconv.Itoa(position+2) + ") THEN " + strconv.FormatFloat(field.Weight, 'g', -1, 64) + " ELSE 0 END"
+		weights[position] = strconv.FormatFloat(field.Weight, 'g', -1, 64)
 	}
-	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(index.Descriptor.Index.Fields)+1, policyir.ProviderSQLite)
-	limit := "?" + strconv.Itoa(len(index.Descriptor.Index.Fields)+len(candidates.Args)+2)
-	return "SELECT " + strings.Join(scores, "+") + " AS score," + strings.Join(identity, ",") +
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
+	limit := "?" + strconv.Itoa(len(candidates.Args)+2)
+	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(identity, ",") +
 		" FROM " + fts + " AS golem_ff JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" WHERE " + fts + " MATCH ?1 ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
 }
 
-func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates) string {
+type sqliteRankBranch struct {
+	expression string
+	weight     float64
+}
+
+func sqliteRankBranches(index fulltextcontract.Index, terms []term) []sqliteRankBranch {
+	branches := make([]sqliteRankBranch, 0, len(index.Fields)*len(terms))
+	seen := make(map[string]bool, cap(branches))
+	for fieldPosition, field := range index.Fields {
+		for _, item := range terms {
+			expression := compileSQLiteField([]term{item}, index.Folding, fieldPosition)
+			if seen[expression] {
+				continue
+			}
+			seen[expression] = true
+			branches = append(branches, sqliteRankBranch{expression: expression, weight: field.Weight})
+		}
+	}
+	return branches
+}
+
+func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.Candidates, branches []sqliteRankBranch) string {
+	base := string(index.Descriptor.Storage)
+	fts, keys := manager.quote(base+"_fts"), manager.quote(base+"_keys")
+	identity, joins := manager.identitySQL(index, "golem_fk", "golem_fc", candidates)
+	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(branches), policyir.ProviderSQLite)
+	limit := "?" + strconv.Itoa(len(branches)+len(candidates.Args)+1)
+	if len(branches) <= sqliteDirectBranchMaximum {
+		ranks := make([]string, len(branches))
+		for position, branch := range branches {
+			ranks[position] = "SELECT golem_ff.rowid golem_fd," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + " golem_fw FROM " + fts + " AS golem_ff" +
+				" JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
+				" WHERE " + fts + " MATCH ?" + strconv.Itoa(position+1)
+		}
+		direct := "WITH golem_fr AS (" + strings.Join(ranks, " UNION ALL ") +
+			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(identity, ",") +
+			" FROM golem_fs JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_fs.golem_fd" +
+			" ORDER BY golem_fs.score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+		if readsql.ValidateStatementComplexity(candidates.Model, direct, candidates.MaxStatementBytes, candidates.MaxStatementAliases) == nil {
+			return direct
+		}
+	}
+	values := make([]string, len(branches))
+	for position, branch := range branches {
+		values[position] = "(?" + strconv.Itoa(position+1) + "," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + ")"
+	}
+	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(identity, ",") +
+		" FROM golem_fq JOIN " + fts + " AS golem_ff ON " + fts + " MATCH golem_fq.golem_fe JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
+		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
+		" GROUP BY golem_ff.rowid," + strings.Join(identity, ",") + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
+}
+
+func (manager *Manager) postgresqlStatement(index Index, terms []term, candidates semanticruntime.Candidates, ranking string) string {
 	table := manager.table(string(index.Descriptor.Storage) + "_fts")
 	identity, joins := manager.identitySQL(index, "golem_ff", "golem_fc", candidates)
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(terms), policyir.ProviderPostgreSQL)
@@ -197,7 +289,11 @@ func (manager *Manager) postgresqlStatement(index Index, terms []term, candidate
 	}
 	query := fulltextpostgresql.JoinQueries(queries)
 	limit := "$" + strconv.Itoa(len(terms)+len(candidates.Args)+1)
-	return "SELECT ts_rank_cd(" + postgresqlWeights(index.Descriptor.Index) + ",golem_ff.document," + query + ")::double precision AS score," + strings.Join(identity, ",") +
+	normalization := ""
+	if ranking == fulltextcontract.RankingBM25 {
+		normalization = ",32"
+	}
+	return "SELECT ts_rank_cd(" + postgresqlWeights(index.Descriptor.Index) + ",golem_ff.document," + query + normalization + ")::double precision AS score," + strings.Join(identity, ",") +
 		" FROM " + table + " AS golem_ff JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" WHERE golem_ff.document@@" + query + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
 }
@@ -268,8 +364,17 @@ type term struct {
 }
 
 func parse(input string) ([]term, error) {
-	if input == "" || len(input) > 10_000 || !utf8.ValidString(input) || strings.IndexByte(input, 0) >= 0 {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: query is empty or invalid")
+	if input == "" {
+		return nil, InvalidQuery("full-text query is empty")
+	}
+	if len(input) > 10_000 {
+		return nil, InvalidQuery("full-text query exceeds the 10000-byte limit")
+	}
+	if !utf8.ValidString(input) {
+		return nil, InvalidQuery("full-text query is not valid UTF-8")
+	}
+	if strings.IndexByte(input, 0) >= 0 {
+		return nil, InvalidQuery("full-text query contains a NUL byte")
 	}
 	result := make([]term, 0, 8)
 	for position := 0; position < len(input); {
@@ -292,7 +397,7 @@ func parse(input string) ([]term, error) {
 				position++
 			}
 			if position == len(input) {
-				return nil, fmt.Errorf("P9_FULLTEXT_QUERY: quoted phrase is not terminated")
+				return nil, InvalidQuery("full-text quoted phrase is not terminated")
 			}
 			item.value = strings.TrimSpace(input[start:position])
 			position++
@@ -310,7 +415,7 @@ func parse(input string) ([]term, error) {
 				item.prefix = true
 				item.value = strings.TrimSuffix(item.value, "*")
 				if prefixLexemeLength(item.value) < 2 {
-					return nil, fmt.Errorf("P9_FULLTEXT_QUERY: prefix terms require at least two characters")
+					return nil, InvalidQuery("full-text prefix terms require at least two characters")
 				}
 			}
 		}
@@ -319,11 +424,11 @@ func parse(input string) ([]term, error) {
 		}
 		result = append(result, item)
 		if len(result) > 32 {
-			return nil, fmt.Errorf("P9_FULLTEXT_QUERY: query exceeds 32 terms")
+			return nil, InvalidQuery("full-text query exceeds the 32-term limit")
 		}
 	}
 	if len(result) == 0 {
-		return nil, fmt.Errorf("P9_FULLTEXT_QUERY: query has no terms")
+		return nil, InvalidQuery("full-text query has no terms")
 	}
 	return result, nil
 }

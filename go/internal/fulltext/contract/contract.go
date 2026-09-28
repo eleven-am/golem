@@ -21,6 +21,8 @@ const (
 const (
 	FoldingDiacritics = "diacritics"
 	FoldingNone       = "none"
+	RankingTermCount  = "term-count"
+	RankingBM25       = "bm25"
 	MinimumWeight     = 0x1p-149
 	MaximumWeight     = 0x1.fffffep+127
 )
@@ -55,6 +57,15 @@ type Index struct {
 	Fields  []Field `json:"fields"`
 	Folding string  `json:"folding"`
 	Prefix  []uint8 `json:"prefix"`
+	Ranking string  `json:"ranking"`
+}
+
+type indexWire struct {
+	Name    string  `json:"name"`
+	Fields  []Field `json:"fields"`
+	Folding string  `json:"folding"`
+	Prefix  []uint8 `json:"prefix"`
+	Ranking string  `json:"ranking,omitempty"`
 }
 
 func IndexesByModel(model ir.ModelIR) (map[ir.ModelID][]Index, error) {
@@ -87,10 +98,15 @@ func IndexesByModel(model ir.ModelIR) (map[ir.ModelID][]Index, error) {
 }
 
 func Encode(index Index) (string, error) {
+	index.Ranking = EffectiveRanking(index)
 	if err := validate(index); err != nil {
 		return "", err
 	}
-	payload, err := json.Marshal(index)
+	ranking := index.Ranking
+	if ranking == RankingTermCount {
+		ranking = ""
+	}
+	payload, err := json.Marshal(indexWire{Name: index.Name, Fields: index.Fields, Folding: index.Folding, Prefix: index.Prefix, Ranking: ranking})
 	if err != nil {
 		return "", fmt.Errorf("full-text contract encode: %w", err)
 	}
@@ -100,26 +116,35 @@ func Encode(index Index) (string, error) {
 func Decode(payload string) (Index, error) {
 	decoder := json.NewDecoder(bytes.NewBufferString(payload))
 	decoder.DisallowUnknownFields()
-	var result Index
-	if err := decoder.Decode(&result); err != nil {
+	var wire indexWire
+	if err := decoder.Decode(&wire); err != nil {
 		return Index{}, fmt.Errorf("full-text contract decode: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Index{}, fmt.Errorf("full-text contract decode: trailing data")
 	}
+	result := Index{Name: wire.Name, Fields: wire.Fields, Folding: wire.Folding, Prefix: wire.Prefix, Ranking: wire.Ranking}
+	result.Ranking = EffectiveRanking(result)
 	if err := validate(result); err != nil {
 		return Index{}, err
 	}
-	encoded, err := json.Marshal(result)
-	if err != nil || string(encoded) != payload {
+	encoded, err := Encode(result)
+	if err != nil || encoded != payload {
 		return Index{}, fmt.Errorf("full-text contract decode: payload is not canonical")
 	}
 	return result, nil
 }
 
+func EffectiveRanking(index Index) string {
+	if index.Ranking == "" {
+		return RankingTermCount
+	}
+	return index.Ranking
+}
+
 func validate(index Index) error {
-	if index.Name == "" || len(index.Fields) == 0 || index.Folding != FoldingDiacritics && index.Folding != FoldingNone {
+	if index.Name == "" || len(index.Fields) == 0 || index.Folding != FoldingDiacritics && index.Folding != FoldingNone || index.Ranking != RankingTermCount && index.Ranking != RankingBM25 {
 		return fmt.Errorf("full-text contract: invalid index")
 	}
 	seenFields := make(map[string]bool, len(index.Fields))

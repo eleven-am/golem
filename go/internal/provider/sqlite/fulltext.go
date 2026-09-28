@@ -26,7 +26,12 @@ func sqliteFullTextFold(arguments []driver.Value) (driver.Value, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s: expected TEXT", fullTextFoldFunction)
 	}
-	return fulltextfolding.Diacritics(value), nil
+	for position := 0; position < len(value); position++ {
+		if value[position] >= 0x80 {
+			return fulltextfolding.Diacritics(value), nil
+		}
+	}
+	return value, nil
 }
 
 type sqliteFullTextObjects struct {

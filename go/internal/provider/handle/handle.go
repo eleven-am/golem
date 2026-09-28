@@ -222,6 +222,14 @@ func (database *Database) Close() error {
 			close(database.state.closed)
 		}
 		if database.state.database != nil {
+			if database.state.provider == golem.SQLite && !database.state.testOnly {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				_, err := database.state.database.ExecContext(ctx, "PRAGMA optimize=0x10002")
+				cancel()
+				if err != nil {
+					database.state.closeErr = failure(CodeClose, "provider close failed")
+				}
+			}
 			if err := database.state.database.Close(); err != nil {
 				database.state.closeErr = failure(CodeClose, "provider close failed")
 			}

@@ -5,7 +5,7 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.5.0
+go get github.com/eleven-am/golem/go@v0.5.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
@@ -13,7 +13,78 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable.
 
 ---
 
-## Unreleased
+## go/v0.5.3
+
+**SQLite full-text search now ranks in one linear pass.** The default ranking
+counts distinct matched terms per field and applies the field's declared
+weight, preserving caller isolation without corpus-wide statistics. An
+opt-in BM25 mode is available when corpus-wide term frequency is appropriate.
+The ranking query no longer executes a correlated `MATCH` subquery for every
+result candidate. Enabling or disabling BM25 on an existing index is a reviewed
+rewrite migration. SQLite BM25 can reveal aggregate corpus influence through
+scores and ordering, so multi-principal applications should retain the default.
+
+Measured on 200,000 roughly 2 KB documents on an Apple M3 Pro, using weighted
+subject, participants and body fields (3/2/1) and five repetitions after
+fixture creation:
+
+| SQLite default-ranking query | Median |
+| --- | ---: |
+| One term, 100 matches | 0.51 ms |
+| One term, 1,000 matches | 1.58 ms |
+| One term, 10,000 matches | 12.58 ms |
+| Three terms | 13.52 ms |
+| 10,000-match term with a 0.1% predicate | 7.97 ms |
+| Common term, 200,000 matches | 259.51 ms |
+
+The SQLite Unicode-folding callback now returns ASCII text directly. On the
+same machine, a 2,070-byte ASCII value fell from 35.5 µs and two allocations
+to 0.84 µs and one allocation; non-ASCII folding semantics are unchanged.
+
+Synchronous FTS5 maintenance remains intentionally transactional. A 50,000-row
+benchmark with roughly 2 KB bodies measured 36.9 µs per unindexed row and
+344.2 µs per indexed row. Profiling at 200,000 rows showed that even a bare
+FTS5 insert with no Golem key table, folding, replacement cleanup or additional
+trigger statements costs 4.25–4.72 times the owner-table insert. The lower
+overhead target proposed during development is therefore not attainable without
+weakening immediate search consistency or removing phrase, field or BM25
+behavior; this release keeps those guarantees.
+
+**Search APIs are complete across execution modes.** Full-text search has an
+additive `TextSearch…Select` form so callers can avoid hydrating large fields.
+Full-text and semantic Search/Similar methods are generated for caller and
+system transaction clients, and every stage runs on the transaction-bound
+executor. Multiple predicates are accepted and combined with `AND`; existing
+`TextSearch…(...Predicate)` call sites remain source-compatible.
+
+Committed 200,000-row benchmarks on the same machine measured primary-key and
+unique lookups at 107 µs and 88 µs. Indexed ranges returning 20, 200 and
+2,000 rows took 94 µs, 324 µs and 7.48 ms. Through the generated public API,
+exact SQLite semantic Search and Similar at 1,024 dimensions took 863 ms and
+882 ms unfiltered, and 3.2 ms and 4.0 ms with a 0.1% candidate predicate.
+
+**Full-text failures now preserve their public boundary.** Invalid query
+syntax and request limits return `BAD_USER_INPUT` with a specific safe reason.
+Database execution, streaming and decoding failures follow the internal-error
+path instead of being presented as caller mistakes.
+
+`golem doctor` now reports the drifting object's type, name and owning table in
+both human and JSON output. Applying a SQLite migration refreshes planner
+statistics after schema verification, and closing a verified SQLite handle
+runs bounded planner optimization so statistics reflect later ingestion.
+Removing a Golem-derived semantic or
+full-text index no longer needs a data-loss approval, while historical plans
+that already recorded the exact legacy approval remain valid.
+
+SQLite full-text indexes using the default `FoldDiacritics` mode require
+inserts and indexed-field updates to use a connection opened through Golem's
+SQLite provider. Those triggers call Golem's Unicode-folding function, which a
+plain `sqlite3` connection does not register. PostgreSQL direct SQL writes are
+unchanged.
+
+---
+
+## go/v0.5.2
 
 **First-class full-text indexes are available on SQLite and PostgreSQL.**
 `FullTextIndex` declares weighted local text fields and generates

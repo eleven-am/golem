@@ -10,6 +10,31 @@ import (
 	"github.com/eleven-am/golem/go/internal/physical"
 )
 
+func TestLowerRoundTripsRankingThroughPhysicalDefinition(t *testing.T) {
+	payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingNone, Ranking: fulltextcontract.RankingBM25, Fields: []fulltextcontract.Field{{ID: "body", Weight: 1}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extension, err := Lower(ir.ProviderExtensionIR{ID: "index", Provider: ir.SQLite, Kind: fulltextcontract.IndexKind, Version: fulltextcontract.Version, Owner: "document", Payload: payload}, physical.PhysicalTable{
+		ID: "document",
+		Columns: []physical.PhysicalColumn{
+			{ID: "id", Name: "id", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+			{ID: "body", Name: "body", Storage: physical.StorageType{Kind: physical.StorageSQLiteText}},
+		},
+		PrimaryKey: &physical.PhysicalKey{Columns: []ir.FieldID{"id"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor, err := Decode(extension)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if descriptor.Index.Ranking != fulltextcontract.RankingBM25 {
+		t.Fatalf("ranking=%q", descriptor.Index.Ranking)
+	}
+}
+
 func TestProjectOwnerDetectsIndexedAndIdentityColumnChanges(t *testing.T) {
 	sourceID := ir.FieldID("source")
 	generated := &physical.GeneratedExpression{Kind: physical.GeneratedStored, Expression: physical.Expression{Kind: physical.ExpressionColumn, Type: physical.StorageType{Kind: physical.StoragePostgreSQLText}, Nullable: true, Column: &sourceID}}

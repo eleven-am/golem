@@ -23,6 +23,7 @@ import (
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/codegen/manifest"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	providerhandle "github.com/eleven-am/golem/go/internal/provider/handle"
 	"github.com/eleven-am/golem/go/internal/testenv"
 	publicprovider "github.com/eleven-am/golem/go/provider"
@@ -69,6 +70,32 @@ func TestVersionHumanAndJSONGolden(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDoctorSchemaDriftNamesCatalogObject(t *testing.T) {
+	output := newDoctorOutput("sqlite")
+	output.Schema = "drift"
+	output.addObject("GOLEM_DOCTOR_SCHEMA_DRIFT", "error", providerdrift.Object{Type: "trigger", Name: "messages_fts_ad", Table: "messages"})
+	var human bytes.Buffer
+	if err := writeDoctorOutput(&human, output, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{`GOLEM_DOCTOR_SCHEMA_DRIFT error`, `object=trigger`, `name="messages_fts_ad"`, `table="messages"`} {
+		if !strings.Contains(human.String(), fragment) {
+			t.Fatalf("doctor output missing %q:\n%s", fragment, human.String())
+		}
+	}
+	var encoded bytes.Buffer
+	if err := writeDoctorOutput(&encoded, output, true); err != nil {
+		t.Fatal(err)
+	}
+	var decoded doctorOutput
+	if err := json.Unmarshal(encoded.Bytes(), &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Diagnostics) != 1 || decoded.Diagnostics[0] != output.Diagnostics[0] {
+		t.Fatalf("doctor JSON diagnostics=%#v want=%#v", decoded.Diagnostics, output.Diagnostics)
 	}
 }
 
@@ -473,7 +500,20 @@ func exerciseP8DoctorPostgreSQLMatrix(t *testing.T, administrativeDSN string) {
 		t.Fatal(err)
 	}
 	driftBefore := snapshotPostgreSQLDoctorState(t, databaseDSN)
-	assertDoctorState(t, module, "postgresql", databaseDSN, doctorState{capabilities: "pass", history: "current", schema: "drift", generation: "current"})
+	driftOutput := assertDoctorState(t, module, "postgresql", databaseDSN, doctorState{capabilities: "pass", history: "current", schema: "drift", generation: "current"})
+	foundDrift := false
+	for _, diagnostic := range driftOutput.Diagnostics {
+		if diagnostic.Code != "GOLEM_DOCTOR_SCHEMA_DRIFT" {
+			continue
+		}
+		foundDrift = true
+		if diagnostic.ObjectType != "column" || diagnostic.ObjectName != "p8_doctor_drift" || diagnostic.Table != "users" {
+			t.Fatalf("PostgreSQL drift diagnostic=%#v", diagnostic)
+		}
+	}
+	if !foundDrift {
+		t.Fatal("PostgreSQL drift diagnostic is absent")
+	}
 	if driftAfter := snapshotPostgreSQLDoctorState(t, databaseDSN); !reflect.DeepEqual(driftBefore, driftAfter) {
 		t.Fatalf("drift PostgreSQL doctor modified catalog, ledger, or user data:\nbefore=%#v\nafter=%#v", driftBefore, driftAfter)
 	}

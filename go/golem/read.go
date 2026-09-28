@@ -914,6 +914,30 @@ func (option projectionValue[M]) mutationProjection(M) readOptionNode {
 	return cloneReadOption(option.node)
 }
 
+// RuntimeTextSearchReadOptions combines search predicates and converts an
+// optional Select projection to ordinary read options.
+func RuntimeTextSearchReadOptions[M any](predicates []Predicate[M], projections ...Projection[M]) ([]ReadOption[M], error) {
+	var witness M
+	result := make([]ReadOption[M], 0, 2)
+	if len(projections) > 1 {
+		return nil, fmt.Errorf("full-text search accepts at most one projection")
+	}
+	if len(projections) == 1 {
+		if projections[0] == nil {
+			return nil, fmt.Errorf("full-text search projection is nil")
+		}
+		projection := projections[0].mutationProjection(witness)
+		if projection.kind != readOptionSelect {
+			return nil, fmt.Errorf("full-text search supports Select projection only")
+		}
+		result = append(result, readOptionValue[M]{node: projection})
+	}
+	if len(predicates) != 0 {
+		result = append(result, Where(And(predicates...)))
+	}
+	return result, nil
+}
+
 func Where[M any](predicate Predicate[M]) ReadOption[M] {
 	return readOptionValue[M]{node: readOptionNode{kind: readOptionWhere, freezePredicate: predicate.freezeForModel}}
 }

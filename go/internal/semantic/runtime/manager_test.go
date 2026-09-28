@@ -649,6 +649,29 @@ INSERT INTO "posts" (id,title) VALUES ('a','alpha'),('b','beta')`); err != nil {
 	return drainFixture{db: db, manager: manager, embedder: embedder}
 }
 
+func TestSemanticQueryOnObservesUncommittedCandidateWrites(t *testing.T) {
+	fixture := newDrainFixture(t)
+	transaction, err := fixture.db.BeginTxx(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = transaction.Rollback() }()
+	if _, err := transaction.Exec(`DELETE FROM "posts" WHERE "id"='a'`); err != nil {
+		t.Fatal(err)
+	}
+	ranked, err := fixture.manager.QueryOn(context.Background(), transaction, "post", "related", "alpha", textCandidates(`SELECT "id" AS "id" FROM "posts"`), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	betaKey, err := semantickey.Encode([]any{"b"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranked) != 1 || ranked[0].Key != betaKey {
+		t.Fatalf("transaction-bound semantic ranks=%#v want only beta", ranked)
+	}
+}
+
 func (fixture drainFixture) mark(t *testing.T, id string) {
 	t.Helper()
 	key, err := semantickey.Encode([]any{id})

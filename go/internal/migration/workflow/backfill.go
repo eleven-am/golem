@@ -280,8 +280,12 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 		return BackfillAttachResult{}, fmt.Errorf("field %s does not resolve to the pending physical target", request.Field)
 	}
 	entry := pending.Entry
+	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
+	if err != nil {
+		return BackfillAttachResult{}, err
+	}
 	for _, operation := range entry.Operations {
-		if migration.RequiresApproval(operation) {
+		if migration.PlanRequiresApproval(plan, operation) {
 			entry.Approvals = append(entry.Approvals, migration.Approval{OperationID: operation.ID, Risk: operation.Risk, Before: operation.Before, After: operation.After})
 		}
 	}
@@ -292,10 +296,6 @@ func PrepareBackfillAttach(ctx context.Context, request BackfillAttachRequest) (
 		return BackfillAttachResult{}, err
 	}
 	entry.Manual = []migration.ManualCompanion{{OperationID: backfill.ID, File: migration.FileChecksum{Path: companionPath, SHA256: migration.Checksum(request.SQL)}, Postcondition: migration.BackfillPostcondition(modelID, fieldID)}}
-	plan, err := migration.DiffReviewed(entry.BeforeSnapshot, entry.AfterSnapshot)
-	if err != nil {
-		return BackfillAttachResult{}, err
-	}
 	if err := migration.ValidatePlan(plan, entry.Approvals); err != nil {
 		return BackfillAttachResult{}, err
 	}

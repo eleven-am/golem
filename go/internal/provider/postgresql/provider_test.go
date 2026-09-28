@@ -10,6 +10,7 @@ import (
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextpostgresql "github.com/eleven-am/golem/go/internal/fulltext/postgresql"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/testenv"
 )
@@ -184,6 +185,8 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "unexpected index") {
 		t.Fatalf("unexpected shadow index error=%v", err)
+	} else {
+		assertPostgreSQLDriftObject(t, err, providerdrift.Object{Type: "index", Name: "unexpected_fulltext_index", Table: base + "_fts"})
 	}
 	if _, err := database.Exec(`DROP INDEX "golem_fulltext_live"."unexpected_fulltext_index"`); err != nil {
 		t.Fatal(err)
@@ -220,6 +223,8 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "primary key drift") {
 		t.Fatalf("missing shadow primary key error=%v", err)
+	} else {
+		assertPostgreSQLDriftObject(t, err, providerdrift.Object{Type: "primary_key", Name: base + "_fts_pkey", Table: base + "_fts"})
 	}
 	if _, err := database.Exec(`ALTER TABLE "golem_fulltext_live"."` + base + `_fts" ADD PRIMARY KEY ("id")`); err != nil {
 		t.Fatal(err)
@@ -298,6 +303,8 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
 		t.Fatalf("stable trigger function error=%v", err)
+	} else {
+		assertPostgreSQLDriftObject(t, err, providerdrift.Object{Type: "function", Name: function, Table: base + "_fts"})
 	}
 	if _, err := database.Exec(`ALTER FUNCTION "golem_fulltext_live"."` + function + `"() VOLATILE`); err != nil {
 		t.Fatal(err)
@@ -340,6 +347,14 @@ func TestLiveFullTextIndexIsTransactionalAndDriftChecked(t *testing.T) {
 	}
 	if err := provider.Verify(context.Background(), database, schema); err == nil || !strings.Contains(err.Error(), "trigger function drift") {
 		t.Fatalf("drifted trigger function error=%v", err)
+	}
+}
+
+func assertPostgreSQLDriftObject(t *testing.T, err error, want providerdrift.Object) {
+	t.Helper()
+	got, ok := providerdrift.Inspect(err)
+	if !ok || got != want {
+		t.Fatalf("drift object=%#v ok=%t want=%#v err=%v", got, ok, want, err)
 	}
 }
 
