@@ -11,6 +11,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/eleven-am/golem/go/internal/semantic/sqlitevec"
 	"github.com/jmoiron/sqlx"
@@ -259,6 +260,42 @@ func TestFullTextIndexIsTransactionalManagedStorage(t *testing.T) {
 	}
 	assertMatches("winner", 0)
 	assertMatches("reused", 0)
+	for _, testCase := range []struct {
+		name   string
+		mutate []string
+		want   providerdrift.Object
+	}{
+		{name: "extra fts table", mutate: []string{`CREATE VIRTUAL TABLE app_fts USING fts5(x)`}, want: providerdrift.Object{Type: "table", Name: "app_fts", Table: "app_fts"}},
+		{name: "missing fts storage", mutate: []string{`DROP TABLE "` + base + `_fts"`}, want: providerdrift.Object{Type: "table", Name: base + "_fts", Table: base + "_fts"}},
+		{name: "missing key sidecar", mutate: []string{`DROP TABLE "` + base + `_keys"`}, want: providerdrift.Object{Type: "table", Name: base + "_keys", Table: base + "_keys"}},
+		{name: "missing fts shadow table", mutate: []string{`DROP TABLE "` + base + `_fts_config"`}, want: providerdrift.Object{Type: "table", Name: base + "_fts_config", Table: base + "_fts"}},
+		{name: "missing delete trigger", mutate: []string{`DROP TRIGGER "` + base + `_ad"`}, want: providerdrift.Object{Type: "trigger", Name: base + "_ad", Table: "users"}},
+		{name: "altered delete trigger", mutate: []string{`DROP TRIGGER "` + base + `_ad"`, `CREATE TRIGGER "` + base + `_ad" AFTER DELETE ON "users" BEGIN SELECT 1; END`}, want: providerdrift.Object{Type: "trigger", Name: base + "_ad", Table: "users"}},
+	} {
+		t.Run("drift "+testCase.name, func(t *testing.T) {
+			driftDatabase, _, err := provider.Open(context.Background(), filepath.Join(t.TempDir(), "drift.db"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer driftDatabase.Close()
+			if err := provider.ApplyInitial(context.Background(), driftDatabase, schema); err != nil {
+				t.Fatal(err)
+			}
+			for _, statement := range testCase.mutate {
+				if _, err := driftDatabase.Exec(statement); err != nil {
+					t.Fatal(err)
+				}
+			}
+			_, err = provider.Introspect(context.Background(), driftDatabase, schema)
+			if err == nil {
+				t.Fatal("drifted full-text catalog was accepted")
+			}
+			object, ok := providerdrift.Inspect(err)
+			if !ok || object != testCase.want {
+				t.Fatalf("drift object=%#v ok=%t want=%#v err=%v", object, ok, testCase.want, err)
+			}
+		})
+	}
 }
 
 func TestReviewedSemanticSnapshotReplaysLegacyShadowShape(t *testing.T) {

@@ -229,6 +229,75 @@ func TestPolicySQLiteNamedScalarMutationMatrix(t *testing.T) {
 	}
 }
 
+func TestPolicySQLiteEveryScalarOperatorIsNullClosedByConstruction(t *testing.T) {
+	ctx := context.Background()
+	database, _, err := New().Open(ctx, filepath.Join(t.TempDir(), "scalar-null-closure.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	resolver := newSQLitePolicyTestResolver(t)
+	proof, err := New().PolicyCapabilityProof(ctx, database, resolver.fingerprint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, err := ir.StringValue("value")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range operator.Entries() {
+		if entry.NodeKind() != ir.ConditionScalar {
+			continue
+		}
+		t.Run(entry.Name(), func(t *testing.T) {
+			operand := ir.NoOperand()
+			switch {
+			case entry.AcceptsOperand(ir.OperandOne):
+				operand, err = ir.OneOperand(value)
+			case entry.AcceptsOperand(ir.OperandMany):
+				operand, err = ir.ManyOperand([]ir.Value{value})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			requirements, shapeErr := operator.ValidateShape(entry.ID(), operator.Shape{Node: ir.ConditionScalar, FieldType: resolver.textType, Operand: operand, Mode: ir.ComparisonSensitive, Providers: ir.PortableProviders()})
+			if shapeErr != nil {
+				t.Fatal(shapeErr)
+			}
+			condition, conditionErr := ir.NewScalar(resolver.modelID, resolver.nameID, resolver.textType, entry.ID(), ir.ComparisonSensitive, operand, requirements)
+			if conditionErr != nil {
+				t.Fatal(conditionErr)
+			}
+			fragment, compileErr := policysql.Compile(policysql.Request{Condition: condition, Provider: ir.ProviderSQLite, Resolver: resolver, Dialect: NewPolicyDialect(), Capabilities: proof, BoundFingerprint: resolver.fingerprint, RootAlias: "root"})
+			if compileErr != nil {
+				t.Fatal(compileErr)
+			}
+			column := `"root"."name"`
+			sql := fragment.SQL()
+			switch entry.NullSubject() {
+			case operator.NullSubjectNeverMatches:
+				if !strings.Contains(sql, column+" IS NOT NULL") {
+					t.Fatalf("nullable false-on-NULL operator bypassed closure: %s", sql)
+				}
+			case operator.NullSubjectAlwaysMatches:
+				if !strings.Contains(sql, column+" IS NULL OR") {
+					t.Fatalf("nullable true-on-NULL operator bypassed closure: %s", sql)
+				}
+			case operator.NullSubjectMatchesNull:
+				if sql != "("+column+" IS NULL)" {
+					t.Fatalf("nullable presence operator=%s", sql)
+				}
+			case operator.NullSubjectMatchesPresent:
+				if sql != "("+column+" IS NOT NULL)" {
+					t.Fatalf("nullable presence operator=%s", sql)
+				}
+			default:
+				t.Fatalf("scalar operator has unsupported NULL behavior %d", entry.NullSubject())
+			}
+		})
+	}
+}
+
 type legacySQLitePolicyDialect struct{ PolicyDialect }
 
 func (legacySQLitePolicyDialect) RenderScalar(leaf policysql.ScalarLeaf, binder *policysql.Binder) (string, error) {
@@ -567,7 +636,7 @@ type sqlitePolicyTestResolver struct {
 	fingerprint                 [32]byte
 }
 
-func newSQLitePolicyTestResolver(t *testing.T) *sqlitePolicyTestResolver {
+func newSQLitePolicyTestResolver(t testing.TB) *sqlitePolicyTestResolver {
 	t.Helper()
 	text, err := ir.NewTypeRef(ir.ValueString, true, 0, 0, ir.EnumID{}, nil, 0)
 	if err != nil {

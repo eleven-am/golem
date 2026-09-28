@@ -158,7 +158,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 		return result, []ir.Diagnostic{ir.NewError("P1_METHOD_GOLEM_IMPORT", fmt.Sprintf("package %q does not import the declaration package %q", pkg.PkgPath, golemPath), ir.SourceSpan{})}
 	}
 	scope := golemPkg.Types.Scope()
-	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "FullTextIndex", "FullTextField", "TextFolding", "TextPrefix", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
+	for _, name := range []string{"DefineModel", "OptimisticConcurrency", "PrimaryKey", "Unique", "Index", "SemanticIndex", "FullTextIndex", "FullTextField", "TextFolding", "TextPrefix", "TextRanking", "IndexColumn", "IndexExpr", "Check", "Generated", "RelationOptions", "ForProvider", "SchemaValueOf", "Lower", "Upper", "Length", "Coalesce", "Cast", "GraphQL", "GraphQLOperations", "GraphQLPlural", "GraphQLRoots", "GraphQLPageSizes", "GraphQLHidden", "GraphQLHookOwned", "Subscriptions", "Analytics", "AnalyticsDimensions", "AnalyticsMeasures", "AnalyticsRelationDimensions", "NamedRelationDimension", "DimensionField", "Via", "AnalyticsLimits", "ScopedReads", "ComputedField", "BatchedComputedField", "BatchedComputedFieldWithCacheKey", "Requires", "Query", "Mutation", "GraphQLBoolean", "GraphQLInt", "GraphQLFloat", "GraphQLString", "GraphQLBigInt", "GraphQLDecimal", "GraphQLUUID", "GraphQLDate", "GraphQLTime", "GraphQLDateTime", "GraphQLBytes", "GraphQLJSON", "GraphQLObject", "GraphQLEnum", "GraphQLList"} {
 		if fn, ok := scope.Lookup(name).(*types.Func); ok {
 			result.functions[fn] = name
 		}
@@ -190,7 +190,7 @@ func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.
 			}
 		}
 	}
-	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString", "FoldDiacritics", "FoldNone", "GraphQLFindOne", "GraphQLFindMany", "GraphQLCreate", "GraphQLUpdate", "GraphQLUpsert", "GraphQLDelete", "GraphQLUpdateMany", "GraphQLDeleteMany", "GraphQLAggregate", "GraphQLGroupBy", "GraphQLRelationGroupBy"} {
+	for _, name := range []string{"SQLite", "PostgreSQL", "Stored", "Virtual", "NoAction", "Restrict", "Cascade", "SetNull", "SetDefault", "Int16ToInt32", "Int16ToInt64", "Int32ToInt64", "Int64ToString", "FoldDiacritics", "FoldNone", "RankBM25", "GraphQLFindOne", "GraphQLFindMany", "GraphQLCreate", "GraphQLUpdate", "GraphQLUpsert", "GraphQLDelete", "GraphQLUpdateMany", "GraphQLDeleteMany", "GraphQLAggregate", "GraphQLGroupBy", "GraphQLRelationGroupBy"} {
 		if object := scope.Lookup(name); object != nil {
 			result.constants[object] = name
 		}

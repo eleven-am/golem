@@ -280,6 +280,19 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if manager == nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
 	}
+	return manager.QueryOn(ctx, manager.database, model, name, query, candidates, take)
+}
+
+// QueryOn executes semantic ranking through the supplied queryer. Transaction
+// clients use this seam so candidate authorization and vector ranking observe
+// the same database snapshot as their ordinary reads and writes.
+func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name, query string, candidates Candidates, take int) (result []Rank, resultErr error) {
+	if manager == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
+	}
+	if queryer == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query executor is not configured")
+	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
@@ -314,7 +327,7 @@ func (manager *Manager) Query(ctx context.Context, model ir.ModelID, name, query
 	if err != nil {
 		return nil, embedding.Failf(embedding.CodeProvider, err, "provider vector of %d dimensions could not be encoded for storage", vectors[0].Dimensions())
 	}
-	ranks, err := manager.rankVector(ctx, selected, vector, candidates, "", take)
+	ranks, err := manager.rankVectorOn(ctx, queryer, selected, vector, candidates, "", take)
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +364,17 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 	if manager == nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
 	}
+	return manager.QueryByKeyOn(ctx, manager.database, model, name, sourceKey, source, candidates, take)
+}
+
+// QueryByKeyOn executes similarity ranking through the supplied queryer.
+func (manager *Manager) QueryByKeyOn(ctx context.Context, queryer sqlx.QueryerContext, model ir.ModelID, name, sourceKey string, source, candidates Candidates, take int) (result []Rank, resultErr error) {
+	if manager == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic manager is not configured")
+	}
+	if queryer == nil {
+		return nil, embedding.Failf(embedding.CodeInvalidInput, nil, "semantic query executor is not configured")
+	}
 	invalidContext := ctx == nil
 	ctx, rankSpan := observeexec.Begin(ctx, manager.observer, golem.Provider(manager.provider), semanticObservationModel(model), observe.KindSemantic, observe.OperationSemanticRank, observe.PhaseFinish)
 	defer func() { finishSemanticObservation(rankSpan, resultErr) }()
@@ -376,11 +400,11 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 	if err := validateCandidates(selected, source); err != nil {
 		return nil, err
 	}
-	vector, err := manager.sourceVector(ctx, selected, sourceKey, source)
+	vector, err := manager.sourceVectorOn(ctx, queryer, selected, sourceKey, source)
 	if err != nil {
 		return nil, err
 	}
-	ranks, err := manager.rankVector(ctx, selected, vector, candidates, sourceKey, take)
+	ranks, err := manager.rankVectorOn(ctx, queryer, selected, vector, candidates, sourceKey, take)
 	if err != nil {
 		return nil, err
 	}
@@ -389,6 +413,20 @@ func (manager *Manager) QueryByKey(ctx context.Context, model ir.ModelID, name, 
 }
 
 func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey string, source Candidates) (any, error) {
+	return manager.sourceVectorOn(ctx, manager.database, index, sourceKey, source)
+}
+
+type statementObservingQueryer interface {
+	GolemRecordsStatements()
+}
+
+func recordQueryerStatement(ctx context.Context, queryer sqlx.QueryerContext) {
+	if _, alreadyObserved := queryer.(statementObservingQueryer); !alreadyObserved {
+		observeexec.RecordStatement(ctx)
+	}
+}
+
+func (manager *Manager) sourceVectorOn(ctx context.Context, queryer sqlx.QueryerContext, index Index, sourceKey string, source Candidates) (any, error) {
 	vectorProjection := "golem_sv.embedding"
 	if manager.provider == ir.PostgreSQL {
 		vectorProjection = "golem_sv.embedding::text"
@@ -413,14 +451,14 @@ func (manager *Manager) sourceVector(ctx context.Context, index Index, sourceKey
 	arguments := make([]any, 0, len(source.Args)+2)
 	arguments = append(arguments, sourceKey, fingerprint)
 	arguments = append(arguments, source.Args...)
-	observeexec.RecordStatement(ctx)
+	recordQueryerStatement(ctx, queryer)
 	if manager.provider == ir.SQLite {
 		var encoded []byte
-		err := manager.database.GetContext(ctx, &encoded, statement, arguments...)
+		err := sqlx.GetContext(ctx, queryer, &encoded, statement, arguments...)
 		return classifySourceVector(encoded, err)
 	}
 	var text string
-	err := manager.database.GetContext(ctx, &text, statement, arguments...)
+	err := sqlx.GetContext(ctx, queryer, &text, statement, arguments...)
 	return classifySourceVector(text, err)
 }
 
@@ -441,6 +479,10 @@ func classifySourceVector[Vector ~string | ~[]byte](vector Vector, err error) (a
 }
 
 func (manager *Manager) rankVector(ctx context.Context, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+	return manager.rankVectorOn(ctx, manager.database, index, vector, candidates, exclude, take)
+}
+
+func (manager *Manager) rankVectorOn(ctx context.Context, queryer sqlx.QueryerContext, index Index, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
 	statement := manager.exactSQLiteRankStatement(index, candidates, exclude != "")
 	if manager.provider == ir.PostgreSQL {
 		statement = manager.exactPostgreSQLRankStatement(index, candidates, exclude != "")
@@ -448,10 +490,10 @@ func (manager *Manager) rankVector(ctx context.Context, index Index, vector any,
 	if err := readsql.ValidateStatementComplexity(candidates.Model, statement, candidates.MaxStatementBytes, candidates.MaxStatementAliases); err != nil {
 		return nil, embedding.Failf(embedding.CodeInvalidInput, err, "semantic ranking statement exceeds configured complexity")
 	}
-	return manager.rankExact(ctx, index, statement, vector, candidates, exclude, take)
+	return manager.rankExactOn(ctx, queryer, index, statement, vector, candidates, exclude, take)
 }
 
-func (manager *Manager) rankExact(ctx context.Context, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
+func (manager *Manager) rankExactOn(ctx context.Context, queryer sqlx.QueryerContext, index Index, statement string, vector any, candidates Candidates, exclude string, take int) ([]Rank, error) {
 	arguments := make([]any, 0, len(candidates.Args)+4)
 	arguments = append(arguments, vector)
 	arguments = append(arguments, candidates.Args...)
@@ -460,12 +502,12 @@ func (manager *Manager) rankExact(ctx context.Context, index Index, statement st
 		arguments = append(arguments, exclude)
 	}
 	arguments = append(arguments, take)
-	return manager.queryRanks(ctx, statement, arguments, take, candidates)
+	return manager.queryRanksOn(ctx, queryer, statement, arguments, take, candidates)
 }
 
-func (manager *Manager) queryRanks(ctx context.Context, statement string, arguments []any, take int, candidates Candidates) ([]Rank, error) {
-	observeexec.RecordStatement(ctx)
-	rows, err := manager.database.QueryxContext(ctx, statement, arguments...)
+func (manager *Manager) queryRanksOn(ctx context.Context, queryer sqlx.QueryerContext, statement string, arguments []any, take int, candidates Candidates) ([]Rank, error) {
+	recordQueryerStatement(ctx, queryer)
+	rows, err := queryer.QueryxContext(ctx, statement, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("P9_SEMANTIC_QUERY: ranking failed")
 	}

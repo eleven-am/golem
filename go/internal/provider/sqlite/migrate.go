@@ -1093,6 +1093,9 @@ func (provider *Provider) applyMigration(ctx context.Context, database *sqlx.DB,
 	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("sqlite migration final verification: %w", err)
 	}
+	if err := analyzeSQLitePlanner(ctx, transaction); err != nil {
+		return err
+	}
 
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writeTerminalLedger(ctx, transaction, manifest, len(ledger), entry); err != nil {
@@ -1203,6 +1206,9 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	if err := physical.CompareFingerprints(entry.AfterSnapshot, actualAfter); err != nil {
 		return fmt.Errorf("sqlite initial migration final verification: %w", err)
 	}
+	if err := analyzeSQLitePlanner(ctx, transaction); err != nil {
+		return err
+	}
 	migrationfailpoint.Reach(ctx, "inside_transaction_before_ledger")
 	if err := writeTerminalLedger(ctx, transaction, manifest, 0, entry); err != nil {
 		return err
@@ -1215,6 +1221,15 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 		return fmt.Errorf("sqlite initial migration commit: %w", err)
 	}
 	migrationfailpoint.Reach(ctx, "after_phase_commit")
+	return nil
+}
+
+func analyzeSQLitePlanner(ctx context.Context, transaction interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	if _, err := transaction.ExecContext(ctx, "ANALYZE"); err != nil {
+		return fmt.Errorf("sqlite migration planner analysis: %w", err)
+	}
 	return nil
 }
 

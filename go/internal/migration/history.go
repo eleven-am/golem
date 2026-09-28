@@ -387,14 +387,16 @@ func validateEntrySemantics(entry ManifestEntry) error {
 			return err
 		}
 		operation, exists := operations[approval.OperationID]
-		if !exists || approvals[approval.OperationID] || !RequiresApproval(operation) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
+		required := RequiresApproval(operation) && !isDerivedExtensionDrop(operation, entry.BeforeSnapshot)
+		legacy := !required && operation.Risk == RiskDataLoss && approval.Risk == operation.Risk && approval.Before == operation.Before && approval.After == operation.After
+		if !exists || approvals[approval.OperationID] || (!required && !legacy) || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After {
 			return fmt.Errorf("approval for %s is not exact and object-scoped", approval.OperationID)
 		}
 		approvals[approval.OperationID] = true
 	}
 	for operationID, operation := range operations {
-		required := RequiresApproval(operation)
-		if approvals[operationID] != required {
+		required := RequiresApproval(operation) && !isDerivedExtensionDrop(operation, entry.BeforeSnapshot)
+		if approvals[operationID] != required && !(approvals[operationID] && isDerivedExtensionDrop(operation, entry.BeforeSnapshot)) {
 			return fmt.Errorf("operation %s approval inventory is inconsistent with risk %s", operationID, operation.Risk)
 		}
 	}

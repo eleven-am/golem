@@ -116,6 +116,14 @@ const (
 	FoldNone TextFoldingMode = "none"
 )
 
+// TextRankingMode selects how a full-text index ranks matching rows.
+type TextRankingMode string
+
+const (
+	// RankBM25 selects the provider's opt-in statistical relevance ranking.
+	RankBM25 TextRankingMode = "bm25"
+)
+
 // FullTextOption configures one full-text index.
 type FullTextOption interface{ fullTextOption() }
 type fullTextOption struct{}
@@ -138,6 +146,11 @@ func FullTextField[M any](_ Column[M], _ float64) FullTextFieldOption[M] {
 
 // TextFolding selects the index's portable normalization mode.
 func TextFolding(_ TextFoldingMode) FullTextOption {
+	return fullTextOption{}
+}
+
+// TextRanking selects the index's ranking algorithm.
+func TextRanking(_ TextRankingMode) FullTextOption {
 	return fullTextOption{}
 }
 

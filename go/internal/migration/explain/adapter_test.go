@@ -179,6 +179,9 @@ func TestMigrationExplainProspectiveAdapterPreservesProviderExtensionRecreationR
 			if operation.Effect() != EffectValueRewritten {
 				t.Fatalf("provider-extension recreation %s effect=%s", operation.Kind(), operation.Effect())
 			}
+			if operation.Kind() == migration.DropProviderExtension && (operation.Risk() != migration.RiskSafe || operation.ApprovalRequired()) {
+				t.Fatalf("derived drop explanation risk=%s approvalRequired=%t", operation.Risk(), operation.ApprovalRequired())
+			}
 		}
 	}
 	if !seen[migration.DropProviderExtension] || !seen[migration.CreateProviderExtension] {

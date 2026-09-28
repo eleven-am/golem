@@ -2647,6 +2647,7 @@ golem.Provider type string
 golem.ProviderSchemaDocument type struct
 golem.Providers func(*Schema, ...Provider)
 golem.Query func[Resolver any](*GraphQLSchema, string, Resolver)
+golem.RankBM25 const TextRankingMode = "bm25"
 golem.ReadCount const ReadOperation = 4
 golem.ReadFindFirst const ReadOperation = 2
 golem.ReadFindMany const ReadOperation = 3
@@ -2984,6 +2985,7 @@ golem.RuntimeSemanticRow type struct
 golem.RuntimeSemanticRowFromResult func[M any](SemanticResult[M]) (RuntimeModelRow, error)
 golem.RuntimeSemanticRowIdentity func(RuntimeSemanticRow) (RuntimeSemanticIdentityToken, []FieldID)
 golem.RuntimeSemanticTransport func(RuntimeModelRow) (RuntimeSemanticRow, bool)
+golem.RuntimeTextSearchReadOptions func[M any]([]Predicate[M], ...Projection[M]) ([]ReadOption[M], error)
 golem.RuntimeToManyOccurrenceCell func(FieldID, RuntimeOccurrenceID, []RuntimeModelRow) RuntimeOccurrenceCell
 golem.RuntimeToManyReadCell func(FieldID, []RuntimeModelRow) RuntimeReadCell
 golem.RuntimeToOneOccurrenceCell func(FieldID, RuntimeOccurrenceID, RuntimeModelRow) RuntimeOccurrenceCell
@@ -3162,6 +3164,9 @@ golem.TextMeasureContains func[M any, V ~string](Measure[M, V], V, ComparisonMod
 golem.TextMeasureEndsWith func[M any, V ~string](Measure[M, V], V, ComparisonMode) GroupPredicate[M]
 golem.TextMeasureStartsWith func[M any, V ~string](Measure[M, V], V, ComparisonMode) GroupPredicate[M]
 golem.TextPrefix func(...uint8) FullTextOption
+golem.TextRanking func(TextRankingMode) FullTextOption
+golem.TextRankingMode comparable
+golem.TextRankingMode type string
 golem.Time comparable
 golem.Time type struct
 golem.ToMany[M any, R any] type struct
@@ -4197,6 +4202,7 @@ runtime.CallerScoped func[P any, A any, M any](context.Context, *Caller[P, A], g
 runtime.CallerSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerSimilar func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerTextSearch func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
+runtime.CallerTextSearchSelect func[P any, A any, M any](context.Context, *Caller[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.CallerTransaction func[P any, A any](context.Context, *Caller[P, A], func(*CallerTx[P, A]) error) error
 runtime.CallerTx comparable
 runtime.CallerTxAggregate func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
@@ -4212,7 +4218,11 @@ runtime.CallerTxFindUnique func[P any, A any, M any](context.Context, *CallerTx[
 runtime.CallerTxGroupBy func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
 runtime.CallerTxRelationGroupBy func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.CallerTxScoped func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
+runtime.CallerTxSearch func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
+runtime.CallerTxSimilar func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.CallerTxSystem func[P any, A any](*CallerTx[P, A]) *SystemTx[P, A]
+runtime.CallerTxTextSearch func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
+runtime.CallerTxTextSearchSelect func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.CallerTxUpdate func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.CallerTxUpdateMany func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.Predicate[M], golem.UpdateManyInput[M]) (int64, error)
 runtime.CallerTxUpdateVersioned func[P any, A any, M any](context.Context, *CallerTx[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.ExistingVersion, golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
@@ -4311,6 +4321,7 @@ runtime.SystemScoped func[P any, A any, M any](context.Context, System[P, A], go
 runtime.SystemSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.SystemSimilar func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
 runtime.SystemTextSearch func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
+runtime.SystemTextSearchSelect func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.SystemTransaction func[P any, A any](context.Context, System[P, A], func(*SystemTx[P, A]) error) error
 runtime.SystemTx comparable
 runtime.SystemTxAggregate func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)
@@ -4326,6 +4337,10 @@ runtime.SystemTxFindUnique func[P any, A any, M any](context.Context, *SystemTx[
 runtime.SystemTxGroupBy func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.GroupRequest[M]) ([]golem.GroupRow[M], error)
 runtime.SystemTxRelationGroupBy func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error)
 runtime.SystemTxScoped func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.ScopedQuery[M]) ([]golem.ScopedRow, error)
+runtime.SystemTxSearch func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
+runtime.SystemTxSimilar func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], string, golem.UniqueSelectorValue[M], int, ...golem.Predicate[M]) ([]golem.SemanticResult[M], error)
+runtime.SystemTxTextSearch func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], string, string, int, ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
+runtime.SystemTxTextSearchSelect func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], string, string, int, golem.Projection[M], ...golem.Predicate[M]) ([]golem.FullTextResult[M], error)
 runtime.SystemTxUpdate func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)
 runtime.SystemTxUpdateMany func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.Predicate[M], golem.UpdateManyInput[M]) (int64, error)
 runtime.SystemTxUpdateVersioned func[P any, A any, M any](context.Context, *SystemTx[P, A], golem.ModelDescriptor[M], golem.MutationTarget[M], golem.ExistingVersion, golem.UpdateInput[M], ...golem.Projection[M]) (golem.Row[M], error)

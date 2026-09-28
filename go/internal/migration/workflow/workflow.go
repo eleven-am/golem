@@ -167,7 +167,7 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		var risks []migration.OperationRisk
 		for _, operation := range plan.Operations {
 			risks = append(risks, migration.OperationRisk{OperationID: operation.ID, Risk: operation.Risk})
-			if migration.RequiresApproval(operation) {
+			if migration.PlanRequiresApproval(plan, operation) {
 				if pendingRequiredColumn && operation.ObjectID == backfills[0].ObjectID {
 					continue
 				}

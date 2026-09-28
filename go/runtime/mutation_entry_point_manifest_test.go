@@ -404,14 +404,14 @@ func nonMutationRuntimeEntryPoints() map[string]struct{} {
 		"CallerExplainAggregate", "CallerExplainCount", "CallerExplainFindFirst", "CallerExplainFindMany",
 		"CallerExplainFindUnique", "CallerExplainGroupBy", "CallerExplainRelationGroupBy", "CallerExplainScoped",
 		"CallerFindFirst", "CallerFindMany", "CallerFindUnique", "CallerFrozenEvents", "CallerFrozenReadEvents",
-		"CallerGroupBy", "CallerMutationModel", "CallerRelationGroupBy", "CallerScoped", "CallerSearch", "CallerTextSearch",
-		"CallerSimilar", "CallerTransaction", "CallerTxAggregate", "CallerTxCount", "CallerTxEnqueue",
+		"CallerGroupBy", "CallerMutationModel", "CallerRelationGroupBy", "CallerScoped", "CallerSearch", "CallerTextSearch", "CallerTextSearchSelect",
+		"CallerSimilar", "CallerTransaction", "CallerTxAggregate", "CallerTxCount", "CallerTxEnqueue", "CallerTxSearch", "CallerTxSimilar",
 		"CallerTxFindFirst", "CallerTxFindMany", "CallerTxFindUnique", "CallerTxGroupBy",
-		"CallerTxRelationGroupBy", "CallerTxScoped", "CallerTxSystem",
+		"CallerTxRelationGroupBy", "CallerTxScoped", "CallerTxSystem", "CallerTxTextSearch", "CallerTxTextSearchSelect",
 		"SystemAggregate", "SystemCount", "SystemFindFirst", "SystemFindMany", "SystemFindUnique",
-		"SystemGroupBy", "SystemRelationGroupBy", "SystemScoped", "SystemSearch", "SystemSimilar", "SystemTextSearch",
+		"SystemGroupBy", "SystemRelationGroupBy", "SystemScoped", "SystemSearch", "SystemSimilar", "SystemTextSearch", "SystemTextSearchSelect",
 		"SystemTransaction", "SystemTxAggregate", "SystemTxCount", "SystemTxEnqueue", "SystemTxFindFirst",
-		"SystemTxFindMany", "SystemTxFindUnique", "SystemTxGroupBy", "SystemTxRelationGroupBy", "SystemTxScoped",
+		"SystemTxFindMany", "SystemTxFindUnique", "SystemTxGroupBy", "SystemTxRelationGroupBy", "SystemTxScoped", "SystemTxSearch", "SystemTxSimilar", "SystemTxTextSearch", "SystemTxTextSearchSelect",
 	}
 	result := make(map[string]struct{}, len(names))
 	for _, name := range names {

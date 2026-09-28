@@ -324,6 +324,35 @@ func TestFreezeFindManyOwnsNestedTypedReadShape(t *testing.T) {
 	}
 }
 
+func TestTextSearchOptionsCombinePredicatesAndPreserveSelect(t *testing.T) {
+	options, err := RuntimeTextSearchReadOptions(
+		[]Predicate[readPost]{readPosts.Title.Contains("go"), readPosts.ID.Eq(UUID{})},
+		Select[readPost](readPosts.ID),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := FreezeFindMany(readPostDescriptor, options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	where, present := request.Where()
+	root := where.View().Root()
+	if !present || root.Kind() != FrozenConditionLogical || root.Operator() != FrozenOperatorAnd || len(root.Children()) != 2 {
+		t.Fatalf("combined where=%#v present=%t", where, present)
+	}
+	selection := request.Selection()
+	if len(selection) != 1 || selection[0].FieldID() != readPosts.ID.fieldIdentity() {
+		t.Fatalf("selection=%#v", selection)
+	}
+	if _, err := RuntimeTextSearchReadOptions(nil, Select[readPost](readPosts.ID), Select[readPost](readPosts.Title)); err == nil {
+		t.Fatal("duplicate text-search projection accepted")
+	}
+	if _, err := RuntimeTextSearchReadOptions(nil, Omit[readPost](readPosts.Title)); err == nil {
+		t.Fatal("unsupported text-search projection accepted")
+	}
+}
+
 func TestFreezeRelationCountOwnsWhereOnlyChildAndCanCoexistWithRows(t *testing.T) {
 	request, err := FreezeFindMany(readPostDescriptor, Select[readPost](
 		readPosts.Comments.Select(readComments.ID),

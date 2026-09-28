@@ -11,6 +11,7 @@ import (
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
+	providerdrift "github.com/eleven-am/golem/go/internal/provider/drift"
 	semanticstorage "github.com/eleven-am/golem/go/internal/semantic/storage"
 	"github.com/jmoiron/sqlx"
 )
@@ -77,6 +78,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	}
 	expectedObjects := make(map[string]string)
 	expectedTokenObjects := make(map[string]string)
+	expectedObjectTables := make(map[string]string)
 	for _, object := range normalized.System.Objects {
 		statement, renderErr := renderSystemObject(object)
 		if renderErr != nil {
@@ -137,10 +139,20 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 				expectedTokenObjects["trigger\x00"+string(names.insert)] = statements[2]
 				expectedTokenObjects["trigger\x00"+string(names.update)] = statements[3]
 				expectedTokenObjects["trigger\x00"+string(names.delete)] = statements[4]
+				expectedObjectTables["table\x00"+string(names.keys)] = string(names.keys)
+				expectedObjectTables["table\x00"+string(names.index)] = string(names.index)
+				expectedObjectTables["trigger\x00"+string(names.insert)] = string(owner.Name)
+				expectedObjectTables["trigger\x00"+string(names.update)] = string(owner.Name)
+				expectedObjectTables["trigger\x00"+string(names.delete)] = string(owner.Name)
+				indexKey := "table\x00" + string(names.index)
+				if _, exists := actual[indexKey]; !exists {
+					return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: string(names.index), Table: string(names.index)}, "sqlite introspect drift: missing full-text table %s", names.index)
+				}
 				for _, suffix := range []string{"_config", "_data", "_docsize", "_idx"} {
 					key := "table\x00" + string(names.index) + suffix
 					if _, exists := actual[key]; !exists {
-						return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: full-text shadow table %s%s", names.index, suffix)
+						name := string(names.index) + suffix
+						return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "table", Name: name, Table: string(names.index)}, "sqlite introspect drift: full-text shadow table %s", name)
 					}
 					delete(actual, key)
 				}
@@ -187,12 +199,20 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 		delete(actual, unmanaged.Kind+"\x00"+string(unmanaged.Name))
 	}
 	if len(actual) != len(expectedObjects)+len(expectedTokenObjects) {
+		if object, exists := firstUnexpectedSchemaObject(actual, expectedObjects, expectedTokenObjects); exists {
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: object.Type, Name: object.Name, Table: object.Table}, "sqlite introspect drift: unexpected %s %s on %s", object.Type, object.Name, object.Table)
+		}
+		if key, exists := firstMissingSchemaObject(actual, expectedObjects, expectedTokenObjects); exists {
+			kind, name := splitSchemaObjectKey(key)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: kind, Name: name, Table: expectedObjectTables[key]}, "sqlite introspect drift: missing %s", key)
+		}
 		return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: object count got=%d want=%d objects=%v", len(actual), len(expectedObjects)+len(expectedTokenObjects), sortedSchemaObjectKeys(actual))
 	}
 	for key, expectedSQL := range expectedTokenObjects {
 		row, exists := actual[key]
 		if !exists {
-			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: missing %s", key)
+			kind, name := splitSchemaObjectKey(key)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: kind, Name: name, Table: expectedObjectTables[key]}, "sqlite introspect drift: missing %s", key)
 		}
 		expectedTokens, lexErr := lexDDL(expectedSQL)
 		if lexErr != nil {
@@ -203,13 +223,14 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect parse %s: %w", key, lexErr)
 		}
 		if !reflect.DeepEqual(expectedTokens, actualTokens) {
-			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: full-text definition changed for %s", key)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: row.Type, Name: row.Name, Table: row.Table}, "sqlite introspect drift: full-text definition changed for %s", key)
 		}
 	}
 	for key, expectedSQL := range expectedObjects {
 		row, exists := actual[key]
 		if !exists {
-			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: missing %s", key)
+			kind, name := splitSchemaObjectKey(key)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: kind, Name: name, Table: expectedObjectTables[key]}, "sqlite introspect drift: missing %s", key)
 		}
 		expectedAST, parseErr := parseDDL(expectedSQL)
 		if parseErr != nil {
@@ -220,7 +241,7 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect parse %s: %w", key, parseErr)
 		}
 		if !reflect.DeepEqual(expectedAST, actualAST) {
-			return physical.PhysicalSchema{}, fmt.Errorf("sqlite introspect drift: semantic definition changed for %s", key)
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: row.Type, Name: row.Name, Table: row.Table}, "sqlite introspect drift: semantic definition changed for %s", key)
 		}
 	}
 	for _, table := range normalized.Tables {
@@ -237,6 +258,46 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 	// Stable IDs and registered expression identities are reattached only after
 	// every catalog fact and parsed semantic definition has matched.
 	return normalized, nil
+}
+
+func firstUnexpectedSchemaObject(actual map[string]schemaRow, expected ...map[string]string) (schemaRow, bool) {
+	keys := sortedSchemaObjectKeys(actual)
+	for _, key := range keys {
+		known := false
+		for _, objects := range expected {
+			if _, known = objects[key]; known {
+				break
+			}
+		}
+		if !known {
+			return actual[key], true
+		}
+	}
+	return schemaRow{}, false
+}
+
+func firstMissingSchemaObject(actual map[string]schemaRow, expected ...map[string]string) (string, bool) {
+	var keys []string
+	for _, objects := range expected {
+		for key := range objects {
+			if _, exists := actual[key]; !exists {
+				keys = append(keys, key)
+			}
+		}
+	}
+	if len(keys) == 0 {
+		return "", false
+	}
+	sort.Strings(keys)
+	return keys[0], true
+}
+
+func splitSchemaObjectKey(key string) (string, string) {
+	parts := strings.SplitN(key, "\x00", 2)
+	if len(parts) != 2 {
+		return "object", key
+	}
+	return parts[0], parts[1]
 }
 
 func sortedSchemaObjectKeys(objects map[string]schemaRow) []string {

@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	"github.com/eleven-am/golem/go/internal/physical"
 )
 
 func Order(plan Plan) ([]Operation, error) {
@@ -245,11 +246,11 @@ func ValidatePlan(plan Plan, approvals []Approval) error {
 	}
 	for _, operation := range plan.Operations {
 		approval, exists := approved[operation.ID]
-		required := RequiresApproval(operation)
+		required := PlanRequiresApproval(plan, operation)
 		if required && (!exists || approval.Risk != operation.Risk || approval.Before != operation.Before || approval.After != operation.After) {
 			return fmt.Errorf("operation %s requires exact object-scoped approval", operation.ID)
 		}
-		if exists && !required {
+		if exists && !required && !acceptsLegacyApproval(plan, operation, approval) {
 			return fmt.Errorf("operation %s does not accept destructive approval", operation.ID)
 		}
 		delete(approved, operation.ID)
@@ -264,18 +265,66 @@ func ValidatePlan(plan Plan, approvals []Approval) error {
 // only together with an exact object-scoped approval binding its ID, risk, and
 // before/after content digests.
 //
-// Data-loss and manual risk always require one. AlterColumnType and
-// BackfillColumn additionally require one at every risk classification: the
-// approval digest pair is the only artifact binding a human review to the
-// exact typed before/after metadata of a type change, or to the exact target
-// of a reviewed backfill, so a value-preserving widening or a reviewed
-// backfill must never become an unreviewed automatic operation.
+// Data-loss and manual risk require one. AlterColumnType and BackfillColumn
+// additionally require one at every risk classification: the approval digest
+// pair is the only artifact binding a human review to the exact typed
+// before/after metadata of a type change, or to the exact target of a reviewed
+// backfill, so a value-preserving widening or a reviewed backfill must never
+// become an unreviewed automatic operation. Callers with a complete Plan use
+// PlanRequiresApproval so recognized derived-storage removal can be classified
+// from its typed before snapshot.
 func RequiresApproval(operation Operation) bool {
 	switch operation.Kind {
 	case AlterColumnType, BackfillColumn, InitializeConcurrencyColumn:
 		return true
 	}
 	return operation.Risk == RiskDataLoss || operation.Risk == RiskManual
+}
+
+// PlanRequiresApproval applies approval policy using the plan's typed snapshots.
+func PlanRequiresApproval(plan Plan, operation Operation) bool {
+	if plan.snapshotFacts != nil && isDerivedExtensionDrop(operation, plan.snapshotFacts.before) {
+		return false
+	}
+	return RequiresApproval(operation)
+}
+
+// PlanOperationRisk returns the effective user-facing risk for one operation.
+func PlanOperationRisk(plan Plan, operation Operation) Risk {
+	if plan.snapshotFacts != nil && isDerivedExtensionDrop(operation, plan.snapshotFacts.before) {
+		return RiskSafe
+	}
+	return operation.Risk
+}
+
+func isDerivedExtensionDrop(operation Operation, before physical.PhysicalSchema) bool {
+	if operation.Kind != DropProviderExtension {
+		return false
+	}
+	for _, extension := range before.Extensions {
+		if string(extension.ID) != operation.ObjectID {
+			continue
+		}
+		return isHistoricalDerivedExtension(extension.Kind, extension.Version)
+	}
+	return false
+}
+
+func isHistoricalDerivedExtension(kind string, version uint16) bool {
+	switch kind {
+	case "golem.semantic-index", "golem.fulltext-index":
+		return version == 1
+	default:
+		return false
+	}
+}
+
+func acceptsLegacyApproval(plan Plan, operation Operation, approval Approval) bool {
+	return !PlanRequiresApproval(plan, operation) &&
+		operation.Risk == RiskDataLoss &&
+		approval.Risk == operation.Risk &&
+		approval.Before == operation.Before &&
+		approval.After == operation.After
 }
 
 func validateOperationDigests(operation Operation) error {

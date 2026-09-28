@@ -289,7 +289,9 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		for _, index := range fulltext[model.ID] {
-			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, fullTextSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			method := fullTextSearchMethodName(index.Name)
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client Caller%sClient[P]) %sSelect(ctx %s.Context, query string, take int, projection %s.Projection[%s], where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTextSearchSelect(ctx, client.runtime, %s, %q, query, take, projection, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		if contract.Subscriptions {
 			eventType := model.Go.Name + "Event"
@@ -313,7 +315,9 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		for _, index := range fulltext[model.ID] {
-			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, fullTextSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			method := fullTextSearchMethodName(index.Name)
+			fmt.Fprintf(source, "func (client System%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client System%sClient[P]) %sSelect(ctx %s.Context, query string, take int, projection %s.Projection[%s], where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTextSearchSelect(ctx, client.runtime, %s, %q, query, take, projection, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
 		}
 		emitAnalyticsClientMethods(source, "System", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
@@ -325,6 +329,15 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.CallerTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.CallerTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client CallerTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.CallerTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		for _, index := range semantic[model.ID] {
+			fmt.Fprintf(source, "func (client CallerTx%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerTxSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client CallerTx%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.CallerTxSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
+		for _, index := range fulltext[model.ID] {
+			method := fullTextSearchMethodName(index.Name)
+			fmt.Fprintf(source, "func (client CallerTx%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTxTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client CallerTx%sClient[P]) %sSelect(ctx %s.Context, query string, take int, projection %s.Projection[%s], where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.CallerTxTextSearchSelect(ctx, client.runtime, %s, %q, query, take, projection, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
 		emitAnalyticsClientMethods(source, "CallerTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
 			emitScopedClientMethod(source, "CallerTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
@@ -335,6 +348,15 @@ func emitRuntimeSurface(source *bytes.Buffer, actorType, contextAlias, fmtAlias,
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindFirst(ctx %s.Context, options ...%s.ReadOption[%s]) (%s.Row[%s], bool, error) { return %s.SystemTxFindFirst(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) FindUnique(ctx %s.Context, selector %s.UniqueSelectorValue[%s], options ...%s.ReadOption[%s]) (%s.Row[%s], error) { return %s.SystemTxFindUnique(ctx, client.runtime, %s, selector, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor)
 		fmt.Fprintf(source, "func (client SystemTx%sClient[P]) Count(ctx %s.Context, options ...%s.ReadOption[%s]) (int64, error) { return %s.SystemTxCount(ctx, client.runtime, %s, options...) }\n", model.Go.Name, contextAlias, golemAlias, modelType, runtimeAlias, descriptor)
+		for _, index := range semantic[model.ID] {
+			fmt.Fprintf(source, "func (client SystemTx%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemTxSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, semanticSearchMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client SystemTx%sClient[P]) %s(ctx %s.Context, source %s.UniqueSelectorValue[%s], take int, where ...%s.Predicate[%s]) ([]%s.SemanticResult[%s], error) { return %s.SystemTxSimilar(ctx, client.runtime, %s, %q, source, take, where...) }\n", model.Go.Name, semanticSimilarMethodName(index.Name), contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
+		for _, index := range fulltext[model.ID] {
+			method := fullTextSearchMethodName(index.Name)
+			fmt.Fprintf(source, "func (client SystemTx%sClient[P]) %s(ctx %s.Context, query string, take int, where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTxTextSearch(ctx, client.runtime, %s, %q, query, take, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+			fmt.Fprintf(source, "func (client SystemTx%sClient[P]) %sSelect(ctx %s.Context, query string, take int, projection %s.Projection[%s], where ...%s.Predicate[%s]) ([]%s.FullTextResult[%s], error) { return %s.SystemTxTextSearchSelect(ctx, client.runtime, %s, %q, query, take, projection, where...) }\n", model.Go.Name, method, contextAlias, golemAlias, modelType, golemAlias, modelType, golemAlias, modelType, runtimeAlias, descriptor, index.Name)
+		}
 		emitAnalyticsClientMethods(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor, contractHasRelationDimensions(contract))
 		if contract.ScopedReads {
 			emitScopedClientMethod(source, "SystemTx", model.Go.Name, modelType, contextAlias, golemAlias, runtimeAlias, descriptor)
@@ -540,11 +562,12 @@ func validateFullTextMethodNames(indexes map[ir.ModelID][]fulltextcontract.Index
 			if _, ok := fulltextcontract.ExportedIndexName(index.Name); !ok {
 				return fmt.Errorf("registry codegen: full-text index name %q cannot form a Go method", index.Name)
 			}
-			method := fullTextSearchMethodName(index.Name)
-			if previous, collision := methods[method]; collision && previous != index.Name {
-				return fmt.Errorf("registry codegen: full-text index names %q and %q collide in Go", previous, index.Name)
+			for _, method := range []string{fullTextSearchMethodName(index.Name), fullTextSearchMethodName(index.Name) + "Select"} {
+				if previous, collision := methods[method]; collision && previous != index.Name {
+					return fmt.Errorf("registry codegen: full-text index names %q and %q collide in Go", previous, index.Name)
+				}
+				methods[method] = index.Name
 			}
-			methods[method] = index.Name
 		}
 	}
 	return nil

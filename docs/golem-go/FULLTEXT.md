@@ -26,13 +26,35 @@ func (Message) GolemModel() golem.ModelSpec[Message] {
 Fields must be local `String` fields. Weights are positive constants. SQLite
 uses a contentless FTS5 index; PostgreSQL uses a trigger-maintained `tsvector`
 side table and GIN index. Both are updated in the same database transaction as
-the model row, including cascades and writes outside Golem's runtime.
+the model row, including cascades. PostgreSQL maintains the index for direct
+SQL writes. On SQLite, inserting or updating indexed fields with the default
+`FoldDiacritics` mode requires a connection opened through Golem's SQLite
+provider, because the maintenance trigger calls Golem's Unicode-folding
+function. A plain `sqlite3` connection does not have that function and cannot
+perform those writes. Deletes and updates that do not touch indexed fields do
+not require it.
 
 `FoldDiacritics` is the default. Both providers use the same canonical Unicode
 decomposition and remove Unicode mark characters. Use `FoldNone` when accents
 must remain distinct. PostgreSQL requires UTF-8 and the deterministic
 `pg_catalog."und-x-icu"` collation, and supports at most four distinct weights
 because `tsvector` has four weight classes.
+
+The default ranking does not use corpus-wide statistics. SQLite scores each
+distinct query term once per matching field and multiplies it by that field's
+weight. PostgreSQL uses per-document `ts_rank_cd`. Equal scores are ordered by
+the model identity, not by recency.
+
+For a single-principal corpus that needs statistical relevance, add
+`golem.TextRanking(golem.RankBM25)` to the index. SQLite then uses weighted
+FTS5 `bm25`; PostgreSQL uses normalized `ts_rank_cd`. SQLite BM25 uses inverse
+document frequency and average document length from the complete index. Rows
+the caller cannot read are never returned, but their aggregate statistics can
+change scores, ordering and top-result membership among readable rows. Do not
+enable it when that aggregate influence would cross a security boundary.
+
+Changing an existing index between the default and BM25 is a reviewed rewrite:
+regenerate and apply the migration before using the changed generated client.
 
 ## Querying
 
@@ -47,7 +69,24 @@ for _, result := range results {
 }
 ```
 
-An optional predicate may narrow the search. The generated GraphQL root is
+Predicates may narrow the search and are combined with `AND`. Use the additive
+`TextSearchContentSelect` form when a programmatic caller only needs selected
+fields instead of hydrating the complete row:
+
+```go
+results, err := caller.Messages.TextSearchContentSelect(
+	ctx,
+	`invoice "service fee"`,
+	20,
+	golem.Select(Messages.ID, Messages.Subject),
+	Messages.MailboxID.Eq(mailboxID),
+)
+```
+
+Caller and system transaction clients expose the same search methods; their
+candidate query, ranking and hydration all use the transaction-bound executor,
+so uncommitted writes are visible and rollback removes them. The generated
+GraphQL root is
 `textSearchMessagesByContent(query:, take:, where:)`; it returns rows without
 scores.
 
@@ -70,9 +109,9 @@ an index through a reviewed migration backfills existing rows before the
 migration commits.
 
 Scores are only for ordering within one query. They are not comparable across
-providers or indexes. SQLite ranks weighted field matches without corpus-wide
-statistics; PostgreSQL uses per-document `ts_rank_cd`. Hidden rows therefore
-cannot appear, alter visible ordering or influence a returned score.
+providers or indexes. Under the default ranking, hidden rows cannot appear,
+alter visible ordering or influence a returned score. The opt-in SQLite BM25
+exception is described above.
 
 Full-text search does not provide semantic similarity, stemming, synonyms,
 snippets or highlighting. Use a semantic index for meaning-based search and

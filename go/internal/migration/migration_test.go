@@ -99,7 +99,7 @@ func TestTypedDiffInitialRenameAndTypeChange(t *testing.T) {
 	}
 }
 
-func TestSemanticExtensionDiffIsAdditiveAndDropsOnlyWithDataLoss(t *testing.T) {
+func TestSemanticExtensionDiffIsAdditiveAndDerivedDropNeedsNoApproval(t *testing.T) {
 	modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
 	fieldID := ir.FieldID("1123456789abcdef0123456789abcdef")
 	desired := schema()
@@ -138,12 +138,25 @@ func TestSemanticExtensionDiffIsAdditiveAndDropsOnlyWithDataLoss(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var derivedDrop Operation
 	for _, operation := range drop.Operations {
-		if operation.Kind == DropProviderExtension && operation.Risk == RiskDataLoss {
-			return
+		if operation.Kind == DropProviderExtension {
+			derivedDrop = operation
 		}
 	}
-	t.Fatalf("semantic drop is not explicit data loss: %#v", drop.Operations)
+	if derivedDrop.ID == "" || PlanRequiresApproval(drop, derivedDrop) {
+		t.Fatalf("semantic drop requires destructive approval: %#v", drop.Operations)
+	}
+	if risk := PlanOperationRisk(drop, derivedDrop); risk != RiskSafe {
+		t.Fatalf("semantic drop effective risk=%s want %s", risk, RiskSafe)
+	}
+	if err := ValidatePlan(drop, nil); err != nil {
+		t.Fatalf("derived semantic drop was not accepted without approval: %v", err)
+	}
+	legacy := Approval{OperationID: derivedDrop.ID, Risk: derivedDrop.Risk, Before: derivedDrop.Before, After: derivedDrop.After}
+	if err := ValidatePlan(drop, []Approval{legacy}); err != nil {
+		t.Fatalf("legacy reviewed drop approval was not preserved: %v", err)
+	}
 }
 
 func TestSemanticExtensionChangeIsReviewedOrderedRewrite(t *testing.T) {
@@ -274,6 +287,73 @@ func TestFullTextExtensionChangeIsReviewedOrderedRewrite(t *testing.T) {
 	}
 }
 
+func TestFullTextRankingChangeIsProviderRewrite(t *testing.T) {
+	for _, provider := range []ir.Provider{ir.SQLite, ir.PostgreSQL} {
+		t.Run(string(provider), func(t *testing.T) {
+			modelID := ir.ModelID("0123456789abcdef0123456789abcdef")
+			identityID := ir.FieldID("1123456789abcdef0123456789abcdef")
+			bodyID := ir.FieldID("1223456789abcdef0123456789abcdef")
+			storage := physical.StorageSQLiteText
+			manifest := physical.SQLiteManifest()
+			namespace := physical.PhysicalName("main")
+			if provider == ir.PostgreSQL {
+				storage = physical.StoragePostgreSQLText
+				manifest = physical.PostgreSQLManifest()
+				namespace = "public"
+			}
+			owner := physical.PhysicalTable{
+				ID: modelID, Name: "documents",
+				Columns: []physical.PhysicalColumn{
+					{ID: identityID, Name: "id", Storage: physical.StorageType{Kind: storage}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+					{ID: bodyID, Name: "body", Ordinal: 1, Storage: physical.StorageType{Kind: storage}, Default: physical.PhysicalDefault{Kind: physical.DefaultNone}},
+				},
+				PrimaryKey: &physical.PhysicalKey{ID: "2123456789abcdef0123456789abcdef", Name: "pk_documents", Columns: []ir.FieldID{identityID}},
+			}
+			extensionID := ir.ExtensionID("3123456789abcdef0123456789abcdef")
+			lower := func(ranking string) physical.Extension {
+				t.Helper()
+				payload, err := fulltextcontract.Encode(fulltextcontract.Index{Name: "content", Folding: fulltextcontract.FoldingDiacritics, Ranking: ranking, Prefix: []uint8{}, Fields: []fulltextcontract.Field{{ID: string(bodyID), Weight: 1}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				extension, err := fulltextstorage.Lower(ir.ProviderExtensionIR{ID: extensionID, Provider: provider, Version: fulltextcontract.Version, Owner: ir.ObjectID(modelID), Kind: fulltextcontract.IndexKind, Payload: payload}, owner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return extension
+			}
+			before := physical.PhysicalSchema{Version: physical.SchemaFormatVersion, CanonicalVersion: physical.CanonicalFormatVersion, Provider: manifest, Namespace: physical.Namespace{Name: namespace}, Tables: []physical.PhysicalTable{owner}, Extensions: []physical.Extension{lower(fulltextcontract.RankingTermCount)}}
+			after := before
+			after.Extensions = []physical.Extension{lower(fulltextcontract.RankingBM25)}
+			plan, err := Diff(before, after)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var drops, creates int
+			for _, operation := range plan.Operations {
+				switch operation.Kind {
+				case DropProviderExtension:
+					drops++
+					if operation.Risk != RiskRewrite {
+						t.Fatalf("drop risk=%s", operation.Risk)
+					}
+				case CreateProviderExtension:
+					creates++
+					if operation.Risk != RiskRewrite {
+						t.Fatalf("create risk=%s", operation.Risk)
+					}
+				}
+			}
+			if drops != 1 || creates != 1 {
+				t.Fatalf("ranking transition operations=%#v", plan.Operations)
+			}
+			if plan.BeforeFingerprint == plan.AfterFingerprint {
+				t.Fatal("ranking transition did not change physical fingerprint")
+			}
+		})
+	}
+}
+
 func TestUnknownProviderExtensionChangeRemainsClosed(t *testing.T) {
 	base := schema()
 	owner := physical.ObjectRef{Kind: ir.ObjectModel, ModelID: "0123456789abcdef0123456789abcdef"}
@@ -290,6 +370,45 @@ func TestUnknownProviderExtensionChangeRemainsClosed(t *testing.T) {
 	}}
 	if _, err := Diff(before, after); err == nil || !strings.Contains(err.Error(), "cannot change in place") {
 		t.Fatalf("unknown same-ID provider extension change error=%v", err)
+	}
+	drop, err := Diff(before, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operation Operation
+	for _, candidate := range drop.Operations {
+		if candidate.Kind == DropProviderExtension {
+			operation = candidate
+		}
+	}
+	if operation.ID == "" || !PlanRequiresApproval(drop, operation) {
+		t.Fatalf("unknown extension drop lost destructive approval: %#v", drop.Operations)
+	}
+	if err := ValidatePlan(drop, nil); err == nil {
+		t.Fatal("unknown extension drop was accepted without approval")
+	}
+}
+
+func TestFutureDerivedExtensionVersionRemainsApprovalClosed(t *testing.T) {
+	base := schema()
+	owner := physical.ObjectRef{Kind: ir.ObjectModel, ModelID: "0123456789abcdef0123456789abcdef"}
+	before := base
+	before.Extensions = []physical.Extension{{
+		ID: "3123456789abcdef0123456789abcdef", Provider: ir.SQLite,
+		Kind: "golem.semantic-index", Version: 2, Owner: owner,
+	}}
+	drop, err := Diff(before, base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var operation Operation
+	for _, candidate := range drop.Operations {
+		if candidate.Kind == DropProviderExtension {
+			operation = candidate
+		}
+	}
+	if operation.ID == "" || !PlanRequiresApproval(drop, operation) || PlanOperationRisk(drop, operation) != RiskDataLoss {
+		t.Fatalf("future derived extension was treated as released derived storage: %#v", drop.Operations)
 	}
 }
 
