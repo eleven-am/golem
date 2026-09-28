@@ -191,9 +191,10 @@ the pass stops for the rest of its page, and up to three re-embeds of
 already-stored documents that prove the provider is answering before any strike
 is charged. Finding which document in a refused batch is at fault waits until
 the provider has answered, so it costs nothing during an outage; when it runs it
-is bounded at eight calls a pass. A pass with nothing stored yet has nothing to
-probe, and there isolating the batch is the only way to learn anything. The
-count never grows with the number of batches in the page.
+is bounded at eight calls a pass. An index with nothing stored is the exception
+and costs up to ten: it has no document to probe with, so isolating the batch is
+the only way it can learn anything, and it does that until one document embeds.
+Neither count grows with the number of batches in the page.
 
 **Startup now verifies every index on `golem_queue` on both providers, not
 just `golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are
