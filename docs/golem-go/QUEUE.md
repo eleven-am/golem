@@ -28,13 +28,13 @@ welcome, err := queue.Register(registry, queue.Definition[Welcome]{
 
 | Field | Meaning |
 |---|---|
-| `Type` | stable name, stored on the row |
+| `Type` | stable name, stored on the row; lower-case `[a-z0-9._-]`, at most 128 bytes |
 | `Handle` | the work; returning an error schedules a retry |
-| `MaxAttempts` | attempts before the job is dead-lettered |
-| `Timeout` | per-attempt limit; the handler's context is cancelled |
-| `Backoff` | `Base` and `Cap` for the retry delay |
-| `MaxConcurrent` | ceiling on concurrent leases of this type |
-| `ExclusiveBy` | derives a key; jobs sharing one never run concurrently |
+| `MaxAttempts` | attempts before the job is dead-lettered; zero means 5 |
+| `Timeout` | per-attempt limit; the handler's context is cancelled and the attempt is retried; zero means 10 minutes |
+| `Backoff` | `Base` and `Cap` for the retry delay, exponential with full jitter; zero means 5 seconds and 5 minutes |
+| `MaxConcurrent` | ceiling on leases of this type held at once by one worker process; zero means unbounded. Fleet-wide budgets are `QueueConfig.Resources` |
+| `ExclusiveBy` | derives a key; jobs sharing one never run concurrently, across every worker |
 
 Pass the registry when opening:
 
@@ -63,9 +63,18 @@ jobID, err := application.Enqueue(ctx, pending)
 go application.RunQueueWorker(ctx)
 ```
 
-`RunQueueWorker` blocks until its context is cancelled. Run one per process;
-several processes may run one each against the same database, and claims are
-exclusive.
+`RunQueueWorker` blocks until its context is cancelled. Run one per
+application: a second concurrent call on the same application returns
+`CodeWorkerRunning`. Several processes may each run one against the same
+database, and claims are exclusive.
+
+### Leases
+
+A claim leases the job for `LeaseDuration` (30 seconds by default) and the
+worker renews the lease every third of that while the handler runs. A renewal
+that fails cancels the handler's context and discards its outcome; once the
+lease expires another worker may claim the job, and that claim counts a new
+attempt. Renewals also carry `Cancel` requests to a running handler.
 
 ### Enqueue inside your own transaction
 
@@ -96,12 +105,17 @@ flaky=succeeded attempt=2
 After the final attempt the job becomes `failed` with
 `LastCode = attempts_exhausted`.
 
+`queue.Terminal(err)` fails the job at once with `LastCode = terminal`, leaving
+its remaining attempts unspent. `queue.CompletedWith(code, err)` records
+success together with a code describing what degraded. A handler that panics
+is recovered and retried like an error, with `LastCode = handler_panic`.
+
 Return `queue.RetryIn(delay, err)` to override the backoff, or
 `queue.RetryInWithoutAttempt(delay, err)` to defer **without** consuming an
-attempt — for a dependency that is unavailable rather than a failure. That
-second form never exhausts attempts, so a handler that always returns it
-produces a job that never dead-letters and never ages out. Bound it on
-something other than the attempt count.
+attempt — for a dependency that is unavailable rather than a failure. Both
+delays are clamped to 24 hours. That second form never exhausts attempts, so a
+handler that always returns it produces a job that never dead-letters and never
+ages out. Bound it on something other than the attempt count.
 
 ## Options
 
@@ -110,8 +124,11 @@ welcome.New(payload, queue.After(30*time.Second))
 welcome.New(payload, queue.Dedupe("welcome:ada"))
 ```
 
-`After` delays first execution. `Dedupe` coalesces: enqueueing an identical key
-while one is pending returns the existing job rather than creating a second.
+`After` delays first execution by up to 24 hours. `Dedupe` coalesces:
+enqueueing an identical key while a job carrying it is pending or leased
+returns that job's ID rather than creating a second; once the job is terminal
+the key is free again. Keys are at most 256 bytes. `New` returns the error for
+an option it refuses.
 
 ## Inspecting and operating
 
@@ -120,18 +137,47 @@ operator := application.QueueOperator()
 status, err := operator.Inspect(ctx, jobID)
 ```
 
-`Status` carries `State`, `Attempt`, `MaxAttempts`, `AvailableAt`, `LastCode`
-and `FinishedAt`. The operator also offers `List`, `ListFailed`,
-`CountByState`, `Cancel`, `CancelMany`, `Requeue` and `RequeueFailed`.
+`Status` carries `ID`, `Type`, `State`, `Attempt`, `MaxAttempts`,
+`AvailableAt`, `LastCode`, `CancelRequested`, `EnqueuedAt` and `FinishedAt`,
+and never the payload. The operator also offers `List`, `ListFailed`,
+`CountByState`, `Cancel`, `CancelMany`, `Requeue`, `RequeueFailed` and
+`RunRetention`. Pages and bulk actions are bounded at 256 jobs.
+
+`Cancel` is immediate for a pending job and cooperative for a leased one: the
+request is recorded, the running handler's context is cancelled at its next
+lease renewal, and completion may win first.
 
 A handler returning is not the same as the job being recorded succeeded. If you
 poll for a terminal state immediately after your handler runs, you will observe
 `leased` before you observe `succeeded`.
 
+## Worker limits
+
+`QueueConfig.Limits` bounds the worker. Zero-valued fields take these
+defaults:
+
+| Field | Default |
+|---|---|
+| `Concurrency` | 4 handlers at once |
+| `ClaimBatch` | 16 jobs per claim |
+| `LeaseDuration` | 30s |
+| `PollInterval` | 250ms |
+| `ShutdownGrace` | 15s |
+| `AbandonGrace` | 5s |
+| `MaxPayloadBytes` | 1 MiB, which is also the ceiling |
+| `RetentionAge` | 30 days |
+| `RetentionEvery` | 1 minute |
+| `RetentionRows` | 256 per pass |
+
+`Open` refuses limits outside their ranges with `CodeConfigInvalid`:
+`LeaseDuration` 1s..10m, `AbandonGrace` at most 2m, `RetentionAge` 1h..10y,
+`RetentionEvery` 1m..24h or `RetentionDisabled`.
+
 ## Retention
 
 Workers delete terminal job rows older than `RetentionAge` every
-`RetentionEvery`. **This is on by default** — 30 days, checked every minute.
+`RetentionEvery`, at most `RetentionRows` per pass. **This is on by default** —
+30 days, checked every minute. Live rows are never deleted.
 
 To keep history indefinitely:
 
@@ -140,15 +186,23 @@ limits := queue.DefaultLimits()
 limits.RetentionEvery = queue.RetentionDisabled
 ```
 
+and pass `Limits: limits` in `QueueConfig`. History then survives until an
+operator calls `RunRetention`.
+
 ## The queue's own tables
 
-Golem creates `golem_queue` and its indexes on first use and checks, every time
-the queue starts, that the primary key is exactly `id` and that **every index
-on `golem_queue` is one golem itself defined, with golem's exact definition**.
-A same-named index with a different shape, or any other index on the table,
-stops startup with an error naming the object. Drop it and let golem recreate
-its own; accepting a wrong-shaped `golem_queue_dedupe` would quietly turn off
-deduplication.
+Golem creates `golem_queue` and its indexes when the application opens with
+`Queue` set, and checks then, and again each time `RunQueueWorker` starts,
+that the primary key is exactly `id` and that **every index on `golem_queue`
+is one golem itself defined, with golem's exact definition**. A same-named
+index with a different shape, or any other index on the table, stops startup
+with an error naming the object. So does a golem index that is missing because
+an object elsewhere in the database already carries its name. Drop it and let
+golem recreate its own; accepting a wrong-shaped `golem_queue_dedupe` would
+quietly turn off deduplication.
+
+On SQLite the table is `main.golem_queue`. On PostgreSQL it lives in the
+system namespace, `_golem` unless your schema names another.
 
 If you added your own index to `golem_queue`, startup now refuses it. Golem
 owns this table, so move that index to a table you own.
@@ -163,6 +217,9 @@ Three indexes serve the operator surface rather than the claim loop:
 | `golem_queue_history` | `(status, enqueued_at, id)` | `List` filtered by state |
 | `golem_queue_terminal` | `(status, finished_at, id)` | `ListFailed` and retention |
 
+On SQLite the store names them with `INDEXED BY`; on PostgreSQL the planner
+chooses.
+
 **Golem creates them only when your generated schema admits them.** That
 happens when you regenerate and author the migration that records them, so a
 library upgrade on its own changes nothing and stays reversible. Until you
@@ -174,9 +231,14 @@ delivers both.
 
 When a handler exceeds its `Timeout`, its context is cancelled. Go cannot kill
 a goroutine, so if the handler ignores cancellation and keeps running past
-`AbandonGrace`, the worker records the retry anyway. The job becomes claimable
-while the abandoned goroutine is still executing — it can run twice,
-concurrently.
+`AbandonGrace` (5 seconds by default), the worker records the retry anyway,
+counting the attempt; on the last attempt the job becomes `failed`. The job
+becomes claimable while the abandoned goroutine is still executing — it can
+run twice, concurrently.
+
+On shutdown a running handler gets `ShutdownGrace` to finish before its
+context is cancelled. An outcome it returns after that is not recorded; the
+job is reclaimed once its lease expires.
 
 Handlers must honour `ctx.Done()`. This is the one place the queue cannot
 protect you.

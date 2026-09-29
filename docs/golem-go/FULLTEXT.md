@@ -23,22 +23,45 @@ func (Message) GolemModel() golem.ModelSpec[Message] {
 }
 ```
 
-Fields must be local `String` fields. Weights are positive constants. SQLite
-uses a contentless FTS5 index; PostgreSQL uses a trigger-maintained `tsvector`
-side table and GIN index. Both are updated in the same database transaction as
-the model row, including cascades. PostgreSQL maintains the index for direct
-SQL writes. On SQLite, inserting or updating indexed fields with the default
-`FoldDiacritics` mode requires a connection opened through Golem's SQLite
+The index name is a constant matching `[a-z][a-z0-9_-]{0,62}` and names the
+generated methods (`content` becomes `TextSearchContent`). Fields must be
+local `String` fields. Weights are positive constants within the `float32`
+range. `TextPrefix` lists distinct token lengths in 1..32; SQLite builds FTS5
+prefix indexes for them, PostgreSQL ignores them, and prefix queries work on
+both providers without it. A model cannot carry a full-text index when, on
+SQLite, it has a column named `rowid` or a primary or unique key column named
+`docid` or `_golem_owner_rowid`, or, on PostgreSQL, a primary key column named
+`document`.
+
+SQLite uses a contentless FTS5 index; PostgreSQL uses a trigger-maintained
+`tsvector` side table and GIN index. Both are updated in the same database
+transaction as the model row, including cascades. PostgreSQL maintains the
+index for direct SQL writes. On SQLite, with the default `FoldDiacritics`
+mode, inserts and updates that touch an indexed field, a primary key column
+or a unique key column require a connection opened through Golem's SQLite
 provider, because the maintenance trigger calls Golem's Unicode-folding
 function. A plain `sqlite3` connection does not have that function and cannot
-perform those writes. Deletes and updates that do not touch indexed fields do
-not require it.
+perform those writes. Deletes, and updates that touch none of those columns,
+do not require it. Golem's SQLite provider removes planner statistics for the
+FTS5 shadow tables when it opens or closes the database and after each
+migration, so indexed writes stay flat as the index grows; running `ANALYZE`
+on the whole database yourself records them again until Golem next opens or
+closes it.
 
 `FoldDiacritics` is the default. Both providers use the same canonical Unicode
 decomposition and remove Unicode mark characters. Use `FoldNone` when accents
-must remain distinct. PostgreSQL requires UTF-8 and the deterministic
-`pg_catalog."und-x-icu"` collation, and supports at most four distinct weights
-because `tsvector` has four weight classes.
+must remain distinct.
+
+Matching ignores case on SQLite for every script. On PostgreSQL it ignores
+case only as far as the database's character type (`LC_CTYPE`) folds it: a
+database created with a linguistic ctype such as `en_US.utf8` folds every
+script, but one created with `LC_CTYPE=C` folds ASCII letters only. Accented
+Latin letters are unaffected under the default `FoldDiacritics`, because
+folding reduces them to ASCII first; letters that stay outside ASCII, such as
+Greek and Cyrillic, keep their case, so there `καφές` does not find `Καφές`.
+Golem does not check the ctype. PostgreSQL requires UTF-8 and the deterministic `pg_catalog."und-x-icu"`
+collation, checked when a migration is applied, and supports at most four
+distinct weights because `tsvector` has four weight classes.
 
 The default ranking does not use corpus-wide statistics. SQLite scores each
 distinct query term once per matching field and multiplies it by that field's
@@ -91,9 +114,10 @@ GraphQL root is
 scores.
 
 Terms are OR-joined. Double quotes form a phrase. A trailing `*` enables a
-prefix term of at least two characters. Golem parses this syntax and quotes
-every lexeme; raw FTS5 or `tsquery` syntax is never accepted. Queries are
-limited to 32 terms and results to 1,000 rows.
+prefix term whose final lexeme has at least two letters or digits. Golem
+parses this syntax and quotes every lexeme; raw FTS5 or `tsquery` syntax is
+never accepted. Queries are limited to 32 terms and 10,000 bytes of valid
+UTF-8, and results to 1,000 rows.
 
 ## Authorization and consistency
 
@@ -112,6 +136,15 @@ Scores are only for ordering within one query. They are not comparable across
 providers or indexes. Under the default ranking, hidden rows cannot appear,
 alter visible ordering or influence a returned score. The opt-in SQLite BM25
 exception is described above.
+
+**Hidden rows do affect how long a search takes.** Both providers match the
+query against the whole index before narrowing to the rows the caller may
+read, so a query that matches many hidden rows is measurably slower than one
+that matches none, even though the results are identical. Measured with 20
+readable rows: SQLite answered in 0.22 ms when 50,000 hidden rows did not
+match and 37 ms when they did; PostgreSQL in 1.5 ms and 9.6 ms with 30,000.
+Treat the response time of a search as revealing roughly how common a term is
+across the whole index, including rows the caller cannot see.
 
 Full-text search does not provide semantic similarity, stemming, synonyms,
 snippets or highlighting. Use a semantic index for meaning-based search and

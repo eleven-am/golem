@@ -4,6 +4,22 @@ Status: **implemented**. Two details below differ from the original
 proposal; both are marked and the reason recorded, because the first draft
 described an API that could not be built.
 
+**Changed since implementation.** The rest of this page is the design record
+and is left as written; the behaviour it describes has moved in three places,
+each documented in `RELEASE-NOTES.md`:
+
+- `mutationCapabilities` now takes the client as a parameter
+  (`internal/codegen/model/emit.go`), the price named under "What this
+  costs".
+- go/v0.4.0: a hook may author a `system` field on every write path.
+  go/v0.3.2 left nested-child hooks, upsert, versioned mutations, update-many
+  batches and `HookExecutor` refusing one; each now accepts a hook-written
+  field and still refuses one the caller's own input named.
+- go/v0.4.0: a caller relation write (connect, set, disconnect) that assigns
+  a `system`, `readonly`, `hidden` or, on update, `immutable` foreign key is
+  refused with the same reason as the direct write. A system client may still
+  assign it.
+
 ## The gap
 
 An application cannot express a field that it maintains and no client may
@@ -84,7 +100,7 @@ This is a policy bypass reachable from application code, in a system whose
 central claim is that policy compiles into every query. It must be
 conspicuous rather than convenient:
 
-- the escape is a method call at the point of use, never an option on the
+- the escape is a call at the point of use, never an option on the
   transaction or a field on a config
 - it emits an observation, so a deployment can see how often application code
   leaves the authorized path
@@ -137,7 +153,8 @@ rather than discovering it in review.
 ## Rules to settle
 
 - `system` + `immutable`: system writes at create, then nobody. Accepted.
-- `system` + `readonly`: rejected at compile with a message naming both.
+- `system` + `readonly`: rejected at compile with a message naming both
+  (`P1_EXPOSURE_SYSTEM_READONLY`).
 - `system` + a policy granting the field to callers: the mode wins. Modes are
   absolute today and this must not become the exception, or a reader can no
   longer tell what a mode means without reading every policy.
@@ -167,9 +184,10 @@ consequence of editing a schema.
 
 The first implementation left the escape unreachable from schema-package
 code, and left a mutation hook unable to write a `system` field because
-hook-replaced inputs re-enter with the caller stance. Both are now closed:
-without them the mode mostly produces compile errors in the place custom
-mutations actually live — `examples/social/social/extensions.go` already
+hook-replaced inputs re-enter with the caller stance. Both are now closed
+(the hook path only for root create and update at first; go/v0.4.0 extended
+it to every write path, as noted at the top): without them the mode mostly
+produces compile errors in the place custom mutations actually live — `examples/social/social/extensions.go` already
 opens `caller.Transaction` inside the schema package.
 
 The shell exposes the system surface to the whole schema package, because it

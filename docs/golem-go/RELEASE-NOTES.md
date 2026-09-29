@@ -9,7 +9,8 @@ go get github.com/eleven-am/golem/go@v0.5.4
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
-prefix. A plain `v0.3.0` tag would not make this module fetchable.
+prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
+`go/v0.3.0` predate these notes and are not described here.
 
 ---
 
@@ -45,7 +46,10 @@ loaded them: a connection keeps the statistics it has read even after they are
 deleted, so removing the rows alone would leave those connections scanning. You
 do not need to regenerate or migrate.
 
-Tables without a full-text index were never affected.
+Ordinary tables were never affected. The repair covers every shadow table
+SQLite reports, not only full-text ones, so it also removes the statistics
+v0.5.3 recorded for the `vec0` table behind a semantic index created before
+v0.5.1 and not migrated since.
 
 **The semantic outage cost is corrected.** SEMANTIC.md said an outage costs at
 most five provider calls per pass. That holds once an index has stored a
@@ -146,6 +150,10 @@ before calling generated full-text methods.
 the one required `IS NOT NULL` guard, while other predicates retain their own
 NULL behavior. Indexed primary-key and selective candidate predicates are
 sargable again without changing three-valued policy semantics.
+
+---
+
+## go/v0.5.1
 
 **Semantic search no longer makes SQLite scan a `vec0` virtual table before
 authorization.** Current SQLite semantic vectors use a strict,

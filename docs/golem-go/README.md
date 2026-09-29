@@ -3,7 +3,8 @@
 Declare your data as Go structs. Golem derives the database schema, the
 migrations, an authorized query and mutation API, and a GraphQL surface.
 
-Every page here is executed by a test. The code on them is code that ran.
+Every page here that carries a program is executed by a test. The code on
+them is code that ran.
 
 ## Start here
 

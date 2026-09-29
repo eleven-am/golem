@@ -74,13 +74,13 @@ On a real field:
 |---|---|
 | `id=` | canonical field identity |
 | `pk` | primary key |
-| `default=uuid` / `default=now` | database-side default |
+| `default=uuid` / `default=now` | value golem supplies on create when the field is not written; no column `DEFAULT` is emitted |
 | `readonly` | cannot be written by any caller |
 | `immutable` | writable on create, never on update |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |
 | `writeonly` | writable, never readable |
-| `relation=has_many` / `belongs_to` / `many_to_many` | relation kind |
+| `relation=has_many` / `has_one` / `belongs_to` / `many_to_many` | relation kind |
 | `fields=` / `references=` | the local and foreign columns joining it |
 
 `db:"-"` marks a field as having no column of its own, which every relation
