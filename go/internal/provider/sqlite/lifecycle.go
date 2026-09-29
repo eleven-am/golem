@@ -67,7 +67,20 @@ func (provider *Provider) verifyOpenedDatabase(ctx context.Context, database *sq
 		_ = database.Close()
 		return nil, CapabilityReport{}, err
 	}
+	if err := healShadowTableStatistics(ctx, database); err != nil {
+		_ = database.Close()
+		return nil, CapabilityReport{}, err
+	}
 	return database, report, nil
+}
+
+func healShadowTableStatistics(ctx context.Context, database *sqlx.DB) error {
+	if _, err := ForgetShadowTableStatistics(ctx, database); err != nil {
+		return fmt.Errorf("sqlite open: %w", err)
+	}
+	database.SetMaxIdleConns(0)
+	database.SetMaxIdleConns(VerifiedPoolWidth)
+	return nil
 }
 
 const (

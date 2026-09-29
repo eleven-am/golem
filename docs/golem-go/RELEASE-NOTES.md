@@ -5,11 +5,52 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.5.3
+go get github.com/eleven-am/golem/go@v0.5.4
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable.
+
+---
+
+## go/v0.5.4
+
+**Take this release if you use full-text search on SQLite.** In v0.5.3, every
+write to a table carrying a full-text index got slower as the index grew. Over
+20,000 inserts the last rows cost eight to twelve times as much as the first;
+this release keeps them flat.
+
+| 20,000 inserts after a migration | First 2,000 rows | Last 2,000 rows | Last ÷ first |
+| --- | ---: | ---: | ---: |
+| v0.5.3 | 196–203 µs/row | 1,652–2,336 µs/row | 8–12× |
+| v0.5.4 | 220–284 µs/row | 221–230 µs/row | 0.8–1.0× |
+
+The cause was planner statistics. Applying a migration ran `ANALYZE` while the
+full-text index was still nearly empty, recording that its internal storage
+held two rows. FTS5 reads that storage by rowid range on every write, and the
+planner, trusting the statistic, chose to scan the whole table instead. The
+table grew with every write, so every write got slower. Closing the database
+refreshed statistics the same way, so it could poison an index the session had
+never touched.
+
+Migrations now analyze only real tables, never the shadow tables SQLite keeps
+behind a virtual table, and closing the database removes any shadow-table
+statistics its refresh recorded. Close still refreshes statistics for tables
+written during the session, which ordinary indexes depend on after bulk
+ingestion.
+
+**A database v0.5.3 already poisoned is repaired on open.** Opening removes
+stale shadow-table statistics and replaces the pooled connections that had
+loaded them: a connection keeps the statistics it has read even after they are
+deleted, so removing the rows alone would leave those connections scanning. You
+do not need to regenerate or migrate.
+
+Tables without a full-text index were never affected.
+
+**The semantic outage cost is corrected.** SEMANTIC.md said an outage costs at
+most five provider calls per pass. That holds once an index has stored a
+document; an index with nothing stored yet has no document to probe with,
+isolates the refused batch instead, and costs up to ten.
 
 ---
 
