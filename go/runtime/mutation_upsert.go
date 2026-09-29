@@ -217,18 +217,15 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 }
 
 func validateCreateAgreesWithTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
-	selected := make(map[policyir.FieldID]policyir.Value, len(target.Values()))
-	for _, selector := range target.Values() {
-		selected[selector.FieldID()] = selector.Value()
-	}
+	created := make(map[policyir.FieldID]mutationir.ScalarOperation, len(operations))
 	for _, operation := range operations {
-		want, targeted := selected[operation.FieldID()]
-		if !targeted || operation.RuntimeOwned() {
-			continue
-		}
+		created[operation.FieldID()] = operation
+	}
+	for _, selector := range target.Values() {
+		operation, written := created[selector.FieldID()]
 		value, present := operation.Value()
-		if operation.Kind() != mutationir.ScalarSet || !present || !equalMutationPhysicalValue(value, want) {
-			return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", golem.ModelID(target.ModelID()), golem.FieldID(operation.FieldID()), "upsert create input contradicts the target selector", nil)
+		if !written || operation.Kind() != mutationir.ScalarSet || !present || !equalMutationPhysicalValue(value, selector.Value()) {
+			return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", golem.ModelID(target.ModelID()), golem.FieldID(selector.FieldID()), "upsert create input does not set the target selector", nil)
 		}
 	}
 	return nil

@@ -123,9 +123,12 @@ then match predicates incorrectly, because SQLite's string functions stop at
 NUL; rows already stored that way still read. An empty `[]byte` is stored as
 empty instead of NULL, on every write path, and reads back as an empty,
 non-nil slice. `golem.NewDecimal(0, scale)` returns `Decimal{}`, so a
-zero reads the same on both providers. An upsert whose create input names a
-different key than its target is refused when the create branch runs, instead
-of creating a row the target never named. A nullable computed field over a
+zero reads the same on both providers. When an upsert takes its create
+branch, its create input must set every field of the target to the target's
+value, or the upsert is refused with `BAD_USER_INPUT` and nothing is created.
+Before, an upsert by ID whose create input left the ID to a default created a
+row with a different ID, so repeating the upsert kept creating unrelated rows.
+Set the ID explicitly in the create input, or target a field you do set. A nullable computed field over a
 masked value resolves to null instead of an internal server error.
 
 **Queue and events.**

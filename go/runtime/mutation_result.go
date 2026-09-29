@@ -426,6 +426,10 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	if errors.As(err, &missing) {
 		return golem.RuntimeOperationError(golem.CodeNotFound, scalarMutationOperationName(operation), model, golem.FieldID(missing.Field), "record not found", err)
 	}
+	var identity *mutationnested.TargetIdentityError
+	if errors.As(err, &identity) {
+		return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), "upsert create input does not set the target selector", err)
+	}
 	var scalar *scalarMutationFailure
 	var hook *mutationHookFailure
 	if errors.As(err, &scalar) || errors.As(err, &hook) {
