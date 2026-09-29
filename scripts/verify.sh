@@ -18,7 +18,7 @@ STEPS=(
 CLI_PACKAGES=(./cmd/golem ./golemtest)
 DATABASE_PACKAGES=(
 	./runtime ./internal/generate/pipeline ./internal/semantic/runtime ./internal/fulltext/runtime ./internal/provider/postgresql
-	./internal/read/decode ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
+	./internal/read/decode ./internal/read/sql ./internal/p7oracle ./internal/policy/oracle ./provider/postgresql
 	./internal/event/outbox
 )
 ORACLE_MUTATION_AND_LOAD=(./internal/p8oracle/mutation ./internal/p8oracle/load ./internal/p8oracle/analytics)
