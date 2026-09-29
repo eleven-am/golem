@@ -28,6 +28,13 @@ const (
 	postgreSQLDefaultConnectionMaximumIdleTime = 5 * time.Minute
 	postgreSQLMinimumConnectionDuration        = time.Second
 	postgreSQLMaximumConnectionDuration        = 24 * time.Hour
+
+	sqliteStatisticsTimeout = 30 * time.Second
+)
+
+var (
+	sqliteStatisticsInterval = 4 * time.Hour
+	sqliteStatisticsRefresh  = refreshSQLitePlannerStatistics
 )
 
 type Code string
@@ -125,6 +132,9 @@ type databaseState struct {
 	closeErr  error
 	closed    chan struct{}
 	closeDone chan struct{}
+
+	maintenanceCancel context.CancelFunc
+	maintenanceDone   chan struct{}
 }
 
 func newDatabase(database *sqlx.DB, kind golem.Provider, version Version, features []string, pool PoolStatus) *Database {
@@ -221,10 +231,14 @@ func (database *Database) Close() error {
 		if database.state.closed != nil {
 			close(database.state.closed)
 		}
+		if database.state.maintenanceCancel != nil {
+			database.state.maintenanceCancel()
+			<-database.state.maintenanceDone
+		}
 		if database.state.database != nil {
 			if database.state.provider == golem.SQLite && !database.state.testOnly {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				err := refreshSQLitePlannerStatistics(ctx, database.state.database)
+				err := sqliteStatisticsRefresh(ctx, database.state.database)
 				cancel()
 				if err != nil {
 					database.state.closeErr = failure(CodeClose, "provider close failed")
@@ -286,7 +300,29 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 		"analytics-exact.v1",
 	}, PoolStatus{maximumOpen: internalsqlite.VerifiedPoolWidth, maximumIdle: internalsqlite.VerifiedPoolWidth})
 	result.state.sqliteDataSourceName = dataSourceName
+	result.state.maintainSQLiteStatistics(sqliteStatisticsInterval)
 	return result, nil
+}
+
+func (state *databaseState) maintainSQLiteStatistics(interval time.Duration) {
+	lifetime, cancel := context.WithCancel(context.Background())
+	state.maintenanceCancel = cancel
+	state.maintenanceDone = make(chan struct{})
+	go func() {
+		defer close(state.maintenanceDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-lifetime.Done():
+				return
+			case <-ticker.C:
+				ctx, stop := context.WithTimeout(lifetime, sqliteStatisticsTimeout)
+				_ = sqliteStatisticsRefresh(ctx, state.database)
+				stop()
+			}
+		}
+	}()
 }
 
 // CheckpointSQLiteForBackup performs the provider-owned SQLite checkpoint for

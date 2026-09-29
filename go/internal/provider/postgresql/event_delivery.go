@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -21,6 +22,9 @@ type eventCoordinator struct {
 	database            *sqlx.DB
 	namespace           physical.PhysicalName
 	legacyProbeComplete atomic.Bool
+	claimIndexAdmitted  bool
+	claimIndexMutex     sync.Mutex
+	claimIndexReady     atomic.Bool
 }
 
 type postgresqlEventQueryExecer interface {
@@ -28,18 +32,27 @@ type postgresqlEventQueryExecer interface {
 	sqlx.ExecerContext
 }
 
-func (*Provider) EventCoordinator(database *sqlx.DB) (eventprovider.Coordinator, error) {
-	return newEventCoordinator(database, "_golem")
+func (provider *Provider) EventCoordinator(database *sqlx.DB) (eventprovider.Coordinator, error) {
+	return provider.EventCoordinatorAtAdmitting(database, "_golem", nil)
 }
 
 // EventCoordinatorAt exists for generated schemas whose reviewed system
 // namespace differs from the default. The namespace must already be a closed
 // physical identifier; no application value can become SQL.
-func (*Provider) EventCoordinatorAt(database *sqlx.DB, namespace physical.PhysicalName) (eventprovider.Coordinator, error) {
-	return newEventCoordinator(database, namespace)
+func (provider *Provider) EventCoordinatorAt(database *sqlx.DB, namespace physical.PhysicalName) (eventprovider.Coordinator, error) {
+	return provider.EventCoordinatorAtAdmitting(database, namespace, nil)
 }
 
-func newEventCoordinator(database *sqlx.DB, namespace physical.PhysicalName) (eventprovider.Coordinator, error) {
+func (*Provider) EventCoordinatorAtAdmitting(database *sqlx.DB, namespace physical.PhysicalName, unmanaged []physical.UnmanagedObject) (eventprovider.Coordinator, error) {
+	coordinator, err := newEventCoordinator(database, namespace)
+	if err != nil {
+		return nil, err
+	}
+	coordinator.claimIndexAdmitted = physical.OutboxDeliveryClaimAdmitted(unmanaged)
+	return coordinator, nil
+}
+
+func newEventCoordinator(database *sqlx.DB, namespace physical.PhysicalName) (*eventCoordinator, error) {
 	if database == nil {
 		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: database is nil")
 	}
@@ -47,6 +60,58 @@ func newEventCoordinator(database *sqlx.DB, namespace physical.PhysicalName) (ev
 		return nil, fmt.Errorf("P7_POSTGRESQL_DELIVERY: system namespace is invalid")
 	}
 	return &eventCoordinator{database: database, namespace: namespace}, nil
+}
+
+func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error {
+	if !coordinator.claimIndexAdmitted || coordinator.claimIndexReady.Load() {
+		return nil
+	}
+	coordinator.claimIndexMutex.Lock()
+	defer coordinator.claimIndexMutex.Unlock()
+	if coordinator.claimIndexReady.Load() {
+		return nil
+	}
+	if _, err := coordinator.database.ExecContext(ctx, postgresqlOutboxDeliveryClaimStatement(coordinator.namespace)); err != nil {
+		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: create golem_outbox_delivery_claim: %w", err)
+	}
+	present, err := postgresqlOutboxDeliveryClaimPresent(ctx, coordinator.database, coordinator.namespace)
+	if err != nil {
+		return err
+	}
+	if !present {
+		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: an object named golem_outbox_delivery_claim blocks golem's claim index on _golem_outbox_delivery; drop it so golem can create its own")
+	}
+	coordinator.claimIndexReady.Store(true)
+	return nil
+}
+
+func postgresqlOutboxDeliveryClaimStatement(namespace physical.PhysicalName) string {
+	return `CREATE INDEX IF NOT EXISTS "golem_outbox_delivery_claim" ON ` + qualified(namespace, "_golem_outbox_delivery") + ` ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`
+}
+
+func postgresqlOutboxDeliveryClaimPresent(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName) (bool, error) {
+	rows, err := q.QueryxContext(ctx, `SELECT c.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_class ic JOIN pg_catalog.pg_namespace n ON n.oid=ic.relnamespace LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=ic.oid LEFT JOIN pg_catalog.pg_class c ON c.oid=i.indrelid WHERE n.nspname=$1 AND ic.relname='golem_outbox_delivery_claim'`, string(namespace))
+	if err != nil {
+		return false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	}
+	defer rows.Close()
+	found := false
+	for rows.Next() {
+		var table, keys, predicate sql.NullString
+		var unique, valid sql.NullBool
+		if err := rows.Scan(&table, &unique, &valid, &keys, &predicate); err != nil {
+			return false, err
+		}
+		if found || !postgresqlOutboxDeliveryClaimShape(table.String, unique.Bool, valid.Bool, keys.String, predicate.String) {
+			return false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: existing golem_outbox_delivery_claim does not match golem's claim index; drop it so golem can create its own")
+		}
+		found = true
+	}
+	return found, rows.Err()
+}
+
+func postgresqlOutboxDeliveryClaimShape(table string, unique, valid bool, keys, predicate string) bool {
+	return table == "_golem_outbox_delivery" && !unique && valid && keys == "3 1 5 7" && predicate == postgresqlOutboxDeliveryClaimPredicate
 }
 
 func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
@@ -60,6 +125,9 @@ func (coordinator *eventCoordinator) ClaimWithDepth(ctx context.Context, options
 
 func (coordinator *eventCoordinator) claim(ctx context.Context, options eventprovider.ClaimOptions, includeDepth bool) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
+	if err := coordinator.ensureClaimIndex(ctx); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	tokens := make([]string, options.Groups)
@@ -85,8 +153,7 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	}
 	var causations []string
 	delivery := coordinator.deliveryTable()
-	query := `SELECT "causation_id" FROM ` + delivery + ` WHERE "status" IN ('pending','leased') AND "available_at"<=clock_timestamp() AND ("lease_until" IS NULL OR "lease_until"<=clock_timestamp()) ORDER BY "first_recorded_at","causation_id" FOR UPDATE SKIP LOCKED LIMIT $1`
-	if err := transaction.SelectContext(ctx, &causations, query, options.Groups); err != nil {
+	if err := transaction.SelectContext(ctx, &causations, postgresqlClaimableGroups(delivery), options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_POSTGRESQL_DELIVERY: discover claimable groups: %w", err)
 	}
 	causations, err = coordinator.boundedCausations(ctx, transaction, causations, eventprovider.ClaimByteLimit(options))
@@ -450,6 +517,12 @@ func postgresqlFactValue(row postgresqlFactRow) eventprovider.FactRow {
 		RecordedAt: row.RecordedAt.UTC().Truncate(time.Microsecond),
 	}
 }
+
+func postgresqlClaimableGroups(delivery string) string {
+	return `SELECT "causation_id" FROM ` + delivery + ` WHERE "status" IN ('pending','leased') AND "available_at"<=clock_timestamp() AND ("lease_until" IS NULL OR "lease_until"<=clock_timestamp()) ORDER BY "first_recorded_at","causation_id" FOR UPDATE SKIP LOCKED LIMIT $1`
+}
+
+const postgresqlOutboxDeliveryClaimPredicate = "(status = ANY (ARRAY['pending'::text, 'leased'::text]))"
 
 func (coordinator *eventCoordinator) deliveryTable() string {
 	return qualified(coordinator.namespace, "_golem_outbox_delivery")

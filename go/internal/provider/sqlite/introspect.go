@@ -204,7 +204,11 @@ func (provider *Provider) introspectNormalizedCatalog(ctx context.Context, datab
 		}
 	}
 	for _, unmanaged := range normalized.Unmanaged {
-		delete(actual, unmanaged.Kind+"\x00"+string(unmanaged.Name))
+		key := unmanaged.Kind + "\x00" + string(unmanaged.Name)
+		if row, present := actual[key]; present && unmanaged.Kind == "index" && unmanaged.Name == physical.OutboxDeliveryClaimIndex && !sqliteOutboxDeliveryClaimMatches(row.Table, row.SQL) {
+			return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: row.Type, Name: row.Name, Table: row.Table}, "sqlite introspect drift: %s does not match %q; drop it so golem can create its own", row.Name, sqliteOutboxDeliveryClaimDefinition)
+		}
+		delete(actual, key)
 	}
 	if len(actual) != len(expectedObjects)+len(expectedTokenObjects) {
 		if object, exists := firstUnexpectedSchemaObject(actual, expectedObjects, expectedTokenObjects); exists {

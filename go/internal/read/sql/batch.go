@@ -103,12 +103,14 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	args := append([]any(nil), context.cursorArgs...)
 	keyPredicates := make([]string, len(keys))
 	cursorKeyPredicates := make([]string, len(keys))
+	keyPlaceholders := make([][]string, len(keys))
 	for tupleIndex, tuple := range keys {
 		if len(tuple) != len(context.keyFields) {
 			return BatchStatement{}, fail(CodeInput, plan.ModelID(), policyir.FieldID{}, "batch correlation tuple width does not match the relation", nil)
 		}
 		parts := make([]string, len(tuple))
 		cursorParts := make([]string, len(tuple))
+		keyPlaceholders[tupleIndex] = make([]string, len(tuple))
 		for fieldIndex, value := range tuple {
 			resolved := context.keyFields[fieldIndex]
 			encoded, encodeErr := encodeBatchValue(context.dialect, context.resolver, resolved.Type, value)
@@ -117,6 +119,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 			}
 			args = append(args, encoded)
 			placeholder := context.dialect.Placeholder(len(args))
+			keyPlaceholders[tupleIndex][fieldIndex] = placeholder
 			parts[fieldIndex] = context.dialect.Quote(context.alias) + "." + context.dialect.Quote(resolved.Column) + " = " + placeholder
 			cursorParts[fieldIndex] = context.dialect.Quote("golem_cp0") + "." + context.dialect.Quote(resolved.Column) + " = " + placeholder
 		}
@@ -189,6 +192,13 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 		baseWhere += " AND (" + strings.Join(cursorOwnership, " AND ") + ")"
 	}
 	base := "SELECT " + strings.Join(selects, ", ") + " FROM " + context.from + " WHERE " + baseWhere
+	if bound, bounded := batchSeekBound(plan); bounded && context.prefix == "" {
+		seeked, seekErr := renderBatchSeekBase(plan, context, selects, whereSQL, keyPlaceholders, bound)
+		if seekErr != nil {
+			return BatchStatement{}, seekErr
+		}
+		base = seeked
+	}
 
 	keyAliases := make([]string, len(context.keyIDs))
 	keyTypes := make(map[policyir.FieldID]compilerir.LogicalTypeIR, len(context.keyIDs))
@@ -295,6 +305,114 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 		columns[index] = Column{field: field.FieldID(), alias: fmt.Sprintf("golem_c%d", index), public: field.Public()}
 	}
 	return BatchStatement{statement: Statement{text: text, args: args, columns: columns, counts: countColumns, planMap: context.planMap.clone(), reverse: context.reverse}, keys: context.keyIDs, extraKeys: extraKeys}, nil
+}
+
+func batchSeekBound(plan readplan.Plan) (int, bool) {
+	take, present := plan.Take()
+	if !present || len(plan.Distinct()) != 0 {
+		return 0, false
+	}
+	if take < 0 {
+		take = -take
+	}
+	skip := 0
+	if value, ok := plan.Skip(); ok {
+		skip = value
+	}
+	return skip + take, true
+}
+
+func batchSeekOrder(plan readplan.Plan, context batchContext) (string, error) {
+	parts := make([]string, 0, len(plan.OrderBy())*2)
+	logicalTypes := logicalTypesByField(context.fields)
+	for _, order := range plan.OrderBy() {
+		column := context.physical[order.FieldID()]
+		resolved, ok := context.resolver.Field(context.provider, plan.ModelID(), order.FieldID())
+		if column == "" || !ok {
+			return "", fail(CodeSchema, plan.ModelID(), order.FieldID(), "batch seek order field is absent", nil)
+		}
+		direction := order.Direction()
+		if context.reverse {
+			if direction == readir.Ascending {
+				direction = readir.Descending
+			} else {
+				direction = readir.Ascending
+			}
+		}
+		word, null := "ASC", column+" IS NOT NULL ASC"
+		if direction == readir.Descending {
+			word, null = "DESC", column+" IS NULL ASC"
+		}
+		if resolved.Nullable {
+			parts = append(parts, null)
+		}
+		parts = append(parts, portableOrderOperand(context.provider, logicalTypes[order.FieldID()], column)+" "+word)
+	}
+	if len(parts) == 0 {
+		return "", fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "batch relation requires deterministic order", nil)
+	}
+	return strings.Join(parts, ", "), nil
+}
+
+func renderBatchSeekBase(plan readplan.Plan, context batchContext, selects []string, whereSQL string, keyPlaceholders [][]string, bound int) (string, error) {
+	order, err := batchSeekOrder(plan, context)
+	if err != nil {
+		return "", err
+	}
+	quote := context.dialect.Quote
+	driver := physical.PhysicalName("golem_bk0")
+	rows := make([]string, 0, len(keyPlaceholders)+1)
+	keyColumns := make([]string, len(context.keyFields))
+	correlation := make([]string, len(context.keyFields))
+	for index, field := range context.keyFields {
+		keyColumns[index] = fmt.Sprintf("golem_key%d", index)
+		if context.provider == policyir.ProviderSQLite {
+			keyColumns[index] = fmt.Sprintf("column%d", index+1)
+		}
+		correlation[index] = quote(context.alias) + "." + quote(field.Column) + " = " + quote(driver) + "." + quote(physical.PhysicalName(keyColumns[index]))
+	}
+	limit := fmt.Sprintf(" LIMIT %d", bound)
+	inner := " FROM " + context.from + " WHERE (" + whereSQL + ") AND (" + strings.Join(correlation, " AND ") + ") ORDER BY " + order + limit
+	switch context.provider {
+	case policyir.ProviderPostgreSQL:
+		typed := make([]string, len(context.keyFields))
+		template := physical.PhysicalName("golem_bt0")
+		for index, field := range context.keyFields {
+			typed[index] = "(SELECT " + quote(template) + "." + quote(field.Column) + " FROM " + context.dialect.Table(context.model) + " AS " + quote(template) + " WHERE FALSE)"
+		}
+		rows = append(rows, "("+strings.Join(typed, ", ")+")")
+		for _, tuple := range keyPlaceholders {
+			rows = append(rows, "("+strings.Join(tuple, ", ")+")")
+		}
+		quotedColumns := make([]string, len(keyColumns))
+		for index, column := range keyColumns {
+			quotedColumns[index] = quote(physical.PhysicalName(column))
+		}
+		return "SELECT " + strings.Join(selects, ", ") + " FROM (VALUES " + strings.Join(rows, ", ") + ") AS " + quote(driver) + " (" + strings.Join(quotedColumns, ", ") + ") CROSS JOIN LATERAL (SELECT " + quote(context.alias) + ".*" + inner + ") AS " + quote(context.alias), nil
+	case policyir.ProviderSQLite:
+		model, ok := context.registry.Model(golem.ModelID(plan.ModelID()))
+		if !ok || len(model.PrimaryKey()) == 0 {
+			return "", fail(CodeSchema, plan.ModelID(), policyir.FieldID{}, "batch seek requires the target primary key", nil)
+		}
+		identity := make([]string, len(model.PrimaryKey()))
+		for index, field := range model.PrimaryKey() {
+			resolved, found := context.resolver.Field(context.provider, plan.ModelID(), policyir.FieldID(field))
+			if !found {
+				return "", fail(CodeSchema, plan.ModelID(), policyir.FieldID(field), "batch seek primary key field is absent", nil)
+			}
+			identity[index] = quote(context.alias) + "." + quote(resolved.Column)
+		}
+		for _, tuple := range keyPlaceholders {
+			rows = append(rows, "("+strings.Join(tuple, ", ")+")")
+		}
+		tuple := strings.Join(identity, ", ")
+		if len(identity) > 1 {
+			tuple = "(" + tuple + ")"
+		}
+		return "SELECT " + strings.Join(selects, ", ") + " FROM (VALUES " + strings.Join(rows, ", ") + ") AS " + quote(driver) + " CROSS JOIN " + context.from + " WHERE " + tuple + " IN (SELECT " + strings.Join(identity, ", ") + inner + ")", nil
+	default:
+		return "", fail(CodeRender, plan.ModelID(), policyir.FieldID{}, "batch seek provider is unsupported", nil)
+	}
 }
 
 func prepareBatchContext(plan readplan.Plan, endpoint schema.RelationEndpoint, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof) (batchContext, error) {
