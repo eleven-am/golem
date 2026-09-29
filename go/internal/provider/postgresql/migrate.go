@@ -227,11 +227,11 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	if err != nil {
 		return IncrementalPlan{}, err
 	}
-	validateOrder := validatePostgreSQLColumnOrder
+	validateColumns := validatePostgreSQLColumnInventory
 	if historicalV1 {
-		validateOrder = validateHistoricalV1PostgreSQLColumnOrder
+		validateColumns = validateHistoricalV1PostgreSQLColumnOrder
 	}
-	if err := validateOrder(beforeTables, afterTables, owners, semantic.Operations); err != nil {
+	if err := validateColumns(beforeTables, afterTables, owners, semantic.Operations); err != nil {
 		return IncrementalPlan{}, fmt.Errorf("postgresql migration %s: %w", entry.ID, err)
 	}
 	beforeExtensions := make(map[ir.ExtensionID]physical.Extension, len(before.Extensions))
@@ -244,7 +244,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			backfilled[ir.FieldID(operation.ObjectID)] = true
 		}
 	}
-	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled, formatUpgrade: reviewedPostgreSQLV1RepresentationTransition(before, after)}
+	renderer := ddlRenderer{schema: after, tables: afterTables, beforeExtensions: beforeExtensions, backfilled: backfilled, formatUpgrade: reviewedPostgreSQLV1RepresentationTransition(before, after), renamedKeys: referencedKeyRenames(beforeTables, afterTables, owners, semantic.Operations)}
 	plan := IncrementalPlan{MigrationID: entry.ID}
 	refreshFullTextOwners, err := postgresqlChangedFullTextProjectionOwners(before, after, beforeTables, afterTables)
 	if err != nil {
@@ -733,6 +733,9 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		if !ok {
 			return nil, fmt.Errorf("add key target is absent")
 		}
+		if r.renamedKeys[operation.ObjectID] {
+			return nil, nil
+		}
 		kind := "UNIQUE"
 		if operation.Kind == migration.AddPrimaryKey {
 			kind = "PRIMARY KEY"
@@ -743,6 +746,17 @@ func (r ddlRenderer) incrementalOperation(operation migration.Operation, owners 
 		key, ok := postgresqlKey(before, operation.Kind, operation.ObjectID)
 		if !ok {
 			return nil, fmt.Errorf("drop key target is absent")
+		}
+		if r.renamedKeys[operation.ObjectID] {
+			addKind := migration.AddUnique
+			if operation.Kind == migration.DropPrimaryKey {
+				addKind = migration.AddPrimaryKey
+			}
+			renamed, renamedOK := postgresqlKey(after, addKind, operation.ObjectID)
+			if !renamedOK {
+				return nil, fmt.Errorf("renamed key target is absent")
+			}
+			return []string{fmt.Sprintf("ALTER TABLE %s RENAME CONSTRAINT %s TO %s", qualified(r.schema.Namespace.Name, target.Name), quote(key.Name), quote(renamed.Name))}, nil
 		}
 		return []string{fmt.Sprintf("ALTER TABLE %s DROP CONSTRAINT %s", qualified(r.schema.Namespace.Name, target.Name), quote(key.Name))}, nil
 	case migration.AddForeignKey:
@@ -820,7 +834,7 @@ func postgresqlOutboxDeliveryBackfill(system physical.SystemSchema) string {
 	return "INSERT INTO " + qualified(system.Namespace.Name, delivery) + " (" + columns + ") SELECT " + quote("causation_id") + ",'pending',MIN(" + quote("recorded_at") + "),0,MIN(" + quote("recorded_at") + "),MIN(" + quote("recorded_at") + ") FROM " + qualified(system.Namespace.Name, outbox) + " GROUP BY " + quote("causation_id") + " ON CONFLICT (" + quote("causation_id") + ") DO NOTHING"
 }
 
-func validatePostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operations []migration.Operation) error {
+func validatePostgreSQLColumnInventory(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operations []migration.Operation) error {
 	for tableID, before := range beforeTables {
 		after, exists := afterTables[tableID]
 		if !exists {
@@ -857,33 +871,14 @@ func validatePostgreSQLColumnOrder(beforeTables, afterTables map[ir.ModelID]phys
 				actual = append(actual, ir.FieldID(operation.ObjectID))
 			}
 		}
-		if len(actual) != len(after.Columns) {
-			return fmt.Errorf("table %s final column inventory cannot be represented by ALTER TABLE", tableID)
-		}
-		if len(recreated) == 0 {
-			for index := range actual {
-				if actual[index] != after.Columns[index].ID {
-					return fmt.Errorf("table %s final column order requires a table rebuild", tableID)
-				}
-			}
-			continue
-		}
-		// A reviewed stored-generated recreation may move only derived columns
-		// physically to the tail. Their logical ordinal remains the authored
-		// schema ordinal; every source/owner column must retain relative order.
-		var actualOwners, expectedOwners []ir.FieldID
-		for _, field := range actual {
-			if !recreated[field] {
-				actualOwners = append(actualOwners, field)
-			}
-		}
+		expected := make([]ir.FieldID, 0, len(after.Columns))
 		for _, column := range after.Columns {
-			if !recreated[column.ID] {
-				expectedOwners = append(expectedOwners, column.ID)
-			}
+			expected = append(expected, column.ID)
 		}
-		if !reflect.DeepEqual(actualOwners, expectedOwners) {
-			return fmt.Errorf("table %s owner column order requires a table rebuild", tableID)
+		sort.Slice(actual, func(i, j int) bool { return actual[i] < actual[j] })
+		sort.Slice(expected, func(i, j int) bool { return expected[i] < expected[j] })
+		if !reflect.DeepEqual(actual, expected) {
+			return fmt.Errorf("table %s final column inventory cannot be represented by ALTER TABLE", tableID)
 		}
 	}
 	return nil
@@ -1005,6 +1000,67 @@ func postgresqlColumn(table physical.PhysicalTable, id ir.FieldID) (physical.Phy
 		}
 	}
 	return physical.PhysicalColumn{}, false
+}
+
+func referencedKeyRenames(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, owners map[migration.OperationID]ir.ModelID, operations []migration.Operation) map[string]bool {
+	present := map[migration.OperationKind]map[string]bool{}
+	for _, operation := range operations {
+		if present[operation.Kind] == nil {
+			present[operation.Kind] = map[string]bool{}
+		}
+		present[operation.Kind][operation.ObjectID] = true
+	}
+	result := map[string]bool{}
+	for _, operation := range operations {
+		add := migration.AddUnique
+		switch operation.Kind {
+		case migration.DropPrimaryKey:
+			add = migration.AddPrimaryKey
+		case migration.DropUnique:
+		default:
+			continue
+		}
+		if !present[add][operation.ObjectID] {
+			continue
+		}
+		tableID := owners[operation.ID]
+		before, hadBefore := beforeTables[tableID]
+		after, hasAfter := afterTables[tableID]
+		if !hadBefore || !hasAfter {
+			continue
+		}
+		old, oldOK := postgresqlKey(before, operation.Kind, operation.ObjectID)
+		current, currentOK := postgresqlKey(after, add, operation.ObjectID)
+		if !oldOK || !currentOK || old.Name == current.Name {
+			continue
+		}
+		oldIdentity, currentIdentity := old, current
+		oldIdentity.Name, currentIdentity.Name = "", ""
+		if !reflect.DeepEqual(oldIdentity, currentIdentity) {
+			continue
+		}
+		if retainedForeignKeyReferencesKey(beforeTables, afterTables, tableID, old.Columns, present[migration.DropForeignKey]) {
+			result[operation.ObjectID] = true
+		}
+	}
+	return result
+}
+
+func retainedForeignKeyReferencesKey(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, tableID ir.ModelID, columns []ir.FieldID, dropped map[string]bool) bool {
+	for childID, child := range beforeTables {
+		if _, retained := afterTables[childID]; !retained {
+			continue
+		}
+		for _, foreignKey := range child.ForeignKeys {
+			if foreignKey.ReferencedTable != tableID || !reflect.DeepEqual(foreignKey.ReferencedColumns, columns) || dropped[string(foreignKey.ID)] {
+				continue
+			}
+			if _, stillDeclared := postgresqlForeignKey(afterTables[childID], foreignKey.ID); stillDeclared {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func postgresqlKey(table physical.PhysicalTable, kind migration.OperationKind, objectID string) (physical.PhysicalKey, bool) {

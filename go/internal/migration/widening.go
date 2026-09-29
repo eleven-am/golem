@@ -84,6 +84,16 @@ func PostgreSQLAutomaticTypeTransition(before, after physical.StorageType, allow
 	return allowV1FormatEdge && before.Kind == physical.StoragePostgreSQLText && before.Precision == 0 && before.Scale == 0 && before.Length == 0 && before.Symbol == nil && after.Kind == physical.StoragePostgreSQLVarchar && after.Precision == 0 && after.Scale == 0 && after.Length > 0 && after.Symbol == nil
 }
 
+func SQLiteStringWidening(before, after physical.StorageType) bool {
+	if before.Kind != physical.StorageSQLiteText || after.Kind != physical.StorageSQLiteText || before.Symbol != nil || after.Symbol != nil {
+		return false
+	}
+	if before.Precision != 0 || before.Scale != 0 || after.Precision != 0 || after.Scale != 0 || before.Length == 0 {
+		return false
+	}
+	return after.Length == 0 || after.Length > before.Length
+}
+
 const maximumTemporalPrecision = 6
 
 func unparameterizedPair(values ...physical.StorageType) bool {

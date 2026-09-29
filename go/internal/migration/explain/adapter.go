@@ -309,6 +309,7 @@ func adaptOperation(plan migration.Plan, operation migration.Operation, before, 
 	if !ok {
 		return operationInput{}, unavailable()
 	}
+	approvalRequired := migration.PlanRequiresApproval(plan, operation)
 	_, approvalPresent := approvals[operation.ID]
 	result := operationInput{
 		id: operation.ID, kind: operation.Kind, stage: operation.Stage,
@@ -316,7 +317,7 @@ func adaptOperation(plan migration.Plan, operation migration.Operation, before, 
 		before: operation.Before, after: operation.After,
 		dependencies:     append([]migration.OperationID(nil), operation.Dependencies...),
 		capabilities:     append([]ir.CapabilityID(nil), operation.Capabilities...),
-		approvalRequired: migration.PlanRequiresApproval(plan, operation), approvalPresent: approvalPresent,
+		approvalRequired: approvalRequired, approvalPresent: approvalPresent && approvalRequired,
 		effect: effect,
 	}
 	if companion, exists := manual[operation.ID]; exists {

@@ -316,6 +316,56 @@ golem migration apply --provider sqlite --dsn "file:notes.db"
 `golem check --app-out ./notes` fails when generated code no longer matches
 the schema — run it in CI.
 
+### Approvals
+
+Every operation carries a risk label: `safe`, `locking`, `rewrite`,
+`dataLoss` or `manual`. `migration new` refuses until each operation that
+needs review is approved with `--approve <operation-id>`. When several are
+missing, it lists all of them in one error, with a ready-made
+`--approve ... --approve ...` line to rerun with. Approval is required for:
+
+- every column type change (`alterColumnType`), including a value-preserving
+  widening, which is labelled `rewrite`;
+- every `dataLoss` operation: dropping a table or column, making a column
+  required, adding a unique key, primary key or check that existing rows may
+  violate, and any type change that is not a widening;
+- a reviewed backfill (`manual`) and the initialization of a new optimistic
+  concurrency column.
+
+A constraint that the migration drops and re-adds while still accepting every
+value it accepted before needs no approval and is labelled `locking`, because
+the database re-validates it. That covers renaming a table or column (golem
+derives constraint names from both), raising or removing a string's length
+limit, and making a column optional.
+
+### What each provider changes in place
+
+- Renaming a table or column keeps its data. When another table's foreign
+  key refers to a renamed table or key column, SQLite rebuilds the referring
+  table so the reference follows the new name, and PostgreSQL renames the
+  referenced key constraint rather than dropping it.
+- Raising or removing a string's length limit (`varchar(200)` to
+  `varchar(500)`, or to an unbounded string) works on both providers. SQLite
+  rebuilds the table; PostgreSQL alters the column type. Lowering or adding a
+  limit is refused on both, because existing values might not fit.
+- Field order. SQLite keeps columns in declared order: reordering fields, or
+  inserting a field anywhere but at the end, rebuilds the table. PostgreSQL
+  cannot reorder columns in place, so a new field is always appended
+  physically and a reorder changes no DDL. Physical column order is not part
+  of PostgreSQL drift checking; the set of columns and their definitions is.
+- A required field with no default cannot be added while SQLite is a
+  provider: declare a default or make the field optional. Only when
+  PostgreSQL is the schema's sole provider can one required field per
+  migration be added with a reviewed backfill.
+
+### Drift
+
+Application startup and `golem doctor` compare the live database with the
+reviewed migrations and report any difference as drift. Temporal columns
+must match exactly, including the time zone: a `timestamp with time zone`
+column altered to `timestamp without time zone` (or a `time` column gaining a
+time zone) is drift.
+
 ## Errors you will meet early
 
 | Error | Cause |
