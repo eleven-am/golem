@@ -21,6 +21,11 @@ const (
 	CodeSubscriptionCancelled    ErrorCode = "GOLEM_SUBSCRIPTION_CANCELLED"
 	CodeCDCInvalid               ErrorCode = "GOLEM_CDC_INVALID"
 	CodeCDCUnavailable           ErrorCode = "GOLEM_CDC_UNAVAILABLE"
+
+	// CodeSubscriptionResync ends a subscription whose event source was lost
+	// mid-stream, so events may have been skipped. The client must refetch the
+	// state it derives from events and subscribe again.
+	CodeSubscriptionResync ErrorCode = "GOLEM_SUBSCRIPTION_RESYNC"
 )
 
 type Error struct {

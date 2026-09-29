@@ -246,11 +246,8 @@ func (hub *ModelHub[T]) sourceLoop(run *hubRun[T]) {
 					return
 				}
 				events.Observe(hub.config.Observer, run.ctx, hub.config.Model, "", events.ObservationTransportReconnect, events.OutcomeFailure, "", 0, len(run.input), cap(run.input), 0, 1)
-				if !waitContext(run.ctx, jitterBackoff(backoff)) {
-					return
-				}
-				backoff = nextBackoff(backoff, hub.limits.RetryCap)
-				break
+				hub.terminateRun(run.id, events.CodeSubscriptionResync)
+				return
 			}
 			if notice.EventSchemaDigest() != hub.config.EventSchema || notice.ModelID() != hub.config.Model {
 				stopClose()

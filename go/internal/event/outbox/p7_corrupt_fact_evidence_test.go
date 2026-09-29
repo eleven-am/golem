@@ -59,7 +59,7 @@ func TestCorruptFactBlocksAndRemainsInspectable(t *testing.T) {
 	}
 	transport := &captureTransport{}
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transport)
-	if err := publisher.publishLease(ctx, leases[0]); err != nil {
+	if err := publisher.publishLease(ctx, time.Now(), leases[0]); err != nil {
 		t.Fatal(err)
 	}
 	if len(transport.batches) != 0 {

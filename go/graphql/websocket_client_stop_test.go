@@ -151,6 +151,7 @@ func TestWebSocketGenuineSubscriptionFailuresStillTerminateTheOperation(t *testi
 		events.CodeSubscriptionOverflow,
 		events.CodeSubscriptionRevalidation,
 		events.CodeSubscriptionSourceClosed,
+		events.CodeSubscriptionResync,
 	} {
 		t.Run(string(code), func(t *testing.T) {
 			connection, executor, observer := newClientStopServer(t)

@@ -349,3 +349,77 @@ func TestWebSocketKeepsClientThatSendsUnsolicitedPongsBeforeItsAnswer(t *testing
 		t.Fatalf("server dropped a client that answered every probe: %v", err)
 	}
 }
+
+type closeSignalStream struct {
+	protocolStream
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (stream *closeSignalStream) Close() error {
+	stream.once.Do(func() { close(stream.closed) })
+	return nil
+}
+
+type slowSubscribeExecutor struct {
+	entered   chan struct{}
+	abandoned chan struct{}
+	release   chan struct{}
+	stream    ResponseStream
+}
+
+func (executor *slowSubscribeExecutor) Execute(context.Context, int, Operation) Response {
+	return Response{Data: map[string]any{"viewer": int32(1)}}
+}
+
+func (executor *slowSubscribeExecutor) Subscribe(ctx context.Context, _ int, _ Operation) (ResponseStream, error) {
+	close(executor.entered)
+	select {
+	case <-ctx.Done():
+		close(executor.abandoned)
+	case <-executor.release:
+	}
+	<-executor.release
+	return executor.stream, nil
+}
+
+func TestWebSocketSlowSubscribeDoesNotBlockTheReadLoop(t *testing.T) {
+	stream := &closeSignalStream{protocolStream: protocolStream{values: make(chan Response)}, closed: make(chan struct{})}
+	executor := &slowSubscribeExecutor{entered: make(chan struct{}), abandoned: make(chan struct{}), release: make(chan struct{}), stream: stream}
+	server, err := NewServer(`type Query { viewer: Int! } type Subscription { ticks: Int! }`, Config[int]{
+		PrincipalFromContext: func(context.Context) (int, bool) { return 41, true },
+		ReportInternalError:  func(context.Context, error) {},
+	}, executor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := httptest.NewServer(server.Handler())
+	defer host.Close()
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(executor.release) }) }
+	defer release()
+	dialer := websocket.Dialer{Subprotocols: []string{graphqlTransportWS}}
+	connection, _, err := dialer.Dial("ws"+strings.TrimPrefix(host.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	writeWS(t, connection, wsMessage{Type: "connection_init"})
+	if ack := readWS(t, connection); ack.Type != "connection_ack" {
+		t.Fatalf("ack = %#v", ack)
+	}
+	writeWS(t, connection, wsMessage{ID: "slow", Type: "subscribe", Payload: json.RawMessage(`{"query":"subscription { ticks }"}`)})
+	<-executor.entered
+	writeWS(t, connection, wsMessage{Type: "ping"})
+	if pong := readWS(t, connection); pong.Type != "pong" {
+		t.Fatalf("ping during a slow subscribe = %#v", pong)
+	}
+	writeWS(t, connection, wsMessage{ID: "slow", Type: "complete"})
+	<-executor.abandoned
+	release()
+	<-stream.closed
+	writeWS(t, connection, wsMessage{Type: "ping"})
+	if pong := readWS(t, connection); pong.Type != "pong" {
+		t.Fatalf("a completed slow subscribe wrote %#v", pong)
+	}
+}
