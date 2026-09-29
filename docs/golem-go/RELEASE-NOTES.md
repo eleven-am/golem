@@ -5,12 +5,183 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.5.4
+go get github.com/eleven-am/golem/go@v0.6.0
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.0
+
+**This release changes behaviour you may depend on.** Three changes can make
+code that worked on v0.5.4 fail or behave differently; read them before
+upgrading. Everything else is a fix that needs no action, apart from one
+optional regeneration described under "Regenerating".
+
+### Changes that need your attention
+
+**A caller can link only to a row it can read.** Every way a caller writes a
+foreign key now requires the target row to be readable by that caller: create,
+update, update-many, upsert, nested `Connect`, `ConnectOrCreate`, set and
+disconnect, through the programmatic clients, `HookExecutor` and GraphQL. A
+target the caller cannot read is reported exactly like a target that does not
+exist. In v0.5.4 a direct foreign-key write checked nothing about the target,
+so a caller could attach a row to one it could not read, and learn whether an
+ID existed by comparing the outcome with a random ID. System clients and
+foreign-key values written by hooks are not checked. Field modes apply as
+before.
+
+`Connect` and `ConnectOrCreate` now require read access to the target instead
+of update access. A caller who could read a row but not update it used to get
+`NOT_FOUND` from `Connect`, and `ConnectOrCreate` then tried to create a
+duplicate and failed with `CONFLICT`; both now succeed. `ConnectOrCreate`
+against an existing row the caller cannot read reports not found instead of
+attempting a create.
+
+**Cascaded deletes now produce change events.** Deleting a row whose
+dependents are declared with `OnDelete(golem.Cascade)`, `SetNull` or
+`SetDefault` now locks those dependents in the same transaction and emits a
+delete or update event for each, and marks their semantic index entries the
+way an ordinary delete or update does. In v0.5.4 the database removed or
+changed them silently: subscribers never heard of it, and a cascaded row's
+semantic vector stayed stored until a full reconcile. Permission to delete the
+parent covers its dependents, as before; subscribers still receive only events
+for rows their own read policy allows. A delete whose cascade would touch more
+rows than `MutationLimits.MaxTouchedRows` (1,000 by default) is now refused
+whole with the row-limit error instead of proceeding. That refusal counts every
+dependent, including rows the caller cannot read, so it can tell a caller that
+more dependents exist than the limit allows.
+
+**A subscription that may have missed events now ends.** When the event
+transport drops or fails mid-stream, every affected subscription ends with the
+new code `GOLEM_SUBSCRIPTION_RESYNC` (`events.CodeSubscriptionResync`). Before,
+the hub reconnected behind the subscriber's back and anything published during
+the gap was lost without a signal, on both the in-memory and NATS transports.
+On this code, refetch the state you derive from events and subscribe again, as
+you already do for `GOLEM_SUBSCRIPTION_OVERFLOW`. GraphQL clients receive the
+code unchanged.
+
+For the same reason, `Subscribe` now returns only once the event source is
+connected. A transient connection failure is retried while it waits, and
+cancelling the context ends the wait. It used to return at once and retry in
+the background, dropping events published before the connection succeeded.
+
+### Regenerating
+
+Upgrading the module alone requires no migration, and a database created by
+v0.5.4 opens and runs unchanged. Regenerating your schema brings two
+improvements, each as a reviewed migration:
+
+- **Event delivery claim index.** The migration admits a new index,
+  `golem_outbox_delivery_claim`, which golem creates the first time it claims
+  deliveries, the same way v0.5.0 created the queue-history indexes. The
+  migration's SQL is empty. Once the index exists, an older library refuses to
+  start because of it. To go back after applying the migration, drop
+  `golem_outbox_delivery_claim` and delete that migration's ledger row.
+  Rolling the module back without having applied the migration needs none of
+  this.
+- **Full-text normalization, if you have a full-text index.** Each index moves
+  to the current normalization through one reviewed rewrite: its storage and
+  triggers are dropped, recreated and backfilled inside the migration
+  transaction. Until you apply it, existing indexes behave exactly as in
+  v0.5.4.
+
+Migrations written by v0.6.0 no longer record approvals for constraints that
+are dropped and re-added while still accepting every existing value, such as
+those renamed by a table or column rename. The v0.5 command-line tool reads
+such a migration as missing an approval, so author and apply migrations with
+the v0.6.0 tool once you start using it.
+
+### Fixes
+
+**Full-text matching.** On a newly generated or rewritten index, case is
+folded independently of the database: on a PostgreSQL database created with
+`LC_CTYPE=C`, `καφές` now finds `Καφές`. Indexed text and queries are
+normalized to Unicode NFC in both folding modes, so text stored decomposed is
+found by a composed query; under `FoldNone` on SQLite, writes to such an index
+therefore need a connection opened through golem, as `FoldDiacritics` writes
+already did. `"service fe"*` is now accepted as a phrase whose last word is a
+prefix; it used to fail with a misleading error.
+
+**SQLite rows containing an empty `Bytes` value read correctly.** The SQLite
+driver golem uses reads every column after a zero-length BLOB from the wrong
+position: integers came back as 0, text as `""`, later columns took their
+neighbour's value, and only a type check such as a UUID raised an error. Golem
+now returns `Bytes` columns from SQLite in a form the driver reads correctly.
+Golem's own writes never stored an empty BLOB before this release, so a v0.5
+application was affected only if one reached a `Bytes` column another way,
+such as raw SQL, another writer or imported data. If yours could have, rows
+read through v0.5 may have carried shifted values into anything derived from
+them.
+
+**Values.** Strings containing a NUL byte are rejected with `BAD_USER_INPUT`
+before any SQL runs, on both providers. On SQLite they used to be stored and
+then match predicates incorrectly, because SQLite's string functions stop at
+NUL; rows already stored that way still read. An empty `[]byte` is stored as
+empty instead of NULL, on every write path, and reads back as an empty,
+non-nil slice. `golem.NewDecimal(0, scale)` returns `Decimal{}`, so a
+zero reads the same on both providers. An upsert whose create input names a
+different key than its target is refused when the create branch runs, instead
+of creating a row the target never named. A nullable computed field over a
+masked value resolves to null instead of an internal server error.
+
+**Queue and events.**
+- A single failed lease renewal no longer cancels a running job or event
+  publish. The lease is treated as lost only when renewal is refused or the
+  lease has expired. Before, a `MaxAttempts: 1` job could be finalized as
+  failed although its handler never failed.
+- A batch acknowledged during shutdown is recorded instead of being delivered
+  again after the lease expires.
+- A job that succeeds while the worker is shutting down is recorded instead of
+  running again on restart.
+- One full subscriber on the in-memory transport no longer stalls delivery to
+  every other subscriber for up to five minutes; only its own stream ends.
+- A slow subscribe no longer blocks a WebSocket connection's pings and stops.
+
+**Migrations.**
+- Renaming a table or key column that another table references now applies on
+  both providers. It used to leave migration history stuck.
+- Reordering fields works: SQLite rebuilds the table, and PostgreSQL, which
+  cannot reorder columns in place, no longer compares physical column order in
+  drift checks. PostgreSQL used to refuse any field not added at the end.
+- SQLite can raise or remove a string's length limit.
+- Drift checks now notice a timestamp or time column gaining or losing its
+  time zone; they used to report such a schema as current.
+- Renames, raised length limits and newly optional columns no longer ask for a
+  `DATA_LOSS` approval. When approvals are missing, all of them are listed at
+  once with a ready `--approve` line.
+- The errors for a required field without a default, and for a missing
+  migration file, now name the field and the real path.
+
+GUIDE.md now documents approvals, what each provider changes in place, and
+drift.
+
+**Costs that grew with data.** Measured at a small and a large size, per
+operation:
+
+| Operation | Sizes | SQLite before | SQLite after | PostgreSQL before | PostgreSQL after |
+| --- | --- | --- | --- | --- | --- |
+| Queue claim | 1k → 100k jobs | 0.26 → 24.8 ms | 0.15 → 0.15 ms | 0.78 → 25.7 ms | 0.83 → 0.91 ms |
+| Event delivery claim, with the index | 1k → 100k groups | 0.13 → 17.9 ms | 0.03 → 0.02 ms | 2.2 → 24.8 ms | 1.4 ms at 100k |
+| SQLite event retention | 2k → 200k groups | 1.28 → 180 ms | 0.16 → 0.19 ms | — | — |
+| Batched relation loading with `take` | 200 → 20k children per parent | 6.7 → 315 ms | 0.29 → 0.28 ms | 1.8 → 61 ms | 2.3 → 1.0 ms |
+
+The queue claim change needs no migration. Batched relation loading walks an
+index in order when the sort fields are not nullable, and on PostgreSQL text
+fields only under the C collation; otherwise it takes each parent's top rows
+without sorting the whole batch. A long-running SQLite process now refreshes
+planner statistics every four hours instead of only at close, removing
+full-text shadow-table statistics in the same step. A failed refresh is
+reported to `Config.Observer` as a `runtime.maintenance` operation, and the
+schedule continues.
+
+On PostgreSQL, the delivery claim index is built with `CREATE INDEX
+CONCURRENTLY` by one node at a time, so outbox writes continue while it builds,
+and nodes without the lock keep claiming without it. On both providers an index
+that is dropped later is rebuilt.
 
 ---
 
