@@ -185,7 +185,12 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 		prefix += " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(values, ", ") + ")"
 	}
 	statements := []Statement{{role: ApplyCreate, text: prefix + returning, bindings: bindings, columns: resultColumns, cardinality: ExactlyOneRow}}
-	verify, present, err := context.postconditionStatement(uint32(len(statements)-1), context.createVerificationConditions())
+	if reference, referenced, referenceErr := context.referenceStatement(0); referenceErr != nil {
+		return nil, referenceErr
+	} else if referenced {
+		statements = append(statements, reference)
+	}
+	verify, present, err := context.postconditionStatement(0, context.createVerificationConditions())
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +294,11 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		return nil, err
 	}
 	statements = append(statements, Statement{role: ApplyUpdate, text: "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + strings.Join(assignments, ", ") + " WHERE " + updateWhere + returning, bindings: updateBindings, columns: resultColumns, cardinality: ExactlyOneRow})
+	if reference, referenced, referenceErr := context.referenceStatement(1); referenceErr != nil {
+		return nil, referenceErr
+	} else if referenced {
+		statements = append(statements, reference)
+	}
 	verify, present, err := context.postconditionStatement(1, context.updateVerificationConditions())
 	if err != nil {
 		return nil, err
@@ -498,6 +508,19 @@ func (context renderContext) postconditionStatement(source uint32, conditions []
 		return Statement{}, false, err
 	}
 	return Statement{role: VerifyPostcondition, text: "SELECT " + selectList + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND "), bindings: bindings, columns: columns, cardinality: ExactlyOneRow}, true, nil
+}
+
+func (context renderContext) referenceStatement(source uint32) (Statement, bool, error) {
+	condition, present := context.node.ReferenceCondition()
+	if !present {
+		return Statement{}, false, nil
+	}
+	statement, _, err := context.postconditionStatement(source, []policyir.Condition{condition})
+	if err != nil {
+		return Statement{}, false, err
+	}
+	statement.role = VerifyReference
+	return statement, true, nil
 }
 
 func (context renderContext) createVerificationConditions() []policyir.Condition {

@@ -57,6 +57,7 @@ type Registry struct {
 	models                   map[golem.ModelID]Model
 	fields                   map[golem.ModelID]map[golem.FieldID]Field
 	relations                map[relationKey]RelationEndpoint
+	deleteEffects            map[golem.ModelID][]DeleteEffect
 	enumValues               map[compilerir.EnumID]map[string]compilerir.EnumValueID
 	enumLabels               map[compilerir.EnumID]map[compilerir.EnumValueID]string
 	physicalModels           map[golem.Provider]map[golem.ModelID]PhysicalModel
@@ -67,6 +68,33 @@ type Registry struct {
 	physicalNamespaces       map[golem.Provider]physical.PhysicalName
 	physicalSystemNamespaces map[golem.Provider]physical.PhysicalName
 	capabilities             map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact
+}
+
+type DeleteEffect struct {
+	source      golem.ModelID
+	relation    golem.RelationID
+	action      compilerir.ReferentialAction
+	correlation []Correlation
+}
+
+func (effect DeleteEffect) SourceModelID() golem.ModelID         { return effect.source }
+func (effect DeleteEffect) RelationID() golem.RelationID         { return effect.relation }
+func (effect DeleteEffect) Action() compilerir.ReferentialAction { return effect.action }
+func (effect DeleteEffect) Correlation() []Correlation {
+	return append([]Correlation(nil), effect.correlation...)
+}
+
+func (registry *Registry) DeleteEffects(target golem.ModelID) []DeleteEffect {
+	if registry == nil {
+		return nil
+	}
+	effects := registry.deleteEffects[target]
+	result := make([]DeleteEffect, len(effects))
+	for index, effect := range effects {
+		result[index] = effect
+		result[index].correlation = effect.Correlation()
+	}
+	return result
 }
 
 type relationKey struct {

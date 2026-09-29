@@ -141,112 +141,148 @@ func TestCallerPolicyInvisibleExactDisconnectReturnsNotFoundAcrossProviders(t *t
 	})
 }
 
-func TestCallerSourceExactConnectAuthorizesSelectedTargetUpdateReachAcrossProviders(t *testing.T) {
+func TestCallerSourceExactConnectAuthorizesSelectedTargetReadReachAcrossProviders(t *testing.T) {
 	runRelationDeleteProviderProfiles(t, "src_connect_auth", schematest.NewSubscribedIndexedOptionalSource, schematest.NewSubscribedIndexedOptionalSourcePostgreSQLNamespaces, func(t *testing.T, profile mutationProviderAcceptanceFixture) {
 		ctx, base := context.Background(), profile.fixture
-		for _, id := range []byte{240, 241, 242} {
-			if _, err := SystemCreate(ctx, base.app.System(), base.postDescriptor, base.createPost(id, golem.UUID{15: 1}, "before")); err != nil {
+		cases := sourceTargetReachMatrix()
+		for index := range cases {
+			if _, err := SystemCreate(ctx, base.app.System(), base.postDescriptor, base.createPost(byte(200+index), golem.UUID{15: 1}, "before")); err != nil {
 				t.Fatal(err)
 			}
 		}
-		for index, test := range []struct {
-			name   string
-			reach  sourceTargetUpdateReach
-			allows bool
-		}{{"allowed", sourceTargetUpdateAll, true}, {"absent", sourceTargetUpdateAbsent, false}, {"conditional-invisible", sourceTargetUpdateAlice, false}} {
+		for index, test := range cases {
 			t.Run(test.name, func(t *testing.T) {
-				fixture := reopenMutationResultWithSourceTargetUpdateReach(t, base, test.reach)
+				fixture := reopenMutationResultWithSourceTargetReach(t, base, test.read, test.update)
 				if _, err := fixture.app.database.ExecContext(ctx, `DELETE FROM `+nestedAcceptanceOutbox(fixture.app)); err != nil {
 					t.Fatal(err)
 				}
-				id := byte(240 + index)
-				bob := golem.GeneratedUniqueSelectorValue[mutationResultUser](fixture.schema.User, fixture.schema.UserKey,
-					golem.GeneratedSelectorComponent(fixture.schema.UserID, golem.UUID{15: 2}))
-				input := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
-					golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.title, "after"),
-					golem.GeneratedNestedConnect[mutationResultPost, mutationResultUser](fixture.schema.Post, fixture.schema.PostAuthor, fixture.schema.Authorship, fixture.schema.User, bob))
-				_, err := CallerUpdate(ctx, mustMutationResultCaller(t, fixture), fixture.postDescriptor, fixture.target(id), input)
-				if test.allows {
+				id := byte(200 + index)
+				connect := func(user byte) error {
+					target := golem.GeneratedUniqueSelectorValue[mutationResultUser](fixture.schema.User, fixture.schema.UserKey,
+						golem.GeneratedSelectorComponent(fixture.schema.UserID, golem.UUID{15: user}))
+					input := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
+						golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.title, "after"),
+						golem.GeneratedNestedConnect[mutationResultPost, mutationResultUser](fixture.schema.Post, fixture.schema.PostAuthor, fixture.schema.Authorship, fixture.schema.User, target))
+					_, err := CallerUpdate(ctx, mustMutationResultCaller(t, fixture), fixture.postDescriptor, fixture.target(id), input)
+					return err
+				}
+				missing := connect(250)
+				var missingFailure *golem.Error
+				if !errors.As(missing, &missingFailure) {
+					t.Fatalf("source Connect to a missing target err=%v", missing)
+				}
+				err := connect(2)
+				allows := test.read == sourceTargetReachAll
+				if allows {
 					if err != nil {
-						t.Fatalf("authorized source Connect: %v", err)
+						t.Fatalf("source Connect to a readable target: %v", err)
+					}
+					if missingFailure.Code != golem.CodeNotFound || missingFailure.Message != "record not found" {
+						t.Fatalf("source Connect to a missing target=%#v", missingFailure)
 					}
 				} else {
 					var failure *golem.Error
-					if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound {
-						t.Fatalf("source Connect target denial=%#v err=%v", failure, err)
+					if !errors.As(err, &failure) || failure.Code != missingFailure.Code || failure.Message != missingFailure.Message {
+						t.Fatalf("source Connect to an unreadable target=%#v missing=%#v err=%v", failure, missingFailure, err)
+					}
+					want := golem.CodeNotFound
+					if test.read == sourceTargetReachAbsent {
+						want = golem.CodeBadUserInput
+					}
+					if failure.Code != want {
+						t.Fatalf("source Connect to an unreadable target code=%s want=%s", failure.Code, want)
 					}
 				}
 				wantTitle, wantAuthor := "before", mutationResultUUIDText(1)
-				if test.allows {
+				if allows {
 					wantTitle, wantAuthor = "after", mutationResultUUIDText(2)
 				}
-				assertSourceMembershipPostState(t, fixture, id, wantTitle, sql.NullString{String: wantAuthor, Valid: true}, test.allows)
+				assertSourceMembershipPostState(t, fixture, id, wantTitle, sql.NullString{String: wantAuthor, Valid: true}, allows)
 			})
 		}
 	})
 }
 
-func TestCallerSourceCurrentDisconnectAuthorizesSelectedTargetUpdateReachAcrossProviders(t *testing.T) {
+func TestCallerSourceCurrentDisconnectAuthorizesSelectedTargetReadReachAcrossProviders(t *testing.T) {
 	runRelationDeleteProviderProfiles(t, "src_disconnect_auth", schematest.NewSubscribedIndexedOptionalSource, schematest.NewSubscribedIndexedOptionalSourcePostgreSQLNamespaces, func(t *testing.T, profile mutationProviderAcceptanceFixture) {
 		ctx, base := context.Background(), profile.fixture
-		for _, id := range []byte{243, 244, 245} {
-			if _, err := SystemCreate(ctx, base.app.System(), base.postDescriptor, base.createPost(id, golem.UUID{15: 2}, "before")); err != nil {
+		cases := sourceTargetReachMatrix()
+		for index := range cases {
+			if _, err := SystemCreate(ctx, base.app.System(), base.postDescriptor, base.createPost(byte(220+index), golem.UUID{15: 2}, "before")); err != nil {
 				t.Fatal(err)
 			}
 		}
-		for index, test := range []struct {
-			name   string
-			reach  sourceTargetUpdateReach
-			allows bool
-		}{{"allowed", sourceTargetUpdateAll, true}, {"absent", sourceTargetUpdateAbsent, false}, {"conditional-invisible", sourceTargetUpdateAlice, false}} {
+		for index, test := range cases {
 			t.Run(test.name, func(t *testing.T) {
-				fixture := reopenMutationResultWithSourceTargetUpdateReach(t, base, test.reach)
+				fixture := reopenMutationResultWithSourceTargetReach(t, base, test.read, test.update)
 				if _, err := fixture.app.database.ExecContext(ctx, `DELETE FROM `+nestedAcceptanceOutbox(fixture.app)); err != nil {
 					t.Fatal(err)
 				}
-				id := byte(243 + index)
+				id := byte(220 + index)
 				input := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
 					golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.title, "after"),
 					golem.GeneratedNestedDisconnectOne[mutationResultPost, mutationResultUser](fixture.schema.Post, fixture.schema.PostAuthor, fixture.schema.Authorship, fixture.schema.User))
 				_, err := CallerUpdate(ctx, mustMutationResultCaller(t, fixture), fixture.postDescriptor, fixture.target(id), input)
-				if test.allows {
+				allows := test.read == sourceTargetReachAll
+				if allows {
 					if err != nil {
-						t.Fatalf("authorized source Disconnect: %v", err)
+						t.Fatalf("source Disconnect from a readable target: %v", err)
 					}
 				} else {
 					var failure *golem.Error
-					if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound {
-						t.Fatalf("source Disconnect target denial=%#v err=%v", failure, err)
+					if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound || failure.Message != "record not found" {
+						t.Fatalf("source Disconnect from an unreadable target=%#v err=%v", failure, err)
 					}
 				}
 				wantTitle, wantAuthor := "before", sql.NullString{String: mutationResultUUIDText(2), Valid: true}
-				if test.allows {
+				if allows {
 					wantTitle, wantAuthor = "after", sql.NullString{}
 				}
-				assertSourceMembershipPostState(t, fixture, id, wantTitle, wantAuthor, test.allows)
+				assertSourceMembershipPostState(t, fixture, id, wantTitle, wantAuthor, allows)
 			})
 		}
 	})
 }
 
-type sourceTargetUpdateReach uint8
+type sourceTargetReach uint8
 
 const (
-	sourceTargetUpdateAbsent sourceTargetUpdateReach = iota
-	sourceTargetUpdateAll
-	sourceTargetUpdateAlice
+	sourceTargetReachAbsent sourceTargetReach = iota
+	sourceTargetReachAll
+	sourceTargetReachAlice
 )
 
-func reopenMutationResultWithSourceTargetUpdateReach(t testing.TB, fixture mutationResultFixture, reach sourceTargetUpdateReach) mutationResultFixture {
+type sourceTargetReachCase struct {
+	name         string
+	read, update sourceTargetReach
+}
+
+func sourceTargetReachMatrix() []sourceTargetReachCase {
+	names := map[sourceTargetReach]string{sourceTargetReachAbsent: "absent", sourceTargetReachAll: "all", sourceTargetReachAlice: "alice-only"}
+	var cases []sourceTargetReachCase
+	for _, read := range []sourceTargetReach{sourceTargetReachAll, sourceTargetReachAbsent, sourceTargetReachAlice} {
+		for _, update := range []sourceTargetReach{sourceTargetReachAll, sourceTargetReachAbsent, sourceTargetReachAlice} {
+			cases = append(cases, sourceTargetReachCase{name: "read-" + names[read] + "/update-" + names[update], read: read, update: update})
+		}
+	}
+	return cases
+}
+
+func reopenMutationResultWithSourceTargetReach(t testing.TB, fixture mutationResultFixture, read, update sourceTargetReach) mutationResultFixture {
 	t.Helper()
 	userPolicy := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultUser](fixture.schema.User, func(mutationResultActor) (golem.FrozenPolicy, error) {
 		rules := golem.NewRules[mutationResultUser]()
-		rules.CanRead(golem.All[mutationResultUser]())
+		switch read {
+		case sourceTargetReachAll:
+			rules.CanRead(golem.All[mutationResultUser]())
+		case sourceTargetReachAlice:
+			rules.CanRead(fixture.userName.Eq("alice"))
+		}
 		rules.CanCreate(golem.All[mutationResultUser]())
-		switch reach {
-		case sourceTargetUpdateAll:
+		switch update {
+		case sourceTargetReachAll:
 			rules.CanUpdate(golem.All[mutationResultUser]())
-		case sourceTargetUpdateAlice:
+		case sourceTargetReachAlice:
 			rules.CanUpdate(fixture.userName.Eq("alice"))
 		}
 		return rules.Freeze(fixture.schema.User)

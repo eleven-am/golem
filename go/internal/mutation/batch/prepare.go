@@ -22,24 +22,24 @@ import (
 func (program Program) PrepareCaptured(rows []mutationdecode.Row) (Prepared, error) {
 	context := program.context
 	if uint64(len(rows)) > uint64(program.maxRows) {
-		return Prepared{}, fail(CodeLimit, context.node.ModelID(), policyir.FieldID{}, fmt.Sprintf("captured %d rows; maximum is %d", len(rows), program.maxRows), nil)
+		return Prepared{}, fail(CodeLimit, context.modelID(), policyir.FieldID{}, fmt.Sprintf("captured %d rows; maximum is %d", len(rows), program.maxRows), nil)
 	}
 	identities := make([][]any, len(rows))
 	seen := make(map[string]struct{}, len(rows))
 	for index, row := range rows {
-		if row.ModelID() != context.node.ModelID() {
-			return Prepared{}, fail(CodeSet, context.node.ModelID(), policyir.FieldID{}, fmt.Sprintf("captured row %d belongs to another model", index), nil)
+		if row.ModelID() != context.modelID() {
+			return Prepared{}, fail(CodeSet, context.modelID(), policyir.FieldID{}, fmt.Sprintf("captured row %d belongs to another model", index), nil)
 		}
 		complete, completeErr := row.IsComplete(context.registry)
 		if completeErr != nil || !complete {
-			return Prepared{}, fail(CodeSet, context.node.ModelID(), policyir.FieldID{}, fmt.Sprintf("captured row %d is not a complete scalar image", index), completeErr)
+			return Prepared{}, fail(CodeSet, context.modelID(), policyir.FieldID{}, fmt.Sprintf("captured row %d is not a complete scalar image", index), completeErr)
 		}
 		values, key, err := context.encodedPrimary(row)
 		if err != nil {
 			return Prepared{}, err
 		}
 		if _, duplicate := seen[key]; duplicate {
-			return Prepared{}, fail(CodeSet, context.node.ModelID(), policyir.FieldID{}, "captured primary identity appears more than once", nil)
+			return Prepared{}, fail(CodeSet, context.modelID(), policyir.FieldID{}, "captured primary identity appears more than once", nil)
 		}
 		seen[key] = struct{}{}
 		identities[index] = values
@@ -81,6 +81,19 @@ func (program Program) PrepareCaptured(rows []mutationdecode.Row) (Prepared, err
 			return Prepared{}, err
 		}
 		prepared.statements = append(prepared.statements, statement)
+	}
+	if _, referenced := context.node.ReferenceCondition(); referenced && context.node.Operation() == mutationir.UpdateMany {
+		for start := 0; start < len(rows); start += chunkSize {
+			end := start + chunkSize
+			if end > len(rows) {
+				end = len(rows)
+			}
+			statement, renderErr := context.renderReference(identities[start:end])
+			if renderErr != nil {
+				return Prepared{}, renderErr
+			}
+			prepared.statements = append(prepared.statements, statement)
+		}
 	}
 	if context.node.Operation() == mutationir.UpdateMany {
 		for start := 0; start < len(rows); start += chunkSize {
@@ -178,17 +191,26 @@ func (context renderContext) chunkSize() (int, error) {
 		}
 		postFixed = len(fragment.bindings)
 	}
+	if condition, ok := context.node.ReferenceCondition(); ok {
+		fragment, compileErr := context.compile(condition, 0)
+		if compileErr != nil {
+			return 0, compileErr
+		}
+		if len(fragment.bindings) > postFixed {
+			postFixed = len(fragment.bindings)
+		}
+	}
 	if postFixed > updateFixed {
 		fixed = postFixed
 	} else {
 		fixed = updateFixed
 	}
 	if len(context.primary) == 0 || max <= fixed {
-		return 0, fail(CodeLimit, context.node.ModelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
+		return 0, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
 	}
 	rows := (max - fixed) / len(context.primary)
 	if rows < 1 {
-		return 0, fail(CodeLimit, context.node.ModelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
+		return 0, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "parameter bound cannot hold one captured identity", nil)
 	}
 	if rows > int(context.plan.Bounds().MaxRows()) {
 		rows = int(context.plan.Bounds().MaxRows())
@@ -201,7 +223,7 @@ func (context renderContext) renderUpdate(identities [][]any) (Statement, error)
 	assignments := make([]string, len(operations))
 	bindings := make([]Binding, 0)
 	for index, operation := range operations {
-		field, _ := context.resolver.Field(context.provider, context.node.ModelID(), operation.FieldID())
+		field, _ := context.resolver.Field(context.provider, context.modelID(), operation.FieldID())
 		column := context.dialect.Quote(field.Column)
 		expression, err := context.scalarExpression(operation, column, &bindings)
 		if err != nil {
@@ -210,7 +232,7 @@ func (context renderContext) renderUpdate(identities [][]any) (Statement, error)
 		assignments[index] = column + " = " + expression
 	}
 	if len(assignments) == 0 {
-		return Statement{}, fail(CodeInput, context.node.ModelID(), policyir.FieldID{}, "update-many has no scalar operations", nil)
+		return Statement{}, fail(CodeInput, context.modelID(), policyir.FieldID{}, "update-many has no scalar operations", nil)
 	}
 	identitySQL, identityBindings, err := context.identitiesWhere(identities, len(bindings))
 	if err != nil {
@@ -260,6 +282,25 @@ func (context renderContext) renderRehydrate(identities [][]any) (Statement, err
 	return context.check(statement)
 }
 
+func (context renderContext) renderReference(identities [][]any) (Statement, error) {
+	identitySQL, bindings, err := context.identitiesWhere(identities, 0)
+	if err != nil {
+		return Statement{}, err
+	}
+	condition, _ := context.node.ReferenceCondition()
+	reference, err := context.compile(condition, len(bindings))
+	if err != nil {
+		return Statement{}, err
+	}
+	bindings = append(bindings, reference.bindings...)
+	fields, columns, err := context.completeColumns()
+	if err != nil {
+		return Statement{}, err
+	}
+	statement := Statement{role: VerifyReference, text: "SELECT " + strings.Join(fields, ", ") + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE (" + identitySQL + ") AND (" + reference.text + ") ORDER BY " + context.orderBy(), bindings: bindings, columns: columns, cardinality: ExactlyCapturedRows, expected: uint32(len(identities))}
+	return context.check(statement)
+}
+
 func (context renderContext) selectingConstraint() (policyir.Condition, error) {
 	if selection, ok := context.node.SelectionRequirement(); ok {
 		return selection.Constraint(), nil
@@ -269,7 +310,7 @@ func (context renderContext) selectingConstraint() (policyir.Condition, error) {
 			return predicate, nil
 		}
 	}
-	return policyir.Condition{}, fail(CodeInput, context.node.ModelID(), policyir.FieldID{}, "complete selecting constraint is absent", nil)
+	return policyir.Condition{}, fail(CodeInput, context.modelID(), policyir.FieldID{}, "complete selecting constraint is absent", nil)
 }
 
 func (context renderContext) scalarExpression(operation mutationir.ScalarOperation, column string, bindings *[]Binding) (string, error) {
@@ -278,11 +319,11 @@ func (context renderContext) scalarExpression(operation mutationir.ScalarOperati
 	}
 	value, ok := operation.Value()
 	if !ok {
-		return "", fail(CodeInput, context.node.ModelID(), operation.FieldID(), "scalar operand is absent", nil)
+		return "", fail(CodeInput, context.modelID(), operation.FieldID(), "scalar operand is absent", nil)
 	}
 	encoded, err := context.encode(value, operation.Type())
 	if err != nil {
-		return "", fail(CodeInput, context.node.ModelID(), operation.FieldID(), "scalar operand cannot be encoded", err)
+		return "", fail(CodeInput, context.modelID(), operation.FieldID(), "scalar operand cannot be encoded", err)
 	}
 	*bindings = append(*bindings, Binding{value: encoded})
 	placeholder := context.dialect.Placeholder(len(*bindings))
@@ -294,23 +335,23 @@ func (context renderContext) scalarExpression(operation mutationir.ScalarOperati
 	case mutationir.ScalarDecrement:
 		return "(" + column + " - " + placeholder + ")", nil
 	default:
-		return "", fail(CodeInput, context.node.ModelID(), operation.FieldID(), "unknown scalar operation", nil)
+		return "", fail(CodeInput, context.modelID(), operation.FieldID(), "unknown scalar operation", nil)
 	}
 }
 
 func (context renderContext) identitiesWhere(identities [][]any, offset int) (string, []Binding, error) {
 	if len(identities) == 0 {
-		return "", nil, fail(CodeSet, context.node.ModelID(), policyir.FieldID{}, "identity chunk is empty", nil)
+		return "", nil, fail(CodeSet, context.modelID(), policyir.FieldID{}, "identity chunk is empty", nil)
 	}
 	bindings := make([]Binding, 0, len(identities)*len(context.primary))
 	rows := make([]string, len(identities))
 	for rowIndex, values := range identities {
 		if len(values) != len(context.primary) {
-			return "", nil, fail(CodeSet, context.node.ModelID(), policyir.FieldID{}, "captured identity width changed", nil)
+			return "", nil, fail(CodeSet, context.modelID(), policyir.FieldID{}, "captured identity width changed", nil)
 		}
 		parts := make([]string, len(values))
 		for index, value := range values {
-			field, _ := context.resolver.Field(context.provider, context.node.ModelID(), context.primary[index])
+			field, _ := context.resolver.Field(context.provider, context.modelID(), context.primary[index])
 			bindings = append(bindings, Binding{value: value})
 			parts[index] = context.qualified(field.Column) + " = " + context.dialect.Placeholder(offset+len(bindings))
 		}
@@ -325,19 +366,19 @@ func (context renderContext) encodedPrimary(row mutationdecode.Row) ([]any, stri
 	for index, fieldID := range context.primary {
 		cell, ok := row.Cell(fieldID)
 		if !ok || cell.IsNull() {
-			return nil, "", fail(CodeSet, context.node.ModelID(), fieldID, "captured primary-key component is absent or NULL", nil)
+			return nil, "", fail(CodeSet, context.modelID(), fieldID, "captured primary-key component is absent or NULL", nil)
 		}
 		value, ok := cell.PolicyValue()
 		if !ok {
-			return nil, "", fail(CodeSet, context.node.ModelID(), fieldID, "captured primary-key component has no exact value", nil)
+			return nil, "", fail(CodeSet, context.modelID(), fieldID, "captured primary-key component has no exact value", nil)
 		}
-		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), fieldID)
+		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		if !ok {
-			return nil, "", fail(CodeSchema, context.node.ModelID(), fieldID, "primary-key physical field is absent", nil)
+			return nil, "", fail(CodeSchema, context.modelID(), fieldID, "primary-key physical field is absent", nil)
 		}
 		encoded, err := context.encode(value, field.Type)
 		if err != nil {
-			return nil, "", fail(CodeSet, context.node.ModelID(), fieldID, "captured primary-key value cannot be encoded", err)
+			return nil, "", fail(CodeSet, context.modelID(), fieldID, "captured primary-key value cannot be encoded", err)
 		}
 		values[index] = encoded
 		appendKey(&key, encoded)
@@ -376,12 +417,12 @@ func (context renderContext) encode(value policyir.Value, typ policyir.TypeRef) 
 }
 
 func (context renderContext) returning() (string, []ResultColumn, error) {
-	model, _ := context.registry.Model(golem.ModelID(context.node.ModelID()))
+	model, _ := context.registry.Model(golem.ModelID(context.modelID()))
 	var fields []string
 	var columns []ResultColumn
 	for _, publicID := range model.Fields() {
 		fieldID := policyir.FieldID(publicID)
-		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), fieldID)
+		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		if !ok {
 			continue
 		}
@@ -390,7 +431,7 @@ func (context renderContext) returning() (string, []ResultColumn, error) {
 		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
 	}
 	if len(fields) == 0 {
-		return "", nil, fail(CodeSchema, context.node.ModelID(), policyir.FieldID{}, "model has no persisted scalar fields", nil)
+		return "", nil, fail(CodeSchema, context.modelID(), policyir.FieldID{}, "model has no persisted scalar fields", nil)
 	}
 	return strings.Join(fields, ", "), columns, nil
 }
@@ -398,7 +439,7 @@ func (context renderContext) returning() (string, []ResultColumn, error) {
 func (context renderContext) orderBy() string {
 	parts := make([]string, len(context.primary))
 	for index, fieldID := range context.primary {
-		field, _ := context.resolver.Field(context.provider, context.node.ModelID(), fieldID)
+		field, _ := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		parts[index] = context.qualified(field.Column) + " ASC"
 	}
 	return strings.Join(parts, ", ")
@@ -406,7 +447,7 @@ func (context renderContext) orderBy() string {
 
 func (context renderContext) check(statement Statement) (Statement, error) {
 	if uint32(len(statement.bindings)) > context.plan.Bounds().MaxParameters() {
-		return Statement{}, fail(CodeLimit, context.node.ModelID(), policyir.FieldID{}, "prepared statement exceeds parameter bound", nil)
+		return Statement{}, fail(CodeLimit, context.modelID(), policyir.FieldID{}, "prepared statement exceeds parameter bound", nil)
 	}
 	return statement, nil
 }

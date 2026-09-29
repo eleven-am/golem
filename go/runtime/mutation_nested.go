@@ -105,6 +105,9 @@ func renderNestedScalarNode[P, A any](app *App[P, A], stance mutationir.Stance, 
 	} else if condition, ok := node.RowPostcondition(); ok {
 		input.RowPostcondition = &condition
 	}
+	if condition, ok := node.ReferenceCondition(); ok {
+		input.ReferenceCondition = &condition
+	}
 	var result mutationir.ImageRequirements
 	var err error
 	if completeResult {
@@ -292,6 +295,9 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	if condition, present := node.RowPostcondition(); present {
 		input.RowPostcondition = &condition
 	}
+	if condition, present := node.ReferenceCondition(); present {
+		input.ReferenceCondition = &condition
+	}
 	graph, err := mutationir.NewGraph(input)
 	if err != nil {
 		return mutationnested.ApplyResult{}, err
@@ -327,7 +333,16 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	}
 	var authorized []mutationbatch.AuthorizedRow
 	var applied, after []mutationdecode.Row
+	var cascade *cascadeEffects
 	for _, statement := range prepared.Statements() {
+		if statement.Role() == mutationbatch.ApplyDelete && cascade == nil {
+			if cascade, err = captureCascadeEffects(ctx, queryer, app.registry, app.provider, app.mutationLimits, node.ModelID(), rows); err != nil {
+				return mutationnested.ApplyResult{}, err
+			}
+			if cascade == nil {
+				cascade = &cascadeEffects{}
+			}
+		}
 		returned, grants, executeErr := executeMutationBatchStatement(ctx, queryer, app.registry, app.provider, node.ModelID(), statement, statement.ExpectedRows())
 		if executeErr != nil {
 			return mutationnested.ApplyResult{}, executeErr
@@ -345,6 +360,7 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 			applied = append(applied, returned...)
 		case mutationbatch.RehydrateAfterImage:
 			after = append(after, returned...)
+		case mutationbatch.VerifyReference:
 		default:
 			return mutationnested.ApplyResult{}, fmt.Errorf("P4_RUNTIME_NESTED_BATCH: unknown statement role %d", statement.Role())
 		}
@@ -374,6 +390,9 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 		if _, err := state.buildFact(app.registry, prepared.FactRequirement(), &before, afterRow, time.Now()); err != nil {
 			return mutationnested.ApplyResult{}, err
 		}
+	}
+	if err := recordCascadeEffects(ctx, queryer, app.registry, app.provider, app.mutationLimits, state, cascade); err != nil {
+		return mutationnested.ApplyResult{}, err
 	}
 	applyResult := mutationnested.NewApplyResult(nil, nil)
 	if stance == mutationir.Caller {
@@ -443,7 +462,7 @@ func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], pol
 	if err != nil {
 		return mutationnested.Result{}, err
 	}
-	request := mutationplan.RootRequest{Stance: stance, Operation: operation, Model: policyir.ModelID(input.ModelID()), Registry: app.registry, Policies: policies, Result: anchorResult, Retry: mutationir.NoRetry, Bounds: bounds}
+	request := mutationplan.RootRequest{Stance: stance, Operation: operation, Model: policyir.ModelID(input.ModelID()), Registry: app.registry, Policies: policies, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth, Result: anchorResult, Retry: mutationir.NoRetry, Bounds: bounds}
 	runtimeValues := newMutationRuntimeValues()
 	if len(snapshots) != 0 && snapshots[0] != nil {
 		runtimeValues = snapshots[0]
@@ -501,7 +520,7 @@ func prepareNestedCompilationWithHookOwnedDeferral[P, A any](app *App[P, A], pol
 	root, _ := rootPlan.Graph().Root()
 	rootInput := nestedNodeInput(root)
 	built, err := mutationnested.Build(mutationnested.Request{
-		Root: rootInput, Mutations: input.Relations(), Stance: stance, Registry: app.registry, Policies: policies,
+		Root: rootInput, Mutations: input.Relations(), Stance: stance, Registry: app.registry, Policies: policies, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth,
 		MaxDepth: uint16(app.mutationLimits.nestedDepth), MaxRows: uint32(app.mutationLimits.touchedRows),
 		HookInventory: func(model policyir.ModelID) mutationplan.HookInventory {
 			if stance != mutationir.Caller {
@@ -721,6 +740,9 @@ func nestedNodeInput(node mutationir.Node) mutationir.NodeInput {
 	}
 	if condition, ok := node.RowPostcondition(); ok {
 		input.RowPostcondition = &condition
+	}
+	if condition, ok := node.ReferenceCondition(); ok {
+		input.ReferenceCondition = &condition
 	}
 	return input
 }
@@ -1520,7 +1542,7 @@ func (transaction *systemNestedTransaction[P, A]) compileNestedHookReplacement(r
 	}
 	built, err := mutationnested.Build(mutationnested.Request{
 		Root: root, Mutations: []golem.FrozenNestedMutation{frozen}, Stance: mutationir.Caller,
-		Registry: transaction.app.registry, Policies: transaction.policies,
+		Registry: transaction.app.registry, Policies: transaction.policies, ReadRelationDepth: transaction.app.readLimits.plan.MaxRelationDepth,
 		HookInventory: func(model policyir.ModelID) mutationplan.HookInventory {
 			return mutationHookInventory(transaction.app.bindings, golem.ModelID(model))
 		},
@@ -1563,7 +1585,7 @@ func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplace
 		return mutationnested.Result{}, mutationnested.SubtreeReplacement{}, err
 	}
 	request := mutationplan.RootRequest{
-		Stance: mutationir.Caller, Operation: mutationir.Create, Model: original.ModelID(), Registry: transaction.app.registry, Policies: transaction.policies,
+		Stance: mutationir.Caller, Operation: mutationir.Create, Model: original.ModelID(), Registry: transaction.app.registry, Policies: transaction.policies, ReadRelationDepth: transaction.app.readLimits.plan.MaxRelationDepth,
 		Create: &bound, Result: result, Retry: mutationir.NoRetry, Hooks: mutationHookInventory(transaction.app.bindings, transformed.ModelID()),
 	}
 	request.AuthorizedRuntimeFields = make([]policyir.FieldID, len(ownedFields))
@@ -1586,7 +1608,7 @@ func (transaction *systemNestedTransaction[P, A]) compileBeforeParentHookReplace
 	}
 	root.BeforeParent, root.RuntimeReplacement, root.RuntimeSource = true, true, slot
 	built, err := mutationnested.Build(mutationnested.Request{
-		Root: root, Mutations: input.Relations(), Stance: mutationir.Caller, Registry: transaction.app.registry, Policies: transaction.policies,
+		Root: root, Mutations: input.Relations(), Stance: mutationir.Caller, Registry: transaction.app.registry, Policies: transaction.policies, ReadRelationDepth: transaction.app.readLimits.plan.MaxRelationDepth,
 		HookInventory: func(model policyir.ModelID) mutationplan.HookInventory {
 			return mutationHookInventory(transaction.app.bindings, golem.ModelID(model))
 		},
@@ -1658,7 +1680,7 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 		return nil, mutationnested.SubtreeReplacement{}, err
 	}
 	request := mutationplan.RootRequest{
-		Stance: mutationir.Caller, Model: model, Registry: transaction.app.registry, Policies: transaction.policies,
+		Stance: mutationir.Caller, Model: model, Registry: transaction.app.registry, Policies: transaction.policies, ReadRelationDepth: transaction.app.readLimits.plan.MaxRelationDepth,
 		Result: result, Retry: mutationir.NoRetry,
 		Hooks: mutationHookInventory(transaction.app.bindings, transformed.ModelID()),
 	}
@@ -1719,7 +1741,7 @@ func (transaction *systemNestedTransaction[P, A]) compileExactHookReplacement(so
 	if len(relations) != 0 {
 		built, buildErr := mutationnested.Build(mutationnested.Request{
 			Root: rootInput, Mutations: relations, Stance: mutationir.Caller,
-			Registry: transaction.app.registry, Policies: transaction.policies,
+			Registry: transaction.app.registry, Policies: transaction.policies, ReadRelationDepth: transaction.app.readLimits.plan.MaxRelationDepth,
 			HookInventory: func(model policyir.ModelID) mutationplan.HookInventory {
 				return mutationHookInventory(transaction.app.bindings, golem.ModelID(model))
 			},

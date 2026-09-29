@@ -532,7 +532,23 @@ func factCodec(t testing.TB, fixture schematest.Fixture) *mutationir.FactCodecRe
 }
 
 func policySet(fixture schematest.Fixture, policy policyir.Policy) testPolicies {
-	return testPolicies{generation: fixture.Registry.GenerationDigest(), provider: policyir.ProviderSQLite, values: map[policyir.ModelID]policyir.Policy{policy.ModelID(): policy}}
+	values := map[policyir.ModelID]policyir.Policy{policy.ModelID(): policy}
+	if user := policyir.ModelID(fixture.User); user != policy.ModelID() && user != (policyir.ModelID{}) {
+		values[user] = readablePolicy(user)
+	}
+	return testPolicies{generation: fixture.Registry.GenerationDigest(), provider: policyir.ProviderSQLite, values: values}
+}
+
+func readablePolicy(model policyir.ModelID) policyir.Policy {
+	read, err := policyir.NewModelRule(policyir.ActionRead, policyir.EffectGrant, model, nil, 0)
+	if err != nil {
+		panic(err)
+	}
+	policy, err := policyir.NewPolicy(model, []policyir.Rule{read})
+	if err != nil {
+		panic(err)
+	}
+	return policy
 }
 
 func allowAllPolicy(t testing.TB, model policyir.ModelID) policyir.Policy {

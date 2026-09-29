@@ -6,9 +6,14 @@ import (
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 const listCapability = compilerir.CapabilityID("scalar-list:json-array:v1")
+
+func FieldType(field schema.Field) (policyir.TypeRef, error) {
+	return bindType(field.LogicalType(), field.Nullable())
+}
 
 func bindType(logical compilerir.LogicalTypeIR, nullable bool) (policyir.TypeRef, error) {
 	kind, ok := logicalKind(logical.Kind)

@@ -55,6 +55,7 @@ const (
 	ApplyUpdate
 	ApplyDelete
 	VerifyPostcondition
+	VerifyReference
 )
 
 type Cardinality uint8

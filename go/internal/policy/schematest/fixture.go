@@ -147,7 +147,21 @@ func newFixtureConfigured(t testing.TB, userMaxTake, postMaxTake uint32, modes C
 	return newFixtureConfiguredWithConcurrency(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, false)
 }
 
+func NewSubscribedIndexedOptionalSourceOnDelete(t testing.TB, action compilerir.ReferentialAction) Fixture {
+	return newFixtureWithDeleteAction(t, 0, 0, ContractModes{}, true, false, false, true, false, "public", "_golem", false, true, false, false, action)
+}
+
+func NewSubscribedIndexedOptionalSourceOnDeletePostgreSQLNamespaces(action compilerir.ReferentialAction) func(testing.TB, physical.PhysicalName, physical.PhysicalName) Fixture {
+	return func(t testing.TB, namespace, systemNamespace physical.PhysicalName) Fixture {
+		return newFixtureWithDeleteAction(t, 0, 0, ContractModes{}, true, false, false, true, false, namespace, systemNamespace, false, true, false, false, action)
+	}
+}
+
 func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool) Fixture {
+	return newFixtureWithDeleteAction(t, userMaxTake, postMaxTake, modes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues, postgresNamespace, postgresSystemNamespace, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency, compilerir.ActionRestrict)
+}
+
+func newFixtureWithDeleteAction(t testing.TB, userMaxTake, postMaxTake uint32, modes ContractModes, indexedAuthor, exactValues, mutationVocabulary, postSubscriptions, fullExactValues bool, postgresNamespace, postgresSystemNamespace physical.PhysicalName, inverseHasOne, nullableAuthor, scopedReads, optimisticConcurrency bool, deleteAction compilerir.ReferentialAction) Fixture {
 	t.Helper()
 	user, post := compilerir.ModelID(id(1)), compilerir.ModelID(id(2))
 	userID, userName := compilerir.FieldID(id(11)), compilerir.FieldID(id(12))
@@ -185,7 +199,7 @@ func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake 
 		model.Models[1].Fields[1].Scalar.Nullable = true
 	}
 	if nullableAuthor || inverseHasOne {
-		model.Relations[0].ForeignKey = &compilerir.ForeignKeyIR{ID: compilerir.ForeignKeyID(id(44)), PhysicalName: "fk_posts_author", OnUpdate: compilerir.ActionRestrict, OnDelete: compilerir.ActionRestrict, Match: compilerir.MatchSimple, Deferrable: compilerir.NotDeferrable}
+		model.Relations[0].ForeignKey = &compilerir.ForeignKeyIR{ID: compilerir.ForeignKeyID(id(44)), PhysicalName: "fk_posts_author", OnUpdate: compilerir.ActionRestrict, OnDelete: deleteAction, Match: compilerir.MatchSimple, Deferrable: compilerir.NotDeferrable}
 	}
 	if exactValues {
 		precision, scale := uint16(18), uint16(13)
@@ -290,7 +304,7 @@ func newFixtureConfiguredWithConcurrency(t testing.TB, userMaxTake, postMaxTake 
 		postgresSchema.Tables[1].Columns[1].Nullable = true
 	}
 	if nullableAuthor || inverseHasOne {
-		foreign := physical.PhysicalForeignKey{ID: compilerir.ForeignKeyID(id(44)), Name: "fk_posts_author", Columns: []compilerir.FieldID{authorID}, ReferencedTable: user, ReferencedColumns: []compilerir.FieldID{userID}, OnUpdate: compilerir.ActionRestrict, OnDelete: compilerir.ActionRestrict, Deferrable: compilerir.NotDeferrable}
+		foreign := physical.PhysicalForeignKey{ID: compilerir.ForeignKeyID(id(44)), Name: "fk_posts_author", Columns: []compilerir.FieldID{authorID}, ReferencedTable: user, ReferencedColumns: []compilerir.FieldID{userID}, OnUpdate: compilerir.ActionRestrict, OnDelete: deleteAction, Deferrable: compilerir.NotDeferrable}
 		sqliteSchema.Tables[1].ForeignKeys = []physical.PhysicalForeignKey{foreign}
 		postgresSchema.Tables[1].ForeignKeys = []physical.PhysicalForeignKey{foreign}
 	}

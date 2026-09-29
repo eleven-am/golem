@@ -157,7 +157,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 		Stance: stance, Operation: mutationir.Upsert, Model: request.model,
 		Registry: app.registry, Policies: policies,
 		Target: &boundTarget, Create: &boundCreate, Update: &boundUpdate,
-		Result: request.result, Retry: retry, Bounds: bounds,
+		Result: request.result, Retry: retry, Bounds: bounds, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth,
 	}
 	planning.AuthorizedRuntimeFields = make([]policyir.FieldID, len(ownedFields))
 	for index, field := range ownedFields {
@@ -252,6 +252,9 @@ func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, 
 	}
 	if value, present := node.RowPostcondition(); present {
 		input.RowPostcondition = &value
+	}
+	if value, present := node.ReferenceCondition(); present {
+		input.ReferenceCondition = &value
 	}
 	input.FieldConditions = node.FieldAuthorizations()
 	graph, err := mutationir.NewGraph(input)

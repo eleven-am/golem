@@ -85,6 +85,7 @@ type Request struct {
 	// graph ordinals are frozen. Nil means no runtime-owned materialization.
 	RuntimeValues     func(mutationir.NodeInput) (mutationir.NodeInput, error)
 	EntryHookAuthored []golem.FieldID
+	ReadRelationDepth int
 }
 
 // PositionAudit is proof that one selector/filter position was classified

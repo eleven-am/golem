@@ -109,6 +109,8 @@ func (value maskedDependencyError) Error() string {
 	return fmt.Sprintf("computed field %s cannot read masked dependency %s", value.field, value.dependency)
 }
 
+func (maskedDependencyError) GolemMaskedDependency() {}
+
 // MaskedDependency is the stable resolver error for a dependency which the
 // caller's field policy withheld. It does not grant access to the private row.
 func MaskedDependency(field, dependency string) error {

@@ -260,7 +260,7 @@ func prepareFrozenBatchProgram[P, A any](app *App[P, A], policies mutationplan.P
 	request := mutationplan.RootRequest{
 		Stance: stance, Operation: operation, Model: policyir.ModelID(model),
 		Registry: app.registry, Policies: policies, Predicate: &predicate,
-		Retry: mutationir.NoRetry, Bounds: bounds,
+		Retry: mutationir.NoRetry, Bounds: bounds, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth,
 	}
 	if stance == mutationir.Caller {
 		request.Hooks = mutationHookInventory(app.bindings, model)
@@ -364,7 +364,16 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	}
 	var authorized []mutationbatch.AuthorizedRow
 	var applied, after []mutationdecode.Row
+	var cascade *cascadeEffects
 	for _, statement := range prepared.Statements() {
+		if statement.Role() == mutationbatch.ApplyDelete && cascade == nil {
+			if cascade, err = captureCascadeEffects(ctx, scope.queryer, app.registry, app.provider, app.mutationLimits, program.ModelID(), captured); err != nil {
+				return 0, publicBatchExecutionError(program, err)
+			}
+			if cascade == nil {
+				cascade = &cascadeEffects{}
+			}
+		}
 		rows, grants, executeErr := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), statement, statement.ExpectedRows())
 		if executeErr != nil {
 			return 0, publicBatchExecutionError(program, executeErr)
@@ -382,6 +391,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 			applied = append(applied, rows...)
 		case mutationbatch.RehydrateAfterImage:
 			after = append(after, rows...)
+		case mutationbatch.VerifyReference:
 		default:
 			return 0, publicBatchExecutionError(program, fmt.Errorf("unknown prepared batch statement role %d", statement.Role()))
 		}
@@ -436,6 +446,9 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if _, err := state.buildFact(app.registry, requirement, &before, after, recordedAt); err != nil {
 			return 0, publicBatchExecutionError(program, err)
 		}
+	}
+	if err := recordCascadeEffects(ctx, scope.queryer, app.registry, app.provider, app.mutationLimits, state, cascade); err != nil {
+		return 0, publicBatchExecutionError(program, err)
 	}
 	if !outerState {
 		if err := flushMutationBinding(ctx, scope.execer, activeBinding); err != nil {
@@ -555,10 +568,15 @@ func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerCont
 		return nil, nil, err
 	}
 	if statement.Cardinality() == mutationbatch.ExactlyCapturedRows && uint32(len(result)) != statement.ExpectedRows() {
+		if statement.Role() == mutationbatch.VerifyReference {
+			return nil, nil, errBatchReferenceUnreadable
+		}
 		return nil, nil, &batchCardinalityError{role: statement.Role(), got: uint32(len(result)), want: statement.ExpectedRows()}
 	}
 	return result, grantRows, nil
 }
+
+var errBatchReferenceUnreadable = errors.New("persisted foreign key names no readable row")
 
 type batchCardinalityError struct {
 	role      mutationbatch.Role
