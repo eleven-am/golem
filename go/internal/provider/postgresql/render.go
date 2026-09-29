@@ -230,6 +230,7 @@ type ddlRenderer struct {
 	beforeExtensions map[ir.ExtensionID]physical.Extension
 	backfilled       map[ir.FieldID]bool
 	formatUpgrade    bool
+	renamedKeys      map[string]bool
 }
 
 func (r ddlRenderer) table(table physical.PhysicalTable) (string, error) {

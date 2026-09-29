@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -234,10 +235,11 @@ func buildReviewedMigrationPlan(ctx context.Context, moduleDir, migrationRoot st
 func redactMigrationPlanError(moduleDir string, err error) error {
 	message := err.Error()
 	if moduleDir != "" {
-		message = strings.ReplaceAll(message, moduleDir, "<module>")
+		message = strings.ReplaceAll(message, strings.TrimRight(moduleDir, `/\`)+string(filepath.Separator), "")
+		message = strings.ReplaceAll(message, moduleDir, ".")
 	}
 	message = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^[:space:]"'<>]+`).ReplaceAllString(message, "<redacted>")
-	message = regexp.MustCompile(`(?:[A-Za-z]:[\\/]|/)[^[:space:]"'<>]+`).ReplaceAllString(message, "<path>")
+	message = regexp.MustCompile(`(^|[[:space:]"'(=])(?:[A-Za-z]:[\\/]|/)[^[:space:]"'<>]+`).ReplaceAllString(message, "${1}<path>")
 	return errors.New(message)
 }
 

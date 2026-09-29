@@ -283,18 +283,18 @@ func RequiresApproval(operation Operation) bool {
 
 // PlanRequiresApproval applies approval policy using the plan's typed snapshots.
 func PlanRequiresApproval(plan Plan, operation Operation) bool {
-	if plan.snapshotFacts != nil && isDerivedExtensionDrop(operation, plan.snapshotFacts.before) {
-		return false
+	if plan.snapshotFacts == nil {
+		return RequiresApproval(operation)
 	}
-	return RequiresApproval(operation)
+	return snapshotRequiresApproval(plan.snapshotFacts.before, plan.snapshotFacts.after, plan.Operations, operation)
 }
 
 // PlanOperationRisk returns the effective user-facing risk for one operation.
 func PlanOperationRisk(plan Plan, operation Operation) Risk {
-	if plan.snapshotFacts != nil && isDerivedExtensionDrop(operation, plan.snapshotFacts.before) {
-		return RiskSafe
+	if plan.snapshotFacts == nil {
+		return operation.Risk
 	}
-	return operation.Risk
+	return snapshotOperationRisk(plan.snapshotFacts.before, plan.snapshotFacts.after, plan.Operations, operation)
 }
 
 func isDerivedExtensionDrop(operation Operation, before physical.PhysicalSchema) bool {

@@ -252,6 +252,12 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 			rebuildTables[tableID] = true
 		}
 	}
+	for tableID := range reorderedTables(beforeTables, afterTables) {
+		rebuildTables[tableID] = true
+	}
+	for tableID := range referencingTablesOfRespelledRebuilds(beforeTables, afterTables, rebuildTables, newTables) {
+		rebuildTables[tableID] = true
+	}
 
 	plan := IncrementalPlan{MigrationID: entry.ID}
 	guarded := map[ir.ModelID]bool{}
@@ -304,7 +310,7 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 	}
 	refreshFullText := make(map[ir.ExtensionID]bool)
 	preRefresh := make([]string, 0)
-	for _, owner := range sortedFullTextOwners(refreshFullTextOwners) {
+	for _, owner := range sortedModelIDs(refreshFullTextOwners) {
 		for _, extension := range fullTextExtensions(entry.BeforeSnapshot, owner) {
 			refreshFullText[extension.ID] = true
 			statements, dropErr := dropFullTextExtension(extension)
@@ -445,8 +451,20 @@ func (provider *Provider) planIncremental(entry migration.ManifestEntry) (Increm
 		}
 		plan.steps = append(plan.steps, migrationStep{statements: statements})
 	}
+	for _, tableID := range sortedModelIDs(rebuildTables) {
+		if emitted[tableID] {
+			continue
+		}
+		rebuild := rebuildByTable[tableID]
+		statements, renderErr := renderRebuild(beforeTables[tableID], afterTables[tableID], afterTables, rebuild)
+		if renderErr != nil {
+			return IncrementalPlan{}, renderErr
+		}
+		plan.steps = append(plan.steps, migrationStep{statements: statements, rebuild: &rebuild})
+		emitted[tableID] = true
+	}
 	postRefresh := make([]string, 0)
-	for _, owner := range sortedFullTextOwners(refreshFullTextOwners) {
+	for _, owner := range sortedModelIDs(refreshFullTextOwners) {
 		for _, extension := range fullTextExtensions(entry.AfterSnapshot, owner) {
 			statements, renderErr := renderFullTextExtension(extension, afterTables[owner])
 			if renderErr != nil {
@@ -499,13 +517,71 @@ func changedFullTextProjectionOwners(before, after physical.PhysicalSchema, befo
 	return result, nil
 }
 
-func sortedFullTextOwners(values map[ir.ModelID]bool) []ir.ModelID {
+func sortedModelIDs(values map[ir.ModelID]bool) []ir.ModelID {
 	result := make([]ir.ModelID, 0, len(values))
 	for value := range values {
 		result = append(result, value)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+func reorderedTables(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable) map[ir.ModelID]bool {
+	result := map[ir.ModelID]bool{}
+	for tableID, before := range beforeTables {
+		after, retained := afterTables[tableID]
+		if !retained {
+			continue
+		}
+		if !reflect.DeepEqual(sharedColumnOrder(before, after), sharedColumnOrder(after, before)) {
+			result[tableID] = true
+		}
+	}
+	return result
+}
+
+func sharedColumnOrder(table, other physical.PhysicalTable) []ir.FieldID {
+	columns := append([]physical.PhysicalColumn(nil), table.Columns...)
+	sort.SliceStable(columns, func(i, j int) bool { return columns[i].Ordinal < columns[j].Ordinal })
+	result := []ir.FieldID{}
+	for _, column := range columns {
+		if _, shared := findColumnByID(other, column.ID); shared {
+			result = append(result, column.ID)
+		}
+	}
+	return result
+}
+
+func referencingTablesOfRespelledRebuilds(beforeTables, afterTables map[ir.ModelID]physical.PhysicalTable, rebuilt, created map[ir.ModelID]bool) map[ir.ModelID]bool {
+	result := map[ir.ModelID]bool{}
+	for tableID, table := range afterTables {
+		if _, retained := beforeTables[tableID]; !retained || created[tableID] || rebuilt[tableID] {
+			continue
+		}
+		for _, foreignKey := range table.ForeignKeys {
+			if !rebuilt[foreignKey.ReferencedTable] {
+				continue
+			}
+			before, beforeOK := foreignKeyTargetSpelling(beforeTables[foreignKey.ReferencedTable], foreignKey.ReferencedColumns)
+			after, afterOK := foreignKeyTargetSpelling(afterTables[foreignKey.ReferencedTable], foreignKey.ReferencedColumns)
+			if !beforeOK || !afterOK || !reflect.DeepEqual(before, after) {
+				result[tableID] = true
+			}
+		}
+	}
+	return result
+}
+
+func foreignKeyTargetSpelling(table physical.PhysicalTable, columns []ir.FieldID) ([]physical.PhysicalName, bool) {
+	spelling := []physical.PhysicalName{table.Name}
+	for _, field := range columns {
+		column, exists := findColumnByID(table, field)
+		if !exists {
+			return nil, false
+		}
+		spelling = append(spelling, column.Name)
+	}
+	return spelling, true
 }
 
 func fullTextExtensions(schema physical.PhysicalSchema, owner ir.ModelID) []physical.Extension {
@@ -583,7 +659,7 @@ func buildTableRebuild(before, after physical.PhysicalTable, fingerprint migrati
 			}
 			continue
 		}
-		if !reflect.DeepEqual(old.Storage, column.Storage) {
+		if !reflect.DeepEqual(old.Storage, column.Storage) && !migration.SQLiteStringWidening(old.Storage, column.Storage) {
 			return TableRebuild{}, fmt.Errorf("table %s field %s changes storage and requires an explicit reviewed cast", after.ID, column.ID)
 		}
 		if column.Generated != nil {
