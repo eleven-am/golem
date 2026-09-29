@@ -133,18 +133,40 @@ func TestMemoryTransportIsBoundedAndCapabilityIsProcessLocal(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
+	other, err := transport.Subscribe(context.Background(), subscription)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
 	if err := transport.Publish(context.Background(), batch); err != nil {
 		t.Fatal(err)
 	}
-	if code := errorCode(t, transport.Publish(context.Background(), batch)); code != CodeEventTransport {
-		t.Fatalf("full buffer error = %q", code)
+	if _, err := other.Recv(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := transport.Publish(context.Background(), batch); err != nil {
+		t.Fatalf("one full subscriber failed the publish for every subscriber: %v", err)
 	}
 	if _, err := stream.Recv(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := transport.Publish(context.Background(), batch); err != nil {
+	if code := errorCode(t, recvErr(stream)); code != CodeEventTransport {
+		t.Fatalf("full buffer error = %q", code)
+	}
+	if _, err := other.Recv(context.Background()); err != nil {
 		t.Fatalf("exact capacity was not reusable: %v", err)
 	}
+	if err := transport.Publish(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Recv(context.Background()); err != nil {
+		t.Fatalf("an overflowed subscriber stalled the others: %v", err)
+	}
+}
+
+func recvErr(stream Stream) error {
+	_, err := stream.Recv(context.Background())
+	return err
 }
 
 func TestTransportCapabilitiesRequireCanonicalIdentityAndClosedScope(t *testing.T) {
@@ -193,20 +215,36 @@ func TestMemoryTransportRejectsPartialCausalBatchAtBoundary(t *testing.T) {
 	first := mustNotice(t, golem.EventID{1}, generation, model, causation, 1, []byte{1})
 	second := mustNotice(t, golem.EventID{2}, generation, model, causation, 2, []byte{2})
 	batch, _ := internalvalue.NewEventBatch(causation, []Notice{first, second})
-	transport, _ := NewMemoryTransport(MemoryLimits{Buffer: 1})
+	earlier := mustNotice(t, golem.EventID{3}, generation, model, golem.CausationID{4}, 1, []byte{3})
+	prefill, _ := internalvalue.NewEventBatch(golem.CausationID{4}, []Notice{earlier})
+	transport, _ := NewMemoryTransport(MemoryLimits{Buffer: 2})
 	subscription, _ := internalvalue.NewSubscription(generation, model)
 	stream, err := transport.Subscribe(context.Background(), subscription)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = stream.Close() })
-	if code := errorCode(t, transport.Publish(context.Background(), batch)); code != CodeEventTransport {
-		t.Fatalf("code = %q", code)
+	if err := transport.Publish(context.Background(), prefill); err != nil {
+		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if _, err := stream.Recv(ctx); errorCode(t, err) != CodeSubscriptionCancelled {
-		t.Fatal("failed batch left a partial notice queued")
+	other, err := transport.Subscribe(context.Background(), subscription)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = other.Close() })
+	if err := transport.Publish(context.Background(), batch); err != nil {
+		t.Fatalf("one full subscriber failed the publish for every subscriber: %v", err)
+	}
+	if got, err := stream.Recv(context.Background()); err != nil || got.EventID() != earlier.EventID() {
+		t.Fatalf("earlier notice = %v, %v", got.EventID(), err)
+	}
+	if code := errorCode(t, recvErr(stream)); code != CodeEventTransport {
+		t.Fatalf("overflowed batch left a partial notice queued or closed with %q", code)
+	}
+	for _, want := range []Notice{first, second} {
+		if got, err := other.Recv(context.Background()); err != nil || got.EventID() != want.EventID() {
+			t.Fatalf("subscriber with room lost the batch: %v, %v", got.EventID(), err)
+		}
 	}
 }
 

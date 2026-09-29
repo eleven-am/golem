@@ -157,6 +157,7 @@ func TestGraphQLErrorPresenterMapsEveryCodeAndNeverLeaksTrustedCause(t *testing.
 		events.CodeEventPublisherRunning, events.CodeEventPoison, events.CodeSubscriptionInvalid,
 		events.CodeSubscriptionOverflow, events.CodeSubscriptionRevalidation, events.CodeSubscriptionSourceClosed,
 		events.CodeSubscriptionCancelled, events.CodeCDCInvalid, events.CodeCDCUnavailable,
+		events.CodeSubscriptionResync,
 	} {
 		reported := 0
 		presented := PresentError(context.Background(), fmt.Errorf("outer: %w", events.Failure(code)), []any{"events"}, func(context.Context, error) { reported++ })

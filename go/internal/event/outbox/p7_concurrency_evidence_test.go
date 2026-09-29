@@ -23,10 +23,10 @@ func TestPartialTransportAcceptanceRetriesWholeBatch(t *testing.T) {
 	coordinator := &publisherTestCoordinator{renewed: true}
 	transport := &captureTransport{errors: []error{fmt.Errorf("ambiguous partial broker acceptance"), nil}}
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transport)
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if len(transport.batches) != 2 || len(transport.batches[0].Events()) != 3 || len(transport.batches[1].Events()) != 3 {
@@ -46,7 +46,7 @@ func TestTransientFailureNeverDropsAtArbitraryAttemptCount(t *testing.T) {
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transportFunc(func(context.Context, eventvalue.EventBatch) error {
 		return fmt.Errorf("private transient transport outage")
 	}))
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if coordinator.retryCalls != 1 || coordinator.ackCalls != 0 || coordinator.blockCalls != 0 {
@@ -63,7 +63,9 @@ func TestConcurrentCausationsMayInterleaveWithoutCorruption(t *testing.T) {
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transport)
 	publisher.limits.Concurrency = 2
 	done := make(chan error, 1)
-	go func() { done <- publisher.runClaimed(context.Background(), []eventprovider.Lease{first, second}) }()
+	go func() {
+		done <- publisher.runClaimed(context.Background(), time.Now(), []eventprovider.Lease{first, second})
+	}()
 	select {
 	case cause := <-coordinator.acknowledgements:
 		if cause != second.Delivery.CausationID {
@@ -98,7 +100,9 @@ func TestRecordedAtIsNeverUsedAsCommitTimestampOrGlobalOrder(t *testing.T) {
 	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transport)
 	publisher.limits.Concurrency = 2
 	done := make(chan error, 1)
-	go func() { done <- publisher.runClaimed(context.Background(), []eventprovider.Lease{older, newer}) }()
+	go func() {
+		done <- publisher.runClaimed(context.Background(), time.Now(), []eventprovider.Lease{older, newer})
+	}()
 	select {
 	case cause := <-coordinator.acknowledgements:
 		if cause != newer.Delivery.CausationID {

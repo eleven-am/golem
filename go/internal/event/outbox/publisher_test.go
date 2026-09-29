@@ -189,7 +189,7 @@ func TestPublisherReportsSanitizedAttemptAndAcknowledgement(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := publisher.publishLease(context.Background(), publisherValidLease(t, fixture)); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), publisherValidLease(t, fixture)); err != nil {
 		t.Fatal(err)
 	}
 	observer.mu.Lock()
@@ -212,7 +212,9 @@ func TestPublisherRunOwnershipAndShutdownGrace(t *testing.T) {
 	}))
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
-	go func() { done <- publisher.runClaimed(ctx, []eventprovider.Lease{publisherValidLease(t, fixture)}) }()
+	go func() {
+		done <- publisher.runClaimed(ctx, time.Now(), []eventprovider.Lease{publisherValidLease(t, fixture)})
+	}()
 	select {
 	case <-entered:
 	case <-time.After(time.Second):
@@ -332,7 +334,7 @@ func TestPublisherRejectsOrdinalAndDuplicatedColumnCorruptionBeforeTransport(t *
 			coordinator := &publisherTestCoordinator{renewed: true}
 			transport := &captureTransport{}
 			publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, transport)
-			if err := publisher.publishLease(context.Background(), lease); err != nil {
+			if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 				t.Fatal(err)
 			}
 			if len(transport.batches) != 0 || coordinator.blockCalls != 1 || coordinator.ackCalls != 0 {
@@ -359,12 +361,12 @@ func TestPublisherReusesIdenticalCausalBatchAfterAmbiguousAcceptanceWindows(t *t
 			if test.hook {
 				publisher.hooks.AfterPublishBeforeAck = func(eventvalue.EventBatch) error { return errors.New("crash window") }
 			}
-			first := publisher.publishLease(context.Background(), lease)
+			first := publisher.publishLease(context.Background(), time.Now(), lease)
 			if test.hook && first == nil {
 				t.Fatal("crash hook did not interrupt acknowledgement")
 			}
 			publisher.hooks = crashHooks{}
-			if err := publisher.publishLease(context.Background(), lease); err != nil {
+			if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 				t.Fatal(err)
 			}
 			if len(test.transport.batches) != 2 {
@@ -395,7 +397,7 @@ func TestPublisherRenewalLossCancelsContextRespectingTransportWithinGrace(t *tes
 	publisher.limits.LeaseDuration = 3 * time.Millisecond
 	publisher.limits.ShutdownGrace = 20 * time.Millisecond
 	started := time.Now()
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if time.Since(started) > 100*time.Millisecond {
@@ -627,4 +629,121 @@ func publisherCausalLease(t *testing.T, fixture schematest.Fixture, rows int) ev
 		})
 	}
 	return lease
+}
+
+type contextAcknowledgeCoordinator struct {
+	publisherTestCoordinator
+	acknowledged bool
+}
+
+func (coordinator *contextAcknowledgeCoordinator) Acknowledge(ctx context.Context, _, _ string) (bool, error) {
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	coordinator.ackCalls++
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	coordinator.acknowledged = true
+	return true, nil
+}
+
+func TestPublisherAcknowledgesADeliveredBatchDuringShutdown(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &contextAcknowledgeCoordinator{publisherTestCoordinator: publisherTestCoordinator{renewed: true}}
+	publisher := publisherForTest(t, coordinator, publisherTestResolver{fixture.Registry}, &captureTransport{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	publisher.hooks.AfterPublishBeforeAck = func(eventvalue.EventBatch) error {
+		cancel()
+		return nil
+	}
+	if err := publisher.runClaimed(ctx, time.Now(), []eventprovider.Lease{publisherValidLease(t, fixture)}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if !coordinator.acknowledged || coordinator.retryCalls != 0 || coordinator.releaseCalls != 0 {
+		t.Fatalf("a delivered batch was left leased for redelivery: acks=%d acknowledged=%t retries=%d releases=%d", coordinator.ackCalls, coordinator.acknowledged, coordinator.retryCalls, coordinator.releaseCalls)
+	}
+}
+
+type scriptedRenewCoordinator struct {
+	publisherTestCoordinator
+	renew func(context.Context) (bool, error)
+}
+
+func (coordinator *scriptedRenewCoordinator) Renew(ctx context.Context, _, _ string, _ time.Duration) (bool, error) {
+	coordinator.mu.Lock()
+	coordinator.renewCalls++
+	coordinator.mu.Unlock()
+	return coordinator.renew(ctx)
+}
+
+func renewalPublisherForTest(t *testing.T, coordinator eventprovider.Coordinator, fixture schematest.Fixture, transport PublisherTransport) *Publisher {
+	t.Helper()
+	publisher, err := NewPublisher(coordinator, publisherTestResolver{fixture.Registry}, transport, Limits{
+		ClaimGroups: 1, Concurrency: 1, LeaseDuration: time.Second, PublishTimeout: time.Minute,
+		RetryBase: time.Millisecond, RetryCap: time.Second, ShutdownGrace: 20 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return publisher
+}
+
+func TestPublisherTransientRenewalErrorKeepsTheInFlightPublish(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	recovered := make(chan struct{})
+	var renewals atomic.Int64
+	coordinator := &scriptedRenewCoordinator{renew: func(context.Context) (bool, error) {
+		switch renewals.Add(1) {
+		case 1:
+			return false, errors.New("transient: connection reset by peer")
+		case 2:
+			close(recovered)
+		}
+		return true, nil
+	}}
+	canceled := make(chan struct{})
+	publisher := renewalPublisherForTest(t, coordinator, fixture, transportFunc(func(ctx context.Context, _ eventvalue.EventBatch) error {
+		select {
+		case <-ctx.Done():
+			close(canceled)
+			return ctx.Err()
+		case <-recovered:
+			return nil
+		}
+	}))
+	if err := publisher.runClaimed(context.Background(), time.Now(), []eventprovider.Lease{publisherValidLease(t, fixture)}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-canceled:
+		t.Fatal("one failed renewal cancelled a publish whose lease was still valid")
+	default:
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.ackCalls != 1 || coordinator.retryCalls != 0 || coordinator.releaseCalls != 0 {
+		t.Fatalf("a transient renewal error stranded the lease: acks=%d retries=%d releases=%d", coordinator.ackCalls, coordinator.retryCalls, coordinator.releaseCalls)
+	}
+}
+
+func TestPublisherRenewalErrorsPastLeaseExpiryAbandonThePublish(t *testing.T) {
+	fixture := schematest.NewSubscribedIndexed(t)
+	coordinator := &scriptedRenewCoordinator{renew: func(context.Context) (bool, error) {
+		return false, errors.New("store unavailable")
+	}}
+	publisher := renewalPublisherForTest(t, coordinator, fixture, transportFunc(func(ctx context.Context, _ eventvalue.EventBatch) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}))
+	if err := publisher.runClaimed(context.Background(), time.Now(), []eventprovider.Lease{publisherValidLease(t, fixture)}); err != nil {
+		t.Fatal(err)
+	}
+	coordinator.mu.Lock()
+	defer coordinator.mu.Unlock()
+	if coordinator.renewCalls < 2 || coordinator.ackCalls != 0 || coordinator.retryCalls != 0 || coordinator.releaseCalls != 0 {
+		t.Fatalf("an expired lease was still acted on: renewals=%d acks=%d retries=%d releases=%d", coordinator.renewCalls, coordinator.ackCalls, coordinator.retryCalls, coordinator.releaseCalls)
+	}
 }

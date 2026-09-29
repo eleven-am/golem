@@ -13,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/events/transporttest"
 	"github.com/eleven-am/golem/go/golem"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
+	"github.com/eleven-am/golem/go/internal/subscription/subscriptiontest"
 	natsclient "github.com/nats-io/nats.go"
 )
 
@@ -586,6 +587,30 @@ func (observer *closingObserver) ObserveEvent(context.Context, events.Observatio
 	observer.once.Do(func() {
 		_ = observer.transport.Close()
 		close(observer.done)
+	})
+}
+
+func TestCoreNATSStreamOverflowNeverDropsAnUpdateSilently(t *testing.T) {
+	transport := mustTestTransport(t, newFakeConnection(), Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", StreamBuffer: 1})
+	eventSchema := golem.EventSchemaDigest(subscriptiontest.Generation)
+	binding := mapBinding{}
+	batches := map[byte]events.EventBatch{}
+	for value := byte(1); value <= 11; value++ {
+		notice := mustNotice(t, golem.EventID{value}, subscriptiontest.Generation, eventSchema, subscriptiontest.Model, golem.CausationID{value}, 1, []byte{value})
+		binding[string([]byte{value})] = notice
+		batch, err := eventvalue.NewEventBatch(golem.CausationID{value}, []events.Notice{notice})
+		if err != nil {
+			t.Fatal(err)
+		}
+		batches[value] = batch
+	}
+	if err := transport.BindEventRuntime(binding); err != nil {
+		t.Fatal(err)
+	}
+	subscriptiontest.AssertOverflowEndsSubscribersWithResync(t, transport.Subscribe, func(t testing.TB, value byte) {
+		if err := transport.Publish(context.Background(), batches[value]); err != nil {
+			t.Fatalf("publish %d: %v", value, err)
+		}
 	})
 }
 

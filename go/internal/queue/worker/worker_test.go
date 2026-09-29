@@ -1515,3 +1515,126 @@ func TestRetentionEnabledStillRunsARetentionPass(t *testing.T) {
 	awaitSignal(t, passes, "retention pass with retention enabled")
 	stop()
 }
+
+func TestTransientRenewalErrorKeepsTheLease(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	started := make(chan struct{})
+	release := make(chan struct{})
+	canceled := make(chan error, 1)
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type:        "gate.renewal.transient",
+		MaxAttempts: 1,
+		Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+			close(started)
+			select {
+			case <-ctx.Done():
+				canceled <- context.Cause(ctx)
+				return ctx.Err()
+			case <-release:
+				return nil
+			}
+		},
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	recovered := make(chan struct{})
+	var renewals atomic.Int64
+	store := stubStore{Store: fixture.store, renew: func(ctx context.Context, id, token string, duration time.Duration) (queueprovider.Renewal, error) {
+		switch renewals.Add(1) {
+		case 1:
+			return queueprovider.Renewal{}, errors.New("transient: connection reset by peer")
+		case 2:
+			renewal, err := fixture.store.Renew(ctx, id, token, duration)
+			close(recovered)
+			return renewal, err
+		default:
+			return fixture.store.Renew(ctx, id, token, duration)
+		}
+	}}
+	_, stop := fixture.start(t, store, registry, gateLimits())
+	awaitSignal(t, started, "the handler to start")
+	select {
+	case cause := <-canceled:
+		t.Fatalf("one failed heartbeat cancelled a handler whose lease was still valid: %v", cause)
+	case <-recovered:
+	}
+	close(release)
+	record := awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+	stop()
+	if record.AttemptCount != 1 || record.LastCode == queueprovider.CodeAttemptsExhausted {
+		t.Fatalf("a transient renewal error damaged the job: %#v", record)
+	}
+}
+
+func TestRenewalErrorsPastLeaseExpiryLoseTheLease(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	observed := make(chan error, 1)
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type: "gate.renewal.expired",
+		Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+			<-ctx.Done()
+			observed <- context.Cause(ctx)
+			return nil
+		},
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	store := stubStore{Store: fixture.store, renew: func(context.Context, string, string, time.Duration) (queueprovider.Renewal, error) {
+		return queueprovider.Renewal{}, errors.New("store unavailable")
+	}}
+	limits := gateLimits()
+	limits.AbandonGrace = 30 * time.Millisecond
+	_, stop := fixture.start(t, store, registry, limits)
+	var cause error
+	select {
+	case cause = <-observed:
+	case <-time.After(20 * time.Second):
+		t.Fatal("renewal errors past lease expiry never cancelled the handler")
+	}
+	stop()
+	if !errors.Is(cause, ErrLeaseLost) {
+		t.Fatalf("handler observed cancellation cause %v", cause)
+	}
+	record := fixture.inspect(t, identity)
+	if record.LastCode != "" || record.FinishedAt != nil {
+		t.Fatalf("a worker without its lease recorded an outcome: %#v", record)
+	}
+}
+
+func TestShutdownRecordsAHandlerThatSucceedsInsideAbandonGrace(t *testing.T) {
+	fixture := newHarness(t)
+	registry := queue.NewRegistry()
+	started := make(chan struct{})
+	jobType := register(t, registry, queue.Definition[gatePayload]{
+		Type:        "gate.shutdown.succeeded",
+		MaxAttempts: 3,
+		Handle: func(ctx context.Context, _ queue.Job[gatePayload]) error {
+			close(started)
+			<-ctx.Done()
+			if !errors.Is(context.Cause(ctx), errShutdown) {
+				return context.Cause(ctx)
+			}
+			return nil
+		},
+	})
+	identity := fixture.enqueue(t, newPending(t, jobType))
+	limits := gateLimits()
+	limits.ShutdownGrace = 10 * time.Millisecond
+	limits.AbandonGrace = 20 * time.Second
+	worker, err := New(fixture.store, registry, limits, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- worker.Run(ctx) }()
+	awaitSignal(t, started, "the handler to start")
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	record := fixture.inspect(t, identity)
+	if record.State != queueprovider.StateSucceeded || record.AttemptCount != 1 {
+		t.Fatalf("shutdown discarded a handler's success: %#v", record)
+	}
+}

@@ -441,21 +441,28 @@ func TestCancellationDoesNotStartQueuedEvaluation(t *testing.T) {
 	}
 }
 
-func TestTransportReconnectPreservesSubscriber(t *testing.T) {
+func TestTransportLossMidStreamEndsSubscribersWithResync(t *testing.T) {
 	first, second := newFakeSource(), newFakeSource()
 	factory := sequentialFactory(first, second)
 	hub := newTestHub(t, factory, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
 	first.fail(events.Failure(events.CodeEventTransport))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionResync {
+		t.Fatalf("a subscriber kept receiving across a lost source: %v", err)
+	}
 	select {
 	case <-second.opened:
-	case <-time.After(time.Second):
-		t.Fatal("source did not reconnect")
+		t.Fatal("the hub reopened the source for a subscriber that may have missed events")
+	default:
 	}
+	resubscribed := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
+	<-second.opened
 	notice := testNotice(t, 1)
 	second.send(notice)
-	if got := recv(t, stream); got != notice.EventID() {
-		t.Fatal("subscriber was not preserved across reconnect")
+	if got := recv(t, resubscribed); got != notice.EventID() {
+		t.Fatal("a resubscribed client did not receive events from the new source")
 	}
 	shutdown(t, hub)
 }

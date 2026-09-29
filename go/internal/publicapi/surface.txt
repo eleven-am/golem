@@ -185,6 +185,7 @@ events.CodeOf func(error) (ErrorCode, bool)
 events.CodeSubscriptionCancelled const ErrorCode = "GOLEM_SUBSCRIPTION_CANCELLED"
 events.CodeSubscriptionInvalid const ErrorCode = "GOLEM_SUBSCRIPTION_INVALID"
 events.CodeSubscriptionOverflow const ErrorCode = "GOLEM_SUBSCRIPTION_OVERFLOW"
+events.CodeSubscriptionResync const ErrorCode = "GOLEM_SUBSCRIPTION_RESYNC"
 events.CodeSubscriptionRevalidation const ErrorCode = "GOLEM_SUBSCRIPTION_REVALIDATION"
 events.CodeSubscriptionSourceClosed const ErrorCode = "GOLEM_SUBSCRIPTION_SOURCE_CLOSED"
 events.DefaultLimits func() Limits
