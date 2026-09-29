@@ -11,11 +11,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -133,8 +136,20 @@ type databaseState struct {
 	closed    chan struct{}
 	closeDone chan struct{}
 
-	maintenanceCancel context.CancelFunc
-	maintenanceDone   chan struct{}
+	maintenanceCancel   context.CancelFunc
+	maintenanceDone     chan struct{}
+	maintenanceObserver atomic.Pointer[maintenanceObserver]
+}
+
+type maintenanceObserver struct{ observer observe.Observer }
+
+// AttachMaintenanceObserver routes failures of the handle's background
+// maintenance to observer. The most recently attached observer receives them.
+func AttachMaintenanceObserver(database *Database, observer observe.Observer) {
+	if database == nil || database.state == nil || observer == nil {
+		return
+	}
+	database.state.maintenanceObserver.Store(&maintenanceObserver{observer: observer})
 }
 
 func newDatabase(database *sqlx.DB, kind golem.Provider, version Version, features []string, pool PoolStatus) *Database {
@@ -177,6 +192,19 @@ func AdoptUnverifiedForTest(database *sqlx.DB, metadata TestMetadata) *Database 
 // public escape from reviewed migration-ledger startup verification.
 func (database *Database) IsUnverifiedForTest() bool {
 	return database != nil && database.state != nil && database.state.testOnly
+}
+
+// MaintenanceObserverForTest is visible only inside Golem's internal import
+// boundary. It lets runtime tests prove that opening an application routes the
+// handle's background maintenance failures to the configured observer.
+func (database *Database) MaintenanceObserverForTest() observe.Observer {
+	if database == nil || database.state == nil {
+		return nil
+	}
+	if attached := database.state.maintenanceObserver.Load(); attached != nil {
+		return attached.observer
+	}
+	return nil
 }
 
 func compactStrings(values []string) []string {
@@ -312,14 +340,27 @@ func (state *databaseState) maintainSQLiteStatistics(interval time.Duration) {
 		defer close(state.maintenanceDone)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		failures := 0
 		for {
 			select {
 			case <-lifetime.Done():
 				return
 			case <-ticker.C:
+				started := time.Now()
 				ctx, stop := context.WithTimeout(lifetime, sqliteStatisticsTimeout)
-				_ = sqliteStatisticsRefresh(ctx, state.database)
+				err := sqliteStatisticsRefresh(ctx, state.database)
 				stop()
+				if err == nil {
+					failures = 0
+					continue
+				}
+				if lifetime.Err() != nil {
+					return
+				}
+				failures++
+				if attached := state.maintenanceObserver.Load(); attached != nil {
+					observeexec.EmitMaintenance(attached.observer, state.provider, observe.OutcomeFailure, observe.ReasonProvider, failures, time.Since(started))
+				}
 			}
 		}
 	}()

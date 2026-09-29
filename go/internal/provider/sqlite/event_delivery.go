@@ -59,21 +59,51 @@ func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error
 	if coordinator.claimIndexReady.Load() {
 		return nil
 	}
-	if _, err := coordinator.database.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS "main"."golem_outbox_delivery_claim" ON "_golem_outbox_delivery" ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`); err != nil {
-		return fmt.Errorf("P7_SQLITE_DELIVERY: create golem_outbox_delivery_claim: %w", err)
+	_, createErr := coordinator.database.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS "main"."golem_outbox_delivery_claim" ON "_golem_outbox_delivery" ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`)
+	present, err := sqliteOutboxDeliveryClaimPresent(ctx, coordinator.database)
+	if err != nil {
+		return err
 	}
+	if !present {
+		if createErr != nil {
+			return fmt.Errorf("P7_SQLITE_DELIVERY: create golem_outbox_delivery_claim: %w", createErr)
+		}
+		return fmt.Errorf("P7_SQLITE_DELIVERY: golem_outbox_delivery_claim is absent after its creation succeeded")
+	}
+	coordinator.claimIndexReady.Store(true)
+	return nil
+}
+
+func (coordinator *eventCoordinator) verifyClaimIndex(ctx context.Context, queryer sqlx.QueryerContext) (bool, error) {
+	if !coordinator.claimIndexReady.Load() {
+		return false, nil
+	}
+	var definitions []string
+	if err := sqlx.SelectContext(ctx, queryer, &definitions, `SELECT COALESCE("sql",'') FROM "main"."sqlite_master" WHERE "type"='index' AND "name"='golem_outbox_delivery_claim' AND "tbl_name"='_golem_outbox_delivery'`); err != nil {
+		return false, fmt.Errorf("P7_SQLITE_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	}
+	if len(definitions) == 1 && sqliteOutboxDeliveryClaimMatches("_golem_outbox_delivery", definitions[0]) {
+		return true, nil
+	}
+	coordinator.claimIndexReady.Store(false)
+	return false, nil
+}
+
+func sqliteOutboxDeliveryClaimPresent(ctx context.Context, queryer sqlx.QueryerContext) (bool, error) {
 	var rows []struct {
 		Table string         `db:"tbl_name"`
 		SQL   sql.NullString `db:"sql"`
 	}
-	if err := coordinator.database.SelectContext(ctx, &rows, `SELECT "tbl_name","sql" FROM "main"."sqlite_master" WHERE "type"='index' AND "name"='golem_outbox_delivery_claim'`); err != nil {
-		return fmt.Errorf("P7_SQLITE_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	if err := sqlx.SelectContext(ctx, queryer, &rows, `SELECT "tbl_name","sql" FROM "main"."sqlite_master" WHERE "name"='golem_outbox_delivery_claim'`); err != nil {
+		return false, fmt.Errorf("P7_SQLITE_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	}
+	if len(rows) == 0 {
+		return false, nil
 	}
 	if len(rows) != 1 || !sqliteOutboxDeliveryClaimMatches(rows[0].Table, rows[0].SQL.String) {
-		return fmt.Errorf("P7_SQLITE_DELIVERY: an object named golem_outbox_delivery_claim does not match %q; drop it so golem can create its own", sqliteOutboxDeliveryClaimDefinition)
+		return false, fmt.Errorf("P7_SQLITE_DELIVERY: an object named golem_outbox_delivery_claim does not match %q; drop it so golem can create its own", sqliteOutboxDeliveryClaimDefinition)
 	}
-	coordinator.claimIndexReady.Store(true)
-	return nil
+	return true, nil
 }
 
 func sqliteOutboxDeliveryClaimMatches(table, definition string) bool {
@@ -107,6 +137,9 @@ func sqliteClaimableGroups(indexed bool) string {
 
 func (coordinator *eventCoordinator) claim(ctx context.Context, options eventprovider.ClaimOptions, includeDepth bool) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
+	if _, err := coordinator.verifyClaimIndex(ctx, coordinator.database); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	if err := coordinator.ensureClaimIndex(ctx); err != nil {
@@ -148,8 +181,12 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 	if err := connection.GetContext(ctx, &now, "SELECT "+sqliteDatabaseMicros); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: read database time: %w", err)
 	}
+	indexed, err := coordinator.verifyClaimIndex(ctx, connection)
+	if err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
 	var causations []string
-	if err := connection.SelectContext(ctx, &causations, sqliteClaimableGroups(coordinator.claimIndexReady.Load()), now, now, options.Groups); err != nil {
+	if err := connection.SelectContext(ctx, &causations, sqliteClaimableGroups(indexed), now, now, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
 	}
 	causations, err = sqliteBoundedCausations(ctx, connection, causations, eventprovider.ClaimByteLimit(options))

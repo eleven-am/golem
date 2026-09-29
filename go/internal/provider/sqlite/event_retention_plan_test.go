@@ -11,7 +11,12 @@ import (
 
 func openOutboxSystemTables(tb testing.TB) *sqlx.DB {
 	tb.Helper()
-	database := sqlx.MustOpen("sqlite", "file:"+tb.TempDir()+"/outbox.db?_pragma=foreign_keys(1)&_txlock=immediate")
+	return openOutboxSystemTablesAt(tb, tb.TempDir()+"/outbox.db")
+}
+
+func openOutboxSystemTablesAt(tb testing.TB, path string) *sqlx.DB {
+	tb.Helper()
+	database := sqlx.MustOpen("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_txlock=immediate")
 	tb.Cleanup(func() { database.Close() })
 	for _, object := range []physical.SystemObject{physical.OutboxSystemObjectV1(), physical.OutboxDeliverySystemObjectV1()} {
 		statement, err := renderSystemObject(object)

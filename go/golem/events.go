@@ -231,11 +231,13 @@ func (request FrozenEventRequest) Selection() []FieldID {
 }
 
 // EventStream delivers one subscriber's change events in order. It never skips
-// an event silently: when the event transport drops or fails mid-stream, Recv
-// ends the stream with GOLEM_SUBSCRIPTION_RESYNC instead of reconnecting behind
-// the caller's back, because the events it missed cannot be replayed. On that
-// code the caller refetches the state it derives from events and subscribes
-// again. A caller that falls behind its queue ends with
+// an event silently. Subscribing returns only once the transport subscription
+// is live, retrying a transient connect failure until then, so the stream
+// covers every event published after it returns. When the transport drops or
+// fails mid-stream, Recv ends the stream with GOLEM_SUBSCRIPTION_RESYNC instead
+// of reconnecting behind the caller's back, because the events it missed cannot
+// be replayed. On that code the caller refetches the state it derives from
+// events and subscribes again. A caller that falls behind its queue ends with
 // GOLEM_SUBSCRIPTION_OVERFLOW and recovers the same way.
 type EventStream[E any] interface {
 	Recv(context.Context) (E, error)

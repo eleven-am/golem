@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -106,6 +107,130 @@ func TestDeleteCascadeRollsBackAndIsBoundedAcrossProviders(t *testing.T) {
 		assertCascadeFacts(t, profile, nil)
 		assertCascadePosts(t, profile, map[byte]string{30: mutationResultUUIDText(2), 31: mutationResultUUIDText(2), 32: mutationResultUUIDText(2)})
 	})
+}
+
+func TestDeleteCascadeIsBoundedByTheRemainingRowBudgetAcrossProviders(t *testing.T) {
+	runRelationDeleteProviderProfiles(t, "cascade_budget", func(t testing.TB) schematest.Fixture {
+		return schematest.NewSubscribedIndexedOptionalSourceOnDelete(t, compilerir.ActionCascade)
+	}, schematest.NewSubscribedIndexedOptionalSourceOnDeletePostgreSQLNamespaces(compilerir.ActionCascade), func(t *testing.T, profile mutationProviderAcceptanceFixture) {
+		ctx, fixture := context.Background(), profile.fixture
+		for _, id := range []byte{40, 41, 42} {
+			if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(id, golem.UUID{15: 2}, "budget")); err != nil {
+				t.Fatal(err)
+			}
+		}
+		clearCascadeOutbox(t, profile)
+		unchanged := map[byte]string{40: mutationResultUUIDText(2), 41: mutationResultUUIDText(2), 42: mutationResultUUIDText(2)}
+
+		var applied atomic.Int64
+		exact := reopenMutationResultWithUserDeleteProbe(t, fixture, MutationLimits{MaxTouchedRows: 3}, &applied)
+		_, err := CallerDelete(ctx, mustMutationResultCaller(t, exact), exact.userDescriptor, cascadeUserTarget(exact, 2))
+		assertMutationRowLimit(t, err, "delete", "mutation exceeds the configured row limit")
+		_, err = CallerDeleteMany(ctx, mustMutationResultCaller(t, exact), exact.userDescriptor, exact.userID.Eq(golem.UUID{15: 2}))
+		assertMutationRowLimit(t, err, "deleteMany", "batch mutation exceeds the configured row limit")
+		assertCascadeFacts(t, profile, nil)
+		assertCascadePosts(t, profile, unchanged)
+
+		spent := reopenMutationResultWithUserDeleteProbe(t, fixture, MutationLimits{MaxTouchedRows: 4}, &applied)
+		err = CallerTransaction(ctx, mustMutationResultCaller(t, spent), func(tx *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			if _, err := CallerTxUpdate(ctx, tx, spent.postDescriptor, spent.target(40), spent.updateTitle("spent")); err != nil {
+				return err
+			}
+			_, err := CallerTxDelete(ctx, tx, spent.userDescriptor, cascadeUserTarget(spent, 2))
+			return err
+		})
+		assertMutationRowLimit(t, err, "delete", "mutation exceeds the configured row limit")
+		err = CallerTransaction(ctx, mustMutationResultCaller(t, spent), func(tx *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			if _, err := CallerTxUpdate(ctx, tx, spent.postDescriptor, spent.target(40), spent.updateTitle("spent")); err != nil {
+				return err
+			}
+			_, err := CallerTxDeleteMany(ctx, tx, spent.userDescriptor, spent.userID.Eq(golem.UUID{15: 2}))
+			return err
+		})
+		assertMutationRowLimit(t, err, "deleteMany", "batch mutation exceeds the configured row limit")
+		assertCascadeFacts(t, profile, nil)
+		assertCascadePosts(t, profile, unchanged)
+
+		single := reopenMutationResultWithLimits(t, fixture, MutationLimits{MaxTouchedRows: 1})
+		err = CallerTransaction(ctx, mustMutationResultCaller(t, single), func(tx *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			if _, err := CallerTxCreate(ctx, tx, single.postDescriptor, single.createPost(43, golem.UUID{15: 1}, "first")); err != nil {
+				return err
+			}
+			_, err := CallerTxCreate(ctx, tx, single.postDescriptor, single.createPost(44, golem.UUID{15: 1}, "second"))
+			return err
+		})
+		assertMutationRowLimit(t, err, "create", "mutation exceeds the configured row limit")
+		assertCascadeFacts(t, profile, nil)
+		assertCascadePosts(t, profile, unchanged)
+		if applied.Load() != 0 {
+			t.Fatalf("a refused cascade ran %d parent deletes before refusing", applied.Load())
+		}
+
+		if _, err := CallerDelete(ctx, mustMutationResultCaller(t, spent), spent.userDescriptor, cascadeUserTarget(spent, 2)); err != nil {
+			t.Fatalf("delete exactly at the touched-row limit: %v", err)
+		}
+		assertCascadeFacts(t, profile, []cascadeFact{{"deleted", 40}, {"deleted", 41}, {"deleted", 42}})
+		assertCascadePosts(t, profile, map[byte]string{})
+		if applied.Load() != 1 {
+			t.Fatalf("parent deletes=%d want=1", applied.Load())
+		}
+	})
+}
+
+func reopenMutationResultWithUserDeleteProbe(t *testing.T, fixture mutationResultFixture, limits MutationLimits, applied *atomic.Int64) mutationResultFixture {
+	t.Helper()
+	provider := golem.SQLite
+	if fixture.app.provider == policyir.ProviderPostgreSQL {
+		provider = golem.PostgreSQL
+	}
+	allowUsers := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultUser](fixture.schema.User, func(mutationResultActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[mutationResultUser]()
+		rules.CanRead(golem.All[mutationResultUser]())
+		rules.CanCreate(golem.All[mutationResultUser]())
+		rules.CanUpdate(golem.All[mutationResultUser]())
+		rules.CanDelete(golem.All[mutationResultUser]())
+		return rules.Freeze(fixture.schema.User)
+	})
+	allowPosts := golem.GeneratedPolicyBinding[mutationResultActor, mutationResultPost](fixture.schema.Post, func(mutationResultActor) (golem.FrozenPolicy, error) {
+		rules := golem.NewRules[mutationResultPost]()
+		rules.CanRead(golem.All[mutationResultPost]())
+		rules.CanCreate(golem.All[mutationResultPost]())
+		rules.CanUpdate(golem.All[mutationResultPost]())
+		rules.CanDelete(golem.All[mutationResultPost]())
+		return rules.Freeze(fixture.schema.Post)
+	})
+	hooks := []golem.HookBinding[mutationResultActor]{
+		golem.GeneratedAfterHookBinding[mutationResultActor, mutationResultUser, golem.DeleteHookResult[mutationResultUser]](fixture.schema.User, golem.HookDelete, func(context.Context, golem.DeleteHookResult[mutationResultUser]) error {
+			applied.Add(1)
+			return nil
+		}),
+		golem.GeneratedAfterHookBinding[mutationResultActor, mutationResultUser, golem.DeleteManyHookResult[mutationResultUser]](fixture.schema.User, golem.HookDeleteMany, func(context.Context, golem.DeleteManyHookResult[mutationResultUser]) error {
+			applied.Add(1)
+			return nil
+		}),
+	}
+	bindings, err := golem.GeneratedApplicationBindings(fixture.schema.Bundle.GenerationDigest(),
+		golem.GeneratedStampedPackageBindings(fixture.schema.Bundle.GenerationDigest(), []golem.PolicyBinding[mutationResultActor]{allowUsers, allowPosts}, hooks))
+	if err != nil {
+		t.Fatal(err)
+	}
+	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+		Database: p8RuntimeTestDatabase(fixture.app.database, provider), Bundle: fixture.schema.Bundle, Bindings: bindings, Descriptors: fixture.app.descriptors,
+		MutationLimits: limits, ResolvePrincipal: fixture.app.resolvePrincipal, SnapshotActor: fixture.app.snapshotActor,
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.app = app
+	return fixture
+}
+
+func assertMutationRowLimit(t *testing.T, err error, operation, message string) {
+	t.Helper()
+	var failure *golem.Error
+	if !errors.As(err, &failure) || failure.Code != golem.CodeBadUserInput || failure.Operation != operation || failure.Message != message {
+		t.Fatalf("row limit failure=%#v err=%v, want %s %q", failure, err, operation, message)
+	}
 }
 
 func seedCascadeUser(t *testing.T, fixture mutationResultFixture, id byte, name string) {

@@ -179,7 +179,7 @@ func (context renderContext) completeColumns() ([]string, []ResultColumn, error)
 			continue
 		}
 		alias := "golem_f_" + hex.EncodeToString(fieldID[:])
-		fields = append(fields, context.qualified(field.Column)+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
+		fields = append(fields, policysql.ProjectColumn(context.provider, field.Type, context.qualified(field.Column))+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
 		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
 	}
 	if len(fields) == 0 {

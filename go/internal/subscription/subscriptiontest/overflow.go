@@ -134,3 +134,60 @@ func key(t testing.TB) subscription.SubscriberKey {
 	}
 	return result
 }
+
+func AssertTransientConnectFailureNeverSkipsSilently(t *testing.T, source subscription.SourceFactory, publish func(testing.TB, byte)) {
+	t.Helper()
+	connected := make(chan struct{})
+	var opens atomic.Int64
+	factory := func(ctx context.Context, request events.Subscription) (events.Stream, error) {
+		if opens.Add(1) == 1 {
+			return nil, events.Failure(events.CodeEventTransport)
+		}
+		stream, err := source(ctx, request)
+		if err == nil && opens.Load() == 2 {
+			close(connected)
+		}
+		return stream, err
+	}
+	hub, err := subscription.NewModelHub(subscription.Config[golem.EventID]{
+		Generation: Generation, Model: Model, Source: factory,
+		Limits: events.Limits{SubscriberQueue: 64, HubInputQueue: 8, EvaluationConcurrency: 1, RetryBase: 50 * time.Millisecond, RetryCap: 50 * time.Millisecond},
+		Evaluate: func(_ context.Context, notice events.Notice, _ subscription.SubscriberKey) (subscription.Evaluation[golem.EventID], error) {
+			return subscription.Deliver(notice.EventID()), nil
+		},
+		Clone: func(value golem.EventID) (golem.EventID, error) { return value, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := hub.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	stream, err := hub.Subscribe(context.Background(), key(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	publish(t, 1)
+	<-connected
+	publish(t, 2)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	value, err := stream.Recv(ctx)
+	if err != nil {
+		code, ok := events.CodeOf(err)
+		if !ok || code != events.CodeSubscriptionResync {
+			t.Fatalf("a subscriber whose source failed to connect ended with %v, not %s", err, events.CodeSubscriptionResync)
+		}
+		return
+	}
+	if value != (golem.EventID{1}) {
+		t.Fatalf("the hub silently skipped an update published after Subscribe returned: first delivered %v after %d source attempts", value, opens.Load())
+	}
+	if value, err := stream.Recv(ctx); err != nil || value != (golem.EventID{2}) {
+		t.Fatalf("second update=%v err=%v", value, err)
+	}
+}

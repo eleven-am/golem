@@ -849,7 +849,7 @@ func cloneFrozenOperand(operand frozenOperand) frozenOperand {
 }
 
 func cloneFrozenValue(value frozenValue) frozenValue {
-	value.bytes = append([]byte(nil), value.bytes...)
+	value.bytes = bytes.Clone(value.bytes)
 	value.json = value.json.clone()
 	return value
 }
@@ -988,7 +988,7 @@ func (view frozenValueView) Bytes() ([]byte, bool) {
 	if view.value.kind != FrozenValueBytes {
 		return nil, false
 	}
-	return append([]byte(nil), view.value.bytes...), true
+	return bytes.Clone(view.value.bytes), true
 }
 func (view frozenValueView) UUID() (UUID, bool) {
 	return view.value.uuid, view.value.kind == FrozenValueUUID

@@ -82,7 +82,7 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		if value.Kind() != reflect.Slice || value.Type().Elem().Kind() != reflect.Uint8 {
 			return result, wrongGoType(raw, "[]byte")
 		}
-		bytesValue := append([]byte(nil), value.Bytes()...)
+		bytesValue := bytes.Clone(value.Bytes())
 		if logical.MaxLength != nil && uint32(len(bytesValue)) > *logical.MaxLength {
 			return result, fmt.Errorf("bytes exceed maximum byte length %d", *logical.MaxLength)
 		}

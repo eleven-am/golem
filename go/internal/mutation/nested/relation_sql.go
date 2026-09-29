@@ -472,7 +472,7 @@ func selectAll(registry *schema.Registry, resolver policysql.Resolver, dialect p
 		if alias != "" {
 			column = dialect.Quote(alias) + "." + column
 		}
-		selects[index] = column + " AS " + dialect.Quote(physical.PhysicalName(name))
+		selects[index] = policysql.ProjectColumn(provider, field.Type, column) + " AS " + dialect.Quote(physical.PhysicalName(name))
 		columns[index] = RelationSQLColumn{field: fieldID, alias: name}
 	}
 	if len(selects) == 0 {
@@ -529,7 +529,7 @@ func cloneRelationArgs(values []any) []any {
 	for index, value := range values {
 		switch typed := value.(type) {
 		case []byte:
-			result[index] = append([]byte(nil), typed...)
+			result[index] = bytes.Clone(typed)
 		case []string:
 			result[index] = append([]string(nil), typed...)
 		case time.Time:

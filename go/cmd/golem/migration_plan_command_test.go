@@ -744,3 +744,38 @@ func rewriteManifestWithUnknownOperation(t *testing.T, module, provider string) 
 		t.Fatal(err)
 	}
 }
+
+func TestRedactMigrationPlanErrorHidesEveryAbsolutePathAndKeepsModuleRelativeOnes(t *testing.T) {
+	module := "/Users/roy/proj"
+	for _, test := range []struct {
+		input     string
+		forbidden []string
+		kept      []string
+	}{
+		{input: "read [/Users/roy/private/canary.sql]: denied", forbidden: []string{"/Users", "canary"}},
+		{input: "paths /a/one,/Users/roy/private/canary.sql", forbidden: []string{"/a/one", "/Users", "canary"}},
+		{input: "paths migrations/one,/Users/roy/private/canary.sql", forbidden: []string{"/Users", "canary"}, kept: []string{"migrations/one"}},
+		{input: "file:/Users/roy/private/canary.sql not found", forbidden: []string{"/Users", "canary"}},
+		{input: "open (/etc/passwd) failed", forbidden: []string{"/etc"}},
+		{input: "flag --out=/etc/passwd", forbidden: []string{"/etc"}},
+		{input: `open "/etc/passwd" and '/etc/shadow'`, forbidden: []string{"/etc"}},
+		{input: "open {/etc/passwd}; then |/etc/shadow|", forbidden: []string{"/etc"}},
+		{input: `read C:\Users\roy\canary.sql and D:/private/canary.sql`, forbidden: []string{`C:\Users`, "D:/private", "canary"}},
+		{input: "read ../../outside/canary.sql and ~/private/canary.sql", forbidden: []string{"outside", "private", "canary"}},
+		{input: "dial postgres://user:secret@host/private", forbidden: []string{"user:secret", "host/private"}},
+		{input: "read " + module + "/migrations/0001_initial/migration.sql: denied", forbidden: []string{module}, kept: []string{"migrations/0001_initial/migration.sql"}},
+		{input: "schema/app.golem:3:4: unknown field in " + module, forbidden: []string{module}, kept: []string{"schema/app.golem:3:4"}},
+	} {
+		got := redactMigrationPlanError(module, errors.New(test.input)).Error()
+		for _, forbidden := range test.forbidden {
+			if strings.Contains(got, forbidden) {
+				t.Errorf("redact(%q)=%q still contains %q", test.input, got, forbidden)
+			}
+		}
+		for _, kept := range test.kept {
+			if !strings.Contains(got, kept) {
+				t.Errorf("redact(%q)=%q lost the module-relative %q", test.input, got, kept)
+			}
+		}
+	}
+}

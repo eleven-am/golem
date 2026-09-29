@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
 	"errors"
@@ -301,7 +302,7 @@ func cloneComputedArguments(values []ComputedArgument) []ComputedArgument {
 func cloneComputedArgumentValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []any:
 		result := make([]any, len(typed))
 		for index, item := range typed {

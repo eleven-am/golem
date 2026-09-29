@@ -9,10 +9,12 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationfact "github.com/eleven-am/golem/go/internal/mutation/fact"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	"github.com/eleven-am/golem/go/internal/observeexec"
+	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/jmoiron/sqlx"
 )
@@ -180,11 +182,23 @@ func (state *mutationState) touch(rows int) error {
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
 	if rows > state.limits.touchedRows-state.touched {
-		return fmt.Errorf("P4_MUTATION_LIMIT: touched rows exceed %d", state.limits.touchedRows)
+		return mutationbatch.LimitError(policyir.ModelID{}, fmt.Sprintf("touched rows exceed %d", state.limits.touchedRows))
 	}
 	state.touched += rows
 	state.dirty = state.dirty || rows != 0
 	return nil
+}
+
+func (state *mutationState) remainingTouched() (int, error) {
+	if state == nil {
+		return 0, fmt.Errorf("P4_MUTATION_STATE: transaction state is unavailable")
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.flushed || state.finished {
+		return 0, fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
+	}
+	return state.limits.touchedRows - state.touched, nil
 }
 
 // buildFact allocates the next transaction ordinal only after the exact fact

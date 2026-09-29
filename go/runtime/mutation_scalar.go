@@ -501,7 +501,7 @@ func commitScalarMutationExecution(ctx context.Context, binding *executionBindin
 	}
 	if err := state.touch(1); err != nil {
 		state.poison(err)
-		return err
+		return scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "touched rows exceed the configured limit", err)
 	}
 	if requirement := program.FactRequirement(); requirement.Enabled() {
 		before, after, imageErr := scalarMutationFactImages(registry, model, program, result)
@@ -535,7 +535,11 @@ func captureScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, bind
 	if err != nil {
 		return nil, scalarMutationError(mutationir.Delete, scalarMutationInvariant, mutationsql.ApplyDelete, 0, "locked pre-image could not form a row", err)
 	}
-	return captureCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, model, []mutationdecode.Row{parent})
+	state, err := binding.mutationState()
+	if err != nil {
+		return nil, err
+	}
+	return captureCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, model, []mutationdecode.Row{parent})
 }
 
 func commitScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, provider policyir.Provider, cascade *cascadeEffects) error {
@@ -932,12 +936,17 @@ func publicScalarMutationError(model golem.ModelID, err error) error {
 	if errors.As(err, &hook) {
 		return golem.RuntimeOperationError(golem.CodeBadUserInput, string(hook.operation), model, golem.FieldID{}, "mutation hook rejected the operation", err)
 	}
+	var failure *scalarMutationFailure
+	scalar := errors.As(err, &failure)
 	var limit *mutationbatch.Error
 	if errors.As(err, &limit) && limit.Code == mutationbatch.CodeLimit {
-		return golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", model, golem.FieldID{}, "mutation exceeds the configured row limit", err)
+		operation := "delete"
+		if scalar {
+			operation = scalarMutationOperationName(failure.operation)
+		}
+		return golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, golem.FieldID{}, "mutation exceeds the configured row limit", err)
 	}
-	var failure *scalarMutationFailure
-	if !errors.As(err, &failure) {
+	if !scalar {
 		return err
 	}
 	operation := scalarMutationOperationName(failure.operation)

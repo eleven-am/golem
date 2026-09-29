@@ -3,6 +3,7 @@ package postgresql
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -13,6 +14,7 @@ import (
 
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -24,7 +26,7 @@ type eventCoordinator struct {
 	legacyProbeComplete atomic.Bool
 	claimIndexAdmitted  bool
 	claimIndexMutex     sync.Mutex
-	claimIndexReady     atomic.Bool
+	claimIndexOID       atomic.Uint32
 }
 
 type postgresqlEventQueryExecer interface {
@@ -62,52 +64,122 @@ func newEventCoordinator(database *sqlx.DB, namespace physical.PhysicalName) (*e
 	return &eventCoordinator{database: database, namespace: namespace}, nil
 }
 
+type postgresqlClaimIndexState uint8
+
+const (
+	postgresqlClaimIndexAbsent postgresqlClaimIndexState = iota + 1
+	postgresqlClaimIndexValid
+	postgresqlClaimIndexBuilding
+	postgresqlClaimIndexAbandoned
+)
+
 func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error {
-	if !coordinator.claimIndexAdmitted || coordinator.claimIndexReady.Load() {
+	if !coordinator.claimIndexAdmitted || coordinator.claimIndexOID.Load() != 0 {
 		return nil
 	}
 	coordinator.claimIndexMutex.Lock()
 	defer coordinator.claimIndexMutex.Unlock()
-	if coordinator.claimIndexReady.Load() {
+	if coordinator.claimIndexOID.Load() != 0 {
 		return nil
 	}
-	if _, err := coordinator.database.ExecContext(ctx, postgresqlOutboxDeliveryClaimStatement(coordinator.namespace)); err != nil {
-		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: create golem_outbox_delivery_claim: %w", err)
-	}
-	present, err := postgresqlOutboxDeliveryClaimPresent(ctx, coordinator.database, coordinator.namespace)
+	connection, err := coordinator.database.Connx(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: reserve a connection for golem_outbox_delivery_claim: %w", err)
 	}
-	if !present {
-		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: an object named golem_outbox_delivery_claim blocks golem's claim index on _golem_outbox_delivery; drop it so golem can create its own")
+	defer connection.Close()
+	key := queueAdvisoryKey("golem_outbox_delivery_claim\x00" + string(coordinator.namespace))
+	var held bool
+	if err := connection.GetContext(ctx, &held, `SELECT pg_try_advisory_lock($1)`, key); err != nil {
+		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: serialize golem_outbox_delivery_claim creation: %w", err)
 	}
-	coordinator.claimIndexReady.Store(true)
+	if !held {
+		return nil
+	}
+	defer func() {
+		_, _ = connection.ExecContext(context.WithoutCancel(ctx), `SELECT pg_advisory_unlock($1)`, key)
+	}()
+	for attempt := 0; attempt < 3; attempt++ {
+		state, oid, err := postgresqlOutboxDeliveryClaimState(ctx, connection, coordinator.namespace)
+		if err != nil {
+			return err
+		}
+		switch state {
+		case postgresqlClaimIndexValid:
+			coordinator.claimIndexOID.Store(oid)
+			return nil
+		case postgresqlClaimIndexBuilding:
+			return nil
+		case postgresqlClaimIndexAbandoned:
+			if _, err := connection.ExecContext(ctx, `DROP INDEX CONCURRENTLY IF EXISTS `+qualified(coordinator.namespace, "golem_outbox_delivery_claim")); err != nil {
+				return fmt.Errorf("P7_POSTGRESQL_DELIVERY: drop the invalid golem_outbox_delivery_claim an interrupted build left: %w", err)
+			}
+		default:
+			if _, err := connection.ExecContext(ctx, postgresqlOutboxDeliveryClaimStatement(coordinator.namespace)); err != nil && !postgresqlRelationCreationRaced(err) {
+				return fmt.Errorf("P7_POSTGRESQL_DELIVERY: create golem_outbox_delivery_claim: %w", err)
+			}
+		}
+	}
 	return nil
 }
 
+func (coordinator *eventCoordinator) verifyClaimIndex(ctx context.Context, queryer sqlx.QueryerContext) error {
+	expected := coordinator.claimIndexOID.Load()
+	if expected == 0 {
+		return nil
+	}
+	var usable bool
+	if err := sqlx.GetContext(ctx, queryer, &usable, `SELECT EXISTS (SELECT 1 FROM pg_catalog.pg_index WHERE "indexrelid"=to_regclass($1) AND "indexrelid"=$2::oid AND "indisvalid")`, qualified(coordinator.namespace, "golem_outbox_delivery_claim"), int64(expected)); err != nil {
+		return fmt.Errorf("P7_POSTGRESQL_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	}
+	if !usable {
+		coordinator.claimIndexOID.CompareAndSwap(expected, 0)
+	}
+	return nil
+}
+
+func postgresqlRelationCreationRaced(err error) bool {
+	var failure *pgconn.PgError
+	return errors.As(err, &failure) && (failure.Code == "23505" || failure.Code == "42P07")
+}
+
 func postgresqlOutboxDeliveryClaimStatement(namespace physical.PhysicalName) string {
-	return `CREATE INDEX IF NOT EXISTS "golem_outbox_delivery_claim" ON ` + qualified(namespace, "_golem_outbox_delivery") + ` ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`
+	return `CREATE INDEX CONCURRENTLY IF NOT EXISTS "golem_outbox_delivery_claim" ON ` + qualified(namespace, "_golem_outbox_delivery") + ` ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`
 }
 
 func postgresqlOutboxDeliveryClaimPresent(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName) (bool, error) {
-	rows, err := q.QueryxContext(ctx, `SELECT c.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),'') FROM pg_catalog.pg_class ic JOIN pg_catalog.pg_namespace n ON n.oid=ic.relnamespace LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=ic.oid LEFT JOIN pg_catalog.pg_class c ON c.oid=i.indrelid WHERE n.nspname=$1 AND ic.relname='golem_outbox_delivery_claim'`, string(namespace))
+	state, _, err := postgresqlOutboxDeliveryClaimState(ctx, q, namespace)
+	return state == postgresqlClaimIndexValid, err
+}
+
+func postgresqlOutboxDeliveryClaimState(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName) (postgresqlClaimIndexState, uint32, error) {
+	rows, err := q.QueryxContext(ctx, `SELECT ic.oid::bigint,c.relname,i.indisunique,i.indisvalid,i.indkey::text,COALESCE(pg_catalog.pg_get_expr(i.indpred,i.indrelid),''),EXISTS (SELECT 1 FROM pg_catalog.pg_locks l WHERE l.relation=i.indrelid AND l.mode='ShareUpdateExclusiveLock' AND l.granted AND l.pid<>pg_catalog.pg_backend_pid()) FROM pg_catalog.pg_class ic JOIN pg_catalog.pg_namespace n ON n.oid=ic.relnamespace LEFT JOIN pg_catalog.pg_index i ON i.indexrelid=ic.oid LEFT JOIN pg_catalog.pg_class c ON c.oid=i.indrelid WHERE n.nspname=$1 AND ic.relname='golem_outbox_delivery_claim'`, string(namespace))
 	if err != nil {
-		return false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+		return 0, 0, fmt.Errorf("P7_POSTGRESQL_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
 	}
 	defer rows.Close()
-	found := false
+	state, oid := postgresqlClaimIndexAbsent, uint32(0)
 	for rows.Next() {
 		var table, keys, predicate sql.NullString
 		var unique, valid sql.NullBool
-		if err := rows.Scan(&table, &unique, &valid, &keys, &predicate); err != nil {
-			return false, err
+		var building bool
+		var relation int64
+		if err := rows.Scan(&relation, &table, &unique, &valid, &keys, &predicate, &building); err != nil {
+			return 0, 0, err
 		}
-		if found || !postgresqlOutboxDeliveryClaimShape(table.String, unique.Bool, valid.Bool, keys.String, predicate.String) {
-			return false, fmt.Errorf("P7_POSTGRESQL_DELIVERY: existing golem_outbox_delivery_claim does not match golem's claim index; drop it so golem can create its own")
+		if state != postgresqlClaimIndexAbsent || !postgresqlOutboxDeliveryClaimShape(table.String, unique.Bool, true, keys.String, predicate.String) {
+			return 0, 0, fmt.Errorf("P7_POSTGRESQL_DELIVERY: existing golem_outbox_delivery_claim does not match golem's claim index; drop it so golem can create its own")
 		}
-		found = true
+		switch {
+		case valid.Bool:
+			state = postgresqlClaimIndexValid
+		case building:
+			state = postgresqlClaimIndexBuilding
+		default:
+			state = postgresqlClaimIndexAbandoned
+		}
+		oid = uint32(relation)
 	}
-	return found, rows.Err()
+	return state, oid, rows.Err()
 }
 
 func postgresqlOutboxDeliveryClaimShape(table string, unique, valid bool, keys, predicate string) bool {
@@ -125,6 +197,9 @@ func (coordinator *eventCoordinator) ClaimWithDepth(ctx context.Context, options
 
 func (coordinator *eventCoordinator) claim(ctx context.Context, options eventprovider.ClaimOptions, includeDepth bool) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
+	if err := coordinator.verifyClaimIndex(ctx, coordinator.database); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	if err := coordinator.ensureClaimIndex(ctx); err != nil {

@@ -543,7 +543,7 @@ func (manager *Manager) exactSQLiteRankStatement(index Index, candidates Candida
 	identity := make([]string, len(index.Descriptor.Identity))
 	joins := make([]string, len(index.Descriptor.Identity))
 	for position, column := range index.Descriptor.Identity {
-		identity[position] = "golem_ss." + manager.quote(column.Name)
+		identity[position] = policysql.ProjectStorageColumn(column.Storage.Kind, "golem_ss."+manager.quote(column.Name))
 		joins[position] = "golem_sq." + manager.quote(column.Name) + "=golem_ss." + manager.quote(column.Name)
 	}
 	distance := "vec_distance_cosine(vec_f32(golem_sv.embedding),vec_f32(" + manager.placeholder(1) + "))"
@@ -1686,7 +1686,8 @@ func (manager *Manager) projection(table physical.PhysicalTable, index Index) (s
 func (manager *Manager) projectionList(projection sourceProjection, prefix string) string {
 	names := make([]string, len(projection.selected))
 	for position, field := range projection.selected {
-		names[position] = prefix + manager.quote(projection.columns[field].Name)
+		column := projection.columns[field]
+		names[position] = policysql.ProjectStorageColumn(column.Storage.Kind, prefix+manager.quote(column.Name))
 	}
 	return strings.Join(names, ",")
 }
@@ -1817,6 +1818,15 @@ func (manager *Manager) decodeSources(ctx context.Context, table physical.Physic
 		}
 		if err := rows.Scan(destinations...); err != nil {
 			return nil, err
+		}
+		for position, field := range projection.selected {
+			if text, projected := values[position].(string); projected && projection.columns[field].Storage.Kind == physical.StorageSQLiteBlob {
+				decoded, err := hex.DecodeString(text)
+				if err != nil {
+					return nil, fmt.Errorf("hex-projected source column is not hexadecimal: %w", err)
+				}
+				values[position] = decoded
+			}
 		}
 		keys := make([]any, len(table.PrimaryKey.Columns))
 		for position, field := range table.PrimaryKey.Columns {

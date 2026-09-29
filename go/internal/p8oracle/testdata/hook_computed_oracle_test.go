@@ -555,15 +555,12 @@ func (fixture *fixture) computedAndBatchedDisclosure() {
 	if maskedPost["body"] != nil || maskedPost["excerpt"] != nil {
 		fixture.t.Fatalf("masked computed shape=%v", maskedPost)
 	}
-	if len(masked.Errors) != 1 || masked.Errors[0].Extensions["code"] == nil {
-		fixture.t.Fatalf("masked dependency stable error=%+v", masked.Errors)
+	assertNoGraphErrors(fixture.t, masked)
+	if !reflect.DeepEqual(maskedPost, map[string]any{"id": privateDependencyID.String(), "body": nil, "excerpt": nil}) {
+		fixture.t.Fatalf("masked computed field is distinguishable from an absent value: %v", maskedPost)
 	}
-	if masked.Errors[0].Message != "internal server error" || masked.Errors[0].Extensions["code"] != "INTERNAL_SERVER_ERROR" {
-		fixture.t.Fatalf("masked dependency public classification=%+v", masked.Errors[0])
-	}
-	trusted := fixture.takeTrustedErrors()
-	if len(trusted) != 1 || !strings.Contains(trusted[0], "masked dependency body") || strings.Contains(trusted[0], privateBodyCanary) {
-		fixture.t.Fatalf("masked dependency trusted classification=%v", trusted)
+	if trusted := fixture.takeTrustedErrors(); len(trusted) != 0 {
+		fixture.t.Fatalf("masked dependency reached the internal-error channel: %v", trusted)
 	}
 
 	aliasTrace := &displayTrace{}
@@ -636,7 +633,7 @@ func (fixture *fixture) assertComputedObservations() {
 			}
 		}
 	}
-	if computed != 2 || computedSuccess != 1 || computedFailure != 1 || batched != 1+concurrentLoaderOperations {
+	if computed != 2 || computedSuccess != 2 || computedFailure != 0 || batched != 1+concurrentLoaderOperations {
 		fixture.t.Fatalf("computed observations computed=%d success=%d failure=%d batched=%d all=%+v", computed, computedSuccess, computedFailure, batched, values)
 	}
 }

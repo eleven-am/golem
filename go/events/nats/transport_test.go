@@ -591,7 +591,18 @@ func (observer *closingObserver) ObserveEvent(context.Context, events.Observatio
 }
 
 func TestCoreNATSStreamOverflowNeverDropsAnUpdateSilently(t *testing.T) {
-	transport := mustTestTransport(t, newFakeConnection(), Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", StreamBuffer: 1})
+	transport, publish := natsSubscriptionTestTransport(t, 1)
+	subscriptiontest.AssertOverflowEndsSubscribersWithResync(t, transport.Subscribe, publish)
+}
+
+func TestCoreNATSConnectFailureNeverSkipsAnUpdateSilently(t *testing.T) {
+	transport, publish := natsSubscriptionTestTransport(t, 64)
+	subscriptiontest.AssertTransientConnectFailureNeverSkipsSilently(t, transport.Subscribe, publish)
+}
+
+func natsSubscriptionTestTransport(t *testing.T, buffer int) (*Transport, func(testing.TB, byte)) {
+	t.Helper()
+	transport := mustTestTransport(t, newFakeConnection(), Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", StreamBuffer: buffer})
 	eventSchema := golem.EventSchemaDigest(subscriptiontest.Generation)
 	binding := mapBinding{}
 	batches := map[byte]events.EventBatch{}
@@ -607,11 +618,12 @@ func TestCoreNATSStreamOverflowNeverDropsAnUpdateSilently(t *testing.T) {
 	if err := transport.BindEventRuntime(binding); err != nil {
 		t.Fatal(err)
 	}
-	subscriptiontest.AssertOverflowEndsSubscribersWithResync(t, transport.Subscribe, func(t testing.TB, value byte) {
+	return transport, func(t testing.TB, value byte) {
+		t.Helper()
 		if err := transport.Publish(context.Background(), batches[value]); err != nil {
 			t.Fatalf("publish %d: %v", value, err)
 		}
-	})
+	}
 }
 
 type mapBinding map[string]events.Notice
