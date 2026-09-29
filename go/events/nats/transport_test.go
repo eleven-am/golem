@@ -600,6 +600,11 @@ func TestCoreNATSConnectFailureNeverSkipsAnUpdateSilently(t *testing.T) {
 	subscriptiontest.AssertTransientConnectFailureNeverSkipsSilently(t, transport.Subscribe, publish)
 }
 
+func TestCoreNATSSubscribeFailsWhenTheSourceNeverGoesLive(t *testing.T) {
+	transport, publish := natsSubscriptionTestTransport(t, 64)
+	subscriptiontest.AssertSubscribeFailsWhenTheSourceNeverGoesLive(t, transport.Subscribe, publish)
+}
+
 func natsSubscriptionTestTransport(t *testing.T, buffer int) (*Transport, func(testing.TB, byte)) {
 	t.Helper()
 	transport := mustTestTransport(t, newFakeConnection(), Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", StreamBuffer: buffer})

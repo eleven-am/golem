@@ -181,6 +181,14 @@ func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state 
 	select {
 	case <-run.live:
 	case <-item.done:
+		select {
+		case <-run.live:
+		default:
+			if stop := stream.closeStop(); stop != nil {
+				stop()
+			}
+			return nil, item.err
+		}
 	}
 	events.Observe(hub.config.Observer, ctx, hub.config.Model, "", events.ObservationHubMembership, events.OutcomeSuccess, "", 0, 0, hub.limits.SubscriberQueue, 0, 1)
 	return stream, nil

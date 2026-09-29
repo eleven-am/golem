@@ -191,3 +191,79 @@ func AssertTransientConnectFailureNeverSkipsSilently(t *testing.T, source subscr
 		t.Fatalf("second update=%v err=%v", value, err)
 	}
 }
+
+type membershipCounter struct{ successes atomic.Int64 }
+
+func (counter *membershipCounter) ObserveEvent(_ context.Context, observation events.Observation) {
+	if observation.Kind() == events.ObservationHubMembership && observation.Outcome() == events.OutcomeSuccess {
+		counter.successes.Add(1)
+	}
+}
+
+func AssertSubscribeFailsWhenTheSourceNeverGoesLive(t *testing.T, source subscription.SourceFactory, publish func(testing.TB, byte)) {
+	t.Helper()
+	var opens atomic.Int64
+	cancelled := make(chan struct{})
+	var once atomic.Bool
+	factory := func(ctx context.Context, request events.Subscription) (events.Stream, error) {
+		switch opens.Add(1) {
+		case 1:
+			return nil, events.Failure(events.CodeEventSourceClosed)
+		case 2, 3:
+			if opens.Load() == 3 && once.CompareAndSwap(false, true) {
+				close(cancelled)
+			}
+			return nil, events.Failure(events.CodeEventTransport)
+		default:
+			return source(ctx, request)
+		}
+	}
+	counter := &membershipCounter{}
+	hub, err := subscription.NewModelHub(subscription.Config[golem.EventID]{
+		Generation: Generation, Model: Model, Source: factory, Observer: counter,
+		Limits: events.Limits{SubscriberQueue: 64, HubInputQueue: 8, EvaluationConcurrency: 1, RetryBase: 20 * time.Millisecond, RetryCap: 20 * time.Millisecond},
+		Evaluate: func(_ context.Context, notice events.Notice, _ subscription.SubscriberKey) (subscription.Evaluation[golem.EventID], error) {
+			return subscription.Deliver(notice.EventID()), nil
+		},
+		Clone: func(value golem.EventID) (golem.EventID, error) { return value, nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := hub.Shutdown(ctx); err != nil {
+			t.Error(err)
+		}
+	}()
+	stream, err := hub.Subscribe(context.Background(), key(t))
+	if code, ok := events.CodeOf(err); stream != nil || !ok || code != events.CodeSubscriptionSourceClosed {
+		t.Fatalf("a terminal source failure before going live returned stream=%v err=%v, want no stream and %s", stream != nil, err, events.CodeSubscriptionSourceClosed)
+	}
+	subscribeContext, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-cancelled
+		cancel()
+	}()
+	stream, err = hub.Subscribe(subscribeContext, key(t))
+	if code, ok := events.CodeOf(err); stream != nil || !ok || code != events.CodeSubscriptionCancelled {
+		t.Fatalf("a subscribe cancelled while connecting returned stream=%v err=%v, want no stream and %s", stream != nil, err, events.CodeSubscriptionCancelled)
+	}
+	if got := counter.successes.Load(); got != 0 {
+		t.Fatalf("failed subscribes recorded %d successful memberships", got)
+	}
+	live, err := hub.Subscribe(context.Background(), key(t))
+	if err != nil {
+		t.Fatalf("an ordinary subscribe after the failures: %v", err)
+	}
+	publish(t, 1)
+	ctx, stop := context.WithTimeout(context.Background(), 5*time.Second)
+	defer stop()
+	if value, err := live.Recv(ctx); err != nil || value != (golem.EventID{1}) {
+		t.Fatalf("live subscriber received %v err=%v", value, err)
+	}
+	if got := counter.successes.Load(); got != 1 {
+		t.Fatalf("successful memberships=%d want 1", got)
+	}
+}

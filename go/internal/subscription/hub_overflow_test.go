@@ -42,3 +42,11 @@ func publishMemoryNotice(transport events.EventTransport) func(testing.TB, byte)
 		}
 	}
 }
+
+func TestMemoryTransportSubscribeFailsWhenTheSourceNeverGoesLive(t *testing.T) {
+	transport, err := events.NewMemoryTransport(events.MemoryLimits{Buffer: 64})
+	if err != nil {
+		t.Fatal(err)
+	}
+	subscriptiontest.AssertSubscribeFailsWhenTheSourceNeverGoesLive(t, transport.Subscribe, publishMemoryNotice(transport))
+}
