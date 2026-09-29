@@ -118,8 +118,8 @@ type SelectionRequirement struct {
 }
 
 func NewSelectionRequirement(action policyir.Action, constraint policyir.Condition) (SelectionRequirement, error) {
-	if action != policyir.ActionUpdate && action != policyir.ActionDelete {
-		return SelectionRequirement{}, fmt.Errorf("P4_MUTATION_IR_SELECTION: selecting action must be update or delete")
+	if action != policyir.ActionRead && action != policyir.ActionUpdate && action != policyir.ActionDelete {
+		return SelectionRequirement{}, fmt.Errorf("P4_MUTATION_IR_SELECTION: selecting action must be read, update, or delete")
 	}
 	if err := constraint.Validate(); err != nil {
 		return SelectionRequirement{}, fmt.Errorf("P4_MUTATION_IR_SELECTION: invalid constraint: %w", err)

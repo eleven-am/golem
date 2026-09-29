@@ -125,6 +125,30 @@ is never read rather than read and filtered.
 `rules.CanReadFields(predicate, Notes.Title)` and `CannotReadFields` narrow
 authorization to individual columns.
 
+A unique constraint is the one place a write can reveal a row you cannot read.
+Suppose you create or update a row and the value collides with a unique key or
+primary key held by a row outside your read policy. The database still rejects
+the write, and golem reports it as `CONFLICT`, which tells you the value is
+taken. That is inherent to the constraint. The collision is checked across
+every row, and hiding it would mean accepting a write that cannot be stored. If
+the taken values themselves are secret, such as emails or handles, make the key
+opaque, scope it with a composite key that includes the owner, or route the
+write through a system-client flow that answers the same way either way.
+Foreign keys do not leak like this: you can link only to a row you can read,
+and golem reports a row you cannot read exactly as a row that does not exist.
+
+`RelationOptions(...).OnDelete(golem.Cascade)` tells golem that a dependent
+row's lifetime belongs to its parent. If you may delete the parent, that
+permission covers every row the cascade removes, including rows owned by other
+users and rows you cannot read. `SetNull` works the same way: deleting the
+parent clears the reference on each dependent without checking a policy on
+that row. Golem locks the affected rows before the parent is deleted and emits
+a change event for each one: a deleted event for every cascaded row and an
+updated event for every cleared reference, in the same transaction as the
+delete. Each subscriber still receives only the events its own read policy
+allows. A delete whose cascade would touch more rows than
+`MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
+
 ## Callers and the system client
 
 ```go

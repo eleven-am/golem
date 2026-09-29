@@ -140,6 +140,14 @@ type renderContext struct {
 	model        policysql.Model
 	alias        physical.PhysicalName
 	primary      []policyir.FieldID
+	logical      policyir.ModelID
+}
+
+func (context renderContext) modelID() policyir.ModelID {
+	if context.logical != (policyir.ModelID{}) {
+		return context.logical
+	}
+	return context.node.ModelID()
 }
 
 type fragment struct {
@@ -150,7 +158,7 @@ type fragment struct {
 func (context renderContext) compile(condition policyir.Condition, offset int) (fragment, error) {
 	result, err := policysql.Compile(policysql.Request{Condition: condition, Provider: context.provider, Resolver: context.resolver, Dialect: context.dialect, Capabilities: context.capabilities, BoundFingerprint: context.resolver.SchemaFingerprint(), RootAlias: context.alias})
 	if err != nil {
-		return fragment{}, fail(CodeProvider, context.node.ModelID(), policyir.FieldID{}, "condition cannot be rendered safely", err)
+		return fragment{}, fail(CodeProvider, context.modelID(), policyir.FieldID{}, "condition cannot be rendered safely", err)
 	}
 	args := result.Args()
 	bindings := make([]Binding, len(args))
@@ -161,12 +169,12 @@ func (context renderContext) compile(condition policyir.Condition, offset int) (
 }
 
 func (context renderContext) completeColumns() ([]string, []ResultColumn, error) {
-	model, _ := context.registry.Model(golem.ModelID(context.node.ModelID()))
+	model, _ := context.registry.Model(golem.ModelID(context.modelID()))
 	var fields []string
 	var columns []ResultColumn
 	for _, publicID := range model.Fields() {
 		fieldID := policyir.FieldID(publicID)
-		field, ok := context.resolver.Field(context.provider, context.node.ModelID(), fieldID)
+		field, ok := context.resolver.Field(context.provider, context.modelID(), fieldID)
 		if !ok { // relation field
 			continue
 		}
@@ -175,7 +183,7 @@ func (context renderContext) completeColumns() ([]string, []ResultColumn, error)
 		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
 	}
 	if len(fields) == 0 {
-		return nil, nil, fail(CodeSchema, context.node.ModelID(), policyir.FieldID{}, "model has no persisted scalar fields", nil)
+		return nil, nil, fail(CodeSchema, context.modelID(), policyir.FieldID{}, "model has no persisted scalar fields", nil)
 	}
 	return fields, columns, nil
 }

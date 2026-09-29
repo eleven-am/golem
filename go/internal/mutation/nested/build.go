@@ -475,7 +475,7 @@ func (builder *builder) targetMembershipNode(endpoint schema.RelationEndpoint, a
 
 // sourceMembershipNode keeps the two independent P4 authorization subjects
 // explicit in the graph. The probe selects the existing related target under
-// that target model's update reach. Only an authorized probe result can reach
+// that target model's read reach. Only an authorized probe result can reach
 // the child effect, which separately updates the actual FK-owning parent under
 // the parent's update reach and correlation-field grants.
 func (builder *builder) sourceMembershipNode(endpoint schema.RelationEndpoint, action golem.MutationRelationAction, branch golem.FrozenNestedMutationBranch, kind mutationir.RelationPositionKind, bound *mutationbind.BoundTarget) (mutationir.NodeInput, error) {

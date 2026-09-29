@@ -162,6 +162,12 @@ func (encoder *canonicalEncoder) node(node Node) {
 		encoder.u8(1)
 		encoder.condition(*node.rowPostcondition)
 	}
+	if node.referenceCondition == nil {
+		encoder.u8(0)
+	} else {
+		encoder.u8(1)
+		encoder.condition(*node.referenceCondition)
+	}
 	encoder.count(len(node.fieldConditions))
 	for _, authorization := range node.fieldConditions {
 		encoder.id16(authorization.field)

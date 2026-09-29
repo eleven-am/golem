@@ -793,6 +793,17 @@ func reopenMutationResultWithUserWriteDenials(t testing.TB, fixture mutationResu
 
 func runRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixture func(testing.TB) schematest.Fixture, postgresFixture func(testing.TB, physical.PhysicalName, physical.PhysicalName) schematest.Fixture, operation func(*testing.T, mutationProviderAcceptanceFixture)) {
 	t.Helper()
+	runConfiguredRelationDeleteProviderProfiles(t, prefix, sqliteFixture, postgresFixture, nil, operation)
+}
+
+func runConfiguredRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixture func(testing.TB) schematest.Fixture, postgresFixture func(testing.TB, physical.PhysicalName, physical.PhysicalName) schematest.Fixture, configure func(schematest.Fixture, *Config[mutationResultPrincipal, mutationResultActor]), operation func(*testing.T, mutationProviderAcceptanceFixture)) {
+	t.Helper()
+	configured := func(schemaFixture schematest.Fixture) func(*Config[mutationResultPrincipal, mutationResultActor]) {
+		if configure == nil {
+			return nil
+		}
+		return func(config *Config[mutationResultPrincipal, mutationResultActor]) { configure(schemaFixture, config) }
+	}
 	t.Run("sqlite", func(t *testing.T) {
 		provider := sqliteprovider.New()
 		database, _, err := provider.Open(context.Background(), "file:"+filepath.Join(t.TempDir(), prefix+".db"))
@@ -805,7 +816,7 @@ func runRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixtur
 			t.Fatal(err)
 		}
 		seedMutationBoundaryUsers(t, database, golem.SQLite, "")
-		fixture := mutationResultFixtureForSchema(t, database, golem.SQLite, schemaFixture)
+		fixture := mutationResultFixtureForSchemaConfigured(t, database, golem.SQLite, schemaFixture, configured(schemaFixture))
 		operation(t, mutationProviderAcceptanceFixture{fixture: fixture, provider: golem.SQLite, posts: `"posts"`, outbox: `"_golem_outbox"`, placeholder: func(int) string { return "?" }})
 	})
 	for _, value := range []struct{ name, profile, env string }{{"postgresql-c", "c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
@@ -831,7 +842,7 @@ func runRelationDeleteProviderProfiles(t *testing.T, prefix string, sqliteFixtur
 			}
 			posts := quoteAcceptanceIdentifier(applicationNamespace) + `."posts"`
 			seedMutationBoundaryUsers(t, database, golem.PostgreSQL, applicationNamespace)
-			fixture := mutationResultFixtureForSchema(t, database, golem.PostgreSQL, schemaFixture)
+			fixture := mutationResultFixtureForSchemaConfigured(t, database, golem.PostgreSQL, schemaFixture, configured(schemaFixture))
 			operation(t, mutationProviderAcceptanceFixture{fixture: fixture, provider: golem.PostgreSQL, posts: posts, outbox: quoteAcceptanceIdentifier(systemNamespace) + `."_golem_outbox"`, placeholder: func(index int) string { return fmt.Sprintf("$%d", index) }})
 		})
 	}
@@ -1000,6 +1011,11 @@ func mutationResultFixtureWithUserDeleteRelationPolicy(t *testing.T, fixture mut
 
 func mutationResultFixtureForSchema(t *testing.T, database *sqlx.DB, provider golem.Provider, schemaFixture schematest.Fixture) mutationResultFixture {
 	t.Helper()
+	return mutationResultFixtureForSchemaConfigured(t, database, provider, schemaFixture, nil)
+}
+
+func mutationResultFixtureForSchemaConfigured(t *testing.T, database *sqlx.DB, provider golem.Provider, schemaFixture schematest.Fixture, configure func(*Config[mutationResultPrincipal, mutationResultActor])) mutationResultFixture {
+	t.Helper()
 	base := newMutationResultFixture(t)
 	userIdentity := golem.GeneratedIdentityMetadata(schemaFixture.User, schemaFixture.UserKey, golem.PrimaryIdentity, schemaFixture.UserID)
 	postIdentity := golem.GeneratedIdentityMetadata(schemaFixture.Post, schemaFixture.PostKey, golem.PrimaryIdentity, schemaFixture.PostID)
@@ -1018,10 +1034,14 @@ func mutationResultFixtureForSchema(t *testing.T, database *sqlx.DB, provider go
 	if err != nil {
 		t.Fatal(err)
 	}
-	app, err := Open(context.Background(), withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
+	config := withRuntimeTestEvents(t, Config[mutationResultPrincipal, mutationResultActor]{
 		Database: p8RuntimeTestDatabase(database, provider), Bundle: schemaFixture.Bundle, Bindings: base.app.bindings, Descriptors: descriptors,
 		ResolvePrincipal: base.app.resolvePrincipal, SnapshotActor: base.app.snapshotActor,
-	}))
+	})
+	if configure != nil {
+		configure(&config)
+	}
+	app, err := Open(context.Background(), config)
 	if err != nil {
 		t.Fatal(err)
 	}

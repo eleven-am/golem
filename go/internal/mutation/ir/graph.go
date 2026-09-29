@@ -16,24 +16,25 @@ const (
 )
 
 type NodeInput struct {
-	Operation         Operation
-	Model             policyir.ModelID
-	Relation          policyir.RelationID
-	Branch            Branch
-	Target            *Target
-	Predicate         *policyir.Condition
-	RelationPosition  *RelationPosition
-	ScalarOperations  []ScalarOperation
-	InfluencingFields []policyir.FieldID
-	Before            ImageRequirements
-	After             ImageRequirements
-	Selection         *SelectionRequirement
-	RowPostcondition  *policyir.Condition
-	FieldConditions   []FieldAuthorization
-	Hooks             []HookRequirement
-	Fact              FactRequirement
-	Identity          IdentityBehavior
-	Children          []NodeInput
+	Operation          Operation
+	Model              policyir.ModelID
+	Relation           policyir.RelationID
+	Branch             Branch
+	Target             *Target
+	Predicate          *policyir.Condition
+	RelationPosition   *RelationPosition
+	ScalarOperations   []ScalarOperation
+	InfluencingFields  []policyir.FieldID
+	Before             ImageRequirements
+	After              ImageRequirements
+	Selection          *SelectionRequirement
+	RowPostcondition   *policyir.Condition
+	ReferenceCondition *policyir.Condition
+	FieldConditions    []FieldAuthorization
+	Hooks              []HookRequirement
+	Fact               FactRequirement
+	Identity           IdentityBehavior
+	Children           []NodeInput
 	// RuntimeSource is non-semantic nested-compiler provenance. Canonical plan
 	// encoding deliberately excludes it.
 	RuntimeSource      uint32
@@ -64,6 +65,7 @@ type Node struct {
 	after              ImageRequirements
 	selection          *SelectionRequirement
 	rowPostcondition   *policyir.Condition
+	referenceCondition *policyir.Condition
 	fieldConditions    []FieldAuthorization
 	hooks              []HookRequirement
 	fact               FactRequirement
@@ -135,6 +137,12 @@ func (node Node) RowPostcondition() (policyir.Condition, bool) {
 	}
 	return *node.rowPostcondition, true
 }
+func (node Node) ReferenceCondition() (policyir.Condition, bool) {
+	if node.referenceCondition == nil {
+		return policyir.Condition{}, false
+	}
+	return *node.referenceCondition, true
+}
 func (node Node) FieldAuthorizations() []FieldAuthorization {
 	return append([]FieldAuthorization(nil), node.fieldConditions...)
 }
@@ -167,6 +175,10 @@ func (node Node) clone() Node {
 	if node.rowPostcondition != nil {
 		value := *node.rowPostcondition
 		copy.rowPostcondition = &value
+	}
+	if node.referenceCondition != nil {
+		value := *node.referenceCondition
+		copy.referenceCondition = &value
 	}
 	copy.fieldConditions = node.FieldAuthorizations()
 	copy.scalarOperations = node.ScalarOperations()
@@ -308,6 +320,10 @@ func nodeFromInput(input NodeInput, ordinal, parent uint32, hasParent bool, dept
 		condition := *input.RowPostcondition
 		node.rowPostcondition = &condition
 	}
+	if input.ReferenceCondition != nil {
+		condition := *input.ReferenceCondition
+		node.referenceCondition = &condition
+	}
 	if node.before.model == (policyir.ModelID{}) {
 		node.before = emptyImage(node.model)
 	}
@@ -372,8 +388,15 @@ func (node Node) validateShape() error {
 			return fmt.Errorf("P4_MUTATION_IR_NODE: invalid selection requirement")
 		}
 		expected := policyir.ActionUpdate
-		if node.operation == Delete || node.operation == DeleteMany {
+		switch node.operation {
+		case Delete, DeleteMany:
 			expected = policyir.ActionDelete
+		case BranchProbe:
+			expected = policyir.ActionRead
+		case ConnectOrCreate:
+			if node.selection.action == policyir.ActionRead {
+				expected = policyir.ActionRead
+			}
 		}
 		if node.selection.action != expected {
 			return fmt.Errorf("P4_MUTATION_IR_NODE: selection action does not match operation")
@@ -382,6 +405,14 @@ func (node Node) validateShape() error {
 	if node.rowPostcondition != nil {
 		if err := node.rowPostcondition.Validate(); err != nil || node.rowPostcondition.ModelID() != node.model {
 			return fmt.Errorf("P4_MUTATION_IR_NODE: invalid row postcondition")
+		}
+	}
+	if node.referenceCondition != nil {
+		if err := node.referenceCondition.Validate(); err != nil || node.referenceCondition.ModelID() != node.model {
+			return fmt.Errorf("P4_MUTATION_IR_NODE: invalid reference condition")
+		}
+		if node.operation != Create && node.operation != Update && node.operation != UpdateMany {
+			return fmt.Errorf("P4_MUTATION_IR_NODE: only a scalar write can carry a reference condition")
 		}
 	}
 	if err := validateNodeTargetShape(node); err != nil {

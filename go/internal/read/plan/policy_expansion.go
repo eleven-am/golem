@@ -23,6 +23,17 @@ func newPolicyExpander(policies PolicySet, maximum int) *policyExpander {
 	return &policyExpander{policies: policies, maximum: maximum, active: make(map[policyir.ModelID]bool)}
 }
 
+func ReadReach(policies PolicySet, model policyir.ModelID, maxDepth int) (policyir.Condition, error) {
+	if maxDepth <= 0 {
+		maxDepth = DefaultLimits().MaxRelationDepth
+	}
+	row, err := newPolicyExpander(policies, maxDepth).model(model, 0)
+	if err != nil {
+		return policyir.Condition{}, err
+	}
+	return normalize.Condition(row)
+}
+
 func (expander *policyExpander) model(model policyir.ModelID, depth int) (policyir.Condition, error) {
 	if expander == nil || expander.policies == nil || model == (policyir.ModelID{}) {
 		return policyir.Condition{}, fail(CodePolicy, model, policyir.FieldID{}, "relation target policy is unavailable", nil)

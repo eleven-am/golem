@@ -57,6 +57,8 @@ const (
 	ApplyUpdate
 	ApplyDelete
 	RehydrateAfterImage
+	VerifyReference
+	CaptureDependents
 )
 
 type Cardinality uint8
