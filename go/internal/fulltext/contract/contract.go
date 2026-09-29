@@ -19,12 +19,13 @@ const (
 )
 
 const (
-	FoldingDiacritics = "diacritics"
-	FoldingNone       = "none"
-	RankingTermCount  = "term-count"
-	RankingBM25       = "bm25"
-	MinimumWeight     = 0x1p-149
-	MaximumWeight     = 0x1.fffffep+127
+	FoldingDiacritics     = "diacritics"
+	FoldingNone           = "none"
+	NormalizationNFCLower = "nfc-lower"
+	RankingTermCount      = "term-count"
+	RankingBM25           = "bm25"
+	MinimumWeight         = 0x1p-149
+	MaximumWeight         = 0x1.fffffep+127
 )
 
 type Field struct {
@@ -53,19 +54,21 @@ func ExportedIndexName(value string) (string, bool) {
 }
 
 type Index struct {
-	Name    string  `json:"name"`
-	Fields  []Field `json:"fields"`
-	Folding string  `json:"folding"`
-	Prefix  []uint8 `json:"prefix"`
-	Ranking string  `json:"ranking"`
+	Name          string  `json:"name"`
+	Fields        []Field `json:"fields"`
+	Folding       string  `json:"folding"`
+	Prefix        []uint8 `json:"prefix"`
+	Ranking       string  `json:"ranking"`
+	Normalization string  `json:"normalization"`
 }
 
 type indexWire struct {
-	Name    string  `json:"name"`
-	Fields  []Field `json:"fields"`
-	Folding string  `json:"folding"`
-	Prefix  []uint8 `json:"prefix"`
-	Ranking string  `json:"ranking,omitempty"`
+	Name          string  `json:"name"`
+	Fields        []Field `json:"fields"`
+	Folding       string  `json:"folding"`
+	Prefix        []uint8 `json:"prefix"`
+	Ranking       string  `json:"ranking,omitempty"`
+	Normalization string  `json:"normalization,omitempty"`
 }
 
 func IndexesByModel(model ir.ModelIR) (map[ir.ModelID][]Index, error) {
@@ -106,7 +109,7 @@ func Encode(index Index) (string, error) {
 	if ranking == RankingTermCount {
 		ranking = ""
 	}
-	payload, err := json.Marshal(indexWire{Name: index.Name, Fields: index.Fields, Folding: index.Folding, Prefix: index.Prefix, Ranking: ranking})
+	payload, err := json.Marshal(indexWire{Name: index.Name, Fields: index.Fields, Folding: index.Folding, Prefix: index.Prefix, Ranking: ranking, Normalization: index.Normalization})
 	if err != nil {
 		return "", fmt.Errorf("full-text contract encode: %w", err)
 	}
@@ -124,7 +127,7 @@ func Decode(payload string) (Index, error) {
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		return Index{}, fmt.Errorf("full-text contract decode: trailing data")
 	}
-	result := Index{Name: wire.Name, Fields: wire.Fields, Folding: wire.Folding, Prefix: wire.Prefix, Ranking: wire.Ranking}
+	result := Index{Name: wire.Name, Fields: wire.Fields, Folding: wire.Folding, Prefix: wire.Prefix, Ranking: wire.Ranking, Normalization: wire.Normalization}
 	result.Ranking = EffectiveRanking(result)
 	if err := validate(result); err != nil {
 		return Index{}, err
@@ -144,7 +147,7 @@ func EffectiveRanking(index Index) string {
 }
 
 func validate(index Index) error {
-	if index.Name == "" || len(index.Fields) == 0 || index.Folding != FoldingDiacritics && index.Folding != FoldingNone || index.Ranking != RankingTermCount && index.Ranking != RankingBM25 {
+	if index.Name == "" || len(index.Fields) == 0 || index.Folding != FoldingDiacritics && index.Folding != FoldingNone || index.Ranking != RankingTermCount && index.Ranking != RankingBM25 || index.Normalization != "" && index.Normalization != NormalizationNFCLower {
 		return fmt.Errorf("full-text contract: invalid index")
 	}
 	seenFields := make(map[string]bool, len(index.Fields))

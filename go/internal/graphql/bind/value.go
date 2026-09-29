@@ -117,7 +117,7 @@ func (s *inputState) value(logical compilerir.LogicalTypeIR, raw any) (policyir.
 		if logical.MaxLength != nil && uint32(utf8.RuneCountInString(value)) > *logical.MaxLength {
 			return policyir.Value{}, fmt.Errorf("String exceeds maximum length %d", *logical.MaxLength)
 		}
-		return policyir.StringValue(value)
+		return policyir.PortableStringValue(value)
 	case compilerir.TypeBytes:
 		value, err := graphqlscalar.Bytes(raw)
 		if err != nil {

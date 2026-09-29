@@ -893,7 +893,10 @@ func equalMutationPhysicalValue(left, right any) bool {
 func cloneMutationPhysicalValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		if typed == nil {
+			return typed
+		}
+		return append([]byte{}, typed...)
 	case time.Time:
 		return typed
 	default:

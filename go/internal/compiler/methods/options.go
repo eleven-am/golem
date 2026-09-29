@@ -245,7 +245,7 @@ func (in *interpreter) evalFullTextIndex(call *ast.CallExpr) {
 		in.errorAt("P9_FULLTEXT_INDEX_DUPLICATE", "full-text index names must be unique within a model", call.Args[0])
 		return
 	}
-	index := fulltextcontract.Index{Name: name, Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Ranking: fulltextcontract.RankingTermCount}
+	index := fulltextcontract.Index{Name: name, Folding: fulltextcontract.FoldingDiacritics, Prefix: []uint8{}, Ranking: fulltextcontract.RankingTermCount, Normalization: fulltextcontract.NormalizationNFCLower}
 	seenFields := make(map[ir.FieldID]bool)
 	seenFolding, seenPrefix, seenRanking := false, false, false
 	for _, expression := range call.Args[1:] {

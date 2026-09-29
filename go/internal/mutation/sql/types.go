@@ -225,7 +225,10 @@ func cloneBindings(values []Binding) []Binding {
 func cloneArgument(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		if typed == nil {
+			return typed
+		}
+		return append([]byte{}, typed...)
 	case []string:
 		return append([]string(nil), typed...)
 	case time.Time:

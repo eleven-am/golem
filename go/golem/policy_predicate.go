@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -767,6 +768,9 @@ func validateFrozenOperand(operand frozenOperand) error {
 			if !utf8.ValidString(value.text) {
 				return freezeFailure(FreezeInvalidValue, "string operand is not valid UTF-8")
 			}
+			if strings.IndexByte(value.text, 0) >= 0 {
+				return freezeFailure(FreezeInvalidValue, "string operand contains NUL, which is outside the portable provider value domain")
+			}
 		case FrozenValueBytes:
 		case FrozenValueDate:
 			if _, err := NewDate(int(value.date.year), time.Month(value.date.month), int(value.date.day)); err != nil {
@@ -783,6 +787,9 @@ func validateFrozenOperand(operand frozenOperand) error {
 		case FrozenValueJSON:
 			if _, ok := copyJSONValue(publicJSONValue(value.json)); !ok {
 				return freezeFailure(FreezeInvalidValue, "invalid JSON operand")
+			}
+			if jsonContainsNUL(value.json) {
+				return freezeFailure(FreezeInvalidValue, "JSON operand contains NUL, which is outside the portable provider value domain")
 			}
 		default:
 			return freezeFailure(FreezeInvalidValue, "operand has an unknown value kind")
@@ -1392,4 +1399,21 @@ func writeUint64(output *bytes.Buffer, value uint64) {
 func writeBytes(output *bytes.Buffer, value []byte) {
 	writeUint32(output, uint32(len(value)))
 	output.Write(value)
+}
+
+func jsonContainsNUL(value jsonValueData) bool {
+	if strings.IndexByte(value.text, 0) >= 0 {
+		return true
+	}
+	for _, element := range value.array {
+		if jsonContainsNUL(element) {
+			return true
+		}
+	}
+	for _, member := range value.object {
+		if strings.IndexByte(member.key, 0) >= 0 || jsonContainsNUL(member.value) {
+			return true
+		}
+	}
+	return false
 }

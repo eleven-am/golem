@@ -11,9 +11,42 @@ import (
 	fulltextfolding "github.com/eleven-am/golem/go/internal/fulltext/folding"
 	fulltextstorage "github.com/eleven-am/golem/go/internal/fulltext/storage"
 	"github.com/eleven-am/golem/go/internal/physical"
+	"golang.org/x/text/unicode/norm"
 )
 
-const fullTextFoldFunction = "golem_fulltext_fold"
+const (
+	fullTextFoldFunction = "golem_fulltext_fold"
+	fullTextNFCFunction  = "golem_fulltext_nfc"
+)
+
+func sqliteFullTextNFC(arguments []driver.Value) (driver.Value, error) {
+	if len(arguments) != 1 {
+		return nil, fmt.Errorf("%s: arity", fullTextNFCFunction)
+	}
+	if arguments[0] == nil {
+		return nil, nil
+	}
+	value, ok := arguments[0].(string)
+	if !ok {
+		return nil, fmt.Errorf("%s: expected TEXT", fullTextNFCFunction)
+	}
+	for position := 0; position < len(value); position++ {
+		if value[position] >= 0x80 {
+			return norm.NFC.String(value), nil
+		}
+	}
+	return value, nil
+}
+
+func sqliteFullTextField(value string, index fulltextcontract.Index) string {
+	if index.Folding == fulltextcontract.FoldingDiacritics {
+		return fullTextFoldFunction + "(" + value + ")"
+	}
+	if index.Normalization == fulltextcontract.NormalizationNFCLower {
+		return fullTextNFCFunction + "(" + value + ")"
+	}
+	return value
+}
 
 func sqliteFullTextFold(arguments []driver.Value) (driver.Value, error) {
 	if len(arguments) != 1 {
@@ -126,10 +159,7 @@ func renderFullTextExtension(extension physical.Extension, owner physical.Physic
 	newFields := make([]string, len(fields))
 	for position, column := range fields {
 		fieldNames[position] = quote(sqliteFullTextFieldName(position))
-		newFields[position] = "COALESCE(NEW." + quote(column.Name) + ",'')"
-		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-			newFields[position] = fullTextFoldFunction + "(" + newFields[position] + ")"
-		}
+		newFields[position] = sqliteFullTextField("COALESCE(NEW."+quote(column.Name)+",'')", descriptor.Index)
 	}
 	tokenizer := "unicode61 remove_diacritics 0"
 	options := []string{"content=''", "contentless_delete=1", "tokenize=" + quoteLiteral(tokenizer)}
@@ -223,10 +253,7 @@ func renderFullTextBackfill(extension physical.Extension, owner physical.Physica
 	for position, field := range descriptor.Index.Fields {
 		column := columns[ir.FieldID(field.ID)]
 		fieldNames[position] = quote(sqliteFullTextFieldName(position))
-		fieldSelect[position] = "COALESCE(o." + quote(column.Name) + ",'')"
-		if descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-			fieldSelect[position] = fullTextFoldFunction + "(" + fieldSelect[position] + ")"
-		}
+		fieldSelect[position] = sqliteFullTextField("COALESCE(o."+quote(column.Name)+",'')", descriptor.Index)
 	}
 	return []string{
 		"INSERT INTO " + quote(names.keys) + " (" + strings.Join(identityNames, ",") + ") SELECT " + strings.Join(identitySelect, ",") + " FROM " + quote(owner.Name) + " AS o",
