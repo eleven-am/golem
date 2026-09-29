@@ -76,6 +76,7 @@ On a real field:
 | `pk` | primary key |
 | `default=uuid` / `default=now` | database-side default |
 | `readonly` | cannot be written by any caller |
+| `updated` | set to the mutation time on every update of the row, including one whose values equal the stored ones |
 | `immutable` | writable on create, never on update |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |

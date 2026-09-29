@@ -77,7 +77,7 @@ func bindValue(raw any, logical compilerir.LogicalTypeIR, typ policyir.TypeRef, 
 		if logical.MaxLength != nil && uint32(utf8.RuneCountInString(text)) > *logical.MaxLength {
 			return result, fmt.Errorf("string exceeds maximum rune length %d", *logical.MaxLength)
 		}
-		result, err = policyir.StringValue(text)
+		result, err = policyir.PortableStringValue(text)
 	case compilerir.TypeBytes:
 		if value.Kind() != reflect.Slice || value.Type().Elem().Kind() != reflect.Uint8 {
 			return result, wrongGoType(raw, "[]byte")

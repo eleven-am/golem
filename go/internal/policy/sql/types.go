@@ -106,7 +106,10 @@ func cloneArgs(values []any) []any {
 	for index, value := range values {
 		switch typed := value.(type) {
 		case []byte:
-			result[index] = append([]byte(nil), typed...)
+			result[index] = typed
+			if typed != nil {
+				result[index] = append([]byte{}, typed...)
+			}
 		case []string:
 			result[index] = append([]string(nil), typed...)
 		default:

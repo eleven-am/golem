@@ -10,7 +10,17 @@ import (
 const unicodeCollation = `pg_catalog."und-x-icu"`
 
 func NormalizeText(expression, folding string) string {
+	return NormalizeTextFor(expression, folding, "")
+}
+
+func NormalizeTextFor(expression, folding, normalization string) string {
 	value := "COALESCE(" + expression + ",'')"
+	if normalization == fulltextcontract.NormalizationNFCLower {
+		value = "pg_catalog.lower((" + value + " COLLATE " + unicodeCollation + "))"
+		if folding != fulltextcontract.FoldingDiacritics {
+			value = "pg_catalog.normalize(" + value + ",'NFC')"
+		}
+	}
 	if folding == fulltextcontract.FoldingDiacritics {
 		marks := strings.ReplaceAll(fulltextfolding.MarkCharacters(), "'", "''")
 		value = "pg_catalog.normalize(pg_catalog.translate(pg_catalog.normalize(" + value + ",'NFD'),'" + marks + "',''),'NFC')"
@@ -19,7 +29,11 @@ func NormalizeText(expression, folding string) string {
 }
 
 func PhraseQuery(expression, folding string, prefix bool) string {
-	phrase := "phraseto_tsquery('simple'," + NormalizeText(expression, folding) + ")"
+	return PhraseQueryFor(expression, folding, "", prefix)
+}
+
+func PhraseQueryFor(expression, folding, normalization string, prefix bool) string {
+	phrase := "phraseto_tsquery('simple'," + NormalizeTextFor(expression, folding, normalization) + ")"
 	if !prefix {
 		return phrase
 	}

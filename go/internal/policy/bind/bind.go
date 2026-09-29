@@ -762,7 +762,7 @@ func (b *binder) value(view golem.FrozenValueView, typ ir.TypeRef, path string) 
 		if !ok {
 			return ir.Value{}, b.failure(CodeValue, path, "string accessor disagrees with its tag")
 		}
-		bound, err := ir.StringValue(value)
+		bound, err := ir.PortableStringValue(value)
 		if err != nil {
 			return ir.Value{}, b.wrap(CodeValue, path, ir.ModelID{}, ir.FieldID{}, ir.RelationID{}, 0, err)
 		}
