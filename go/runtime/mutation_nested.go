@@ -333,10 +333,14 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	}
 	var authorized []mutationbatch.AuthorizedRow
 	var applied, after []mutationdecode.Row
+	state, err := binding.mutationState()
+	if err != nil {
+		return mutationnested.ApplyResult{}, err
+	}
 	var cascade *cascadeEffects
 	for _, statement := range prepared.Statements() {
 		if statement.Role() == mutationbatch.ApplyDelete && cascade == nil {
-			if cascade, err = captureCascadeEffects(ctx, queryer, app.registry, app.provider, app.mutationLimits, node.ModelID(), rows); err != nil {
+			if cascade, err = captureCascadeEffects(ctx, queryer, app.registry, app.provider, app.mutationLimits, state, node.ModelID(), rows); err != nil {
 				return mutationnested.ApplyResult{}, err
 			}
 			if cascade == nil {
@@ -366,10 +370,6 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 		}
 	}
 	verification, err := prepared.VerifyAuthorized(authorized, applied, after, node.Ordinal())
-	if err != nil {
-		return mutationnested.ApplyResult{}, err
-	}
-	state, err := binding.mutationState()
 	if err != nil {
 		return mutationnested.ApplyResult{}, err
 	}

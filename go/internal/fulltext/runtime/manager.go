@@ -219,7 +219,7 @@ func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticrunt
 	}
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
 	limit := "?" + strconv.Itoa(len(candidates.Args)+2)
-	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(identity, ",") +
+	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM " + fts + " AS golem_ff JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" WHERE " + fts + " MATCH ?1 ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
@@ -260,7 +260,7 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 				" WHERE " + fts + " MATCH ?" + strconv.Itoa(position+1)
 		}
 		direct := "WITH golem_fr AS (" + strings.Join(ranks, " UNION ALL ") +
-			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(identity, ",") +
+			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 			" FROM golem_fs JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_fs.golem_fd" +
 			" ORDER BY golem_fs.score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
 		if readsql.ValidateStatementComplexity(candidates.Model, direct, candidates.MaxStatementBytes, candidates.MaxStatementAliases) == nil {
@@ -271,7 +271,7 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 	for position, branch := range branches {
 		values[position] = "(?" + strconv.Itoa(position+1) + "," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + ")"
 	}
-	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(identity, ",") +
+	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM golem_fq JOIN " + fts + " AS golem_ff ON " + fts + " MATCH golem_fq.golem_fe JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" GROUP BY golem_ff.rowid," + strings.Join(identity, ",") + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
@@ -321,6 +321,14 @@ func (manager *Manager) identitySQL(index Index, storedAlias, candidateAlias str
 		joins[position] = candidateAlias + "." + manager.quote(candidates.Columns[position]) + "=" + identity[position]
 	}
 	return identity, joins
+}
+
+func (manager *Manager) projectedIdentity(index Index, identity []string) []string {
+	result := make([]string, len(identity))
+	for position, column := range index.Identity {
+		result[position] = policysql.ProjectStorageColumn(column.Storage.Kind, identity[position])
+	}
+	return result
 }
 
 func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
@@ -404,6 +412,11 @@ func parse(input string) ([]term, error) {
 				position++
 				if prefixLexemeLength(item.value) < 2 {
 					return nil, InvalidQuery("full-text prefix terms require at least two characters")
+				}
+				if position < len(input) {
+					if next, _ := utf8.DecodeRuneInString(input[position:]); !unicode.IsSpace(next) {
+						return nil, InvalidQuery("full-text phrase prefix must be followed by whitespace or the end of the query")
+					}
 				}
 			}
 		} else {

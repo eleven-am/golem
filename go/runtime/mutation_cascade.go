@@ -31,11 +31,18 @@ type cascadeFrontier struct {
 	rows  []mutationdecode.Row
 }
 
-func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, limits normalizedMutationLimits, model policyir.ModelID, parents []mutationdecode.Row) (*cascadeEffects, error) {
+func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, limits normalizedMutationLimits, state *mutationState, model policyir.ModelID, parents []mutationdecode.Row) (*cascadeEffects, error) {
 	if len(parents) == 0 || len(registry.DeleteEffects(golem.ModelID(model))) == 0 {
 		return nil, nil
 	}
-	budget := limits.touchedRows
+	remaining, err := state.remainingTouched()
+	if err != nil {
+		return nil, err
+	}
+	budget := remaining - len(parents)
+	if budget < 0 {
+		return nil, mutationbatch.LimitError(model, fmt.Sprintf("deleted rows exceed %d", limits.touchedRows))
+	}
 	deleted := make(map[string]struct{}, len(parents))
 	for _, row := range parents {
 		key, err := mutationbatch.PrimaryKey(registry, provider, row)
@@ -54,7 +61,7 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 			source := policyir.ModelID(effect.SourceModelID())
 			statements, err := mutationbatch.RenderDependents(mutationbatch.DependentsRequest{
 				Registry: registry, Provider: provider, Parent: current.model, Parents: current.rows, Effect: effect,
-				MaxRows: uint32(budget), MaxParameters: uint32(limits.statementParameters),
+				MaxRows: uint32(max(budget, 1)), MaxParameters: uint32(limits.statementParameters),
 			})
 			if err != nil {
 				return nil, err
@@ -89,7 +96,7 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 					}
 				}
 				if len(effects.deleted)+len(nulled) > budget {
-					return nil, mutationbatch.LimitError(source, fmt.Sprintf("cascaded rows exceed %d", budget))
+					return nil, mutationbatch.LimitError(source, fmt.Sprintf("cascaded rows exceed the %d of %d touched rows that remain", budget, limits.touchedRows))
 				}
 			}
 			if len(next) != 0 {

@@ -3,6 +3,7 @@
 package sql
 
 import (
+	"bytes"
 	"fmt"
 	"strings"
 
@@ -126,6 +127,8 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	columns := make([]Column, len(fields))
 	physicalColumns := make(map[policyir.FieldID]string, len(fields))
 	selectRoot := make([]string, len(fields))
+	projectedRoot := make([]string, len(fields))
+	columnTypes := make([]policyir.TypeRef, len(fields))
 	for index, field := range fields {
 		resolved, found := resolver.Field(provider, plan.ModelID(), field.FieldID())
 		if !found {
@@ -135,6 +138,8 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 		column := dialect.Quote(rootAlias) + "." + dialect.Quote(resolved.Column)
 		physicalColumns[field.FieldID()] = column
 		selectRoot[index] = column + " AS " + dialect.Quote(physical.PhysicalName(alias))
+		projectedRoot[index] = policysql.ProjectColumn(provider, resolved.Type, column) + " AS " + dialect.Quote(physical.PhysicalName(alias))
+		columnTypes[index] = resolved.Type
 		columns[index] = Column{field: field.FieldID(), alias: alias, public: field.Public()}
 	}
 	renderedCounts, err := renderRelationCounts(plan, registry, provider, capabilities, dialect, rootAlias, policyAliases, readAliases)
@@ -200,6 +205,8 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 	args = append(args, rootArgs...)
 	selectRoot = append(selectRoot, countExpressions...)
 	selectRoot = append(selectRoot, relationExpressions...)
+	projectedRoot = append(projectedRoot, countExpressions...)
+	projectedRoot = append(projectedRoot, relationExpressions...)
 
 	var text string
 	if distinct := plan.Distinct(); len(distinct) != 0 {
@@ -220,9 +227,9 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 		inner = append(inner, "ROW_NUMBER() OVER (PARTITION BY "+strings.Join(partitions, ", ")+" ORDER BY "+windowOrder+") AS "+dialect.Quote("golem_rank"))
 		outerAlias := physical.PhysicalName("golem_d0")
 		outerSelect := make([]string, 0, len(columns)+len(countColumns)+len(correlatedColumns))
-		for _, column := range columns {
+		for index, column := range columns {
 			quoted := dialect.Quote(physical.PhysicalName(column.alias))
-			outerSelect = append(outerSelect, dialect.Quote(outerAlias)+"."+quoted+" AS "+quoted)
+			outerSelect = append(outerSelect, policysql.ProjectColumn(provider, columnTypes[index], dialect.Quote(outerAlias)+"."+quoted)+" AS "+quoted)
 		}
 		for _, column := range countColumns {
 			quoted := dialect.Quote(physical.PhysicalName(column.alias))
@@ -237,7 +244,7 @@ func Render(plan readplan.Plan, registry *schema.Registry, provider policyir.Pro
 			text += " ORDER BY " + outerOrder
 		}
 	} else {
-		text = "SELECT " + strings.Join(selectRoot, ", ") + " FROM " + from + " WHERE " + rootWhere
+		text = "SELECT " + strings.Join(projectedRoot, ", ") + " FROM " + from + " WHERE " + rootWhere
 		if rootOrder != "" {
 			text += " ORDER BY " + rootOrder
 		}
@@ -502,8 +509,8 @@ func providerDialect(provider policyir.Provider) (policysql.Dialect, error) {
 func cloneArgs(values []any) []any {
 	result := make([]any, len(values))
 	for index, value := range values {
-		if bytes, ok := value.([]byte); ok {
-			result[index] = append([]byte(nil), bytes...)
+		if data, ok := value.([]byte); ok {
+			result[index] = bytes.Clone(data)
 		} else {
 			result[index] = value
 		}

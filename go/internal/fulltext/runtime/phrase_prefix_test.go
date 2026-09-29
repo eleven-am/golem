@@ -21,3 +21,20 @@ func TestQueryParserAcceptsPhrasePrefix(t *testing.T) {
 		t.Fatalf("SQLite phrase prefix=%q", got)
 	}
 }
+
+func TestQueryParserRejectsTextGluedToAPhrasePrefix(t *testing.T) {
+	for _, query := range []string{`"foo"*bar`, `"quick bro"*fox tail`, `"foo"**`, `"foo"*"bar"`} {
+		_, err := parse(query)
+		if err == nil {
+			t.Fatalf("query %q accepted text directly after a phrase prefix", query)
+		}
+		if reason, ok := QueryValidationReason(err); !ok || reason != "full-text phrase prefix must be followed by whitespace or the end of the query" {
+			t.Fatalf("query %q reason=%q typed=%t", query, reason, ok)
+		}
+	}
+	for _, query := range []string{`"foo"*`, `"foo"* bar`, "\"foo\"* bar", `"user@example.com"*`} {
+		if _, err := parse(query); err != nil {
+			t.Fatalf("query %q: %v", query, err)
+		}
+	}
+}

@@ -427,7 +427,7 @@ func (context renderContext) returning() (string, []ResultColumn, error) {
 			continue
 		}
 		alias := fmt.Sprintf("golem_f_%x", fieldID)
-		fields = append(fields, context.dialect.Quote(field.Column)+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
+		fields = append(fields, policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(field.Column))+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
 		columns = append(columns, ResultColumn{field: fieldID, alias: alias})
 	}
 	if len(fields) == 0 {

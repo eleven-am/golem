@@ -288,7 +288,7 @@ func logicalGoType(logical ir.LogicalTypeIR, enums map[ir.EnumID]ir.EnumIR, impo
 
 func cloneExpression(value string, logical ir.LogicalTypeIR) string {
 	if logical.Kind == ir.TypeBytes {
-		return "append([]byte(nil), " + value + "...)"
+		return "append(" + value + "[:0:0], " + value + "...)"
 	}
 	if logical.Kind == ir.TypeScalarList {
 		return "append(" + value + "[:0:0], " + value + "...)"

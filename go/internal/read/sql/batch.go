@@ -141,6 +141,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 
 	selects := make([]string, len(context.fields), len(context.fields)+len(context.keyIDs))
 	fieldAliases := make(map[policyir.FieldID]string, len(context.fields))
+	fieldTypes := make(map[policyir.FieldID]policyir.TypeRef, len(context.fields)+len(context.keyIDs))
 	for index, field := range context.fields {
 		resolved, ok := context.resolver.Field(provider, plan.ModelID(), field.FieldID())
 		if !ok {
@@ -148,6 +149,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 		}
 		alias := fmt.Sprintf("golem_c%d", index)
 		fieldAliases[field.FieldID()] = alias
+		fieldTypes[field.FieldID()] = resolved.Type
 		selects[index] = context.dialect.Quote(context.alias) + "." + context.dialect.Quote(resolved.Column) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
 	}
 	selects = append(selects, countExpressions...)
@@ -159,6 +161,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 		resolved := context.keyFields[index]
 		alias := fmt.Sprintf("golem_k%d", index)
 		fieldAliases[field] = alias
+		fieldTypes[field] = resolved.Type
 		extraKeys = append(extraKeys, field)
 		selects = append(selects, context.dialect.Quote(context.alias)+"."+context.dialect.Quote(resolved.Column)+" AS "+context.dialect.Quote(physical.PhysicalName(alias)))
 	}
@@ -257,9 +260,9 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	rankAlias := physical.PhysicalName("golem_bp0")
 	page := "SELECT " + context.dialect.Quote(pageAlias) + ".*, ROW_NUMBER() OVER (PARTITION BY " + strings.Join(partition, ", ") + " ORDER BY " + strings.Join(orderAliases, ", ") + ") AS " + context.dialect.Quote("golem_page_rank") + " FROM (" + pageInput + ") AS " + context.dialect.Quote(pageAlias)
 	outerSelect := make([]string, 0, len(context.fields)+len(countColumns)+len(extraKeys))
-	for index := range context.fields {
+	for index, field := range context.fields {
 		alias := context.dialect.Quote(physical.PhysicalName(fmt.Sprintf("golem_c%d", index)))
-		outerSelect = append(outerSelect, context.dialect.Quote(rankAlias)+"."+alias)
+		outerSelect = append(outerSelect, policysql.ProjectColumn(provider, fieldTypes[field.FieldID()], context.dialect.Quote(rankAlias)+"."+alias)+" AS "+alias)
 	}
 	for _, count := range countColumns {
 		alias := context.dialect.Quote(physical.PhysicalName(count.alias))
@@ -267,7 +270,7 @@ func RenderBatch(plan readplan.Plan, endpoint schema.RelationEndpoint, keys [][]
 	}
 	for _, field := range extraKeys {
 		alias := context.dialect.Quote(physical.PhysicalName(fieldAliases[field]))
-		outerSelect = append(outerSelect, context.dialect.Quote(rankAlias)+"."+alias)
+		outerSelect = append(outerSelect, policysql.ProjectColumn(provider, fieldTypes[field], context.dialect.Quote(rankAlias)+"."+alias)+" AS "+alias)
 	}
 	text := "SELECT " + strings.Join(outerSelect, ", ") + " FROM (" + page + ") AS " + context.dialect.Quote(rankAlias)
 	filters := make([]string, 0, 2)

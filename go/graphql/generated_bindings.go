@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"math"
@@ -341,7 +342,7 @@ func normalizeGeneratedCustomResult[M any](compilation compilerir.CompilationIR,
 		}
 	case "Bytes":
 		if result, ok := value.([]byte); ok {
-			return append([]byte(nil), result...), nil
+			return bytes.Clone(result), nil
 		}
 	case "JSON":
 		if result, ok := value.(interface{ Bytes() []byte }); ok {

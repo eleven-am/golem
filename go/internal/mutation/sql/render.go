@@ -671,7 +671,7 @@ func (context renderContext) returning(fields []policyir.FieldID) (string, []Res
 			return "", nil, fail(CodeSchema, context.node.ModelID(), fieldID, "returning field has no physical descriptor", nil)
 		}
 		alias := fmt.Sprintf("golem_c%d", index)
-		items[index] = context.dialect.Quote(field.Column) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
+		items[index] = policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(field.Column)) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
 		columns[index] = ResultColumn{field: fieldID, alias: alias}
 	}
 	return " RETURNING " + strings.Join(items, ", "), columns, nil
@@ -686,7 +686,7 @@ func (context renderContext) selectFields(fields []policyir.FieldID) (string, []
 			return "", nil, fail(CodeSchema, context.node.ModelID(), fieldID, "selected image field has no physical descriptor", nil)
 		}
 		alias := fmt.Sprintf("golem_c%d", index)
-		items[index] = context.qualified(field.Column) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
+		items[index] = policysql.ProjectColumn(context.provider, field.Type, context.qualified(field.Column)) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
 		columns[index] = ResultColumn{field: fieldID, alias: alias}
 	}
 	return strings.Join(items, ", "), columns, nil

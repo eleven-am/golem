@@ -25,6 +25,7 @@ import (
 	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
+	providerhandle "github.com/eleven-am/golem/go/internal/provider/handle"
 	postgresprovider "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	sqliteprovider "github.com/eleven-am/golem/go/internal/provider/sqlite"
 	queueprovider "github.com/eleven-am/golem/go/internal/queue/provider"
@@ -300,6 +301,7 @@ func Open[P, A any](ctx context.Context, config Config[P, A]) (result *App[P, A]
 	}
 	app := &App[P, A]{databaseHandle: databaseHandle, database: database, provider: provider, registry: registry, providers: providers, capabilities: proof, bindings: config.Bindings, descriptors: config.Descriptors, resolvePrincipal: config.ResolvePrincipal, snapshotActor: config.SnapshotActor, readLimits: readLimits, mutationLimits: mutationLimits, analyticsLimits: analyticsLimits, eventRegistry: config.EventRegistry, eventFactories: config.EventFactories, eventLimits: eventLimits, eventTransport: config.EventTransport, observer: config.Observer, eventSchemas: eventSchemas, eventProvider: providerIdentity, snapshotPrincipal: config.SnapshotPrincipal, eventHubs: make(map[golem.ModelID]*subscription.ModelHub[any]), afterCommitError: config.AfterCommitError, auditPrincipal: config.AuditPrincipal, reportScopedQuery: config.ReportScopedQuery, semantic: semanticManager, fulltext: fullTextManager, reviewedUnmanaged: expected.Unmanaged}
 	app.eventObserver = adaptEventObserver(config.Observer, providerIdentity)
+	providerhandle.AttachMaintenanceObserver((*providerhandle.Database)(databaseHandle), config.Observer)
 	if err := app.initializeEventRuntime(config.CDCAdapters, config.ReportEventOperator); err != nil {
 		return nil, err
 	}

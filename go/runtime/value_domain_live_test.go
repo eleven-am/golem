@@ -99,14 +99,20 @@ type exactValueProfile struct {
 	provider    policyir.Provider
 	proof       policysql.CapabilityProof
 	prefix      string
+	outbox      string
 	placeholder func(int) string
 }
 
 func runExactValueProfiles(t *testing.T, operation func(*testing.T, exactValueProfile)) {
 	t.Helper()
+	runExactValueProfilesFor(t, schematest.NewMutationExactValues, operation)
+}
+
+func runExactValueProfilesFor(t *testing.T, newFixture func(testing.TB) schematest.Fixture, operation func(*testing.T, exactValueProfile)) {
+	t.Helper()
 	ctx := context.Background()
 	t.Run("sqlite", func(t *testing.T) {
-		fixture := schematest.NewMutationExactValues(t)
+		fixture := newFixture(t)
 		provider := sqliteprovider.New()
 		database, _, err := provider.Open(ctx, "file:"+filepath.Join(t.TempDir(), "value-domain.db"))
 		if err != nil {
@@ -120,13 +126,13 @@ func runExactValueProfiles(t *testing.T, operation func(*testing.T, exactValuePr
 		if err != nil {
 			t.Fatal(err)
 		}
-		operation(t, exactValueProfile{fixture: fixture, database: database, provider: policyir.ProviderSQLite, proof: proof, placeholder: func(int) string { return "?" }})
+		operation(t, exactValueProfile{fixture: fixture, database: database, provider: policyir.ProviderSQLite, proof: proof, outbox: `"_golem_outbox"`, placeholder: func(int) string { return "?" }})
 	})
 	for _, profile := range []struct{ name, env string }{{"postgresql-c", "GOLEM_TEST_POSTGRES_DSN"}, {"postgresql-linguistic", "GOLEM_TEST_POSTGRES_LINGUISTIC_DSN"}} {
 		profile := profile
 		t.Run(profile.name, func(t *testing.T) {
 			dsn := testenv.DisposablePostgreSQL(t, profile.env)
-			fixture := schematest.NewMutationExactValues(t)
+			fixture := newFixture(t)
 			sequence := mutationOutboxNamespaceSequence.Add(1)
 			applicationNamespace := physical.PhysicalName(fmt.Sprintf("golem_value_domain_%d", sequence))
 			systemNamespace := physical.PhysicalName(fmt.Sprintf("golem_value_domain_system_%d", sequence))
@@ -152,7 +158,7 @@ func runExactValueProfiles(t *testing.T, operation func(*testing.T, exactValuePr
 				t.Fatal(err)
 			}
 			operation(t, exactValueProfile{fixture: fixture, database: database, provider: policyir.ProviderPostgreSQL, proof: proof,
-				prefix: quoteAcceptanceIdentifier(string(applicationNamespace)) + ".", placeholder: func(index int) string { return fmt.Sprintf("$%d", index) }})
+				prefix: quoteAcceptanceIdentifier(string(applicationNamespace)) + ".", outbox: quoteAcceptanceIdentifier(string(systemNamespace)) + `."_golem_outbox"`, placeholder: func(index int) string { return fmt.Sprintf("$%d", index) }})
 		})
 	}
 }
@@ -213,5 +219,38 @@ func TestEmptyBytesPersistAsEmptyNotNullAcrossProviders(t *testing.T) {
 		if err := profile.database.GetContext(context.Background(), &stored, query, mutationResultUUIDText(202)); err != nil || stored.Null || stored.Length != 0 {
 			t.Fatalf("stored empty bytes=%+v err=%v; want a non-NULL zero-length value", stored, err)
 		}
+		if got, present := profile.readPublicBytes(t, 202); !present || got == nil || len(got) != 0 {
+			t.Fatalf("public row empty bytes=%#v present=%t; want a non-nil zero-length slice", got, present)
+		}
 	})
+}
+
+func (profile exactValueProfile) readPublicBytes(t *testing.T, id byte) ([]byte, bool) {
+	t.Helper()
+	schema := profile.fixture
+	provider := golem.SQLite
+	if profile.provider == policyir.ProviderPostgreSQL {
+		provider = golem.PostgreSQL
+	}
+	postIdentity := golem.GeneratedIdentityMetadata(schema.Post, schema.PostKey, golem.PrimaryIdentity, schema.PostID)
+	userIdentity := golem.GeneratedIdentityMetadata(schema.User, schema.UserKey, golem.PrimaryIdentity, schema.UserID)
+	postDescriptor := golem.GeneratedModelDescriptor[mutationResultPost](schema.Post, golem.GeneratedDescriptorShape(
+		[]golem.FieldID{schema.PostID, schema.PostBytes}, nil, []golem.IdentityMetadata{postIdentity}, nil))
+	userDescriptor := golem.GeneratedModelDescriptor[mutationResultUser](schema.User, golem.GeneratedDescriptorShape(
+		[]golem.FieldID{schema.UserID}, nil, []golem.IdentityMetadata{userIdentity}, nil))
+	fixture := mutationResultFixtureForSchemaConfigured(t, profile.database, provider, schema, func(config *Config[mutationResultPrincipal, mutationResultActor]) {
+		descriptors, err := golem.GeneratedApplicationDescriptors(schema.Bundle.GenerationDigest(),
+			golem.GeneratedStampedPackageDescriptors(schema.Bundle.GenerationDigest(), userDescriptor.Metadata(), postDescriptor.Metadata()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		config.Descriptors = descriptors
+	})
+	field := golem.GeneratedBytesField[mutationResultPost](schema.PostBytes)
+	selector := golem.GeneratedUniqueSelectorValue[mutationResultPost](schema.Post, schema.PostKey, golem.GeneratedSelectorComponent(schema.PostID, golem.UUID{15: id}))
+	row, err := SystemFindUnique(context.Background(), fixture.app.System(), postDescriptor, selector, golem.RuntimeProjectionReadOption(golem.Select[mutationResultPost](field)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return golem.Value(row, field).Get()
 }

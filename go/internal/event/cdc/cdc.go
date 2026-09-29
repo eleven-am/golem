@@ -4,6 +4,7 @@
 package cdc
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
@@ -45,7 +46,7 @@ type CorrelationInput struct {
 
 func (input CorrelationInput) Adapter() events.CDCIdentity { return input.adapter }
 func (input CorrelationInput) SourceTransactionID() string { return input.sourceTransactionID }
-func (input CorrelationInput) Cursor() []byte              { return append([]byte(nil), input.cursor...) }
+func (input CorrelationInput) Cursor() []byte              { return bytes.Clone(input.cursor) }
 
 type Config struct {
 	Adapter       events.CDCAdapter
@@ -95,7 +96,7 @@ func (emitter *Emitter) Emit(ctx context.Context, input events.CDCBatchInput) er
 		eventID := deriveEventID(identity, owned.SourceTransactionID, change.Ordinal)
 		notice, encodeErr := emitter.config.Encoder.EncodeCDC(ctx, EncodeInput{
 			Adapter: identity, SourceTransactionID: owned.SourceTransactionID,
-			RecordedAt: owned.RecordedAt, Cursor: append([]byte(nil), owned.Cursor...), EventID: eventID, CausationID: causation,
+			RecordedAt: owned.RecordedAt, Cursor: bytes.Clone(owned.Cursor), EventID: eventID, CausationID: causation,
 			Ordinal: change.Ordinal, Model: change.Model, Action: change.Action,
 			Before: cloneRowPointer(change.Before), After: cloneRowPointer(change.After),
 		})
@@ -125,7 +126,7 @@ func cloneAndValidate(input events.CDCBatchInput) (events.CDCBatchInput, error) 
 		len(input.Changes) == 0 || len(input.Changes) > events.MaximumCDCChangesPerTransaction {
 		return events.CDCBatchInput{}, events.Failure(events.CodeCDCInvalid)
 	}
-	owned := events.CDCBatchInput{SourceTransactionID: input.SourceTransactionID, RecordedAt: input.RecordedAt, Cursor: append([]byte(nil), input.Cursor...), Changes: make([]events.CDCChangeInput, len(input.Changes))}
+	owned := events.CDCBatchInput{SourceTransactionID: input.SourceTransactionID, RecordedAt: input.RecordedAt, Cursor: bytes.Clone(input.Cursor), Changes: make([]events.CDCChangeInput, len(input.Changes))}
 	for index, change := range input.Changes {
 		if change.Ordinal != uint32(index+1) || change.Model == (golem.ModelID{}) || !validChangeShape(change) {
 			return events.CDCBatchInput{}, events.Failure(events.CodeCDCInvalid)

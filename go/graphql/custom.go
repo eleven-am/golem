@@ -1,6 +1,7 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"reflect"
@@ -213,7 +214,7 @@ func cloneCustomArguments(values []CustomArgument) []CustomArgument {
 func cloneCustomValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []any:
 		result := make([]any, len(typed))
 		for index, item := range typed {

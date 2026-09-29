@@ -239,7 +239,7 @@ func redactMigrationPlanError(moduleDir string, err error) error {
 		message = strings.ReplaceAll(message, moduleDir, ".")
 	}
 	message = regexp.MustCompile(`(?i)[a-z][a-z0-9+.-]*://[^[:space:]"'<>]+`).ReplaceAllString(message, "<redacted>")
-	message = regexp.MustCompile(`(^|[[:space:]"'(=])(?:[A-Za-z]:[\\/]|/)[^[:space:]"'<>]+`).ReplaceAllString(message, "${1}<path>")
+	message = regexp.MustCompile(`(^|[^A-Za-z0-9._~/\\-])(?:[A-Za-z]:[\\/]|\.\.[\\/]|~[\\/]|/)[^[:space:]"'<>]+`).ReplaceAllString(message, "${1}<path>")
 	return errors.New(message)
 }
 

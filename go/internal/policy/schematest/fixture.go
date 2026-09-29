@@ -35,6 +35,7 @@ type Fixture struct {
 	PostJSON         golem.FieldID
 	PostList         golem.FieldID
 	PostDateTime     golem.FieldID
+	PostAuthorName   golem.FieldID
 	UserPosts        golem.FieldID
 	PostAuthor       golem.FieldID
 	Authorship       golem.RelationID
@@ -125,6 +126,12 @@ func NewOptimisticConcurrencyPostgreSQLNamespaces(t testing.TB, namespace, syste
 // Decimal, BigInt, and microsecond DateTime.
 func NewMutationExactValues(t testing.TB) Fixture {
 	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, false, true, "public", "_golem", false, false, false)
+}
+
+// NewSubscribedMutationExactValues is NewMutationExactValues with post change
+// facts enabled, so every post mutation captures complete row images.
+func NewSubscribedMutationExactValues(t testing.TB) Fixture {
+	return newFixtureConfigured(t, 0, 0, ContractModes{}, true, true, false, true, true, "public", "_golem", false, false, false)
 }
 
 func NewWithMaxTake(t testing.TB, userMaxTake, postMaxTake uint32) Fixture {

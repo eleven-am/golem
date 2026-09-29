@@ -68,6 +68,7 @@ type hubRun[T any] struct {
 	cancel context.CancelFunc
 	input  chan events.Notice
 	jobs   chan evaluationJob[T]
+	live   chan struct{}
 }
 
 type member[T any] struct {
@@ -133,6 +134,10 @@ func NewModelHub[T any](config Config[T]) (*ModelHub[T], error) {
 	return &ModelHub[T]{config: config, limits: limits, members: make(map[uint64]*member[T]), runs: make(map[uint64]*hubRun[T])}, nil
 }
 
+// Subscribe returns only once the model's transport subscription is live, so
+// every event published after it returns is either delivered or ends the
+// stream with an error. A transient source failure before that point is
+// retried while Subscribe waits; nobody holds a stream that could miss events.
 func (hub *ModelHub[T]) Subscribe(ctx context.Context, key SubscriberKey) (*Stream[T], error) {
 	return hub.subscribe(ctx, key, nil, nil)
 }
@@ -173,6 +178,10 @@ func (hub *ModelHub[T]) subscribe(ctx context.Context, key SubscriberKey, state 
 	}
 	stream := &Stream[T]{hub: hub, id: item.id, member: item}
 	stream.installStop(context.AfterFunc(ctx, func() { stream.closeWith(events.CodeSubscriptionCancelled) }))
+	select {
+	case <-run.live:
+	case <-item.done:
+	}
 	events.Observe(hub.config.Observer, ctx, hub.config.Model, "", events.ObservationHubMembership, events.OutcomeSuccess, "", 0, 0, hub.limits.SubscriberQueue, 0, 1)
 	return stream, nil
 }
@@ -189,7 +198,7 @@ func (hub *ModelHub[T]) activeRunLocked() *hubRun[T] {
 func (hub *ModelHub[T]) newRunLocked() *hubRun[T] {
 	hub.nextRun++
 	ctx, cancel := context.WithCancel(context.Background())
-	run := &hubRun[T]{id: hub.nextRun, ctx: ctx, cancel: cancel, input: make(chan events.Notice, hub.limits.HubInputQueue), jobs: make(chan evaluationJob[T], hub.limits.EvaluationConcurrency)}
+	run := &hubRun[T]{id: hub.nextRun, ctx: ctx, cancel: cancel, input: make(chan events.Notice, hub.limits.HubInputQueue), jobs: make(chan evaluationJob[T], hub.limits.EvaluationConcurrency), live: make(chan struct{})}
 	hub.runs[run.id] = run
 	hub.wg.Add(2 + hub.limits.EvaluationConcurrency)
 	return run
@@ -232,6 +241,7 @@ func (hub *ModelHub[T]) sourceLoop(run *hubRun[T]) {
 			return
 		}
 		backoff = hub.limits.RetryBase
+		close(run.live)
 		stopClose := context.AfterFunc(run.ctx, func() { _ = stream.Close() })
 		for {
 			notice, receiveErr := stream.Recv(run.ctx)

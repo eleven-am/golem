@@ -367,7 +367,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	var cascade *cascadeEffects
 	for _, statement := range prepared.Statements() {
 		if statement.Role() == mutationbatch.ApplyDelete && cascade == nil {
-			if cascade, err = captureCascadeEffects(ctx, scope.queryer, app.registry, app.provider, app.mutationLimits, program.ModelID(), captured); err != nil {
+			if cascade, err = captureCascadeEffects(ctx, scope.queryer, app.registry, app.provider, app.mutationLimits, state, program.ModelID(), captured); err != nil {
 				return 0, publicBatchExecutionError(program, err)
 			}
 			if cascade == nil {

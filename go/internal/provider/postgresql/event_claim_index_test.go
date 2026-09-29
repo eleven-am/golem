@@ -14,7 +14,12 @@ import (
 
 func openDeliveryNamespace(tb testing.TB, namespace physical.PhysicalName) *sqlx.DB {
 	tb.Helper()
-	database, err := sqlx.Open("pgx", testenv.DisposablePostgreSQL(tb, testenv.PostgreSQLDSNVariable))
+	return openDeliveryNamespaceAt(tb, testenv.PostgreSQLDSNVariable, namespace)
+}
+
+func openDeliveryNamespaceAt(tb testing.TB, variable string, namespace physical.PhysicalName) *sqlx.DB {
+	tb.Helper()
+	database, err := sqlx.Open("pgx", testenv.DisposablePostgreSQL(tb, variable))
 	if err != nil {
 		tb.Fatal(err)
 	}

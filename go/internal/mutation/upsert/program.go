@@ -4,6 +4,7 @@
 package upsert
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
@@ -374,8 +375,8 @@ func cloneStatement(statement Statement) Statement {
 func cloneArgs(values []any) []any {
 	result := append([]any(nil), values...)
 	for index, value := range result {
-		if bytes, ok := value.([]byte); ok {
-			result[index] = append([]byte(nil), bytes...)
+		if data, ok := value.([]byte); ok {
+			result[index] = bytes.Clone(data)
 		}
 	}
 	return result

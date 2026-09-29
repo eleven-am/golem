@@ -325,7 +325,10 @@ missing, it lists all of them in one error, with a ready-made
 `--approve ... --approve ...` line to rerun with. Approval is required for:
 
 - every column type change (`alterColumnType`), including a value-preserving
-  widening, which is labelled `rewrite`;
+  widening, which is labelled `rewrite`. Raising or removing a string's length
+  limit is such a widening on both providers: SQLite rebuilds the table and
+  PostgreSQL alters the column type, and either way the operation is labelled
+  `rewrite` and needs `--approve`;
 - every `dataLoss` operation: dropping a table or column, making a column
   required, adding a unique key, primary key or check that existing rows may
   violate, and any type change that is not a widening;
@@ -335,8 +338,7 @@ missing, it lists all of them in one error, with a ready-made
 A constraint that the migration drops and re-adds while still accepting every
 value it accepted before needs no approval and is labelled `locking`, because
 the database re-validates it. That covers renaming a table or column (golem
-derives constraint names from both), raising or removing a string's length
-limit, and making a column optional.
+derives constraint names from both) and making a column optional.
 
 ### What each provider changes in place
 
@@ -346,8 +348,10 @@ limit, and making a column optional.
   referenced key constraint rather than dropping it.
 - Raising or removing a string's length limit (`varchar(200)` to
   `varchar(500)`, or to an unbounded string) works on both providers. SQLite
-  rebuilds the table; PostgreSQL alters the column type. Lowering or adding a
-  limit is refused on both, because existing values might not fit.
+  rebuilds the table; PostgreSQL alters the column type. On both it is an
+  `alterColumnType` operation labelled `rewrite`, so `migration new` needs
+  `--approve <operation-id>` for it. Lowering or adding a limit is refused on
+  both, because existing values might not fit.
 - Field order. SQLite keeps columns in declared order: reordering fields, or
   inserting a field anywhere but at the end, rebuilds the table. PostgreSQL
   cannot reorder columns in place, so a new field is always appended

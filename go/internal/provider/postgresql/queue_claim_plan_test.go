@@ -49,7 +49,12 @@ func analyzedPostgreSQLPlan(tb testing.TB, database *sqlx.DB, statement string, 
 
 func openClaimNamespace(tb testing.TB, namespace string) (*queueStore, *sqlx.DB) {
 	tb.Helper()
-	dsn := testenv.DisposablePostgreSQL(tb, testenv.PostgreSQLDSNVariable)
+	return openClaimNamespaceAt(tb, testenv.PostgreSQLDSNVariable, namespace)
+}
+
+func openClaimNamespaceAt(tb testing.TB, variable, namespace string) (*queueStore, *sqlx.DB) {
+	tb.Helper()
+	dsn := testenv.DisposablePostgreSQL(tb, variable)
 	database, err := sqlx.Open("pgx", dsn)
 	if err != nil {
 		tb.Fatal(err)
@@ -90,7 +95,7 @@ FROM generate_series(0,$1-1) AS i`
 }
 
 func postgresqlClaimProbe(store *queueStore, limit int) (string, []any) {
-	return postgresqlClaimDiscovery(store.table(), `job."type" IN ($1,$2)`, []any{"type0", "type1"}, limit)
+	return postgresqlClaimDiscovery(store.table(), `job."type" IN ($1,$2)`, []any{"type0", "type1"}, nil, limit)
 }
 
 func TestPostgreSQLClaimDiscoveryStopsAtItsLimit(t *testing.T) {

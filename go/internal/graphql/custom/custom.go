@@ -4,6 +4,7 @@
 package custom
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"time"
@@ -397,7 +398,7 @@ func cloneType(value compilerir.GraphQLTypeIR) compilerir.GraphQLTypeIR {
 func cloneValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []any:
 		result := make([]any, len(typed))
 		for index, item := range typed {

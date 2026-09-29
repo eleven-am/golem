@@ -96,6 +96,7 @@ const (
 
 const (
 	OperationRuntimeOpen               Operation = "runtime.open"
+	OperationRuntimeMaintenance        Operation = "runtime.maintenance"
 	OperationReadFindUnique            Operation = "read.find_unique"
 	OperationReadFindFirst             Operation = "read.find_first"
 	OperationReadFindMany              Operation = "read.find_many"
@@ -278,7 +279,7 @@ func validReason(value Reason) bool {
 
 func validOperation(value Operation) bool {
 	switch value {
-	case OperationRuntimeOpen, OperationReadFindUnique, OperationReadFindFirst, OperationReadFindMany,
+	case OperationRuntimeOpen, OperationRuntimeMaintenance, OperationReadFindUnique, OperationReadFindFirst, OperationReadFindMany,
 		OperationReadCount, OperationMutationCreate, OperationMutationUpdate, OperationMutationUpsert,
 		OperationMutationDelete, OperationMutationUpdateMany, OperationMutationDeleteMany,
 		OperationMutationConnect, OperationMutationDisconnect, OperationMutationSetRelation,

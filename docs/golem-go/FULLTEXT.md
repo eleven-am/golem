@@ -124,7 +124,11 @@ scores.
 
 Terms are OR-joined. Double quotes form a phrase. A trailing `*` on a term or
 directly after a closing quote makes the final word a prefix of at least two
-letters or digits: `ref*` or `"service fe"*`. Golem parses this syntax and
+letters or digits: `ref*` or `"service fe"*`. Whitespace or the end of the
+query must follow `"…"*`, so `"service fe"*charges` is rejected rather than
+split into two terms. Punctuation separates words on both providers, so
+`"user@example.com"*` is the phrase `user example com*` and matches the same
+rows on SQLite and PostgreSQL. Golem parses this syntax and
 quotes every lexeme; raw FTS5 or `tsquery` syntax is never accepted. Queries
 are limited to 32 terms and 10,000 bytes of valid UTF-8, and results to 1,000
 rows.
