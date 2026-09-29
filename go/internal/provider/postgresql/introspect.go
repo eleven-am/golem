@@ -1088,7 +1088,7 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		}
 	}
 	if deliveryName != "" {
-		if err := introspectOutboxDelivery(ctx, q, expected.Namespace.Name, deliveryName); err != nil {
+		if err := introspectOutboxDelivery(ctx, q, expected.Namespace.Name, deliveryName, allowed["index\x00"+string(physical.OutboxDeliveryClaimIndex)]); err != nil {
 			return physical.SystemSchema{}, err
 		}
 	}
@@ -1202,7 +1202,7 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 	return nil
 }
 
-func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string) error {
+func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string, claimAdmitted bool) error {
 	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(namespace), name)
 	if err != nil {
 		return err
@@ -1301,6 +1301,12 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		var unique, valid bool
 		if err := indexRows.Scan(&indexName, &unique, &valid, &keys, &predicate); err != nil {
 			return err
+		}
+		if claimAdmitted && indexName == string(physical.OutboxDeliveryClaimIndex) {
+			if !postgresqlOutboxDeliveryClaimShape(name, unique, valid, keys, predicate) {
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: indexName, Table: name}, "postgresql outbox delivery index drift: %s does not match golem's claim index; drop it so golem can create its own", indexName)
+			}
+			continue
 		}
 		count++
 		if indexName != "_golem_outbox_delivery_pending" || unique || !valid || keys != "2 5 3 1" || predicate != "" {

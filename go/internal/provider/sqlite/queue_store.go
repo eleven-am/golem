@@ -19,7 +19,6 @@ const (
 	sqliteQueueTable   = `"main"."golem_queue"`
 	sqliteQueueColumns = `"id","type","payload","status","attempt_count","max_attempts","available_at","lease_token","lease_until","dedupe_key","exclusive_key","cancel_requested_at","last_code","enqueued_at","finished_at","updated_at"`
 	sqliteQueueSummary = `"id","type","status","attempt_count","max_attempts","available_at","cancel_requested_at","last_code","enqueued_at","finished_at"`
-	sqliteQueueClaim   = `("status" IN ('pending','leased') AND "available_at"<=?)`
 	sqliteQueueFence   = ` WHERE "id"=? AND "lease_token"=? AND "status"='leased' AND "lease_until">` + sqliteDatabaseMicros
 
 	sqliteQueueDedupeDefinition = `CREATE UNIQUE INDEX "golem_queue_dedupe" ON "golem_queue" ("dedupe_key") WHERE "status" IN ('pending','leased')`
@@ -254,6 +253,21 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 	return stored, nil
 }
 
+func sqliteClaimDiscovery(typePredicate string, typeArguments []any, now int64, limit int) (string, []any) {
+	branches := make([]string, 0, 2)
+	arguments := make([]any, 0, 2*(len(typeArguments)+3)+1)
+	for _, status := range []queueprovider.State{queueprovider.StatePending, queueprovider.StateLeased} {
+		branches = append(branches, `SELECT * FROM (SELECT job."id",job."type",job."status",job."attempt_count",job."max_attempts",job."cancel_requested_at",job."exclusive_key",job."available_at" FROM `+sqliteQueueTable+` AS job WHERE job."status"='`+string(status)+`' AND job."available_at"<=? AND `+typePredicate+
+			` AND (job."exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+sqliteQueueTable+` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">?))`+
+			` ORDER BY job."available_at",job."id" LIMIT ?)`)
+		arguments = append(arguments, now)
+		arguments = append(arguments, typeArguments...)
+		arguments = append(arguments, now, limit)
+	}
+	arguments = append(arguments, limit)
+	return strings.Join(branches, ` UNION ALL `) + ` ORDER BY "available_at","id" LIMIT ?`, arguments
+}
+
 func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {
 	if err := queueprovider.ValidateClaim(options); err != nil {
 		return nil, err
@@ -291,30 +305,26 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		}
 		claimTypes = resourceEligibleTypes(options.Types, options.Resource.Costs, resourceCapacity-resourceUsed)
 	}
-	arguments := []any{now}
+	typeArguments := make([]any, 0, len(claimTypes)+len(options.Types)+1)
 	typePredicate := "0"
 	if len(claimTypes) != 0 {
 		typePredicate = `job."type" IN (` + placeholders(len(claimTypes)) + `)`
 		for _, name := range claimTypes {
-			arguments = append(arguments, name)
+			typeArguments = append(typeArguments, name)
 		}
 	}
 	if options.Resource != nil {
 		typePredicate = `(` + typePredicate + ` OR (job."type" IN (` + placeholders(len(options.Types)) + `) AND job."status"='leased' AND job."lease_until"<=? AND (job."cancel_requested_at" IS NOT NULL OR job."attempt_count">=job."max_attempts")))`
 		for _, name := range options.Types {
-			arguments = append(arguments, name)
+			typeArguments = append(typeArguments, name)
 		}
-		arguments = append(arguments, now)
+		typeArguments = append(typeArguments, now)
 	}
 	discoveryLimit := options.Limit
 	if options.Resource != nil {
 		discoveryLimit = queueprovider.MaximumClaimJobs
 	}
-	arguments = append(arguments, now, discoveryLimit)
-	discovery := `SELECT "id","type","status","attempt_count","max_attempts","cancel_requested_at","exclusive_key" FROM ` + sqliteQueueTable + ` AS job WHERE ` + sqliteQueueClaim +
-		` AND ` + typePredicate +
-		` AND ("exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM ` + sqliteQueueTable + ` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">?))` +
-		` ORDER BY "available_at","id" LIMIT ?`
+	discovery, arguments := sqliteClaimDiscovery(typePredicate, typeArguments, now, discoveryLimit)
 	var candidates []struct {
 		ID              string         `db:"id"`
 		Type            string         `db:"type"`
@@ -323,6 +333,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		MaxAttempts     int64          `db:"max_attempts"`
 		CancelRequested sql.NullInt64  `db:"cancel_requested_at"`
 		ExclusiveKey    sql.NullString `db:"exclusive_key"`
+		AvailableAt     int64          `db:"available_at"`
 	}
 	if err := connection.SelectContext(ctx, &candidates, discovery, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_SQLITE_STORE: discover claimable jobs: %w", err)

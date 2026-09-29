@@ -213,6 +213,18 @@ func (store *queueStore) Enqueue(ctx context.Context, executor queueprovider.Exe
 	return stored, nil
 }
 
+func postgresqlClaimDiscovery(table, typePredicate string, arguments []any, limit int) (string, []any) {
+	arguments = append(arguments, limit)
+	limitPlaceholder := "$" + strconv.Itoa(len(arguments))
+	branches := make([]string, 0, 2)
+	for _, status := range []queueprovider.State{queueprovider.StatePending, queueprovider.StateLeased} {
+		branches = append(branches, `SELECT * FROM (SELECT job."id",job."type",job."status",job."attempt_count",job."max_attempts",job."cancel_requested_at",job."exclusive_key",job."available_at" FROM `+table+` AS job WHERE job."status"='`+string(status)+`' AND job."available_at"<=clock_timestamp() AND `+typePredicate+
+			` AND (job."exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM `+table+` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">clock_timestamp()))`+
+			` ORDER BY job."available_at",job."id" LIMIT `+limitPlaceholder+` FOR UPDATE OF job SKIP LOCKED) AS "`+string(status)+`"`)
+	}
+	return strings.Join(branches, ` UNION ALL `) + ` ORDER BY "available_at","id" LIMIT ` + limitPlaceholder, arguments
+}
+
 func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimOptions) ([]queueprovider.Record, error) {
 	if err := queueprovider.ValidateClaim(options); err != nil {
 		return nil, err
@@ -264,11 +276,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 	if options.Resource != nil {
 		discoveryLimit = queueprovider.MaximumClaimJobs
 	}
-	arguments = append(arguments, discoveryLimit)
-	discovery := `SELECT "id","type","status","attempt_count","max_attempts","cancel_requested_at","exclusive_key" FROM ` + store.table() + ` AS job WHERE ` + postgresqlQueueClaim +
-		` AND ` + typePredicate +
-		` AND ("exclusive_key" IS NULL OR NOT EXISTS (SELECT 1 FROM ` + store.table() + ` AS holder WHERE holder."exclusive_key"=job."exclusive_key" AND holder."id"<>job."id" AND holder."status"='leased' AND holder."lease_until">clock_timestamp()))` +
-		` ORDER BY "available_at","id" LIMIT $` + strconv.Itoa(len(arguments)) + ` FOR UPDATE OF job SKIP LOCKED`
+	discovery, arguments := postgresqlClaimDiscovery(store.table(), typePredicate, arguments, discoveryLimit)
 	var candidates []struct {
 		ID              string         `db:"id"`
 		Type            string         `db:"type"`
@@ -277,6 +285,7 @@ func (store *queueStore) Claim(ctx context.Context, options queueprovider.ClaimO
 		MaxAttempts     int64          `db:"max_attempts"`
 		CancelRequested sql.NullTime   `db:"cancel_requested_at"`
 		ExclusiveKey    sql.NullString `db:"exclusive_key"`
+		AvailableAt     time.Time      `db:"available_at"`
 	}
 	if err := transaction.SelectContext(ctx, &candidates, discovery, arguments...); err != nil {
 		return nil, fmt.Errorf("QUEUE_POSTGRESQL_STORE: discover claimable jobs: %w", err)

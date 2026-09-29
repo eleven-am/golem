@@ -4,11 +4,14 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"reflect"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
+	"github.com/eleven-am/golem/go/internal/physical"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -16,9 +19,14 @@ const sqliteDatabaseMicros = `CAST((julianday('now') - 2440587.5) * 86400000000 
 
 const sqliteFactByteExpression = `length(CAST("event_id" AS BLOB))+length(CAST("codec_identity" AS BLOB))+length(CAST("generation_fingerprint" AS BLOB))+length(CAST("model_id" AS BLOB))+length(CAST("action" AS BLOB))+COALESCE(length("before_identity"),0)+COALESCE(length("after_identity"),0)+length(CAST("causation_id" AS BLOB))+length("metadata")+COALESCE(length("delete_snapshot"),0)+32`
 
+const sqliteOutboxDeliveryClaimDefinition = `CREATE INDEX "golem_outbox_delivery_claim" ON "_golem_outbox_delivery" ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`
+
 type eventCoordinator struct {
 	database            *sqlx.DB
 	legacyProbeComplete atomic.Bool
+	claimIndexAdmitted  bool
+	claimIndexMutex     sync.Mutex
+	claimIndexReady     atomic.Bool
 }
 
 type sqliteEventQueryExecer interface {
@@ -35,6 +43,51 @@ func (*Provider) EventCoordinator(database *sqlx.DB) (eventprovider.Coordinator,
 	return &eventCoordinator{database: database}, nil
 }
 
+func (*Provider) EventCoordinatorAdmitting(database *sqlx.DB, unmanaged []physical.UnmanagedObject) (eventprovider.Coordinator, error) {
+	if database == nil {
+		return nil, fmt.Errorf("P7_SQLITE_DELIVERY: database is nil")
+	}
+	return &eventCoordinator{database: database, claimIndexAdmitted: physical.OutboxDeliveryClaimAdmitted(unmanaged)}, nil
+}
+
+func (coordinator *eventCoordinator) ensureClaimIndex(ctx context.Context) error {
+	if !coordinator.claimIndexAdmitted || coordinator.claimIndexReady.Load() {
+		return nil
+	}
+	coordinator.claimIndexMutex.Lock()
+	defer coordinator.claimIndexMutex.Unlock()
+	if coordinator.claimIndexReady.Load() {
+		return nil
+	}
+	if _, err := coordinator.database.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS "main"."golem_outbox_delivery_claim" ON "_golem_outbox_delivery" ("first_recorded_at","causation_id","available_at","lease_until") WHERE "status" IN ('pending','leased')`); err != nil {
+		return fmt.Errorf("P7_SQLITE_DELIVERY: create golem_outbox_delivery_claim: %w", err)
+	}
+	var rows []struct {
+		Table string         `db:"tbl_name"`
+		SQL   sql.NullString `db:"sql"`
+	}
+	if err := coordinator.database.SelectContext(ctx, &rows, `SELECT "tbl_name","sql" FROM "main"."sqlite_master" WHERE "type"='index' AND "name"='golem_outbox_delivery_claim'`); err != nil {
+		return fmt.Errorf("P7_SQLITE_DELIVERY: inspect golem_outbox_delivery_claim: %w", err)
+	}
+	if len(rows) != 1 || !sqliteOutboxDeliveryClaimMatches(rows[0].Table, rows[0].SQL.String) {
+		return fmt.Errorf("P7_SQLITE_DELIVERY: an object named golem_outbox_delivery_claim does not match %q; drop it so golem can create its own", sqliteOutboxDeliveryClaimDefinition)
+	}
+	coordinator.claimIndexReady.Store(true)
+	return nil
+}
+
+func sqliteOutboxDeliveryClaimMatches(table, definition string) bool {
+	if table != "_golem_outbox_delivery" {
+		return false
+	}
+	expected, err := parseDDL(sqliteOutboxDeliveryClaimDefinition)
+	if err != nil {
+		return false
+	}
+	actual, err := parseDDL(definition)
+	return err == nil && reflect.DeepEqual(expected, actual)
+}
+
 func (coordinator *eventCoordinator) Claim(ctx context.Context, options eventprovider.ClaimOptions) ([]eventprovider.Lease, error) {
 	snapshot, err := coordinator.claim(ctx, options, false)
 	return snapshot.Leases, err
@@ -44,8 +97,19 @@ func (coordinator *eventCoordinator) ClaimWithDepth(ctx context.Context, options
 	return coordinator.claim(ctx, options, true)
 }
 
+func sqliteClaimableGroups(indexed bool) string {
+	indexedBy := ""
+	if indexed {
+		indexedBy = ` INDEXED BY "golem_outbox_delivery_claim"`
+	}
+	return `SELECT "causation_id" FROM "main"."_golem_outbox_delivery"` + indexedBy + ` WHERE "status" IN ('pending','leased') AND "available_at"<=? AND ("lease_until" IS NULL OR "lease_until"<=?) ORDER BY "first_recorded_at","causation_id" LIMIT ?`
+}
+
 func (coordinator *eventCoordinator) claim(ctx context.Context, options eventprovider.ClaimOptions, includeDepth bool) (eventprovider.ClaimSnapshot, error) {
 	if err := eventprovider.ValidateClaim(options); err != nil {
+		return eventprovider.ClaimSnapshot{}, err
+	}
+	if err := coordinator.ensureClaimIndex(ctx); err != nil {
 		return eventprovider.ClaimSnapshot{}, err
 	}
 	tokens := make([]string, options.Groups)
@@ -85,7 +149,7 @@ func (coordinator *eventCoordinator) claim(ctx context.Context, options eventpro
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: read database time: %w", err)
 	}
 	var causations []string
-	if err := connection.SelectContext(ctx, &causations, `SELECT "causation_id" FROM "main"."_golem_outbox_delivery" WHERE "status" IN ('pending','leased') AND "available_at"<=? AND ("lease_until" IS NULL OR "lease_until"<=?) ORDER BY "first_recorded_at","causation_id" LIMIT ?`, now, now, options.Groups); err != nil {
+	if err := connection.SelectContext(ctx, &causations, sqliteClaimableGroups(coordinator.claimIndexReady.Load()), now, now, options.Groups); err != nil {
 		return eventprovider.ClaimSnapshot{}, fmt.Errorf("P7_SQLITE_DELIVERY: discover claimable groups: %w", err)
 	}
 	causations, err = sqliteBoundedCausations(ctx, connection, causations, eventprovider.ClaimByteLimit(options))
@@ -285,9 +349,14 @@ func (coordinator *eventCoordinator) RunRetention(ctx context.Context, policy ev
 			_, _ = connection.ExecContext(cleanup, "ROLLBACK")
 		}
 	}()
-	var candidates []sqliteRetentionCandidate
-	if err := connection.SelectContext(ctx, &candidates, `SELECT d."causation_id",COUNT(o."event_id") AS "fact_rows" FROM "main"."_golem_outbox_delivery" d JOIN "main"."_golem_outbox" o ON o."causation_id"=d."causation_id" WHERE d."status"='delivered' AND d."available_at"<=? AND d."delivered_at"<=? GROUP BY d."causation_id",d."available_at",d."first_recorded_at" HAVING MAX(o."recorded_at")<=? ORDER BY d."available_at",d."first_recorded_at",d."causation_id" LIMIT ?`, policy.OlderThan.UTC().UnixMicro(), policy.OlderThan.UTC().UnixMicro(), policy.OlderThan.UTC().UnixMicro(), policy.MaxRows); err != nil {
+	var causations []string
+	statement, arguments := sqliteRetentionStatement(policy.OlderThan.UTC().UnixMicro(), policy.MaxRows)
+	if err := connection.SelectContext(ctx, &causations, statement, arguments...); err != nil {
 		return eventprovider.RetentionResult{}, fmt.Errorf("P7_SQLITE_RETENTION: select groups: %w", err)
+	}
+	candidates, err := sqliteRetentionCandidates(ctx, connection, causations)
+	if err != nil {
+		return eventprovider.RetentionResult{}, err
 	}
 	selected := retentionPrefix(candidates, policy.MaxRows)
 	result, err := sqliteDeleteRetentionCandidates(ctx, connection, selected)
@@ -299,6 +368,33 @@ func (coordinator *eventCoordinator) RunRetention(ctx context.Context, policy ev
 	}
 	committed = true
 	return result, nil
+}
+
+func sqliteRetentionStatement(olderThan int64, limit int) (string, []any) {
+	return `SELECT d."causation_id" FROM "main"."_golem_outbox_delivery" d WHERE d."status"='delivered' AND d."available_at"<=? AND d."delivered_at"<=? AND NOT EXISTS (SELECT 1 FROM "main"."_golem_outbox" o WHERE o."causation_id"=d."causation_id" AND o."recorded_at">?) ORDER BY d."available_at",d."first_recorded_at",d."causation_id" LIMIT ?`, []any{olderThan, olderThan, olderThan, limit}
+}
+
+func sqliteRetentionCandidates(ctx context.Context, connection *sqlx.Conn, causations []string) ([]sqliteRetentionCandidate, error) {
+	if len(causations) == 0 {
+		return nil, nil
+	}
+	arguments := make([]any, len(causations))
+	for index, causation := range causations {
+		arguments[index] = causation
+	}
+	var counts []sqliteRetentionCandidate
+	if err := connection.SelectContext(ctx, &counts, `SELECT "causation_id",COUNT(*) AS "fact_rows" FROM "main"."_golem_outbox" WHERE "causation_id" IN (`+placeholders(len(causations))+`) GROUP BY "causation_id"`, arguments...); err != nil {
+		return nil, fmt.Errorf("P7_SQLITE_RETENTION: count facts: %w", err)
+	}
+	byCausation := make(map[string]int, len(counts))
+	for _, count := range counts {
+		byCausation[count.Causation] = count.Facts
+	}
+	ordered := make([]sqliteRetentionCandidate, 0, len(causations))
+	for _, causation := range causations {
+		ordered = append(ordered, sqliteRetentionCandidate{Causation: causation, Facts: byCausation[causation]})
+	}
+	return ordered, nil
 }
 
 func sqliteDeleteRetentionCandidates(ctx context.Context, connection *sqlx.Conn, selected []sqliteRetentionCandidate) (eventprovider.RetentionResult, error) {

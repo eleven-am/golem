@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
@@ -80,7 +81,12 @@ func BenchmarkSQLiteFullTextFold(b *testing.B) {
 
 func sqliteFullTextWriteBenchmarkDatabase(tb testing.TB, indexed bool) *sqlx.DB {
 	tb.Helper()
-	database, _, err := New().Open(context.Background(), filepath.Join(tb.TempDir(), "writes.db"))
+	return sqliteFullTextWriteBenchmarkDatabaseAt(tb, filepath.Join(tb.TempDir(), "writes.db"), indexed)
+}
+
+func sqliteFullTextWriteBenchmarkDatabaseAt(tb testing.TB, path string, indexed bool) *sqlx.DB {
+	tb.Helper()
+	database, _, err := New().Open(context.Background(), path)
 	if err != nil {
 		tb.Fatal(err)
 	}
@@ -129,4 +135,52 @@ func sqliteFullTextWriteBenchmarkDatabase(tb testing.TB, indexed bool) *sqlx.DB 
 		}
 	}
 	return database
+}
+
+func BenchmarkSQLiteFullTextWriteTrendAfterMigrationAnalysis(b *testing.B) {
+	const rows, block = 20_000, 2_000
+	body := strings.Repeat("alpha beta gamma delta ", 90)
+	for range b.N {
+		b.StopTimer()
+		database := sqliteFullTextWriteBenchmarkDatabase(b, true)
+		if err := analyzeSQLitePlanner(context.Background(), database); err != nil {
+			database.Close()
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		blocks := make([]time.Duration, 0, rows/block)
+		started := time.Now()
+		transaction, err := database.Beginx()
+		if err != nil {
+			database.Close()
+			b.Fatal(err)
+		}
+		for row := 1; row <= rows; row++ {
+			key := fmt.Sprintf("%016d", row)
+			if _, err := transaction.Exec(`INSERT INTO documents(id,slug,subject,participants,body) VALUES(?,?,?,?,?)`, key, "slug-"+key, "subject alpha", "sender recipient", body); err != nil {
+				database.Close()
+				b.Fatal(err)
+			}
+			if row%block == 0 {
+				if err := transaction.Commit(); err != nil {
+					database.Close()
+					b.Fatal(err)
+				}
+				blocks = append(blocks, time.Since(started))
+				started = time.Now()
+				if transaction, err = database.Beginx(); err != nil {
+					database.Close()
+					b.Fatal(err)
+				}
+			}
+		}
+		b.StopTimer()
+		_ = transaction.Rollback()
+		database.Close()
+		first := float64(blocks[0].Microseconds()) / block
+		last := float64(blocks[len(blocks)-1].Microseconds()) / block
+		b.ReportMetric(first, "first-block-µs/row")
+		b.ReportMetric(last, "last-block-µs/row")
+		b.ReportMetric(last/first, "last/first")
+	}
 }

@@ -46,6 +46,7 @@ func (provider *Provider) lower(ctx context.Context, model ir.ModelIR, options p
 		System: systemSchema(),
 	}
 	schema.Unmanaged = append(schema.Unmanaged, physical.QueueUnmanagedObjects()...)
+	schema.Unmanaged = append(schema.Unmanaged, physical.OutboxDeliveryUnmanagedObjects()...)
 	enums := make(map[ir.EnumID]ir.EnumIR, len(model.Enums))
 	for _, enum := range model.Enums {
 		enums[enum.ID] = enum
