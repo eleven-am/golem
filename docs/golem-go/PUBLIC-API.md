@@ -30,8 +30,8 @@ text, so it records what the compiler sees:
   pointer, so moving a method from a value to a pointer receiver removes an
   entry. Methods promoted through an embedded field are included.
 - **types** as either an alias (`= target`) or a defined type with its
-  underlying type and type parameters. A defined type that is comparable has
-  a `comparable` entry, so losing comparability — which breaks `==` and use
+  underlying type and type parameters. A defined non-interface type that is
+  comparable has a `comparable` entry, so losing comparability — which breaks `==` and use
   as a map key — is a removal.
 - **struct fields** in each exported field's own entry with its type, whether
   it is embedded, and its tag. Fields promoted through an embedded field are
@@ -70,7 +70,9 @@ disappears).
 
 Changing the surface is allowed. Changing it silently is not: the record has
 to be updated in the same commit, which puts the change in the diff a
-reviewer reads.
+reviewer reads. A failing run writes the current surface to
+`internal/publicapi/surface.actual.txt`, which git ignores; regenerating the
+record is copying that file over `surface.txt` and saying why in the commit.
 
 **Behaviour is guaranteed by tests, not by prose.** Earlier releases carried
 seven `PUBLIC-*-ABI` documents describing behaviour in words. Words drift
@@ -119,4 +121,5 @@ notes rather than discovered from a compile error.
 
 A 1.0 would claim that removals stop happening without a major version. That
 claim needs the surface record to have held still across several releases
-first. It has held for one.
+first. Since the record began at go/v0.4.0 it has taken no removals through
+go/v0.5.3, four releases that only added to it.

@@ -21,15 +21,16 @@ func DefineSchema(schema *golem.Schema) {
 }
 ```
 
-Generation emits two methods per index, on both caller and system clients:
+Generation emits two methods per index, on the caller, system and transaction
+clients:
 
 ```go
 caller.Notes.SearchRelated(ctx, "flour water", 3)
 caller.Notes.SimilarRelated(ctx, notes.Notes.ByID.Value(id), 2)
 ```
 
-Both accept optional predicates, and both return `SemanticResult` values
-carrying `Row()`, `Distance()` and `Similarity()`.
+Both accept optional predicates, take a `take` between 1 and 1000, and return
+`SemanticResult` values carrying `Row()`, `Distance()` and `Similarity()`.
 
 ## Supplying an embedding provider
 
@@ -115,8 +116,10 @@ compared against, and pay a round trip to do it.
 
 ## Freshness
 
-Golem marks a row stale when a write changes an embedded column, and the drain
-re-embeds it.
+Golem marks a row stale on every write that touches it, whatever the write
+changed. The drain recomputes the content hash of the embedded columns and
+re-embeds only a row whose hash differs; an unchanged row is flipped back to
+ready without a provider call.
 
 **A stale row does not rank.** It is excluded until re-embedded, and a
 similarity request whose source is stale fails with the same "unavailable"
@@ -127,8 +130,8 @@ makes the staleness visible.
 **No full reconcile runs by default.** `SemanticReconcileInterval` is zero
 unless you set it, so golem repairs drift introduced through its own write
 path and nothing else. Rows changed by raw SQL, a restore, or another writer
-are never noticed. Set an interval if anything writes to your database that is
-not golem.
+are never noticed. Set an interval, between one minute and 24 hours, if
+anything writes to your database that is not golem.
 
 Startup checks the private state table for vectors from another embedding-space
 fingerprint. Only when it finds one does it mark those rows pending and enqueue
@@ -144,69 +147,84 @@ state rows for startup's fingerprint check to find. Run
 
 **Only a refusal the provider marks as invalid input quarantines a row.** A
 batch refused that way is retried one row at a time, so the row it cannot
-embed is quarantined and its neighbours are stored.
+embed is quarantined and its neighbours are stored. A document golem itself
+cannot frame as an input, over 16 MiB or not valid UTF-8, is quarantined the
+same way without a provider call.
 
 **Every other failure leaves the rows pending and the drain retries later
 without spending an attempt.** That covers an outage, a rate limit, a malformed
-response and an error golem cannot classify. The retry waits for the time the
-job has already waited, between five seconds and five minutes, so an outage of
-any length never dead-letters the drain.
+response and an error golem cannot classify; the last two are the unclassified
+refusals the strike rule below bounds. The retry waits for the time the job has
+already waited, between five seconds and five minutes, so an outage of any
+length never dead-letters the drain.
 
 **One row the provider keeps refusing does not hold up the rest.** A batch
 refused for an unclassified reason is retried one row at a time, so the rows
 around the culprit are stored rather than left pending with it. This holds
 wherever the culprit falls: the rows after it in its own batch, and every later
-batch in the page, are still attempted.
+batch in the page, are still attempted. Isolation spends at most eight
+single-row calls per pass; a refused batch larger than that is finished by
+later passes.
 
 **A row the provider keeps refusing without saying why is quarantined after
 five strikes.** The count lives in `ambiguous_strikes` on the shadow state
 table and resets to zero whenever the row embeds successfully or is marked
 stale again. At the fifth strike the row's `status` becomes `failed` and its
 `error_code` becomes `EMBEDDING_REFUSED_UNCLASSIFIED`. To bring it back, change
-the indexed source row: the next pass marks it stale, clears the strike count
-and tries again.
+the indexed source row: that write marks it stale and clears the strike count,
+and the next pass tries again. A reconcile retries it as well, because its
+stored hash no longer matches its content.
 
 **A strike is only ever charged in a pass where a provider call succeeded.**
 An outage cannot spend strikes a healthy pass earned earlier. When nothing else
 in the pass embedded, golem re-embeds documents it already stored to prove the
 provider is answering, and charges nothing if they all fail. It tries up to
-three distinct ones and never the same one twice in a pass, so a document the
-provider has stopped accepting cannot pin the probe; whichever one answers
-becomes the next pass's first choice. Those re-embeds are discarded, and the
-rows they borrow are left exactly as they were. A provider that reports
-`EMBEDDING_UNAVAILABLE` never strikes at all.
+three distinct ones and never the same one twice in a pass; each pass draws
+further along the index, and a candidate that failed is not drawn first again,
+so a document the provider has stopped accepting cannot pin the probe. Those
+re-embeds are discarded, and the rows they borrow are left exactly as they
+were. A provider that reports `EMBEDDING_UNAVAILABLE` never strikes at all.
 
 **The strike column requires the migration.** Regenerate and apply it before
 the bound can take effect; until then an unclassified refusal is retried
 forever, as before. That is the same regeneration the queue's operator-history
 indexes need.
 
-**Known limit: an index with nothing stored cannot charge a strike.** Because
-a strike is only charged when a provider call succeeded in the same pass, the
-pass needs either another row that embedded or a stored document the liveness
-probe can borrow. An index whose only document is the one the provider refuses,
-with nothing else ever stored, has neither, so it never reaches the bound and
-is retried forever.
+**Known limit: an index whose only document is the one the provider refuses
+cannot charge a strike.** Because a strike is only charged when a provider call
+succeeded in the same pass, the pass needs either another row that embedded or
+a stored document the liveness probe can borrow. An index whose only document
+is the one the provider refuses, with nothing else ever stored, has neither, so
+it never reaches the bound and is retried forever.
 
-**An outage costs at most five provider calls per pass.** Two batch calls
-failing with nothing stored between them stop the pass for the rest of its
-page, and proving liveness costs up to three re-embeds of documents already
-stored. Finding which document in a refused batch is at fault happens only once
-the provider has answered, so it costs nothing while the provider is down; when
-it does run it is bounded at eight calls a pass, and a batch larger than that is
-finished by later passes. A pass with nothing stored yet has no candidates to
-probe, and there isolating the batch is the only way to learn anything, so it
-runs. The count never grows with the number of batches in the page. Each
+**An outage costs at most five provider calls per pass once the index holds
+documents, and at most ten while it is still empty.** Two batch calls failing
+with nothing stored between them stop the pass for the rest of its page, and
+proving liveness costs up to three re-embeds of documents already stored: two
+plus three is the five. Documents here means rows currently `ready`, or rows
+in the page whose content proved unchanged; a pass in which every stored row
+is itself marked stale has nothing to borrow and pays the empty-index cost.
+
+The ten is the empty index. Finding which document in a refused batch is at
+fault normally waits until the provider has answered, so it costs nothing while
+the provider is down — but a pass with nothing stored has no document to probe
+with, and there isolating the batch is the only way to learn anything, so it
+runs anyway, bounded at eight calls. Two plus eight is the ten. That regime
+ends as soon as one document embeds, because from then on the index has
+something to probe.
+
+Neither count grows with the number of batches in the page. Each
 deferred pass is observed as a `semantic.refresh` retry whose aggregate count
 is the number of rows it left pending.
 
 ## Ranking is exact
 
-Both providers rank exactly. PostgreSQL deliberately keeps the planner off the
-approximate vector index, because an approximate scan returns a full page of
-plausible neighbours while silently omitting nearer ones — and a page that is
-confidently wrong is worse than a slow one for a feature whose whole purpose is
-"these are the closest".
+Both providers rank exactly. PostgreSQL creates no approximate vector index,
+neither HNSW nor IVFFlat, and the rank statement orders by an expression the
+planner cannot serve from one, because an approximate scan returns a full page
+of plausible neighbours while silently omitting nearer ones — and a page that
+is confidently wrong is worse than a slow one for a feature whose whole purpose
+is "these are the closest".
 
 SQLite stores current vectors in a strict, dimension-checked BLOB table and
 drives ranking from the authorized candidate query before calculating cosine
@@ -218,9 +236,11 @@ missed.
 
 ## Cost
 
-No new tables beyond the index's own storage. A search costs one provider call
-plus one authorized ranking statement; a similarity request costs one source
-read plus one ranking statement and no provider call. Exact ranking work grows
+No new tables beyond the index's own storage. A search costs one provider call,
+one authorized ranking statement, and the authorized row read that hydrates the
+ranked identities; a similarity request costs one authorized source read, one
+source-vector read, one ranking statement and that same hydration read, with
+no provider call. Exact ranking work grows
 with the authorized candidate set. Predicates therefore improve SQLite cost as
 well as narrowing results; large public corpora trade latency for the exactness
 guarantee on both providers.

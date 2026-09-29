@@ -1224,11 +1224,34 @@ func (provider *Provider) applyBootstrapMigration(ctx context.Context, connectio
 	return nil
 }
 
-func analyzeSQLitePlanner(ctx context.Context, transaction interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-}) error {
-	if _, err := transaction.ExecContext(ctx, "ANALYZE"); err != nil {
+func analyzeSQLitePlanner(ctx context.Context, transaction sqliteStatisticsExecutor) error {
+	if _, err := ForgetShadowTableStatistics(ctx, transaction); err != nil {
 		return fmt.Errorf("sqlite migration planner analysis: %w", err)
+	}
+	rows, err := transaction.QueryContext(ctx, `SELECT name FROM pragma_table_list WHERE schema='main' AND type='table' AND name NOT LIKE 'sqlite\_%' ESCAPE '\' ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("sqlite migration planner analysis: %w", err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			_ = rows.Close()
+			return fmt.Errorf("sqlite migration planner analysis: %w", err)
+		}
+		tables = append(tables, name)
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return fmt.Errorf("sqlite migration planner analysis: %w", err)
+	}
+	if err := rows.Close(); err != nil {
+		return fmt.Errorf("sqlite migration planner analysis: %w", err)
+	}
+	for _, table := range tables {
+		if _, err := transaction.ExecContext(ctx, "ANALYZE "+sqliteQuotedIdentifier(table)); err != nil {
+			return fmt.Errorf("sqlite migration planner analysis: %w", err)
+		}
 	}
 	return nil
 }

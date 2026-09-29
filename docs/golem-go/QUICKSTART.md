@@ -51,10 +51,20 @@ func DefineSchema(schema *golem.Schema) {
 ## 2. A policy for every exposed model
 
 Golem refuses to generate an application whose models have no authorization.
-Skip this and `golem inspect` answers:
+Skip this and `golem inspect` exits 1 with a diagnostics document on stdout:
 
 ```
-P1_BINDING_POLICY_REQUIRED: exposed model Note has no DefinePolicy binding
+{
+  "formatVersion": 1,
+  "diagnostics": [
+    {
+      "code": "P1_BINDING_POLICY_REQUIRED",
+      "severity": "error",
+      "message": "exposed model Note has no DefinePolicy binding",
+      ...
+    }
+  ]
+}
 ```
 
 A policy is a method on the model. It receives the resolved actor and records
@@ -109,9 +119,10 @@ golem generate --schema ./notes --app-out ./notes
 ```
 
 `migration new` writes `migrations/`: the SQL, a manifest, and before/after
-snapshots for review. `generate` writes the `zz_golem_*.gen.go` files beside
-your source and a `.golem/` directory holding the fingerprints it will check
-against later.
+snapshots for review. `generate` writes the `zz_golem_*.gen.go` files and a
+`zz_golem_graphql.schema.graphqls` beside your source, a `golemgqlgen/`
+subpackage holding the GraphQL executable, and a `.golem/` directory holding
+the manifest and snapshots it will check against later.
 
 Both are reviewable artifacts. Commit them.
 
@@ -197,10 +208,11 @@ title, present := golem.Value(created, notes.Notes.Title).Get()
 // title == "", present == false
 ```
 
-A mutation returns the row's identity, not the fields you wrote. A field is
-absent when it was not selected, and absent when policy masks it — the two are
-deliberately indistinguishable, so a caller cannot learn that a field exists
-by watching it disappear.
+A mutation returns nothing you did not select — not the fields you wrote, and
+not the identity. Pass `notes.Notes.Select(notes.Notes.ID)` as a second
+argument to get the identity back. A field is absent when it was not selected,
+and absent when policy masks it — the two are deliberately indistinguishable,
+so a caller cannot learn that a field exists by watching it disappear.
 
 Ignoring `present` and printing the value gives you `""` and no indication
 whether the note is untitled or the field was never fetched.

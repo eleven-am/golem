@@ -5,11 +5,56 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.5.3
+go get github.com/eleven-am/golem/go@v0.5.4
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
-prefix. A plain `v0.3.0` tag would not make this module fetchable.
+prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
+`go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.5.4
+
+**Take this release if you use full-text search on SQLite.** In v0.5.3, every
+write to a table carrying a full-text index got slower as the index grew. Over
+20,000 inserts the last rows cost eight to twelve times as much as the first;
+this release keeps them flat.
+
+| 20,000 inserts after a migration | First 2,000 rows | Last 2,000 rows | Last ÷ first |
+| --- | ---: | ---: | ---: |
+| v0.5.3 | 196–203 µs/row | 1,652–2,336 µs/row | 8–12× |
+| v0.5.4 | 220–284 µs/row | 221–230 µs/row | 0.8–1.0× |
+
+The cause was planner statistics. Applying a migration ran `ANALYZE` while the
+full-text index was still nearly empty, recording that its internal storage
+held two rows. FTS5 reads that storage by rowid range on every write, and the
+planner, trusting the statistic, chose to scan the whole table instead. The
+table grew with every write, so every write got slower. Closing the database
+refreshed statistics the same way, so it could poison an index the session had
+never touched.
+
+Migrations now analyze only real tables, never the shadow tables SQLite keeps
+behind a virtual table, and closing the database removes any shadow-table
+statistics its refresh recorded. Close still refreshes statistics for tables
+written during the session, which ordinary indexes depend on after bulk
+ingestion.
+
+**A database v0.5.3 already poisoned is repaired on open.** Opening removes
+stale shadow-table statistics and replaces the pooled connections that had
+loaded them: a connection keeps the statistics it has read even after they are
+deleted, so removing the rows alone would leave those connections scanning. You
+do not need to regenerate or migrate.
+
+Ordinary tables were never affected. The repair covers every shadow table
+SQLite reports, not only full-text ones, so it also removes the statistics
+v0.5.3 recorded for the `vec0` table behind a semantic index created before
+v0.5.1 and not migrated since.
+
+**The semantic outage cost is corrected.** SEMANTIC.md said an outage costs at
+most five provider calls per pass. That holds once an index has stored a
+document; an index with nothing stored yet has no document to probe with,
+isolates the refused batch instead, and costs up to ten.
 
 ---
 
@@ -106,6 +151,10 @@ the one required `IS NOT NULL` guard, while other predicates retain their own
 NULL behavior. Indexed primary-key and selective candidate predicates are
 sargable again without changing three-valued policy semantics.
 
+---
+
+## go/v0.5.1
+
 **Semantic search no longer makes SQLite scan a `vec0` virtual table before
 authorization.** Current SQLite semantic vectors use a strict,
 dimension-checked BLOB table, and the exact ranking statement drives from the
@@ -191,9 +240,10 @@ the pass stops for the rest of its page, and up to three re-embeds of
 already-stored documents that prove the provider is answering before any strike
 is charged. Finding which document in a refused batch is at fault waits until
 the provider has answered, so it costs nothing during an outage; when it runs it
-is bounded at eight calls a pass. A pass with nothing stored yet has nothing to
-probe, and there isolating the batch is the only way to learn anything. The
-count never grows with the number of batches in the page.
+is bounded at eight calls a pass. An index with nothing stored is the exception
+and costs up to ten: it has no document to probe with, so isolating the batch is
+the only way it can learn anything, and it does that until one document embeds.
+Neither count grows with the number of batches in the page.
 
 **Startup now verifies every index on `golem_queue` on both providers, not
 just `golem_queue_dedupe`.** `golem_queue_claim` and `golem_queue_exclusive` are

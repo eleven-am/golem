@@ -224,7 +224,7 @@ func (database *Database) Close() error {
 		if database.state.database != nil {
 			if database.state.provider == golem.SQLite && !database.state.testOnly {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				_, err := database.state.database.ExecContext(ctx, "PRAGMA optimize=0x10002")
+				err := refreshSQLitePlannerStatistics(ctx, database.state.database)
 				cancel()
 				if err != nil {
 					database.state.closeErr = failure(CodeClose, "provider close failed")
@@ -491,4 +491,20 @@ func isPostgreSQLSpace(value byte) bool {
 	default:
 		return false
 	}
+}
+
+func refreshSQLitePlannerStatistics(ctx context.Context, database *sqlx.DB) error {
+	transaction, err := database.BeginTxx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err := transaction.ExecContext(ctx, "PRAGMA optimize=0x10002"); err != nil {
+		_ = transaction.Rollback()
+		return err
+	}
+	if _, err := internalsqlite.ForgetShadowTableStatistics(ctx, transaction); err != nil {
+		_ = transaction.Rollback()
+		return err
+	}
+	return transaction.Commit()
 }
