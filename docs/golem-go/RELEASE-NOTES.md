@@ -5,12 +5,70 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.2
+go get github.com/eleven-am/golem/go@v0.6.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.3
+
+**A custom mutation can own a write that policy closes to everyone else.** The
+pattern "an operation validates, then writes; policy closes the generic path so
+callers cannot bypass it" was not expressible. `CannotCreate` also refused the
+operation's own `Create`, because a custom resolver runs as the caller and
+policy made no exception for it. The only escape, `SystemEscape`, hands out an
+unrestricted system client to any code holding the transaction.
+
+`golem.Within(rules, Resolver)` grants a write only while that custom mutation
+runs:
+
+```go
+func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
+	owned := Invites.Owner.Eq(actor.ID)
+	rules.CanRead(owned)
+	rules.CanUpdate(owned)
+	rules.CannotUpdateFields(golem.All[Invite](), Invites.Status)
+	golem.Within(rules, InviteMember).CanCreate(owned)
+	golem.Within(rules, AcceptInvite).CanUpdateFields(owned, Invites.Status)
+}
+```
+
+Callers get no create and cannot change `Status`; the `InviteMember` and
+`AcceptInvite` custom mutations can. GUIDE.md, "Operations that own a write",
+has the full example.
+
+- `Within` offers grant verbs only: `CanCreate`, `CanUpdate`, `CanDelete`,
+  `CanCreateFields` and `CanUpdateFields`. A grant is still a predicate over the
+  actor, so the operation writes only the rows it allows.
+- Inside the operation a write is allowed when a `Within` grant covering it
+  allows it, or when the caller's own policy does. A `Cannot*` rule on anything
+  the grant does not name still refuses.
+- The grant exists only in the running operation. Generic GraphQL and Go
+  writes, calling the resolver function directly, a caller or goroutine that
+  outlives the operation, and another mutation in the same document are all
+  refused with the caller's usual error.
+- A `Within` naming something other than a generated custom mutation fails the
+  policy build with an error naming the function.
+- `Mutate(ctx, caller, Resolver, args)`, generated for applications with custom
+  mutations, runs one from Go through the same dispatch, hooks and observation
+  as GraphQL. Each run is observed as `mutation.custom`.
+
+The change is additive: existing policies, resolvers and generated code for
+schemas without custom mutations are unchanged. Regenerate to use `Within` and
+`Mutate`. `SystemEscape` remains available.
+
+**GraphQL responses list fields in selection order.** HTTP responses and
+subscription frames re-encoded their data through a Go map, so every object's
+keys came out in alphabetical order. They now follow the operation's selection,
+including aliases and fragments. Only key order changes on the wire;
+`Server.Execute` still returns maps.
+
+**Tooling.** The CLI end-to-end tests run in parallel child processes, which
+cuts the package's run time roughly in half.
 
 ---
 
