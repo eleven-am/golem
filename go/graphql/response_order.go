@@ -208,6 +208,7 @@ type collectedField struct {
 	name       string
 	definition *ast.Definition
 	sets       []ast.SelectionSet
+	typename   bool
 }
 
 func (writer *selectionWriter) value(value any, sets []ast.SelectionSet, parent *ast.Definition) error {
@@ -344,32 +345,50 @@ func (writer *selectionWriter) scalar(value any) error {
 }
 
 func (writer *selectionWriter) typename(value map[string]any, sets []ast.SelectionSet, parent *ast.Definition) string {
-	if typename, ok := writer.selectedTypename(value, sets, map[string]bool{}); ok {
-		return typename
-	}
 	if writer.schema == nil {
 		return ""
 	}
-	for _, candidate := range writer.schema.GetPossibleTypes(parent) {
-		fields := writer.collect(sets, parent, candidate.Name)
-		if len(fields) != len(value) {
+	possible := writer.schema.GetPossibleTypes(parent)
+	for _, name := range writer.typenameResponseNames(sets, nil, map[string]bool{}) {
+		typename, ok := value[name].(string)
+		if !ok {
 			continue
 		}
-		matches := true
-		for _, field := range fields {
-			if _, present := value[field.name]; !present {
-				matches = false
-				break
+		for _, candidate := range possible {
+			if candidate.Name == typename && writer.consistentTypename(value, sets, parent, typename, name) {
+				return typename
 			}
 		}
-		if matches {
+	}
+	for _, candidate := range possible {
+		fields := writer.collect(sets, parent, candidate.Name)
+		if len(fields) == len(value) && writer.presentIn(value, fields) {
 			return candidate.Name
 		}
 	}
 	return ""
 }
 
-func (writer *selectionWriter) selectedTypename(value map[string]any, sets []ast.SelectionSet, visited map[string]bool) (string, bool) {
+func (writer *selectionWriter) consistentTypename(value map[string]any, sets []ast.SelectionSet, parent *ast.Definition, typename, responseName string) bool {
+	fields := writer.collect(sets, parent, typename)
+	for _, field := range fields {
+		if field.name == responseName {
+			return field.typename && writer.presentIn(value, fields)
+		}
+	}
+	return false
+}
+
+func (writer *selectionWriter) presentIn(value map[string]any, fields []collectedField) bool {
+	for _, field := range fields {
+		if _, present := value[field.name]; !present {
+			return false
+		}
+	}
+	return true
+}
+
+func (writer *selectionWriter) typenameResponseNames(sets []ast.SelectionSet, names []string, visited map[string]bool) []string {
 	for _, set := range sets {
 		for _, selection := range set {
 			switch selection := selection.(type) {
@@ -381,32 +400,23 @@ func (writer *selectionWriter) selectedTypename(value map[string]any, sets []ast
 				if name == "" {
 					name = selection.Name
 				}
-				if typename, ok := value[name].(string); ok {
-					return typename, true
-				}
+				names = append(names, name)
 			case *ast.InlineFragment:
-				if !graphqlIncluded(selection.Directives, writer.variables) {
-					continue
-				}
-				if typename, ok := writer.selectedTypename(value, []ast.SelectionSet{selection.SelectionSet}, visited); ok {
-					return typename, true
+				if graphqlIncluded(selection.Directives, writer.variables) {
+					names = writer.typenameResponseNames([]ast.SelectionSet{selection.SelectionSet}, names, visited)
 				}
 			case *ast.FragmentSpread:
 				if visited[selection.Name] || !graphqlIncluded(selection.Directives, writer.variables) {
 					continue
 				}
 				visited[selection.Name] = true
-				fragment := writer.fragments.ForName(selection.Name)
-				if fragment == nil {
-					continue
-				}
-				if typename, ok := writer.selectedTypename(value, []ast.SelectionSet{fragment.SelectionSet}, visited); ok {
-					return typename, true
+				if fragment := writer.fragments.ForName(selection.Name); fragment != nil {
+					names = writer.typenameResponseNames([]ast.SelectionSet{fragment.SelectionSet}, names, visited)
 				}
 			}
 		}
 	}
-	return "", false
+	return names
 }
 
 func (writer *selectionWriter) collect(sets []ast.SelectionSet, parent *ast.Definition, typename string) []collectedField {
@@ -443,7 +453,7 @@ func (writer *selectionWriter) collectFields(sets []ast.SelectionSet, parent *as
 					continue
 				}
 				positions[name] = len(fields)
-				fields = append(fields, collectedField{name: name, definition: writer.fieldType(selection), sets: []ast.SelectionSet{selection.SelectionSet}})
+				fields = append(fields, collectedField{name: name, definition: writer.fieldType(selection), sets: []ast.SelectionSet{selection.SelectionSet}, typename: selection.Name == "__typename"})
 			case *ast.InlineFragment:
 				if graphqlIncluded(selection.Directives, writer.variables) && writer.applies(selection.TypeCondition, parent, typename) {
 					visit(selection.SelectionSet)

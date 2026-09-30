@@ -350,8 +350,8 @@ func BenchmarkHTTPLargeListThroughExecutable(b *testing.B) {
 func BenchmarkHTTPLargeListWithoutExecutable(b *testing.B) { benchmarkLargeList(b, nil) }
 
 const abstractOrderSchema = `interface Node { id: ID! }
-type Cat implements Node { id: ID! name: String! lives: Int! }
-type Dog implements Node { id: ID! name: String! barks: Boolean! }
+type Cat implements Node { id: ID! name: String lives: Int! }
+type Dog implements Node { id: ID! name: String barks: Boolean! }
 union Pet = Cat | Dog
 type Query { pets: [Pet!]! nodes: [Node!]! }
 `
@@ -399,6 +399,18 @@ func TestAbstractTypesFollowCollectFieldsOfTheRuntimeType(t *testing.T) {
 				"nodes": []any{map[string]any{"id": "c", "name": "Tom", "lives": 9}},
 			}),
 			want: `{"data":{"pets":[{"lives":9,"name":"Tom"},{"name":"Rex","barks":true}],"nodes":[{"id":"c","name":"Tom","lives":9}]}}`,
+		},
+		{
+			name:     "inactive typename sharing a response name with an ordinary string is not a runtime type",
+			query:    `{ pets { ... on Cat { tag: __typename lives } ... on Dog { barks tag: name } } }`,
+			response: staticData(map[string]any{"pets": []any{map[string]any{"barks": true, "tag": "Rex"}, map[string]any{"tag": "Cat", "lives": 9}}}),
+			want:     `{"data":{"pets":[{"barks":true,"tag":"Rex"},{"tag":"Cat","lives":9}]}}`,
+		},
+		{
+			name:     "ordinary string naming another possible type yields to the object shape",
+			query:    `{ pets { ... on Cat { lives tag: name } ... on Dog { tag: __typename barks } } }`,
+			response: staticData(map[string]any{"pets": []any{map[string]any{"lives": 9, "tag": "Dog"}, map[string]any{"tag": "Dog", "barks": true}}}),
+			want:     `{"data":{"pets":[{"lives":9,"tag":"Dog"},{"tag":"Dog","barks":true}]}}`,
 		},
 		{
 			name:     "no typename with indistinguishable runtime types uses the first possible type",
