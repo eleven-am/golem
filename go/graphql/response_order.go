@@ -348,75 +348,58 @@ func (writer *selectionWriter) typename(value map[string]any, sets []ast.Selecti
 	if writer.schema == nil {
 		return ""
 	}
-	possible := writer.schema.GetPossibleTypes(parent)
-	for _, name := range writer.typenameResponseNames(sets, nil, map[string]bool{}) {
-		typename, ok := value[name].(string)
-		if !ok {
+	best, bestRank := "", runtimeTypeRank{}
+	for index, candidate := range writer.schema.GetPossibleTypes(parent) {
+		rank := runtimeTypeRankOf(value, writer.collect(sets, parent, candidate.Name), candidate.Name, index)
+		if best == "" || rank.before(bestRank) {
+			best, bestRank = candidate.Name, rank
+		}
+	}
+	return best
+}
+
+type runtimeTypeRank struct {
+	contradicted bool
+	incomplete   bool
+	present      int
+	confirmed    bool
+	index        int
+}
+
+func runtimeTypeRankOf(value map[string]any, fields []collectedField, typename string, index int) runtimeTypeRank {
+	rank := runtimeTypeRank{index: index}
+	for _, field := range fields {
+		child, present := value[field.name]
+		if !present {
+			rank.incomplete = true
 			continue
 		}
-		for _, candidate := range possible {
-			if candidate.Name == typename && writer.consistentTypename(value, sets, parent, typename, name) {
-				return typename
-			}
+		rank.present++
+		if !field.typename {
+			continue
 		}
-	}
-	for _, candidate := range possible {
-		fields := writer.collect(sets, parent, candidate.Name)
-		if len(fields) == len(value) && writer.presentIn(value, fields) {
-			return candidate.Name
+		if child != typename {
+			rank.contradicted = true
+			continue
 		}
+		rank.confirmed = true
 	}
-	return ""
+	return rank
 }
 
-func (writer *selectionWriter) consistentTypename(value map[string]any, sets []ast.SelectionSet, parent *ast.Definition, typename, responseName string) bool {
-	fields := writer.collect(sets, parent, typename)
-	for _, field := range fields {
-		if field.name == responseName {
-			return field.typename && writer.presentIn(value, fields)
-		}
+func (rank runtimeTypeRank) before(other runtimeTypeRank) bool {
+	switch {
+	case rank.contradicted != other.contradicted:
+		return !rank.contradicted
+	case rank.incomplete != other.incomplete:
+		return !rank.incomplete
+	case rank.present != other.present:
+		return rank.present > other.present
+	case rank.confirmed != other.confirmed:
+		return rank.confirmed
+	default:
+		return rank.index < other.index
 	}
-	return false
-}
-
-func (writer *selectionWriter) presentIn(value map[string]any, fields []collectedField) bool {
-	for _, field := range fields {
-		if _, present := value[field.name]; !present {
-			return false
-		}
-	}
-	return true
-}
-
-func (writer *selectionWriter) typenameResponseNames(sets []ast.SelectionSet, names []string, visited map[string]bool) []string {
-	for _, set := range sets {
-		for _, selection := range set {
-			switch selection := selection.(type) {
-			case *ast.Field:
-				if selection.Name != "__typename" || !graphqlIncluded(selection.Directives, writer.variables) {
-					continue
-				}
-				name := selection.Alias
-				if name == "" {
-					name = selection.Name
-				}
-				names = append(names, name)
-			case *ast.InlineFragment:
-				if graphqlIncluded(selection.Directives, writer.variables) {
-					names = writer.typenameResponseNames([]ast.SelectionSet{selection.SelectionSet}, names, visited)
-				}
-			case *ast.FragmentSpread:
-				if visited[selection.Name] || !graphqlIncluded(selection.Directives, writer.variables) {
-					continue
-				}
-				visited[selection.Name] = true
-				if fragment := writer.fragments.ForName(selection.Name); fragment != nil {
-					names = writer.typenameResponseNames([]ast.SelectionSet{fragment.SelectionSet}, names, visited)
-				}
-			}
-		}
-	}
-	return names
 }
 
 func (writer *selectionWriter) collect(sets []ast.SelectionSet, parent *ast.Definition, typename string) []collectedField {
@@ -491,7 +474,7 @@ func (writer *selectionWriter) applies(condition string, parent *ast.Definition,
 	if parent.IsAbstractType() {
 		concrete = writer.schema.Types[typename]
 		if concrete == nil {
-			return true
+			return false
 		}
 	}
 	if condition == concrete.Name {

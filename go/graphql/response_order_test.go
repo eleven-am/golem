@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -356,82 +357,206 @@ union Pet = Cat | Dog
 type Query { pets: [Pet!]! nodes: [Node!]! }
 `
 
-func TestAbstractTypesFollowCollectFieldsOfTheRuntimeType(t *testing.T) {
-	cat := map[string]any{"kind": "Cat", "lives": 9, "name": "Tom"}
-	dog := map[string]any{"kind": "Dog", "name": "Rex", "barks": true}
-	branches := `... on Dog { name barks } ... on Cat { lives name }`
-	cases := []orderCase{
-		{
-			name:     "typename in a named fragment",
-			query:    `{ pets { ...Kind ` + branches + ` } } fragment Kind on Pet { kind: __typename }`,
-			response: staticData(map[string]any{"pets": []any{cat, dog}}),
-			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
-		},
-		{
-			name:     "typename in an inline fragment",
-			query:    `{ pets { ... on Pet { kind: __typename } ` + branches + ` } }`,
-			response: staticData(map[string]any{"pets": []any{cat, dog}}),
-			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
-		},
-		{
-			name:     "typename nested in included fragments after a skipped one",
-			query:    `query Q($no: Boolean!) { pets { ... @skip(if: $no) { kind: __typename } ... @include(if: true) { ...Outer } ` + branches + ` } } fragment Outer on Pet { ... on Pet { ...Kind } } fragment Kind on Pet { kind: __typename }`,
-			response: staticData(map[string]any{"pets": []any{cat, dog}}),
-			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
-		},
-		{
-			name:     "named fragment typename decides between indistinguishable branches",
-			query:    `{ pets { ...Kind ... on Cat { id name } ... on Dog { name id } } } fragment Kind on Pet { kind: __typename }`,
-			response: staticData(map[string]any{"pets": []any{map[string]any{"kind": "Dog", "id": "d", "name": "Rex"}}}),
-			want:     `{"data":{"pets":[{"kind":"Dog","name":"Rex","id":"d"}]}}`,
-		},
-		{
-			name:     "inline fragment typename decides between indistinguishable branches",
-			query:    `{ pets { ... on Cat { id name } ... on Dog { name id } ... { kind: __typename } } }`,
-			response: staticData(map[string]any{"pets": []any{map[string]any{"kind": "Dog", "id": "d", "name": "Rex"}}}),
-			want:     `{"data":{"pets":[{"name":"Rex","id":"d","kind":"Dog"}]}}`,
-		},
-		{
-			name:  "no typename infers the only runtime type whose fields match",
-			query: `{ pets { ` + branches + ` } nodes { id ... on Dog { barks name } ... on Cat { name lives } } }`,
-			response: staticData(map[string]any{
-				"pets":  []any{map[string]any{"lives": 9, "name": "Tom"}, map[string]any{"name": "Rex", "barks": true}},
-				"nodes": []any{map[string]any{"id": "c", "name": "Tom", "lives": 9}},
-			}),
-			want: `{"data":{"pets":[{"lives":9,"name":"Tom"},{"name":"Rex","barks":true}],"nodes":[{"id":"c","name":"Tom","lives":9}]}}`,
-		},
-		{
-			name:     "inactive typename sharing a response name with an ordinary string is not a runtime type",
-			query:    `{ pets { ... on Cat { tag: __typename lives } ... on Dog { barks tag: name } } }`,
-			response: staticData(map[string]any{"pets": []any{map[string]any{"barks": true, "tag": "Rex"}, map[string]any{"tag": "Cat", "lives": 9}}}),
-			want:     `{"data":{"pets":[{"barks":true,"tag":"Rex"},{"tag":"Cat","lives":9}]}}`,
-		},
-		{
-			name:     "ordinary string naming another possible type yields to the object shape",
-			query:    `{ pets { ... on Cat { lives tag: name } ... on Dog { tag: __typename barks } } }`,
-			response: staticData(map[string]any{"pets": []any{map[string]any{"lives": 9, "tag": "Dog"}, map[string]any{"tag": "Dog", "barks": true}}}),
-			want:     `{"data":{"pets":[{"lives":9,"tag":"Dog"},{"tag":"Dog","barks":true}]}}`,
-		},
-		{
-			name:     "no typename with indistinguishable runtime types uses the first possible type",
-			query:    `{ pets { ... on Dog { name id } ... on Cat { id name } } }`,
-			response: staticData(map[string]any{"pets": []any{map[string]any{"id": "x", "name": "Tom"}}}),
-			want:     `{"data":{"pets":[{"id":"x","name":"Tom"}]}}`,
-		},
+type abstractShape struct {
+	name     string
+	cat, dog []string
+}
+
+type abstractRow struct {
+	parent, root, placement, shape string
+	value                          any
+	extra                          bool
+	cat, dog                       []string
+}
+
+func (row abstractRow) name() string {
+	return fmt.Sprintf("%s/%s/%v/extra=%v/%s", row.parent, row.placement, row.value, row.extra, row.shape)
+}
+
+func (row abstractRow) query() string {
+	cat := strings.Join(row.cat, " ")
+	dog := strings.Join(row.dog, " ")
+	prefix, fragments := "", ""
+	switch row.placement {
+	case "direct":
+		prefix = "kind: __typename "
+	case "fragment":
+		prefix = "... @skip(if: true) { kind: __typename } ... @include(if: true) { ...Outer } "
+		fragments = fmt.Sprintf(" fragment Outer on %s { ... on %s { ...Kind } } fragment Kind on %s { kind: __typename }", row.parent, row.parent, row.parent)
+	case "inactive-branch":
+		cat += " kind: __typename"
+		dog = "kind: name " + dog
+	case "active-branch":
+		cat = "kind: name " + cat
+		dog += " kind: __typename"
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			server := orderServer(t, abstractOrderSchema, nil, orderExecutor{response: testCase.response})
-			body, err := json.Marshal(map[string]any{"query": testCase.query, "variables": map[string]any{"no": true}})
-			if err != nil {
-				t.Fatal(err)
+	return fmt.Sprintf("{ %s { %s... on Cat { %s } ... on Dog { %s } } }%s", row.root, prefix, cat, dog, fragments)
+}
+
+func (row abstractRow) collected(typename string) (fields []string, typenameField bool) {
+	branch := row.dog
+	if typename == "Cat" {
+		branch = row.cat
+	}
+	switch row.placement {
+	case "direct", "fragment":
+		return append([]string{"kind"}, branch...), true
+	case "inactive-branch":
+		if typename == "Cat" {
+			return append(append([]string{}, branch...), "kind"), true
+		}
+		return append([]string{"kind"}, branch...), false
+	case "active-branch":
+		if typename == "Dog" {
+			return append(append([]string{}, branch...), "kind"), true
+		}
+		return append([]string{"kind"}, branch...), false
+	default:
+		return branch, false
+	}
+}
+
+func (row abstractRow) object() map[string]any {
+	values := map[string]any{"id": "d", "name": "Rex", "barks": true, "kind": row.value}
+	fields, _ := row.collected("Dog")
+	object := map[string]any{}
+	for _, field := range fields {
+		object[field] = values[field]
+	}
+	if row.extra {
+		object["extra"] = true
+	}
+	return object
+}
+
+func (row abstractRow) expectedType() string {
+	object := row.object()
+	type rank struct {
+		name                                string
+		contradicted, incomplete, confirmed bool
+		present                             int
+	}
+	ranks := []rank{}
+	for _, typename := range []string{"Cat", "Dog"} {
+		fields, typenameField := row.collected(typename)
+		current := rank{name: typename}
+		for _, field := range fields {
+			if _, ok := object[field]; ok {
+				current.present++
+			} else {
+				current.incomplete = true
 			}
-			request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
-			request.Header.Set("Content-Type", "application/json")
-			recorder := httptest.NewRecorder()
-			server.Handler().ServeHTTP(recorder, request)
-			if got := recorder.Body.String(); got != testCase.want+"\n" {
-				t.Fatalf("body\n got=%s\nwant=%s", got, testCase.want)
+		}
+		if value, ok := object["kind"]; typenameField && ok {
+			current.contradicted = value != typename
+			current.confirmed = value == typename
+		}
+		ranks = append(ranks, current)
+	}
+	cat, dog := ranks[0], ranks[1]
+	switch {
+	case cat.contradicted != dog.contradicted:
+		return map[bool]string{true: "Dog", false: "Cat"}[cat.contradicted]
+	case cat.incomplete != dog.incomplete:
+		return map[bool]string{true: "Dog", false: "Cat"}[cat.incomplete]
+	case cat.present != dog.present:
+		return map[bool]string{true: "Cat", false: "Dog"}[cat.present > dog.present]
+	case cat.confirmed != dog.confirmed:
+		return map[bool]string{true: "Cat", false: "Dog"}[cat.confirmed]
+	default:
+		return "Cat"
+	}
+}
+
+func (row abstractRow) conforming() bool {
+	switch row.placement {
+	case "absent":
+		return true
+	case "inactive-branch":
+		_, ok := row.value.(string)
+		return ok
+	default:
+		return row.value == "Dog"
+	}
+}
+
+func (row abstractRow) want(t *testing.T, typename string) string {
+	t.Helper()
+	object := row.object()
+	fields, _ := row.collected(typename)
+	written := map[string]bool{}
+	var body strings.Builder
+	write := func(field string) {
+		encoded, err := json.Marshal(object[field])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if body.Len() != 0 {
+			body.WriteByte(',')
+		}
+		body.WriteString(`"` + field + `":`)
+		body.Write(encoded)
+		written[field] = true
+	}
+	for _, field := range fields {
+		if _, ok := object[field]; ok && !written[field] {
+			write(field)
+		}
+	}
+	remaining := []string{}
+	for field := range object {
+		if !written[field] {
+			remaining = append(remaining, field)
+		}
+	}
+	sort.Strings(remaining)
+	for _, field := range remaining {
+		write(field)
+	}
+	return `{"data":{"` + row.root + `":[{` + body.String() + `}]}}`
+}
+
+func abstractRows() []abstractRow {
+	shapes := []abstractShape{
+		{"distinguishable", []string{"lives", "name"}, []string{"name", "barks"}},
+		{"dog-superset", []string{"name"}, []string{"barks", "name"}},
+		{"dog-subset", []string{"lives", "name"}, []string{"name"}},
+		{"identical", []string{"id", "name"}, []string{"name", "id"}},
+	}
+	var rows []abstractRow
+	for _, parent := range [][2]string{{"Pet", "pets"}, {"Node", "nodes"}} {
+		for _, placement := range []string{"direct", "fragment", "inactive-branch", "active-branch", "absent"} {
+			values := []any{"Dog", "Rex", "Cat", 7}
+			if placement == "absent" {
+				values = []any{nil}
+			}
+			for _, value := range values {
+				for _, extra := range []bool{false, true} {
+					for _, shape := range shapes {
+						rows = append(rows, abstractRow{parent: parent[0], root: parent[1], placement: placement, shape: shape.name, value: value, extra: extra, cat: shape.cat, dog: shape.dog})
+					}
+				}
+			}
+		}
+	}
+	return rows
+}
+
+func TestAbstractRuntimeTypeResolutionTable(t *testing.T) {
+	rows := abstractRows()
+	if len(rows) != 272 {
+		t.Fatalf("rows=%d", len(rows))
+	}
+	for _, row := range rows {
+		t.Run(row.name(), func(t *testing.T) {
+			typename := row.expectedType()
+			if row.conforming() && typename != "Dog" && row.shape != "identical" {
+				t.Fatalf("oracle chose %s for a conforming Dog with a distinguishable shape", typename)
+			}
+			want := row.want(t, typename)
+			server := orderServer(t, abstractOrderSchema, nil, orderExecutor{response: staticData(map[string]any{row.root: []any{row.object()}})})
+			if got := orderHTTP(t, server, row.query()); got != want+"\n" {
+				t.Fatalf("query %s\n got=%s\nwant=%s (%s)", row.query(), got, want, typename)
 			}
 		})
 	}
