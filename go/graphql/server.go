@@ -305,6 +305,9 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 	if preparedOperation.Operation.Definition.Operation == ast.Subscription {
 		return Response{Errors: []Error{publicError("SUBSCRIPTION_TRANSPORT_REQUIRED", "GraphQL subscriptions require graphql-transport-ws")}}
 	}
+	if server.executable == nil && preparedOperation.rootMeta {
+		return Response{Errors: []Error{publicError("GRAPHQL_VALIDATION_FAILED", "__schema, __type and a root __typename need an executable schema, which this GraphQL server does not have")}}
+	}
 	operation := observe.OperationGraphQLQuery
 	if preparedOperation.Operation.Definition.Operation == ast.Mutation {
 		operation = observe.OperationGraphQLMutation
@@ -345,7 +348,15 @@ func graphQLObservationResult(response Response) (observe.Outcome, observe.Reaso
 	return observe.OutcomeRefused, observe.ReasonInvalidInput
 }
 
-type preparedRequest struct{ Operation Operation }
+type preparedRequest struct {
+	Operation Operation
+	rootMeta  bool
+}
+
+const (
+	maxIntrospectionSchemaRoots = 1
+	maxIntrospectionTypeRoots   = 8
+)
 
 func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool) (preparedRequest, *Response) {
 	fail := func(code, message string) (preparedRequest, *Response) {
@@ -406,11 +417,15 @@ func (server *Server[P]) prepareRequest(request Request, byteLimitsChecked bool)
 	if err != nil {
 		return fail("BAD_USER_INPUT", "GraphQL variables are invalid")
 	}
-	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.limits.MaxPageSize, server.limits.MaxComplexity, map[string]bool{})
+	complexity, err := operationComplexity(definition.SelectionSet, document.Fragments, coerced, server.limits.MaxPageSize, server.limits.MaxComplexity, map[string]bool{}, false)
 	if err != nil || complexity > server.limits.MaxComplexity {
 		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
 	}
-	return preparedRequest{Operation: Operation{Document: document, Definition: definition, Variables: coerced}}, nil
+	meta := rootMetaSelection{schemas: map[string]bool{}, types: map[string]bool{}}
+	if err := meta.collect(definition.SelectionSet, document.Fragments, coerced, map[string]bool{}); err != nil || len(meta.schemas) > maxIntrospectionSchemaRoots || len(meta.types) > maxIntrospectionTypeRoots {
+		return fail("QUERY_LIMIT_EXCEEDED", "GraphQL query exceeds a configured limit")
+	}
+	return preparedRequest{Operation: Operation{Document: document, Definition: definition, Variables: coerced}, rootMeta: len(meta.schemas) != 0 || len(meta.types) != 0 || meta.typename}, nil
 }
 
 func (server *Server[P]) executePrepared(ctx context.Context, request Request, document *ast.QueryDocument, definition *ast.OperationDefinition, variables map[string]any, prepared Response) Response {
@@ -555,7 +570,7 @@ func inputShape(value any, depth int) (nodes, maximumDepth, listItems, bytes int
 	return
 }
 
-func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, defaultPage, limit int, stack map[string]bool) (int, error) {
+func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, defaultPage, limit int, stack map[string]bool, introspection bool) (int, error) {
 	total := 0
 	for _, selection := range set {
 		switch value := selection.(type) {
@@ -563,12 +578,13 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			if !graphqlIncluded(value.Directives, variables) {
 				continue
 			}
-			child, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit, stack)
+			nested := introspection || introspectionRoot(value)
+			child, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit, stack, nested)
 			if err != nil {
 				return 0, err
 			}
 			multiplier := 1
-			if value.Definition != nil && value.Definition.Type != nil && value.Definition.Type.Elem != nil {
+			if !nested && value.Definition != nil && value.Definition.Type != nil && value.Definition.Type.Elem != nil {
 				multiplier = defaultPage
 				if multiplier < 1 {
 					multiplier = 1
@@ -592,7 +608,7 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 			if !graphqlIncluded(value.Directives, variables) {
 				continue
 			}
-			cost, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit-total, stack)
+			cost, err := operationComplexity(value.SelectionSet, fragments, variables, defaultPage, limit-total, stack, introspection)
 			if err != nil {
 				return 0, err
 			}
@@ -609,7 +625,7 @@ func operationComplexity(set ast.SelectionSet, fragments ast.FragmentDefinitionL
 				return 0, fmt.Errorf("GraphQL fragment expansion is invalid")
 			}
 			stack[value.Name] = true
-			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, defaultPage, limit-total, stack)
+			cost, err := operationComplexity(fragment.SelectionSet, fragments, variables, defaultPage, limit-total, stack, introspection)
 			delete(stack, value.Name)
 			if err != nil {
 				return 0, err
@@ -673,12 +689,12 @@ type operationShapeStats struct {
 
 func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitionList, limits Limits) operationShapeStats {
 	stats := operationShapeStats{}
-	var walk func(ast.SelectionSet, int, map[string]bool)
-	walk = func(current ast.SelectionSet, depth int, stack map[string]bool) {
+	var walk func(ast.SelectionSet, int, map[string]bool, bool)
+	walk = func(current ast.SelectionSet, depth int, stack map[string]bool, introspection bool) {
 		if stats.exceeded {
 			return
 		}
-		if depth > stats.depth {
+		if !introspection && depth > stats.depth {
 			stats.depth = depth
 		}
 		if stats.depth > limits.MaxDepth {
@@ -697,16 +713,16 @@ func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitio
 				if value.Alias != "" && value.Alias != value.Name {
 					stats.aliases++
 				}
-				if value.Name == "__schema" || value.Name == "__type" {
+				if introspectionRoot(value) {
 					stats.introspection = true
 				}
 				if stats.fields > limits.MaxSelectedFields || stats.aliases > limits.MaxAliases {
 					stats.exceeded = true
 					return
 				}
-				walk(value.SelectionSet, depth+1, stack)
+				walk(value.SelectionSet, depth+1, stack, introspection || introspectionRoot(value))
 			case *ast.InlineFragment:
-				walk(value.SelectionSet, depth, stack)
+				walk(value.SelectionSet, depth, stack, introspection)
 			case *ast.FragmentSpread:
 				if stack[value.Name] {
 					stats.exceeded = true
@@ -718,7 +734,7 @@ func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitio
 					return
 				}
 				stack[value.Name] = true
-				walk(fragment.SelectionSet, depth, stack)
+				walk(fragment.SelectionSet, depth, stack, introspection)
 				delete(stack, value.Name)
 			default:
 				stats.exceeded = true
@@ -728,8 +744,64 @@ func boundedOperationShape(set ast.SelectionSet, fragments ast.FragmentDefinitio
 			}
 		}
 	}
-	walk(set, 1, map[string]bool{})
+	walk(set, 1, map[string]bool{}, false)
 	return stats
+}
+
+type rootMetaSelection struct {
+	schemas, types map[string]bool
+	typename       bool
+}
+
+func (meta *rootMetaSelection) collect(set ast.SelectionSet, fragments ast.FragmentDefinitionList, variables map[string]any, stack map[string]bool) error {
+	for _, selection := range set {
+		switch value := selection.(type) {
+		case *ast.Field:
+			if !graphqlIncluded(value.Directives, variables) {
+				continue
+			}
+			responseName := value.Alias
+			if responseName == "" {
+				responseName = value.Name
+			}
+			switch value.Name {
+			case "__schema":
+				meta.schemas[responseName] = true
+			case "__type":
+				meta.types[responseName] = true
+			case "__typename":
+				meta.typename = true
+			}
+		case *ast.InlineFragment:
+			if !graphqlIncluded(value.Directives, variables) {
+				continue
+			}
+			if err := meta.collect(value.SelectionSet, fragments, variables, stack); err != nil {
+				return err
+			}
+		case *ast.FragmentSpread:
+			if !graphqlIncluded(value.Directives, variables) {
+				continue
+			}
+			fragment := fragments.ForName(value.Name)
+			if fragment == nil || stack[value.Name] {
+				return fmt.Errorf("GraphQL fragment expansion is invalid")
+			}
+			stack[value.Name] = true
+			err := meta.collect(fragment.SelectionSet, fragments, variables, stack)
+			delete(stack, value.Name)
+			if err != nil {
+				return err
+			}
+		default:
+			return fmt.Errorf("GraphQL selection kind is invalid")
+		}
+	}
+	return nil
+}
+
+func introspectionRoot(field *ast.Field) bool {
+	return field.Name == "__schema" || field.Name == "__type"
 }
 
 type astNodeBudget struct{ count, limit int }

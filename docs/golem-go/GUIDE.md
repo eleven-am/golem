@@ -302,6 +302,79 @@ The author sees their published note and their draft. An anonymous caller sees
 only the published one — not because the program filtered, but because the
 policy predicate was compiled into the query. The draft filter finds one row.
 
+## GraphQL
+
+### Introspection
+
+Introspection is off by default. Turn it on in the generated config:
+
+```go
+server, err := application.GraphQL(notes.GraphQLConfig[Principal]{
+	PrincipalFromContext: principalFromContext,
+	ReportInternalError:  reportInternalError,
+	Introspection:        true,
+})
+```
+
+With `Introspection: true`, `__schema` and `__type(name:)` are answered on
+`Query`. You can select them alone or beside ordinary roots in the same
+operation. They describe exactly the SDL that `server.SDL()` returns:
+
+- A model, relation or field marked hidden is absent from both.
+- An operation you did not generate is absent from both.
+- A field that policy can mask is present in both, because masking happens per
+  row at read time, not in the schema.
+
+Introspection does not consult policy, so every caller that
+`PrincipalFromContext` accepts sees the same schema.
+
+With `Introspection: false`, any operation that selects `__schema` or `__type`,
+including through a fragment, is refused whole with
+`GRAPHQL_VALIDATION_FAILED`.
+
+`__typename` is not introspection and works regardless of the flag:
+
+- `{ __typename }` returns `"Query"`, and `mutation { __typename }` returns
+  `"Mutation"`.
+- Inside any object selection, including a subscription event and its
+  `entity`, it returns the object's type name.
+- It is not allowed as the root field of a subscription, because GraphQL
+  requires a subscription's single root field to be a real field. There it is
+  refused with `GRAPHQL_VALIDATION_FAILED`.
+
+A generated application always gives its server an executable schema. A
+server you build directly with `graphql.NewServer` and no `ExecutableSchema`
+cannot answer `__schema`, `__type` or a root `__typename`. It refuses them
+with `GRAPHQL_VALIDATION_FAILED` rather than omit them from the response.
+
+Introspection is limited separately from data:
+
+- **Cost.** Every field under `__schema` or `__type` costs 1 toward
+  `MaxComplexity`. Introspection lists such as `types`, `fields` and `args` are
+  bounded by the schema, not by stored rows, so they are never multiplied by
+  `MaxPageSize`.
+- **Depth.** Selections under `__schema` or `__type` do not count toward
+  `MaxDepth`.
+- **Recursion.** Nesting `fields`, `inputFields`, `interfaces` or
+  `possibleTypes` three deep, as in `types { fields { type { fields { type {
+  fields ...` , is refused with `GRAPHQL_VALIDATION_FAILED`. This matches
+  graphql-js's `MaxIntrospectionDepthRule`.
+- **Repetition.** One operation may select at most one `__schema` root and
+  at most eight `__type` roots, counted by response name after `@skip` and
+  `@include`. A ninth `__type` or a second aliased `__schema` is refused with
+  `QUERY_LIMIT_EXCEEDED`, because each alias would serialise the schema
+  again. Two selections under the same response name merge and count once.
+- **Still enforced.** Introspection selections still count toward
+  `MaxSelectedFields`, `MaxAliases`, `MaxASTNodes`, `MaxFragments`,
+  `MaxTokens` and `MaxRequestBytes`.
+
+The standard graphql-js `IntrospectionQuery`, the one GraphiQL and code
+generators send, passes at the default limits whatever the schema's size.
+
+Data selections in the same operation are costed and depth-limited exactly as
+they would be alone. Placing them beside `__schema`, or inside a fragment that
+also selects it, does not exempt them.
+
 ## Changing a schema
 
 Editing a model means a new migration before regeneration:
