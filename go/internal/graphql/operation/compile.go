@@ -479,6 +479,9 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 	}
 	result := Result{Reads: make([]ReadRoot, 0, len(fields))}
 	for _, root := range fields {
+		if queryMetaRoot(root.field.Name) {
+			continue
+		}
 		binding, ok := c.queries[root.field.Name]
 		if !ok {
 			analyticsRoot, analyticsOK, analyticsErr := c.analytics.Compile(root.field, document.Fragments, variables)
@@ -537,6 +540,10 @@ func (c *Compiler) compileQuery(document *ast.QueryDocument, definition *ast.Ope
 	return result, nil
 }
 
+func queryMetaRoot(name string) bool {
+	return name == "__schema" || name == "__type" || name == "__typename"
+}
+
 func (c *Compiler) EncodeAnalytics(root graphqlanalytics.Root, rows [][]golem.RuntimeAnalyticsCell) (any, error) {
 	if c == nil || c.analytics == nil {
 		return nil, fmt.Errorf("P6_OPERATION_ANALYTICS: compiler is unavailable")
@@ -554,6 +561,9 @@ func (c *Compiler) compileMutation(document *ast.QueryDocument, definition *ast.
 	}
 	result := Result{Mutations: make([]MutationRoot, 0, len(fields))}
 	for _, root := range fields {
+		if root.field.Name == "__typename" {
+			continue
+		}
 		binding, ok := c.mutations[root.field.Name]
 		if !ok {
 			custom, customErr := c.compileCustom(root, compilerir.CustomOperationMutation, document.Fragments, variables)

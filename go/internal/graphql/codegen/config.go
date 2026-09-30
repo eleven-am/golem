@@ -287,6 +287,10 @@ func Emit(request Request) (Result, error) {
 		}
 		body.WriteString("\tdefault:\n\t\treturn nil, fmt.Errorf(\"GraphQL subscription model is unavailable\")\n\t}\n}\n\n")
 	}
+	body.WriteString("func (app *App[P]) golemGeneratedGraphQLAuthenticatePrincipal(ctx context.Context, principal P) error {\n")
+	body.WriteString("\tif app == nil || app.runtime == nil { return fmt.Errorf(\"GraphQL application is unavailable\") }\n")
+	body.WriteString("\treturn app.runtime.AuthenticatePrincipal(ctx, principal)\n")
+	body.WriteString("}\n\n")
 	body.WriteString("func (app *App[P]) golemGeneratedGraphQLBeginCaller(ctx context.Context, principal P) (golemgraphql.CallerExecution, error) {\n")
 	body.WriteString("\tif app == nil || app.runtime == nil { return nil, fmt.Errorf(\"GraphQL application is unavailable\") }\n")
 	body.WriteString("\tcaller, err := app.ForPrincipal(ctx, principal)\n")
@@ -312,7 +316,7 @@ func Emit(request Request) (Result, error) {
 		body.WriteString("\tif err != nil { return nil, err }\n")
 	}
 	body.WriteString("\texecutor, err := golemgraphql.NewGeneratedExecutor(golemgraphql.GeneratedExecutorConfig[P]{\n")
-	body.WriteString("\t\tBundle: bundle, Limits: config.Limits, BeginCaller: app.golemGeneratedGraphQLBeginCaller, ReportInternalError: config.ReportInternalError,\n")
+	body.WriteString("\t\tBundle: bundle, Limits: config.Limits, BeginCaller: app.golemGeneratedGraphQLBeginCaller, AuthenticatePrincipal: app.golemGeneratedGraphQLAuthenticatePrincipal, ReportInternalError: config.ReportInternalError,\n")
 	if len(computedBindings) != 0 {
 		body.WriteString("\t\tComputedBindings: []golemgraphql.ComputedBinding{\n")
 		for index := range computedBindings {
