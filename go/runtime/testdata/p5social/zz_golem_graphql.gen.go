@@ -160,6 +160,13 @@ func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenMutation(ctx context.
 	return caller.execution.ExecuteFrozenMutation(ctx, request)
 }
 
+func (app *App[P]) golemGeneratedGraphQLAuthenticatePrincipal(ctx context.Context, principal P) error {
+	if app == nil || app.runtime == nil {
+		return fmt.Errorf("GraphQL application is unavailable")
+	}
+	return app.runtime.AuthenticatePrincipal(ctx, principal)
+}
+
 func (app *App[P]) golemGeneratedGraphQLBeginCaller(ctx context.Context, principal P) (golemgraphql.CallerExecution, error) {
 	if app == nil || app.runtime == nil {
 		return nil, fmt.Errorf("GraphQL application is unavailable")
@@ -189,7 +196,7 @@ func (app *App[P]) GraphQL(config GraphQLConfig[P]) (*GraphQLServer, error) {
 	bundle := GolemGeneratedSchemaBundle()
 	golemGeneratedExecutable := golemgqlgen.NewExecutableSchema(golemgqlgen.Config{Resolvers: &golemgqlgen.Resolver{}})
 	executor, err := golemgraphql.NewGeneratedExecutor(golemgraphql.GeneratedExecutorConfig[P]{
-		Bundle: bundle, Limits: config.Limits, BeginCaller: app.golemGeneratedGraphQLBeginCaller, ReportInternalError: config.ReportInternalError,
+		Bundle: bundle, Limits: config.Limits, BeginCaller: app.golemGeneratedGraphQLBeginCaller, AuthenticatePrincipal: app.golemGeneratedGraphQLAuthenticatePrincipal, ReportInternalError: config.ReportInternalError,
 	})
 	if err != nil {
 		return nil, err

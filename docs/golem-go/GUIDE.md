@@ -325,8 +325,14 @@ operation. They describe exactly the SDL that `server.SDL()` returns:
 - A field that policy can mask is present in both, because masking happens per
   row at read time, not in the schema.
 
-Introspection does not consult policy, so every caller that
-`PrincipalFromContext` accepts sees the same schema.
+An operation that selects only `__schema`, `__type` or `__typename` roots
+still resolves the principal through your `ResolvePrincipal`. A principal it
+refuses gets exactly the error a data query would get.
+
+Such an operation does not consult policy: it builds no model policy, opens no
+transaction and issues no SQL. So every caller whose principal resolves sees
+the same schema. When meta roots sit beside data roots, the operation runs the
+ordinary caller setup for the data.
 
 With `Introspection: false`, any operation that selects `__schema` or `__type`,
 including through a fragment, is refused whole with

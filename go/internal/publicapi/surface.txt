@@ -3306,6 +3306,7 @@ graphql.(CustomArgument).Name func() string
 graphql.(CustomArgument).Value func() any
 graphql.(CustomResult).Value func() any
 graphql.AdaptGeneratedEventStream func[E any](golem.EventStream[E], func(E) (GeneratedEvent, error)) (EventStream, error)
+graphql.AuthenticatePrincipal[P any] type func(context.Context, P) error
 graphql.BeginCaller[P any] type func(context.Context, P) (CallerExecution, error)
 graphql.BindBatchedComputed func(string, ComputedCacheKeyFunc, ComputedBatchFunc) (ComputedBinding, error)
 graphql.BindComputed func(string, ComputedResolveFunc) (ComputedBinding, error)
@@ -3394,7 +3395,8 @@ graphql.GeneratedCustomMutationInputArgument func[M any](golem.ModelDescriptor[M
 graphql.GeneratedCustomPredicateArgument func[M any](golem.ModelDescriptor[M]) GeneratedCustomArgumentConversion
 graphql.GeneratedCustomSelectorArgument func[M any](golem.ModelDescriptor[M]) GeneratedCustomArgumentConversion
 graphql.GeneratedEvent type struct
-graphql.GeneratedExecutorConfig unkeyed literal {Bundle, Limits, BeginCaller, ComputedBindings, CustomBindings, ReportInternalError}
+graphql.GeneratedExecutorConfig unkeyed literal {Bundle, Limits, BeginCaller, ComputedBindings, CustomBindings, ReportInternalError, AuthenticatePrincipal}
+graphql.GeneratedExecutorConfig.AuthenticatePrincipal field AuthenticatePrincipal[P]
 graphql.GeneratedExecutorConfig.BeginCaller field BeginCaller[P]
 graphql.GeneratedExecutorConfig.Bundle field golem.SchemaBundle
 graphql.GeneratedExecutorConfig.ComputedBindings field []ComputedBinding
@@ -4134,6 +4136,7 @@ render.Route type struct
 render.Route unkeyed literal {Patterns, Resolve}
 render.Route.Patterns field []string
 render.Route.Resolve field Resolver
+runtime.(*App).AuthenticatePrincipal func(context.Context, P) error
 runtime.(*App).Enqueue func(context.Context, queue.Pending) (queue.JobID, error)
 runtime.(*App).EventCapabilities func() events.Capabilities
 runtime.(*App).EventLimits func() events.Limits

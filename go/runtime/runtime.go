@@ -449,16 +449,9 @@ func validateAfterCommitHandler[A any](bindings golem.ApplicationBindings[A], ha
 // once for this fresh execution. Resolution or policy failure is never treated
 // as system access.
 func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P, A], error) {
-	if app == nil || ctx == nil {
-		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal could not be resolved", fmt.Errorf("nil application or context"))
-	}
-	resolved, err := app.resolvePrincipal(ctx, principal)
+	actor, err := app.resolveActor(ctx, principal)
 	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal could not be resolved", err)
-	}
-	actor, err := snapshotActor(resolved, app.snapshotActor)
-	if err != nil {
-		return nil, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal actor could not be snapshotted", err)
+		return nil, err
 	}
 	policies, err := policyruntime.Build(policyruntime.BuildRequest[A]{Bindings: app.bindings, Actor: actor, Registry: app.registry, Provider: app.provider, Capabilities: app.capabilities})
 	if err != nil {
@@ -473,6 +466,30 @@ func (app *App[P, A]) ForPrincipal(ctx context.Context, principal P) (*Caller[P,
 		auditID = app.auditPrincipal(principal)
 	}
 	return &Caller[P, A]{app: app, policies: policies, actor: actor, execution: execution, executor: databaseExecution(app.database), auditID: auditID, principal: principal}, nil
+}
+
+// AuthenticatePrincipal resolves and snapshots the principal exactly as
+// ForPrincipal does and returns the same error when either step fails. It
+// builds no policy, opens no transaction, and issues no SQL of its own.
+func (app *App[P, A]) AuthenticatePrincipal(ctx context.Context, principal P) error {
+	_, err := app.resolveActor(ctx, principal)
+	return err
+}
+
+func (app *App[P, A]) resolveActor(ctx context.Context, principal P) (A, error) {
+	var zero A
+	if app == nil || ctx == nil {
+		return zero, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal could not be resolved", fmt.Errorf("nil application or context"))
+	}
+	resolved, err := app.resolvePrincipal(ctx, principal)
+	if err != nil {
+		return zero, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal could not be resolved", err)
+	}
+	actor, err := snapshotActor(resolved, app.snapshotActor)
+	if err != nil {
+		return zero, golem.RuntimeReadError(golem.CodeUnauthenticated, "begin", golem.ModelID{}, golem.FieldID{}, "principal actor could not be snapshotted", err)
+	}
+	return actor, nil
 }
 
 func (app *App[P, A]) System() System[P, A] {

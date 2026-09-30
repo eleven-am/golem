@@ -31,18 +31,25 @@ type CallerAnalyticsExecution interface {
 
 type BeginCaller[P any] func(context.Context, P) (CallerExecution, error)
 
+// AuthenticatePrincipal resolves a principal exactly as BeginCaller does, but
+// builds no policy and touches no database. The generated executor uses it for
+// operations that select only __schema, __type or __typename roots.
+type AuthenticatePrincipal[P any] func(context.Context, P) error
+
 type GeneratedExecutorConfig[P any] struct {
-	Bundle              golem.SchemaBundle
-	Limits              Limits
-	BeginCaller         BeginCaller[P]
-	ComputedBindings    []ComputedBinding
-	CustomBindings      []CustomBinding
-	ReportInternalError func(context.Context, error)
+	Bundle                golem.SchemaBundle
+	Limits                Limits
+	BeginCaller           BeginCaller[P]
+	ComputedBindings      []ComputedBinding
+	CustomBindings        []CustomBinding
+	ReportInternalError   func(context.Context, error)
+	AuthenticatePrincipal AuthenticatePrincipal[P]
 }
 
 type generatedExecutor[P any] struct {
 	compiler         *graphqloperation.Compiler
 	begin            BeginCaller[P]
+	authenticate     AuthenticatePrincipal[P]
 	report           func(context.Context, error)
 	compilation      compilerir.CompilationIR
 	computed         []ComputedBinding
@@ -79,7 +86,7 @@ func NewGeneratedExecutor[P any](config GeneratedExecutorConfig[P]) (Executor[P]
 		return nil, err
 	}
 	bindings := append([]ComputedBinding(nil), config.ComputedBindings...)
-	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom}, nil
+	return &generatedExecutor[P]{compiler: compiler, begin: config.BeginCaller, authenticate: config.AuthenticatePrincipal, report: config.ReportInternalError, compilation: compilation, computed: bindings, maxComputedBatch: limits.MaxComputedBatchSize, custom: custom}, nil
 }
 
 func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, operation Operation) Response {
@@ -89,6 +96,12 @@ func (executor *generatedExecutor[P]) Execute(ctx context.Context, principal P, 
 	compiled, err := executor.compiler.Compile(operation.Document, operation.Definition, operation.Variables)
 	if err != nil {
 		return Response{Errors: []Error{publicError("BAD_USER_INPUT", "GraphQL operation could not be bound")}}
+	}
+	if len(compiled.Order) == 0 && compiled.Event == nil && executor.authenticate != nil {
+		if err := executor.authenticate(ctx, principal); err != nil {
+			return Response{Errors: []Error{PresentError(ctx, err, nil, executor.report)}}
+		}
+		return Response{Data: map[string]any{}}
 	}
 	caller, err := executor.begin(ctx, principal)
 	if err != nil || caller == nil {
