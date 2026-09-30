@@ -266,11 +266,11 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 			}
 			return
 		}
-		serialized := response
+		serialized := state.server.selectionOrdered(response, prepared.Operation)
 		if state.server.executable != nil && response.Data != nil {
 			serialized = state.server.executePrepared(ctx, request, prepared.Operation.Document, prepared.Operation.Definition, prepared.Operation.Variables, response)
 		}
-		payload, err := json.Marshal(serialized)
+		payload, err := encodeResponse(serialized)
 		if err != nil {
 			operationErr = err
 			state.operationErrorUnlessStopped(stopped, id, publicError("INTERNAL_SERVER_ERROR", "internal server error"))
