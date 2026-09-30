@@ -106,7 +106,7 @@ func loadTyped(ctx context.Context, config Config) (loaded, []ir.Diagnostic) {
 	}
 	loadedPackages, err := packages.Load(&packages.Config{
 		Context: ctx, Dir: config.Dir, Env: environment,
-		Mode: mode, Overlay: overlay, ParseFile: parseFile, Tests: false,
+		Mode: mode, Overlay: overlay, ParseFile: parseFile, Tests: false, BuildFlags: config.BuildFlags,
 	}, patterns...)
 	if err != nil {
 		return loaded{}, []ir.Diagnostic{ir.NewError("P1_METHOD_LOAD", err.Error(), ir.SourceSpan{})}
@@ -119,7 +119,7 @@ func loadTyped(ctx context.Context, config Config) (loaded, []ir.Diagnostic) {
 			if strings.HasPrefix(packageError.Msg, "# ") && strings.Contains(packageError.Msg, "\n") {
 				continue
 			}
-			diagnostics = append(diagnostics, ir.NewError("P1_METHOD_TYPECHECK", packageError.Msg, errorSpan(packageError.Pos, pkg, config)))
+			diagnostics = append(diagnostics, ir.NewError(TypeCheckCode, packageError.Msg, errorSpan(packageError.Pos, pkg, config)))
 		}
 	}
 	ir.SortDiagnostics(diagnostics)

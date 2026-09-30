@@ -64,7 +64,7 @@ type pendingGenerated struct {
 	span    ir.SourceSpan
 }
 
-func interpret(ctx context.Context, config Config) Result {
+func interpret(ctx context.Context, config Config) (result Result) {
 	if config.GolemImportPath == "" {
 		config.GolemImportPath = defaultGolemPath
 	}
@@ -75,9 +75,17 @@ func interpret(ctx context.Context, config Config) Result {
 		config.IDRegistry = ir.NewIDRegistry()
 	}
 	loaded, diagnostics := loadTyped(ctx, config)
-	result := Result{Diagnostics: diagnostics}
-	if hasErrors(diagnostics) {
+	result = Result{Diagnostics: diagnostics}
+	typeErrored := hasErrors(diagnostics)
+	if typeErrored && (!config.TolerateTypeErrors || loaded.packages == nil || !onlyTypeErrors(diagnostics)) {
 		return result
+	}
+	if typeErrored {
+		defer func() {
+			if recover() != nil {
+				result = Result{Diagnostics: diagnostics}
+			}
+		}()
 	}
 	models := append([]ir.ModelDeclIR(nil), config.Compilation.Model.Models...)
 	sort.Slice(models, func(i, j int) bool { return models[i].ID < models[j].ID })
@@ -97,7 +105,9 @@ func interpret(ctx context.Context, config Config) Result {
 			advanced: keyindex.AdvancedModelDeclarations{ModelID: model.ID}, semanticIndexes: map[string]bool{}, fullTextIndexes: map[string]bool{},
 		}
 		entry.interpretModel()
-		entry.interpretGraphQLModel()
+		if !typeErrored {
+			entry.interpretGraphQLModel()
+		}
 		entry.finishGenerated()
 		entry.finishSemantic()
 		result.Advanced = append(result.Advanced, entry.advanced)
@@ -115,9 +125,11 @@ func interpret(ctx context.Context, config Config) Result {
 		result.Extensions = append(result.Extensions, entry.extensions...)
 		result.Diagnostics = append(result.Diagnostics, entry.diagnostics...)
 	}
-	custom, customDiagnostics := interpretGraphQLSchema(config, loaded)
-	result.GraphQLCustom = append(result.GraphQLCustom, custom...)
-	result.Diagnostics = append(result.Diagnostics, customDiagnostics...)
+	if !typeErrored {
+		custom, customDiagnostics := interpretGraphQLSchema(config, loaded)
+		result.GraphQLCustom = append(result.GraphQLCustom, custom...)
+		result.Diagnostics = append(result.Diagnostics, customDiagnostics...)
+	}
 	sort.Slice(result.Advanced, func(i, j int) bool { return result.Advanced[i].ModelID < result.Advanced[j].ModelID })
 	sort.Slice(result.RelationOptions, func(i, j int) bool {
 		if result.RelationOptions[i].ModelID != result.RelationOptions[j].ModelID {
@@ -149,6 +161,19 @@ func interpret(ctx context.Context, config Config) Result {
 	})
 	ir.SortDiagnostics(result.Diagnostics)
 	return result
+}
+
+// TypeCheckCode identifies a diagnostic reporting that a registered package
+// does not type-check against the supplied bootstrap.
+const TypeCheckCode = "P1_METHOD_TYPECHECK"
+
+func onlyTypeErrors(diagnostics []ir.Diagnostic) bool {
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == ir.SeverityError && diagnostic.Code != TypeCheckCode {
+			return false
+		}
+	}
+	return true
 }
 
 func buildVocabulary(pkg *packages.Package, golemPath string) (vocabulary, []ir.Diagnostic) {
