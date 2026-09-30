@@ -14,8 +14,13 @@ import (
 
 func disconnectGapHub(t *testing.T, transport *Transport) *subscriptionhub.ModelHub[golem.EventID] {
 	t.Helper()
+	return disconnectGapHubWithSource(t, transport.Subscribe)
+}
+
+func disconnectGapHubWithSource(t *testing.T, source subscriptionhub.SourceFactory) *subscriptionhub.ModelHub[golem.EventID] {
+	t.Helper()
 	hub, err := subscriptionhub.NewModelHub(subscriptionhub.Config[golem.EventID]{
-		Generation: subscriptiontest.Generation, Model: subscriptiontest.Model, Source: transport.Subscribe,
+		Generation: subscriptiontest.Generation, Model: subscriptiontest.Model, Source: source,
 		Limits: events.Limits{SubscriberQueue: 8, HubInputQueue: 8, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond},
 		Evaluate: func(_ context.Context, notice events.Notice, _ subscriptionhub.SubscriberKey) (subscriptionhub.Evaluation[golem.EventID], error) {
 			return subscriptionhub.Deliver(notice.EventID()), nil
@@ -123,5 +128,38 @@ func TestSubscribeDuringAnOutageGoesLiveOnlyAfterTheReconnect(t *testing.T) {
 	defer cancel()
 	if value, err := live.stream.Recv(ctx); err != nil || value != (golem.EventID{2}) {
 		t.Fatalf("after the reconnect value=%v err=%v", value, err)
+	}
+}
+
+func TestSubscribeDuringAnOutageEndsWithTheCallerContext(t *testing.T) {
+	transport, _ := natsSubscriptionTestTransport(t, 64)
+	transport.markDisconnected()
+	refused := make(chan struct{}, 64)
+	hub := disconnectGapHubWithSource(t, func(ctx context.Context, request events.Subscription) (events.Stream, error) {
+		stream, err := transport.Subscribe(ctx, request)
+		if err != nil {
+			refused <- struct{}{}
+		}
+		return stream, err
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	type result struct {
+		stream *subscriptionhub.Stream[golem.EventID]
+		err    error
+	}
+	subscribed := make(chan result, 1)
+	go func() {
+		stream, err := hub.Subscribe(ctx, disconnectGapKey(t))
+		subscribed <- result{stream: stream, err: err}
+	}()
+	select {
+	case <-refused:
+	case early := <-subscribed:
+		t.Fatalf("a subscribe during the outage returned before any refusal: stream=%v err=%v", early.stream != nil, early.err)
+	}
+	cancel()
+	ended := <-subscribed
+	if ended.stream != nil || eventCode(ended.err) != events.CodeSubscriptionCancelled {
+		t.Fatalf("a subscribe cancelled during the outage returned stream=%v err=%v, want no stream and %s", ended.stream != nil, ended.err, events.CodeSubscriptionCancelled)
 	}
 }
