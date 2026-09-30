@@ -340,6 +340,7 @@ type Mutation {
   inviteMember(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
   nestedTeamInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
   renewInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
+  reviewInvite(alsoEmail: Boolean!, id: UUID!): String!
   transactionalInvite(email: String!, fail: Boolean!, id: UUID!, owner: String!, teamID: UUID!): String!
 }
 

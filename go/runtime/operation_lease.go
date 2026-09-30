@@ -55,7 +55,7 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 		var zero R
 		return zero, conflict
 	}
-	if lease.Used() && caller.executor != nil && caller.executor.operationWrites != nil {
+	if err == nil && lease.Used() && caller.executor != nil && caller.executor.operationWrites != nil {
 		caller.executor.operationWrites.record(lease, conflict)
 	}
 	return result, err

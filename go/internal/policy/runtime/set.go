@@ -11,9 +11,11 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/bind"
+	"github.com/eleven-am/golem/go/internal/policy/imply"
 	"github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/operator"
+	"github.com/eleven-am/golem/go/internal/policy/resolve"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
 )
@@ -51,9 +53,26 @@ func (scope *operationScope) release() {
 // operation's Within grants. Such a write commits only while the operation is
 // live, and ending the operation waits for a commit already in progress.
 type Lease struct {
-	scope *operationScope
-	used  atomic.Bool
-	ended atomic.Bool
+	scope  *operationScope
+	used   atomic.Bool
+	ended  atomic.Bool
+	mu     sync.Mutex
+	served map[ir.ModelID]bool
+}
+
+func (lease *Lease) serve(model ir.ModelID) {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if lease.served == nil {
+		lease.served = map[ir.ModelID]bool{}
+	}
+	lease.served[model] = true
+}
+
+func (lease *Lease) wasServed(model ir.ModelID) bool {
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	return lease.served[model]
 }
 
 func (lease *Lease) Used() bool  { return lease != nil && lease.used.Load() }
@@ -116,7 +135,7 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 	if set.scoped != nil && !set.scope.released.Load() {
 		if policy, ok := set.scoped[model]; ok {
 			if set.lease != nil {
-				set.lease.used.Store(true)
+				set.lease.serve(model)
 			}
 			return policy, true
 		}
@@ -161,6 +180,39 @@ func (set *Set) Lease() (*Set, *Lease) {
 	view := *set
 	view.lease = lease
 	return &view, lease
+}
+
+// RecordGrant classifies one authorisation decision of a write planned
+// through this set. The lease is marked used unless the operation's policy
+// for that decision is proved to grant nothing beyond the caller's own
+// policy; a decision the proof cannot settle counts as depending on the grant.
+// field selects a field decision, and nil the row decision.
+func (set *Set) RecordGrant(model ir.ModelID, action ir.Action, field *ir.FieldID) {
+	if set == nil || set.lease == nil || !set.lease.wasServed(model) {
+		return
+	}
+	if !grantAddsNothing(set.scoped[model], set.policies[model], action, model, field) {
+		set.lease.used.Store(true)
+	}
+}
+
+func grantAddsNothing(scoped, base ir.Policy, action ir.Action, model ir.ModelID, field *ir.FieldID) bool {
+	resolveCondition := func(policy ir.Policy) (ir.Condition, error) {
+		if field == nil {
+			return resolve.RowConstraint(policy, action, model)
+		}
+		return resolve.FieldCondition(policy, action, model, *field)
+	}
+	scopedCondition, err := resolveCondition(scoped)
+	if err != nil {
+		return false
+	}
+	baseCondition, err := resolveCondition(base)
+	if err != nil {
+		return false
+	}
+	proved, err := imply.Condition(scopedCondition, baseCondition)
+	return err == nil && proved
 }
 
 // WithLease returns a view recording into lease when lease belongs to this

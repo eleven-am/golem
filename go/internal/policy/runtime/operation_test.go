@@ -61,6 +61,8 @@ func newRuntimeOperationFixture(t *testing.T) runtimeOperationFixture {
 		rules.CannotUpdateFields(golem.All[runtimeUser](), handle, identity)
 		golem.Within(rules, runtimeInviteOperation).CanCreate(golem.All[runtimeUser]())
 		golem.Within(rules, runtimeRenameOperation).CanUpdateFields(golem.All[runtimeUser](), handle)
+		rules.CanDelete(handle.Eq("owned"))
+		golem.Within(rules, runtimeAuditOperation).CanDelete(handle.StartsWith("own"))
 		return rules.Freeze(fixture.user)
 	})
 	bindings, err := golem.GeneratedApplicationOperations(runtimeBindings(t, fixture.generation, binding),
@@ -245,8 +247,12 @@ func TestLeaseCommitsOnlyWhileItsOperationIsLive(t *testing.T) {
 	invite, release := fixture.set.Within(fixture.invite)
 	unused, unusedLease := invite.Lease()
 	used, usedLease := invite.Lease()
-	if _, ok := used.Policy(fixture.user); !ok || !usedLease.Used() {
-		t.Fatal("a lookup of a model the operation grants on did not use the lease")
+	if _, ok := used.Policy(fixture.user); !ok {
+		t.Fatal("policy is absent")
+	}
+	used.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	if !usedLease.Used() {
+		t.Fatal("a create only the operation grants did not use the lease")
 	}
 	if unusedLease.Used() {
 		t.Fatal("a lease was used by another lease's lookup")
@@ -259,7 +265,9 @@ func TestLeaseCommitsOnlyWhileItsOperationIsLive(t *testing.T) {
 	if err := usedLease.Commit(func() error { commits++; return nil }); !errors.Is(err, ErrOperationEnded) || commits != 1 || !usedLease.Ended() {
 		t.Fatalf("a lease that used a grant committed after its operation ended: %v commits=%d", err, commits)
 	}
-	if _, ok := unused.Policy(fixture.user); !ok || unusedLease.Used() {
+	unused.Policy(fixture.user)
+	unused.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	if unusedLease.Used() {
 		t.Fatal("a lookup after release used the lease")
 	}
 	if base, _ := fixture.set.Lease(); base != fixture.set {
@@ -279,7 +287,9 @@ func TestLeaseReuseIsLimitedToItsOwnOperation(t *testing.T) {
 	_, lease := invite.Lease()
 	if reused := invite.WithLease(lease); reused == invite {
 		t.Fatal("a lease was not reused for its own operation")
-	} else if _, ok := reused.Policy(fixture.user); !ok || !lease.Used() {
+	} else if _, ok := reused.Policy(fixture.user); !ok {
+		t.Fatal("policy is absent")
+	} else if reused.RecordGrant(fixture.user, policyir.ActionCreate, nil); !lease.Used() {
 		t.Fatal("a reused lease did not record its use")
 	}
 	if rename.WithLease(lease) != rename || fixture.set.WithLease(lease) != fixture.set || invite.WithLease(nil) != invite {
@@ -294,6 +304,7 @@ func TestReleaseWaitsForACommitInProgress(t *testing.T) {
 	if _, ok := used.Policy(fixture.user); !ok {
 		t.Fatal("policy is absent")
 	}
+	used.RecordGrant(fixture.user, policyir.ActionCreate, nil)
 	released := make(chan struct{})
 	committed := false
 	err := lease.Commit(func() error {
@@ -330,7 +341,9 @@ func TestCommitLeasesRequiresEveryOperationLive(t *testing.T) {
 	first, firstLease := invite.Lease()
 	second, secondLease := rename.Lease()
 	first.Policy(fixture.user)
+	first.RecordGrant(fixture.user, policyir.ActionCreate, nil)
 	second.Policy(fixture.user)
+	second.RecordGrant(fixture.user, policyir.ActionUpdate, &fixture.handle)
 	commits := 0
 	if err := CommitLeases([]*Lease{firstLease, secondLease, nil, firstLease}, func() error { commits++; return nil }); err != nil || commits != 1 {
 		t.Fatalf("live leases = %v commits=%d", err, commits)
@@ -338,5 +351,49 @@ func TestCommitLeasesRequiresEveryOperationLive(t *testing.T) {
 	releaseRename()
 	if err := CommitLeases([]*Lease{firstLease, secondLease}, func() error { commits++; return nil }); !errors.Is(err, ErrOperationEnded) || commits != 1 || !secondLease.Ended() {
 		t.Fatalf("a commit with one ended operation = %v commits=%d", err, commits)
+	}
+}
+
+func TestRecordGrantClassifiesEachAuthorisationDecision(t *testing.T) {
+	fixture := newRuntimeOperationFixture(t)
+	cases := []struct {
+		name      string
+		operation golem.OperationID
+		action    policyir.Action
+		field     *policyir.FieldID
+		lookup    bool
+		needed    bool
+	}{
+		{name: "A: the caller's policy refuses the create", operation: fixture.invite, action: policyir.ActionCreate, lookup: true, needed: true},
+		{name: "A: the caller's policy denies the field", operation: fixture.rename, action: policyir.ActionUpdate, field: &fixture.handle, lookup: true, needed: true},
+		{name: "B: a field no Within grant names", operation: fixture.rename, action: policyir.ActionUpdate, field: &fixture.id, lookup: true},
+		{name: "B: rows the caller's policy already covers", operation: fixture.rename, action: policyir.ActionUpdate, lookup: true},
+		{name: "B: a verb the operation grants nothing for", operation: fixture.invite, action: policyir.ActionDelete, lookup: true},
+		{name: "C: a wider grant the proof cannot reduce", operation: fixture.audit, action: policyir.ActionDelete, lookup: true, needed: true},
+		{name: "no grant was served", operation: fixture.invite, action: policyir.ActionCreate},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			scoped, release := fixture.set.Within(test.operation)
+			defer release()
+			leased, lease := scoped.Lease()
+			if test.lookup {
+				if _, ok := leased.Policy(fixture.user); !ok {
+					t.Fatal("policy is absent")
+				}
+			}
+			leased.RecordGrant(fixture.user, test.action, test.field)
+			if lease.Used() != test.needed {
+				t.Fatalf("used=%t want %t", lease.Used(), test.needed)
+			}
+		})
+	}
+	scoped, release := fixture.set.Within(fixture.invite)
+	leased, lease := scoped.Lease()
+	release()
+	leased.Policy(fixture.user)
+	leased.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	if lease.Used() {
+		t.Fatal("a decision made from the caller's own policy after release used the lease")
 	}
 }

@@ -52,7 +52,8 @@ func (Team) DefinePolicy(rules *golem.Rules[Team], actor Actor) {
 	rules.CanRead(owned)
 	rules.CanCreate(owned)
 	rules.CanUpdate(owned)
-	rules.CanDelete(owned)
+	rules.CanDelete(owned.And(Teams.Owner.StartsWith("al")))
+	golem.Within(rules, InviteMember).CanDelete(owned)
 }
 
 func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
@@ -67,6 +68,7 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	golem.Within(rules, UpsertInvite).CanCreate(owned)
 	golem.Within(rules, UpsertInvite).CanUpdateFields(owned, Invites.Status)
 	golem.Within(rules, AcceptInvite).CanUpdateFields(owned, Invites.Status)
+	golem.Within(rules, ReviewInvite).CanCreateFields(owned, Invites.ID, Invites.Owner)
 	if actor.Misconfigured {
 		golem.Within(rules, SearchInvites).CanCreate(owned)
 	}
@@ -123,6 +125,7 @@ type SearchArgs struct {
 func DefineGraphQL(graphql *golem.GraphQLSchema) {
 	golem.Mutation(graphql, "inviteMember", InviteMember)
 	golem.Mutation(graphql, "acceptInvite", AcceptInvite)
+	golem.Mutation(graphql, "reviewInvite", ReviewInvite)
 	golem.Mutation(graphql, "nestedTeamInvite", NestedTeamInvite)
 	golem.Mutation(graphql, "transactionalInvite", TransactionalInvite)
 	golem.Mutation(graphql, "renewInvite", UpsertInvite)
@@ -171,6 +174,14 @@ func AcceptInvite(ctx context.Context, caller *Caller[Principal], arguments Acce
 	}
 	status, _ := golem.Value(updated, Invites.Status).Get()
 	return status, nil
+}
+
+func ReviewInvite(ctx context.Context, caller *Caller[Principal], _ AcceptArgs) (string, error) {
+	recordResolver("reviewInvite")
+	if err := runProbe(ctx, "reviewInvite", caller); err != nil {
+		return "", err
+	}
+	return "reviewed", nil
 }
 
 func NestedTeamInvite(ctx context.Context, caller *Caller[Principal], arguments InviteArgs) (string, error) {

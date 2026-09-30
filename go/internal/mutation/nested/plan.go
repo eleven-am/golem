@@ -342,6 +342,7 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 		row, err = readplan.ReadReach(builder.request.Policies, node.Model, builder.request.ReadRelationDepth)
 	} else {
 		row, err = resolve.RowConstraint(policy, action, node.Model)
+		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, nil)
 	}
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint could not resolve", err)
@@ -376,6 +377,8 @@ func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir
 			continue
 		}
 		condition, conditionErr := resolve.FieldCondition(policy, action, node.Model, operation.FieldID())
+		fieldID := operation.FieldID()
+		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &fieldID)
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(operation.FieldID()), "nested field condition could not resolve", conditionErr)
 		}
@@ -433,6 +436,8 @@ func (builder *builder) decorateOwnedFields(node mutationir.NodeInput, fields []
 		if conditionErr != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field condition could not resolve", conditionErr)
 		}
+		recorded := field
+		mutationplan.RecordGrant(builder.request.Policies, node.Model, action, &recorded)
 		authorization, authorizationErr := mutationir.NewFieldAuthorization(field, condition)
 		if authorizationErr != nil {
 			return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID(field), "runtime-owned field authorization is invalid", authorizationErr)
@@ -513,6 +518,7 @@ func (builder *builder) classifyOne(condition policyir.Condition, use classify.U
 	if err != nil {
 		return fail(CodePolicy, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position action constraint could not resolve", err)
 	}
+	mutationplan.RecordGrant(builder.request.Policies, condition.ModelID(), selectingAction, nil)
 	complete, err := conjoin(condition.ModelID(), row, condition)
 	if err != nil {
 		return fail(CodeClassification, golem.ModelID(condition.ModelID()), endpoint.FieldID(), "position constraint could not combine", err)

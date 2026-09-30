@@ -176,17 +176,27 @@ a caller the resolver kept, or a goroutine that outlives it, from then on
 writes only what the caller's own policy allows. Two custom mutations in one
 GraphQL document each receive only their own grants.
 
-A write that used a Within grant commits only while its operation is running.
-Ending the operation waits for a commit that has already started, and for
-nothing else. A write, or a caller transaction containing one, that reaches
-its commit after the operation ended is rolled back and fails with the
-ordinary retryable `CONFLICT` that write reports when it conflicts: for
-example `CONFLICT: mutation conflicted` for a create, or `CONFLICT: batch
-mutation conflicted` for an `UpdateMany`. Golem runs nothing further: no hook
-runs again, nothing is re-planned, and no write is issued. The hooks that
-already ran in the rolled-back transaction ran exactly once, and after-commit
-hooks never run. Retrying under the caller's own policy then gives exactly the
-result the caller alone would get.
+A write made through the operation's caller that reaches its commit after the
+operation ended is judged when golem plans it. For every row and field decision
+the write needs, golem compares the operation's grants with the caller's own
+policy.
+
+- **Refused with CONFLICT.** If the write's authorisation may have depended on a
+  Within grant, the write is rolled back and fails with the ordinary retryable
+  `CONFLICT` it reports when it conflicts, such as `CONFLICT: mutation
+  conflicted` for a create or `CONFLICT: batch mutation conflicted` for an
+  `UpdateMany`. This covers every write the caller's own policy refuses, and
+  every write where golem cannot prove the grant adds nothing. Only the row
+  decides such a case, so golem refuses it.
+- **Commits normally.** A write the caller's own policy clearly allows is one
+  where the grant is proved to add nothing to any decision it needs.
+
+Ending the operation waits only for a commit already under way. After a refusal
+golem runs nothing further: no hook runs again and nothing is re-planned or
+written. Hooks that ran inside the rolled-back transaction ran exactly once,
+and after-commit hooks never run. A refused or failed write takes no part in
+this rule: it cannot make its transaction fail later. Retry to run the write
+under the caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
