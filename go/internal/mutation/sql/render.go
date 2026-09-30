@@ -425,7 +425,7 @@ func (context renderContext) actionWhere(target mutationir.Target, includeSelect
 			if compileErr != nil {
 				return "", nil, compileErr
 			}
-			parts = append(parts, fragment.text)
+			parts = append(parts, "("+fragment.text+")")
 			bindings = append(bindings, fragment.bindings...)
 		}
 	}

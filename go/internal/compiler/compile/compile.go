@@ -2,6 +2,7 @@
 package compile
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/codegen/bindings"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/codegen/registry"
+	"github.com/eleven-am/golem/go/internal/codegen/surface"
 	compilerconcurrency "github.com/eleven-am/golem/go/internal/compiler/concurrency"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/compiler/keyindex"
@@ -19,6 +21,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/resolve"
 	"github.com/eleven-am/golem/go/internal/compiler/schema"
 	"github.com/eleven-am/golem/go/internal/compiler/schemaexpr"
+	"github.com/eleven-am/golem/go/internal/gomodfile"
 	graphqlcontract "github.com/eleven-am/golem/go/internal/graphql/contract"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
@@ -65,7 +68,45 @@ func Compile(ctx context.Context, config Config) Result {
 	return compileWithMethods(ctx, prepared, extracted.Packages, config.Dir)
 }
 
+const surfaceAttempts = 2
+
+var interpretMethods = methods.Interpret
+
 func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema.PackageMetadata, dir string) Result {
+	result, candidate := compileMethodsAttempt(ctx, raw, metadata, dir, nil, nil)
+	if candidate == nil {
+		return result
+	}
+	moduleDir := dir
+	if len(metadata) != 0 && metadata[0].ModuleDir != "" {
+		moduleDir = metadata[0].ModuleDir
+	}
+	buildFlags, cleanup, err := gomodfile.IsolatedBuildFlags(ctx, moduleDir, nil)
+	if err != nil {
+		return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_METHOD_LOAD", err.Error(), raw.Root.Span)}}
+	}
+	defer cleanup()
+	for attempt := 0; candidate != nil && attempt < surfaceAttempts; attempt++ {
+		retried, _ := compileMethodsAttempt(ctx, raw, metadata, dir, candidate, buildFlags)
+		if hasErrors(retried.Diagnostics) || retried.Compilation == nil {
+			return retried
+		}
+		stable, err := sameSurface(*candidate, *retried.Compilation, retried.Packages)
+		if err != nil {
+			return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span)}}
+		}
+		if stable {
+			return retried
+		}
+		candidate = retried.Compilation
+	}
+	if candidate != nil {
+		return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_METHOD_SURFACE_UNSTABLE", "the generated surface the declarations produce changes each time they are type-checked against it", raw.Root.Span)}}
+	}
+	return result
+}
+
+func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []schema.PackageMetadata, dir string, surfaceFrom *ir.CompilationIR, buildFlags []string) (Result, *ir.CompilationIR) {
 	resolved := resolve.Base(raw)
 	diagnostics := append([]ir.Diagnostic(nil), resolved.Diagnostics...)
 	shapes := relation.Result{}
@@ -90,38 +131,30 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 		}
 	}
 	var interpreted methods.Result
+	var typeErrors []ir.Diagnostic
+	var beforeInterpretation []ir.Diagnostic
 	if !hasErrors(diagnostics) {
-		bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: resolved.Compilation, Packages: specs})
-		if err != nil {
-			diagnostics = append(diagnostics, ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span))
-		} else {
-			shells, shellErr := bindings.EmitShells(bindings.Request{Compilation: resolved.Compilation, Packages: specs})
-			if shellErr != nil {
-				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_BINDING_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
-			} else {
-				for _, shell := range shells {
-					bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
-				}
-			}
-			appPackage, appFound := packageSpec(specs, resolved.Compilation.Model.Schema.PackagePath)
-			if !appFound {
-				diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", resolved.Compilation.Model.Schema.PackagePath), raw.Root.Span))
-			} else {
-				shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: resolved.Compilation.Model.Schema.Actor, Model: resolved.Compilation.Model, Contract: resolved.Compilation.Contract, DeclarationDiscovery: true})
-				if shellErr != nil {
-					diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
+		bootstrap, bootstrapDiagnostics := methodBootstrap(raw, resolved.Compilation, specs, surfaceFrom)
+		diagnostics = append(diagnostics, bootstrapDiagnostics...)
+		if hasErrors(diagnostics) {
+			return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
+		}
+		beforeInterpretation = append([]ir.Diagnostic(nil), diagnostics...)
+		interpreted = interpretMethods(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs, TolerateTypeErrors: surfaceFrom == nil, BuildFlags: buildFlags})
+		declared := interpreted.Diagnostics
+		if surfaceFrom == nil {
+			declared = nil
+			for _, diagnostic := range interpreted.Diagnostics {
+				if diagnostic.Severity == ir.SeverityError && diagnostic.Code == methods.TypeCheckCode {
+					typeErrors = append(typeErrors, diagnostic)
 				} else {
-					bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+					declared = append(declared, diagnostic)
 				}
 			}
-			if hasErrors(diagnostics) {
-				return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
-			}
-			interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs})
-			diagnostics = append(diagnostics, interpreted.Diagnostics...)
-			if !hasErrors(interpreted.Diagnostics) {
-				resolved.Compilation.Model.Extensions = append(resolved.Compilation.Model.Extensions, interpreted.Extensions...)
-			}
+		}
+		diagnostics = append(diagnostics, declared...)
+		if !hasErrors(declared) {
+			resolved.Compilation.Model.Extensions = append(resolved.Compilation.Model.Extensions, interpreted.Extensions...)
 		}
 	}
 	if !hasErrors(diagnostics) {
@@ -154,7 +187,89 @@ func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema
 	if !hasErrors(diagnostics) {
 		diagnostics = append(diagnostics, graphqlextension.AddFullTextSearchOperations(&resolved.Compilation)...)
 	}
-	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir)
+	if len(typeErrors) != 0 {
+		if hasErrors(diagnostics) {
+			return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
+		}
+		finished := finish(raw, resolved.Compilation, diagnostics)
+		if finished.Compilation == nil {
+			return finishWithMetadata(raw, resolved.Compilation, finished.Diagnostics, specs, modulePath, moduleDir), nil
+		}
+		return finishWithMetadata(raw, resolved.Compilation, append(beforeInterpretation, typeErrors...), specs, modulePath, moduleDir), finished.Compilation
+	}
+	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
+}
+
+func methodBootstrap(raw ir.RawDeclIR, compilation ir.CompilationIR, specs []modelcodegen.PackageSpec, surfaceFrom *ir.CompilationIR) (modelcodegen.Result, []ir.Diagnostic) {
+	appPackage, appFound := packageSpec(specs, compilation.Model.Schema.PackagePath)
+	if surfaceFrom != nil {
+		if !appFound {
+			return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", compilation.Model.Schema.PackagePath), raw.Root.Span)}
+		}
+		bootstrap, err := surface.Emit(surface.Request{Compilation: *surfaceFrom, Packages: specs, AppPackage: appPackage})
+		if err != nil {
+			return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span)}
+		}
+		shells, err := bindings.EmitShells(bindings.Request{Compilation: *surfaceFrom, Packages: specs})
+		if err != nil {
+			return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_BINDING_SHELL_EMIT", err.Error(), raw.Root.Span)}
+		}
+		for _, shell := range shells {
+			bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+		}
+		return bootstrap, nil
+	}
+	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: specs})
+	if err != nil {
+		return modelcodegen.Result{}, []ir.Diagnostic{ir.NewError("P1_METHOD_EMIT", err.Error(), raw.Root.Span)}
+	}
+	var diagnostics []ir.Diagnostic
+	shells, shellErr := bindings.EmitShells(bindings.Request{Compilation: compilation, Packages: specs})
+	if shellErr != nil {
+		diagnostics = append(diagnostics, ir.NewError("P1_METHOD_BINDING_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
+	} else {
+		for _, shell := range shells {
+			bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+		}
+	}
+	if !appFound {
+		diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_PACKAGE", fmt.Sprintf("schema-root application package %q is unavailable", compilation.Model.Schema.PackagePath), raw.Root.Span))
+		return bootstrap, diagnostics
+	}
+	shell, shellErr := registry.EmitShell(registry.ShellRequest{AppPackage: appPackage, Actor: compilation.Model.Schema.Actor, Model: compilation.Model, Contract: compilation.Contract, DeclarationDiscovery: true})
+	if shellErr != nil {
+		diagnostics = append(diagnostics, ir.NewError("P1_METHOD_REGISTRY_SHELL_EMIT", shellErr.Error(), raw.Root.Span))
+		return bootstrap, diagnostics
+	}
+	bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: shell.ImportPath, PackageName: shell.PackageName, Path: shell.Path, Source: shell.Source})
+	return bootstrap, diagnostics
+}
+
+func sameSurface(left, right ir.CompilationIR, specs []modelcodegen.PackageSpec) (bool, error) {
+	emit := func(compilation ir.CompilationIR) (modelcodegen.Result, error) {
+		appPackage, found := packageSpec(specs, compilation.Model.Schema.PackagePath)
+		if !found {
+			return modelcodegen.Result{}, fmt.Errorf("schema-root application package %q is unavailable", compilation.Model.Schema.PackagePath)
+		}
+		return surface.Emit(surface.Request{Compilation: compilation, Packages: specs, AppPackage: appPackage})
+	}
+	first, err := emit(left)
+	if err != nil {
+		return false, err
+	}
+	second, err := emit(right)
+	if err != nil {
+		return false, err
+	}
+	if len(first.Files) != len(second.Files) {
+		return false, nil
+	}
+	for index := range first.Files {
+		if first.Files[index].Path != second.Files[index].Path || !bytes.Equal(first.Files[index].Source, second.Files[index].Source) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func packageSpec(specs []modelcodegen.PackageSpec, importPath string) (modelcodegen.PackageSpec, bool) {

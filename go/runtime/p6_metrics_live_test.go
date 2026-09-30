@@ -116,7 +116,7 @@ func newP6MetricsHarness(t *testing.T, profile p5ExtensionProviderProfile, limit
 		AuditPrincipal:    func(p6metrics.Principal) string { return "p6-metrics" },
 		ReportScopedQuery: func(context.Context, golem.ScopedAuditRecord) {},
 		ResolvePrincipal: func(_ context.Context, principal p6metrics.Principal) (p6metrics.Actor, error) {
-			return p6metrics.Actor{CategoryPrefix: principal.CategoryPrefix}, nil
+			return p6metrics.Actor{CategoryPrefix: principal.CategoryPrefix, AlsoCategory: principal.AlsoCategory}, nil
 		},
 	})
 	if err != nil {

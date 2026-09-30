@@ -67,7 +67,7 @@ func RenderPersistedVerification(node mutationir.Node, row mutationdecode.Row, c
 		if compileErr != nil {
 			return PersistedVerification{}, compileErr
 		}
-		parts = append(parts, fragment.text)
+		parts = append(parts, "("+fragment.text+")")
 		for _, binding := range fragment.bindings {
 			if binding.kind != StaticBinding {
 				return PersistedVerification{}, fmt.Errorf("P4_MUTATION_SQL_VERIFY: condition contains non-static binding")

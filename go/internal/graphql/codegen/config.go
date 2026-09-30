@@ -15,6 +15,7 @@ import (
 	"github.com/99designs/gqlgen/codegen/config"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
+	"github.com/eleven-am/golem/go/internal/graphql/adaptersurface"
 	graphqlextension "github.com/eleven-am/golem/go/internal/graphql/extension"
 	semanticcontract "github.com/eleven-am/golem/go/internal/semantic/contract"
 	"github.com/vektah/gqlparser/v2/ast"
@@ -26,7 +27,7 @@ const GQLGenVersion = "v0.17.70"
 
 const (
 	GraphQLABIVersion        = "p8-graphql-abi-v5"
-	GoFilename               = "zz_golem_graphql.gen.go"
+	GoFilename               = adaptersurface.Filename
 	SDLFilename              = "zz_golem_graphql.schema.graphqls"
 	DefaultGolemImportPath   = "github.com/eleven-am/golem/go/golem"
 	DefaultGraphQLImportPath = "github.com/eleven-am/golem/go/graphql"
@@ -221,41 +222,12 @@ func Emit(request Request) (Result, error) {
 		fmt.Fprintf(&body, "\t{Kind: %s, Field: %s},\n", strconv.Quote(value.operation), strconv.Quote(value.name))
 	}
 	body.WriteString("}\n\n")
-	body.WriteString("type GraphQLLimits = golemgraphql.Limits\n\n")
-	body.WriteString("type GraphQLConfig[P any] struct {\n")
-	body.WriteString("\tPrincipalFromContext func(context.Context) (P, bool)\n")
-	body.WriteString("\tLimits GraphQLLimits\n")
-	body.WriteString("\tIntrospection bool\n")
-	body.WriteString("\tWebSocketInit func(context.Context, json.RawMessage) (context.Context, error)\n")
-	body.WriteString("\tReportInternalError func(context.Context, error)\n")
-	body.WriteString("}\n\n")
-	body.WriteString("type GraphQLServer struct {\n")
-	body.WriteString("\thandler http.Handler\n")
-	body.WriteString("\tsdl string\n")
-	body.WriteString("\tcontractFingerprint golem.SchemaDigest\n")
-	body.WriteString("\tshutdown func(context.Context) error\n")
-	body.WriteString("}\n\n")
-	body.WriteString("func (server *GraphQLServer) Shutdown(ctx context.Context) error {\n")
-	body.WriteString("\tif server == nil || server.shutdown == nil { return nil }\n")
-	body.WriteString("\treturn server.shutdown(ctx)\n")
-	body.WriteString("}\n\n")
-	body.WriteString("func (server *GraphQLServer) Handler() http.Handler {\n")
-	body.WriteString("\tif server == nil { return nil }\n")
-	body.WriteString("\treturn server.handler\n")
-	body.WriteString("}\n\n")
-	body.WriteString("func (server *GraphQLServer) SDL() string {\n")
-	body.WriteString("\tif server == nil { return \"\" }\n")
-	body.WriteString("\treturn server.sdl\n")
-	body.WriteString("}\n\n")
-	body.WriteString("func (server *GraphQLServer) ContractFingerprint() golem.SchemaDigest {\n")
-	body.WriteString("\tif server == nil { return golem.SchemaDigest{} }\n")
-	body.WriteString("\treturn server.contractFingerprint\n")
-	body.WriteString("}\n\n")
+	adaptersurface.WriteServer(&body)
 	body.WriteString("type golemGeneratedGraphQLCaller[P any] struct {\n")
 	body.WriteString("\tpublic *Caller[P]\n")
 	fmt.Fprintf(&body, "\texecution *golemruntime.CallerMutationExecution[P, %s]\n", actorType)
 	body.WriteString("}\n\n")
-	body.WriteString("func (*Caller[P]) GolemGraphQLCallerCapability() {}\n\n")
+	body.WriteString(adaptersurface.CallerCapabilityDeclaration)
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCallerCapability() {}\n\n")
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomCallerValue() any {\n")
 	body.WriteString("\tif caller == nil { return nil }; return caller.public\n")
@@ -303,7 +275,7 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("\tif err != nil { return nil, err }\n")
 	body.WriteString("\treturn &golemGeneratedGraphQLCaller[P]{public: caller, execution: execution}, nil\n")
 	body.WriteString("}\n\n")
-	body.WriteString("func (app *App[P]) GraphQL(config GraphQLConfig[P]) (*GraphQLServer, error) {\n")
+	body.WriteString(adaptersurface.ServerConstructorSignature + " {\n")
 	body.WriteString("\tif app == nil || app.runtime == nil { return nil, fmt.Errorf(\"GraphQL application is unavailable\") }\n")
 	body.WriteString("\tbundle := GolemGeneratedSchemaBundle()\n")
 	body.WriteString("\tgolemGeneratedExecutable := golemgqlgen.NewExecutableSchema(golemgqlgen.Config{Resolvers: &golemgqlgen.Resolver{}})\n")

@@ -91,7 +91,7 @@ func discoverAndEmit(ctx context.Context, request DiscoveryRequest) Result {
 		environment = append(os.Environ(), environment...)
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles | packages.NeedImports | packages.NeedDeps | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule
-	loaded, loadErr := packages.Load(&packages.Config{Context: ctx, Dir: request.Dir, Env: environment, Mode: mode, Overlay: overlay, ParseFile: parseFile}, patterns...)
+	loaded, loadErr := packages.Load(&packages.Config{Context: ctx, Dir: request.Dir, Env: environment, Mode: mode, Overlay: overlay, ParseFile: parseFile, BuildFlags: request.BuildFlags}, patterns...)
 	if loadErr != nil {
 		return Result{Diagnostics: []ir.Diagnostic{ir.NewError("P1_BINDING_LOAD", loadErr.Error(), ir.SourceSpan{})}}
 	}
@@ -103,7 +103,7 @@ func discoverAndEmit(ctx context.Context, request DiscoveryRequest) Result {
 			if strings.HasPrefix(packageError.Msg, "# ") && strings.Contains(packageError.Msg, "\n") {
 				continue
 			}
-			diagnostics = append(diagnostics, ir.NewError("P1_BINDING_TYPECHECK", packageError.Msg, packageErrorSpan(packageError.Pos, pkg, request)))
+			diagnostics = append(diagnostics, ir.NewError(TypeCheckCode, packageError.Msg, packageErrorSpan(packageError.Pos, pkg, request)))
 		}
 	}
 	if hasErrors(diagnostics) {

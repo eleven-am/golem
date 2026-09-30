@@ -11,6 +11,10 @@ import (
 
 const Filename = "zz_golem_bindings.gen.go"
 
+// TypeCheckCode identifies a diagnostic reporting that a registered package
+// does not type-check against the supplied bootstrap.
+const TypeCheckCode = "P1_BINDING_TYPECHECK"
+
 type BindingKind string
 type HookOperation string
 type HookPhase string
@@ -68,6 +72,7 @@ type DiscoveryRequest struct {
 	Compilation        ir.CompilationIR
 	Packages           []modelcodegen.PackageSpec
 	ModelBootstrap     modelcodegen.Result
+	BuildFlags         []string
 	GolemImportPath    string
 	GenerationDigest   string
 	GeneratorVersion   string

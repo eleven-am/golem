@@ -5,7 +5,7 @@ proposal; both are marked and the reason recorded, because the first draft
 described an API that could not be built.
 
 **Changed since implementation.** The rest of this page is the design record
-and is left as written; the behaviour it describes has moved in three places,
+and is left as written; the behaviour it describes has moved in four places,
 each documented in `RELEASE-NOTES.md`:
 
 - `mutationCapabilities` now takes the client as a parameter
@@ -19,6 +19,15 @@ each documented in `RELEASE-NOTES.md`:
   a `system`, `readonly`, `hidden` or, on update, `immutable` foreign key is
   refused with the same reason as the direct write. A system client may still
   assign it.
+- go/v0.6.2: the caller-only shell is no longer the only surface generation
+  type-checks against. When schema-package code uses a generated symbol the
+  shell lacks — `System[P]`, `App[P]`, a selector such as `ByID`, a search
+  method — the package is checked again against the complete generated
+  surface, emitted by the same code as the published files
+  (`internal/codegen/surface`). Policy discovery uses that surface too. A
+  type check grants nothing the compiled package lacks, and the argument
+  under "Decided" still holds: a policy body has no transaction to pass to
+  `SystemEscape`.
 
 ## The gap
 

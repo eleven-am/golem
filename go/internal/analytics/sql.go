@@ -323,7 +323,7 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 		if policyErr := planMap.mergePolicy(policy.PolicyRelationAliases()); policyErr != nil {
 			return Statement{}, policyErr
 		}
-		conditions = append(conditions, rebase(policy.SQL(), len(args), provider))
+		conditions = append(conditions, "("+rebase(policy.SQL(), len(args), provider)+")")
 		args = append(args, policy.Args()...)
 		if index == len(relationPath)-1 {
 			for _, field := range hop.Authorized.Fields() {

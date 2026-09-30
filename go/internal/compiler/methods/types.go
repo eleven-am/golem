@@ -30,6 +30,13 @@ type Config struct {
 	Registry        *schemaexpr.Registry
 	IDRegistry      *ir.IDRegistry
 	GolemImportPath string
+	// TolerateTypeErrors continues past P1_METHOD_TYPECHECK diagnostics so a
+	// caller can recover the declared model surface while the supplied
+	// bootstrap is still incomplete. The diagnostics are still returned, and
+	// GraphQL declarations, which never shape the generated surface, are not
+	// interpreted.
+	TolerateTypeErrors bool
+	BuildFlags         []string
 }
 
 // RelationOptionDeclaration is kept separate from keyindex input because

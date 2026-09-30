@@ -372,7 +372,7 @@ func renderCursor(plan readplan.Plan, cursor readir.Cursor, registry *schema.Reg
 		selects[index] = dialect.Quote(cursorTableAlias) + "." + dialect.Quote(resolved.Column) + " AS " + dialect.Quote(alias)
 		cursorColumns[index] = dialect.Quote(cteName) + "." + dialect.Quote(alias)
 	}
-	prefix := "WITH " + dialect.Quote(cteName) + " AS (SELECT " + strings.Join(selects, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(cursorTableAlias) + " WHERE " + fragment.SQL() + " LIMIT 1) "
+	prefix := "WITH " + dialect.Quote(cteName) + " AS (SELECT " + strings.Join(selects, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(cursorTableAlias) + " WHERE (" + fragment.SQL() + ") LIMIT 1) "
 	join := " CROSS JOIN " + dialect.Quote(cteName)
 	boundary := cursorBoundary(orders, physicalColumns, cursorColumns, provider, logicalTypesByField(plan.Fields()), reverse)
 	if boundary == "" {

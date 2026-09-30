@@ -4,6 +4,7 @@ package scoped
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"reflect"
@@ -41,6 +42,23 @@ type Plan struct {
 	request     golem.FrozenScopedQuery
 	occurrences map[uint32]occurrence
 }
+
+type AuthorizationError struct {
+	Code   string
+	Model  golem.ModelID
+	Field  golem.FieldID
+	Detail string
+	Cause  error
+}
+
+func (failure *AuthorizationError) Error() string {
+	if failure.Cause == nil {
+		return failure.Code + ": " + failure.Detail
+	}
+	return failure.Code + ": " + failure.Detail + ": " + failure.Cause.Error()
+}
+
+func (failure *AuthorizationError) Unwrap() error { return failure.Cause }
 
 func (plan Plan) Request() golem.FrozenScopedQuery { return plan.request }
 
@@ -232,6 +250,10 @@ func build(request golem.FrozenScopedQuery, registry *schema.Registry, providers
 			authorized, err = readplan.Caller(bound, registry, policies, limits)
 		}
 		if err != nil {
+			var refusal *readplan.Error
+			if errors.As(err, &refusal) && (refusal.Code == readplan.CodeField || refusal.Code == readplan.CodePolicy) {
+				return Plan{}, &AuthorizationError{Code: "P6_SCOPED_PLAN_AUTHORIZATION", Model: item.model, Field: golem.FieldID(refusal.Field), Detail: fmt.Sprintf("occurrence=%d", id), Cause: err}
+			}
 			return Plan{}, fmt.Errorf("P6_SCOPED_PLAN_AUTHORIZATION: occurrence=%d: %w", id, err)
 		}
 		item.authorized = authorized
@@ -245,7 +267,7 @@ func build(request golem.FrozenScopedQuery, registry *schema.Registry, providers
 				return Plan{}, fmt.Errorf("P6_SCOPED_PLAN_CLASSIFICATION: required field was not classified")
 			}
 			if classified.Conditional() && !classified.DischargedByConstraint() {
-				return Plan{}, fmt.Errorf("P6_SCOPED_PLAN_CLASSIFICATION: filter/group/order/aggregate field access is not discharged")
+				return Plan{}, &AuthorizationError{Code: "P6_SCOPED_PLAN_CLASSIFICATION", Model: item.model, Field: fieldID, Detail: "filter/group/order/aggregate field access is not discharged"}
 			}
 		}
 		occurrences[id] = item
@@ -799,13 +821,13 @@ func Render(plan Plan, registry *schema.Registry, provider policyir.Provider, ca
 	if err != nil {
 		return Statement{}, err
 	}
-	where := []string{rootPolicy}
+	where := []string{"(" + rootPolicy + ")"}
 	if predicate, present := plan.request.Where(); present {
 		rendered, renderErr := renderPredicate(predicate, sourceExpression, plan, registry, provider, external, dialect, capabilities, aliases, &args)
 		if renderErr != nil {
 			return Statement{}, renderErr
 		}
-		where = append(where, rendered)
+		where = append(where, "("+rendered+")")
 	}
 	fromText += " WHERE " + strings.Join(where, " AND ")
 	contributionCTE := ""
@@ -1244,7 +1266,7 @@ func renderPredicate(value golem.FrozenScopedPredicate, expression func(golem.Fr
 		return left + " IS NOT NULL", nil
 	}
 	bind := func(raw any) (string, error) {
-		if value.Expression.Kind == golem.ScopedExpressionCountAll {
+		if value.Expression.Kind == golem.ScopedExpressionCountAll || value.Expression.Kind == golem.ScopedExpressionCountField {
 			integer := reflect.ValueOf(raw)
 			if !integer.IsValid() || integer.Kind() < reflect.Int || integer.Kind() > reflect.Int64 {
 				return "", fmt.Errorf("P6_SCOPED_BIND: count operand %T is not an integer", raw)
@@ -1259,6 +1281,14 @@ func renderPredicate(value golem.FrozenScopedPredicate, expression func(golem.Fr
 				return "", fmt.Errorf("P6_SCOPED_BIND: exact aggregate operand %T is not canonical numeric", raw)
 			}
 			*args = append(*args, text.String())
+			return dialect.Placeholder(len(*args)), nil
+		}
+		if value.Expression.Kind == golem.ScopedExpressionField || value.Expression.Kind == golem.ScopedExpressionMinimum || value.Expression.Kind == golem.ScopedExpressionMaximum {
+			encoded, encodeErr := encodeScopedStoredOperand(raw, value.Expression, registry, provider, dialect)
+			if encodeErr != nil {
+				return "", encodeErr
+			}
+			*args = append(*args, encoded)
 			return dialect.Placeholder(len(*args)), nil
 		}
 		encoded, encodeErr := encodeScopedValue(raw, field, registry, provider)
@@ -1304,7 +1334,7 @@ func renderPredicate(value golem.FrozenScopedPredicate, expression func(golem.Fr
 		return "", err
 	}
 	logical := compilerir.TypeInt64
-	if value.Expression.Kind != golem.ScopedExpressionCountAll {
+	if value.Expression.Kind != golem.ScopedExpressionCountAll && value.Expression.Kind != golem.ScopedExpressionCountField {
 		logical = plan.occurrences[value.Expression.Occurrence].fields[value.Expression.Field].LogicalType().Kind
 	}
 	if exactScopedNumeric(value.Expression, plan.occurrences[value.Expression.Occurrence].fields[value.Expression.Field]) {
@@ -1359,6 +1389,23 @@ func exactScopedNumeric(expression golem.FrozenScopedExpression, field schema.Fi
 	kind := field.LogicalType().Kind
 	return expression.Kind == golem.ScopedExpressionSum && (kind == compilerir.TypeInt16 || kind == compilerir.TypeInt32 || kind == compilerir.TypeInt64 || kind == compilerir.TypeDecimal) ||
 		expression.Kind == golem.ScopedExpressionAverage && kind == compilerir.TypeDecimal
+}
+
+func encodeScopedStoredOperand(raw any, expression golem.FrozenScopedExpression, registry *schema.Registry, provider policyir.Provider, dialect policysql.Dialect) (any, error) {
+	resolver := policysql.SchemaResolver(registry)
+	descriptor, ok := resolver.Field(provider, policyir.ModelID(expression.Model), policyir.FieldID(expression.Field))
+	if !ok {
+		return nil, fmt.Errorf("P6_SCOPED_BIND: field type is unavailable")
+	}
+	value, err := scopedPolicyValue(raw, descriptor.Type, registry, expression)
+	if err != nil {
+		return nil, fmt.Errorf("P6_SCOPED_BIND: %w", err)
+	}
+	encoded, err := policysql.EncodeOperand(dialect, resolver, value, descriptor.Type)
+	if err != nil {
+		return nil, fmt.Errorf("P6_SCOPED_BIND: %w", err)
+	}
+	return encoded, nil
 }
 
 func encodeScopedValue(raw any, field schema.Field, registry *schema.Registry, provider policyir.Provider) (any, error) {

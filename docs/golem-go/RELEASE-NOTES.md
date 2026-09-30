@@ -5,12 +5,55 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.1
+go get github.com/eleven-am/golem/go@v0.6.2
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.2
+
+**Take this release if a policy or a filter uses OR.** An unparenthesised
+disjunction could escape the restriction it was combined with, so a read
+returned rows the caller's policy forbids and a write changed rows outside its
+relation.
+
+- **Scoped reads.** The policy and the caller's `Where` were joined as
+  `policy AND <predicate>` with neither side wrapped. A top-level `OrScoped`, or
+  a disjunctive policy, therefore escaped the other side: a caller allowed two
+  rows received three, including another user's unpublished row.
+- **Analytics relation hops.** A disjunctive policy on the target of a
+  relation hop was appended to the join condition without parentheses and
+  escaped the correlation, so counts included rows the caller cannot read.
+- **Nested writes.** An OR in a nested `updateMany` escaped the relation guard:
+  `Users.Update(alice, Posts.UpdateMany(A OR B))` also rewrote another user's
+  post. The same composition appeared in a mutation's selection constraint and
+  in the verification of a nested create.
+
+Every place golem combines a policy, predicate or relation condition is now
+parenthesised, and one test drives a disjunctive policy and a disjunctive
+filter through twenty read and write paths on every provider. No regeneration
+or migration is needed.
+
+**Scoped reads refuse an unreadable filter with `FORBIDDEN`.** Filtering a
+scoped read on a field the caller may not read, such as a field readable only
+on the caller's own rows, is refused with `FORBIDDEN`, as `FindMany` refuses
+it. It used to report `BAD_USER_INPUT`, which looked like a malformed query.
+Scoped filters on whole-second `time` values now match on SQLite, `Count()` in
+`Having` no longer fails on PostgreSQL, and selected `date` values decode on
+PostgreSQL.
+
+**Schema-package code can use every generated symbol.** `golem generate`
+type-checked a model package against a reduced stand-in for its generated
+code, so a resolver or helper there that used `System`, `App`, a selector such
+as `ByID`, a semantic or full-text search method, or events failed with
+`P1_METHOD_TYPECHECK`, and the project could not be regenerated at all.
+Generation now checks such code against the complete generated surface. A new
+index and a resolver that uses it work in one `generate`. Projects that already
+generated produce identical output.
 
 ---
 
