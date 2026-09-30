@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -147,6 +149,8 @@ func TestP8ExternalOracleScenario(t *testing.T) {
 		f.exactScalarAndLimits()
 	case "unsupported-relation":
 		f.unsupportedRelation()
+	case "disjunctive-authorization":
+		f.disjunctiveAuthorization()
 	default:
 		t.Fatalf("unknown analytics oracle scenario %q", os.Getenv("P8_ORACLE_SCENARIO"))
 	}
@@ -1126,5 +1130,308 @@ func mustJSON(t *testing.T, value string) golem.JSON[any] {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return result
+}
+
+var errDisjunctiveRollback = errors.New("disjunctive oracle rollback")
+
+type disjunctiveCase struct {
+	name string
+	run  func() ([]string, error)
+	want []string
+}
+
+func (f *fixture) disjunctiveAuthorization() {
+	t := f.t
+	bob := mustUUID(t, bobIDText)
+	ownedOrHidden := func() golem.Predicate[social.Post] {
+		return social.Posts.Title.Eq("a-private").Or(social.Posts.Title.Eq("e-hidden"))
+	}
+	foreignOrHidden := func() golem.Predicate[social.Post] {
+		return social.Posts.Title.Eq("e-hidden").Or(social.Posts.Title.Eq("d-public"))
+	}
+	postTitles := func(rows []golem.Row[social.Post], err error) ([]string, error) {
+		if err != nil {
+			return nil, err
+		}
+		result := make([]string, 0, len(rows))
+		for _, row := range rows {
+			value, ok := golem.Value(row, social.Posts.Title).Get()
+			if !ok {
+				return nil, fmt.Errorf("post title is absent")
+			}
+			result = append(result, value)
+		}
+		return result, nil
+	}
+	scopedTitles := func(rows []golem.ScopedRow, title golem.ScopedResult[string], err error) ([]string, error) {
+		if err != nil {
+			return nil, err
+		}
+		result := make([]string, 0, len(rows))
+		for _, row := range rows {
+			value, ok := golem.ScopedValue(row, title).Get()
+			if !ok {
+				return nil, fmt.Errorf("scoped title is absent")
+			}
+			result = append(result, value)
+		}
+		return result, nil
+	}
+	views := func(read func(context.Context, ...golem.ReadOption[social.Post]) ([]golem.Row[social.Post], error), titles ...string) ([]string, error) {
+		rows, err := read(f.ctx, social.Posts.Where(social.Posts.Title.In(titles...)), social.Posts.Select(social.Posts.Title, social.Posts.Views))
+		if err != nil {
+			return nil, err
+		}
+		result := make([]string, 0, len(rows))
+		for _, row := range rows {
+			title, _ := golem.Value(row, social.Posts.Title).Get()
+			count, _ := golem.Value(row, social.Posts.Views).Get()
+			result = append(result, fmt.Sprintf("%s:%d", title, count))
+		}
+		return result, nil
+	}
+	cases := []disjunctiveCase{
+		{"find-many", func() ([]string, error) {
+			return postTitles(f.caller.Posts.FindMany(f.ctx, social.Posts.Where(ownedOrHidden()), social.Posts.Select(social.Posts.Title)))
+		}, []string{"a-private"}},
+		{"find-first", func() ([]string, error) {
+			row, found, err := f.caller.Posts.FindFirst(f.ctx, social.Posts.Where(ownedOrHidden()), social.Posts.OrderBy(social.Posts.Title.Desc()), social.Posts.Select(social.Posts.Title))
+			if err != nil || !found {
+				return nil, err
+			}
+			return postTitles([]golem.Row[social.Post]{row}, nil)
+		}, []string{"a-private"}},
+		{"count", func() ([]string, error) {
+			count, err := f.caller.Posts.Count(f.ctx, social.Posts.Where(ownedOrHidden()))
+			return []string{fmt.Sprint(count)}, err
+		}, []string{"1"}},
+		{"aggregate", func() ([]string, error) {
+			count := social.Posts.CountAll()
+			result, err := f.caller.Posts.Aggregate(f.ctx, social.Posts.Aggregate(social.Posts.AggregateWhere(ownedOrHidden()), social.Posts.AggregateSelect(count)))
+			if err != nil {
+				return nil, err
+			}
+			return []string{fmt.Sprint(mustAggregateValue(t, result, count))}, nil
+		}, []string{"1"}},
+		{"group-by", func() ([]string, error) {
+			dimension, count := social.Posts.Published.Dimension(), social.Posts.CountAll()
+			rows, err := f.caller.Posts.GroupBy(f.ctx, social.Posts.GroupBy(social.Posts.GroupDimensions(dimension), social.Posts.GroupMeasures(count), social.Posts.GroupWhere(foreignOrHidden())))
+			if err != nil {
+				return nil, err
+			}
+			result := []string{}
+			for _, row := range rows {
+				result = append(result, fmt.Sprintf("%v:%d", mustGroupValue(t, row, dimension), mustGroupValue(t, row, count)))
+			}
+			return result, nil
+		}, []string{"true:1"}},
+		{"relation-group-by", func() ([]string, error) {
+			dimension, count := social.Posts.AuthorHandle, social.Posts.CountAll()
+			rows, err := f.caller.Posts.RelationGroupBy(f.ctx, social.Posts.RelationGroupBy(social.Posts.RelationGroupDimensions(dimension), social.Posts.RelationGroupMeasures(count), social.Posts.RelationGroupWhere(foreignOrHidden())))
+			if err != nil {
+				return nil, err
+			}
+			result := []string{}
+			for _, row := range rows {
+				result = append(result, fmt.Sprintf("%s:%d", mustRelationGroupValue(t, row, dimension), mustRelationGroupValue(t, row, count)))
+			}
+			return result, nil
+		}, []string{"bob:1"}},
+		{"graphql-find-many", func() ([]string, error) {
+			response := f.graphql(`query { posts(where: {OR: [{title: {equals: "a-private"}}, {title: {equals: "e-hidden"}}]}) { title } }`)
+			if len(response.Errors) != 0 {
+				return nil, fmt.Errorf("graphql errors: %v", response.Errors)
+			}
+			result := []string{}
+			for _, item := range list(t, response.Data["posts"]) {
+				result = append(result, fmt.Sprint(object(t, item)["title"]))
+			}
+			return result, nil
+		}, []string{"a-private"}},
+		{"graphql-aggregate", func() ([]string, error) {
+			response := f.graphql(`query { aggregatePosts(where: {OR: [{title: {equals: "a-private"}}, {title: {equals: "e-hidden"}}]}) { count } }`)
+			if len(response.Errors) != 0 {
+				return nil, fmt.Errorf("graphql errors: %v", response.Errors)
+			}
+			return []string{fmt.Sprint(object(t, response.Data["aggregatePosts"])["count"])}, nil
+		}, []string{"1"}},
+		{"scoped-root", func() ([]string, error) {
+			posts := social.Posts.Scope()
+			title := social.Posts.Title.At(posts)
+			rows, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(golem.OrScoped(title.Eq("a-private"), title.Eq("e-hidden"))).Select(title))
+			return scopedTitles(rows, title, err)
+		}, []string{"a-private"}},
+		{"scoped-root-mixed-types", func() ([]string, error) {
+			posts := social.Posts.Scope()
+			title := social.Posts.Title.At(posts)
+			rows, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(golem.OrScoped(social.Posts.AuthorID.At(posts).Eq(bob), social.Posts.Views.At(posts).GT(int64(45)))).Select(title))
+			return scopedTitles(rows, title, err)
+		}, []string{"d-public", "f-followers"}},
+		{"scoped-join-target", func() ([]string, error) {
+			posts := social.Posts.Scope()
+			comments := golem.InnerJoin(posts, social.Posts.Comments)
+			targets := golem.InnerJoin(comments, social.Comments.Post)
+			root, target := social.Posts.Title.At(posts), social.Posts.Title.At(targets)
+			rows, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Join(targets).Where(golem.OrScoped(target.Eq("e-hidden"), target.Eq("d-public"))).Select(root))
+			return scopedTitles(rows, root, err)
+		}, []string{"d-public"}},
+		{"scoped-join-only-predicate", func() ([]string, error) {
+			posts := social.Posts.Scope()
+			authors := golem.InnerJoin(posts, social.Posts.Author)
+			title := social.Posts.Title.At(posts)
+			rows, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Join(authors).Where(social.Users.Handle.At(authors).Eq("bob")).Select(title))
+			return scopedTitles(rows, title, err)
+		}, []string{"d-public", "f-followers"}},
+		{"relation-filter-to-one", func() ([]string, error) {
+			rows, err := f.caller.Comments.FindMany(f.ctx, social.Comments.Where(social.Comments.Post.Is(foreignOrHidden())), social.Comments.Select(social.Comments.Body))
+			if err != nil {
+				return nil, err
+			}
+			result := []string{}
+			for _, row := range rows {
+				body, _ := golem.Value(row, social.Comments.Body).Get()
+				result = append(result, body)
+			}
+			return result, nil
+		}, []string{"d-one"}},
+		{"relation-filter-to-many", func() ([]string, error) {
+			rows, err := f.caller.Users.FindMany(f.ctx, social.Users.Where(social.Users.Posts.Some(ownedOrHidden())), social.Users.Select(social.Users.Handle))
+			if err != nil {
+				return nil, err
+			}
+			result := []string{}
+			for _, row := range rows {
+				handle, _ := golem.Value(row, social.Users.Handle).Get()
+				result = append(result, handle)
+			}
+			return result, nil
+		}, []string{"alice"}},
+		{"nested-include", func() ([]string, error) {
+			rows, err := f.caller.Users.FindMany(f.ctx, social.Users.Select(social.Users.Handle, social.Users.Posts.Args(social.Posts.Where(foreignOrHidden()), social.Posts.Select(social.Posts.Title))))
+			if err != nil {
+				return nil, err
+			}
+			result := []string{}
+			for _, row := range rows {
+				handle, _ := golem.Value(row, social.Users.Handle).Get()
+				children, _ := golem.Many(row, social.Users.Posts.ToMany).Get()
+				for _, child := range children {
+					title, _ := golem.Value(child, social.Posts.Title).Get()
+					result = append(result, handle+":"+title)
+				}
+			}
+			return result, nil
+		}, []string{"bob:d-public"}},
+		{"update-many", func() ([]string, error) {
+			var result []string
+			err := f.caller.Transaction(f.ctx, func(tx *social.CallerTx[social.Principal]) error {
+				count, err := tx.Posts.UpdateMany(f.ctx, ownedOrHidden(), social.Posts.UpdateMany(social.Posts.Views.Set(701)))
+				if err != nil {
+					return err
+				}
+				result = append(result, fmt.Sprint(count))
+				return errDisjunctiveRollback
+			})
+			if !errors.Is(err, errDisjunctiveRollback) {
+				return nil, err
+			}
+			return result, nil
+		}, []string{"1"}},
+		{"delete-many", func() ([]string, error) {
+			var result []string
+			err := f.caller.Transaction(f.ctx, func(tx *social.CallerTx[social.Principal]) error {
+				count, err := tx.Posts.DeleteMany(f.ctx, ownedOrHidden())
+				if err != nil {
+					return err
+				}
+				result = append(result, fmt.Sprint(count))
+				return errDisjunctiveRollback
+			})
+			if !errors.Is(err, errDisjunctiveRollback) {
+				return nil, err
+			}
+			return result, nil
+		}, []string{"1"}},
+		{"nested-update-many", func() ([]string, error) {
+			var result []string
+			err := f.caller.Transaction(f.ctx, func(tx *social.CallerTx[social.Principal]) error {
+				if _, err := tx.Users.Update(f.ctx, social.Users.ByID.Value(f.alice), social.Users.Update(social.Users.Posts.UpdateMany(social.Posts.Title.Eq("a-private").Or(social.Posts.Title.Eq("d-public")), social.Posts.UpdateMany(social.Posts.Views.Set(702))))); err != nil {
+					return err
+				}
+				values, err := views(tx.Posts.FindMany, "a-private", "d-public")
+				if err != nil {
+					return err
+				}
+				result = values
+				return errDisjunctiveRollback
+			})
+			if !errors.Is(err, errDisjunctiveRollback) {
+				return nil, err
+			}
+			return result, nil
+		}, []string{"a-private:702", "d-public:40"}},
+		{"system-nested-update-many", func() ([]string, error) {
+			var result []string
+			err := f.app.System().Transaction(f.ctx, func(tx *social.SystemTx[social.Principal]) error {
+				if _, err := tx.Users.Update(f.ctx, social.Users.ByID.Value(f.alice), social.Users.Update(social.Users.Posts.UpdateMany(ownedOrHidden(), social.Posts.UpdateMany(social.Posts.Views.Set(703))))); err != nil {
+					return err
+				}
+				values, err := views(tx.Posts.FindMany, "a-private", "e-hidden")
+				if err != nil {
+					return err
+				}
+				result = values
+				return errDisjunctiveRollback
+			})
+			if !errors.Is(err, errDisjunctiveRollback) {
+				return nil, err
+			}
+			return result, nil
+		}, []string{"a-private:703", "e-hidden:50"}},
+	}
+	for _, test := range cases {
+		got, err := test.run()
+		if err != nil {
+			t.Errorf("%s: %v: %v", test.name, err, errors.Unwrap(err))
+			continue
+		}
+		sort.Strings(got)
+		want := append([]string(nil), test.want...)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s returned %q; the disjunctive policy allows only %q", test.name, got, want)
+		}
+	}
+
+	posts := social.Posts.Scope()
+	body := social.Posts.Body.At(posts)
+	if rows, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(body.Contains("body")).Select(body)); err == nil || rows != nil {
+		t.Errorf("undischarged conditional text predicate rows=%d err=%v", len(rows), err)
+	} else {
+		var failure *golem.Error
+		if !errors.As(err, &failure) || failure.Code != golem.CodeForbidden {
+			t.Errorf("undischarged conditional text predicate error=%v, want %s", err, golem.CodeForbidden)
+		}
+	}
+	posts = social.Posts.Scope()
+	body = social.Posts.Body.At(posts)
+	author := social.Posts.AuthorID.At(posts)
+	owned, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(golem.AndScoped(author.Eq(f.alice), golem.OrScoped(body.EndsWith("private"), body.StartsWith("body-b")))).Select(body))
+	if got, scopedErr := scopedTitles(owned, body, err); scopedErr != nil || !reflect.DeepEqual(sortedStrings(got), []string{"body-a-private", "body-b-public"}) {
+		t.Errorf("discharged conditional text predicate rows=%q err=%v", got, scopedErr)
+	}
+	posts = social.Posts.Scope()
+	title := social.Posts.Title.At(posts)
+	clock := social.Posts.LiveTime.At(posts)
+	timed, err := f.caller.Posts.Scoped(f.ctx, golem.From(posts).Where(clock.Eq(mustTime(t, "12:34:56"))).Select(title))
+	if got, scopedErr := scopedTitles(timed, title, err); scopedErr != nil || len(got) != 5 {
+		t.Errorf("whole-second time predicate rows=%q err=%v", got, scopedErr)
+	}
+}
+
+func sortedStrings(values []string) []string {
+	result := append([]string(nil), values...)
+	sort.Strings(result)
 	return result
 }

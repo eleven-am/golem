@@ -379,7 +379,7 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 			if err != nil {
 				return RelationSQLStatement{}, err
 			}
-			parts, args = append(parts, fragment.text), append(args, fragment.args...)
+			parts, args = append(parts, "("+fragment.text+")"), append(args, fragment.args...)
 		}
 	}
 	if predicate != nil {
@@ -387,7 +387,7 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 		if err != nil {
 			return RelationSQLStatement{}, err
 		}
-		parts, args = append(parts, fragment.text), append(args, fragment.args...)
+		parts, args = append(parts, "("+fragment.text+")"), append(args, fragment.args...)
 	}
 	// Exact target-model writes are authorized while their related row is
 	// selected and locked. This matters for coordinated source to-one Delete:
@@ -401,7 +401,7 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 		if err != nil {
 			return RelationSQLStatement{}, err
 		}
-		parts, args = append(parts, fragment.text), append(args, fragment.args...)
+		parts, args = append(parts, "("+fragment.text+")"), append(args, fragment.args...)
 	}
 	if len(parts) == 0 {
 		parts = append(parts, "1 = 1")

@@ -7,5 +7,9 @@ func (Metric) DefinePolicy(rules *golem.Rules[Metric], _ Actor) {
 }
 
 func (Category) DefinePolicy(rules *golem.Rules[Category], actor Actor) {
-	rules.CanRead(Categories.Name.StartsWith(actor.CategoryPrefix))
+	visible := Categories.Name.StartsWith(actor.CategoryPrefix)
+	if actor.AlsoCategory != "" {
+		visible = visible.Or(Categories.Name.Eq(actor.AlsoCategory))
+	}
+	rules.CanRead(visible)
 }

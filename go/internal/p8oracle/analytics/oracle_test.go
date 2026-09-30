@@ -25,3 +25,7 @@ func TestP8AnalyticsExactScalarAndLimitParity(t *testing.T) {
 func TestP8UnsupportedRelationAggregationRefusesEveryEntryPoint(t *testing.T) {
 	p8oracle.RunExternalScenario(t, externalAnalyticsOracle, "unsupported-relation")
 }
+
+func TestP8DisjunctivePolicyAndPredicateEveryReadAndWritePath(t *testing.T) {
+	p8oracle.RunExternalScenario(t, externalAnalyticsOracle, "disjunctive-authorization")
+}

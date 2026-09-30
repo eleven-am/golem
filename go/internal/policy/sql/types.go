@@ -258,15 +258,28 @@ type Binder struct {
 }
 
 func (binder *Binder) Value(value ir.Value, typ ir.TypeRef) (string, error) {
+	encoded, err := EncodeOperand(binder.dialect, binder.resolver, value, typ)
+	if err != nil {
+		return "", err
+	}
+	binder.args = append(binder.args, encoded)
+	return binder.dialect.Placeholder(len(binder.args)), nil
+}
+
+// EncodeOperand converts a typed policy operand into the provider argument the
+// dialect stores for typ, resolving enum wire labels through resolver. Every
+// renderer that binds a comparison operand against a stored column must use it
+// so operands and persisted values share one canonical encoding.
+func EncodeOperand(dialect Dialect, resolver Resolver, value ir.Value, typ ir.TypeRef) (any, error) {
 	bound := BoundValue{Value: value, Type: typ}
 	if typ.Kind() == ir.ValueEnum {
 		enum, member, ok := value.Enum()
 		if !ok {
-			return "", fmt.Errorf("policy SQL bind: enum type received a non-enum value")
+			return nil, fmt.Errorf("policy SQL bind: enum type received a non-enum value")
 		}
-		wire, ok := binder.resolver.EnumWire(enum, member)
+		wire, ok := resolver.EnumWire(enum, member)
 		if !ok {
-			return "", fmt.Errorf("policy SQL bind: enum value has no descriptor wire label")
+			return nil, fmt.Errorf("policy SQL bind: enum value has no descriptor wire label")
 		}
 		bound.EnumWires = []string{wire}
 	} else if typ.Kind() == ir.ValueScalarList {
@@ -274,31 +287,30 @@ func (binder *Binder) Value(value ir.Value, typ ir.TypeRef) (string, error) {
 		if element.Kind() == ir.ValueEnum {
 			values, ok := value.List()
 			if !ok {
-				return "", fmt.Errorf("policy SQL bind: scalar-list type received a non-list value")
+				return nil, fmt.Errorf("policy SQL bind: scalar-list type received a non-list value")
 			}
 			bound.EnumWires = make([]string, len(values))
 			for index, item := range values {
 				enum, member, valid := item.Enum()
 				if !valid {
-					return "", fmt.Errorf("policy SQL bind: enum list contains a non-enum value")
+					return nil, fmt.Errorf("policy SQL bind: enum list contains a non-enum value")
 				}
-				wire, found := binder.resolver.EnumWire(enum, member)
+				wire, found := resolver.EnumWire(enum, member)
 				if !found {
-					return "", fmt.Errorf("policy SQL bind: enum list value has no descriptor wire label")
+					return nil, fmt.Errorf("policy SQL bind: enum list value has no descriptor wire label")
 				}
 				bound.EnumWires[index] = wire
 			}
 		}
 	}
-	encoded, err := binder.dialect.Encode(bound)
+	encoded, err := dialect.Encode(bound)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	if !validArgument(encoded) {
-		return "", fmt.Errorf("policy SQL bind: dialect returned unsupported argument type %T", encoded)
+		return nil, fmt.Errorf("policy SQL bind: dialect returned unsupported argument type %T", encoded)
 	}
-	binder.args = append(binder.args, encoded)
-	return binder.dialect.Placeholder(len(binder.args)), nil
+	return encoded, nil
 }
 
 func (binder *Binder) Text(value string) string {

@@ -94,6 +94,10 @@ func prepareScopedStatement[P, A any](app *App[P, A], policies scoped.PolicySet,
 		planned, err = scoped.Caller(request, app.registry, app.providers, policies, app.readLimits.plan)
 	}
 	if err != nil {
+		var refusal *scoped.AuthorizationError
+		if errors.As(err, &refusal) {
+			return preparedScopedStatement{}, golem.RuntimeReadError(golem.CodeForbidden, "scoped", descriptor, refusal.Field, "scoped query is not permitted", err)
+		}
 		return preparedScopedStatement{}, scopedError(descriptor, err)
 	}
 	statement, err := scoped.Render(planned, app.registry, app.provider, app.capabilities, scoped.RenderOptions{
@@ -298,6 +302,9 @@ func decodeScopedValue(raw any, expression golem.FrozenScopedExpression, logical
 		}
 		return golem.ParseDecimal(text())
 	case compilerir.TypeDate:
+		if value, ok := raw.(time.Time); ok {
+			return golem.NewDate(value.Year(), value.Month(), value.Day())
+		}
 		return golem.ParseDate(text())
 	case compilerir.TypeTime:
 		return golem.ParseTime(text())
