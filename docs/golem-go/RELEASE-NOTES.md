@@ -64,9 +64,17 @@ On this code, refetch the state you derive from events and subscribe again, as
 you already do for `GOLEM_SUBSCRIPTION_OVERFLOW`. GraphQL clients receive the
 code unchanged.
 
+On NATS, losing the connection to the broker now ends every open
+subscription this way. Core NATS does not replay messages, so an event
+published while a subscriber's connection was still reconnecting used to be
+lost without a signal, even when both nodes reconnected within milliseconds.
+Events published during the outage are not redelivered to subscribers whose
+stream ended; they refetch.
+
 For the same reason, `Subscribe` now returns only once the event source is
 connected. A transient connection failure is retried while it waits, and
-cancelling the context ends the wait. It used to return at once and retry in
+cancelling the context ends the wait; while NATS is down, a new subscription
+waits for the connection to return. It used to return at once and retry in
 the background, dropping events published before the connection succeeded.
 
 ### Regenerating

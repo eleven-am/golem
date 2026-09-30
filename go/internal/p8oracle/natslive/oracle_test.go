@@ -15,6 +15,7 @@ func TestOrder7LiveNATSOracleSourceAuthority(t *testing.T) {
 	required := [][]byte{
 		[]byte("MaxInboundPayloadBytes: livePayloadLimit + 1"),
 		[]byte("fixture.awaitAvailability(false)"),
+		[]byte("if _, err := stream.Recv(resyncCtx); eventCode(err) != events.CodeSubscriptionResync {"),
 		[]byte("!bytes.Equal(encoded, duplicateRaw.Data) || duplicateEvent.ID() != firstEvent.ID() || duplicateEvent.Metadata().EventID() != firstEvent.Metadata().EventID()"),
 		[]byte("|| strings.Contains(subject, generationText)"),
 		[]byte("if _, err := lateRaw.NextMsg(250 * time.Millisecond); !errors.Is(err, natsclient.ErrTimeout) {\n\t\tfixture.t.Fatalf(\"Core NATS late subscriber replayed history: %v\", err)\n\t}"),
