@@ -194,7 +194,7 @@ func equalGolemFieldIDs(left, right []golem.FieldID) bool {
 
 // CallerUpdateVersioned is the typed generated-client ABI for one caller CAS.
 func CallerUpdateVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "update", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerUpdateVersioned(ctx, caller, descriptor, target, expected, input, projections...)
 	})
 }
@@ -230,7 +230,7 @@ func callerUpdateVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 // CallerDeleteVersioned is the typed generated-client ABI for one caller CAS.
 func CallerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "delete", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerDeleteVersioned(ctx, caller, descriptor, target, expected, projections...)
 	})
 }
@@ -354,7 +354,7 @@ func SystemTxDeleteVersioned[P, A, M any](ctx context.Context, transaction *Syst
 }
 
 func CallerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "upsert", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerUpsertVersioned(ctx, caller, descriptor, target, expected, create, update, projections...)
 	})
 }

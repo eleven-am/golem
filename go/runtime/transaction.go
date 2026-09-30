@@ -394,7 +394,7 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		binding.discardMutation()
 		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
 			_ = transaction.Rollback()
-			return binding.operationWrites.refusal(ctx)
+			return binding.operationWrites.refusal()
 		}
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}

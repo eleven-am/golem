@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -191,19 +192,21 @@ func p10BlockAfterCreate() (reached func() bool, proceed func()) {
 }
 
 type p10LeaseWrite struct {
-	name    string
-	prepare func(*testing.T, *p10OperationFixture)
-	hook    func(*testing.T, *p10OperationFixture)
-	inHook  bool
-	write   func(context.Context, *p10OperationFixture, *p10operations.Caller[p10operations.Principal]) error
-	absent  func(*testing.T, *p10OperationFixture) bool
+	name     string
+	prepare  func(*testing.T, *p10OperationFixture)
+	hook     func(*testing.T, *p10OperationFixture)
+	inHook   bool
+	conflict p10Conflict
+	write    func(context.Context, *p10OperationFixture, *p10operations.Caller[p10operations.Principal]) error
+	absent   func(*testing.T, *p10OperationFixture) bool
 }
 
 func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 	created := p10OperationID(t, 900)
 	return []p10LeaseWrite{
 		{
-			name: "scalar create",
+			name:     "scalar create",
+			conflict: p10Conflict{operation: "create", model: p10InviteModel(), message: "mutation conflicted", hooks: "[before_create after_create]"},
 			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
 				return fixture.genericCreate(ctx, caller, created)
 			},
@@ -213,8 +216,9 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 			},
 		},
 		{
-			name:   "upsert",
-			inHook: true,
+			name:     "upsert",
+			inHook:   true,
+			conflict: p10Conflict{operation: "upsert", model: p10InviteModel(), message: "mutation conflicted"},
 			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
 				_, err := caller.Invites.Upsert(ctx, p10operations.Invites.ByID.Value(created),
 					p10operations.Invites.Create(p10operations.Invites.ID.Create(created), p10operations.Invites.TeamID.Create(fixture.alpha), p10operations.Invites.Owner.Create("alpha"), p10operations.Invites.Email.Create("u@example.test"), p10operations.Invites.Status.Create("pending")),
@@ -228,8 +232,9 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 			},
 		},
 		{
-			name:   "nested create",
-			inHook: true,
+			name:     "nested create",
+			inHook:   true,
+			conflict: p10Conflict{operation: "create", model: p10TeamModel(), message: "mutation conflicted"},
 			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
 				_, err := caller.Teams.Create(ctx, p10operations.Teams.Create(
 					p10operations.Teams.ID.Create(p10OperationID(t, 901)), p10operations.Teams.Owner.Create("alpha"),
@@ -247,8 +252,9 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 			},
 		},
 		{
-			name:    "batch update",
-			prepare: func(t *testing.T, fixture *p10OperationFixture) { fixture.seedInvite(t, created) },
+			name:     "batch update",
+			conflict: p10Conflict{operation: "updateMany", model: p10InviteModel(), message: "batch mutation conflicted", hooks: "[]"},
+			prepare:  func(t *testing.T, fixture *p10OperationFixture) { fixture.seedInvite(t, created) },
 			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
 				_, err := caller.Invites.UpdateMany(ctx, p10operations.Invites.ID.Eq(created), p10operations.Invites.UpdateMany(p10operations.Invites.Status.Set("accepted")))
 				return err
@@ -259,8 +265,9 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 			},
 		},
 		{
-			name:   "hook executor",
-			inHook: true,
+			name:     "hook executor",
+			inHook:   true,
+			conflict: p10Conflict{operation: "create", model: p10TeamModel(), message: "mutation conflicted"},
 			hook: func(t *testing.T, fixture *p10OperationFixture) {
 				p10operations.SetTeamHook(func(ctx context.Context, executor golem.HookExecutor) error {
 					_, err := golem.HookCreateRow(ctx, executor, p10operations.GolemGeneratedInviteDescriptor, p10operations.Invites.Create(
@@ -323,12 +330,49 @@ func TestOperationWritePlannedBeforeTheOperationEndsCannotCommitAfterItAcrossPro
 					t.Fatalf("operation = %v", err)
 				}
 				proceed()
-				assertP10SameRefusal(t, write.name+" planned inside the operation", usual, <-late)
+				assertP10Conflict(t, write.name+" planned inside the operation", write.conflict, <-late)
 				if !write.absent(t, fixture) {
 					t.Fatalf("%s authorised by the operation committed after it ended", write.name)
 				}
 			})
 		})
+	}
+}
+
+type p10Conflict struct {
+	operation string
+	model     golem.ModelID
+	message   string
+	hooks     string
+}
+
+func p10InviteModel() golem.ModelID {
+	return p10operations.GolemGeneratedInviteDescriptor.Metadata().ModelID()
+}
+
+func p10TeamModel() golem.ModelID {
+	return p10operations.GolemGeneratedTeamDescriptor.Metadata().ModelID()
+}
+
+func assertP10Conflict(t *testing.T, label string, want p10Conflict, got error) {
+	t.Helper()
+	var failure *golem.Error
+	if !errors.As(got, &failure) || failure.Code != golem.CodeConflict || failure.Operation != want.operation || failure.Model != want.model || failure.Field != (golem.FieldID{}) || failure.Message != want.message {
+		t.Fatalf("%s: late write = %#v (%v), want the ordinary %s conflict", label, failure, got, want.operation)
+	}
+	if strings.Contains(got.Error(), "operation") && !strings.Contains(want.message, "operation") {
+		t.Fatalf("%s: the conflict reveals an operation: %v", label, got)
+	}
+	hooks := p10operations.Snapshot().Hooks
+	seen := map[string]bool{}
+	for _, hook := range hooks {
+		if seen[hook] || hook == "after_commit_create" {
+			t.Fatalf("%s: hooks ran again or after a rollback: %v", label, hooks)
+		}
+		seen[hook] = true
+	}
+	if want.hooks != "" && fmt.Sprint(hooks) != want.hooks {
+		t.Fatalf("%s: hooks=%v want %s", label, hooks, want.hooks)
 	}
 }
 
@@ -374,7 +418,7 @@ func TestOperationTransactionCannotCommitAfterTheOperationEndsAcrossProviders(t 
 			t.Fatalf("operation = %v", err)
 		}
 		close(proceed)
-		assertP10SameRefusal(t, "transaction committing after the operation", usual, <-late)
+		assertP10Conflict(t, "transaction committing after the operation", p10Conflict{operation: "create", model: p10InviteModel(), message: "mutation conflicted", hooks: "[before_create after_create]"}, <-late)
 		if exists, _, _ := fixture.inviteExists(t, created); exists {
 			t.Fatal("a transaction committed a write the ended operation authorised")
 		}

@@ -24,7 +24,7 @@ import (
 // policy classification, provider capability checks, and SQL rendering all
 // complete before transaction acquisition.
 func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "updateMany", "batch mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
 		return callerUpdateMany(ctx, caller, descriptor, where, input)
 	})
 }
@@ -66,7 +66,7 @@ func callerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 }
 
 func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "deleteMany", "batch mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
 		return callerDeleteMany(ctx, caller, descriptor, where)
 	})
 }

@@ -93,7 +93,7 @@ func prepareSystemScalarProjection[P, A, M any](system System[P, A], descriptor 
 // scalar create. Hooks, facts, and nested operations are later P4 layers and
 // cannot enter this scalar path; root upsert has its own guarded kernel.
 func CallerCreate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], input golem.CreateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "create", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerCreate(ctx, caller, descriptor, input, projections...)
 	})
 }
@@ -111,7 +111,7 @@ func callerCreate[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 }
 
 func CallerUpdate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "update", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerUpdate(ctx, caller, descriptor, target, input, projections...)
 	})
 }
@@ -138,7 +138,7 @@ func callerUpdate[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 }
 
 func CallerDelete[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "delete", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerDelete(ctx, caller, descriptor, target, projections...)
 	})
 }
@@ -163,7 +163,7 @@ func callerDelete[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 // CallerUpsert executes exactly one truthful create or update branch. Public
 // values and authorization are frozen/planned before the first transaction.
 func CallerUpsert[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "upsert", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
 		return callerUpsert(ctx, caller, descriptor, target, create, update, projections...)
 	})
 }
