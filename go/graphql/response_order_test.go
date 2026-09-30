@@ -348,3 +348,79 @@ func BenchmarkHTTPLargeListThroughExecutable(b *testing.B) {
 }
 
 func BenchmarkHTTPLargeListWithoutExecutable(b *testing.B) { benchmarkLargeList(b, nil) }
+
+const abstractOrderSchema = `interface Node { id: ID! }
+type Cat implements Node { id: ID! name: String! lives: Int! }
+type Dog implements Node { id: ID! name: String! barks: Boolean! }
+union Pet = Cat | Dog
+type Query { pets: [Pet!]! nodes: [Node!]! }
+`
+
+func TestAbstractTypesFollowCollectFieldsOfTheRuntimeType(t *testing.T) {
+	cat := map[string]any{"kind": "Cat", "lives": 9, "name": "Tom"}
+	dog := map[string]any{"kind": "Dog", "name": "Rex", "barks": true}
+	branches := `... on Dog { name barks } ... on Cat { lives name }`
+	cases := []orderCase{
+		{
+			name:     "typename in a named fragment",
+			query:    `{ pets { ...Kind ` + branches + ` } } fragment Kind on Pet { kind: __typename }`,
+			response: staticData(map[string]any{"pets": []any{cat, dog}}),
+			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
+		},
+		{
+			name:     "typename in an inline fragment",
+			query:    `{ pets { ... on Pet { kind: __typename } ` + branches + ` } }`,
+			response: staticData(map[string]any{"pets": []any{cat, dog}}),
+			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
+		},
+		{
+			name:     "typename nested in included fragments after a skipped one",
+			query:    `query Q($no: Boolean!) { pets { ... @skip(if: $no) { kind: __typename } ... @include(if: true) { ...Outer } ` + branches + ` } } fragment Outer on Pet { ... on Pet { ...Kind } } fragment Kind on Pet { kind: __typename }`,
+			response: staticData(map[string]any{"pets": []any{cat, dog}}),
+			want:     `{"data":{"pets":[{"kind":"Cat","lives":9,"name":"Tom"},{"kind":"Dog","name":"Rex","barks":true}]}}`,
+		},
+		{
+			name:     "named fragment typename decides between indistinguishable branches",
+			query:    `{ pets { ...Kind ... on Cat { id name } ... on Dog { name id } } } fragment Kind on Pet { kind: __typename }`,
+			response: staticData(map[string]any{"pets": []any{map[string]any{"kind": "Dog", "id": "d", "name": "Rex"}}}),
+			want:     `{"data":{"pets":[{"kind":"Dog","name":"Rex","id":"d"}]}}`,
+		},
+		{
+			name:     "inline fragment typename decides between indistinguishable branches",
+			query:    `{ pets { ... on Cat { id name } ... on Dog { name id } ... { kind: __typename } } }`,
+			response: staticData(map[string]any{"pets": []any{map[string]any{"kind": "Dog", "id": "d", "name": "Rex"}}}),
+			want:     `{"data":{"pets":[{"name":"Rex","id":"d","kind":"Dog"}]}}`,
+		},
+		{
+			name:  "no typename infers the only runtime type whose fields match",
+			query: `{ pets { ` + branches + ` } nodes { id ... on Dog { barks name } ... on Cat { name lives } } }`,
+			response: staticData(map[string]any{
+				"pets":  []any{map[string]any{"lives": 9, "name": "Tom"}, map[string]any{"name": "Rex", "barks": true}},
+				"nodes": []any{map[string]any{"id": "c", "name": "Tom", "lives": 9}},
+			}),
+			want: `{"data":{"pets":[{"lives":9,"name":"Tom"},{"name":"Rex","barks":true}],"nodes":[{"id":"c","name":"Tom","lives":9}]}}`,
+		},
+		{
+			name:     "no typename with indistinguishable runtime types uses the first possible type",
+			query:    `{ pets { ... on Dog { name id } ... on Cat { id name } } }`,
+			response: staticData(map[string]any{"pets": []any{map[string]any{"id": "x", "name": "Tom"}}}),
+			want:     `{"data":{"pets":[{"id":"x","name":"Tom"}]}}`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			server := orderServer(t, abstractOrderSchema, nil, orderExecutor{response: testCase.response})
+			body, err := json.Marshal(map[string]any{"query": testCase.query, "variables": map[string]any{"no": true}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(body))
+			request.Header.Set("Content-Type", "application/json")
+			recorder := httptest.NewRecorder()
+			server.Handler().ServeHTTP(recorder, request)
+			if got := recorder.Body.String(); got != testCase.want+"\n" {
+				t.Fatalf("body\n got=%s\nwant=%s", got, testCase.want)
+			}
+		})
+	}
+}

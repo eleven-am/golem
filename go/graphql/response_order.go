@@ -251,7 +251,7 @@ func (writer *selectionWriter) object(value map[string]any, sets []ast.Selection
 	}
 	typename := ""
 	if parent != nil && parent.IsAbstractType() {
-		typename = writer.typename(value, sets)
+		typename = writer.typename(value, sets, parent)
 	}
 	fields := writer.collect(sets, parent, typename)
 	writer.output.WriteByte('{')
@@ -343,21 +343,70 @@ func (writer *selectionWriter) scalar(value any) error {
 	return nil
 }
 
-func (writer *selectionWriter) typename(value map[string]any, sets []ast.SelectionSet) string {
+func (writer *selectionWriter) typename(value map[string]any, sets []ast.SelectionSet, parent *ast.Definition) string {
+	if typename, ok := writer.selectedTypename(value, sets, map[string]bool{}); ok {
+		return typename
+	}
+	if writer.schema == nil {
+		return ""
+	}
+	for _, candidate := range writer.schema.GetPossibleTypes(parent) {
+		fields := writer.collect(sets, parent, candidate.Name)
+		if len(fields) != len(value) {
+			continue
+		}
+		matches := true
+		for _, field := range fields {
+			if _, present := value[field.name]; !present {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return candidate.Name
+		}
+	}
+	return ""
+}
+
+func (writer *selectionWriter) selectedTypename(value map[string]any, sets []ast.SelectionSet, visited map[string]bool) (string, bool) {
 	for _, set := range sets {
 		for _, selection := range set {
-			if field, ok := selection.(*ast.Field); ok && field.Name == "__typename" {
-				name := field.Alias
+			switch selection := selection.(type) {
+			case *ast.Field:
+				if selection.Name != "__typename" || !graphqlIncluded(selection.Directives, writer.variables) {
+					continue
+				}
+				name := selection.Alias
 				if name == "" {
-					name = field.Name
+					name = selection.Name
 				}
 				if typename, ok := value[name].(string); ok {
-					return typename
+					return typename, true
+				}
+			case *ast.InlineFragment:
+				if !graphqlIncluded(selection.Directives, writer.variables) {
+					continue
+				}
+				if typename, ok := writer.selectedTypename(value, []ast.SelectionSet{selection.SelectionSet}, visited); ok {
+					return typename, true
+				}
+			case *ast.FragmentSpread:
+				if visited[selection.Name] || !graphqlIncluded(selection.Directives, writer.variables) {
+					continue
+				}
+				visited[selection.Name] = true
+				fragment := writer.fragments.ForName(selection.Name)
+				if fragment == nil {
+					continue
+				}
+				if typename, ok := writer.selectedTypename(value, []ast.SelectionSet{fragment.SelectionSet}, visited); ok {
+					return typename, true
 				}
 			}
 		}
 	}
-	return ""
+	return "", false
 }
 
 func (writer *selectionWriter) collect(sets []ast.SelectionSet, parent *ast.Definition, typename string) []collectedField {
