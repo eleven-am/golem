@@ -147,6 +147,15 @@ func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomCallerValue() an
 	return caller.public
 }
 
+func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLDispatchCustomMutation(ctx context.Context, resolver any, run func(context.Context, any) (any, error)) (any, error) {
+	if caller == nil || caller.public == nil {
+		return nil, fmt.Errorf("GraphQL caller is unavailable")
+	}
+	return golemruntime.DispatchCallerOperation(ctx, caller.public.runtime, resolver, func(ctx context.Context, inner *golemruntime.Caller[P, Actor]) (any, error) {
+		return run(ctx, golemGeneratedOperationCaller[P](inner))
+	})
+}
+
 func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenRead(ctx context.Context, request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {
 	return caller.execution.ExecuteFrozenRead(ctx, request)
 }

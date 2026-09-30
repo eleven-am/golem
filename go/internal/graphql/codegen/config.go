@@ -232,6 +232,13 @@ func Emit(request Request) (Result, error) {
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLCustomCallerValue() any {\n")
 	body.WriteString("\tif caller == nil { return nil }; return caller.public\n")
 	body.WriteString("}\n\n")
+	if hasCustomMutation(request.Compilation) {
+		body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) GolemGraphQLDispatchCustomMutation(ctx context.Context, resolver any, run func(context.Context, any) (any, error)) (any, error) {\n")
+		body.WriteString("\tif caller == nil || caller.public == nil { return nil, fmt.Errorf(\"GraphQL caller is unavailable\") }\n")
+		fmt.Fprintf(&body, "\treturn golemruntime.DispatchCallerOperation(ctx, caller.public.runtime, resolver, func(ctx context.Context, inner *golemruntime.Caller[P, %s]) (any, error) {\n", actorType)
+		body.WriteString("\t\treturn run(ctx, golemGeneratedOperationCaller[P](inner))\n")
+		body.WriteString("\t})\n}\n\n")
+	}
 	body.WriteString("func (caller *golemGeneratedGraphQLCaller[P]) ExecuteFrozenRead(ctx context.Context, request golem.FrozenReadRequest) ([]golem.RuntimeModelRow, error) {\n")
 	body.WriteString("\treturn caller.execution.ExecuteFrozenRead(ctx, request)\n")
 	body.WriteString("}\n\n")
@@ -622,4 +629,16 @@ func plural(name string) string {
 type root struct {
 	operation string
 	name      string
+}
+
+func hasCustomMutation(compilation *ir.CompilationIR) bool {
+	if compilation == nil {
+		return false
+	}
+	for _, operation := range compilation.Contract.CustomOperations {
+		if operation.Operation == ir.CustomOperationMutation {
+			return true
+		}
+	}
+	return false
 }

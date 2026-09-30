@@ -4,6 +4,7 @@ package runtime
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/internal/policy/bind"
@@ -18,6 +19,10 @@ type Set struct {
 	generation golem.SchemaDigest
 	provider   ir.Provider
 	policies   map[ir.ModelID]ir.Policy
+	operations map[golem.OperationID]map[ir.ModelID]ir.Policy
+	root       *Set
+	scoped     map[ir.ModelID]ir.Policy
+	released   *atomic.Bool
 }
 
 func (set *Set) GenerationDigest() golem.SchemaDigest {
@@ -38,8 +43,30 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 	if set == nil {
 		return ir.Policy{}, false
 	}
+	if set.scoped != nil && !set.released.Load() {
+		if policy, ok := set.scoped[model]; ok {
+			return policy, true
+		}
+	}
 	policy, ok := set.policies[model]
 	return policy, ok
+}
+
+// Within returns the policy set of one running custom mutation: the caller's
+// policies with that operation's Within grants appended. It always starts
+// from the caller's own set, so operations never accumulate grants. After
+// release, the returned set answers exactly as the caller's own set does.
+func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
+	if set == nil {
+		return nil, func() {}
+	}
+	root := set
+	if set.root != nil {
+		root = set.root
+	}
+	released := &atomic.Bool{}
+	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, scoped: root.operations[operation], released: released}
+	return scoped, func() { released.Store(true) }
 }
 
 type BuildRequest[A any] struct {
@@ -73,8 +100,29 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 	if !providers.Valid() || !providers.Contains(request.Provider) {
 		return nil, fmt.Errorf("P2_RUNTIME_PROVIDER: provider is not declared by the schema")
 	}
+	policies, err := buildPolicies(request, resolver, providers, generated.Policies())
+	if err != nil {
+		return nil, err
+	}
+	operations := make(map[golem.OperationID]map[ir.ModelID]ir.Policy)
+	for _, operation := range generated.Operations() {
+		scoped, scopedErr := buildPolicies(request, resolver, providers, generated.OperationPolicies(operation))
+		if scopedErr != nil {
+			return nil, scopedErr
+		}
+		for model := range scoped {
+			if _, present := policies[model]; !present {
+				return nil, fmt.Errorf("P2_RUNTIME_POLICY: operation grants for model %x have no caller policy", model)
+			}
+		}
+		operations[operation] = scoped
+	}
+	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies, operations: operations}, nil
+}
+
+func buildPolicies[A any](request BuildRequest[A], resolver policysql.Resolver, providers ir.ProviderSet, frozenPolicies []golem.FrozenPolicy) (map[ir.ModelID]ir.Policy, error) {
 	policies := make(map[ir.ModelID]ir.Policy)
-	for index, frozen := range generated.Policies() {
+	for index, frozen := range frozenPolicies {
 		bound, bindErr := bind.Policy(frozen, request.Registry, providers)
 		if bindErr != nil {
 			return nil, fmt.Errorf("P2_RUNTIME_BIND: policy %d: %w", index, bindErr)
@@ -102,7 +150,7 @@ func Build[A any](request BuildRequest[A]) (*Set, error) {
 		}
 		policies[normalized.ModelID()] = normalized
 	}
-	return &Set{generation: request.Registry.GenerationDigest(), provider: request.Provider, policies: policies}, nil
+	return policies, nil
 }
 
 func requireConditionAgreement(condition ir.Condition, providers ir.ProviderSet) error {

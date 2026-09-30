@@ -81,6 +81,27 @@ func bindCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, 
 		operation:   operation,
 		resolver:    compilerir.AttachedMethodIR{PackagePath: spec.ResolverPackage, Name: spec.ResolverName, Kind: kind},
 		invoke: func(ctx context.Context, rawCaller any, arguments []CustomArgument) (any, error) {
+			if dispatcher, ok := rawCaller.(customMutationDispatcher); ok && operation == CustomMutation {
+				typed, err := decode(cloneCustomArguments(arguments))
+				if err != nil {
+					return nil, fmt.Errorf("GraphQL custom arguments: %w", err)
+				}
+				dispatched, err := dispatcher.GolemGraphQLDispatchCustomMutation(ctx, resolver, func(ctx context.Context, scoped any) (any, error) {
+					caller, ok := scoped.(C)
+					if !ok {
+						return nil, fmt.Errorf("GraphQL custom resolver caller type does not match generated binding")
+					}
+					return resolver(ctx, caller, typed)
+				})
+				if err != nil {
+					return nil, err
+				}
+				value, ok := dispatched.(R)
+				if !ok && dispatched != nil {
+					return nil, fmt.Errorf("GraphQL custom resolver result type does not match generated binding")
+				}
+				return encode(value)
+			}
 			if provider, ok := rawCaller.(interface{ GolemGraphQLCustomCallerValue() any }); ok {
 				rawCaller = provider.GolemGraphQLCustomCallerValue()
 			}
@@ -99,6 +120,10 @@ func bindCustom[C, A, R any](operation CustomOperation, spec CustomBindingSpec, 
 			return encode(value)
 		},
 	}, nil
+}
+
+type customMutationDispatcher interface {
+	GolemGraphQLDispatchCustomMutation(context.Context, any, func(context.Context, any) (any, error)) (any, error)
 }
 
 // CustomRegistry is immutable process-wide binding metadata. ForCaller creates

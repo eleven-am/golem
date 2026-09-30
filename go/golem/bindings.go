@@ -498,6 +498,7 @@ type PackageBindings[A any] struct {
 type ApplicationBindings[A any] struct {
 	generation SchemaDigest
 	packages   []PackageBindings[A]
+	operations map[uintptr]generatedOperation
 }
 
 func GeneratedPolicyBinding[A, M any](model ModelID, build PolicyFactory[A]) PolicyBinding[A] {
@@ -745,6 +746,7 @@ func RuntimeInvokeReadResultHooks[A any](ctx context.Context, bindings Applicati
 type GeneratedPolicySet struct {
 	generation SchemaDigest
 	policies   []FrozenPolicy
+	operations map[OperationID][]FrozenPolicy
 }
 
 func (set GeneratedPolicySet) GenerationDigest() SchemaDigest { return set.generation }
@@ -799,7 +801,11 @@ func BuildGeneratedPolicySet[A any](bindings ApplicationBindings[A], actor A) (G
 			policies = append(policies, policy)
 		}
 	}
-	return GeneratedPolicySet{generation: bindings.generation, policies: policies}, nil
+	operations, err := buildOperationPolicies(bindings, policies)
+	if err != nil {
+		return GeneratedPolicySet{}, err
+	}
+	return GeneratedPolicySet{generation: bindings.generation, policies: policies, operations: operations}, nil
 }
 
 type generatedBindingError string
