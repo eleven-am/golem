@@ -303,19 +303,6 @@ func runResolverSurfaceCommand(t *testing.T, application string, arguments ...st
 	}
 }
 
-func TestGenerateTypechecksSchemaPackageResolversAgainstEveryGeneratedFamily(t *testing.T) {
-	for _, family := range []string{"selectors", "accessors", "semantic", "fulltext", "events", "system"} {
-		t.Run(family, func(t *testing.T) {
-			application := writeResolverSurfaceModule(t, resolverSurfaceFamilies[family])
-			runResolverSurfaceCommand(t, application, "migration", "new", "--schema", "./notes", "--name", "init")
-			runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
-			quickstartGo(t, application, "mod", "tidy")
-			runResolverSurfaceCommand(t, application, "check", "--schema", "./notes", "--app-out", "./notes")
-			quickstartGo(t, application, "build", "./...")
-		})
-	}
-}
-
 const resolverSurfaceMain = `package main
 
 import (
@@ -435,48 +422,6 @@ func main() {
 }
 `
 
-func TestGenerateAcceptsEveryGeneratedFamilyTogetherAndTheResolversRun(t *testing.T) {
-	var combined strings.Builder
-	combined.WriteString("package notes\n\nimport (\n\t\"context\"\n\n\t\"github.com/eleven-am/golem/go/golem\"\n\t\"github.com/eleven-am/golem/go/queryplan\"\n)\n\nfunc DefineGraphQL(graphql *golem.GraphQLSchema) {\n")
-	operations := map[string]string{"selectors": "Query(graphql, \"noteViews\", NoteViews)", "accessors": "Mutation(graphql, \"touchNotes\", TouchNotes)", "semantic": "Query(graphql, \"relatedCount\", RelatedCount)", "fulltext": "Query(graphql, \"textCount\", TextCount)", "events": "Query(graphql, \"eventReady\", EventReady)", "system": "Query(graphql, \"noteTotal\", NoteTotal)"}
-	families := []string{"selectors", "accessors", "semantic", "fulltext", "events", "system"}
-	for _, family := range families {
-		combined.WriteString("\tgolem." + operations[family] + "\n")
-	}
-	combined.WriteString("}\n")
-	for _, family := range families {
-		source := resolverSurfaceFamilies[family]
-		body := source[strings.Index(source, "func DefineGraphQL"):]
-		body = body[strings.Index(body, "}\n")+2:]
-		if prefix := source[strings.Index(source, ")\n")+2 : strings.Index(source, "func DefineGraphQL")]; strings.TrimSpace(prefix) != "" {
-			combined.WriteString(prefix)
-		}
-		combined.WriteString(body)
-	}
-	application := writeResolverSurfaceModule(t, combined.String())
-	mainSource := strings.Replace(resolverSurfaceMain, "DSN", `"file:`+filepath.ToSlash(filepath.Join(application, "notes.db"))+`"`, 1)
-	if err := os.MkdirAll(filepath.Join(application, "cmd", "notes"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(application, "cmd", "notes", "main.go"), []byte(mainSource), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	quickstartGo(t, application, "mod", "tidy")
-	database := "file:" + filepath.ToSlash(filepath.Join(application, "notes.db"))
-	runResolverSurfaceCommand(t, application, "migration", "new", "--schema", "./notes", "--name", "init")
-	runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
-	quickstartGo(t, application, "mod", "tidy")
-	runResolverSurfaceCommand(t, application, "check", "--schema", "./notes", "--app-out", "./notes")
-	assertSurfaceDeclaresThePublishedABI(t, application, "./notes")
-	runResolverSurfaceCommand(t, application, "migration", "apply", "--provider", "sqlite", "--dsn", database)
-	quickstartGo(t, application, "mod", "tidy")
-	quickstartGo(t, application, "build", "./...")
-	output := quickstartGo(t, application, "run", "./cmd/notes")
-	if !strings.Contains(output, "views=7 touched=1 text=2 related=true ready=3 total=1") {
-		t.Fatalf("the resolver program printed %q", output)
-	}
-}
-
 const resolverSurfaceBaseline = `package notes
 
 import (
@@ -494,7 +439,27 @@ func NoteCount(ctx context.Context, caller *Caller[Principal], arguments TermArg
 }
 `
 
-func TestGenerateAcceptsANewIndexAndTheResolverUsingItInOneChange(t *testing.T) {
+func combinedResolverSurfaceFamilies(families []string) string {
+	operations := map[string]string{"selectors": "Query(graphql, \"noteViews\", NoteViews)", "accessors": "Mutation(graphql, \"touchNotes\", TouchNotes)", "semantic": "Query(graphql, \"relatedCount\", RelatedCount)", "fulltext": "Query(graphql, \"textCount\", TextCount)", "events": "Query(graphql, \"eventReady\", EventReady)", "system": "Query(graphql, \"noteTotal\", NoteTotal)"}
+	var combined strings.Builder
+	combined.WriteString("package notes\n\nimport (\n\t\"context\"\n\n\t\"github.com/eleven-am/golem/go/golem\"\n\t\"github.com/eleven-am/golem/go/queryplan\"\n)\n\nvar _ queryplan.Report\n\nfunc DefineGraphQL(graphql *golem.GraphQLSchema) {\n")
+	for _, family := range families {
+		combined.WriteString("\tgolem." + operations[family] + "\n")
+	}
+	combined.WriteString("}\n")
+	for _, family := range families {
+		source := resolverSurfaceFamilies[family]
+		body := source[strings.Index(source, "func DefineGraphQL"):]
+		body = body[strings.Index(body, "}\n")+2:]
+		if prefix := source[strings.Index(source, ")\n")+2 : strings.Index(source, "func DefineGraphQL")]; strings.TrimSpace(prefix) != "" {
+			combined.WriteString(prefix)
+		}
+		combined.WriteString(body)
+	}
+	return combined.String()
+}
+
+func TestGenerateTypechecksSchemaPackageResolversAgainstTheGeneratedSurface(t *testing.T) {
 	baseline := strings.Replace(strings.Replace(resolverSurfaceSchema,
 		"\t\tgolem.SemanticIndex(\"related\", \"content\", Notes.Title, Notes.Body),\n", "", 1),
 		"\t\tgolem.FullTextIndex(\"content\",\n\t\t\tgolem.FullTextField(Notes.Title, 3),\n\t\t\tgolem.FullTextField(Notes.Body, 1),\n\t\t),\n", "", 1)
@@ -503,13 +468,12 @@ func TestGenerateAcceptsANewIndexAndTheResolverUsingItInOneChange(t *testing.T) 
 	}
 	application := writeResolverSurfaceModule(t, resolverSurfaceBaseline)
 	schemaPath := filepath.Join(application, "notes", "schema.go")
+	resolvers := filepath.Join(application, "notes", "resolvers.go")
 	if err := os.WriteFile(schemaPath, []byte(baseline), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runResolverSurfaceCommand(t, application, "migration", "new", "--schema", "./notes", "--name", "init")
 	runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
-	quickstartGo(t, application, "mod", "tidy")
-	quickstartGo(t, application, "build", "./...")
 	registry, err := os.ReadFile(filepath.Join(application, "notes", "zz_golem_registry.gen.go"))
 	if err != nil {
 		t.Fatal(err)
@@ -518,20 +482,46 @@ func TestGenerateAcceptsANewIndexAndTheResolverUsingItInOneChange(t *testing.T) 
 		t.Fatal("baseline generation already published the index methods")
 	}
 
-	if err := os.WriteFile(schemaPath, []byte(resolverSurfaceSchema), 0o644); err != nil {
-		t.Fatal(err)
+	t.Run("a new index and the resolver using it in one change", func(t *testing.T) {
+		if err := os.WriteFile(schemaPath, []byte(resolverSurfaceSchema), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(resolvers, []byte(combinedResolverSurfaceFamilies([]string{"semantic", "fulltext"})), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runResolverSurfaceCommand(t, application, "migration", "new", "--schema", "./notes", "--name", "indexes")
+		runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
+	})
+	families := []string{"selectors", "accessors", "semantic", "fulltext", "events", "system"}
+	for _, family := range families {
+		t.Run(family, func(t *testing.T) {
+			if err := os.WriteFile(resolvers, []byte(resolverSurfaceFamilies[family]), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
+		})
 	}
-	combined := strings.Replace(resolverSurfaceFamilies["semantic"], "golem.Query(graphql, \"relatedCount\", RelatedCount)\n", "golem.Query(graphql, \"relatedCount\", RelatedCount)\n\tgolem.Query(graphql, \"textCount\", TextCount)\n", 1)
-	fulltext := resolverSurfaceFamilies["fulltext"]
-	combined += fulltext[strings.Index(fulltext, "func TextCount"):]
-	if err := os.WriteFile(filepath.Join(application, "notes", "resolvers.go"), []byte(combined), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runResolverSurfaceCommand(t, application, "migration", "new", "--schema", "./notes", "--name", "indexes")
-	runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
-	quickstartGo(t, application, "mod", "tidy")
-	runResolverSurfaceCommand(t, application, "check", "--schema", "./notes", "--app-out", "./notes")
-	quickstartGo(t, application, "build", "./...")
+	t.Run("every family together checks, builds, and runs", func(t *testing.T) {
+		if err := os.WriteFile(resolvers, []byte(combinedResolverSurfaceFamilies(families)), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		mainSource := strings.Replace(resolverSurfaceMain, "DSN", `"file:`+filepath.ToSlash(filepath.Join(application, "notes.db"))+`"`, 1)
+		if err := os.MkdirAll(filepath.Join(application, "cmd", "notes"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(application, "cmd", "notes", "main.go"), []byte(mainSource), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
+		quickstartGo(t, application, "mod", "tidy")
+		runResolverSurfaceCommand(t, application, "check", "--schema", "./notes", "--app-out", "./notes")
+		assertSurfaceDeclaresThePublishedABI(t, application, "./notes")
+		runResolverSurfaceCommand(t, application, "migration", "apply", "--provider", "sqlite", "--dsn", "file:"+filepath.ToSlash(filepath.Join(application, "notes.db")))
+		output := quickstartGo(t, application, "run", "./cmd/notes")
+		if !strings.Contains(output, "views=7 touched=1 text=2 related=true ready=3 total=1") {
+			t.Fatalf("the resolver program printed %q", output)
+		}
+	})
 }
 
 func TestGenerateReportsOnlyTheSymbolTheCompleteSurfaceLacks(t *testing.T) {

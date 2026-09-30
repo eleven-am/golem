@@ -129,8 +129,28 @@ func build(ctx context.Context, request Request) (Result, error) {
 	}, nil
 }
 
+var bindingDiscovery = bindings.DiscoverAndEmit
+
 func discoverBindings(ctx context.Context, request Request, compiled compile.Result, compilation ir.CompilationIR) (bindings.Result, error) {
-	bootstrap, err := surface.Emit(surface.Request{Compilation: compilation, Packages: compiled.Packages, AppPackage: request.AppPackage, GolemImportPath: request.GolemImportPath})
+	bootstrap, err := modelcodegen.Emit(modelcodegen.Request{Compilation: compilation, Packages: compiled.Packages, GolemImportPath: request.GolemImportPath})
+	if err != nil {
+		return bindings.Result{}, fmt.Errorf("emit model bootstrap: %w", err)
+	}
+	registryShell, err := registry.EmitShell(registry.ShellRequest{AppPackage: request.AppPackage, Actor: compilation.Model.Schema.Actor, Model: compilation.Model, Contract: compilation.Contract, GolemImportPath: request.GolemImportPath})
+	if err != nil {
+		return bindings.Result{}, fmt.Errorf("emit registry bootstrap: %w", err)
+	}
+	bootstrap.Files = append(bootstrap.Files, modelcodegen.File{ImportPath: registryShell.ImportPath, PackageName: registryShell.PackageName, Path: registryShell.Path, Source: registryShell.Source})
+	discovery := bindings.DiscoveryRequest{
+		Dir: request.Compile.Dir, ModulePath: compiled.ModulePath, Env: request.Env,
+		Compilation: compilation, Packages: compiled.Packages, ModelBootstrap: bootstrap,
+		GolemImportPath: request.GolemImportPath,
+	}
+	discovered := bindingDiscovery(ctx, discovery)
+	if !onlyBindingTypeErrors(discovered.Diagnostics) {
+		return discovered, nil
+	}
+	discovery.ModelBootstrap, err = surface.Emit(surface.Request{Compilation: compilation, Packages: compiled.Packages, AppPackage: request.AppPackage, GolemImportPath: request.GolemImportPath})
 	if err != nil {
 		return bindings.Result{}, fmt.Errorf("emit generated surface: %w", err)
 	}
@@ -143,11 +163,20 @@ func discoverBindings(ctx context.Context, request Request, compiled compile.Res
 		return bindings.Result{}, err
 	}
 	defer cleanup()
-	return bindings.DiscoverAndEmit(ctx, bindings.DiscoveryRequest{
-		Dir: request.Compile.Dir, ModulePath: compiled.ModulePath, Env: request.Env,
-		Compilation: compilation, Packages: compiled.Packages, ModelBootstrap: bootstrap,
-		GolemImportPath: request.GolemImportPath, BuildFlags: buildFlags,
-	}), nil
+	discovery.BuildFlags = buildFlags
+	return bindingDiscovery(ctx, discovery), nil
+}
+
+func onlyBindingTypeErrors(diagnostics []ir.Diagnostic) bool {
+	if len(diagnostics) == 0 {
+		return false
+	}
+	for _, diagnostic := range diagnostics {
+		if diagnostic.Severity == ir.SeverityError && diagnostic.Code != bindings.TypeCheckCode {
+			return false
+		}
+	}
+	return true
 }
 
 func diagnosticsError(diagnostics []ir.Diagnostic) error {

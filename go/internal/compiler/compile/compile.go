@@ -70,6 +70,8 @@ func Compile(ctx context.Context, config Config) Result {
 
 const surfaceAttempts = 2
 
+var interpretMethods = methods.Interpret
+
 func compileWithMethods(ctx context.Context, raw ir.RawDeclIR, metadata []schema.PackageMetadata, dir string) Result {
 	result, candidate := compileMethodsAttempt(ctx, raw, metadata, dir, nil, nil)
 	if candidate == nil {
@@ -138,7 +140,7 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 			return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
 		}
 		beforeInterpretation = append([]ir.Diagnostic(nil), diagnostics...)
-		interpreted = methods.Interpret(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs, TolerateTypeErrors: surfaceFrom == nil, BuildFlags: buildFlags})
+		interpreted = interpretMethods(ctx, methods.Config{Dir: dir, ModulePath: modulePath, Compilation: resolved.Compilation, Packages: specs, Bootstrap: bootstrap, Registry: schemaexpr.NewRegistry(), IDRegistry: resolved.IDs, TolerateTypeErrors: surfaceFrom == nil, BuildFlags: buildFlags})
 		declared := interpreted.Diagnostics
 		if surfaceFrom == nil {
 			declared = nil
