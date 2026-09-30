@@ -188,11 +188,14 @@ func compileMethodsAttempt(ctx context.Context, raw ir.RawDeclIR, metadata []sch
 		diagnostics = append(diagnostics, graphqlextension.AddFullTextSearchOperations(&resolved.Compilation)...)
 	}
 	if len(typeErrors) != 0 {
-		var candidate *ir.CompilationIR
-		if !hasErrors(diagnostics) {
-			candidate = finish(raw, resolved.Compilation, diagnostics).Compilation
+		if hasErrors(diagnostics) {
+			return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
 		}
-		return finishWithMetadata(raw, resolved.Compilation, append(beforeInterpretation, typeErrors...), specs, modulePath, moduleDir), candidate
+		finished := finish(raw, resolved.Compilation, diagnostics)
+		if finished.Compilation == nil {
+			return finishWithMetadata(raw, resolved.Compilation, finished.Diagnostics, specs, modulePath, moduleDir), nil
+		}
+		return finishWithMetadata(raw, resolved.Compilation, append(beforeInterpretation, typeErrors...), specs, modulePath, moduleDir), finished.Compilation
 	}
 	return finishWithMetadata(raw, resolved.Compilation, diagnostics, specs, modulePath, moduleDir), nil
 }

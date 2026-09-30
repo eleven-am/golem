@@ -35,7 +35,8 @@ func TestSourceThatTypeChecksAgainstTheBootstrapIsLoadedOnce(t *testing.T) {
 	}
 }
 
-func TestSourceUsingASymbolOnlyTheCompleteSurfaceDeclaresIsLoadedTwice(t *testing.T) {
+func writeSurfaceRetryFixture(t *testing.T, declarations string) string {
+	t.Helper()
 	golemModule, err := filepath.Abs(filepath.Join("..", "..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -69,13 +70,18 @@ func Load(ctx context.Context, system System[string], id int64) error {
 	_, err := system.Notes.FindUnique(ctx, Notes.ByID.Value(id))
 	return err
 }
-`,
+` + declarations,
 	}
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	return directory
+}
+
+func TestSourceUsingASymbolOnlyTheCompleteSurfaceDeclaresIsLoadedTwice(t *testing.T) {
+	directory := writeSurfaceRetryFixture(t, "")
 	calls := recordInterpretations(t)
 	result := Compile(context.Background(), Config{Dir: directory, Pattern: ".", Root: "DefineSchema"})
 	if len(result.Diagnostics) != 0 || result.Compilation == nil {
@@ -86,5 +92,24 @@ func Load(ctx context.Context, system System[string], id int64) error {
 	}
 	if retry := (*calls)[1]; retry.TolerateTypeErrors || len(retry.BuildFlags) == 0 {
 		t.Fatalf("retry ran with tolerance=%t build flags=%v", retry.TolerateTypeErrors, retry.BuildFlags)
+	}
+}
+
+func TestADeclarationErrorThatPreventsTheSurfaceRetryIsReportedInsteadOfGeneratedSymbols(t *testing.T) {
+	directory := writeSurfaceRetryFixture(t, `
+func (*Note) GolemModel() golem.ModelSpec[Note] {
+	return golem.DefineModel(golem.ScopedReads[Note]())
+}
+`)
+	result := Compile(context.Background(), Config{Dir: directory, Pattern: ".", Root: "DefineSchema"})
+	if result.Compilation != nil {
+		t.Fatal("an invalid declaration compiled")
+	}
+	codes := make([]string, len(result.Diagnostics))
+	for index, diagnostic := range result.Diagnostics {
+		codes[index] = diagnostic.Code
+	}
+	if len(codes) != 1 || codes[0] != "P1_METHOD_RECEIVER" {
+		t.Fatalf("diagnostics = %v, want only the declaration error: %#v", codes, result.Diagnostics)
 	}
 }
