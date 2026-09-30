@@ -1209,7 +1209,7 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 			if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 				return err
 			}
-			if err := transaction.Commit(); err != nil {
+			if err := commitWithinOperation(ctx, transaction.Commit); err != nil {
 				return err
 			}
 			commitMutationBinding(ctx, binding)

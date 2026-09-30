@@ -382,7 +382,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 				if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 					return err
 				}
-				if err := transaction.Commit(); err != nil {
+				if err := commitWithinOperation(ctx, transaction.Commit); err != nil {
 					binding.discardMutation()
 					return err
 				}
@@ -427,7 +427,10 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
 					return err
 				}
-				if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+				if err := commitWithinOperation(ctx, func() error {
+					_, err := connection.ExecContext(ctx, "COMMIT")
+					return err
+				}); err != nil {
 					binding.discardMutation()
 					return err
 				}

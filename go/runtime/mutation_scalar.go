@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"reflect"
 	"time"
 
@@ -309,7 +310,10 @@ func executeScalarMutationProgramWithObservers(ctx context.Context, database *sq
 		transactionBinding.discardMutation()
 		return scalarMutationExecution{}, rollbackScalarMutation(transaction, err)
 	}
-	if commitErr := transaction.Commit(); commitErr != nil {
+	if commitErr := commitWithinOperation(ctx, transaction.Commit); commitErr != nil {
+		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
+			_ = transaction.Rollback()
+		}
 		transactionBinding.discardMutation()
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationProviderFailureKind(commitErr), 0, 0, "transaction commit failed", commitErr)
 	}

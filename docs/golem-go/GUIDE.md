@@ -176,6 +176,21 @@ a caller the resolver kept, or a goroutine that outlives it, from then on
 writes only what the caller's own policy allows. Two custom mutations in one
 GraphQL document each receive only their own grants.
 
+A write that used a Within grant commits only while its operation is running.
+Ending the operation waits for a commit that has already started, and for
+nothing else.
+
+- **Standalone writes.** A write planned during the operation that reaches its
+  commit afterwards is rolled back and redone under the caller's own policy. It
+  gets exactly the result the caller alone would get.
+- **Caller transactions.** A caller transaction that performed such a write
+  belongs to the operation. If it reaches its commit after the operation ended,
+  it is rolled back and `Transaction` returns the error the caller's own policy
+  gives the first such write. Golem finds that error by re-issuing the write in
+  a transaction it always rolls back. If the caller's own policy would allow
+  every such write, `Transaction` returns `CONFLICT`. The callback never runs a
+  second time.
+
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
 with an error naming it. Prefer `Within` to `SystemEscape` for a write an

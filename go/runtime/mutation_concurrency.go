@@ -194,6 +194,12 @@ func equalGolemFieldIDs(left, right []golem.FieldID) bool {
 
 // CallerUpdateVersioned is the typed generated-client ABI for one caller CAS.
 func CallerUpdateVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerUpdateVersioned(ctx, caller, descriptor, target, expected, input, projections...)
+	})
+}
+
+func callerUpdateVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller == nil || caller.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeUnauthenticated, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -224,6 +230,12 @@ func CallerUpdateVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 // CallerDeleteVersioned is the typed generated-client ABI for one caller CAS.
 func CallerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerDeleteVersioned(ctx, caller, descriptor, target, expected, projections...)
+	})
+}
+
+func callerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller == nil || caller.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeUnauthenticated, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -246,6 +258,7 @@ func CallerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 }
 
 func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -275,6 +288,7 @@ func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A]
 }
 
 func SystemDeleteVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -340,6 +354,12 @@ func SystemTxDeleteVersioned[P, A, M any](ctx context.Context, transaction *Syst
 }
 
 func CallerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerUpsertVersioned(ctx, caller, descriptor, target, expected, create, update, projections...)
+	})
+}
+
+func callerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller == nil || caller.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeUnauthenticated, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -367,6 +387,7 @@ func CallerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 }
 
 func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}

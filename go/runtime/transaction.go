@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"sync"
 	"sync/atomic"
 
@@ -20,20 +21,21 @@ import (
 // transaction-bound operation can never silently fall back to another App or
 // to the App's connection pool.
 type executionBinding struct {
-	database     *sqlx.DB
-	executor     sqlx.QueryerContext
-	transaction  *sqlx.Tx
-	active       atomic.Bool
-	scoped       bool
-	nextScope    atomic.Uint64
-	invalidation atomic.Uint64
-	stateMu      sync.Mutex
-	state        *mutationState
-	stateErr     error
-	mutation     executionMutationConfig
-	observation  *observeexec.Span
-	observer     observe.Observer
-	queueWake    atomic.Pointer[func()]
+	database        *sqlx.DB
+	executor        sqlx.QueryerContext
+	transaction     *sqlx.Tx
+	active          atomic.Bool
+	scoped          bool
+	nextScope       atomic.Uint64
+	invalidation    atomic.Uint64
+	stateMu         sync.Mutex
+	state           *mutationState
+	stateErr        error
+	mutation        executionMutationConfig
+	observation     *observeexec.Span
+	observer        observe.Observer
+	queueWake       atomic.Pointer[func()]
+	operationWrites *operationWriteLog
 }
 
 func (binding *executionBinding) queueEnqueued(wake func()) {
@@ -296,6 +298,7 @@ func CallerTransaction[P, A any](ctx context.Context, caller *Caller[P, A], call
 	binding := transactionExecution(caller.app.database, transaction)
 	binding.observation = observation
 	binding.observer = deferredObserver
+	binding.operationWrites = &operationWriteLog{}
 	if err := binding.enableMutation(mutationConfig(caller.app, caller.executor)); err != nil {
 		binding.close()
 		return rollbackTransaction(transaction, err)
@@ -387,8 +390,12 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		binding.discardMutation()
 		return rollbackTransaction(transaction, err)
 	}
-	if commitErr := transaction.Commit(); commitErr != nil {
+	if commitErr := binding.operationWrites.commit(transaction.Commit); commitErr != nil {
 		binding.discardMutation()
+		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
+			_ = transaction.Rollback()
+			return binding.operationWrites.refusal(ctx)
+		}
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: commit: %w", commitErr)
 	}
 	commitMutationBinding(ctx, binding)
@@ -438,7 +445,10 @@ func commitSQLiteImmediate(ctx context.Context, connection sqliteImmediateConnec
 	if connection == nil {
 		return fmt.Errorf("P4_RUNTIME_TRANSACTION: SQLite connection is unavailable")
 	}
-	if _, err := connection.ExecContext(ctx, "COMMIT"); err != nil {
+	if err := commitWithinOperation(ctx, func() error {
+		_, err := connection.ExecContext(ctx, "COMMIT")
+		return err
+	}); err != nil {
 		return err
 	}
 	if committed != nil {

@@ -98,6 +98,7 @@ type p10OperationFixture struct {
 	app      *p10operations.App[p10operations.Principal]
 	server   *p10operations.GraphQLServer
 	database *sqlx.DB
+	gate     *p10CommitGate
 	observer *p10OperationObserver
 	alpha    golem.UUID
 	beta     golem.UUID
@@ -131,26 +132,12 @@ func forEachP10OperationProfile(t *testing.T, run func(*testing.T, *p10Operation
 func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p10OperationFixture {
 	t.Helper()
 	ctx := context.Background()
-	var database *sqlx.DB
-	var apply func(context.Context, *sqlx.DB, physical.PhysicalSchema) error
-	if profile.provider == golem.SQLite {
-		provider := sqliteprovider.New()
-		var err error
-		database, _, err = provider.Open(ctx, "file:"+filepath.Join(t.TempDir(), "operations.sqlite"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		apply = provider.ApplyInitial
-	} else {
-		provider := postgresprovider.New()
-		var err error
-		database, _, err = provider.Open(ctx, testenv.DisposablePostgreSQL(t, profile.env))
-		if err != nil {
-			t.Fatal(err)
-		}
-		apply = provider.ApplyInitial
+	gate := &p10CommitGate{}
+	database := openP10OperationDatabase(t, profile, gate)
+	apply := sqliteprovider.New().ApplyInitial
+	if profile.provider == golem.PostgreSQL {
+		apply = postgresprovider.New().ApplyInitial
 	}
-	t.Cleanup(func() { _ = database.Close() })
 	var encoded []byte
 	for _, document := range p10operations.GolemGeneratedSchemaBundle().Providers() {
 		if document.Provider() == profile.provider {
@@ -191,7 +178,7 @@ func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p
 	if err != nil {
 		t.Fatal(err)
 	}
-	fixture := &p10OperationFixture{app: application, server: server, database: database, observer: observer, alpha: p10OperationID(t, 1), beta: p10OperationID(t, 2)}
+	fixture := &p10OperationFixture{app: application, server: server, database: database, gate: gate, observer: observer, alpha: p10OperationID(t, 1), beta: p10OperationID(t, 2)}
 	system := application.System()
 	for owner, team := range map[string]golem.UUID{"alpha": fixture.alpha, "beta": fixture.beta} {
 		if _, err := system.Teams.Create(ctx, p10operations.Teams.Create(p10operations.Teams.ID.Create(team), p10operations.Teams.Owner.Create(owner))); err != nil {

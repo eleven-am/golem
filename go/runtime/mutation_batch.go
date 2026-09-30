@@ -23,7 +23,13 @@ import (
 // CallerUpdateMany executes one bounded, exact-set authorized update. Planning,
 // policy classification, provider capability checks, and SQL rendering all
 // complete before transaction acquisition.
-func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
+func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
+	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+		return callerUpdateMany(ctx, caller, descriptor, where, input)
+	})
+}
+
+func callerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -59,7 +65,13 @@ func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 }
 
-func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
+func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
+	return callerWrite(ctx, caller, func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+		return callerDeleteMany(ctx, caller, descriptor, where)
+	})
+}
+
+func callerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -92,6 +104,7 @@ func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 }
 
 func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
+	ctx = withoutOperationLease(ctx)
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -113,6 +126,7 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
+	ctx = withoutOperationLease(ctx)
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -648,9 +662,9 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 			_ = transaction.Rollback()
 			return batchExecutionScope{}, err
 		}
-		return batchExecutionScope{queryer: queryer, execer: transaction, binding: active, finish: func(context.Context) error {
+		return batchExecutionScope{queryer: queryer, execer: transaction, binding: active, finish: func(ctx context.Context) error {
 			defer active.close()
-			return transaction.Commit()
+			return commitWithinOperation(ctx, transaction.Commit)
 		}, abort: func() error {
 			defer active.close()
 			return ignoreTransactionDone(transaction.Rollback())

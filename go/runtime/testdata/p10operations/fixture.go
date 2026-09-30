@@ -61,6 +61,7 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	rules.CanUpdate(owned)
 	rules.CannotUpdateFields(golem.All[Invite](), Invites.Status, Invites.Email)
 	golem.Within(rules, InviteMember).CanCreate(owned)
+	golem.Within(rules, InviteMember).CanUpdateFields(owned, Invites.Status)
 	golem.Within(rules, NestedTeamInvite).CanCreate(owned)
 	golem.Within(rules, TransactionalInvite).CanCreate(owned)
 	golem.Within(rules, UpsertInvite).CanCreate(owned)
@@ -71,14 +72,30 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	}
 }
 
+func (Team) AfterCreate(ctx context.Context, result TeamCreateResult) error {
+	probeLock.Lock()
+	hook := activeTeamHook
+	probeLock.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx, result.Executor())
+}
+
 func (Invite) BeforeCreate(ctx context.Context, _ *InviteCreateRequest) error {
 	recordHook("before_create")
 	return nil
 }
 
-func (Invite) AfterCreate(_ context.Context, _ InviteCreateResult) error {
+func (Invite) AfterCreate(ctx context.Context, _ InviteCreateResult) error {
 	recordHook("after_create")
-	return nil
+	probeLock.Lock()
+	hook := activeInviteHook
+	probeLock.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx)
 }
 
 func (Invite) AfterCommitCreate(_ context.Context, _ InviteCreateResult) error {
@@ -232,21 +249,39 @@ func inviteInput(arguments InviteArgs, email string) InviteCreateInput {
 
 type Probe func(ctx context.Context, operation string, caller *Caller[Principal]) error
 
+type TeamHook func(ctx context.Context, executor golem.HookExecutor) error
+
+func SetTeamHook(hook TeamHook) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeTeamHook = hook
+}
+
+func SetInviteHook(hook func(context.Context) error) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeInviteHook = hook
+}
+
 type Record struct {
 	Resolvers []string
 	Hooks     []string
 }
 
 var (
-	probeLock   sync.Mutex
-	activeProbe Probe
-	record      Record
+	probeLock        sync.Mutex
+	activeProbe      Probe
+	activeTeamHook   TeamHook
+	activeInviteHook func(context.Context) error
+	record           Record
 )
 
 func Reset(probe Probe) {
 	probeLock.Lock()
 	defer probeLock.Unlock()
 	activeProbe = probe
+	activeTeamHook = nil
+	activeInviteHook = nil
 	record = Record{}
 }
 

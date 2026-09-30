@@ -3,7 +3,10 @@
 package runtime
 
 import (
+	"errors"
 	"fmt"
+	"sort"
+	"sync"
 	"sync/atomic"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -22,7 +25,74 @@ type Set struct {
 	operations map[golem.OperationID]map[ir.ModelID]ir.Policy
 	root       *Set
 	scoped     map[ir.ModelID]ir.Policy
-	released   *atomic.Bool
+	scope      *operationScope
+	lease      *Lease
+}
+
+// ErrOperationEnded refuses a commit whose write used Within grants after the
+// operation that owned those grants ended.
+var ErrOperationEnded = errors.New("P5_CUSTOM_OPERATION: the operation that authorised this write has ended")
+
+var operationScopeOrder atomic.Uint64
+
+type operationScope struct {
+	mu       sync.Mutex
+	released atomic.Bool
+	order    uint64
+}
+
+func (scope *operationScope) release() {
+	scope.mu.Lock()
+	scope.released.Store(true)
+	scope.mu.Unlock()
+}
+
+// Lease records whether one write planned under an operation set used the
+// operation's Within grants. Such a write commits only while the operation is
+// live, and ending the operation waits for a commit already in progress.
+type Lease struct {
+	scope *operationScope
+	used  atomic.Bool
+	ended atomic.Bool
+}
+
+func (lease *Lease) Used() bool  { return lease != nil && lease.used.Load() }
+func (lease *Lease) Ended() bool { return lease != nil && lease.ended.Load() }
+
+// Commit runs commit, holding the operation live for its duration when the
+// write used the operation's grants. After the operation ended it runs
+// nothing and returns ErrOperationEnded.
+func (lease *Lease) Commit(commit func() error) error {
+	return CommitLeases([]*Lease{lease}, commit)
+}
+
+// CommitLeases is Commit for the writes of one transaction.
+func CommitLeases(leases []*Lease, commit func() error) error {
+	var used []*Lease
+	seen := map[*operationScope]bool{}
+	for _, lease := range leases {
+		if !lease.Used() || seen[lease.scope] {
+			continue
+		}
+		seen[lease.scope] = true
+		used = append(used, lease)
+	}
+	sort.Slice(used, func(i, j int) bool { return used[i].scope.order < used[j].scope.order })
+	for _, lease := range used {
+		lease.scope.mu.Lock()
+		defer lease.scope.mu.Unlock()
+	}
+	for _, lease := range used {
+		if lease.scope.released.Load() {
+			for _, ended := range leases {
+				if ended.Used() {
+					ended.ended.Store(true)
+				}
+			}
+			return ErrOperationEnded
+		}
+	}
+	return commit()
 }
 
 func (set *Set) GenerationDigest() golem.SchemaDigest {
@@ -43,8 +113,11 @@ func (set *Set) Policy(model ir.ModelID) (ir.Policy, bool) {
 	if set == nil {
 		return ir.Policy{}, false
 	}
-	if set.scoped != nil && !set.released.Load() {
+	if set.scoped != nil && !set.scope.released.Load() {
 		if policy, ok := set.scoped[model]; ok {
+			if set.lease != nil {
+				set.lease.used.Store(true)
+			}
 			return policy, true
 		}
 	}
@@ -64,9 +137,41 @@ func (set *Set) Within(operation golem.OperationID) (*Set, func()) {
 	if set.root != nil {
 		root = set.root
 	}
-	released := &atomic.Bool{}
-	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, scoped: root.operations[operation], released: released}
-	return scoped, func() { released.Store(true) }
+	scope := &operationScope{order: operationScopeOrder.Add(1)}
+	scoped := &Set{generation: root.generation, provider: root.provider, policies: root.policies, root: root, scoped: root.operations[operation], scope: scope}
+	return scoped, scope.release
+}
+
+// Base returns the caller's own set, without any operation's grants.
+func (set *Set) Base() *Set {
+	if set == nil || set.root == nil {
+		return set
+	}
+	return set.root
+}
+
+// Lease returns a view of an operation set that records whether a write
+// planned through it used the operation's grants. A set carrying no grants
+// is returned unchanged with a nil lease.
+func (set *Set) Lease() (*Set, *Lease) {
+	if set == nil || set.scoped == nil {
+		return set, nil
+	}
+	lease := &Lease{scope: set.scope}
+	view := *set
+	view.lease = lease
+	return &view, lease
+}
+
+// WithLease returns a view recording into lease when lease belongs to this
+// set's operation, and the set unchanged otherwise.
+func (set *Set) WithLease(lease *Lease) *Set {
+	if set == nil || lease == nil || set.scoped == nil || set.scope != lease.scope {
+		return set
+	}
+	view := *set
+	view.lease = lease
+	return &view
 }
 
 type BuildRequest[A any] struct {
