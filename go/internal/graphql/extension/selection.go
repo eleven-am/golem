@@ -1,6 +1,7 @@
 package extension
 
 import (
+	"bytes"
 	"encoding/json"
 
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -88,7 +89,7 @@ func cloneGraphQLType(value compilerir.GraphQLTypeIR) compilerir.GraphQLTypeIR {
 func cloneBoundValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []any:
 		result := make([]any, len(typed))
 		for index, item := range typed {

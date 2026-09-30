@@ -65,7 +65,6 @@ func (transport *memoryTransport) Publish(ctx context.Context, batch EventBatch)
 	}
 	events := batch.Events()
 	transport.mu.Lock()
-	defer transport.mu.Unlock()
 	pending := make(map[*memoryStream][]Notice)
 	for _, notice := range events {
 		for _, stream := range transport.streams {
@@ -74,15 +73,20 @@ func (transport *memoryTransport) Publish(ctx context.Context, batch EventBatch)
 			}
 		}
 	}
+	var overflowed []*memoryStream
 	for stream, notices := range pending {
 		if len(stream.queue)+len(notices) > cap(stream.queue) {
-			return Failure(CodeEventTransport)
+			delete(transport.streams, stream.id)
+			overflowed = append(overflowed, stream)
+			continue
 		}
-	}
-	for stream, notices := range pending {
 		for _, notice := range notices {
 			stream.queue <- notice
 		}
+	}
+	transport.mu.Unlock()
+	for _, stream := range overflowed {
+		_ = stream.closeWith(CodeEventTransport)
 	}
 	return nil
 }

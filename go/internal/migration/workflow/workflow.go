@@ -147,6 +147,9 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 	for _, artifact := range state.Artifacts {
 		artifactByPath[artifact.Path] = artifact
 	}
+	if err := missingApprovals(preview.Providers, approved); err != nil {
+		return NewResult{}, err
+	}
 	var changedProviders []ir.Provider
 	for _, providerPreview := range preview.Providers {
 		provider := providerPreview.Provider
@@ -161,7 +164,7 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		backfills := pendingBackfillOperations(migration.ManifestEntry{Operations: plan.Operations})
 		pendingRequiredColumn := len(backfills) != 0
 		if pendingRequiredColumn && (len(providers) != 1 || providerID != ir.PostgreSQL || len(backfills) != 1) {
-			return NewResult{}, fmt.Errorf("reviewed required-column backfill authoring requires exactly one PostgreSQL provider and one target field")
+			return NewResult{}, requiredFieldWithoutDefault(after, backfills, len(providers) != 1 || providerID != ir.PostgreSQL)
 		}
 		var approvals []migration.Approval
 		var risks []migration.OperationRisk
@@ -289,6 +292,52 @@ func PrepareNew(ctx context.Context, request NewRequest) (NewResult, error) {
 		return NewResult{}, err
 	}
 	return NewResult{Prospective: prospective, PublicationPath: path.Join(root, PublicationFilename), MigrationID: id, Providers: changedProviders}, nil
+}
+
+func requiredFieldWithoutDefault(after physical.PhysicalSchema, backfills []migration.Operation, notPostgreSQLOnly bool) error {
+	fields := make([]string, 0, len(backfills))
+	for _, operation := range backfills {
+		name := operation.ObjectID
+		for _, table := range after.Tables {
+			for _, column := range table.Columns {
+				if string(column.ID) == operation.ObjectID {
+					name = string(table.Name) + "." + string(column.Name)
+				}
+			}
+		}
+		fields = append(fields, name)
+	}
+	sort.Strings(fields)
+	if notPostgreSQLOnly {
+		return fmt.Errorf("required field %s is added without a default, so existing rows would have no value; declare a default or make the field optional (a reviewed backfill is supported only when PostgreSQL is the schema's sole provider)", strings.Join(fields, ", "))
+	}
+	return fmt.Errorf("required fields %s are added without defaults; a reviewed backfill migration adds exactly one required field, so declare defaults, make the fields optional, or add them in separate migrations", strings.Join(fields, ", "))
+}
+
+func missingApprovals(providers []PreviewProvider, approved map[migration.OperationID]bool) error {
+	var lines []string
+	var flags []string
+	flagged := map[migration.OperationID]bool{}
+	for _, providerPreview := range providers {
+		plan := providerPreview.Plan
+		if len(pendingBackfillOperations(migration.ManifestEntry{Operations: plan.Operations})) != 0 {
+			continue
+		}
+		for _, operation := range plan.Operations {
+			if approved[operation.ID] || !migration.PlanRequiresApproval(plan, operation) {
+				continue
+			}
+			lines = append(lines, fmt.Sprintf("provider %s %s operation %s risk %s requires --approve %s", providerPreview.Provider.Result.Provider.Provider, operation.Kind, operation.ID, migration.PlanOperationRisk(plan, operation), operation.ID))
+			if !flagged[operation.ID] {
+				flagged[operation.ID] = true
+				flags = append(flags, "--approve "+string(operation.ID))
+			}
+		}
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	return fmt.Errorf("migration needs %d reviewed approvals; rerun with %s\n%s", len(flags), strings.Join(flags, " "), strings.Join(lines, "\n"))
 }
 
 func validateNewHeadLength(headLength int) error {

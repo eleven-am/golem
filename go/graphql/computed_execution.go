@@ -1,8 +1,10 @@
 package graphql
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -121,6 +123,9 @@ func (execution *computedExecution) resolve(ctx context.Context, _ compilerir.Mo
 			if observation != nil {
 				observation.SetAggregateCount(1)
 			}
+			if slot.Computed.Result.Nullable && maskedDependency(err) {
+				value, err = nil, nil
+			}
 			finishGraphQLChild(observation, err)
 			if err != nil {
 				failures.byIndex[index] = fmt.Errorf("computed row %d: %w", index, err)
@@ -229,6 +234,9 @@ func (execution *computedExecution) resolveBatch(ctx context.Context, slot selec
 			continue
 		}
 		value, err := future.Await(ctx)
+		if slot.Computed.Result.Nullable && maskedDependency(err) {
+			continue
+		}
 		if err != nil {
 			failures.byIndex[index] = fmt.Errorf("computed batch result %d: %w", index, err)
 			continue
@@ -239,6 +247,11 @@ func (execution *computedExecution) resolveBatch(ctx context.Context, slot selec
 		return values, failures
 	}
 	return values, nil
+}
+
+func maskedDependency(err error) bool {
+	var masked interface{ GolemMaskedDependency() }
+	return errors.As(err, &masked)
 }
 
 func maskedComputedParent(row golem.RuntimeModelRow, dependencies []graphqlextension.DependencyAccess) (golem.RuntimeModelRow, error) {
@@ -289,7 +302,7 @@ func cloneComputedArguments(values []ComputedArgument) []ComputedArgument {
 func cloneComputedArgumentValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []any:
 		result := make([]any, len(typed))
 		for index, item := range typed {

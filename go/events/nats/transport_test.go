@@ -13,6 +13,7 @@ import (
 	"github.com/eleven-am/golem/go/events/transporttest"
 	"github.com/eleven-am/golem/go/golem"
 	eventvalue "github.com/eleven-am/golem/go/internal/event/value"
+	"github.com/eleven-am/golem/go/internal/subscription/subscriptiontest"
 	natsclient "github.com/nats-io/nats.go"
 )
 
@@ -587,6 +588,47 @@ func (observer *closingObserver) ObserveEvent(context.Context, events.Observatio
 		_ = observer.transport.Close()
 		close(observer.done)
 	})
+}
+
+func TestCoreNATSStreamOverflowNeverDropsAnUpdateSilently(t *testing.T) {
+	transport, publish := natsSubscriptionTestTransport(t, 1)
+	subscriptiontest.AssertOverflowEndsSubscribersWithResync(t, transport.Subscribe, publish)
+}
+
+func TestCoreNATSConnectFailureNeverSkipsAnUpdateSilently(t *testing.T) {
+	transport, publish := natsSubscriptionTestTransport(t, 64)
+	subscriptiontest.AssertTransientConnectFailureNeverSkipsSilently(t, transport.Subscribe, publish)
+}
+
+func TestCoreNATSSubscribeFailsWhenTheSourceNeverGoesLive(t *testing.T) {
+	transport, publish := natsSubscriptionTestTransport(t, 64)
+	subscriptiontest.AssertSubscribeFailsWhenTheSourceNeverGoesLive(t, transport.Subscribe, publish)
+}
+
+func natsSubscriptionTestTransport(t *testing.T, buffer int) (*Transport, func(testing.TB, byte)) {
+	t.Helper()
+	transport := mustTestTransport(t, newFakeConnection(), Config{URLs: []string{"nats://test"}, SubjectPrefix: "deployment", StreamBuffer: buffer})
+	eventSchema := golem.EventSchemaDigest(subscriptiontest.Generation)
+	binding := mapBinding{}
+	batches := map[byte]events.EventBatch{}
+	for value := byte(1); value <= 11; value++ {
+		notice := mustNotice(t, golem.EventID{value}, subscriptiontest.Generation, eventSchema, subscriptiontest.Model, golem.CausationID{value}, 1, []byte{value})
+		binding[string([]byte{value})] = notice
+		batch, err := eventvalue.NewEventBatch(golem.CausationID{value}, []events.Notice{notice})
+		if err != nil {
+			t.Fatal(err)
+		}
+		batches[value] = batch
+	}
+	if err := transport.BindEventRuntime(binding); err != nil {
+		t.Fatal(err)
+	}
+	return transport, func(t testing.TB, value byte) {
+		t.Helper()
+		if err := transport.Publish(context.Background(), batches[value]); err != nil {
+			t.Fatalf("publish %d: %v", value, err)
+		}
+	}
 }
 
 type mapBinding map[string]events.Notice

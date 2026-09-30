@@ -61,6 +61,9 @@ func NewDecimal(coefficient int64, scale uint8) (Decimal, error) {
 		coefficient /= 10
 		scale--
 	}
+	if coefficient == 0 {
+		scale = 0
+	}
 	if magnitude(coefficient) > maxDecimalCoefficient {
 		return Decimal{}, errors.New("decimal coefficient exceeds portable 18-digit precision")
 	}

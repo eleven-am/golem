@@ -173,11 +173,23 @@ func (fixture *natsFixture) outageReconnectReadiness() {
 	if !fixture.first.EventCapabilities().PublisherRunning() {
 		fixture.t.Fatal("publisher stopped during live NATS outage")
 	}
+	resyncCtx, cancelResync := context.WithTimeout(fixture.ctx, 10*time.Second)
+	defer cancelResync()
+	if _, err := stream.Recv(resyncCtx); eventCode(err) != events.CodeSubscriptionResync {
+		fixture.t.Fatalf("subscriber across a live NATS outage ended with %v, want %s", err, events.CodeSubscriptionResync)
+	}
 	fixture.createPost(id, "outage-reconnect")
 	fixture.control("restore")
 	fixture.awaitAvailability(true)
-	event := recvPost(fixture.t, stream, 10*time.Second)
-	if event.ID() != id || event.Metadata().Action() != golem.EventCreated {
+	reconnectedID := mustUUID(fixture.t, "a2000000-0000-0000-0000-000000000002")
+	resubscribed, err := fixture.caller.Posts.Events(fixture.ctx, golem.EventWhere(social.Posts.ID.Eq(reconnectedID)))
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	defer resubscribed.Close()
+	fixture.createPost(reconnectedID, "after-reconnect")
+	event := recvPost(fixture.t, resubscribed, 10*time.Second)
+	if event.ID() != reconnectedID || event.Metadata().Action() != golem.EventCreated {
 		fixture.t.Fatalf("reconnected event id=%s action=%s", event.ID(), event.Metadata().Action())
 	}
 	if !fixture.first.EventCapabilities().PublisherRunning() {

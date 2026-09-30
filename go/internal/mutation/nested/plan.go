@@ -14,6 +14,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/normalize"
 	"github.com/eleven-am/golem/go/internal/policy/resolve"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
+	readplan "github.com/eleven-am/golem/go/internal/read/plan"
 )
 
 func (builder *builder) updateNode(endpoint schema.RelationEndpoint, branch golem.FrozenNestedMutationBranch, branchKind mutationir.Branch, classifyTarget bool, depth uint16) (mutationir.NodeInput, error) {
@@ -155,7 +156,7 @@ func (builder *builder) connectOrCreateNode(endpoint schema.RelationEndpoint, br
 	if err != nil {
 		return nil, fail(CodeIR, endpoint.ModelID(), endpoint.FieldID(), "connect-or-create relation position is invalid", err)
 	}
-	wrapper, err := builder.decorate(builder.baseNode(mutationir.ConnectOrCreate, policyir.ModelID(endpoint.TargetModelID()), endpoint.RelationID(), &position, mutationir.MainBranch), &condition)
+	wrapper, err := builder.decorateAs(builder.baseNode(mutationir.ConnectOrCreate, policyir.ModelID(endpoint.TargetModelID()), endpoint.RelationID(), &position, mutationir.MainBranch), &condition, endpoint.Role() == compilerir.RelationSource)
 	if err != nil {
 		return nil, err
 	}
@@ -263,6 +264,10 @@ func (builder *builder) singlePosition(endpoint schema.RelationEndpoint, branch 
 }
 
 func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.Condition) (mutationir.NodeInput, error) {
+	return builder.decorateAs(node, position, node.Operation == mutationir.BranchProbe)
+}
+
+func (builder *builder) decorateAs(node mutationir.NodeInput, position *policyir.Condition, readReach bool) (mutationir.NodeInput, error) {
 	model, modelOK := builder.request.Registry.Model(golem.ModelID(node.Model))
 	if !modelOK {
 		return mutationir.NodeInput{}, fail(CodeIR, golem.ModelID(node.Model), golem.FieldID{}, "nested model is absent", nil)
@@ -330,13 +335,27 @@ func (builder *builder) decorate(node mutationir.NodeInput, position *policyir.C
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested model policy is absent", nil)
 	}
 	action := actionFor(node.Operation)
-	row, err := resolve.RowConstraint(policy, action, node.Model)
+	var row policyir.Condition
+	var err error
+	if readReach {
+		action = policyir.ActionRead
+		row, err = readplan.ReadReach(builder.request.Policies, node.Model, builder.request.ReadRelationDepth)
+	} else {
+		row, err = resolve.RowConstraint(policy, action, node.Model)
+	}
 	if err != nil {
 		return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested row constraint could not resolve", err)
 	}
 	if node.Operation == mutationir.Create || node.Operation == mutationir.Update || node.Operation == mutationir.UpdateMany || node.Operation == mutationir.Connect || node.Operation == mutationir.Disconnect || node.Operation == mutationir.SetRelation {
 		value := row
 		node.RowPostcondition = &value
+	}
+	if node.Operation == mutationir.Create || node.Operation == mutationir.Update || node.Operation == mutationir.UpdateMany {
+		reference, referenceErr := mutationplan.ReferenceCondition(builder.request.Registry, builder.request.Policies, node.Model, node.ScalarOperations, builder.request.ReadRelationDepth)
+		if referenceErr != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, golem.ModelID(node.Model), golem.FieldID{}, "nested foreign key read reach could not resolve", referenceErr)
+		}
+		node.ReferenceCondition = reference
 	}
 	if existing(node.Operation) {
 		complete := row
@@ -470,7 +489,11 @@ func (builder *builder) finalizeImages(node mutationir.NodeInput) (mutationir.No
 }
 
 func (builder *builder) classify(condition policyir.Condition, use classify.UseKind, operation mutationir.Operation, endpoint schema.RelationEndpoint) error {
-	if err := builder.classifyOne(condition, use, operation, actionFor(operation), endpoint); err != nil {
+	action := actionFor(operation)
+	if endpoint.Role() == compilerir.RelationSource && (operation == mutationir.Connect || operation == mutationir.Disconnect || operation == mutationir.ConnectOrCreate) {
+		action = policyir.ActionRead
+	}
+	if err := builder.classifyOne(condition, use, operation, action, endpoint); err != nil {
 		return err
 	}
 	return builder.classifyRelatedChildren(condition, operation, endpoint)

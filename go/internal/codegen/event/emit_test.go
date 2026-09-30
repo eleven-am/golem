@@ -109,8 +109,13 @@ func testGeneratedFactoryConstructionInsideModule(t *testing.T, moduleRoot strin
 
 func eventRequest(t *testing.T, importPath, directory string) Request {
 	t.Helper()
+	return eventRequestKeyedBy(t, importPath, directory, ir.TypeUUID)
+}
+
+func eventRequestKeyedBy(t *testing.T, importPath, directory string, kind ir.LogicalTypeKind) Request {
+	t.Helper()
 	field := func(id ir.FieldID, name string) ir.FieldIR {
-		return ir.FieldIR{ID: id, GoName: name, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}}
+		return ir.FieldIR{ID: id, GoName: name, Kind: ir.FieldScalar, Scalar: &ir.ScalarFieldIR{Type: ir.LogicalTypeIR{Kind: kind}}}
 	}
 	post := ir.ModelDeclIR{ID: testPostModel, Go: ir.GoNamedTypeIR{PackagePath: importPath, Name: "Post"}, LogicalName: "Post", Fields: []ir.FieldIR{field(testPostID, "ID")}, PrimaryKey: &ir.KeyIR{ID: testPostKey, Kind: ir.KeyPrimary, Fields: []ir.FieldID{testPostID}}}
 	friend := ir.ModelDeclIR{ID: testFriendModel, Go: ir.GoNamedTypeIR{PackagePath: importPath, Name: "Friendship"}, LogicalName: "Friendship", Fields: []ir.FieldIR{field(testFriendUserID, "UserID"), field(testFriendFriendID, "FriendID")}, PrimaryKey: &ir.KeyIR{ID: testFriendKey, Kind: ir.KeyPrimary, Fields: []ir.FieldID{testFriendUserID, testFriendFriendID}}}
@@ -118,7 +123,7 @@ func eventRequest(t *testing.T, importPath, directory string) Request {
 		identityFields := make([]ir.EventFieldSchemaIR, len(model.PrimaryKey.Fields))
 		fields := make([]ir.FieldContractIR, len(model.Fields))
 		for index, id := range model.PrimaryKey.Fields {
-			identityFields[index] = ir.EventFieldSchemaIR{FieldID: id, Type: ir.LogicalTypeIR{Kind: ir.TypeUUID}}
+			identityFields[index] = ir.EventFieldSchemaIR{FieldID: id, Type: ir.LogicalTypeIR{Kind: kind}}
 			fields[index] = ir.FieldContractIR{FieldID: id, GraphQLName: model.Fields[index].GoName, Modes: []ir.FieldMode{ir.ModeVisible}}
 		}
 		fingerprint := ir.Fingerprint(strings.Repeat("4", 64))
@@ -129,6 +134,53 @@ func eventRequest(t *testing.T, importPath, directory string) Request {
 		Packages:    []modelcodegen.PackageSpec{{ImportPath: importPath, PackageName: "models", Directory: directory}},
 		FinalStamp:  modelcodegen.FinalStamp{GenerationDigest: strings.Repeat("1", 64), GeneratorVersion: "p7-test", TemplateABIVersion: "p7-event-abi-v1"},
 	}
+}
+
+func TestGeneratedEventIdentityKeepsAnEmptyBytesKeyEmpty(t *testing.T) {
+	moduleRoot, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp(".", "p7eventbytestmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(directory)
+	base := filepath.Base(directory)
+	files, err := Emit(eventRequestKeyedBy(t, "github.com/eleven-am/golem/go/internal/codegen/event/"+base, directory, ir.TypeBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(directory, "models.go"), generatedSupportSource())
+	writeFile(t, files[0].Path, string(files[0].Source))
+	writeFile(t, filepath.Join(directory, "events_test.go"), `package models
+import (
+  "testing"
+  "time"
+  "github.com/eleven-am/golem/go/golem"
+  typedvalue "github.com/eleven-am/golem/go/internal/event/typedvalue"
+  golemruntime "github.com/eleven-am/golem/go/runtime"
+)
+func TestEmptyBytesIdentity(t *testing.T) {
+  registry, err := golemruntime.GeneratedEventFactoryRegistry(golem.SchemaDigest{0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11}, GolemGeneratedEventFactories())
+  if err != nil { t.Fatal(err) }
+  schema := golem.EventSchemaDigest{0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44,0x44}
+  metadata := func(model golem.ModelID) typedvalue.Metadata {
+    return typedvalue.Metadata{EventID:golem.EventID{1}, Action:golem.EventCreated, CausationID:golem.CausationID{2}, Ordinal:1, RecordedAt:time.Unix(1,0), Generation:golem.SchemaDigest{9}, EventSchema:schema, HasEventSchema:true, ResolvedEventSchema:schema, ModelID:model}
+  }
+  single, err := typedvalue.New(metadata(golem.ModelID{0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01,0x01}), []any{[]byte{}}, nil)
+  if err != nil { t.Fatal(err) }
+  built, err := golemruntime.RuntimeBuildValidatedEvent(registry, single)
+  post, ok := built.(PostEvent)
+  if err != nil || !ok || post.ID() == nil || len(post.ID()) != 0 { t.Fatalf("post=%#v ok=%v err=%v", built, ok, err) }
+  composite, err := typedvalue.New(metadata(golem.ModelID{0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11,0x11}), []any{[]byte{}, []byte{7}}, nil)
+  if err != nil { t.Fatal(err) }
+  built, err = golemruntime.RuntimeBuildValidatedEvent(registry, composite)
+  friendship, ok := built.(FriendshipEvent)
+  if err != nil || !ok || friendship.ID().UserID() == nil || len(friendship.ID().UserID()) != 0 || string(friendship.ID().FriendID()) != "\x07" { t.Fatalf("friendship=%#v ok=%v err=%v", built, ok, err) }
+}
+`)
+	runGo(t, moduleRoot, "test", "./internal/codegen/event/"+base)
 }
 
 func generatedSupportSource() string {

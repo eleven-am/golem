@@ -159,7 +159,11 @@ func newFullTextMutationFixture(t *testing.T) mutationResultFixture {
 
 func fullTextMutationSchema(t *testing.T) schematest.Fixture {
 	t.Helper()
-	fixture := schematest.NewSubscribedIndexed(t)
+	return withRuntimeFullTextIndex(t, schematest.NewSubscribedIndexed(t))
+}
+
+func withRuntimeFullTextIndex(t testing.TB, fixture schematest.Fixture) schematest.Fixture {
+	t.Helper()
 	modelDocument := fixture.Bundle.Model()
 	var model compilerir.ModelIR
 	if err := json.Unmarshal(modelDocument.Bytes(), &model); err != nil {
@@ -203,7 +207,7 @@ func fullTextMutationSchema(t *testing.T) schematest.Fixture {
 	return fixture
 }
 
-func lowerFullTextFixture(t *testing.T, provider physical.Lowerer, model compilerir.ModelIR, previous physical.PhysicalSchema) physical.PhysicalSchema {
+func lowerFullTextFixture(t testing.TB, provider physical.Lowerer, model compilerir.ModelIR, previous physical.PhysicalSchema) physical.PhysicalSchema {
 	t.Helper()
 	lowered, err := provider.Lower(context.Background(), model, physical.LowerOptions{})
 	if err != nil {

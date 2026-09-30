@@ -16,6 +16,12 @@ type Notice = internalvalue.Notice
 type EventBatch = internalvalue.EventBatch
 type Subscription = internalvalue.Subscription
 
+// Stream is one transport subscription. A stream that cannot deliver a notice,
+// for example because its buffer is full, must end with an error rather than
+// skip it, and must not stall delivery to other streams. The subscription hub
+// treats a mid-stream CodeEventTransport as a gap and ends its subscribers with
+// CodeSubscriptionResync; any other error ends them with
+// CodeSubscriptionSourceClosed.
 type Stream interface {
 	Recv(context.Context) (Notice, error)
 	Close() error

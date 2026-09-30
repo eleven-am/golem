@@ -78,6 +78,7 @@ type RelationExpansionSQLRequest struct {
 	Capabilities  policysql.CapabilityProof
 	MaxRows       uint32
 	MaxParameters uint32
+	Unrestricted  bool
 }
 
 // RenderRelationExpansion renders only descriptor-owned identifiers. Runtime
@@ -88,6 +89,7 @@ func RenderRelationExpansion(request RelationExpansionSQLRequest) (RelationSQLPr
 	if err != nil {
 		return RelationSQLProgram{}, err
 	}
+	context.unrestricted = request.Unrestricted
 	position, ok := request.Node.RelationPosition()
 	if !ok {
 		return RelationSQLProgram{}, fmt.Errorf("P4_NESTED_SQL_INPUT: node %d has no relation position", request.Node.Ordinal())
@@ -279,6 +281,7 @@ type relationRenderContext struct {
 	endpoint      schema.RelationEndpoint
 	targetModel   policysql.Model
 	alias         physical.PhysicalName
+	unrestricted  bool
 }
 
 func newRelationRenderContext(node mutationir.Node, anchor mutationdecode.Row, registry *schema.Registry, provider policyir.Provider, capabilities policysql.CapabilityProof, maxRows, maxParameters uint32) (relationRenderContext, error) {
@@ -393,7 +396,7 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 	// the captured identity without reopening authorization against mutated
 	// relation state.
 	batchAuthorizesCapturedRows := context.node.Operation() == mutationir.UpdateMany || context.node.Operation() == mutationir.DeleteMany
-	if selection, present := context.node.SelectionRequirement(); !batchAuthorizesCapturedRows && present && selection.Constraint().ModelID() == policyir.ModelID(context.endpoint.TargetModelID()) {
+	if selection, present := context.node.SelectionRequirement(); !context.unrestricted && !batchAuthorizesCapturedRows && present && selection.Constraint().ModelID() == policyir.ModelID(context.endpoint.TargetModelID()) {
 		fragment, err := context.compile(selection.Constraint(), len(args))
 		if err != nil {
 			return RelationSQLStatement{}, err
@@ -469,7 +472,7 @@ func selectAll(registry *schema.Registry, resolver policysql.Resolver, dialect p
 		if alias != "" {
 			column = dialect.Quote(alias) + "." + column
 		}
-		selects[index] = column + " AS " + dialect.Quote(physical.PhysicalName(name))
+		selects[index] = policysql.ProjectColumn(provider, field.Type, column) + " AS " + dialect.Quote(physical.PhysicalName(name))
 		columns[index] = RelationSQLColumn{field: fieldID, alias: name}
 	}
 	if len(selects) == 0 {
@@ -526,7 +529,7 @@ func cloneRelationArgs(values []any) []any {
 	for index, value := range values {
 		switch typed := value.(type) {
 		case []byte:
-			result[index] = append([]byte(nil), typed...)
+			result[index] = bytes.Clone(typed)
 		case []string:
 			result[index] = append([]string(nil), typed...)
 		case time.Time:

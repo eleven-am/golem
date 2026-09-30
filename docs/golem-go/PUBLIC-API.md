@@ -122,4 +122,4 @@ notes rather than discovered from a compile error.
 A 1.0 would claim that removals stop happening without a major version. That
 claim needs the surface record to have held still across several releases
 first. Since the record began at go/v0.4.0 it has taken no removals through
-go/v0.5.3, four releases that only added to it.
+go/v0.6.0; every release since has only added to it.

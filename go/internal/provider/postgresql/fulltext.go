@@ -79,7 +79,7 @@ func renderPostgreSQLFullTextExtension(namespace physical.PhysicalName, extensio
 	}
 	vectors := make([]string, len(fields))
 	for position, column := range fields {
-		vectors[position] = postgresqlFullTextVector("NEW."+quote(column.Name), descriptor.Index.Folding, classes[position])
+		vectors[position] = postgresqlFullTextVector("NEW."+quote(column.Name), descriptor.Index, classes[position])
 	}
 	updateFields, err := fulltextstorage.UpdateColumns(extension, owner)
 	if err != nil {
@@ -128,7 +128,7 @@ func renderPostgreSQLFullTextBackfill(namespace physical.PhysicalName, extension
 	vectors := make([]string, len(descriptor.Index.Fields))
 	for position, field := range descriptor.Index.Fields {
 		column := columns[ir.FieldID(field.ID)]
-		vectors[position] = postgresqlFullTextVector("o."+quote(column.Name), descriptor.Index.Folding, classes[position])
+		vectors[position] = postgresqlFullTextVector("o."+quote(column.Name), descriptor.Index, classes[position])
 	}
 	names := postgresqlFullTextNames(descriptor)
 	return []string{"INSERT INTO " + qualified(namespace, names.table) + " (" + strings.Join(identityNames, ",") + "," + quote("document") + ") SELECT " + strings.Join(identitySelect, ",") + "," + postgresqlFullTextDocument(vectors) + " FROM " + qualified(namespace, owner.Name) + " AS o"}, nil
@@ -139,8 +139,8 @@ func postgresqlFullTextDocument(vectors []string) string {
 	return strings.Join(vectors, " || "+boundary+" || ")
 }
 
-func postgresqlFullTextVector(value, folding string, class byte) string {
-	return "setweight(to_tsvector('simple'," + fulltextpostgresql.NormalizeText(value, folding) + "),'" + string(class) + "')"
+func postgresqlFullTextVector(value string, index fulltextcontract.Index, class byte) string {
+	return "setweight(to_tsvector('simple'," + fulltextpostgresql.NormalizeTextFor(value, index.Folding, index.Normalization) + "),'" + string(class) + "')"
 }
 
 func renderPostgreSQLFullTextPrerequisite() string {

@@ -79,3 +79,11 @@ func (inventory factInventory) deleteSnapshotFor(operation mutationir.Operation)
 	}
 	return inventory.snapshot
 }
+
+func ModelFactRequirement(registry *schema.Registry, model policyir.ModelID, operation mutationir.Operation) (mutationir.FactRequirement, error) {
+	inventory, err := deriveFactInventory(registry, model)
+	if err != nil {
+		return mutationir.FactRequirement{}, err
+	}
+	return factFor(RootRequest{Model: model, Registry: registry, facts: inventory}, operation)
+}

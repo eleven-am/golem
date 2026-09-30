@@ -5,6 +5,7 @@
 package batch
 
 import (
+	"bytes"
 	"fmt"
 	"sort"
 	"time"
@@ -57,6 +58,8 @@ const (
 	ApplyUpdate
 	ApplyDelete
 	RehydrateAfterImage
+	VerifyReference
+	CaptureDependents
 )
 
 type Cardinality uint8
@@ -281,7 +284,7 @@ func (verification Verification) Facts() []FactSpec {
 func cloneArgument(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	case []string:
 		return append([]string(nil), typed...)
 	case time.Time:

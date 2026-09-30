@@ -4,6 +4,7 @@
 package typedvalue
 
 import (
+	"bytes"
 	"fmt"
 	"time"
 
@@ -92,7 +93,7 @@ func (event ValidatedEvent) Entity() (golem.RuntimeModelRow, bool) {
 func cloneIdentityValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		return bytes.Clone(typed)
 	default:
 		return value
 	}

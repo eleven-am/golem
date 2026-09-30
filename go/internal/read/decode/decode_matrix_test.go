@@ -555,6 +555,10 @@ func assignScanDestination(t *testing.T, destination, raw any) {
 		*target = append([]byte(nil), raw.([]byte)...)
 	case *sql.NullTime:
 		target.Time, target.Valid = raw.(time.Time), true
+	case sql.Scanner:
+		if err := target.Scan(raw); err != nil {
+			t.Fatal(err)
+		}
 	default:
 		t.Fatalf("unsupported scan destination %T", destination)
 	}

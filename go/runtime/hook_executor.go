@@ -89,6 +89,9 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 	if err := validate(transformed); err != nil {
 		return nil, err
 	}
+	if branch == mutationir.UpsertCreateBranch && prepared.createConflict != nil {
+		return nil, prepared.createConflict
+	}
 	selectedInput := &prepared.request.create
 	program := prepared.create
 	if branch == mutationir.UpsertUpdateBranch {

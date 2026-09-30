@@ -44,6 +44,10 @@ func (connection coreConnection) IsConnected() bool { return connection.connecti
 func (connection coreConnection) Close()            { connection.connection.Close() }
 
 // Transport is a caller-owned Core NATS connection. Close is idempotent.
+// Core NATS does not replay what was published while a connection was down, so
+// losing the broker ends every open stream with CodeEventTransport, which the
+// subscription hub reports to its subscribers as GOLEM_SUBSCRIPTION_RESYNC.
+// Subscribe is refused with CodeEventTransport until the connection returns.
 type Transport struct {
 	config normalizedConfig
 	client connection
@@ -100,6 +104,7 @@ func (transport *Transport) markDisconnected() {
 	}
 	transport.available.Store(false)
 	transport.mu.Unlock()
+	transport.closeStreams(events.CodeEventTransport)
 	drain := transport.queueReconnectObservation(events.OutcomeFailure)
 	transport.callbackMu.Unlock()
 	if drain {
@@ -415,6 +420,10 @@ func (transport *Transport) Subscribe(ctx context.Context, requested events.Subs
 	if transport.closed || !transport.bound || transport.client == nil {
 		transport.mu.Unlock()
 		return nil, events.Failure(events.CodeEventConfig)
+	}
+	if !transport.available.Load() {
+		transport.mu.Unlock()
+		return nil, events.Failure(events.CodeEventTransport)
 	}
 	result := newStream(transport, requested, transport.config.StreamBuffer)
 	transport.streams[result] = struct{}{}

@@ -18,7 +18,8 @@ import (
 	"github.com/eleven-am/golem/go/queue"
 )
 
-// ErrLeaseLost is the handler cancellation cause when a fenced renewal fails.
+// ErrLeaseLost is the handler cancellation cause when a fenced renewal is
+// refused, or when renewals keep failing until the lease has expired.
 // The job now belongs to another worker and this handler's outcome is discarded.
 var ErrLeaseLost = errors.New("QUEUE_LEASE_LOST: the job lease was lost")
 
@@ -269,6 +270,7 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 			if !ok {
 				continue
 			}
+			claimedAt := time.Now()
 			records, err := worker.store.Claim(ctx, queueprovider.ClaimOptions{Types: group.types, Limit: group.limit, LeaseDuration: worker.limits.LeaseDuration, Resource: claimGroup.resource})
 			if err != nil {
 				return claimed, err
@@ -279,7 +281,7 @@ func (worker *Worker) dispatch(ctx, handlerContext context.Context, observer obs
 					continue
 				}
 				claimed++
-				worker.start(handlerContext, record, observer, handlers)
+				worker.start(handlerContext, record, claimedAt, observer, handlers)
 			}
 		}
 	}
@@ -321,7 +323,7 @@ func (worker *Worker) cohort(group claimGroup, capped bool) (cohort, bool) {
 	return cohort{types: types, limit: limit}, true
 }
 
-func (worker *Worker) start(ctx context.Context, record queueprovider.Record, observer observe.Observer, handlers *sync.WaitGroup) {
+func (worker *Worker) start(ctx context.Context, record queueprovider.Record, claimedAt time.Time, observer observe.Observer, handlers *sync.WaitGroup) {
 	registration, found := worker.registry.Lookup(record.Type)
 	if !found {
 		worker.release(ctx, observer, record)
@@ -334,7 +336,7 @@ func (worker *Worker) start(ctx context.Context, record queueprovider.Record, ob
 	handlers.Add(1)
 	go func() {
 		defer worker.finish(record.Type, handlers)
-		worker.run(ctx, record, registration, observer)
+		worker.run(ctx, record, claimedAt, registration, observer)
 	}()
 }
 
@@ -347,7 +349,7 @@ func (worker *Worker) finish(typeName string, handlers *sync.WaitGroup) {
 	worker.Wake()
 }
 
-func (worker *Worker) run(ctx context.Context, record queueprovider.Record, registration queue.Registration, observer observe.Observer) {
+func (worker *Worker) run(ctx context.Context, record queueprovider.Record, claimedAt time.Time, registration queue.Registration, observer observe.Observer) {
 	if record.CancelRequested {
 		changed := worker.finalize(ctx, observer, record, func(book context.Context) (bool, error) {
 			return worker.store.MarkCanceled(book, record.ID, record.LeaseToken, codeCanceled)
@@ -406,11 +408,12 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 	deadline := handlerContext.Done()
 	canceled := false
 	lost := false
+	leaseUntil := claimedAt.Add(worker.limits.LeaseDuration)
 
 	for {
 		select {
 		case result := <-done:
-			if lost || errors.Is(result.cause, errShutdown) {
+			if lost || (result.err != nil && errors.Is(result.cause, errShutdown)) {
 				return
 			}
 			if errors.Is(result.cause, context.DeadlineExceeded) {
@@ -429,7 +432,14 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 			worker.record(ctx, observer, record, registration, cause, cause, canceled, time.Since(started))
 			return
 		case <-renewalChannel:
-			renewal, err := worker.renew(ctx, record)
+			attempted := time.Now()
+			renewal, err := worker.renew(ctx, record, leaseUntil)
+			if err == nil && renewal.Renewed {
+				leaseUntil = attempted.Add(worker.limits.LeaseDuration)
+			}
+			if err != nil && time.Now().Before(leaseUntil) {
+				continue
+			}
 			if err != nil || !renewal.Renewed {
 				lost = true
 				renewalChannel = nil
@@ -445,8 +455,8 @@ func (worker *Worker) run(ctx context.Context, record queueprovider.Record, regi
 	}
 }
 
-func (worker *Worker) renew(ctx context.Context, record queueprovider.Record) (queueprovider.Renewal, error) {
-	book, cancel := worker.bookkeeping(ctx)
+func (worker *Worker) renew(ctx context.Context, record queueprovider.Record, leaseUntil time.Time) (queueprovider.Renewal, error) {
+	book, cancel := context.WithDeadline(context.WithoutCancel(ctx), leaseUntil)
 	defer cancel()
 	return worker.store.Renew(book, record.ID, record.LeaseToken, worker.limits.LeaseDuration)
 }

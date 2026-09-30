@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -521,11 +522,10 @@ func (fixture *fixture) hookComputedCustomAnalytics() {
 	computed := fixture.graphQL(`query { post(where: {ID: "`+bobPublicIDText+`"}) { id body excerpt(maximum: 8) } }`, nil)
 	assertNoCanary(fixture.t, "computed dependency", mustJSONEncode(computed), fixture.eventCanary, fixture.rowCanary)
 	computedPost := graphObject(fixture.t, graphRoot(fixture.t, computed)["post"])
-	if computedPost["body"] != nil || computedPost["excerpt"] != nil || len(computed.Errors) != 1 {
+	if len(computed.Errors) != 0 || !reflect.DeepEqual(computedPost, map[string]any{"id": bobPublicIDText, "body": nil, "excerpt": nil}) {
 		fixture.t.Fatalf("computed masked result=%v errors=%v", computedPost, computed.Errors)
 	}
-	trusted := fixture.takeTrusted()
-	if len(trusted) != 1 || strings.Contains(trusted[0], fixture.eventCanary) {
+	if trusted := fixture.takeTrusted(); len(trusted) != 0 {
 		fixture.t.Fatalf("computed trusted channel=%v", trusted)
 	}
 

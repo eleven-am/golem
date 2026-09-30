@@ -1,6 +1,7 @@
 package golem
 
 import (
+	"bytes"
 	"fmt"
 	"math"
 	"time"
@@ -163,7 +164,7 @@ func runtimePredicateValue(value RuntimePredicateValue) (frozenValue, error) {
 		if !ok {
 			return frozenValue{}, runtimePredicateType(value, "[]byte")
 		}
-		result.bytes = append([]byte(nil), typed...)
+		result.bytes = bytes.Clone(typed)
 	case FrozenValueUUID:
 		var ok bool
 		result.uuid, ok = value.Value.(UUID)

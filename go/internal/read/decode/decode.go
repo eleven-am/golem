@@ -4,6 +4,7 @@
 package decode
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/hex"
 	"fmt"
@@ -141,12 +142,32 @@ func (slot *slot) destination() any {
 	case slotText:
 		return &slot.text
 	case slotBytes:
-		return &slot.bytes
+		return (*bytesDestination)(slot)
 	case slotDateTime:
 		return &slot.instant
 	default:
 		return nil
 	}
+}
+
+type bytesDestination slot
+
+func (destination *bytesDestination) Scan(source any) error {
+	switch typed := source.(type) {
+	case nil:
+		destination.bytes = nil
+	case []byte:
+		destination.bytes = append([]byte{}, typed...)
+	case string:
+		decoded, err := hex.DecodeString(typed)
+		if err != nil {
+			return fmt.Errorf("hex-projected bytes are not hexadecimal: %w", err)
+		}
+		destination.bytes = decoded
+	default:
+		return fmt.Errorf("bytes column returned %T", source)
+	}
+	return nil
 }
 func (slot *slot) value() (any, bool) {
 	switch slot.kind {
@@ -159,7 +180,7 @@ func (slot *slot) value() (any, bool) {
 	case slotText:
 		return slot.text.String, slot.text.Valid
 	case slotBytes:
-		return append([]byte(nil), slot.bytes...), slot.bytes != nil
+		return bytes.Clone(slot.bytes), slot.bytes != nil
 	case slotDateTime:
 		return slot.instant.Time, slot.instant.Valid
 	default:
@@ -204,8 +225,8 @@ func (scan *Scan) RawValues() []any {
 		if !present {
 			continue
 		}
-		if bytes, ok := value.([]byte); ok {
-			result[index] = append([]byte(nil), bytes...)
+		if data, ok := value.([]byte); ok {
+			result[index] = bytes.Clone(data)
 			continue
 		}
 		result[index] = value
@@ -416,12 +437,12 @@ func decodeValue(registry *schema.Registry, provider policyir.Provider, model po
 		value = text
 		policyValue, err = policyir.StringValue(text)
 	case compilerir.TypeBytes:
-		bytes, ok := raw.([]byte)
+		data, ok := raw.([]byte)
 		if !ok {
 			return cell, fmt.Errorf("invalid bytes %T", raw)
 		}
-		value = append([]byte(nil), bytes...)
-		policyValue = policyir.BytesValue(bytes)
+		value = bytes.Clone(data)
+		policyValue = policyir.BytesValue(data)
 	case compilerir.TypeUUID:
 		uuid, parseErr := golem.ParseUUID(raw.(string))
 		if parseErr != nil {
@@ -485,8 +506,8 @@ func decodeValue(registry *schema.Registry, provider policyir.Provider, model po
 		value = wire
 		policyValue, err = policyir.NewEnumValue(policyir.EnumID(enumID), policyir.EnumValueID(memberID))
 	case compilerir.TypeJSON:
-		bytes := []byte(raw.(string))
-		document, parseErr := golem.NewJSONDocument[any](bytes)
+		data := []byte(raw.(string))
+		document, parseErr := golem.NewJSONDocument[any](data)
 		if parseErr != nil {
 			return cell, parseErr
 		}
@@ -548,7 +569,7 @@ func decodeValue(registry *schema.Registry, provider policyir.Provider, model po
 	cell.policy = policyValue
 	switch typed := value.(type) {
 	case []byte:
-		cell.runtime = golem.RuntimePresentReadCell(golem.FieldID(id), typed, func(input []byte) []byte { return append([]byte(nil), input...) })
+		cell.runtime = golem.RuntimePresentReadCell(golem.FieldID(id), typed, bytes.Clone)
 	case golem.JSON[any]:
 		cell.runtime = golem.RuntimePresentReadCell(golem.FieldID(id), typed, func(input golem.JSON[any]) golem.JSON[any] {
 			copy, _ := golem.NewJSONDocument[any](input.Bytes())

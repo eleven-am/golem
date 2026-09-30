@@ -70,6 +70,7 @@ type RootRequest struct {
 	// scalar snapshot and field grants for every field a before hook may author.
 	// It is valid only for the explicit optimistic-concurrency runtime kernel.
 	ConcurrencyPrecheck bool
+	ReadRelationDepth   int
 
 	Retry  mutationir.RetryClass
 	Bounds mutationir.StatementBounds

@@ -452,7 +452,7 @@ func scopedPolicyValue(raw any, typ policyir.TypeRef, registry *schema.Registry,
 		}
 	case policyir.ValueString:
 		if v.Kind() == reflect.String {
-			return policyir.StringValue(v.String())
+			return policyir.PortableStringValue(v.String())
 		}
 	case policyir.ValueUUID:
 		if value, ok := raw.(golem.UUID); ok {

@@ -50,6 +50,15 @@ type NotFoundError struct {
 	Field policyir.FieldID
 }
 
+type TargetIdentityError struct {
+	Model policyir.ModelID
+	Field policyir.FieldID
+}
+
+func (failure *TargetIdentityError) Error() string {
+	return fmt.Sprintf("P4_NESTED_UPSERT_IDENTITY: model=%x field=%x: created row does not carry the upsert target selector", failure.Model, failure.Field)
+}
+
 func (failure *NotFoundError) Error() string {
 	return fmt.Sprintf("P4_NESTED_NOT_FOUND: model=%x field=%x: selected nested record was not found", failure.Model, failure.Field)
 }
@@ -85,6 +94,7 @@ type Request struct {
 	// graph ordinals are frozen. Nil means no runtime-owned materialization.
 	RuntimeValues     func(mutationir.NodeInput) (mutationir.NodeInput, error)
 	EntryHookAuthored []golem.FieldID
+	ReadRelationDepth int
 }
 
 // PositionAudit is proof that one selector/filter position was classified

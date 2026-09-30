@@ -147,7 +147,7 @@ func (plan Plan) validate() error {
 			}
 		}
 		if plan.stance == System {
-			if node.selection != nil || node.rowPostcondition != nil || len(node.fieldConditions) != 0 || len(node.hooks) != 0 {
+			if node.selection != nil || node.rowPostcondition != nil || node.referenceCondition != nil || len(node.fieldConditions) != 0 || len(node.hooks) != 0 {
 				return fmt.Errorf("P4_MUTATION_IR_PLAN: system nodes cannot carry caller policy or hooks")
 			}
 			continue

@@ -79,7 +79,7 @@ type correlationGateEmitter struct {
 
 func (emitter *correlationGateEmitter) Emit(ctx context.Context, input events.CDCBatchInput) error {
 	emitter.received++
-	cursor := append([]byte(nil), input.Cursor...)
+	cursor := bytes.Clone(input.Cursor)
 	correlation := events.RuntimeCDCCorrelationInput(input.SourceTransactionID, cursor)
 	if len(cursor) != 0 {
 		cursor[0] ^= 0xff
@@ -132,7 +132,7 @@ func (emitter *probeEmitter) batch(t testing.TB) events.CDCBatchInput {
 }
 
 func cloneBatch(input events.CDCBatchInput) events.CDCBatchInput {
-	result := events.CDCBatchInput{SourceTransactionID: input.SourceTransactionID, RecordedAt: input.RecordedAt, Cursor: append([]byte(nil), input.Cursor...), Changes: make([]events.CDCChangeInput, len(input.Changes))}
+	result := events.CDCBatchInput{SourceTransactionID: input.SourceTransactionID, RecordedAt: input.RecordedAt, Cursor: bytes.Clone(input.Cursor), Changes: make([]events.CDCChangeInput, len(input.Changes))}
 	copy(result.Changes, input.Changes)
 	return result
 }

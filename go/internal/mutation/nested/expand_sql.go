@@ -132,6 +132,15 @@ func ExpandRelationSQL(ctx context.Context, request SQLExpansionRequest) (Runtim
 		if len(rows) > 1 {
 			return RuntimeExpansion{}, fmt.Errorf("P4_NESTED_EXPAND_CARDINALITY: branch probe returned %d rows", len(rows))
 		}
+		if _, restricted := node.SelectionRequirement(); restricted && len(rows) == 0 && node.Operation() == mutationir.ConnectOrCreate {
+			existing, existenceErr := expandUnrestrictedTarget(ctx, request, anchor)
+			if existenceErr != nil {
+				return RuntimeExpansion{}, existenceErr
+			}
+			if existing {
+				return RuntimeExpansion{}, &NotFoundError{Model: position.TargetModelID(), Field: position.FieldID()}
+			}
+		}
 		branch := mutationir.ConnectOrCreateCreateBranch
 		if node.Operation() == mutationir.Upsert {
 			branch = mutationir.UpsertCreateBranch
@@ -218,6 +227,25 @@ func ExpandRelationSQL(ctx context.Context, request SQLExpansionRequest) (Runtim
 		}
 	}
 	return NewRuntimeExpansion(works, 0)
+}
+
+func expandUnrestrictedTarget(ctx context.Context, request SQLExpansionRequest, anchor mutationdecode.Row) (bool, error) {
+	program, err := RenderRelationExpansion(RelationExpansionSQLRequest{
+		Node: request.Expansion.Node(), Anchor: anchor, Registry: request.Registry, Provider: request.Provider,
+		Capabilities: request.Capabilities, MaxRows: request.MaxRows, MaxParameters: request.MaxParameters, Unrestricted: true,
+	})
+	if err != nil {
+		return false, err
+	}
+	statements := program.Statements()
+	if len(statements) != 1 {
+		return false, fmt.Errorf("P4_NESTED_EXPAND_PROGRAM: connect-or-create existence rendered %d statements", len(statements))
+	}
+	rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statements[0])
+	if err != nil {
+		return false, err
+	}
+	return len(rows) != 0, nil
 }
 
 func sourceCorrelationPopulated(endpoint schema.RelationEndpoint, anchor mutationdecode.Row) (bool, error) {

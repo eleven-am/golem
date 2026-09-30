@@ -125,9 +125,9 @@ func (app *App[P, A]) eventCoordinator() (eventprovider.Coordinator, error) {
 		if namespace != "main" {
 			return nil, fmt.Errorf("SQLite event system namespace is not main")
 		}
-		return sqliteprovider.New().EventCoordinator(app.database)
+		return sqliteprovider.New().EventCoordinatorAdmitting(app.database, app.reviewedUnmanaged)
 	case golem.PostgreSQL:
-		return postgresprovider.New().EventCoordinatorAt(app.database, namespace)
+		return postgresprovider.New().EventCoordinatorAtAdmitting(app.database, namespace, app.reviewedUnmanaged)
 	default:
 		return nil, fmt.Errorf("event provider is unsupported")
 	}

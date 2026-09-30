@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/eleven-am/golem/go/golem"
 	eventprovider "github.com/eleven-am/golem/go/internal/event/provider"
@@ -24,7 +25,7 @@ func TestIncompatibleHistoricalSchemaBlocksWithoutTransportOrAck(t *testing.T) {
 	transport := &captureTransport{}
 	publisher := publisherForTest(t, coordinator, incompatibleDeliveryResolver{publisherTestResolver{fixture.Registry}}, transport)
 
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if len(transport.batches) != 0 || coordinator.ackCalls != 0 || coordinator.blockCalls != 1 {
@@ -78,7 +79,7 @@ func TestMissingHistoricalSchemaBlocksWithoutAckAndResumes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if coordinator.blockCalls != 1 || coordinator.blockCode != "schema-unavailable" || coordinator.ackCalls != 0 || len(transport.batches) != 0 {
@@ -90,7 +91,7 @@ func TestMissingHistoricalSchemaBlocksWithoutAckAndResumes(t *testing.T) {
 		t.Fatalf("resume changed=%t error=%v", changed, err)
 	}
 	resolver.available = true
-	if err := publisher.publishLease(context.Background(), lease); err != nil {
+	if err := publisher.publishLease(context.Background(), time.Now(), lease); err != nil {
 		t.Fatal(err)
 	}
 	if coordinator.blockCalls != 1 || coordinator.ackCalls != 1 || len(transport.batches) != 1 {

@@ -211,7 +211,7 @@ func TestStateCleanupMayBlockAndReenterCloseWithoutHoldingHubLock(t *testing.T) 
 	hub, err := NewModelHub(Config[golem.EventID]{
 		Generation: golem.SchemaDigest{1}, Model: golem.ModelID{2},
 		Limits: events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond},
-		Source: sourceFactory(source),
+		Source: sequentialFactory(source, newFakeSource()),
 		EvaluateState: func(_ context.Context, notice events.Notice, _ SubscriberKey, _ any) (Evaluation[golem.EventID], error) {
 			return Deliver(notice.EventID()), nil
 		},
@@ -441,21 +441,28 @@ func TestCancellationDoesNotStartQueuedEvaluation(t *testing.T) {
 	}
 }
 
-func TestTransportReconnectPreservesSubscriber(t *testing.T) {
+func TestTransportLossMidStreamEndsSubscribersWithResync(t *testing.T) {
 	first, second := newFakeSource(), newFakeSource()
 	factory := sequentialFactory(first, second)
 	hub := newTestHub(t, factory, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
 	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
 	first.fail(events.Failure(events.CodeEventTransport))
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionResync {
+		t.Fatalf("a subscriber kept receiving across a lost source: %v", err)
+	}
 	select {
 	case <-second.opened:
-	case <-time.After(time.Second):
-		t.Fatal("source did not reconnect")
+		t.Fatal("the hub reopened the source for a subscriber that may have missed events")
+	default:
 	}
+	resubscribed := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
+	<-second.opened
 	notice := testNotice(t, 1)
 	second.send(notice)
-	if got := recv(t, stream); got != notice.EventID() {
-		t.Fatal("subscriber was not preserved across reconnect")
+	if got := recv(t, resubscribed); got != notice.EventID() {
+		t.Fatal("a resubscribed client did not receive events from the new source")
 	}
 	shutdown(t, hub)
 }
@@ -498,13 +505,42 @@ func TestImmediateTerminalSourceFailureCannotOrphanFirstMember(t *testing.T) {
 		return nil, events.Failure(events.CodeEventSourceClosed)
 	}
 	hub := newTestHub(t, factory, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
-	stream := subscribe(t, hub, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if _, err := stream.Recv(ctx); code(t, err) != events.CodeSubscriptionSourceClosed {
-		t.Fatalf("immediate terminal failure = %v", err)
+	stream, err := hub.Subscribe(context.Background(), testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
+	if stream != nil || code(t, err) != events.CodeSubscriptionSourceClosed {
+		t.Fatalf("immediate terminal failure stream=%v err=%v", stream != nil, err)
 	}
+	assertNoMembersOrRuns(t, hub)
 	shutdown(t, hub)
+}
+
+func TestSubscribeCancelledBeforeTheSourceGoesLiveLeavesNothingBehind(t *testing.T) {
+	attempts := make(chan struct{}, 64)
+	factory := func(context.Context, events.Subscription) (events.Stream, error) {
+		attempts <- struct{}{}
+		return nil, events.Failure(events.CodeEventTransport)
+	}
+	hub := newTestHub(t, factory, events.Limits{SubscriberQueue: 1, EvaluationConcurrency: 1, RetryBase: time.Millisecond, RetryCap: time.Millisecond}, identityEvaluator, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		<-attempts
+		<-attempts
+		cancel()
+	}()
+	stream, err := hub.Subscribe(ctx, testKey(t, "p", "v", "f", "s", "d", "e", "m", true))
+	if stream != nil || code(t, err) != events.CodeSubscriptionCancelled {
+		t.Fatalf("cancelled pre-live subscribe stream=%v err=%v", stream != nil, err)
+	}
+	assertNoMembersOrRuns(t, hub)
+	shutdown(t, hub)
+}
+
+func assertNoMembersOrRuns[T any](t *testing.T, hub *ModelHub[T]) {
+	t.Helper()
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	if len(hub.members) != 0 || len(hub.runs) != 0 {
+		t.Fatalf("a subscribe that never went live left members=%d runs=%d", len(hub.members), len(hub.runs))
+	}
 }
 
 func TestSourceCloseLastMemberAndApplicationShutdownNoLeak(t *testing.T) {

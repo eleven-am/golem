@@ -192,8 +192,14 @@ func StringValue(value string) (Value, error) {
 	}
 	return Value{kind: ValueString, text: value}, nil
 }
+func PortableStringValue(value string) (Value, error) {
+	if strings.IndexByte(value, 0) >= 0 {
+		return Value{}, fmt.Errorf("policy IR: string contains NUL, which is outside the portable provider value domain")
+	}
+	return StringValue(value)
+}
 func BytesValue(value []byte) Value {
-	return Value{kind: ValueBytes, bytes: append([]byte(nil), value...)}
+	return Value{kind: ValueBytes, bytes: append([]byte{}, value...)}
 }
 func UUIDValue(value [16]byte) Value { return Value{kind: ValueUUID, uuid: value} }
 func NewDateValue(year int16, month, day uint8) (Value, error) {
@@ -258,7 +264,10 @@ func (value Value) Decimal() (coefficient int64, scale uint8, ok bool) {
 }
 func (value Value) Text() (string, bool) { return value.text, value.kind == ValueString }
 func (value Value) Bytes() ([]byte, bool) {
-	return append([]byte(nil), value.bytes...), value.kind == ValueBytes
+	if value.kind != ValueBytes {
+		return nil, false
+	}
+	return append([]byte{}, value.bytes...), true
 }
 func (value Value) UUID() ([16]byte, bool) { return value.uuid, value.kind == ValueUUID }
 func (value Value) Date() (year int16, month, day uint8, ok bool) {
@@ -281,7 +290,9 @@ func (value Value) List() ([]Value, bool) {
 func (value Value) Validate() error { return value.validate() }
 func (value Value) clone() Value {
 	copy := value
-	copy.bytes = append([]byte(nil), value.bytes...)
+	if value.bytes != nil {
+		copy.bytes = append([]byte{}, value.bytes...)
+	}
 	copy.json = value.json.clone()
 	copy.list = cloneValues(value.list)
 	return copy

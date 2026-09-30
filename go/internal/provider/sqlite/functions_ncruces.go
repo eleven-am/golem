@@ -25,6 +25,7 @@ func registerSQLiteFunctions(connection *sqlite3.Conn) error {
 	}{
 		{policyASCIIFoldFunction, 1, sqliteASCIIFold},
 		{fullTextFoldFunction, 1, sqliteFullTextFold},
+		{fullTextNFCFunction, 1, sqliteFullTextNFC},
 		{policyListFunction, 4, sqlitePolicyList},
 		{policyJSONFunction, 6, sqlitePolicyJSON},
 		{AnalyticsNumericCompareFunction, 2, analyticsNumericCompare},

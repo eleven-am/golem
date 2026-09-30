@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
@@ -139,7 +140,7 @@ func prepareScalarProgram[P, A any](request scalarMutationPrepareRequest, stance
 	planning := mutationplan.RootRequest{
 		Stance: stance, Operation: request.operation, Model: request.model,
 		Registry: app.registry, Policies: policies, Result: request.result,
-		Retry: mutationir.NoRetry, Bounds: bounds,
+		Retry: mutationir.NoRetry, Bounds: bounds, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth,
 	}
 	planning.ConcurrencyPrecheck = versioned && stance == mutationir.Caller && request.operation == mutationir.Update
 	if stance == mutationir.Caller {
@@ -379,6 +380,7 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 	}
 	statements := program.Statements()
 	result := scalarMutationExecution{operation: program.Operation(), statements: make([]scalarMutationStatementResult, 0, len(statements))}
+	var cascade *cascadeEffects
 	for index, statement := range statements {
 		if contextErr := ctx.Err(); contextErr != nil {
 			return scalarMutationExecution{}, contextErr
@@ -386,6 +388,11 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 		arguments, err := scalarMutationArguments(program.Operation(), uint32(index), statement, result.statements)
 		if err != nil {
 			return scalarMutationExecution{}, err
+		}
+		if statement.Role() == mutationsql.ApplyDelete {
+			if cascade, err = captureScalarCascade(ctx, queryer, binding, registry, model, provider, result); err != nil {
+				return scalarMutationExecution{}, err
+			}
 		}
 		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
 		if err != nil {
@@ -399,6 +406,9 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 		}
 	}
 	if err := commitScalarMutationExecution(ctx, binding, registry, model, program, result, verified); err != nil {
+		return scalarMutationExecution{}, err
+	}
+	if err := commitScalarCascade(ctx, queryer, binding, registry, provider, cascade); err != nil {
 		return scalarMutationExecution{}, err
 	}
 	return result, nil
@@ -426,6 +436,7 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 	}
 	result := scalarMutationExecution{operation: program.Operation(), statements: make([]scalarMutationStatementResult, 1, len(statements))}
 	result.statements[0] = preimage.clone()
+	var cascade *cascadeEffects
 	if observer != nil {
 		if err := observer(ctx, binding, 0, result); err != nil {
 			return scalarMutationExecution{}, err
@@ -440,6 +451,11 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 		if err != nil {
 			return scalarMutationExecution{}, err
 		}
+		if statement.Role() == mutationsql.ApplyDelete {
+			if cascade, err = captureScalarCascade(ctx, queryer, binding, registry, model, provider, result); err != nil {
+				return scalarMutationExecution{}, err
+			}
+		}
 		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
 		if err != nil {
 			return scalarMutationExecution{}, err
@@ -452,6 +468,9 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 		}
 	}
 	if err := commitScalarMutationExecution(ctx, binding, registry, model, program, result, verified); err != nil {
+		return scalarMutationExecution{}, err
+	}
+	if err := commitScalarCascade(ctx, queryer, binding, registry, provider, cascade); err != nil {
 		return scalarMutationExecution{}, err
 	}
 	return result, nil
@@ -482,7 +501,7 @@ func commitScalarMutationExecution(ctx context.Context, binding *executionBindin
 	}
 	if err := state.touch(1); err != nil {
 		state.poison(err)
-		return err
+		return scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "touched rows exceed the configured limit", err)
 	}
 	if requirement := program.FactRequirement(); requirement.Enabled() {
 		before, after, imageErr := scalarMutationFactImages(registry, model, program, result)
@@ -500,6 +519,40 @@ func commitScalarMutationExecution(ctx context.Context, binding *executionBindin
 			state.poison(markErr)
 			return markErr
 		}
+	}
+	return nil
+}
+
+func captureScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, result scalarMutationExecution) (*cascadeEffects, error) {
+	if binding == nil || !binding.mutation.enabled || len(registry.DeleteEffects(golem.ModelID(model))) == 0 {
+		return nil, nil
+	}
+	preimage, ok := result.statement(0)
+	if !ok {
+		return nil, scalarMutationError(mutationir.Delete, scalarMutationInvariant, mutationsql.ApplyDelete, 0, "delete has no locked pre-image", nil)
+	}
+	parent, err := mutationdecode.FromReadCells(registry, model, preimage.cells)
+	if err != nil {
+		return nil, scalarMutationError(mutationir.Delete, scalarMutationInvariant, mutationsql.ApplyDelete, 0, "locked pre-image could not form a row", err)
+	}
+	state, err := binding.mutationState()
+	if err != nil {
+		return nil, err
+	}
+	return captureCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, model, []mutationdecode.Row{parent})
+}
+
+func commitScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, provider policyir.Provider, cascade *cascadeEffects) error {
+	if cascade.empty() {
+		return nil
+	}
+	state, err := binding.mutationState()
+	if err != nil {
+		return err
+	}
+	if err := recordCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, cascade); err != nil {
+		state.poison(err)
+		return err
 	}
 	return nil
 }
@@ -687,6 +740,8 @@ func zeroRowMutationError(operation mutationir.Operation, role mutationsql.Role,
 		return scalarMutationError(operation, scalarMutationNotFound, role, statement, "mutation target was not found", nil)
 	case mutationsql.VerifyPostcondition:
 		return scalarMutationError(operation, scalarMutationForbidden, role, statement, "persisted mutation result was not authorized", nil)
+	case mutationsql.VerifyReference:
+		return scalarMutationError(operation, scalarMutationProvider, role, statement, "persisted foreign key names no readable row", nil)
 	case mutationsql.ApplyUpdate:
 		return scalarMutationError(operation, scalarMutationConflict, role, statement, "locked update target changed before application", nil)
 	case mutationsql.ApplyDelete:
@@ -842,7 +897,10 @@ func equalMutationPhysicalValue(left, right any) bool {
 func cloneMutationPhysicalValue(value any) any {
 	switch typed := value.(type) {
 	case []byte:
-		return append([]byte(nil), typed...)
+		if typed == nil {
+			return typed
+		}
+		return append([]byte{}, typed...)
 	case time.Time:
 		return typed
 	default:
@@ -879,7 +937,16 @@ func publicScalarMutationError(model golem.ModelID, err error) error {
 		return golem.RuntimeOperationError(golem.CodeBadUserInput, string(hook.operation), model, golem.FieldID{}, "mutation hook rejected the operation", err)
 	}
 	var failure *scalarMutationFailure
-	if !errors.As(err, &failure) {
+	scalar := errors.As(err, &failure)
+	var limit *mutationbatch.Error
+	if errors.As(err, &limit) && limit.Code == mutationbatch.CodeLimit {
+		operation := "delete"
+		if scalar {
+			operation = scalarMutationOperationName(failure.operation)
+		}
+		return golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, golem.FieldID{}, "mutation exceeds the configured row limit", err)
+	}
+	if !scalar {
 		return err
 	}
 	operation := scalarMutationOperationName(failure.operation)

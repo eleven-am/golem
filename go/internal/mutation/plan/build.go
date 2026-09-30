@@ -255,6 +255,11 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 				return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "create action has no grant", gateErr)
 			}
 		}
+		reference, referenceErr := ReferenceCondition(request.Registry, request.Policies, request.Model, scalar, request.ReadRelationDepth)
+		if referenceErr != nil {
+			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "foreign key read reach could not be resolved", referenceErr)
+		}
+		node.ReferenceCondition = reference
 	} else if operation != mutationir.Create {
 		position, positionErr := targetPosition(request)
 		if positionErr != nil {

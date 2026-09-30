@@ -332,12 +332,24 @@ func (function branchExecutorFunc) ExecuteBranch(ctx context.Context, attempt At
 type testPolicySet struct {
 	generation golem.SchemaDigest
 	policy     policyir.Policy
+	author     policyir.ModelID
 }
 
 func (set testPolicySet) GenerationDigest() golem.SchemaDigest { return set.generation }
 func (set testPolicySet) Provider() policyir.Provider          { return policyir.ProviderSQLite }
 func (set testPolicySet) Policy(model policyir.ModelID) (policyir.Policy, bool) {
-	return set.policy, set.policy.ModelID() == model
+	if set.policy.ModelID() == model {
+		return set.policy, true
+	}
+	if model != set.author {
+		return policyir.Policy{}, false
+	}
+	read, err := policyir.NewModelRule(policyir.ActionRead, policyir.EffectGrant, model, nil, 0)
+	if err != nil {
+		return policyir.Policy{}, false
+	}
+	policy, err := policyir.NewPolicy(model, []policyir.Rule{read})
+	return policy, err == nil
 }
 
 func systemPlan(t testing.TB, fixture schematest.Fixture, retry mutationir.RetryClass) mutationir.Plan {
@@ -364,7 +376,7 @@ func systemGuardPlan(t testing.TB, fixture schematest.Fixture, value string, ret
 }
 
 func callerPlan(t testing.TB, fixture schematest.Fixture, policy policyir.Policy, retry mutationir.RetryClass) mutationir.Plan {
-	set := testPolicySet{generation: fixture.Registry.GenerationDigest(), policy: policy}
+	set := testPolicySet{generation: fixture.Registry.GenerationDigest(), policy: policy, author: policyir.ModelID(fixture.User)}
 	return buildPlan(t, fixture, mutationir.Caller, set, retry)
 }
 

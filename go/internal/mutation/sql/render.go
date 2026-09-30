@@ -185,7 +185,12 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 		prefix += " (" + strings.Join(columns, ", ") + ") VALUES (" + strings.Join(values, ", ") + ")"
 	}
 	statements := []Statement{{role: ApplyCreate, text: prefix + returning, bindings: bindings, columns: resultColumns, cardinality: ExactlyOneRow}}
-	verify, present, err := context.postconditionStatement(uint32(len(statements)-1), context.createVerificationConditions())
+	if reference, referenced, referenceErr := context.referenceStatement(0); referenceErr != nil {
+		return nil, referenceErr
+	} else if referenced {
+		statements = append(statements, reference)
+	}
+	verify, present, err := context.postconditionStatement(0, context.createVerificationConditions())
 	if err != nil {
 		return nil, err
 	}
@@ -289,6 +294,11 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		return nil, err
 	}
 	statements = append(statements, Statement{role: ApplyUpdate, text: "UPDATE " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " SET " + strings.Join(assignments, ", ") + " WHERE " + updateWhere + returning, bindings: updateBindings, columns: resultColumns, cardinality: ExactlyOneRow})
+	if reference, referenced, referenceErr := context.referenceStatement(1); referenceErr != nil {
+		return nil, referenceErr
+	} else if referenced {
+		statements = append(statements, reference)
+	}
 	verify, present, err := context.postconditionStatement(1, context.updateVerificationConditions())
 	if err != nil {
 		return nil, err
@@ -500,6 +510,19 @@ func (context renderContext) postconditionStatement(source uint32, conditions []
 	return Statement{role: VerifyPostcondition, text: "SELECT " + selectList + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND "), bindings: bindings, columns: columns, cardinality: ExactlyOneRow}, true, nil
 }
 
+func (context renderContext) referenceStatement(source uint32) (Statement, bool, error) {
+	condition, present := context.node.ReferenceCondition()
+	if !present {
+		return Statement{}, false, nil
+	}
+	statement, _, err := context.postconditionStatement(source, []policyir.Condition{condition})
+	if err != nil {
+		return Statement{}, false, err
+	}
+	statement.role = VerifyReference
+	return statement, true, nil
+}
+
 func (context renderContext) createVerificationConditions() []policyir.Condition {
 	result := make([]policyir.Condition, 0, len(context.node.FieldAuthorizations())+1)
 	if condition, ok := context.node.RowPostcondition(); ok {
@@ -648,7 +671,7 @@ func (context renderContext) returning(fields []policyir.FieldID) (string, []Res
 			return "", nil, fail(CodeSchema, context.node.ModelID(), fieldID, "returning field has no physical descriptor", nil)
 		}
 		alias := fmt.Sprintf("golem_c%d", index)
-		items[index] = context.dialect.Quote(field.Column) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
+		items[index] = policysql.ProjectColumn(context.provider, field.Type, context.dialect.Quote(field.Column)) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
 		columns[index] = ResultColumn{field: fieldID, alias: alias}
 	}
 	return " RETURNING " + strings.Join(items, ", "), columns, nil
@@ -663,7 +686,7 @@ func (context renderContext) selectFields(fields []policyir.FieldID) (string, []
 			return "", nil, fail(CodeSchema, context.node.ModelID(), fieldID, "selected image field has no physical descriptor", nil)
 		}
 		alias := fmt.Sprintf("golem_c%d", index)
-		items[index] = context.qualified(field.Column) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
+		items[index] = policysql.ProjectColumn(context.provider, field.Type, context.qualified(field.Column)) + " AS " + context.dialect.Quote(physical.PhysicalName(alias))
 		columns[index] = ResultColumn{field: fieldID, alias: alias}
 	}
 	return strings.Join(items, ", "), columns, nil

@@ -35,6 +35,21 @@ const (
 	QueueTerminalIndex PhysicalName = "golem_queue_terminal"
 )
 
+const OutboxDeliveryClaimIndex PhysicalName = "golem_outbox_delivery_claim"
+
+func OutboxDeliveryUnmanagedObjects() []UnmanagedObject {
+	return []UnmanagedObject{{Kind: "index", Name: OutboxDeliveryClaimIndex}}
+}
+
+func OutboxDeliveryClaimAdmitted(unmanaged []UnmanagedObject) bool {
+	for _, object := range unmanaged {
+		if object.Kind == "index" && object.Name == OutboxDeliveryClaimIndex {
+			return true
+		}
+	}
+	return false
+}
+
 func QueueHistoryIndexes() []UnmanagedObject {
 	return []UnmanagedObject{
 		{Kind: "index", Name: QueueEnqueuedIndex},

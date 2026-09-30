@@ -187,23 +187,27 @@ func (server *Server[P]) serveWebSocket(writer http.ResponseWriter, request *htt
 			opCtx, opCancel := context.WithCancel(state.ctx)
 			opCtx, subscriptionObservation := observeexec.Begin(opCtx, server.config.Observer, server.config.Provider, golem.ModelID{}, observe.KindGraphQL, observe.OperationGraphQLSubscription, observe.PhaseFinish)
 			stopOperationLifecycle := context.AfterFunc(ctx, opCancel)
-			stream, subscribeErr := executor.Subscribe(opCtx, principal, prepared.Operation)
-			if subscribeErr != nil {
-				finishGraphQLChild(subscriptionObservation, subscribeErr)
-				stopOperationLifecycle()
-				opCancel()
-				state.operationError(message.ID, PresentError(opCtx, subscribeErr, nil, server.config.ReportInternalError))
-				continue
-			}
 			stopped := &atomic.Bool{}
 			state.mu.Lock()
-			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stream: stream, stopped: stopped}
+			state.operations[message.ID] = wsOperation{cancel: opCancel, stop: stopOperationLifecycle, stopped: stopped}
 			state.mu.Unlock()
 			state.ops.Add(1)
-			go func(id string, requestValue Request, prepared preparedRequest, stream ResponseStream, opCtx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
+			go func(id string, requestValue Request, prepared preparedRequest, opCtx context.Context, observation *observeexec.Span, stopped *atomic.Bool) {
 				defer state.ops.Done()
+				stream, subscribeErr := state.subscribe(executor, opCtx, prepared.Operation)
+				if subscribeErr != nil {
+					finishGraphQLChild(observation, subscribeErr)
+					state.operationErrorUnlessStopped(stopped, id, PresentError(opCtx, subscribeErr, nil, server.config.ReportInternalError))
+					state.finishOperation(id, stopped)
+					return
+				}
+				if !state.attachStream(id, stopped, stream) {
+					finishGraphQLChild(observation, context.Canceled)
+					state.closeStream(stream)
+					return
+				}
 				state.runOperation(id, requestValue, prepared, stream, opCtx, observation, stopped)
-			}(message.ID, requestValue, prepared, stream, opCtx, subscriptionObservation, stopped)
+			}(message.ID, requestValue, prepared, opCtx, subscriptionObservation, stopped)
 		case "complete":
 			state.stopOperation(message.ID)
 		}
@@ -277,6 +281,28 @@ func (state *wsConnection[P]) runOperation(id string, request Request, prepared 
 			return
 		}
 	}
+}
+
+func (state *wsConnection[P]) subscribe(executor SubscriptionExecutor[P], ctx context.Context, operation Operation) (stream ResponseStream, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			stream = nil
+			err = errors.New("GraphQL subscription admission panicked")
+		}
+	}()
+	return executor.Subscribe(ctx, state.principal, operation)
+}
+
+func (state *wsConnection[P]) attachStream(id string, instance *atomic.Bool, stream ResponseStream) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	operation, present := state.operations[id]
+	if !present || operation.stopped != instance {
+		return false
+	}
+	operation.stream = stream
+	state.operations[id] = operation
+	return true
 }
 
 func (state *wsConnection[P]) read() (wsMessage, error) {

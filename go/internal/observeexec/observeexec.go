@@ -206,6 +206,16 @@ func Finish(span *Span, outcome observe.Outcome, reason observe.Reason) {
 	})
 }
 
+// EmitMaintenance emits one validated payload-free record of background
+// provider maintenance, such as the periodic SQLite planner-statistics refresh.
+func EmitMaintenance(observer observe.Observer, provider golem.Provider, outcome observe.Outcome, reason observe.Reason, attempt int, duration time.Duration) {
+	internalvalue.Emit(observer, internalvalue.Value{
+		KindValue: string(observe.KindRuntime), PhaseValue: string(observe.PhaseApply), OutcomeValue: string(outcome),
+		ReasonValue: string(reason), ProviderValue: provider, OperationValue: string(observe.OperationRuntimeMaintenance),
+		AttemptValue: attempt, DurationValue: duration,
+	})
+}
+
 // EmitQueue emits one validated payload-free durable job lifecycle record.
 func EmitQueue(observer observe.Observer, provider golem.Provider, jobType string, phase observe.Phase, outcome observe.Outcome, reason observe.Reason, attempt int, duration time.Duration) {
 	internalvalue.Emit(observer, internalvalue.Value{

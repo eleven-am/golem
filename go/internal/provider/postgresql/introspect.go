@@ -320,9 +320,12 @@ WHERE n.nspname=$1 AND c.relkind IN ('r','p') ORDER BY c.relname,a.attnum`, stri
 					expectedOwners = append(expectedOwners, string(column.Name))
 				}
 			}
-			if !reflect.DeepEqual(actualOwnerColumns[oid], expectedOwners) {
-				name := firstStringDifference(expectedOwners, actualOwnerColumns[oid])
-				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: tableName}, "postgresql catalog table %s: non-generated column order differs from the reviewed schema", tableName)
+			actualOwners := append([]string(nil), actualOwnerColumns[oid]...)
+			sort.Strings(expectedOwners)
+			sort.Strings(actualOwners)
+			if !reflect.DeepEqual(actualOwners, expectedOwners) {
+				name := firstStringDifference(expectedOwners, actualOwners)
+				return physical.PhysicalSchema{}, providerdrift.New(providerdrift.Object{Type: "column", Name: name, Table: tableName}, "postgresql catalog table %s: non-generated columns differ from the reviewed schema", tableName)
 			}
 		} else {
 			expectedVisible := make([]string, 0, len(wanted.Columns))
@@ -1088,7 +1091,7 @@ func introspectSystem(ctx context.Context, q catalogQueryer, expected physical.S
 		}
 	}
 	if deliveryName != "" {
-		if err := introspectOutboxDelivery(ctx, q, expected.Namespace.Name, deliveryName); err != nil {
+		if err := introspectOutboxDelivery(ctx, q, expected.Namespace.Name, deliveryName, allowed["index\x00"+string(physical.OutboxDeliveryClaimIndex)]); err != nil {
 			return physical.SystemSchema{}, err
 		}
 	}
@@ -1202,7 +1205,7 @@ func introspectOutbox(ctx context.Context, q catalogQueryer, namespace physical.
 	return nil
 }
 
-func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string) error {
+func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace physical.PhysicalName, name string, claimAdmitted bool) error {
 	columnRows, err := q.QueryxContext(ctx, `SELECT a.attname,pg_catalog.format_type(a.atttypid,a.atttypmod),a.attnotnull,COALESCE(pg_catalog.pg_get_expr(d.adbin,d.adrelid),''),a.attidentity::text,a.attgenerated::text FROM pg_catalog.pg_attribute a JOIN pg_catalog.pg_class c ON c.oid=a.attrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid=c.oid AND d.adnum=a.attnum WHERE n.nspname=$1 AND c.relname=$2 AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, string(namespace), name)
 	if err != nil {
 		return err
@@ -1302,6 +1305,12 @@ func introspectOutboxDelivery(ctx context.Context, q catalogQueryer, namespace p
 		if err := indexRows.Scan(&indexName, &unique, &valid, &keys, &predicate); err != nil {
 			return err
 		}
+		if claimAdmitted && indexName == string(physical.OutboxDeliveryClaimIndex) {
+			if !postgresqlOutboxDeliveryClaimShape(name, unique, valid, keys, predicate) {
+				return providerdrift.New(providerdrift.Object{Type: "index", Name: indexName, Table: name}, "postgresql outbox delivery index drift: %s does not match golem's claim index; drop it so golem can create its own", indexName)
+			}
+			continue
+		}
 		count++
 		if indexName != "_golem_outbox_delivery_pending" || unique || !valid || keys != "2 5 3 1" || predicate != "" {
 			return providerdrift.New(providerdrift.Object{Type: "index", Name: indexName, Table: name}, "postgresql outbox delivery index drift")
@@ -1325,8 +1334,10 @@ func (provider *Provider) verify(ctx context.Context, database *sqlx.DB, expecte
 }
 
 var (
-	numericType = regexp.MustCompile(`^numeric\(([0-9]+),([0-9]+)\)$`)
-	varcharType = regexp.MustCompile(`^character varying\(([0-9]+)\)$`)
+	numericType     = regexp.MustCompile(`^numeric\(([0-9]+),([0-9]+)\)$`)
+	varcharType     = regexp.MustCompile(`^character varying\(([0-9]+)\)$`)
+	timeType        = regexp.MustCompile(`^time\(([0-9]+)\) without time zone$`)
+	timestampTZType = regexp.MustCompile(`^timestamp\(([0-9]+)\) with time zone$`)
 )
 
 func parseCatalogStorage(value string) (physical.StorageType, error) {
@@ -1364,12 +1375,11 @@ func parseCatalogStorage(value string) (physical.StorageType, error) {
 		return physical.StorageType{Kind: physical.StoragePostgreSQLVarchar, Length: uint32(length)}, nil
 	}
 	for _, item := range []struct {
-		prefix string
-		kind   physical.StorageKind
-	}{{"time(", physical.StoragePostgreSQLTime}, {"timestamp(", physical.StoragePostgreSQLTimestampTZ}} {
-		if strings.HasPrefix(value, item.prefix) {
-			end := strings.Index(value, ")")
-			precision, err := strconv.Atoi(value[len(item.prefix):end])
+		pattern *regexp.Regexp
+		kind    physical.StorageKind
+	}{{timeType, physical.StoragePostgreSQLTime}, {timestampTZType, physical.StoragePostgreSQLTimestampTZ}} {
+		if match := item.pattern.FindStringSubmatch(value); match != nil {
+			precision, err := strconv.Atoi(match[1])
 			if err != nil {
 				return physical.StorageType{}, err
 			}

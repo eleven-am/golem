@@ -76,6 +76,7 @@ On a real field:
 | `pk` | primary key |
 | `default=uuid` / `default=now` | value golem supplies on create when the field is not written; no column `DEFAULT` is emitted |
 | `readonly` | cannot be written by any caller |
+| `updated` | set to the mutation time on every update of the row, including one whose values equal the stored ones |
 | `immutable` | writable on create, never on update |
 | `type=` | physical column type |
 | `hidden` | excluded from the generated API |
@@ -124,6 +125,30 @@ is never read rather than read and filtered.
 
 `rules.CanReadFields(predicate, Notes.Title)` and `CannotReadFields` narrow
 authorization to individual columns.
+
+A unique constraint is the one place a write can reveal a row you cannot read.
+Suppose you create or update a row and the value collides with a unique key or
+primary key held by a row outside your read policy. The database still rejects
+the write, and golem reports it as `CONFLICT`, which tells you the value is
+taken. That is inherent to the constraint. The collision is checked across
+every row, and hiding it would mean accepting a write that cannot be stored. If
+the taken values themselves are secret, such as emails or handles, make the key
+opaque, scope it with a composite key that includes the owner, or route the
+write through a system-client flow that answers the same way either way.
+Foreign keys do not leak like this: you can link only to a row you can read,
+and golem reports a row you cannot read exactly as a row that does not exist.
+
+`RelationOptions(...).OnDelete(golem.Cascade)` tells golem that a dependent
+row's lifetime belongs to its parent. If you may delete the parent, that
+permission covers every row the cascade removes, including rows owned by other
+users and rows you cannot read. `SetNull` works the same way: deleting the
+parent clears the reference on each dependent without checking a policy on
+that row. Golem locks the affected rows before the parent is deleted and emits
+a change event for each one: a deleted event for every cascaded row and an
+updated event for every cleared reference, in the same transaction as the
+delete. Each subscriber still receives only the events its own read policy
+allows. A delete whose cascade would touch more rows than
+`MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
 
 ## Callers and the system client
 
@@ -290,6 +315,60 @@ golem migration apply --provider sqlite --dsn "file:notes.db"
 `golem migration plan` shows what a migration will do before it runs, and
 `golem check --app-out ./notes` fails when generated code no longer matches
 the schema — run it in CI.
+
+### Approvals
+
+Every operation carries a risk label: `safe`, `locking`, `rewrite`,
+`dataLoss` or `manual`. `migration new` refuses until each operation that
+needs review is approved with `--approve <operation-id>`. When several are
+missing, it lists all of them in one error, with a ready-made
+`--approve ... --approve ...` line to rerun with. Approval is required for:
+
+- every column type change (`alterColumnType`), including a value-preserving
+  widening, which is labelled `rewrite`. Raising or removing a string's length
+  limit is such a widening on both providers: SQLite rebuilds the table and
+  PostgreSQL alters the column type, and either way the operation is labelled
+  `rewrite` and needs `--approve`;
+- every `dataLoss` operation: dropping a table or column, making a column
+  required, adding a unique key, primary key or check that existing rows may
+  violate, and any type change that is not a widening;
+- a reviewed backfill (`manual`) and the initialization of a new optimistic
+  concurrency column.
+
+A constraint that the migration drops and re-adds while still accepting every
+value it accepted before needs no approval and is labelled `locking`, because
+the database re-validates it. That covers renaming a table or column (golem
+derives constraint names from both) and making a column optional.
+
+### What each provider changes in place
+
+- Renaming a table or column keeps its data. When another table's foreign
+  key refers to a renamed table or key column, SQLite rebuilds the referring
+  table so the reference follows the new name, and PostgreSQL renames the
+  referenced key constraint rather than dropping it.
+- Raising or removing a string's length limit (`varchar(200)` to
+  `varchar(500)`, or to an unbounded string) works on both providers. SQLite
+  rebuilds the table; PostgreSQL alters the column type. On both it is an
+  `alterColumnType` operation labelled `rewrite`, so `migration new` needs
+  `--approve <operation-id>` for it. Lowering or adding a limit is refused on
+  both, because existing values might not fit.
+- Field order. SQLite keeps columns in declared order: reordering fields, or
+  inserting a field anywhere but at the end, rebuilds the table. PostgreSQL
+  cannot reorder columns in place, so a new field is always appended
+  physically and a reorder changes no DDL. Physical column order is not part
+  of PostgreSQL drift checking; the set of columns and their definitions is.
+- A required field with no default cannot be added while SQLite is a
+  provider: declare a default or make the field optional. Only when
+  PostgreSQL is the schema's sole provider can one required field per
+  migration be added with a reviewed backfill.
+
+### Drift
+
+Application startup and `golem doctor` compare the live database with the
+reviewed migrations and report any difference as drift. Temporal columns
+must match exactly, including the time zone: a `timestamp with time zone`
+column altered to `timestamp without time zone` (or a `time` column gaining a
+time zone) is drift.
 
 ## Errors you will meet early
 

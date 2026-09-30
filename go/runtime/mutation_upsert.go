@@ -30,6 +30,7 @@ type preparedRuntimeUpsert struct {
 	updateNested       *mutationnested.Result
 	createNestedPolicy error
 	updateNestedPolicy error
+	createConflict     error
 	request            rootUpsertPrepareRequest
 }
 
@@ -145,6 +146,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 			return preparedRuntimeUpsert{}, err
 		}
 	}
+	createConflict := validateCreateAgreesWithTarget(boundTarget.Target(), boundCreate.Operations())
 	bounds, err := mutationir.NewStatementBounds(uint32(app.mutationLimits.statementParameters), uint32(app.mutationLimits.touchedRows))
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
@@ -157,7 +159,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 		Stance: stance, Operation: mutationir.Upsert, Model: request.model,
 		Registry: app.registry, Policies: policies,
 		Target: &boundTarget, Create: &boundCreate, Update: &boundUpdate,
-		Result: request.result, Retry: retry, Bounds: bounds,
+		Result: request.result, Retry: retry, Bounds: bounds, ReadRelationDepth: app.readLimits.plan.MaxRelationDepth,
 	}
 	planning.AuthorizedRuntimeFields = make([]policyir.FieldID, len(ownedFields))
 	for index, field := range ownedFields {
@@ -211,7 +213,22 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 			updateNested = &compiled
 		}
 	}
-	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, request: request}, nil
+	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, createConflict: createConflict, request: request}, nil
+}
+
+func validateCreateAgreesWithTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
+	created := make(map[policyir.FieldID]mutationir.ScalarOperation, len(operations))
+	for _, operation := range operations {
+		created[operation.FieldID()] = operation
+	}
+	for _, selector := range target.Values() {
+		operation, written := created[selector.FieldID()]
+		value, present := operation.Value()
+		if !written || operation.Kind() != mutationir.ScalarSet || !present || !equalMutationPhysicalValue(value, selector.Value()) {
+			return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", golem.ModelID(target.ModelID()), golem.FieldID(selector.FieldID()), "upsert create input does not set the target selector", nil)
+		}
+	}
+	return nil
 }
 
 func validateAbsentCreateMatchesTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
@@ -252,6 +269,9 @@ func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, 
 	}
 	if value, present := node.RowPostcondition(); present {
 		input.RowPostcondition = &value
+	}
+	if value, present := node.ReferenceCondition(); present {
+		input.ReferenceCondition = &value
 	}
 	input.FieldConditions = node.FieldAuthorizations()
 	graph, err := mutationir.NewGraph(input)
@@ -611,6 +631,9 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 		if err := validate(transformed); err != nil {
 			return nil, &mutationHookFailure{operation: request.Operation(), phase: golem.HookBefore, cause: err}
 		}
+	}
+	if branch == mutationir.UpsertCreateBranch && prepared.createConflict != nil {
+		return nil, prepared.createConflict
 	}
 	program := prepared.create
 	if branch == mutationir.UpsertUpdateBranch {

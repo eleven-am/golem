@@ -1,6 +1,7 @@
 package events
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"regexp"
@@ -26,11 +27,11 @@ type CDCCorrelationInput struct {
 // RuntimeCDCCorrelationInput transfers validated, owned source identity into
 // the installed adapter's required correlation capability.
 func RuntimeCDCCorrelationInput(sourceTransactionID string, cursor []byte) CDCCorrelationInput {
-	return CDCCorrelationInput{sourceTransactionID: sourceTransactionID, cursor: append([]byte(nil), cursor...)}
+	return CDCCorrelationInput{sourceTransactionID: sourceTransactionID, cursor: bytes.Clone(cursor)}
 }
 
 func (input CDCCorrelationInput) SourceTransactionID() string { return input.sourceTransactionID }
-func (input CDCCorrelationInput) Cursor() []byte              { return append([]byte(nil), input.cursor...) }
+func (input CDCCorrelationInput) Cursor() []byte              { return bytes.Clone(input.cursor) }
 
 type CDCEmitter interface {
 	Emit(context.Context, CDCBatchInput) error

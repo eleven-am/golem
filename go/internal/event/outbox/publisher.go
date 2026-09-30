@@ -207,6 +207,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 				nextRetention = now.Add(publisher.limits.RetentionEvery)
 			}
 		}
+		claimedAt := time.Now()
 		if coordinator, ok := publisher.coordinator.(eventprovider.ClaimDepthCoordinator); ok && !now.Before(nextDepth) {
 			var snapshot eventprovider.ClaimSnapshot
 			snapshot, err = coordinator.ClaimWithDepth(ctx, claimOptions)
@@ -241,7 +242,7 @@ func (publisher *Publisher) Run(ctx context.Context) error {
 			}
 			continue
 		}
-		if err := publisher.runClaimed(ctx, leases); err != nil {
+		if err := publisher.runClaimed(ctx, claimedAt, leases); err != nil {
 			if ctx.Err() != nil {
 				return nil
 			}
@@ -269,7 +270,7 @@ func (publisher *Publisher) observeDepth(ctx context.Context, depth eventprovide
 	events.Observe(publisher.observer, ctx, golem.ModelID{}, "", events.ObservationDepthRetired, events.OutcomeSuccess, "", 0, 0, 0, 0, depth.Retired)
 }
 
-func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovider.Lease) error {
+func (publisher *Publisher) runClaimed(ctx context.Context, claimedAt time.Time, leases []eventprovider.Lease) error {
 	errorsChannel := make(chan error, len(leases))
 	var wait sync.WaitGroup
 	for _, lease := range leases {
@@ -280,7 +281,7 @@ func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovid
 				publisher.releaseLease(lease)
 				return
 			}
-			if err := publisher.publishLease(ctx, lease); err != nil {
+			if err := publisher.publishLease(ctx, claimedAt, lease); err != nil {
 				errorsChannel <- err
 			}
 		}()
@@ -313,7 +314,7 @@ func (publisher *Publisher) runClaimed(ctx context.Context, leases []eventprovid
 	}
 }
 
-func (publisher *Publisher) publishLease(ctx context.Context, lease eventprovider.Lease) error {
+func (publisher *Publisher) publishLease(ctx context.Context, claimedAt time.Time, lease eventprovider.Lease) error {
 	causation, err := parseUUID[golem.CausationID](lease.Delivery.CausationID)
 	if err != nil || len(lease.Facts) == 0 {
 		return publisher.blockInvalid(ctx, lease, "fact-invalid")
@@ -354,7 +355,7 @@ func (publisher *Publisher) publishLease(ctx context.Context, lease eventprovide
 		}
 	}
 	started := time.Now()
-	publishErr, owned := publisher.publishWithRenewal(ctx, lease, batch)
+	publishErr, owned := publisher.publishWithRenewal(ctx, claimedAt, lease, batch)
 	if !owned || publishErr != nil {
 		publisher.observeBatch(ctx, batch, events.ObservationPublisherAttempt, events.OutcomeFailure, lease.Delivery.AttemptCount, time.Since(started))
 	} else {
@@ -384,7 +385,9 @@ func (publisher *Publisher) publishLease(ctx context.Context, lease eventprovide
 			return err
 		}
 	}
-	changed, ackErr := publisher.coordinator.Acknowledge(ctx, lease.Delivery.CausationID, lease.Delivery.LeaseToken)
+	book, cancelBook := context.WithTimeout(context.WithoutCancel(ctx), publisher.limits.LeaseDuration)
+	defer cancelBook()
+	changed, ackErr := publisher.coordinator.Acknowledge(book, lease.Delivery.CausationID, lease.Delivery.LeaseToken)
 	if ackErr != nil {
 		return fmt.Errorf("P7_PUBLISHER_ACK: %w", ackErr)
 	}
@@ -411,7 +414,7 @@ func codecFactRow(row eventprovider.FactRow) mutationfact.OutboxRow {
 	}
 }
 
-func (publisher *Publisher) publishWithRenewal(ctx context.Context, lease eventprovider.Lease, batch eventvalue.EventBatch) (error, bool) {
+func (publisher *Publisher) publishWithRenewal(ctx context.Context, claimedAt time.Time, lease eventprovider.Lease, batch eventvalue.EventBatch) (error, bool) {
 	attempt, cancel := context.WithTimeout(ctx, publisher.limits.PublishTimeout)
 	defer cancel()
 	done := make(chan error, 1)
@@ -422,12 +425,21 @@ func (publisher *Publisher) publishWithRenewal(ctx context.Context, lease eventp
 	}
 	ticker := time.NewTicker(renewEvery)
 	defer ticker.Stop()
+	leaseUntil := claimedAt.Add(publisher.limits.LeaseDuration)
 	for {
 		select {
 		case err := <-done:
 			return err, true
 		case <-ticker.C:
-			renewed, err := publisher.coordinator.Renew(attempt, lease.Delivery.CausationID, lease.Delivery.LeaseToken, publisher.limits.LeaseDuration)
+			renewedAt := time.Now()
+			renewed, err := publisher.renew(attempt, lease, leaseUntil)
+			if err == nil && renewed {
+				leaseUntil = renewedAt.Add(publisher.limits.LeaseDuration)
+				continue
+			}
+			if err != nil && time.Now().Before(leaseUntil) {
+				continue
+			}
 			if err != nil || !renewed {
 				cancel()
 				publisher.waitForTransport(done)
@@ -445,6 +457,12 @@ func (publisher *Publisher) publishWithRenewal(ctx context.Context, lease eventp
 			}
 		}
 	}
+}
+
+func (publisher *Publisher) renew(ctx context.Context, lease eventprovider.Lease, leaseUntil time.Time) (bool, error) {
+	bounded, cancel := context.WithDeadline(ctx, leaseUntil)
+	defer cancel()
+	return publisher.coordinator.Renew(bounded, lease.Delivery.CausationID, lease.Delivery.LeaseToken, publisher.limits.LeaseDuration)
 }
 
 // waitForTransport gives a context-respecting transport a bounded interval to

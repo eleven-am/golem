@@ -11,11 +11,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/observeexec"
 	internalpostgresql "github.com/eleven-am/golem/go/internal/provider/postgresql"
 	internalsqlite "github.com/eleven-am/golem/go/internal/provider/sqlite"
+	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -28,6 +31,13 @@ const (
 	postgreSQLDefaultConnectionMaximumIdleTime = 5 * time.Minute
 	postgreSQLMinimumConnectionDuration        = time.Second
 	postgreSQLMaximumConnectionDuration        = 24 * time.Hour
+
+	sqliteStatisticsTimeout = 30 * time.Second
+)
+
+var (
+	sqliteStatisticsInterval = 4 * time.Hour
+	sqliteStatisticsRefresh  = refreshSQLitePlannerStatistics
 )
 
 type Code string
@@ -125,6 +135,21 @@ type databaseState struct {
 	closeErr  error
 	closed    chan struct{}
 	closeDone chan struct{}
+
+	maintenanceCancel   context.CancelFunc
+	maintenanceDone     chan struct{}
+	maintenanceObserver atomic.Pointer[maintenanceObserver]
+}
+
+type maintenanceObserver struct{ observer observe.Observer }
+
+// AttachMaintenanceObserver routes failures of the handle's background
+// maintenance to observer. The most recently attached observer receives them.
+func AttachMaintenanceObserver(database *Database, observer observe.Observer) {
+	if database == nil || database.state == nil || observer == nil {
+		return
+	}
+	database.state.maintenanceObserver.Store(&maintenanceObserver{observer: observer})
 }
 
 func newDatabase(database *sqlx.DB, kind golem.Provider, version Version, features []string, pool PoolStatus) *Database {
@@ -167,6 +192,19 @@ func AdoptUnverifiedForTest(database *sqlx.DB, metadata TestMetadata) *Database 
 // public escape from reviewed migration-ledger startup verification.
 func (database *Database) IsUnverifiedForTest() bool {
 	return database != nil && database.state != nil && database.state.testOnly
+}
+
+// MaintenanceObserverForTest is visible only inside Golem's internal import
+// boundary. It lets runtime tests prove that opening an application routes the
+// handle's background maintenance failures to the configured observer.
+func (database *Database) MaintenanceObserverForTest() observe.Observer {
+	if database == nil || database.state == nil {
+		return nil
+	}
+	if attached := database.state.maintenanceObserver.Load(); attached != nil {
+		return attached.observer
+	}
+	return nil
 }
 
 func compactStrings(values []string) []string {
@@ -221,10 +259,14 @@ func (database *Database) Close() error {
 		if database.state.closed != nil {
 			close(database.state.closed)
 		}
+		if database.state.maintenanceCancel != nil {
+			database.state.maintenanceCancel()
+			<-database.state.maintenanceDone
+		}
 		if database.state.database != nil {
 			if database.state.provider == golem.SQLite && !database.state.testOnly {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				err := refreshSQLitePlannerStatistics(ctx, database.state.database)
+				err := sqliteStatisticsRefresh(ctx, database.state.database)
 				cancel()
 				if err != nil {
 					database.state.closeErr = failure(CodeClose, "provider close failed")
@@ -286,7 +328,42 @@ func OpenSQLite(ctx context.Context, dataSourceName string) (*Database, error) {
 		"analytics-exact.v1",
 	}, PoolStatus{maximumOpen: internalsqlite.VerifiedPoolWidth, maximumIdle: internalsqlite.VerifiedPoolWidth})
 	result.state.sqliteDataSourceName = dataSourceName
+	result.state.maintainSQLiteStatistics(sqliteStatisticsInterval)
 	return result, nil
+}
+
+func (state *databaseState) maintainSQLiteStatistics(interval time.Duration) {
+	lifetime, cancel := context.WithCancel(context.Background())
+	state.maintenanceCancel = cancel
+	state.maintenanceDone = make(chan struct{})
+	go func() {
+		defer close(state.maintenanceDone)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		failures := 0
+		for {
+			select {
+			case <-lifetime.Done():
+				return
+			case <-ticker.C:
+				started := time.Now()
+				ctx, stop := context.WithTimeout(lifetime, sqliteStatisticsTimeout)
+				err := sqliteStatisticsRefresh(ctx, state.database)
+				stop()
+				if err == nil {
+					failures = 0
+					continue
+				}
+				if lifetime.Err() != nil {
+					return
+				}
+				failures++
+				if attached := state.maintenanceObserver.Load(); attached != nil {
+					observeexec.EmitMaintenance(attached.observer, state.provider, observe.OutcomeFailure, observe.ReasonProvider, failures, time.Since(started))
+				}
+			}
+		}
+	}()
 }
 
 // CheckpointSQLiteForBackup performs the provider-owned SQLite checkpoint for

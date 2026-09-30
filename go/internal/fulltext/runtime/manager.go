@@ -10,6 +10,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/unicode/norm"
+
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	fulltextcontract "github.com/eleven-am/golem/go/internal/fulltext/contract"
 	fulltextfolding "github.com/eleven-am/golem/go/internal/fulltext/folding"
@@ -161,15 +163,11 @@ func (manager *Manager) QueryOn(ctx context.Context, queryer sqlx.QueryerContext
 	if manager.provider == ir.PostgreSQL {
 		statement = manager.postgresqlStatement(index, parsed, candidates, ranking)
 		for _, item := range parsed {
-			value := item.value
-			if index.Descriptor.Index.Folding == fulltextcontract.FoldingDiacritics {
-				value = fulltextfolding.Diacritics(value)
-			}
-			arguments = append(arguments, value)
+			arguments = append(arguments, foldQueryValue(item.value, index.Descriptor.Index))
 		}
 	} else if ranking == fulltextcontract.RankingBM25 {
 		statement = manager.sqliteBM25Statement(index, candidates)
-		arguments = append(arguments, compileSQLite(parsed, index.Descriptor.Index.Folding))
+		arguments = append(arguments, compileSQLiteFor(parsed, index.Descriptor.Index))
 	} else {
 		branches := sqliteRankBranches(index.Descriptor.Index, parsed)
 		statement = manager.sqliteStatement(index, candidates, branches)
@@ -221,7 +219,7 @@ func (manager *Manager) sqliteBM25Statement(index Index, candidates semanticrunt
 	}
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, 1, policyir.ProviderSQLite)
 	limit := "?" + strconv.Itoa(len(candidates.Args)+2)
-	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(identity, ",") +
+	return "SELECT -bm25(" + fts + "," + strings.Join(weights, ",") + ") AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM " + fts + " AS golem_ff JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" WHERE " + fts + " MATCH ?1 ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
@@ -237,7 +235,7 @@ func sqliteRankBranches(index fulltextcontract.Index, terms []term) []sqliteRank
 	seen := make(map[string]bool, cap(branches))
 	for fieldPosition, field := range index.Fields {
 		for _, item := range terms {
-			expression := compileSQLiteField([]term{item}, index.Folding, fieldPosition)
+			expression := compileSQLiteField([]term{item}, index, fieldPosition)
 			if seen[expression] {
 				continue
 			}
@@ -262,7 +260,7 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 				" WHERE " + fts + " MATCH ?" + strconv.Itoa(position+1)
 		}
 		direct := "WITH golem_fr AS (" + strings.Join(ranks, " UNION ALL ") +
-			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(identity, ",") +
+			"),golem_fs AS (SELECT golem_fd,sum(golem_fw) AS score FROM golem_fr GROUP BY golem_fd) SELECT golem_fs.score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 			" FROM golem_fs JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_fs.golem_fd" +
 			" ORDER BY golem_fs.score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
 		if readsql.ValidateStatementComplexity(candidates.Model, direct, candidates.MaxStatementBytes, candidates.MaxStatementAliases) == nil {
@@ -273,7 +271,7 @@ func (manager *Manager) sqliteStatement(index Index, candidates semanticruntime.
 	for position, branch := range branches {
 		values[position] = "(?" + strconv.Itoa(position+1) + "," + strconv.FormatFloat(branch.weight, 'g', -1, 64) + ")"
 	}
-	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(identity, ",") +
+	return "WITH golem_fq(golem_fe,golem_fw) AS (VALUES " + strings.Join(values, ",") + ") SELECT sum(golem_fq.golem_fw) AS score," + strings.Join(manager.projectedIdentity(index, identity), ",") +
 		" FROM golem_fq JOIN " + fts + " AS golem_ff ON " + fts + " MATCH golem_fq.golem_fe JOIN " + keys + " AS golem_fk ON golem_fk.docid=golem_ff.rowid" +
 		" JOIN (" + candidateSQL + ") AS golem_fc ON " + strings.Join(joins, " AND ") +
 		" GROUP BY golem_ff.rowid," + strings.Join(identity, ",") + " ORDER BY score DESC," + strings.Join(identity, ",") + " LIMIT " + limit
@@ -285,7 +283,7 @@ func (manager *Manager) postgresqlStatement(index Index, terms []term, candidate
 	candidateSQL := policysql.RebasePlaceholders(candidates.SQL, len(terms), policyir.ProviderPostgreSQL)
 	queries := make([]string, len(terms))
 	for position, item := range terms {
-		queries[position] = fulltextpostgresql.PhraseQuery("$"+strconv.Itoa(position+1), fulltextcontract.FoldingNone, item.prefix)
+		queries[position] = fulltextpostgresql.PhraseQueryFor("$"+strconv.Itoa(position+1), fulltextcontract.FoldingNone, index.Descriptor.Index.Normalization, item.prefix)
 	}
 	query := fulltextpostgresql.JoinQueries(queries)
 	limit := "$" + strconv.Itoa(len(terms)+len(candidates.Args)+1)
@@ -323,6 +321,14 @@ func (manager *Manager) identitySQL(index Index, storedAlias, candidateAlias str
 		joins[position] = candidateAlias + "." + manager.quote(candidates.Columns[position]) + "=" + identity[position]
 	}
 	return identity, joins
+}
+
+func (manager *Manager) projectedIdentity(index Index, identity []string) []string {
+	result := make([]string, len(identity))
+	for position, column := range index.Identity {
+		result[position] = policysql.ProjectStorageColumn(column.Storage.Kind, identity[position])
+	}
+	return result
 }
 
 func (manager *Manager) index(model ir.ModelID, name string) (Index, bool) {
@@ -401,6 +407,18 @@ func parse(input string) ([]term, error) {
 			}
 			item.value = strings.TrimSpace(input[start:position])
 			position++
+			if position < len(input) && input[position] == '*' {
+				item.prefix = true
+				position++
+				if prefixLexemeLength(item.value) < 2 {
+					return nil, InvalidQuery("full-text prefix terms require at least two characters")
+				}
+				if position < len(input) {
+					if next, _ := utf8.DecodeRuneInString(input[position:]); !unicode.IsSpace(next) {
+						return nil, InvalidQuery("full-text phrase prefix must be followed by whitespace or the end of the query")
+					}
+				}
+			}
 		} else {
 			start := position
 			for position < len(input) {
@@ -448,13 +466,24 @@ func prefixLexemeLength(value string) int {
 	return latest
 }
 
+func foldQueryValue(value string, index fulltextcontract.Index) string {
+	if index.Folding == fulltextcontract.FoldingDiacritics {
+		return fulltextfolding.Diacritics(value)
+	}
+	if index.Normalization == fulltextcontract.NormalizationNFCLower {
+		return norm.NFC.String(value)
+	}
+	return value
+}
+
 func compileSQLite(terms []term, folding string) string {
+	return compileSQLiteFor(terms, fulltextcontract.Index{Folding: folding})
+}
+
+func compileSQLiteFor(terms []term, index fulltextcontract.Index) string {
 	parts := make([]string, len(terms))
 	for position, item := range terms {
-		value := item.value
-		if folding == fulltextcontract.FoldingDiacritics {
-			value = fulltextfolding.Diacritics(value)
-		}
+		value := foldQueryValue(item.value, index)
 		parts[position] = `"` + strings.ReplaceAll(value, `"`, `""`) + `"`
 		if item.prefix {
 			parts[position] += "*"
@@ -463,6 +492,6 @@ func compileSQLite(terms []term, folding string) string {
 	return strings.Join(parts, " OR ")
 }
 
-func compileSQLiteField(terms []term, folding string, position int) string {
-	return "_golem_field_" + strconv.Itoa(position) + " : (" + compileSQLite(terms, folding) + ")"
+func compileSQLiteField(terms []term, index fulltextcontract.Index, position int) string {
+	return "_golem_field_" + strconv.Itoa(position) + " : (" + compileSQLiteFor(terms, index) + ")"
 }

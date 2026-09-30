@@ -41,7 +41,7 @@
     "event.transport_reconnect"
   ],
   "coverage": [
-    {"kind": "runtime", "operations": ["runtime.open"]},
+    {"kind": "runtime", "operations": ["runtime.open", "runtime.maintenance"]},
     {"kind": "read", "operations": ["read.find_unique", "read.find_first", "read.find_many", "read.count"]},
     {"kind": "mutation", "operations": ["mutation.create", "mutation.update", "mutation.upsert", "mutation.delete", "mutation.update_many", "mutation.delete_many", "mutation.connect", "mutation.disconnect", "mutation.set_relation"]},
     {"kind": "graphql", "operations": ["graphql.request", "graphql.query", "graphql.mutation", "graphql.subscription", "graphql.custom_query", "graphql.custom_mutation", "graphql.computed", "graphql.batched_computed"]},
