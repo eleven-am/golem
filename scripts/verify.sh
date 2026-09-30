@@ -121,7 +121,7 @@ run() {
 	vet) (cd "$GO_DIR" && "$GO" vet ./...) ;;
 	gate) gate ;;
 	database-free) database_free ;;
-	cli-and-harness) go_test_serial "${CLI_PACKAGES[@]}" ;;
+	cli-and-harness) go_test -p=1 -count=1 -timeout=60m "${CLI_PACKAGES[@]}" ;;
 	database-bound) go_test_serial "${DATABASE_PACKAGES[@]}" ;;
 	oracle-mutation-and-load) go_test_serial "${ORACLE_MUTATION_AND_LOAD[@]}" ;;
 	oracle-failure-and-event)
