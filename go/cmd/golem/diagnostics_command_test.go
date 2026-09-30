@@ -276,6 +276,7 @@ func TestDoctorIsReadOnlyAndUsesPublicProviderLifecycle(t *testing.T) {
 }
 
 func TestDoctorStateMatrixBothProviders(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	canary := "doctor-secret-host-user-password"
 	database := filepath.Join(t.TempDir(), canary+".db")
@@ -284,7 +285,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 	}
 	doctorArgs := []string{"doctor", "--provider", "sqlite", "--dsn", database, "--json"}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, doctorArgs, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, doctorArgs, &stdout, &stderr); code != 1 {
 		t.Fatalf("incomplete doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var incomplete doctorOutput
@@ -294,7 +295,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing.db")
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"doctor", "--provider", "sqlite", "--dsn", missing, "--json"}, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, []string{"doctor", "--provider", "sqlite", "--dsn", missing, "--json"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("unreachable doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var unreachable doctorOutput
@@ -307,7 +308,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("migration new code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	databaseBeforeDoctor, err := os.ReadFile(database)
@@ -317,7 +318,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 	moduleBeforeDoctor := treeSnapshot(t, module)
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, doctorArgs, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, doctorArgs, &stdout, &stderr); code != 1 {
 		t.Fatalf("pending doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var pending doctorOutput
@@ -340,12 +341,12 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, doctorArgs, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, doctorArgs, &stdout, &stderr); code != 1 {
 		t.Fatalf("generated pending doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if err := json.Unmarshal(stdout.Bytes(), &pending); err != nil || pending.Generation != "current" || pending.History != "pending" || pending.Schema != "drift" {
@@ -354,7 +355,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "apply", "--provider", "sqlite", "--dsn", database}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "apply", "--provider", "sqlite", "--dsn", database}, &stdout, &stderr); code != 0 {
 		t.Fatalf("migration apply after doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var applied migrationApplyOutput
@@ -363,10 +364,10 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 	}
 
 	var first, second, firstErr, secondErr bytes.Buffer
-	if code := run(context.Background(), module, doctorArgs, &first, &firstErr); code != 0 {
+	if code := runGolem(t, module, doctorArgs, &first, &firstErr); code != 0 {
 		t.Fatalf("current doctor code=%d stdout=%s stderr=%s", code, first.String(), firstErr.String())
 	}
-	if code := run(context.Background(), module, doctorArgs, &second, &secondErr); code != 0 {
+	if code := runGolem(t, module, doctorArgs, &second, &secondErr); code != 0 {
 		t.Fatalf("repeat doctor code=%d stdout=%s stderr=%s", code, second.String(), secondErr.String())
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
@@ -403,7 +404,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	var tamperedOut, tamperedErr bytes.Buffer
-	if code := run(context.Background(), module, doctorArgs, &tamperedOut, &tamperedErr); code != 1 {
+	if code := runGolem(t, module, doctorArgs, &tamperedOut, &tamperedErr); code != 1 {
 		t.Fatalf("tampered doctor code=%d stdout=%s stderr=%s", code, tamperedOut.String(), tamperedErr.String())
 	}
 	var tampered doctorOutput
@@ -419,7 +420,7 @@ func TestDoctorStateMatrixBothProviders(t *testing.T) {
 		t.Fatal(err)
 	}
 	var invalidOut, invalidErr bytes.Buffer
-	if code := run(context.Background(), module, doctorArgs, &invalidOut, &invalidErr); code != 1 {
+	if code := runGolem(t, module, doctorArgs, &invalidOut, &invalidErr); code != 1 {
 		t.Fatalf("invalid-history doctor code=%d stdout=%s stderr=%s", code, invalidOut.String(), invalidErr.String())
 	}
 	var invalid doctorOutput
@@ -546,7 +547,7 @@ type doctorState struct {
 func assertDoctorState(t *testing.T, module, provider, dsn string, want doctorState) doctorOutput {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), module, []string{"doctor", "--provider", provider, "--dsn", dsn, "--json"}, &stdout, &stderr)
+	code := runGolem(t, module, []string{"doctor", "--provider", provider, "--dsn", dsn, "--json"}, &stdout, &stderr)
 	if want.capabilities == "pass" && want.history == "current" && want.schema == "current" && want.generation == "current" {
 		if code != 0 {
 			t.Fatalf("doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -570,7 +571,7 @@ func assertDoctorState(t *testing.T, module, provider, dsn string, want doctorSt
 func runP8Command(t *testing.T, module string, arguments ...string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, arguments, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, arguments, &stdout, &stderr); code != 0 {
 		t.Fatalf("golem %s code=%d stdout=%s stderr=%s", strings.Join(arguments, " "), code, stdout.String(), stderr.String())
 	}
 }
@@ -661,6 +662,7 @@ func snapshotPostgreSQLDoctorState(t *testing.T, dsn string) postgreSQLDoctorSna
 }
 
 func TestDoctorOutputRedactionCanary(t *testing.T) {
+	t.Parallel()
 	const canary = "P8_DOCTOR_SECRET_HOST_USER_PASSWORD_DATABASE_SQL_ROW"
 	module := writeSocialModule(t, false)
 	cases := []struct {
@@ -692,7 +694,7 @@ func TestDoctorOutputRedactionCanary(t *testing.T) {
 					arguments := []string{"doctor", "--provider", testCase.provider, "--dsn", testCase.dsn}
 					arguments = append(arguments, format.arg...)
 					var stdout, stderr bytes.Buffer
-					if code := run(context.Background(), module, arguments, &stdout, &stderr); code != 1 {
+					if code := runGolem(t, module, arguments, &stdout, &stderr); code != 1 {
 						t.Fatalf("doctor code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 					}
 					combined := stdout.String() + stderr.String()

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
@@ -110,27 +112,103 @@ type evolution struct {
 	databases map[ir.Provider]string
 }
 
+type evolutionBaseline struct {
+	once   sync.Once
+	ready  bool
+	module string
+}
+
+var evolutionBaselines = struct {
+	sync.Mutex
+	modules     map[string]*evolutionBaseline
+	directories []string
+}{modules: map[string]*evolutionBaseline{}}
+
+func removeEvolutionBaselines() error {
+	evolutionBaselines.Lock()
+	defer evolutionBaselines.Unlock()
+	var result error
+	for _, directory := range evolutionBaselines.directories {
+		result = errors.Join(result, os.RemoveAll(directory))
+	}
+	return result
+}
+
+func sharedEvolutionBaseline(t *testing.T, schema evolutionSchema) (string, bool) {
+	t.Helper()
+	source := schema.source()
+	evolutionBaselines.Lock()
+	baseline, exists := evolutionBaselines.modules[source]
+	if !exists {
+		baseline = &evolutionBaseline{}
+		evolutionBaselines.modules[source] = baseline
+	}
+	evolutionBaselines.Unlock()
+	created := false
+	baseline.once.Do(func() {
+		module, err := os.MkdirTemp("", "golem-evolution-baseline-")
+		if err != nil {
+			t.Fatal(err)
+		}
+		evolutionBaselines.Lock()
+		evolutionBaselines.directories = append(evolutionBaselines.directories, module)
+		evolutionBaselines.Unlock()
+		value := &evolution{t: t, module: module}
+		value.writeModule(schema)
+		if code, stdout, stderr := value.newMigration("initial", value.requiredApprovals()); code != 0 {
+			t.Fatalf("migration new initial code=%d stdout=%s stderr=%s", code, stdout, stderr)
+		}
+		baseline.module = module
+		baseline.ready = true
+		created = true
+	})
+	if !baseline.ready {
+		t.Fatal("the shared initial evolution module could not be created")
+	}
+	return baseline.module, created
+}
+
 func newEvolution(t *testing.T, schema evolutionSchema) *evolution {
 	t.Helper()
+	baseline, created := sharedEvolutionBaseline(t, schema)
 	module := t.TempDir()
-	goMod := "module example.test/evolution\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(t)) + "\n"
-	if err := os.WriteFile(filepath.Join(module, "go.mod"), []byte(goMod), 0o644); err != nil {
+	if err := os.CopyFS(module, os.DirFS(baseline)); err != nil {
 		t.Fatal(err)
 	}
-	value := &evolution{t: t, module: module, databases: map[ir.Provider]string{}}
-	value.write(schema)
+	value := &evolution{t: t, module: module, schema: schema, databases: map[ir.Provider]string{}}
+	value.createDatabases()
 	for _, provider := range value.providers() {
-		switch provider {
-		case ir.SQLite:
-			value.databases[provider] = filepath.Join(t.TempDir(), "evolution.db")
-		case ir.PostgreSQL:
-			value.databases[provider] = testenv.DisposablePostgreSQL(t, testenv.PostgreSQLDSNVariable)
+		if code, stdout, stderr := value.apply(provider); code != 0 {
+			t.Fatalf("migration apply initial on %s code=%d stdout=%s stderr=%s", provider, code, stdout, stderr)
+		}
+		if created {
+			value.assertSchemaCurrent(provider)
 		}
 	}
-	value.mustMigrate("initial")
 	value.exec(`INSERT INTO ` + value.qualified(schema.authorsTable) + ` ("` + schema.authorIDColumn + `","handle") VALUES ('` + evolutionAuthorID + `','ann')`)
 	value.exec(`INSERT INTO ` + value.qualified("notes") + ` ("id","author_id","title","body") VALUES ('` + evolutionNoteID + `','` + evolutionAuthorID + `','first','kept')`)
 	return value
+}
+
+func (value *evolution) writeModule(schema evolutionSchema) {
+	value.t.Helper()
+	goMod := "module example.test/evolution\n\ngo 1.25.0\n\nrequire github.com/eleven-am/golem/go v0.0.0\nreplace github.com/eleven-am/golem/go => " + filepath.ToSlash(commandModuleRoot(value.t)) + "\n"
+	if err := os.WriteFile(filepath.Join(value.module, "go.mod"), []byte(goMod), 0o644); err != nil {
+		value.t.Fatal(err)
+	}
+	value.write(schema)
+}
+
+func (value *evolution) createDatabases() {
+	value.t.Helper()
+	for _, provider := range value.providers() {
+		switch provider {
+		case ir.SQLite:
+			value.databases[provider] = filepath.Join(value.t.TempDir(), "evolution.db")
+		case ir.PostgreSQL:
+			value.databases[provider] = testenv.DisposablePostgreSQL(value.t, testenv.PostgreSQLDSNVariable)
+		}
+	}
 }
 
 func (value *evolution) providers() []ir.Provider {
@@ -155,7 +233,7 @@ func (value *evolution) write(schema evolutionSchema) {
 func (value *evolution) run(arguments ...string) (int, string, string) {
 	value.t.Helper()
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), value.module, arguments, &stdout, &stderr)
+	code := runGolem(value.t, value.module, arguments, &stdout, &stderr)
 	return code, stdout.String(), stderr.String()
 }
 
@@ -286,6 +364,7 @@ func (value *evolution) assertRowsKept(authorsTable, authorIDColumn string) {
 }
 
 func TestMigrationRenamesAReferencedTableOnEveryProvider(t *testing.T) {
+	t.Parallel()
 	value := newEvolution(t, defaultEvolutionSchema())
 	renamed := value.schema
 	renamed.authorsTable = "writers"
@@ -296,6 +375,7 @@ func TestMigrationRenamesAReferencedTableOnEveryProvider(t *testing.T) {
 }
 
 func TestMigrationRenamesAReferencedKeyColumnOnEveryProvider(t *testing.T) {
+	t.Parallel()
 	value := newEvolution(t, defaultEvolutionSchema())
 	renamed := value.schema
 	renamed.authorIDColumn = "author_key"
@@ -306,6 +386,7 @@ func TestMigrationRenamesAReferencedKeyColumnOnEveryProvider(t *testing.T) {
 }
 
 func TestMigrationReordersFieldsOnEveryProvider(t *testing.T) {
+	t.Parallel()
 	value := newEvolution(t, defaultEvolutionSchema())
 	reordered := value.schema
 	reordered.noteFields = []string{"ID", "AuthorID", "Body", "Title", "Author"}
@@ -316,6 +397,7 @@ func TestMigrationReordersFieldsOnEveryProvider(t *testing.T) {
 }
 
 func TestMigrationInsertsAFieldBeforeExistingFieldsOnEveryProvider(t *testing.T) {
+	t.Parallel()
 	value := newEvolution(t, defaultEvolutionSchema())
 	inserted := value.schema
 	inserted.noteFields = []string{"ID", "AuthorID", "Summary", "Title", "Body", "Author"}
@@ -326,8 +408,10 @@ func TestMigrationInsertsAFieldBeforeExistingFieldsOnEveryProvider(t *testing.T)
 }
 
 func TestMigrationChangesAStringLengthOnEveryProvider(t *testing.T) {
+	t.Parallel()
 	for _, target := range []string{"varchar(500)", "unbounded"} {
 		t.Run("to "+target, func(t *testing.T) {
+			t.Parallel()
 			value := newEvolution(t, defaultEvolutionSchema())
 			widened := value.schema
 			widened.titleType = strings.TrimPrefix(target, "unbounded")
@@ -353,6 +437,7 @@ func (value *evolution) plan() migrationPlanJSON {
 }
 
 func TestMigrationPlanDoesNotCallHarmlessChangesDataLoss(t *testing.T) {
+	t.Parallel()
 	for _, testCase := range []struct {
 		name   string
 		change func(*evolutionSchema)
@@ -364,6 +449,7 @@ func TestMigrationPlanDoesNotCallHarmlessChangesDataLoss(t *testing.T) {
 		{name: "rename table", change: func(schema *evolutionSchema) { schema.authorsTable = "writers" }},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			t.Parallel()
 			value := newEvolution(t, defaultEvolutionSchema())
 			changed := value.schema
 			testCase.change(&changed)
@@ -405,6 +491,7 @@ func TestMigrationPlanDoesNotCallHarmlessChangesDataLoss(t *testing.T) {
 }
 
 func TestMigrationNewReportsEveryMissingApprovalAtOnce(t *testing.T) {
+	t.Parallel()
 	value := newEvolution(t, defaultEvolutionSchema())
 	dropped := value.schema
 	dropped.noteFields = []string{"ID", "AuthorID", "Author"}
@@ -425,8 +512,10 @@ func TestMigrationNewReportsEveryMissingApprovalAtOnce(t *testing.T) {
 }
 
 func TestMigrationNewExplainsARequiredFieldWithoutADefault(t *testing.T) {
+	t.Parallel()
 	for _, providers := range []string{"golem.SQLite", "golem.SQLite, golem.PostgreSQL"} {
 		t.Run(providers, func(t *testing.T) {
+			t.Parallel()
 			initial := defaultEvolutionSchema()
 			initial.providers = providers
 			value := newEvolution(t, initial)
@@ -445,6 +534,7 @@ func TestMigrationNewExplainsARequiredFieldWithoutADefault(t *testing.T) {
 }
 
 func TestMigrationPlanNamesAMissingArtifactByItsModulePath(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	createInitialReviewedMigration(t, module)
 	artifact := filepath.Join("migrations", "sqlite", "0001_initial.sql")
@@ -452,7 +542,7 @@ func TestMigrationPlanNamesAMissingArtifactByItsModulePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "plan"}, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, []string{"migration", "plan"}, &stdout, &stderr); code != 1 {
 		t.Fatalf("migration plan code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	message := stderr.String()

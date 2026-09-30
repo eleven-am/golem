@@ -59,6 +59,7 @@ type migrationPlanJSON struct {
 }
 
 func TestMigrationPlanProspectiveMatchesMigrationNewWithoutWriting(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	before := treeSnapshot(t, module)
 	prospective := runMigrationPlanJSON(t, module)
@@ -74,10 +75,11 @@ func TestMigrationPlanProspectiveMatchesMigrationNewWithoutWriting(t *testing.T)
 }
 
 func TestMigrationPlanReviewedVerifiesHistoryAndEveryArtifactBeforeRendering(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("reviewed plan code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	sqlPath := filepath.Join(module, "migrations", "sqlite", "0001_initial.sql")
@@ -94,7 +96,7 @@ func TestMigrationPlanReviewedVerifiesHistoryAndEveryArtifactBeforeRendering(t *
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
+	if code := runGolem(t, module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 {
 		t.Fatalf("provider filter hid sibling tamper code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if err := verifyMigrationPlanTree(module, tamperedTree); err != nil {
@@ -106,12 +108,13 @@ func TestMigrationPlanReviewedVerifiesHistoryAndEveryArtifactBeforeRendering(t *
 	rewriteReviewedSQLWithValidChecksums(t, resealed, "sqlite", "0001_initial", []byte("-- checksum-valid but not deterministic provider SQL\n"))
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), resealed, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "differs from deterministic rendering") {
+	if code := runGolem(t, resealed, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "differs from deterministic rendering") {
 		t.Fatalf("rendered before full provider verification code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
 
 func TestMigrationPlanTextAndJSONShareOneCanonicalTypedReport(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	encoded := runMigrationPlanBytes(t, module, []string{"--json"})
 	if len(encoded) == 0 || len(encoded) > 16<<20 {
@@ -132,7 +135,7 @@ func TestMigrationPlanTextAndJSONShareOneCanonicalTypedReport(t *testing.T) {
 	}
 	document := decodeMigrationPlanJSON(t, encoded)
 	var textOut, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "plan"}, &textOut, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "plan"}, &textOut, &stderr); code != 0 {
 		t.Fatalf("text plan code=%d stdout=%s stderr=%s", code, textOut.String(), stderr.String())
 	}
 	for _, ids := range migrationPlanOperationIDs(document) {
@@ -164,6 +167,7 @@ func TestMigrationPlanTextAndJSONShareOneCanonicalTypedReport(t *testing.T) {
 }
 
 func TestMigrationPlanExplainsSafeWideningAndReviewedBackfillWithoutClaims(t *testing.T) {
+	t.Parallel()
 	module := writePostgreSQLWideningModule(t)
 	createInitialReviewedMigration(t, module)
 	schemaPath := filepath.Join(module, "schema.go")
@@ -269,6 +273,7 @@ func TestMigrationPlanNeverPrintsSQLValuesDSNsPhysicalNamesOrAbsolutePaths(t *te
 }
 
 func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	for _, args := range [][]string{
 		{"--migration", "0001_initial", "--schema", "."},
@@ -283,7 +288,7 @@ func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *tes
 	createInitialReviewedMigration(t, module)
 	rewriteManifestWithUnknownOperation(t, module, "sqlite")
 	var unknownOut, unknownErr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &unknownOut, &unknownErr); code != 1 || unknownOut.Len() != 0 {
+	if code := runGolem(t, module, []string{"migration", "plan", "--migration", "0001_initial", "--provider", "postgresql", "--json"}, &unknownOut, &unknownErr); code != 1 || unknownOut.Len() != 0 {
 		t.Fatalf("unknown sibling operation rendered code=%d stdout=%s stderr=%s", code, unknownOut.String(), unknownErr.String())
 	}
 
@@ -299,7 +304,7 @@ func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *tes
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), backfillModule, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, backfillModule, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("create pending code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var pending migrationNewOutput
@@ -308,7 +313,7 @@ func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *tes
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), backfillModule, []string{"migration", "plan", "--migration", string(pending.MigrationID)}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "not immutable reviewed history") {
+	if code := runGolem(t, backfillModule, []string{"migration", "plan", "--migration", string(pending.MigrationID)}, &stdout, &stderr); code != 1 || stdout.Len() != 0 || !strings.Contains(stderr.String(), "not immutable reviewed history") {
 		t.Fatalf("pending draft rendered code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 
@@ -319,7 +324,7 @@ func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *tes
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), invalid, []string{"migration", "plan", "--json"}, &stdout, &stderr); code != 1 || !bytes.Contains(stdout.Bytes(), []byte(`"formatVersion": 1`)) || !bytes.Contains(stdout.Bytes(), []byte(`"diagnostics"`)) || strings.Contains(stdout.String(), invalid) {
+	if code := runGolem(t, invalid, []string{"migration", "plan", "--json"}, &stdout, &stderr); code != 1 || !bytes.Contains(stdout.Bytes(), []byte(`"formatVersion": 1`)) || !bytes.Contains(stdout.Bytes(), []byte(`"diagnostics"`)) || strings.Contains(stdout.String(), invalid) {
 		t.Fatalf("closed diagnostic path code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if err := verifyMigrationPlanTree(invalid, invalidBefore); err != nil {
@@ -334,7 +339,7 @@ func TestMigrationPlanRejectsTamperPendingDraftUnknownKindAndInvalidFlags(t *tes
 	} {
 		stdout.Reset()
 		stderr.Reset()
-		if code := run(context.Background(), invalid, append([]string{"migration", "plan", "--json"}, diagnosticCase.args...), &stdout, &stderr); code != 1 || !bytes.Contains(stdout.Bytes(), []byte(`"diagnostics"`)) || strings.Contains(stdout.String(), diagnosticCase.canary) || strings.Contains(stderr.String(), diagnosticCase.canary) {
+		if code := runGolem(t, invalid, append([]string{"migration", "plan", "--json"}, diagnosticCase.args...), &stdout, &stderr); code != 1 || !bytes.Contains(stdout.Bytes(), []byte(`"diagnostics"`)) || strings.Contains(stdout.String(), diagnosticCase.canary) || strings.Contains(stderr.String(), diagnosticCase.canary) {
 			t.Fatalf("diagnostic canary leaked args=%v code=%d stdout=%s stderr=%s", diagnosticCase.args, code, stdout.String(), stderr.String())
 		}
 	}
@@ -473,7 +478,7 @@ func runMigrationPlanBytes(t *testing.T, module string, args []string) []byte {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
 	command := append([]string{"migration", "plan"}, args...)
-	if code := run(context.Background(), module, command, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, command, &stdout, &stderr); code != 0 {
 		t.Fatalf("migration plan args=%v code=%d stdout=%s stderr=%s", args, code, stdout.String(), stderr.String())
 	}
 	if stderr.Len() != 0 {
@@ -586,7 +591,7 @@ func createReviewedBackfill(t *testing.T) (string, string) {
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "new", "--name", "required_slug"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("create pending code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var pending migrationNewOutput
@@ -599,7 +604,7 @@ func createReviewedBackfill(t *testing.T) (string, string) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"migration", "backfill", "attach", "--migration", string(pending.MigrationID), "--field", "User.Slug", "--file", reviewedPath}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "backfill", "attach", "--migration", string(pending.MigrationID), "--field", "User.Slug", "--file", reviewedPath}, &stdout, &stderr); code != 0 {
 		t.Fatalf("attach pending code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	return module, string(pending.MigrationID)

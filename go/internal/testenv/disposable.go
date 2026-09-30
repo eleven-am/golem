@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -41,6 +42,8 @@ func SkipMissingPGVectorf(t testing.TB, format string, args ...any) {
 	t.Skipf(format, args...)
 }
 
+var disposableSequence atomic.Uint64
+
 func disposablePostgreSQL(t testing.TB, base string, unavailable func(testing.TB, string, ...any)) string {
 	t.Helper()
 	admin, err := sql.Open("pgx", base)
@@ -58,7 +61,7 @@ func disposablePostgreSQL(t testing.TB, base string, unavailable func(testing.TB
 		_ = admin.Close()
 		t.Fatalf("read template locale: %v", err)
 	}
-	name := fmt.Sprintf("golem_disposable_%d_%d", os.Getpid(), time.Now().UnixNano())
+	name := fmt.Sprintf("golem_disposable_%d_%d_%d", os.Getpid(), disposableSequence.Add(1), time.Now().UnixNano())
 	if _, err := admin.ExecContext(ctx, disposableCreateStatement(name, encoding, collate, characterType)); err != nil {
 		_ = admin.Close()
 		t.Fatalf("create disposable database: %v", err)

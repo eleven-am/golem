@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -39,13 +41,14 @@ func TestUsageErrorsExitTwoWithoutOutput(t *testing.T) {
 }
 
 func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
+	t.Parallel()
 	root := commandModuleRoot(t)
 	args := []string{"inspect", "--schema", "./cmd/golem/testdata/social"}
 	var first, second, firstErr, secondErr bytes.Buffer
-	if code := run(context.Background(), root, args, &first, &firstErr); code != 0 {
+	if code := runGolem(t, root, args, &first, &firstErr); code != 0 {
 		t.Fatalf("first inspect code=%d stderr=%s", code, firstErr.String())
 	}
-	if code := run(context.Background(), root, args, &second, &secondErr); code != 0 {
+	if code := runGolem(t, root, args, &second, &secondErr); code != 0 {
 		t.Fatalf("second inspect code=%d stderr=%s", code, secondErr.String())
 	}
 	if !bytes.Equal(first.Bytes(), second.Bytes()) {
@@ -151,9 +154,10 @@ func TestInspectSocialGoldenAndDeterminism(t *testing.T) {
 }
 
 func TestSingleProviderAndDefaultSchemaPattern(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"inspect"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"inspect"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("inspect code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var inspected inspectOutput
@@ -166,7 +170,7 @@ func TestSingleProviderAndDefaultSchemaPattern(t *testing.T) {
 	createInitialReviewedMigration(t, module)
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
@@ -413,15 +417,16 @@ func TestMigrationBackfillAttachRendersReviewedTypedPlanBeforePublishing(t *test
 }
 
 func TestMigrationHistoryTamperFailsBeforeDatabaseWorkAndCheckReadsHistory(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"check", "--app-out", "./app", "--migrations", "migrations"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"check", "--app-out", "./app", "--migrations", "migrations"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("check reviewed history code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	sqlPath := filepath.Join(module, "migrations", "sqlite", "0001_initial.sql")
@@ -435,7 +440,7 @@ func TestMigrationHistoryTamperFailsBeforeDatabaseWorkAndCheckReadsHistory(t *te
 	database := filepath.Join(t.TempDir(), "must-not-exist.db")
 	stdout.Reset()
 	stderr.Reset()
-	code := run(context.Background(), module, []string{"migration", "apply", "--provider", "sqlite", "--dsn", database}, &stdout, &stderr)
+	code := runGolem(t, module, []string{"migration", "apply", "--provider", "sqlite", "--dsn", database}, &stdout, &stderr)
 	if code != 1 || !strings.Contains(stderr.String(), "rewritten") {
 		t.Fatalf("tampered apply code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
@@ -445,6 +450,7 @@ func TestMigrationHistoryTamperFailsBeforeDatabaseWorkAndCheckReadsHistory(t *te
 }
 
 func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	schemaPath := filepath.Join(module, "schema.go")
 	schema, err := os.ReadFile(schemaPath)
@@ -458,7 +464,7 @@ func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testin
 		t.Fatal(err)
 	}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
 		t.Fatal(stderr.String())
 	}
 	if err := os.WriteFile(schemaPath, schema, 0o644); err != nil {
@@ -468,7 +474,7 @@ func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testin
 	stdout.Reset()
 	stderr.Reset()
 	args := []string{"migration", "new", "--name", "drop_email"}
-	if code := run(context.Background(), module, args, &stdout, &stderr); code != 1 {
+	if code := runGolem(t, module, args, &stdout, &stderr); code != 1 {
 		t.Fatalf("missing approval code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	parts := strings.Fields(stderr.String())
@@ -482,7 +488,7 @@ func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testin
 	stdout.Reset()
 	stderr.Reset()
 	unknown := append(append([]string(nil), args...), "--approve", "unknown")
-	if code := run(context.Background(), module, unknown, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "requires --approve") {
+	if code := runGolem(t, module, unknown, &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "requires --approve") {
 		t.Fatalf("unknown approval code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if after := treeSnapshot(t, filepath.Join(module, "migrations")); !reflect.DeepEqual(before, after) {
@@ -491,7 +497,7 @@ func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testin
 	stdout.Reset()
 	stderr.Reset()
 	approved := append(append([]string(nil), args...), "--approve", operationID)
-	if code := run(context.Background(), module, approved, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, approved, &stdout, &stderr); code != 0 {
 		t.Fatalf("approved migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var output migrationNewOutput
@@ -501,10 +507,11 @@ func TestMigrationNewRequiresExactApprovalAndPublishesNothingOnFailure(t *testin
 }
 
 func TestCustomMigrationRootCarriesReviewedRenameIntoGeneration(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	var stdout, stderr bytes.Buffer
 	initialArgs := []string{"migration", "new", "--name", "initial", "--migrations", "reviewed/schema"}
-	if code := run(context.Background(), module, initialArgs, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, initialArgs, &stdout, &stderr); code != 0 {
 		t.Fatalf("custom-root initial code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	schemaPath := filepath.Join(module, "schema.go")
@@ -532,13 +539,13 @@ func TestCustomMigrationRootCarriesReviewedRenameIntoGeneration(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "P1_RENAME_HISTORY_REQUIRED") {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 1 || !strings.Contains(stdout.String(), "P1_RENAME_HISTORY_REQUIRED") {
 		t.Fatalf("default-root rename generation code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
 	stderr.Reset()
 	renameArgs := []string{"migration", "new", "--name", "rename_member", "--migrations", "reviewed/schema"}
-	if code := run(context.Background(), module, renameArgs, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, renameArgs, &stdout, &stderr); code != 0 {
 		parts := strings.Fields(stderr.String())
 		if code != 1 || len(parts) == 0 || !strings.Contains(stderr.String(), "requires --approve") {
 			t.Fatalf("custom-root rename migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
@@ -546,14 +553,14 @@ func TestCustomMigrationRootCarriesReviewedRenameIntoGeneration(t *testing.T) {
 		renameArgs = append(renameArgs, "--approve", parts[len(parts)-1])
 		stdout.Reset()
 		stderr.Reset()
-		if approvedCode := run(context.Background(), module, renameArgs, &stdout, &stderr); approvedCode != 0 {
+		if approvedCode := runGolem(t, module, renameArgs, &stdout, &stderr); approvedCode != 0 {
 			t.Fatalf("approved custom-root rename migration code=%d stdout=%s stderr=%s", approvedCode, stdout.String(), stderr.String())
 		}
 	}
 	stdout.Reset()
 	stderr.Reset()
 	generateArgs := []string{"generate", "--app-out", "./app", "--migrations", "reviewed/schema"}
-	if code := run(context.Background(), module, generateArgs, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, generateArgs, &stdout, &stderr); code != 0 {
 		t.Fatalf("custom-root rename generation code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
@@ -582,18 +589,19 @@ func TestGenerateAndCheckRejectOrphanedDefaultMigrationRoot(t *testing.T) {
 }
 
 func TestInspectIgnoresPriorRegistryLocation(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	var before, after, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"inspect"}, &before, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"inspect"}, &before, &stderr); code != 0 {
 		t.Fatalf("inspect before generation code=%d stderr=%s", code, stderr.String())
 	}
 	createInitialReviewedMigration(t, module)
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./application"}, &bytes.Buffer{}, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./application"}, &bytes.Buffer{}, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stderr=%s", code, stderr.String())
 	}
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"inspect"}, &after, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"inspect"}, &after, &stderr); code != 0 {
 		t.Fatalf("inspect after generation code=%d stderr=%s", code, stderr.String())
 	}
 	if !bytes.Equal(before.Bytes(), after.Bytes()) {
@@ -602,10 +610,11 @@ func TestInspectIgnoresPriorRegistryLocation(t *testing.T) {
 }
 
 func TestGenerateMovesRegistryBetweenGeneratedOnlyPackages(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./first"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./first"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("first generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	oldRegistry := filepath.Join(module, "first", "zz_golem_registry.gen.go")
@@ -614,7 +623,7 @@ func TestGenerateMovesRegistryBetweenGeneratedOnlyPackages(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./second"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./second"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("moved generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(oldRegistry); !errors.Is(err, os.ErrNotExist) {
@@ -626,12 +635,13 @@ func TestGenerateMovesRegistryBetweenGeneratedOnlyPackages(t *testing.T) {
 }
 
 func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
+	t.Parallel()
 	module := writeSocialModule(t, false)
 	createInitialReviewedMigration(t, module)
 	migrationBefore := treeSnapshot(t, filepath.Join(module, "migrations"))
 	args := []string{"generate", "--schema", ".", "--app-out", "./app"}
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, args, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, args, &stdout, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var generated generateOutput
@@ -657,7 +667,7 @@ func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
 	stdout.Reset()
 	stderr.Reset()
 	checkArgs := []string{"check", "--schema", ".", "--app-out", "./app"}
-	if code := run(context.Background(), module, checkArgs, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, checkArgs, &stdout, &stderr); code != 0 {
 		t.Fatalf("check code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	var checked generateOutput
@@ -670,7 +680,7 @@ func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, args, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, args, &stdout, &stderr); code != 0 {
 		t.Fatalf("repeat generate code=%d stderr=%s", code, stderr.String())
 	}
 	var repeated generateOutput
@@ -683,11 +693,13 @@ func TestGeneratePublishesThenCheckIsReadOnlyAndDeterministic(t *testing.T) {
 }
 
 func TestDiagnosticsAndFailedCheckDoNotPublishPartialOutput(t *testing.T) {
+	t.Parallel()
 	t.Run("diagnostics", func(t *testing.T) {
+		t.Parallel()
 		module := writeSocialModule(t, true)
 		before := treeSnapshot(t, module)
 		var stdout, stderr bytes.Buffer
-		code := run(context.Background(), module, []string{"generate", "--schema", ".", "--app-out", "./app"}, &stdout, &stderr)
+		code := runGolem(t, module, []string{"generate", "--schema", ".", "--app-out", "./app"}, &stdout, &stderr)
 		if code != 1 || !bytes.Contains(stdout.Bytes(), []byte("P1_BINDING_POLICY_SIGNATURE")) {
 			t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
@@ -696,11 +708,12 @@ func TestDiagnosticsAndFailedCheckDoNotPublishPartialOutput(t *testing.T) {
 		}
 	})
 	t.Run("stale check", func(t *testing.T) {
+		t.Parallel()
 		module := writeSocialModule(t, false)
 		createInitialReviewedMigration(t, module)
 		var stdout, stderr bytes.Buffer
 		generateArgs := []string{"generate", "--schema", ".", "--app-out", "./app"}
-		if code := run(context.Background(), module, generateArgs, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, module, generateArgs, &stdout, &stderr); code != 0 {
 			t.Fatal(stderr.String())
 		}
 		target := filepath.Join(module, "app", "zz_golem_registry.gen.go")
@@ -711,7 +724,7 @@ func TestDiagnosticsAndFailedCheckDoNotPublishPartialOutput(t *testing.T) {
 		before := treeSnapshot(t, module)
 		stdout.Reset()
 		stderr.Reset()
-		code := run(context.Background(), module, []string{"check", "--schema", ".", "--app-out", "./app"}, &stdout, &stderr)
+		code := runGolem(t, module, []string{"check", "--schema", ".", "--app-out", "./app"}, &stdout, &stderr)
 		if code != 1 || !strings.Contains(stderr.String(), "generated artifacts are stale") {
 			t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 		}
@@ -786,10 +799,11 @@ func TestCheckRecoversInterruptedPublicationBeforeOutputValidation(t *testing.T)
 }
 
 func TestCheckRoutesRecoveryForAnotherPublicationOwner(t *testing.T) {
+	t.Parallel()
 	module := writeSingleProviderModule(t)
 	createInitialReviewedMigration(t, module)
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"generate", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("generate code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	other, err := manifest.Build(manifest.Request{
@@ -820,7 +834,7 @@ func TestCheckRoutesRecoveryForAnotherPublicationOwner(t *testing.T) {
 
 	stdout.Reset()
 	stderr.Reset()
-	if code := run(context.Background(), module, []string{"check", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"check", "--app-out", "./app"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("check did not route recovery code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(filepath.Join(module, ".golem", "generation-journal.json")); !errors.Is(err, os.ErrNotExist) {
@@ -900,7 +914,7 @@ func writeSingleProviderModule(t *testing.T) string {
 func createInitialReviewedMigration(t *testing.T, module string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, module, []string{"migration", "new", "--name", "initial"}, &stdout, &stderr); code != 0 {
 		t.Fatalf("initial reviewed migration code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}
 }
@@ -948,6 +962,46 @@ func treeSnapshot(t *testing.T, root string) map[string]string {
 		t.Fatal(err)
 	}
 	return result
+}
+
+const (
+	golemProcessVariable          = "GOLEM_CLI_TEST_PROCESS"
+	golemProcessDirectoryVariable = "GOLEM_CLI_TEST_PROCESS_DIRECTORY"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv(golemProcessVariable) == "1" {
+		os.Exit(run(context.Background(), os.Getenv(golemProcessDirectoryVariable), os.Args[1:], os.Stdout, os.Stderr))
+	}
+	code := m.Run()
+	if err := removeEvolutionBaselines(); err != nil && code == 0 {
+		code = 1
+	}
+	os.Exit(code)
+}
+
+func runGolem(t testing.TB, directory string, arguments []string, stdout, stderr io.Writer) int {
+	t.Helper()
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(executable, arguments...)
+	command.Dir = directory
+	command.Env = append(os.Environ(), golemProcessVariable+"=1", golemProcessDirectoryVariable+"="+directory)
+	command.Stdout = stdout
+	command.Stderr = stderr
+	err = command.Run()
+	var exit *exec.ExitError
+	switch {
+	case err == nil:
+		return 0
+	case errors.As(err, &exit) && exit.ExitCode() >= 0:
+		return exit.ExitCode()
+	default:
+		t.Fatalf("golem %s process: %v", strings.Join(arguments, " "), err)
+		return 0
+	}
 }
 
 func commandModuleRoot(t *testing.T) string {
