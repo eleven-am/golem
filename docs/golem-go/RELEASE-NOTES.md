@@ -5,12 +5,44 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.0
+go get github.com/eleven-am/golem/go@v0.6.1
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.1
+
+**GraphQL introspection works.** In every earlier release, setting
+`GraphQLConfig.Introspection: true` had no effect. The generated executor
+rejected `__schema`, `__type` and a root-level `__typename` with
+`BAD_USER_INPUT` before gqlgen could answer them. Even with that fixed, every
+list in an introspection query was charged as a page of `MaxPageSize` rows,
+and the standard graphql-js `IntrospectionQuery` is 15 levels deep against a
+default `MaxDepth` of 12, so no configuration let a real client introspect.
+
+- `__schema`, `__type` and a root-level `__typename`, including
+  `mutation { __typename }`, are answered alongside generated roots in the same
+  operation.
+- Introspection fields cost one each and do not count toward `MaxDepth`. The
+  standard `IntrospectionQuery` passes at default limits. Data fields selected
+  beside introspection are costed and depth-limited exactly as before,
+  including inside fragments.
+- An operation may select at most one `__schema` root and eight `__type` roots;
+  more is refused with `QUERY_LIMIT_EXCEEDED`.
+- With `Introspection: false`, `__schema` and `__type` are still refused with
+  `GRAPHQL_VALIDATION_FAILED`. `{ __typename }` works either way.
+- Introspection exposes exactly what `SDL()` publishes; hidden models, fields
+  and operations are absent from both.
+- A GraphQL server built without an executable schema refuses these meta roots
+  with `GRAPHQL_VALIDATION_FAILED` instead of omitting them. Generated
+  applications always have one.
+
+GUIDE.md now documents enabling introspection. No regeneration or migration is
+needed.
 
 ---
 
