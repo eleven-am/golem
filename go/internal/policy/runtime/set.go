@@ -119,6 +119,10 @@ func (lease *Lease) Used() bool {
 }
 func (lease *Lease) Ended() bool { return lease != nil && lease.ended.Load() }
 
+func (lease *Lease) OperationEnded() bool {
+	return lease != nil && lease.scope != nil && lease.scope.released.Load()
+}
+
 // Commit runs commit, holding the operation live for its duration when the
 // write used the operation's grants. After the operation ended it runs
 // nothing and returns ErrOperationEnded.

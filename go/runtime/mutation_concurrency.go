@@ -662,7 +662,7 @@ func executeAbsentCreateSavepoint(ctx context.Context, attempt *sqlxUpsertAttemp
 	if err != nil {
 		return nil, err
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -799,7 +799,7 @@ func prepareCallerVersionedScalarExecution[P, A, M any](caller *Caller[P, A], de
 		}
 		hookContext := golem.RuntimeContextWithActor(kernelContext, caller.actor)
 		hookContext, hookObservation := observeexec.BeginChild(hookContext, golem.ModelID(model), observe.KindHook, hookObservationOperation(hookRequest.Operation()), observe.PhaseBefore)
-		transformed, hookErr := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
+		transformed, hookErr := invokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
 		finishObservation(hookObservation, hookErr)
 		if hookErr != nil {
 			return mutationsql.Program{}, &mutationHookFailure{operation: hookRequest.Operation(), phase: golem.HookBefore, cause: hookErr}

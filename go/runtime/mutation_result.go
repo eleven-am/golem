@@ -440,7 +440,7 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookContext, hookObservation := observeexec.BeginChild(hookContext, golem.ModelID(model), observe.KindHook, hookObservationOperation(hookRequest.Operation()), observe.PhaseBefore)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
 	finishObservation(hookObservation, err)
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(operation, golem.ModelID(model), err)

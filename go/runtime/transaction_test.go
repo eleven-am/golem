@@ -288,7 +288,7 @@ func TestSemanticQueueWakeRunsOnlyAfterCommit(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := state.markSemantic(golem.ModelID{1}, "record", []any{"record"}); err != nil {
+		if err := state.markSemantic(context.Background(), golem.ModelID{1}, "record", []any{"record"}); err != nil {
 			t.Fatal(err)
 		}
 		if err := flushMutationBinding(context.Background(), fixture.database, binding); err != nil {

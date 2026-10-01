@@ -209,14 +209,18 @@ a time, so hook writes started concurrently run one after another. A call
 through a hook's executor always runs inside the write that called the hook,
 whatever context you pass it. A call through the transaction itself runs
 inside the call its context came from while that call is still running, and
-otherwise waits its turn. Inside a hook, pass the hook's own context to the
-transaction: with any other context the call waits until the write that called
-the hook finishes, so a hook that waits for it never returns. The same holds
-for a nested hook calling an outer hook's executor. A caller or system
-transaction accepts reads and writes only until its callback returns, or
-panics: golem waits for every call already in flight, refuses later ones, and
-only then flushes, commits or rolls back. Retry to run the write under the
-caller's own policy.
+otherwise waits its turn. A call made through a hook's context belongs to that
+hook, like a call through its executor: when the hook returns, golem waits for
+any such call already started before the write continues, and a call started
+after that runs once the write has finished. Finish those calls before the hook
+returns if the write depends on them. Inside a hook, pass the hook's own
+context to the transaction: with any other context the call waits until the
+write that called the hook finishes, so a hook that waits for it never
+returns. The same holds for a nested hook calling an outer hook's executor. A
+caller or system transaction accepts reads and writes only until its callback
+returns, or panics: golem waits for every call already in flight, refuses
+later ones, and only then flushes, commits or rolls back. Retry to run the
+write under the caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,

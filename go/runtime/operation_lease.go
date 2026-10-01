@@ -116,5 +116,10 @@ func (log *operationWriteLog) commit(commit func() error) error {
 func (log *operationWriteLog) refusal() error {
 	log.mu.Lock()
 	defer log.mu.Unlock()
-	return log.conflicts[0]
+	for index, lease := range log.leases {
+		if lease.Used() && lease.OperationEnded() {
+			return log.conflicts[index]
+		}
+	}
+	return policyruntime.ErrOperationEnded
 }

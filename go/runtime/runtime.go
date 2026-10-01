@@ -546,7 +546,7 @@ func CallerExecuteFrozenRead[P, A any](ctx context.Context, caller *Caller[P, A]
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(request.Operation()), request.ModelID(), golem.FieldID{}, "read request is invalid", err)
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	transformed, err := golem.RuntimeInvokeReadBeforeHooks(hookContext, caller.app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
+	transformed, err := invokeReadBeforeHooks(hookContext, caller.app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
 		_, prepareErr := caller.Prepare(value.Request())
 		return prepareErr
 	})
@@ -578,7 +578,7 @@ func CallerExecuteFrozenRead[P, A any](ctx context.Context, caller *Caller[P, A]
 	default:
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "operation is not row-shaped", nil)
 	}
-	if err := golem.RuntimeInvokeReadResultHooks(hookContext, caller.app.bindings, golem.RuntimeReadHookRows(transformed, rows, found)); err != nil {
+	if err := invokeReadResultHooks(hookContext, caller.app.bindings, golem.RuntimeReadHookRows(transformed, rows, found)); err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(prepared.Operation()), prepared.ModelID(), golem.FieldID{}, "read hook rejected the result", err)
 	}
 	return rows, nil
@@ -898,7 +898,7 @@ func prepareReadStatement[P, A any](app *App[P, A], prepared PreparedRead) (prep
 }
 
 func invokeReadHook[A any](ctx context.Context, bindings golem.ApplicationBindings[A], model golem.ModelID, readOperation golem.ReadOperation, hookOperation golem.HookOperation, phase golem.HookPhase, payload any) error {
-	if err := golem.RuntimeInvokeHooks(ctx, bindings, model, hookOperation, phase, payload); err != nil {
+	if err := invokeHooks(ctx, bindings, model, hookOperation, phase, payload); err != nil {
 		return golem.RuntimeReadError(golem.CodeBadUserInput, operationName(readOperation), model, golem.FieldID{}, "read hook rejected the operation", err)
 	}
 	return nil

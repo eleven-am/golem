@@ -229,7 +229,7 @@ func prepareCallerFrozenBatchHooks[P, A any](ctx context.Context, caller *Caller
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookContext, hookObservation := observeexec.BeginChild(hookContext, model, observe.KindHook, hookObservationOperation(request.Operation()), observe.PhaseBefore)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, request, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, caller.app.bindings, request, validate)
 	finishObservation(hookObservation, err)
 	if err != nil {
 		return mutationbatch.Program{}, err
@@ -355,7 +355,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	if activeBinding == nil {
 		activeBinding = binding
 	}
-	state, stateScope, outerState, err := beginBatchMutationState(app, binding, activeBinding)
+	state, stateScope, outerState, err := beginBatchMutationState(ctx, app, binding, activeBinding)
 	if err != nil {
 		_ = scope.abort()
 		return 0, publicBatchExecutionError(program, err)
@@ -369,7 +369,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		abortErr := scope.abort()
 		rollbackErr := stateScope.rollback()
 		if abortErr != nil || rollbackErr != nil {
-			state.poison(errors.Join(cause, abortErr, rollbackErr))
+			state.poison(ctx, errors.Join(cause, abortErr, rollbackErr))
 		}
 	}
 	defer func() { abandon(err) }()
@@ -425,7 +425,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if program.SemanticIndexed() {
-		if markErr := markBatchSemanticRecords(state, program.ModelID(), program.PrimaryKey(), verification); markErr != nil {
+		if markErr := markBatchSemanticRecords(ctx, state, program.ModelID(), program.PrimaryKey(), verification); markErr != nil {
 			return 0, publicBatchExecutionError(program, markErr)
 		}
 	}
@@ -444,14 +444,14 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		}
 		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfterCommit) {
 			afterCommitResult := golem.RuntimeMutationHookResultWithoutExecutor(result)
-			if err := state.addAfterCommit(operation, model, func(commitContext context.Context) error {
+			if err := state.addAfterCommit(ctx, operation, model, func(commitContext context.Context) error {
 				return invokeMutationResultHooks(commitContext, hooks.bindings, hooks.actor, afterCommitResult, golem.HookAfterCommit)
 			}); err != nil {
 				return 0, publicBatchExecutionError(program, err)
 			}
 		}
 	}
-	if err := state.touch(int(verification.Count())); err != nil {
+	if err := state.touch(ctx, int(verification.Count())); err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
 	requirement := prepared.FactRequirement()
@@ -462,7 +462,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if value, present := fact.After(); present {
 			after = &value
 		}
-		if _, err := state.buildFact(app.registry, requirement, &before, after, recordedAt); err != nil {
+		if _, err := state.buildFact(ctx, app.registry, requirement, &before, after, recordedAt); err != nil {
 			return 0, publicBatchExecutionError(program, err)
 		}
 	}
@@ -478,7 +478,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if err := stateScope.release(); err != nil {
-		state.poison(err)
+		state.poison(ctx, err)
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if !outerState {
@@ -494,7 +494,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 // mutationState itself; enableMutation is the single owner every other mutation
 // family already uses, and its idempotency guard is what keeps one binding from
 // acquiring two states.
-func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executionBinding) (*mutationState, *mutationScope, bool, error) {
+func beginBatchMutationState[P, A any](ctx context.Context, app *App[P, A], binding, active *executionBinding) (*mutationState, *mutationScope, bool, error) {
 	if app == nil || binding == nil || active == nil {
 		return nil, nil, false, fmt.Errorf("batch mutation state is unavailable")
 	}
@@ -503,7 +503,7 @@ func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executio
 		if err != nil {
 			return nil, nil, true, err
 		}
-		scope, err := state.beginScope()
+		scope, err := state.beginScope(ctx)
 		return state, scope, true, err
 	}
 	if err := active.enableMutation(mutationConfig(app, binding)); err != nil {
@@ -513,7 +513,7 @@ func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executio
 	if err != nil {
 		return nil, nil, false, err
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(ctx)
 	return state, scope, false, err
 }
 
@@ -771,6 +771,8 @@ func programModel(program mutationbatch.Program) golem.ModelID {
 }
 
 func invokeBatchAfterHooks[A any](ctx context.Context, hooks *callerMutationHookExecution[A], binding *executionBinding, model golem.ModelID, operation golem.HookOperation, result *golem.RuntimeMutationHookResult) error {
+	ctx, closeScope := openHookScope(ctx)
+	defer closeScope()
 	if hooks.executor != nil {
 		gate := newHookExecutorGate(ctx, binding)
 		defer gate.usage.close()

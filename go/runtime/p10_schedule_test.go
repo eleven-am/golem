@@ -49,6 +49,7 @@ const (
 	p10ActionEscapedExecutorWrite
 	p10ActionDetachedDirectWrite
 	p10ActionOuterExecutorWrite
+	p10ActionSpawnedDirectWrite
 	p10ActionCount
 )
 
@@ -141,10 +142,13 @@ func (schedule *p10Schedule) newWrite(parent *p10ScheduleWrite) *p10ScheduleWrit
 		if step.action == p10ActionOuterExecutorWrite && parent == nil {
 			step.action = p10ActionExecutorWrite
 		}
+		if step.action == p10ActionSpawnedDirectWrite && parent != nil {
+			step.action = p10ActionNestedDirectWrite
+		}
 		switch step.action {
 		case p10ActionExecutorWrite, p10ActionNestedDirectWrite, p10ActionEscapedExecutorWrite, p10ActionOuterExecutorWrite:
 			step.child = schedule.newWrite(write)
-		case p10ActionDetachedDirectWrite:
+		case p10ActionDetachedDirectWrite, p10ActionSpawnedDirectWrite:
 			step.child = schedule.newWrite(nil)
 		}
 		write.steps = append(write.steps, step)
@@ -224,6 +228,14 @@ func (schedule *p10Schedule) hook(ctx context.Context, executor golem.HookExecut
 				defer schedule.pending.Done()
 				schedule.finish(child, schedule.fixture.createTeam(context.WithValue(context.Background(), p10ScheduleKey{}, child), executor, child.id))
 			}()
+		case p10ActionSpawnedDirectWrite:
+			child := step.child
+			schedule.pending.Add(1)
+			go func() {
+				defer schedule.pending.Done()
+				_, err := schedule.tx.Teams.Create(context.WithValue(ctx, p10ScheduleKey{}, child), p10TeamInput(child.id))
+				schedule.finish(child, err)
+			}()
 		case p10ActionDetachedDirectWrite:
 			child := step.child
 			schedule.pending.Add(1)
@@ -263,7 +275,7 @@ func (schedule *p10Schedule) root(worker int) {
 }
 
 func p10ScheduleSeeds() []int64 {
-	count := 12
+	count := 40
 	if value, err := strconv.Atoi(os.Getenv("GOLEM_P10_SCHEDULE_SEEDS")); err == nil && value > 0 {
 		count = value
 	}

@@ -45,7 +45,7 @@ type semanticMarkIdentity struct {
 // then widens verification to the primary key plus every unique key's fields.
 // Shadow storage mirrors the primary key alone, so the widened list cannot be
 // written and would refuse an ordinary update of a unique indexed field.
-func markScalarSemanticRecord(state *mutationState, registry *schema.Registry, model policyir.ModelID, program mutationsql.Program, result scalarMutationExecution) error {
+func markScalarSemanticRecord(ctx context.Context, state *mutationState, registry *schema.Registry, model policyir.ModelID, program mutationsql.Program, result scalarMutationExecution) error {
 	verification := program.IdentityVerification()
 	primary, err := semanticPrimaryKeyFields(registry, model)
 	if err != nil {
@@ -64,7 +64,7 @@ func markScalarSemanticRecord(state *mutationState, registry *schema.Registry, m
 		if keyErr != nil {
 			return scalarMutationError(program.Operation(), scalarMutationInvariant, 0, statementIndex, "semantic record key could not be encoded", keyErr)
 		}
-		return state.markSemantic(golem.ModelID(model), key, identity)
+		return state.markSemantic(ctx, golem.ModelID(model), key, identity)
 	}
 	if before, ok := verification.BeforeStatement(); ok {
 		if err := mark(before); err != nil {
@@ -97,7 +97,7 @@ func semanticPrimaryKeyFields(registry *schema.Registry, model policyir.ModelID)
 // markBatchSemanticRecords marks every row the batch verification proved it
 // touched. One statement can touch many rows, so the buffer grows per row while
 // the drain job it schedules stays one per index per transaction.
-func markBatchSemanticRecords(state *mutationState, model policyir.ModelID, primary []policyir.FieldID, verification mutationbatch.Verification) error {
+func markBatchSemanticRecords(ctx context.Context, state *mutationState, model policyir.ModelID, primary []policyir.FieldID, verification mutationbatch.Verification) error {
 	for _, row := range verification.Rows() {
 		images := []mutationdecode.Row{row.Before()}
 		if after, present := row.After(); present {
@@ -112,7 +112,7 @@ func markBatchSemanticRecords(state *mutationState, model policyir.ModelID, prim
 			if err != nil {
 				return err
 			}
-			if err := state.markSemantic(golem.ModelID(model), key, identity); err != nil {
+			if err := state.markSemantic(ctx, golem.ModelID(model), key, identity); err != nil {
 				return err
 			}
 		}

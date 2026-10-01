@@ -78,7 +78,7 @@ func TestNestedSavepointRollbackUsesNonCanceledContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,7 @@ func TestNestedSavepointRecoveryFailurePoisonsOuterMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}

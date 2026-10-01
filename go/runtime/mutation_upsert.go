@@ -469,7 +469,7 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 	if err != nil {
 		return nil, err
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -626,7 +626,7 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 		}
 		hookContext := golem.RuntimeContextWithActor(ctx, executor.hooks.actor)
 		hookContext, hookObservation := observeexec.BeginChild(hookContext, request.ModelID(), observe.KindHook, hookObservationOperation(request.Operation()), observe.PhaseBefore)
-		transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, executor.hooks.bindings, request, validate)
+		transformed, err := invokeMutationBeforeHooks(hookContext, executor.hooks.bindings, request, validate)
 		finishObservation(hookObservation, err)
 		if err != nil {
 			return nil, &mutationHookFailure{operation: request.Operation(), phase: golem.HookBefore, cause: err}

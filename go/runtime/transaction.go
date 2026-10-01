@@ -191,6 +191,9 @@ func (binding *executionBinding) enableMutation(config executionMutationConfig) 
 	}
 	binding.mutation = config
 	binding.state, binding.stateErr = newMutationState(config.limits, [16]byte{})
+	if binding.stateErr == nil {
+		binding.state.binding = binding
+	}
 	if binding.stateErr == nil && config.invalidate != nil {
 		binding.stateErr = binding.state.setInvalidation(config.invalidate)
 	}

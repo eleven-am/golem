@@ -374,11 +374,11 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 		return mutationnested.ApplyResult{}, err
 	}
 	if program.SemanticIndexed() {
-		if markErr := markBatchSemanticRecords(state, node.ModelID(), program.PrimaryKey(), verification); markErr != nil {
+		if markErr := markBatchSemanticRecords(ctx, state, node.ModelID(), program.PrimaryKey(), verification); markErr != nil {
 			return mutationnested.ApplyResult{}, markErr
 		}
 	}
-	if err := state.touch(int(verification.Count())); err != nil {
+	if err := state.touch(ctx, int(verification.Count())); err != nil {
 		return mutationnested.ApplyResult{}, err
 	}
 	for _, fact := range verification.Facts() {
@@ -387,7 +387,7 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 		if value, present := fact.After(); present {
 			afterRow = &value
 		}
-		if _, err := state.buildFact(app.registry, prepared.FactRequirement(), &before, afterRow, time.Now()); err != nil {
+		if _, err := state.buildFact(ctx, app.registry, prepared.FactRequirement(), &before, afterRow, time.Now()); err != nil {
 			return mutationnested.ApplyResult{}, err
 		}
 	}
@@ -1119,7 +1119,7 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 		if err != nil {
 			return nil, err
 		}
-		scope, err := state.beginScope()
+		scope, err := state.beginScope(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -1232,7 +1232,7 @@ func rollbackNestedSavepoint(ctx context.Context, executor sqlx.ExecerContext, n
 		// state uncertain. Poisoning the outer mutation makes its final flush
 		// fail, forcing the owning transaction boundary to roll back even when
 		// application code swallows the nested operation error.
-		state.poison(failure)
+		state.poison(ctx, failure)
 	}
 	return failure
 }
@@ -1797,7 +1797,7 @@ func (transaction *systemNestedTransaction[P, A]) transformExactPosition(ctx con
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
 	if err != nil {
 		return mutationnested.SubtreeReplacement{}, false, &mutationHookFailure{operation: operation, phase: golem.HookBefore, cause: err}
 	}
@@ -1869,7 +1869,7 @@ func (transaction *systemNestedTransaction[P, A]) TransformNested(ctx context.Co
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
 	if err != nil {
 		return mutationnested.SubtreeReplacement{}, false, &mutationHookFailure{operation: operation, phase: golem.HookBefore, cause: err}
 	}
@@ -1987,7 +1987,7 @@ func (transaction *systemNestedTransaction[P, A]) transformMembership(ctx contex
 		return compileErr
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, transaction.actor)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, transaction.app.bindings, original, validate)
 	if err != nil {
 		return mutationnested.SubtreeReplacement{}, false, &mutationHookFailure{operation: golem.HookUpdate, phase: golem.HookBefore, cause: err}
 	}

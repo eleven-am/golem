@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"sync/atomic"
+
+	"github.com/eleven-am/golem/go/golem"
 )
 
 var errHookExecutorExpired = errors.New("P4_RUNTIME_HOOK_EXECUTOR: executor used after its hook returned")
@@ -65,6 +67,7 @@ type heldWrite struct {
 	owner   *heldWrite
 	nested  sync.Mutex
 	ended   atomic.Bool
+	hook    *usageGate
 }
 
 type heldWriteKey struct{}
@@ -123,6 +126,19 @@ func (binding *executionBinding) beginHookExecutorCall(ctx context.Context, capt
 func (binding *executionBinding) acquire(ctx context.Context, start, floor *heldWrite) (context.Context, func(), error) {
 	owner := start
 	for owner != nil {
+		if owner.hook != nil {
+			if owner.hook.enter() {
+				owner.nested.Lock()
+				break
+			}
+			if owner == floor {
+				return ctx, nil, errHookExecutorExpired
+			}
+			if owner = owner.owner; owner != nil {
+				owner = owner.owner
+			}
+			continue
+		}
 		owner.nested.Lock()
 		if !owner.ended.Load() {
 			break
@@ -152,6 +168,9 @@ func (held *heldWrite) end() {
 	held.nested.Unlock()
 	if held.owner != nil {
 		held.owner.nested.Unlock()
+		if held.owner.hook != nil {
+			held.owner.hook.leave()
+		}
 		return
 	}
 	held.binding.writeLock.Unlock()
@@ -162,4 +181,65 @@ func (binding *executionBinding) closeCalls() {
 	if binding != nil {
 		binding.calls.close()
 	}
+}
+
+func openHookScope(ctx context.Context) (context.Context, func()) {
+	var scopes []*heldWrite
+	seen := map[*executionBinding]bool{}
+	for held := innermostHeldWrite(ctx); held != nil; held = held.scope {
+		if seen[held.binding] {
+			continue
+		}
+		seen[held.binding] = true
+		if held.hook != nil || held.ended.Load() {
+			continue
+		}
+		scope := &heldWrite{scope: innermostHeldWrite(ctx), binding: held.binding, owner: held, hook: (&usageGate{}).init()}
+		ctx = context.WithValue(ctx, heldWriteKey{}, scope)
+		scopes = append(scopes, scope)
+	}
+	return ctx, func() {
+		for _, scope := range scopes {
+			scope.closeHookScope()
+		}
+	}
+}
+
+func (scope *heldWrite) closeHookScope() {
+	scope.hook.close()
+	scope.nested.Lock()
+	scope.ended.Store(true)
+	scope.nested.Unlock()
+}
+
+func withinHookScope[R any](ctx context.Context, run func(context.Context) (R, error)) (R, error) {
+	ctx, closeScope := openHookScope(ctx)
+	defer closeScope()
+	return run(ctx)
+}
+
+func invokeMutationBeforeHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], request golem.RuntimeMutationHookRequest, validate func(golem.RuntimeMutationHookRequest) error) (golem.RuntimeMutationHookRequest, error) {
+	return withinHookScope(ctx, func(ctx context.Context) (golem.RuntimeMutationHookRequest, error) {
+		return golem.RuntimeInvokeMutationBeforeHooks(ctx, bindings, request, validate)
+	})
+}
+
+func invokeReadBeforeHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], request golem.RuntimeReadHookRequest, validate func(golem.RuntimeReadHookRequest) error) (golem.RuntimeReadHookRequest, error) {
+	return withinHookScope(ctx, func(ctx context.Context) (golem.RuntimeReadHookRequest, error) {
+		return golem.RuntimeInvokeReadBeforeHooks(ctx, bindings, request, validate)
+	})
+}
+
+func invokeReadResultHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], result golem.RuntimeReadHookResult) error {
+	_, err := withinHookScope(ctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, golem.RuntimeInvokeReadResultHooks(ctx, bindings, result)
+	})
+	return err
+}
+
+func invokeHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], model golem.ModelID, operation golem.HookOperation, phase golem.HookPhase, payload any) error {
+	_, err := withinHookScope(ctx, func(ctx context.Context) (struct{}, error) {
+		return struct{}{}, golem.RuntimeInvokeHooks(ctx, bindings, model, operation, phase, payload)
+	})
+	return err
 }

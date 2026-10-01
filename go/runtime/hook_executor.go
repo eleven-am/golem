@@ -65,7 +65,7 @@ func withinHookWriteSavepoint[R any](ctx context.Context, binding *executionBind
 	if err != nil {
 		return zero, err
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(ctx)
 	if err != nil {
 		return zero, err
 	}
@@ -87,12 +87,12 @@ func withinHookWriteSavepoint[R any](ctx context.Context, binding *executionBind
 		return zero, runErr
 	}
 	if _, err := execer.ExecContext(ctx, "RELEASE SAVEPOINT "+name); err != nil {
-		state.poison(err)
+		state.poison(ctx, err)
 		_ = scope.release()
 		return zero, err
 	}
 	if err := scope.release(); err != nil {
-		state.poison(err)
+		state.poison(ctx, err)
 		return zero, err
 	}
 	return result, nil
@@ -144,7 +144,7 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 		}
 		return err
 	}
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(golem.RuntimeContextWithActor(ctx, executor.caller.actor), executor.caller.app.bindings, beforeRequest, validate)
+	transformed, err := invokeMutationBeforeHooks(golem.RuntimeContextWithActor(ctx, executor.caller.actor), executor.caller.app.bindings, beforeRequest, validate)
 	if err != nil {
 		return nil, err
 	}
@@ -354,7 +354,7 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 		}
 		return err
 	}
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(golem.RuntimeContextWithActor(ctx, caller.actor), caller.app.bindings, beforeRequest, validate)
+	transformed, err := invokeMutationBeforeHooks(golem.RuntimeContextWithActor(ctx, caller.actor), caller.app.bindings, beforeRequest, validate)
 	if err != nil {
 		return golem.RuntimeHookExecutorResult{}, err
 	}
