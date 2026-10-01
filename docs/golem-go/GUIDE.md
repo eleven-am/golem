@@ -212,7 +212,9 @@ inside the call its context came from while that call is still running, and
 otherwise waits its turn. A call made through a hook's context belongs to that
 hook, like a call through its executor: when the hook returns, golem waits for
 any such call already started before the write continues, and a call started
-after that runs once the write has finished. Finish those calls before the hook
+after that runs once that write has finished; when the hook belongs to a write
+made through an outer hook's executor, that is when the executor call
+finishes, not the outer write. Finish those calls before the hook
 returns if the write depends on them. Inside a hook, pass the hook's own
 context to the transaction: with any other context the call waits until the
 write that called the hook finishes, so a hook that waits for it never
