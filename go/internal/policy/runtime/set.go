@@ -53,11 +53,47 @@ func (scope *operationScope) release() {
 // operation's Within grants. Such a write commits only while the operation is
 // live, and ending the operation waits for a commit already in progress.
 type Lease struct {
-	scope  *operationScope
-	used   atomic.Bool
-	ended  atomic.Bool
-	mu     sync.Mutex
-	served map[ir.ModelID]bool
+	scope     *operationScope
+	parent    *Lease
+	used      atomic.Bool
+	ended     atomic.Bool
+	executed  atomic.Bool
+	discarded atomic.Bool
+	mu        sync.Mutex
+	served    map[ir.ModelID]bool
+	children  []*Lease
+}
+
+// Attempt starts one nested write attempt recording into its own child
+// lease. The child counts toward this lease unless Finish discards it, so an
+// attempt that is never finished errs toward refusing a late commit.
+func (lease *Lease) Attempt() *Lease {
+	if lease == nil {
+		return nil
+	}
+	child := &Lease{scope: lease.scope, parent: lease}
+	lease.mu.Lock()
+	lease.children = append(lease.children, child)
+	lease.mu.Unlock()
+	return child
+}
+
+// Finish ends an attempt. A failed attempt that ran no statement left nothing
+// behind, so its grant usage is discarded; every other attempt keeps counting.
+func (lease *Lease) Finish(err error) {
+	if lease != nil && err != nil && !lease.executed.Load() {
+		lease.discarded.Store(true)
+	}
+}
+
+// NoteStatement records that the attempt, and every attempt enclosing it,
+// ran a statement whose effects may outlive a later failure.
+func (lease *Lease) NoteStatement() {
+	for current := lease; current != nil; current = current.parent {
+		if current.executed.Swap(true) {
+			return
+		}
+	}
 }
 
 func (lease *Lease) serve(model ir.ModelID) {
@@ -75,7 +111,23 @@ func (lease *Lease) wasServed(model ir.ModelID) bool {
 	return lease.served[model]
 }
 
-func (lease *Lease) Used() bool  { return lease != nil && lease.used.Load() }
+func (lease *Lease) Used() bool {
+	if lease == nil || lease.discarded.Load() {
+		return false
+	}
+	if lease.used.Load() {
+		return true
+	}
+	lease.mu.Lock()
+	children := append([]*Lease(nil), lease.children...)
+	lease.mu.Unlock()
+	for _, child := range children {
+		if child.Used() {
+			return true
+		}
+	}
+	return false
+}
 func (lease *Lease) Ended() bool { return lease != nil && lease.ended.Load() }
 
 // Commit runs commit, holding the operation live for its duration when the
@@ -213,6 +265,14 @@ func grantAddsNothing(scoped, base ir.Policy, action ir.Action, model ir.ModelID
 	}
 	proved, err := imply.Condition(scopedCondition, baseCondition)
 	return err == nil && proved
+}
+
+// CurrentLease returns the lease this view records into, if any.
+func (set *Set) CurrentLease() *Lease {
+	if set == nil {
+		return nil
+	}
+	return set.lease
 }
 
 // WithLease returns a view recording into lease when lease belongs to this

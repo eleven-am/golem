@@ -25,6 +25,19 @@ func withoutOperationLease(ctx context.Context) context.Context {
 	return context.WithValue(ctx, operationLeaseKey{}, (*policyruntime.Lease)(nil))
 }
 
+func withinOperationAttempt[P, A, R any](ctx context.Context, caller *Caller[P, A], run func(context.Context, *Caller[P, A]) (R, error)) (R, error) {
+	lease := caller.policies.CurrentLease()
+	if lease == nil {
+		return run(ctx, caller)
+	}
+	attempt := lease.Attempt()
+	scoped := *caller
+	scoped.policies = caller.policies.WithLease(attempt)
+	result, err := run(context.WithValue(ctx, operationLeaseKey{}, attempt), &scoped)
+	attempt.Finish(err)
+	return result, err
+}
+
 func commitWithinOperation(ctx context.Context, commit func() error) error {
 	return operationLeaseFrom(ctx).Commit(commit)
 }
@@ -38,10 +51,17 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 		return run(ctx, caller)
 	}
 	if existing := operationLeaseFrom(ctx); existing != nil {
-		if policies := caller.policies.WithLease(existing); policies != caller.policies {
+		if caller.policies.WithLease(existing) != caller.policies {
+			attempt := existing.Attempt()
 			leased := *caller
-			leased.policies = policies
-			return run(ctx, &leased)
+			leased.policies = caller.policies.WithLease(attempt)
+			result, err := run(context.WithValue(ctx, operationLeaseKey{}, attempt), &leased)
+			attempt.Finish(err)
+			if attempt.Ended() {
+				var zero R
+				return zero, conflict
+			}
+			return result, err
 		}
 	}
 	policies, lease := caller.policies.Lease()

@@ -103,21 +103,25 @@ type observingQueryer struct {
 func (observingQueryer) GolemRecordsStatements() {}
 
 func (queryer observingQueryer) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
+	operationLeaseFrom(ctx).NoteStatement()
 	observeexec.RecordStatement(ctx, queryer.transaction)
 	return queryer.inner.QueryContext(ctx, query, args...)
 }
 
 func (queryer observingQueryer) QueryxContext(ctx context.Context, query string, args ...any) (*sqlx.Rows, error) {
+	operationLeaseFrom(ctx).NoteStatement()
 	observeexec.RecordStatement(ctx, queryer.transaction)
 	return queryer.inner.QueryxContext(ctx, query, args...)
 }
 
 func (queryer observingQueryer) QueryRowxContext(ctx context.Context, query string, args ...any) *sqlx.Row {
+	operationLeaseFrom(ctx).NoteStatement()
 	observeexec.RecordStatement(ctx, queryer.transaction)
 	return queryer.inner.QueryRowxContext(ctx, query, args...)
 }
 
 func (queryer observingQueryer) ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error) {
+	operationLeaseFrom(ctx).NoteStatement()
 	observeexec.RecordStatement(ctx, queryer.transaction)
 	execer, ok := queryer.inner.(sqlx.ExecerContext)
 	if !ok {

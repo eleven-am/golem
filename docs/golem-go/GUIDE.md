@@ -194,8 +194,11 @@ policy.
 Ending the operation waits only for a commit already under way. After a refusal
 golem runs nothing further: no hook runs again and nothing is re-planned or
 written. Hooks that ran inside the rolled-back transaction ran exactly once,
-and after-commit hooks never run. A refused or failed write takes no part in
-this rule: it cannot make its transaction fail later. Retry to run the write
+and after-commit hooks never run. Each write attempt is judged on its own, including a
+write a hook makes and one nested inside it. A refused or failed attempt that
+left nothing behind takes no part in this rule: it cannot make the write
+around it, or its transaction, fail later. An attempt that failed after running
+statements still counts, because its rows may remain. Retry to run the write
 under the caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including

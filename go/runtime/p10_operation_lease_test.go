@@ -264,29 +264,6 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 				return status == "pending"
 			},
 		},
-		{
-			name:     "hook executor",
-			inHook:   true,
-			conflict: p10Conflict{operation: "create", model: p10TeamModel(), message: "mutation conflicted"},
-			hook: func(t *testing.T, fixture *p10OperationFixture) {
-				p10operations.SetTeamHook(func(ctx context.Context, executor golem.HookExecutor) error {
-					_, err := golem.HookCreateRow(ctx, executor, p10operations.GolemGeneratedInviteDescriptor, p10operations.Invites.Create(
-						p10operations.Invites.ID.Create(created), p10operations.Invites.TeamID.Create(p10OperationID(t, 902)),
-						p10operations.Invites.Owner.Create("alpha"), p10operations.Invites.Email.Create("hook@example.test"), p10operations.Invites.Status.Create("pending"),
-					))
-					return err
-				})
-			},
-			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
-				_, err := caller.Teams.Create(ctx, p10operations.Teams.Create(p10operations.Teams.ID.Create(p10OperationID(t, 902)), p10operations.Teams.Owner.Create("alpha")))
-				return err
-			},
-			absent: func(t *testing.T, fixture *p10OperationFixture) bool {
-				exists, _, _ := fixture.inviteExists(t, created)
-				_, teamErr := fixture.app.System().Teams.FindUnique(context.Background(), p10operations.Teams.ByID.Value(p10OperationID(t, 902)))
-				return !exists && teamErr != nil
-			},
-		},
 	}
 }
 

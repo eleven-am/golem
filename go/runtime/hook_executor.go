@@ -21,18 +21,20 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 		}
 		transactionCaller := *caller
 		transactionCaller.executor = binding
-		switch request.Operation() {
-		case golem.RuntimeHookExecutorFindManyOperation:
-			return executeCallerHookFindMany(ctx, &transactionCaller, request)
-		case golem.RuntimeHookExecutorCreateOperation, golem.RuntimeHookExecutorUpdateOperation, golem.RuntimeHookExecutorDeleteOperation:
-			return executeCallerHookScalar(ctx, &transactionCaller, request)
-		case golem.RuntimeHookExecutorUpdateManyOperation, golem.RuntimeHookExecutorDeleteManyOperation:
-			return executeCallerHookBatch(ctx, &transactionCaller, request)
-		case golem.RuntimeHookExecutorUpsertOperation:
-			return executeCallerHookUpsert(ctx, &transactionCaller, request)
-		default:
-			return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: operation is unknown")
-		}
+		return withinOperationAttempt(ctx, &transactionCaller, func(ctx context.Context, transactionCaller *Caller[P, A]) (golem.RuntimeHookExecutorResult, error) {
+			switch request.Operation() {
+			case golem.RuntimeHookExecutorFindManyOperation:
+				return executeCallerHookFindMany(ctx, transactionCaller, request)
+			case golem.RuntimeHookExecutorCreateOperation, golem.RuntimeHookExecutorUpdateOperation, golem.RuntimeHookExecutorDeleteOperation:
+				return executeCallerHookScalar(ctx, transactionCaller, request)
+			case golem.RuntimeHookExecutorUpdateManyOperation, golem.RuntimeHookExecutorDeleteManyOperation:
+				return executeCallerHookBatch(ctx, transactionCaller, request)
+			case golem.RuntimeHookExecutorUpsertOperation:
+				return executeCallerHookUpsert(ctx, transactionCaller, request)
+			default:
+				return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: operation is unknown")
+			}
+		})
 	})
 }
 

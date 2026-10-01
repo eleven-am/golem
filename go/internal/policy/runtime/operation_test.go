@@ -397,3 +397,58 @@ func TestRecordGrantClassifiesEachAuthorisationDecision(t *testing.T) {
 		t.Fatal("a decision made from the caller's own policy after release used the lease")
 	}
 }
+
+func TestLeaseAttemptsCountTowardTheirParentUnlessDiscarded(t *testing.T) {
+	fixture := newRuntimeOperationFixture(t)
+	scoped, release := fixture.set.Within(fixture.invite)
+	defer release()
+	_, root := scoped.Lease()
+	use := func(lease *Lease) {
+		view := scoped.WithLease(lease)
+		view.Policy(fixture.user)
+		view.RecordGrant(fixture.user, policyir.ActionCreate, nil)
+	}
+	failed := root.Attempt()
+	use(failed)
+	failed.Finish(errors.New("refused before any statement"))
+	if root.Used() {
+		t.Fatal("a failed attempt that ran no statement counted toward its parent")
+	}
+	unfinished := root.Attempt()
+	use(unfinished)
+	if !root.Used() {
+		t.Fatal("an attempt that was never finished did not count toward its parent")
+	}
+	_, second := scoped.Lease()
+	succeeded := second.Attempt()
+	grandchild := succeeded.Attempt()
+	use(grandchild)
+	grandchild.Finish(nil)
+	succeeded.Finish(nil)
+	if !second.Used() {
+		t.Fatal("a successful nested attempt did not count toward its ancestors")
+	}
+	_, third := scoped.Lease()
+	ran := third.Attempt()
+	use(ran)
+	ran.Attempt().NoteStatement()
+	ran.Finish(errors.New("failed after a statement"))
+	if !third.Used() {
+		t.Fatal("a failed attempt that ran a statement stopped counting")
+	}
+	_, fourth := scoped.Lease()
+	outer := fourth.Attempt()
+	inner := outer.Attempt()
+	use(inner)
+	inner.Finish(nil)
+	outer.Finish(errors.New("refused before any statement"))
+	if fourth.Used() {
+		t.Fatal("a discarded attempt's successful children still counted")
+	}
+	var absent *Lease
+	if absent.Attempt() != nil || absent.Used() {
+		t.Fatal("a nil lease produced an attempt")
+	}
+	absent.Finish(errors.New("ignored"))
+	absent.NoteStatement()
+}

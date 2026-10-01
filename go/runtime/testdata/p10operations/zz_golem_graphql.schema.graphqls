@@ -118,6 +118,7 @@ type Invite {
   owner: String
   email: String
   status: String
+  note: String
   team: Team
 }
 
@@ -131,6 +132,7 @@ input InviteWhereInput {
   owner: StringFilter
   email: StringFilter
   status: StringFilter
+  note: NullableStringFilter
   team: TeamRelationFilter
 }
 
@@ -140,6 +142,7 @@ input InviteOrderByInput {
   owner: SortOrder
   email: SortOrder
   status: SortOrder
+  note: SortOrder
 }
 
 enum InviteScalarField {
@@ -148,6 +151,7 @@ enum InviteScalarField {
   owner
   email
   status
+  note
 }
 
 input InviteWhereUniqueInput @oneOf {
@@ -159,6 +163,7 @@ input InviteCreateInput {
   owner: String!
   email: String!
   status: String!
+  note: String
   team: InviteTeamCreateRelationInput!
 }
 
@@ -167,6 +172,7 @@ input InviteUpdateInput {
   owner: StringUpdateOperationsInput
   email: StringUpdateOperationsInput
   status: StringUpdateOperationsInput
+  note: NullableStringUpdateOperationsInput
   team: InviteTeamUpdateRelationInput
 }
 
@@ -176,6 +182,7 @@ input InviteUpdateManyInput {
   owner: StringUpdateOperationsInput
   email: StringUpdateOperationsInput
   status: StringUpdateOperationsInput
+  note: NullableStringUpdateOperationsInput
 }
 
 input InviteTeamCreateRelationInput @oneOf {
@@ -285,6 +292,7 @@ input InviteCreateWithoutTeamInput {
   owner: String!
   email: String!
   status: String!
+  note: String
 }
 
 input InviteUpdateWithoutTeamInput {
@@ -292,6 +300,7 @@ input InviteUpdateWithoutTeamInput {
   owner: StringUpdateOperationsInput
   email: StringUpdateOperationsInput
   status: StringUpdateOperationsInput
+  note: NullableStringUpdateOperationsInput
 }
 
 input TeamCreateWithoutInvitesInput {

@@ -31,12 +31,13 @@ type Team struct {
 type Invite struct {
 	_ struct{} `golem:"model;id=p10operations.Invite;table=invites;graphql=Invite"`
 
-	ID     golem.UUID `db:"id" golem:"id=p10operations.Invite.ID;pk"`
-	TeamID golem.UUID `db:"team_id"`
-	Owner  string     `db:"owner" golem:"type=varchar(80)"`
-	Email  string     `db:"email" golem:"type=varchar(160)"`
-	Status string     `db:"status" golem:"type=varchar(40)"`
-	Team   *Team      `db:"-" golem:"relation=belongs_to;fields=team_id;references=id"`
+	ID     golem.UUID         `db:"id" golem:"id=p10operations.Invite.ID;pk"`
+	TeamID golem.UUID         `db:"team_id"`
+	Owner  string             `db:"owner" golem:"type=varchar(80)"`
+	Email  string             `db:"email" golem:"type=varchar(160)"`
+	Status string             `db:"status" golem:"type=varchar(40)"`
+	Note   golem.Null[string] `db:"note" golem:"type=varchar(80)"`
+	Team   *Team              `db:"-" golem:"relation=belongs_to;fields=team_id;references=id"`
 }
 
 func DefineSchema(schema *golem.Schema) {
@@ -61,7 +62,7 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 	rules.CanRead(owned)
 	rules.CanUpdate(owned)
 	rules.CannotUpdateFields(golem.All[Invite](), Invites.Status, Invites.Email)
-	golem.Within(rules, InviteMember).CanCreate(owned)
+	golem.Within(rules, InviteMember).CanCreateFields(owned, Invites.ID, Invites.TeamID, Invites.Owner, Invites.Email, Invites.Status, Invites.Team)
 	golem.Within(rules, InviteMember).CanUpdateFields(owned, Invites.Status)
 	golem.Within(rules, NestedTeamInvite).CanCreate(owned)
 	golem.Within(rules, TransactionalInvite).CanCreate(owned)
@@ -75,6 +76,7 @@ func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
 }
 
 func (Team) AfterCreate(ctx context.Context, result TeamCreateResult) error {
+	recordHook("team_after_create")
 	probeLock.Lock()
 	hook := activeTeamHook
 	probeLock.Unlock()
@@ -89,15 +91,27 @@ func (Invite) BeforeCreate(ctx context.Context, _ *InviteCreateRequest) error {
 	return nil
 }
 
-func (Invite) AfterCreate(ctx context.Context, _ InviteCreateResult) error {
+func (Invite) AfterCreate(ctx context.Context, result InviteCreateResult) error {
 	recordHook("after_create")
 	probeLock.Lock()
 	hook := activeInviteHook
+	executorHook := activeInviteExecutorHook
 	probeLock.Unlock()
-	if hook == nil {
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return err
+		}
+	}
+	if executorHook == nil {
 		return nil
 	}
-	return hook(ctx)
+	return executorHook(ctx, result.Executor())
+}
+
+func SetInviteExecutorHook(hook TeamHook) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeInviteExecutorHook = hook
 }
 
 func (Invite) AfterCommitCreate(_ context.Context, _ InviteCreateResult) error {
@@ -280,11 +294,12 @@ type Record struct {
 }
 
 var (
-	probeLock        sync.Mutex
-	activeProbe      Probe
-	activeTeamHook   TeamHook
-	activeInviteHook func(context.Context) error
-	record           Record
+	probeLock                sync.Mutex
+	activeProbe              Probe
+	activeTeamHook           TeamHook
+	activeInviteHook         func(context.Context) error
+	activeInviteExecutorHook TeamHook
+	record                   Record
 )
 
 func Reset(probe Probe) {
@@ -293,6 +308,7 @@ func Reset(probe Probe) {
 	activeProbe = probe
 	activeTeamHook = nil
 	activeInviteHook = nil
+	activeInviteExecutorHook = nil
 	record = Record{}
 }
 
