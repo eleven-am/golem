@@ -200,7 +200,14 @@ no effect. A write a hook makes through its executor runs in its own savepoint.
 If it fails, golem rolls back its rows, events and after-commit hooks, so the
 hook can handle the error and the transaction stays usable. A failed attempt
 therefore takes no part in this rule: it cannot make the write around it, or
-its transaction, fail later. Retry to run the write
+its transaction, fail later.
+
+A hook's executor is valid only while that hook runs. When the hook returns,
+golem waits for any call already in flight on the executor, then refuses every
+later call, from any goroutine. Writes through one transaction are serialised,
+so hook writes started concurrently run one after another. A caller or system
+transaction accepts writes only until its callback returns: golem waits for a
+write already in flight and refuses later ones. Retry to run the write
 under the caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including

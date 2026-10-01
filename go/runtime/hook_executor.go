@@ -16,11 +16,15 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
-func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBinding) golem.HookExecutor {
+func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
 	return golem.RuntimeHookExecutor(func(ctx context.Context, request golem.RuntimeHookExecutorRequest) (golem.RuntimeHookExecutorResult, error) {
-		if caller == nil || caller.app == nil || binding == nil || !binding.scoped {
+		if caller == nil || caller.app == nil || binding == nil || !binding.scoped || gate == nil {
 			return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: active caller transaction is required")
 		}
+		if !gate.usage.enter() {
+			return golem.RuntimeHookExecutorResult{}, errHookExecutorExpired
+		}
+		defer gate.usage.leave()
 		transactionCaller := *caller
 		transactionCaller.executor = binding
 		return withinOperationAttempt(ctx, &transactionCaller, func(ctx context.Context, transactionCaller *Caller[P, A]) (golem.RuntimeHookExecutorResult, error) {
@@ -28,16 +32,22 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 			case golem.RuntimeHookExecutorFindManyOperation:
 				return executeCallerHookFindMany(ctx, transactionCaller, request)
 			case golem.RuntimeHookExecutorCreateOperation, golem.RuntimeHookExecutorUpdateOperation, golem.RuntimeHookExecutorDeleteOperation:
-				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-					return executeCallerHookScalar(ctx, transactionCaller, request)
+				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
+					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+						return executeCallerHookScalar(ctx, transactionCaller, request)
+					})
 				})
 			case golem.RuntimeHookExecutorUpdateManyOperation, golem.RuntimeHookExecutorDeleteManyOperation:
-				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-					return executeCallerHookBatch(ctx, transactionCaller, request)
+				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
+					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+						return executeCallerHookBatch(ctx, transactionCaller, request)
+					})
 				})
 			case golem.RuntimeHookExecutorUpsertOperation:
-				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-					return executeCallerHookUpsert(ctx, transactionCaller, request)
+				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
+					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+						return executeCallerHookUpsert(ctx, transactionCaller, request)
+					})
 				})
 			default:
 				return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: operation is unknown")
@@ -216,7 +226,9 @@ func executeCallerHookUpsert[P, A any](ctx context.Context, caller *Caller[P, A]
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor { return newCallerHookExecutor(caller, binding) },
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
+		},
 	}
 	backend := sqlxUpsertBackend{database: caller.app.database, provider: caller.app.provider, binding: caller.executor, mutation: mutationConfig(caller.app, caller.executor)}
 	executor := &callerHookUpsertBranchExecutor[P, A]{caller: caller, prepared: prepared, hooks: hooks}
@@ -354,8 +366,10 @@ func executeCallerHookScalar[P, A any](ctx context.Context, caller *Caller[P, A]
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor { return newCallerHookExecutor(caller, binding) },
-		capture:  func(result golem.RuntimeMutationHookResult) { captured = result },
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
+		},
+		capture: func(result golem.RuntimeMutationHookResult) { captured = result },
 	}
 	if finalInput != nil && len(finalInput.Relations()) != 0 {
 		result, err := executeCallerNestedHookScalar(ctx, caller, operation, request.ModelID(), finalInput, finalTarget, runtimeValues)
@@ -420,7 +434,9 @@ func executeCallerHookBatch[P, A any](ctx context.Context, caller *Caller[P, A],
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor { return newCallerHookExecutor(caller, binding) },
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
+		},
 	}
 	count, err := executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 	if err != nil {

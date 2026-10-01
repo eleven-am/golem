@@ -805,8 +805,8 @@ func executeCallerNestedScalar[P, A, M any](ctx context.Context, caller *Caller[
 	graph := compiled.Graph()
 	var projected golem.Row[M]
 	materialized := !projection.active
-	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor {
-		return newCallerHookExecutor(caller, binding)
+	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding, gate)
 	}}
 	boundary := &systemNestedBoundary[P, A]{app: caller.app, source: caller.executor, graph: graph, compiled: &compiled, stance: mutationir.Caller, policies: caller.policies, actor: caller.actor, hooks: hooks, runtimeValues: runtimeValues}
 	if projection.active {
@@ -898,8 +898,8 @@ func executeCallerNestedHookScalar[P, A any](ctx context.Context, caller *Caller
 		return golem.RuntimeMutationHookResult{}, err
 	}
 	graph := compiled.Graph()
-	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor {
-		return newCallerHookExecutor(caller, binding)
+	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding, gate)
 	}}
 	boundary := &systemNestedBoundary[P, A]{app: caller.app, source: caller.executor, graph: graph, compiled: &compiled, stance: mutationir.Caller, policies: caller.policies, actor: caller.actor, hooks: hooks, captureRoot: true, runtimeValues: runtimeValues}
 	if _, err := mutationnested.Execute(ctx, graph, uint32(caller.app.mutationLimits.touchedRows), boundary); err != nil {

@@ -259,6 +259,10 @@ func callerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
+	if !system.executor.enterWrite() {
+		return golem.Row[M]{}, errTransactionWriteEnded
+	}
+	defer system.executor.leaveWrite()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -289,6 +293,10 @@ func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A]
 
 func SystemDeleteVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
+	if !system.executor.enterWrite() {
+		return golem.Row[M]{}, errTransactionWriteEnded
+	}
+	defer system.executor.leaveWrite()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -388,6 +396,10 @@ func callerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
+	if !system.executor.enterWrite() {
+		return golem.Row[M]{}, errTransactionWriteEnded
+	}
+	defer system.executor.leaveWrite()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -512,7 +524,9 @@ func executeCallerAbsentVersionedUpsert[P, A, M any](ctx context.Context, caller
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(mutationir.Upsert, golem.ModelID(model), err)
 	}
-	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor { return newCallerHookExecutor(caller, binding) }}
+	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding, gate)
+	}}
 	return executeObservedVersionedUpsertRetries(ctx, caller.app, caller.executor, descriptor.Metadata().ModelID(), func(attemptContext context.Context, attempt uint32) (golem.Row[M], error) {
 		return executeAbsentVersionedUpsertAttempt(attemptContext, caller.app, caller.executor, descriptor, projection, prepared, caller.policies, hooks, attempt)
 	})
@@ -754,7 +768,9 @@ func prepareCallerVersionedScalarExecution[P, A, M any](caller *Caller[P, A], de
 	if err != nil {
 		return mutationsql.Program{}, nil, nil, publicMutationPreparationError(operation, golem.ModelID(model), err)
 	}
-	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor { return newCallerHookExecutor(caller, binding) }}
+	hooks := &callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding, gate)
+	}}
 	afterPrecheck := func(kernelContext context.Context, _ *sqlxUpsertAttempt) (mutationsql.Program, error) {
 		hookRequest, hookErr := scalarBeforeHookRequest(operation, golem.ModelID(model), input, &target)
 		if hookErr != nil {

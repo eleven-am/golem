@@ -252,8 +252,8 @@ func executeCallerFrozenBatchMutation[P, A any](ctx context.Context, caller *Cal
 	if err != nil {
 		return golem.RuntimeMutationResult{}, publicBatchPreparationError(operation, model, err)
 	}
-	hooks := callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding) golem.HookExecutor {
-		return newCallerHookExecutor(caller, binding)
+	hooks := callerMutationHookExecution[A]{bindings: caller.app.bindings, actor: caller.actor, executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+		return newCallerHookExecutor(caller, binding, gate)
 	}}
 	count, err := executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 	if err != nil {

@@ -75,6 +75,15 @@ the calling hook handled the error, and a failed scalar, upsert or batch write
 failed the whole outer write even when the hook handled it. A hook can now
 handle a failed write and continue.
 
+**Transaction-bound handles stop at the end of their scope.** A hook's
+`HookExecutor` works only while that hook runs; a call after the hook returns,
+from any goroutine, is refused with `P4_RUNTIME_HOOK_EXECUTOR`. A write through
+a caller transaction after its callback has returned is refused with
+`P4_RUNTIME_TRANSACTION`; before, such a write could commit without its change
+event. Calls already in flight finish first. Concurrent writes through hook
+executors on one transaction now run one at a time instead of corrupting each
+other's savepoints.
+
 **Tooling.** The CLI end-to-end tests run in parallel child processes, which
 cuts the package's run time roughly in half.
 

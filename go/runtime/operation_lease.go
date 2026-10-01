@@ -50,6 +50,11 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 	if ctx == nil || caller == nil || caller.policies == nil {
 		return run(ctx, caller)
 	}
+	if !caller.executor.enterWrite() {
+		var zero R
+		return zero, errTransactionWriteEnded
+	}
+	defer caller.executor.leaveWrite()
 	if existing := operationLeaseFrom(ctx); existing != nil {
 		if caller.policies.WithLease(existing) != caller.policies {
 			attempt := existing.Attempt()
@@ -75,7 +80,7 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 		var zero R
 		return zero, conflict
 	}
-	if err == nil && lease.Used() && caller.executor != nil && caller.executor.operationWrites != nil {
+	if err == nil && caller.executor != nil && caller.executor.operationWrites != nil {
 		caller.executor.operationWrites.record(lease, conflict)
 	}
 	return result, err

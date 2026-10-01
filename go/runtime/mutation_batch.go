@@ -58,8 +58,8 @@ func callerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
@@ -96,8 +96,8 @@ func callerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
@@ -105,6 +105,10 @@ func callerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 
 func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	ctx = withoutOperationLease(ctx)
+	if !system.executor.enterWrite() {
+		return 0, errTransactionWriteEnded
+	}
+	defer system.executor.leaveWrite()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -127,6 +131,10 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 
 func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	ctx = withoutOperationLease(ctx)
+	if !system.executor.enterWrite() {
+		return 0, errTransactionWriteEnded
+	}
+	defer system.executor.leaveWrite()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -429,13 +437,21 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if operation == golem.HookUpdateMany {
 			result = golem.RuntimeUpdateManyMutationHookResult(model, verification.Count())
 		}
+		var gate *hookExecutorGate
 		if hooks.executor != nil {
-			result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(activeBinding))
+			gate = newHookExecutorGate(ctx, activeBinding)
+			result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(activeBinding, gate))
 		}
 		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfter) {
-			if err := invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, result, golem.HookAfter); err != nil {
+			err := invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, result, golem.HookAfter)
+			if gate != nil {
+				gate.usage.close()
+			}
+			if err != nil {
 				return 0, publicBatchExecutionError(program, err)
 			}
+		} else if gate != nil {
+			gate.usage.close()
 		}
 		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfterCommit) {
 			afterCommitResult := golem.RuntimeMutationHookResultWithoutExecutor(result)

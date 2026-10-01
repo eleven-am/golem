@@ -243,7 +243,7 @@ func hasMutationHook[A any](bindings golem.ApplicationBindings[A], model golem.M
 type callerMutationHookExecution[A any] struct {
 	bindings golem.ApplicationBindings[A]
 	actor    A
-	executor func(*executionBinding) golem.HookExecutor
+	executor func(*executionBinding, *hookExecutorGate) golem.HookExecutor
 	capture  func(golem.RuntimeMutationHookResult)
 }
 
@@ -269,7 +269,9 @@ func (hooks callerMutationHookExecution[A]) observeResult(ctx context.Context, b
 	operation := result.Operation()
 	model := result.ModelID()
 	if hooks.executor != nil {
-		result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(binding))
+		gate := newHookExecutorGate(ctx, binding)
+		defer gate.usage.close()
+		result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(binding, gate))
 	}
 	if hooks.capture != nil {
 		hooks.capture(result)
