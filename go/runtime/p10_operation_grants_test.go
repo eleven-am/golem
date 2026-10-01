@@ -15,6 +15,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/eleven-am/golem/go/events"
 	"github.com/eleven-am/golem/go/golem"
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
@@ -152,9 +153,15 @@ func newP10OperationFixture(t *testing.T, profile p5ExtensionProviderProfile) *p
 		t.Fatal(err)
 	}
 	observer := &p10OperationObserver{}
+	transport, err := events.NewMemoryTransport(events.MemoryLimits{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	application, err := p10operations.Open(ctx, p10operations.Config[p10operations.Principal]{
-		Database: p8AdoptTracedProviderHandle(database, profile),
-		Observer: observer,
+		Database:            p8AdoptTracedProviderHandle(database, profile),
+		Observer:            observer,
+		EventTransport:      transport,
+		ReportEventOperator: func(context.Context, events.OperatorAuditRecord) {},
 		AfterCommitError: func(_ context.Context, failure golem.AfterCommitFailure) {
 			t.Errorf("after-commit hook failed: %v", failure.Cause())
 		},

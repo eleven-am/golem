@@ -428,14 +428,6 @@ func TestLeaseAttemptsCountTowardTheirParentUnlessDiscarded(t *testing.T) {
 	if !second.Used() {
 		t.Fatal("a successful nested attempt did not count toward its ancestors")
 	}
-	_, third := scoped.Lease()
-	ran := third.Attempt()
-	use(ran)
-	ran.Attempt().NoteStatement()
-	ran.Finish(errors.New("failed after a statement"))
-	if !third.Used() {
-		t.Fatal("a failed attempt that ran a statement stopped counting")
-	}
 	_, fourth := scoped.Lease()
 	outer := fourth.Attempt()
 	inner := outer.Attempt()
@@ -450,5 +442,4 @@ func TestLeaseAttemptsCountTowardTheirParentUnlessDiscarded(t *testing.T) {
 		t.Fatal("a nil lease produced an attempt")
 	}
 	absent.Finish(errors.New("ignored"))
-	absent.NoteStatement()
 }

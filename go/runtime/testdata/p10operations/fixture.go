@@ -40,6 +40,14 @@ type Invite struct {
 	Team   *Team              `db:"-" golem:"relation=belongs_to;fields=team_id;references=id"`
 }
 
+func (Team) GolemModel() golem.ModelSpec[Team] {
+	return golem.DefineModel(golem.Subscriptions[Team]())
+}
+
+func (Invite) GolemModel() golem.ModelSpec[Invite] {
+	return golem.DefineModel(golem.Subscriptions[Invite]())
+}
+
 func DefineSchema(schema *golem.Schema) {
 	golem.SchemaName(schema, "p10_operations")
 	golem.Actor[Actor](schema)
@@ -106,6 +114,23 @@ func (Invite) AfterCreate(ctx context.Context, result InviteCreateResult) error 
 		return nil
 	}
 	return executorHook(ctx, result.Executor())
+}
+
+func (Invite) AfterUpdateMany(ctx context.Context, _ InviteUpdateManyResult) error {
+	recordHook("after_update_many")
+	probeLock.Lock()
+	hook := activeInviteManyHook
+	probeLock.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx)
+}
+
+func SetInviteUpdateManyHook(hook func(context.Context) error) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeInviteManyHook = hook
 }
 
 func SetInviteExecutorHook(hook TeamHook) {
@@ -299,6 +324,7 @@ var (
 	activeTeamHook           TeamHook
 	activeInviteHook         func(context.Context) error
 	activeInviteExecutorHook TeamHook
+	activeInviteManyHook     func(context.Context) error
 	record                   Record
 )
 
@@ -309,6 +335,7 @@ func Reset(probe Probe) {
 	activeTeamHook = nil
 	activeInviteHook = nil
 	activeInviteExecutorHook = nil
+	activeInviteManyHook = nil
 	record = Record{}
 }
 

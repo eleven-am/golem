@@ -253,7 +253,7 @@ func p10LeaseWrites(t *testing.T) []p10LeaseWrite {
 		},
 		{
 			name:     "batch update",
-			conflict: p10Conflict{operation: "updateMany", model: p10InviteModel(), message: "batch mutation conflicted", hooks: "[]"},
+			conflict: p10Conflict{operation: "updateMany", model: p10InviteModel(), message: "batch mutation conflicted", hooks: "[after_update_many]"},
 			prepare:  func(t *testing.T, fixture *p10OperationFixture) { fixture.seedInvite(t, created) },
 			write: func(ctx context.Context, fixture *p10OperationFixture, caller *p10operations.Caller[p10operations.Principal]) error {
 				_, err := caller.Invites.UpdateMany(ctx, p10operations.Invites.ID.Eq(created), p10operations.Invites.UpdateMany(p10operations.Invites.Status.Set("accepted")))

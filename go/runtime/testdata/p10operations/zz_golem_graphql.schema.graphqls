@@ -356,3 +356,34 @@ type Mutation {
 type BatchPayload {
   count: Int!
 }
+
+enum GolemEventType {
+  CREATED
+  UPDATED
+  DELETED
+}
+
+type InviteEvent {
+  eventID: UUID!
+  causationID: UUID!
+  transactionOrdinal: Int!
+  recordedAt: DateTime!
+  type: GolemEventType!
+  id: UUID!
+  entity: Invite
+}
+
+type TeamEvent {
+  eventID: UUID!
+  causationID: UUID!
+  transactionOrdinal: Int!
+  recordedAt: DateTime!
+  type: GolemEventType!
+  id: UUID!
+  entity: Team
+}
+
+type Subscription {
+  inviteEvents(where: InviteWhereInput): InviteEvent!
+  teamEvents(where: TeamWhereInput): TeamEvent!
+}

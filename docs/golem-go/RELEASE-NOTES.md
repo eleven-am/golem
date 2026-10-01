@@ -67,6 +67,14 @@ keys came out in alphabetical order. They now follow the operation's selection,
 including aliases and fragments. Only key order changes on the wire;
 `Server.Execute` still returns maps.
 
+**A failed hook write leaves nothing behind.** A write made through a hook's
+`HookExecutor` now runs in its own savepoint. If it returns an error, including
+an error from its own after-hook, its rows, events and after-commit hooks are
+all discarded. Before, a failed nested create could still commit its rows when
+the calling hook handled the error, and a failed scalar, upsert or batch write
+failed the whole outer write even when the hook handled it. A hook can now
+handle a failed write and continue.
+
 **Tooling.** The CLI end-to-end tests run in parallel child processes, which
 cuts the package's run time roughly in half.
 

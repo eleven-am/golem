@@ -57,7 +57,6 @@ type Lease struct {
 	parent    *Lease
 	used      atomic.Bool
 	ended     atomic.Bool
-	executed  atomic.Bool
 	discarded atomic.Bool
 	mu        sync.Mutex
 	served    map[ir.ModelID]bool
@@ -78,21 +77,11 @@ func (lease *Lease) Attempt() *Lease {
 	return child
 }
 
-// Finish ends an attempt. A failed attempt that ran no statement left nothing
-// behind, so its grant usage is discarded; every other attempt keeps counting.
+// Finish ends an attempt. A failed attempt leaves no effect behind, so its
+// grant usage is discarded; a successful one keeps counting.
 func (lease *Lease) Finish(err error) {
-	if lease != nil && err != nil && !lease.executed.Load() {
+	if lease != nil && err != nil {
 		lease.discarded.Store(true)
-	}
-}
-
-// NoteStatement records that the attempt, and every attempt enclosing it,
-// ran a statement whose effects may outlive a later failure.
-func (lease *Lease) NoteStatement() {
-	for current := lease; current != nil; current = current.parent {
-		if current.executed.Swap(true) {
-			return
-		}
 	}
 }
 
