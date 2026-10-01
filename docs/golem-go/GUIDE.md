@@ -126,6 +126,110 @@ is never read rather than read and filtered.
 `rules.CanReadFields(predicate, Notes.Title)` and `CannotReadFields` narrow
 authorization to individual columns.
 
+### Operations that own a write
+
+Some writes belong to one domain operation. Say an invite must have its
+address normalised and its status start at `pending`. Callers should reach
+that only through an `inviteMember` mutation, never through `createInvite` or
+`caller.Invites.Create`. The operation owns the invariant, and the policy
+closes the raw surface: grant no `CanCreate` to callers, then grant the create
+to the operation alone with `golem.Within`:
+
+```go
+func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
+	owned := Invites.Owner.Eq(actor.ID)
+	rules.CanRead(owned)
+	rules.CanUpdate(owned)
+	rules.CannotUpdateFields(golem.All[Invite](), Invites.Status)
+	golem.Within(rules, InviteMember).CanCreate(owned)
+	golem.Within(rules, AcceptInvite).CanUpdateFields(owned, Invites.Status)
+}
+```
+
+`InviteMember` and `AcceptInvite` are the resolvers of custom mutations
+declared with `golem.Mutation` (see [Custom operations](#custom-operations)).
+A Within grant applies only while that resolver runs, whether it was called by
+GraphQL dispatch or through `Mutate`. Outside it, the generic `createInvite`
+root, `caller.Invites.Create`, and a direct call to `InviteMember(ctx, caller,
+args)` are refused with exactly the error they get when no Within grant
+exists. Nothing in the refusal reveals that a grant exists.
+
+Inside the operation, a write is allowed when a Within grant covering it
+allows it, or when the caller's own policy does:
+
+- A model-wide grant (`CanCreate`, `CanUpdate`, `CanDelete`) covers every field
+  of the rows its predicate matches.
+- A field grant (`CanCreateFields`, `CanUpdateFields`) covers only the fields it
+  names.
+- Every other write is decided by the caller's policy alone. `AcceptInvite`
+  above may set `Status`, but a `CannotUpdateFields` on any other field still
+  refuses it.
+- Field modes still bind: a `readonly`, `system` or `immutable` field stays
+  closed whatever a Within grant says.
+
+A Within grant never widens reads, and `Within` offers no `Cannot*` verbs. The
+resolver still runs as the caller. Its predicates still bind, its hooks still
+run, its events are delivered only to readers the policy allows, and it may
+link only to rows the caller can read. Nested writes, upserts and transactions
+opened inside the resolver carry the grant. It ends when the resolver returns:
+a caller the resolver kept, or a goroutine that outlives it, from then on
+writes only what the caller's own policy allows. Two custom mutations in one
+GraphQL document each receive only their own grants.
+
+A write made through the operation's caller that reaches its commit after the
+operation ended is judged when golem plans it. For every row and field decision
+the write needs, golem compares the operation's grants with the caller's own
+policy.
+
+- **Refused with CONFLICT.** If the write's authorisation may have depended on a
+  Within grant, the write is rolled back and fails with the ordinary retryable
+  `CONFLICT` it reports when it conflicts, such as `CONFLICT: mutation
+  conflicted` for a create or `CONFLICT: batch mutation conflicted` for an
+  `UpdateMany`. This covers every write the caller's own policy refuses, and
+  every write where golem cannot prove the grant adds nothing. Only the row
+  decides such a case, so golem refuses it.
+- **Commits normally.** A write the caller's own policy clearly allows is one
+  where the grant is proved to add nothing to any decision it needs.
+
+Ending the operation waits only for a commit already under way. After a refusal
+golem runs nothing further: no hook runs again and nothing is re-planned or
+written. Hooks that ran inside the rolled-back transaction ran exactly once,
+and after-commit hooks never run. Each write attempt is judged on its own, including a
+write a hook makes and one nested inside it. A write that returns an error has
+no effect. A write a hook makes through its executor runs in its own savepoint.
+If it fails, golem rolls back its rows, events and after-commit hooks, so the
+hook can handle the error and the transaction stays usable. A failed attempt
+therefore takes no part in this rule: it cannot make the write around it, or
+its transaction, fail later.
+
+A hook's executor is valid only while that hook runs. When the hook returns,
+golem waits for any call already in flight on the executor, then refuses every
+later call, from any goroutine. A transaction runs its reads and writes one at
+a time, so hook writes started concurrently run one after another. A call
+through a hook's executor always runs inside the write that called the hook,
+whatever context you pass it. A call through the transaction itself runs
+inside the call its context came from while that call is still running, and
+otherwise waits its turn. A call made through a hook's context belongs to that
+hook, like a call through its executor: when the hook returns, golem waits for
+any such call already started before the write continues, and a call started
+after that runs once that write has finished; when the hook belongs to a write
+made through an outer hook's executor, that is when the executor call
+finishes, not the outer write. Finish those calls before the hook
+returns if the write depends on them. Inside a hook, pass the hook's own
+context to the transaction: with any other context the call waits until the
+write that called the hook finishes, so a hook that waits for it never
+returns. The same holds for a nested hook calling an outer hook's executor. A
+caller or system transaction accepts reads and writes only until its callback
+returns, or panics: golem waits for every call already in flight, refuses
+later ones, and only then flushes, commits or rolls back. Retry to run the
+write under the caller's own policy.
+
+`Within` must name a generated custom mutation. Any other function, including
+a custom query resolver, fails the policy build when the caller is created,
+with an error naming it. Prefer `Within` to `SystemEscape` for a write an
+operation owns: `SystemEscape` skips every rule, predicate and hook, while
+`Within` grants one verb on the rows you name.
+
 A unique constraint is the one place a write can reveal a row you cannot read.
 Suppose you create or update a row and the value collides with a unique key or
 primary key held by a row outside your read policy. The database still rejects
@@ -185,6 +289,10 @@ author, err := system.Authors.Create(ctx,
 
 Each field is set through its own builder, so a field that is `readonly` or
 absent from the schema cannot be written by construction.
+
+A transaction runs its writes one at a time. Using one transaction from several
+goroutines is safe, but its writes do not run in parallel: each waits for the
+one before it, including every hook write that one makes.
 
 ### Mutations return only what you select
 
@@ -380,6 +488,53 @@ generators send, passes at the default limits whatever the schema's size.
 Data selections in the same operation are costed and depth-limited exactly as
 they would be alone. Placing them beside `__schema`, or inside a fragment that
 also selects it, does not exempt them.
+
+### Custom operations
+
+A schema package may declare its own query and mutation roots:
+
+```go
+func DefineGraphQL(graphql *golem.GraphQLSchema) {
+	golem.Query(graphql, "searchInvites", SearchInvites)
+	golem.Mutation(graphql, "inviteMember", InviteMember)
+}
+
+func InviteMember(ctx context.Context, caller *Caller[Principal], args InviteArgs) (string, error) {
+	email, err := normalizedEmail(args.Email)
+	if err != nil {
+		return "", err
+	}
+	created, err := caller.Invites.Create(ctx, Invites.Create(
+		Invites.ID.Create(args.ID), Invites.TeamID.Create(args.TeamID),
+		Invites.Owner.Create(args.Owner), Invites.Email.Create(email),
+		Invites.Status.Create("pending"),
+	), Invites.Select(Invites.ID))
+	if err != nil {
+		return "", err
+	}
+	id, _ := golem.Value(created, Invites.ID).Get()
+	return id.String(), nil
+}
+```
+
+A resolver receives only the caller, never `System`, a transaction or a
+database. It may open `caller.Transaction` itself. A custom mutation can be
+granted writes the caller cannot perform directly; see
+[Operations that own a write](#operations-that-own-a-write).
+
+To run a custom mutation from Go, call the generated `Mutate`:
+
+```go
+id, err := notes.Mutate(ctx, caller, notes.InviteMember, notes.InviteArgs{ /* ... */ })
+```
+
+`Mutate` runs the resolver exactly as GraphQL dispatch does. It receives the
+same Within grants, runs the same hooks, uses the same transaction behaviour,
+and is observed as `mutation.custom`. Its types are inferred from the
+resolver. A function that is not a generated custom mutation, such as a custom
+query resolver or a wrapper around a mutation resolver, is refused with
+`P5_CUSTOM_OPERATION` before anything runs. `Mutate` is generated only for a
+schema that declares a custom mutation.
 
 ## Changing a schema
 

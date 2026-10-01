@@ -141,18 +141,18 @@ func recordCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, regi
 			after[key] = row
 		}
 	}
-	if err := state.touch(len(effects.deleted) + len(effects.nulled)); err != nil {
+	if err := state.touch(ctx, len(effects.deleted)+len(effects.nulled)); err != nil {
 		return err
 	}
 	for _, row := range append(append([]mutationdecode.Row(nil), effects.deleted...), effects.nulled...) {
-		if err := markCascadeSemanticRecord(state, registry, row); err != nil {
+		if err := markCascadeSemanticRecord(ctx, state, registry, row); err != nil {
 			return err
 		}
 	}
 	recordedAt := time.Now()
 	for _, row := range effects.deleted {
 		before := row
-		if err := buildCascadeFact(state, registry, mutationir.Delete, &before, nil, recordedAt); err != nil {
+		if err := buildCascadeFact(ctx, state, registry, mutationir.Delete, &before, nil, recordedAt); err != nil {
 			return err
 		}
 	}
@@ -166,14 +166,14 @@ func recordCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, regi
 			return fmt.Errorf("P4_MUTATION_CASCADE: a row whose reference was cleared is absent")
 		}
 		before := row
-		if err := buildCascadeFact(state, registry, mutationir.Update, &before, &current, recordedAt); err != nil {
+		if err := buildCascadeFact(ctx, state, registry, mutationir.Update, &before, &current, recordedAt); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func buildCascadeFact(state *mutationState, registry *schema.Registry, operation mutationir.Operation, before, after *mutationdecode.Row, recordedAt time.Time) error {
+func buildCascadeFact(ctx context.Context, state *mutationState, registry *schema.Registry, operation mutationir.Operation, before, after *mutationdecode.Row, recordedAt time.Time) error {
 	model := before.ModelID()
 	metadata, ok := registry.Model(golem.ModelID(model))
 	if !ok || !metadata.SubscriptionsEnabled() {
@@ -186,7 +186,7 @@ func buildCascadeFact(state *mutationState, registry *schema.Registry, operation
 	if !requirement.Enabled() {
 		return nil
 	}
-	_, err = state.buildFact(registry, requirement, before, after, recordedAt)
+	_, err = state.buildFact(ctx, registry, requirement, before, after, recordedAt)
 	return err
 }
 
@@ -214,7 +214,7 @@ func groupCascadeRows(rows []mutationdecode.Row) map[policyir.ModelID][]mutation
 	return result
 }
 
-func markCascadeSemanticRecord(state *mutationState, registry *schema.Registry, row mutationdecode.Row) error {
+func markCascadeSemanticRecord(ctx context.Context, state *mutationState, registry *schema.Registry, row mutationdecode.Row) error {
 	model := row.ModelID()
 	metadata, ok := registry.Model(golem.ModelID(model))
 	if !ok || !metadata.SemanticIndexed() {
@@ -232,5 +232,5 @@ func markCascadeSemanticRecord(state *mutationState, registry *schema.Registry, 
 	if err != nil {
 		return err
 	}
-	return state.markSemantic(golem.ModelID(model), key, identity)
+	return state.markSemantic(ctx, golem.ModelID(model), key, identity)
 }

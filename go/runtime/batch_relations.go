@@ -203,6 +203,11 @@ func executeBatchStatement[P, A any](ctx context.Context, app *App[P, A], execut
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch decoder could not be built", err)
 	}
+	ctx, endCall, callErr := executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(child.ModelID()), golem.FieldID{}, "batch relation execution binding is unavailable", err)

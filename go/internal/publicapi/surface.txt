@@ -387,6 +387,7 @@ golem.(*AfterCommitFailure).Cause func() error
 golem.(*AfterCommitFailure).Model func() ModelID
 golem.(*AfterCommitFailure).Operation func() HookOperation
 golem.(*ApplicationBindings).GenerationDigest func() SchemaDigest
+golem.(*ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(*ApplicationBindings).PolicyInventory func() []ModelID
 golem.(*ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
 golem.(*ApplicationDescriptors).GenerationDigest func() SchemaDigest
@@ -549,6 +550,8 @@ golem.(*FrozenUniqueSelector).ModelID func() ModelID
 golem.(*FullTextResult).Row func() Row[M]
 golem.(*FullTextResult).Score func() float64
 golem.(*GeneratedPolicySet).GenerationDigest func() SchemaDigest
+golem.(*GeneratedPolicySet).OperationPolicies func(OperationID) []FrozenPolicy
+golem.(*GeneratedPolicySet).Operations func() []OperationID
 golem.(*GeneratedPolicySet).Policies func() []FrozenPolicy
 golem.(*GenerationDigestError).Error func() string
 golem.(*GraphQLType).NonNull func() GraphQLType[T]
@@ -730,6 +733,11 @@ golem.(*NullableTextField).Ne func(V) Predicate[M]
 golem.(*NullableTextField).NotIn func(...V) Predicate[M]
 golem.(*NullableTextField).StartsWith func(V) Predicate[M]
 golem.(*OpaqueField).Expr func() SchemaExpr[M, V]
+golem.(*OperationRules).CanCreate func(Predicate[M])
+golem.(*OperationRules).CanCreateFields func(Predicate[M], Field[M], ...Field[M])
+golem.(*OperationRules).CanDelete func(Predicate[M])
+golem.(*OperationRules).CanUpdate func(Predicate[M])
+golem.(*OperationRules).CanUpdateFields func(Predicate[M], Field[M], ...Field[M])
 golem.(*OrderedField).Asc func() OrderTerm[M]
 golem.(*OrderedField).Desc func() OrderTerm[M]
 golem.(*OrderedField).Eq func(V) Predicate[M]
@@ -1132,6 +1140,7 @@ golem.(AfterCommitFailure).Cause func() error
 golem.(AfterCommitFailure).Model func() ModelID
 golem.(AfterCommitFailure).Operation func() HookOperation
 golem.(ApplicationBindings).GenerationDigest func() SchemaDigest
+golem.(ApplicationBindings).Operation func(any) (OperationID, bool)
 golem.(ApplicationBindings).PolicyInventory func() []ModelID
 golem.(ApplicationBindings).RuntimeHookInventory func() []RuntimeHookMetadata
 golem.(ApplicationDescriptors).GenerationDigest func() SchemaDigest
@@ -1274,6 +1283,8 @@ golem.(FrozenUniqueSelector).ModelID func() ModelID
 golem.(FullTextResult).Row func() Row[M]
 golem.(FullTextResult).Score func() float64
 golem.(GeneratedPolicySet).GenerationDigest func() SchemaDigest
+golem.(GeneratedPolicySet).OperationPolicies func(OperationID) []FrozenPolicy
+golem.(GeneratedPolicySet).Operations func() []OperationID
 golem.(GeneratedPolicySet).Policies func() []FrozenPolicy
 golem.(GraphQLType).NonNull func() GraphQLType[T]
 golem.(IdentityMetadata).Fields func() []FieldID
@@ -2222,6 +2233,7 @@ golem.GeneratedAggregateSelect func[M any](AggregateMeasure[M], ...AggregateMeas
 golem.GeneratedAggregateWhere func[M any](Predicate[M]) AggregateOption[M]
 golem.GeneratedApplicationBindings func[A any](SchemaDigest, ...PackageBindings[A]) (ApplicationBindings[A], error)
 golem.GeneratedApplicationDescriptors func(SchemaDigest, ...PackageDescriptors) (ApplicationDescriptors, error)
+golem.GeneratedApplicationOperations func[A any](ApplicationBindings[A], ...GeneratedOperation) (ApplicationBindings[A], error)
 golem.GeneratedBeforeHookBinding func[A any, M any, Request any](ModelID, HookOperation, func(context.Context, *Request) error) HookBinding[A]
 golem.GeneratedBytesField func[M any](FieldID) BytesField[M]
 golem.GeneratedCountAll func[M any](ModelID) Measure[M, int64]
@@ -2229,6 +2241,7 @@ golem.GeneratedCreateFieldCapability func[M any, V any](ModelID, ScalarColumn[M,
 golem.GeneratedCreateFieldValue func[M any, V any](ModelID, ScalarColumn[M, V], V) CreateValue[M]
 golem.GeneratedCreateInput func[M any](ModelID, ...CreateValue[M]) CreateInput[M]
 golem.GeneratedCreateNullFieldValue func[M any, V any](ModelID, ScalarColumn[M, V]) CreateValue[M]
+golem.GeneratedCustomMutationOperation func[R any](string, R) GeneratedOperation
 golem.GeneratedDecrementFieldValue func[M any, V any](ModelID, ScalarColumn[M, V], V) UpdateManyValue[M]
 golem.GeneratedDescriptorShape func([]FieldID, []FieldID, []IdentityMetadata, []RelationMetadata) GeneratedModelShape
 golem.GeneratedDimension func[M any, V any](ModelID, ScalarColumn[M, V], bool) Dimension[M, V]
@@ -2278,6 +2291,8 @@ golem.GeneratedNullableOrderedField func[M any, V OrderedValue](FieldID) Nullabl
 golem.GeneratedNullableSelectorComponent func[V any](FieldID, Null[V]) selectorComponent
 golem.GeneratedNullableTextField func[M any, V ~string](FieldID) NullableTextField[M, V]
 golem.GeneratedOpaqueField func[M any, V any](FieldID) OpaqueField[M, V]
+golem.GeneratedOperation comparable
+golem.GeneratedOperation type struct
 golem.GeneratedOrderedField func[M any, V OrderedValue](FieldID) OrderedField[M, V]
 golem.GeneratedPackageBindings func[A any]([]PolicyBinding[A], []HookBinding[A]) PackageBindings[A]
 golem.GeneratedPackageDescriptors func(...ModelMetadata) PackageDescriptors
@@ -2607,6 +2622,10 @@ golem.NullableTextField[M any, V ~string] type struct
 golem.Omit func[M any](...Column[M]) Projection[M]
 golem.One func[M any, R any](Row[M], ToOne[M, R]) ReadValue[Row[R]]
 golem.OpaqueField[M any, V any] type struct
+golem.OperationID comparable
+golem.OperationID type struct
+golem.OperationRules comparable
+golem.OperationRules[M any] type struct
 golem.OptimisticConcurrency func[M any](ScalarColumn[M, int64]) ModelOption[M]
 golem.Or func[M any](...Predicate[M]) Predicate[M]
 golem.OrGroup func[M any](GroupPredicate[M], ...GroupPredicate[M]) GroupPredicate[M]
@@ -3193,6 +3212,7 @@ golem.Value func[M any, V any](Row[M], ScalarColumn[M, V]) ReadValue[V]
 golem.Via func[M any, R any, V any](ToOneRelation[M, R], RelationDimensionPath[R, V]) RelationDimensionPath[M, V]
 golem.Virtual const GeneratedStorage = "virtual"
 golem.Where func[M any](Predicate[M]) ReadOption[M]
+golem.Within func[M any, R any](*Rules[M], R) *OperationRules[M]
 golem.anyNullSentinel comparable
 golem.anyNullSentinel type uint8
 golem.dbNullSentinel comparable
@@ -3618,6 +3638,7 @@ observe.OperationHookUpdateMany const Operation = "hook.update_many"
 observe.OperationMigrationInspect const Operation = "migration.inspect"
 observe.OperationMutationConnect const Operation = "mutation.connect"
 observe.OperationMutationCreate const Operation = "mutation.create"
+observe.OperationMutationCustom const Operation = "mutation.custom"
 observe.OperationMutationDelete const Operation = "mutation.delete"
 observe.OperationMutationDeleteMany const Operation = "mutation.delete_many"
 observe.OperationMutationDisconnect const Operation = "mutation.disconnect"
@@ -4265,6 +4286,7 @@ runtime.Config.ResolvePrincipal field func(context.Context, P) (A, error)
 runtime.Config.SnapshotActor field func(A) (A, error)
 runtime.Config.SnapshotPrincipal field func(P) (P, error)
 runtime.Config[P any, A any] type struct
+runtime.DispatchCallerOperation func[P any, A any](context.Context, *Caller[P, A], any, func(context.Context, *Caller[P, A]) (any, error)) (any, error)
 runtime.EventFactory type interface {Build, EventSchemaDigest, ModelID}
 runtime.EventFactory.Build func(internal/event/typedvalue.ValidatedEvent) (any, error)
 runtime.EventFactory.EventSchemaDigest func() golem.EventSchemaDigest
@@ -4309,6 +4331,7 @@ runtime.ReadLimits.MaxStatementAliases field int
 runtime.ReadLimits.MaxStatementBytes field int
 runtime.ReadLimits.MaxStatementParameters field int
 runtime.ReadLimits.MaxTake field int
+runtime.RunCallerOperation func[P any, A any, C any, Args any, R any](context.Context, *Caller[P, A], func(context.Context, C, Args) (R, error), func(*Caller[P, A]) C, Args) (R, error)
 runtime.RuntimeBuildValidatedEvent func(EventFactoryRegistry, internal/event/typedvalue.ValidatedEvent) (any, error)
 runtime.System comparable
 runtime.SystemAggregate func[P any, A any, M any](context.Context, System[P, A], golem.ModelDescriptor[M], golem.AggregateRequest[M]) (golem.AggregateResult[M], error)

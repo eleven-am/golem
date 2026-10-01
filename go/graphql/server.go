@@ -274,8 +274,10 @@ func (server *Server[P]) serveHTTP(writer http.ResponseWriter, request *http.Req
 // Execute applies the same parse, validation, coercion, limit, isolation, and
 // panic boundary used by Handler without re-resolving an already trusted
 // principal. It is the direct-execution surface used by tests and embedding.
+// Response data holds decoded Go values, so object key order is not retained;
+// Handler writes the same data in selection order.
 func (server *Server[P]) Execute(ctx context.Context, principal P, request Request) (response Response) {
-	return server.execute(ctx, principal, request, false)
+	return decodedResponse(server.execute(ctx, principal, request, false))
 }
 
 // execute receives byteLimitsChecked=true only from serveHTTP, after the raw
@@ -321,7 +323,7 @@ func (server *Server[P]) execute(ctx context.Context, principal P, request Reque
 	}
 	prepared := server.executor.Execute(ctx, principal, preparedOperation.Operation)
 	if server.executable == nil || prepared.Data == nil {
-		return prepared
+		return server.selectionOrdered(prepared, preparedOperation.Operation)
 	}
 	return server.executePrepared(ctx, request, preparedOperation.Operation.Document, preparedOperation.Operation.Definition, preparedOperation.Operation.Variables, prepared)
 }
@@ -466,10 +468,12 @@ func (server *Server[P]) executePrepared(ctx context.Context, request Request, d
 		}
 	}
 	if len(result.Data) != 0 {
-		decoder := json.NewDecoder(bytes.NewReader(result.Data))
-		decoder.UseNumber()
-		if err := decoder.Decode(&response.Data); err != nil {
+		data, err := canonicalExecutableData(result.Data)
+		if err != nil {
 			return Response{Errors: []Error{PresentError(ctx, fmt.Errorf("decode gqlgen executable response: %w", err), nil, server.config.ReportInternalError)}}
+		}
+		if string(data) != "null" {
+			response.Data = data
 		}
 	}
 	for _, executableError := range result.Errors {
@@ -514,7 +518,20 @@ func PresentError(ctx context.Context, err error, path []any, report func(contex
 	result.Path = append([]any(nil), path...)
 	return result
 }
-func writeResponse(writer io.Writer, response Response) { _ = json.NewEncoder(writer).Encode(response) }
+func writeResponse(writer io.Writer, response Response) {
+	buffer := responseBuffers.Get().(*bytes.Buffer)
+	defer func() {
+		if buffer.Cap() <= maxPooledResponseBuffer {
+			buffer.Reset()
+			responseBuffers.Put(buffer)
+		}
+	}()
+	if err := encodeResponseInto(buffer, response); err != nil {
+		return
+	}
+	buffer.WriteByte('\n')
+	_, _ = writer.Write(buffer.Bytes())
+}
 func exceedsLexicalTokenLimit(query string, limit int) bool {
 	scanner := lexer.New(&ast.Source{Name: "request.graphql", Input: query})
 	count := 0

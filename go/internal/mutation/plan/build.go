@@ -219,6 +219,7 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 		if err != nil {
 			return mutationir.NodeInput{}, fail(CodePolicy, request, policyir.FieldID{}, "row constraint could not be resolved", err)
 		}
+		RecordGrant(request.Policies, request.Model, action, nil)
 		if operation != mutationir.Create {
 			selection, node.InfluencingFields, err = selectExisting(request, policy, action)
 			if err != nil {
@@ -237,6 +238,7 @@ func writeNode(request RootRequest, policy policyir.Policy, operation mutationir
 			if err != nil {
 				return mutationir.NodeInput{}, fail(CodePolicy, request, field, "field condition could not be resolved", err)
 			}
+			RecordGrant(request.Policies, request.Model, action, &field)
 			if operation == mutationir.Create && request.Operation == mutationir.Create {
 				allowed, gateErr := resolve.ActionAllowed(condition)
 				if gateErr != nil || !allowed {
@@ -350,6 +352,7 @@ func selectExisting(request RootRequest, policy policyir.Policy, action policyir
 	if err != nil {
 		return nil, nil, fail(CodePolicy, request, policyir.FieldID{}, "selecting constraint could not be resolved", err)
 	}
+	RecordGrant(request.Policies, request.Model, action, nil)
 	conditions := []policyir.Condition{row}
 	var position policyir.Condition
 	use := classify.UseSelector

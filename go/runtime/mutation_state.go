@@ -53,26 +53,75 @@ type mutationState struct {
 	markIndex  map[semanticMarkIdentity]struct{}
 	after      []mutationAfterCommit
 	invalidate func()
+
+	binding    *executionBinding
+	registry   *schema.Registry
+	open       map[*heldWrite][]*mutationScope
+	factOwners []*mutationScope
+	touches    []mutationTouch
+	markOwners map[semanticMarkIdentity][]*mutationScope
+	failures   []mutationFailure
+}
+
+type mutationTouch struct {
+	owner *mutationScope
+	rows  int
+}
+
+type mutationFailure struct {
+	owner *mutationScope
+	cause error
 }
 
 type mutationAfterCommit struct {
 	operation golem.HookOperation
 	model     golem.ModelID
 	invoke    func(context.Context) error
+	owner     *mutationScope
 }
 
 type mutationScope struct {
 	state      *mutationState
-	ordinal    uint32
-	touched    int
-	bytes      int
+	owner      *heldWrite
+	parent     *mutationScope
 	dirty      bool
-	facts      int
-	marks      int
-	after      int
-	failure    error
 	rolledBack bool
 	closed     bool
+}
+
+func (scope *mutationScope) contains(owner *mutationScope) bool {
+	for current := owner; current != nil; current = current.parent {
+		if current == scope {
+			return true
+		}
+	}
+	return false
+}
+
+func (state *mutationState) currentScope(ctx context.Context) *mutationScope {
+	for node := heldWriteFor(ctx, state.binding); node != nil; node = node.owner {
+		if stack := state.open[node]; len(stack) != 0 {
+			return stack[len(stack)-1]
+		}
+	}
+	if stack := state.open[nil]; len(stack) != 0 {
+		return stack[len(stack)-1]
+	}
+	return nil
+}
+
+func (state *mutationState) closeScope(scope *mutationScope) error {
+	stack := state.open[scope.owner]
+	if len(stack) == 0 || stack[len(stack)-1] != scope {
+		return fmt.Errorf("P4_MUTATION_STATE: mutation scope closed out of order")
+	}
+	if len(stack) == 1 {
+		delete(state.open, scope.owner)
+	} else {
+		state.open[scope.owner] = stack[:len(stack)-1]
+	}
+	scope.closed = true
+	return nil
 }
 
 func newMutationState(limits normalizedMutationLimits, causation mutationfact.CausationID) (*mutationState, error) {
@@ -86,7 +135,7 @@ func newMutationState(limits normalizedMutationLimits, causation mutationfact.Ca
 	return &mutationState{limits: limits, causation: causation}, nil
 }
 
-func (state *mutationState) beginScope() (*mutationScope, error) {
+func (state *mutationState) beginScope(ctx context.Context) (*mutationScope, error) {
 	if state == nil {
 		return nil, fmt.Errorf("P4_MUTATION_STATE: transaction state is unavailable")
 	}
@@ -95,15 +144,21 @@ func (state *mutationState) beginScope() (*mutationScope, error) {
 	if state.flushed || state.finished {
 		return nil, fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
-	return &mutationScope{state: state, ordinal: state.ordinal, touched: state.touched, bytes: state.bytes, dirty: state.dirty, facts: len(state.facts), marks: len(state.marks), after: len(state.after), failure: state.failure}, nil
+	scope := &mutationScope{state: state, owner: heldWriteFor(ctx, state.binding), parent: state.currentScope(ctx), dirty: state.dirty}
+	if state.open == nil {
+		state.open = make(map[*heldWrite][]*mutationScope)
+	}
+	state.open[scope.owner] = append(state.open[scope.owner], scope)
+	return scope, nil
 }
 
 func (scope *mutationScope) release() error {
 	if scope == nil || scope.state == nil || scope.closed {
 		return fmt.Errorf("P4_MUTATION_STATE: mutation scope is unavailable")
 	}
-	scope.closed = true
-	return nil
+	scope.state.mu.Lock()
+	defer scope.state.mu.Unlock()
+	return scope.state.closeScope(scope)
 }
 
 func (scope *mutationScope) rollback() error {
@@ -116,24 +171,103 @@ func (scope *mutationScope) rollback() error {
 	if state.flushed || state.finished {
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
-	state.ordinal = scope.ordinal
-	state.touched = scope.touched
-	state.bytes = scope.bytes
-	state.dirty = scope.dirty
-	state.facts = state.facts[:scope.facts]
-	state.rewindMarks(scope.marks)
-	state.after = state.after[:scope.after]
-	state.failure = scope.failure
+	if err := state.closeScope(scope); err != nil {
+		return err
+	}
 	scope.rolledBack = true
-	scope.closed = true
+	dirty := scope.dirty
+	touches := state.touches[:0]
+	state.touched = 0
+	for _, touch := range state.touches {
+		if scope.contains(touch.owner) {
+			continue
+		}
+		touches = append(touches, touch)
+		state.touched += touch.rows
+		dirty = dirty || touch.rows != 0
+	}
+	state.touches = touches
+	if err := state.removeFacts(scope); err != nil {
+		state.failures = append(state.failures, mutationFailure{cause: err})
+	}
+	dirty = dirty || len(state.facts) != 0
+	state.removeMarks(scope)
+	after := state.after[:0]
+	for _, work := range state.after {
+		if !scope.contains(work.owner) {
+			after = append(after, work)
+		}
+	}
+	state.after = after
+	failures := state.failures[:0]
+	for _, failure := range state.failures {
+		if !scope.contains(failure.owner) {
+			failures = append(failures, failure)
+		}
+	}
+	state.failures = failures
+	state.failure = nil
+	if len(failures) != 0 {
+		state.failure = failures[0].cause
+	}
+	state.dirty = dirty
 	return nil
+}
+
+func (state *mutationState) removeFacts(scope *mutationScope) error {
+	facts := make([]mutationfact.OutboxRow, 0, len(state.facts))
+	owners := make([]*mutationScope, 0, len(state.factOwners))
+	var gap error
+	for index, row := range state.facts {
+		if scope.contains(state.factOwners[index]) {
+			continue
+		}
+		if row.TransactionOrdinal != int64(len(facts))+1 && gap == nil {
+			renumbered, err := state.renumberFact(row, uint32(len(facts))+1)
+			if err != nil {
+				gap = err
+			} else {
+				row = renumbered
+			}
+		}
+		facts = append(facts, row)
+		owners = append(owners, state.factOwners[index])
+	}
+	state.facts, state.factOwners = facts, owners
+	state.ordinal = uint32(len(facts))
+	state.bytes = 0
+	for _, row := range facts {
+		state.bytes += row.EncodedBytes()
+	}
+	return gap
+}
+
+func (state *mutationState) renumberFact(row mutationfact.OutboxRow, ordinal uint32) (mutationfact.OutboxRow, error) {
+	if state.registry == nil {
+		return row, fmt.Errorf("P4_MUTATION_STATE: a rolled-back scope left a fact ordinal gap")
+	}
+	envelope, err := decodeRuntimeMutationFact(state.registry, row)
+	if err != nil {
+		return row, err
+	}
+	envelope, err = envelope.WithTransactionOrdinal(ordinal)
+	if err != nil {
+		return row, err
+	}
+	metadata, err := mutationfact.Encode(envelope)
+	if err != nil {
+		return row, err
+	}
+	row.TransactionOrdinal = int64(ordinal)
+	row.Metadata = metadata
+	return row, nil
 }
 
 // markSemantic records that one semantic-indexed record was written inside this
 // transaction. Marks are deduplicated per transaction, so a row rewritten many
 // times still costs one shadow-state row and the buffer never emits more than
 // one drain job per index.
-func (state *mutationState) markSemantic(model golem.ModelID, key string, identity []any) error {
+func (state *mutationState) markSemantic(ctx context.Context, model golem.ModelID, key string, identity []any) error {
 	if state == nil || model == (golem.ModelID{}) || key == "" || len(identity) == 0 {
 		return fmt.Errorf("P9_SEMANTIC_MARK: semantic mark is incomplete")
 	}
@@ -143,24 +277,42 @@ func (state *mutationState) markSemantic(model golem.ModelID, key string, identi
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
 	identifier := semanticMarkIdentity{model: model, key: key}
+	owner := state.currentScope(ctx)
+	if state.markOwners == nil {
+		state.markOwners = make(map[semanticMarkIdentity][]*mutationScope)
+	}
 	if _, duplicate := state.markIndex[identifier]; duplicate {
+		state.markOwners[identifier] = append(state.markOwners[identifier], owner)
 		return nil
 	}
 	if state.markIndex == nil {
 		state.markIndex = make(map[semanticMarkIdentity]struct{})
 	}
 	state.markIndex[identifier] = struct{}{}
+	state.markOwners[identifier] = []*mutationScope{owner}
 	state.marks = append(state.marks, semanticMark{model: model, key: key, identity: identity})
 	return nil
 }
 
-// rewindMarks drops the marks a rolled-back scope contributed. The caller holds
-// the state lock.
-func (state *mutationState) rewindMarks(count int) {
-	for _, mark := range state.marks[count:] {
-		delete(state.markIndex, semanticMarkIdentity{model: mark.model, key: mark.key})
+func (state *mutationState) removeMarks(scope *mutationScope) {
+	marks := state.marks[:0]
+	for _, mark := range state.marks {
+		identifier := semanticMarkIdentity{model: mark.model, key: mark.key}
+		owners := state.markOwners[identifier][:0]
+		for _, owner := range state.markOwners[identifier] {
+			if !scope.contains(owner) {
+				owners = append(owners, owner)
+			}
+		}
+		if len(owners) == 0 {
+			delete(state.markOwners, identifier)
+			delete(state.markIndex, identifier)
+			continue
+		}
+		state.markOwners[identifier] = owners
+		marks = append(marks, mark)
 	}
-	state.marks = state.marks[:count]
+	state.marks = marks
 }
 
 func (state *mutationState) semanticMarks() []semanticMark {
@@ -172,7 +324,7 @@ func (state *mutationState) semanticMarks() []semanticMark {
 	return append([]semanticMark(nil), state.marks...)
 }
 
-func (state *mutationState) touch(rows int) error {
+func (state *mutationState) touch(ctx context.Context, rows int) error {
 	if state == nil || rows < 0 {
 		return fmt.Errorf("P4_MUTATION_STATE: touched row count is invalid")
 	}
@@ -185,6 +337,7 @@ func (state *mutationState) touch(rows int) error {
 		return mutationbatch.LimitError(policyir.ModelID{}, fmt.Sprintf("touched rows exceed %d", state.limits.touchedRows))
 	}
 	state.touched += rows
+	state.touches = append(state.touches, mutationTouch{owner: state.currentScope(ctx), rows: rows})
 	state.dirty = state.dirty || rows != 0
 	return nil
 }
@@ -203,7 +356,7 @@ func (state *mutationState) remainingTouched() (int, error) {
 
 // buildFact allocates the next transaction ordinal only after the exact fact
 // bytes fit all execution-wide limits. Failed construction cannot leave a gap.
-func (state *mutationState) buildFact(registry *schema.Registry, requirement mutationir.FactRequirement, before, after *mutationdecode.Row, recordedAt time.Time) (mutationfact.OutboxRow, error) {
+func (state *mutationState) buildFact(ctx context.Context, registry *schema.Registry, requirement mutationir.FactRequirement, before, after *mutationdecode.Row, recordedAt time.Time) (mutationfact.OutboxRow, error) {
 	if state == nil {
 		return mutationfact.OutboxRow{}, fmt.Errorf("P4_MUTATION_STATE: transaction state is unavailable")
 	}
@@ -242,6 +395,8 @@ func (state *mutationState) buildFact(registry *schema.Registry, requirement mut
 	state.ordinal = ordinal
 	state.bytes += row.EncodedBytes()
 	state.facts = append(state.facts, cloneOutboxRow(row))
+	state.factOwners = append(state.factOwners, state.currentScope(ctx))
+	state.registry = registry
 	state.dirty = true
 	return cloneOutboxRow(row), nil
 }
@@ -249,7 +404,7 @@ func (state *mutationState) buildFact(registry *schema.Registry, requirement mut
 // appendOutboxRow is the runtime integration seam for already encoded facts.
 // It enforces the same causation, ordinal, count, and exact-byte invariants as
 // buildFact and is intentionally private to the runtime package.
-func (state *mutationState) appendOutboxRow(row mutationfact.OutboxRow) error {
+func (state *mutationState) appendOutboxRow(ctx context.Context, row mutationfact.OutboxRow) error {
 	if state == nil {
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is unavailable")
 	}
@@ -268,6 +423,7 @@ func (state *mutationState) appendOutboxRow(row mutationfact.OutboxRow) error {
 	state.ordinal = wantOrdinal
 	state.bytes += row.EncodedBytes()
 	state.facts = append(state.facts, cloneOutboxRow(row))
+	state.factOwners = append(state.factOwners, state.currentScope(ctx))
 	state.dirty = true
 	return nil
 }
@@ -297,11 +453,13 @@ func (state *mutationState) completeBeforeParentFacts(start int, ordinal uint32,
 		return fmt.Errorf("P4_MUTATION_STATE: dependency fact checkpoint is stale")
 	}
 	segment := append([]mutationfact.OutboxRow(nil), state.facts[start:]...)
+	owners := append([]*mutationScope(nil), state.factOwners[start:]...)
 	if parentFact {
 		if len(segment) == 0 {
 			return fmt.Errorf("P4_MUTATION_STATE: dependency parent fact is absent")
 		}
 		segment = append([]mutationfact.OutboxRow{segment[len(segment)-1]}, segment[:len(segment)-1]...)
+		owners = append([]*mutationScope{owners[len(owners)-1]}, owners[:len(owners)-1]...)
 	}
 	for index := range segment {
 		envelope, err := decodeRuntimeMutationFact(registry, segment[index])
@@ -320,11 +478,13 @@ func (state *mutationState) completeBeforeParentFacts(start int, ordinal uint32,
 		segment[index].Metadata = metadata
 	}
 	copy(state.facts[start:], segment)
+	copy(state.factOwners[start:], owners)
+	state.registry = registry
 	state.ordinal = ordinal + uint32(len(segment))
 	return nil
 }
 
-func (state *mutationState) addAfterCommit(operation golem.HookOperation, model golem.ModelID, invoke func(context.Context) error) error {
+func (state *mutationState) addAfterCommit(ctx context.Context, operation golem.HookOperation, model golem.ModelID, invoke func(context.Context) error) error {
 	if state == nil || operation == "" || model == (golem.ModelID{}) || invoke == nil {
 		return fmt.Errorf("P4_MUTATION_STATE: after-commit work is incomplete")
 	}
@@ -333,7 +493,7 @@ func (state *mutationState) addAfterCommit(operation golem.HookOperation, model 
 	if state.flushed || state.finished {
 		return fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
-	state.after = append(state.after, mutationAfterCommit{operation: operation, model: model, invoke: invoke})
+	state.after = append(state.after, mutationAfterCommit{operation: operation, model: model, invoke: invoke, owner: state.currentScope(ctx)})
 	return nil
 }
 
@@ -350,13 +510,17 @@ func (state *mutationState) setInvalidation(invalidate func()) error {
 	return nil
 }
 
-func (state *mutationState) poison(cause error) {
+func (state *mutationState) poison(ctx context.Context, cause error) {
 	if state == nil || cause == nil {
 		return
 	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
-	if state.failure == nil && !state.finished {
+	if state.finished {
+		return
+	}
+	state.failures = append(state.failures, mutationFailure{owner: state.currentScope(ctx), cause: cause})
+	if state.failure == nil {
 		state.failure = cause
 	}
 }

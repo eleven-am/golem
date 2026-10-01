@@ -24,20 +24,20 @@ func TestMutationStateScopeRollbackRewindsAccountingAndOrdinals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.touch(1); err != nil {
+	if err := state.touch(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.appendOutboxRow(runtimeStateRow(state, 1, []byte{1, 2})); err != nil {
+	if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 1, []byte{1, 2})); err != nil {
 		t.Fatal(err)
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := state.touch(2); err != nil {
+	if err := state.touch(context.Background(), 2); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.appendOutboxRow(runtimeStateRow(state, 2, []byte{3, 4})); err != nil {
+	if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 2, []byte{3, 4})); err != nil {
 		t.Fatal(err)
 	}
 	if err := scope.rollback(); err != nil {
@@ -45,7 +45,7 @@ func TestMutationStateScopeRollbackRewindsAccountingAndOrdinals(t *testing.T) {
 	}
 	// The rolled-back ordinal is reusable and its row/byte/touched accounting no
 	// longer contributes to the outer transaction.
-	if err := state.appendOutboxRow(runtimeStateRow(state, 2, []byte{5, 6})); err != nil {
+	if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 2, []byte{5, 6})); err != nil {
 		t.Fatalf("reused ordinal: %v", err)
 	}
 	state.mu.Lock()
@@ -63,16 +63,16 @@ func TestMutationStateFactAndByteLimitsAcceptBoundaryRejectBoundaryPlusOne(t *te
 	}
 	// Three metadata bytes plus one identity byte is the exact binary-column
 	// contribution defined by OutboxRow.EncodedBytes.
-	if err := state.appendOutboxRow(runtimeStateRow(state, 1, []byte{1, 2, 3})); err != nil {
+	if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 1, []byte{1, 2, 3})); err != nil {
 		t.Fatalf("exact boundary rejected: %v", err)
 	}
-	if err := state.appendOutboxRow(runtimeStateRow(state, 2, nil)); err == nil {
+	if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 2, nil)); err == nil {
 		t.Fatal("fact boundary+1 was accepted")
 	}
 
 	state, _ = newMutationState(limits, mutationfact.CausationID{3})
 	over := runtimeStateRow(state, 1, []byte{1, 2, 3, 4})
-	if err := state.appendOutboxRow(over); err == nil {
+	if err := state.appendOutboxRow(context.Background(), over); err == nil {
 		t.Fatal("byte boundary+1 was accepted")
 	}
 }
@@ -101,10 +101,10 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 		if err != nil {
 			return err
 		}
-		if err := state.touch(1); err != nil {
+		if err := state.touch(context.Background(), 1); err != nil {
 			return err
 		}
-		return state.appendOutboxRow(runtimeStateRow(state, 1, payload))
+		return state.appendOutboxRow(context.Background(), runtimeStateRow(state, 1, payload))
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -138,10 +138,10 @@ func assertMutationDataAndFactAtomic(t testing.TB, fixture mutationResultFixture
 		if err != nil {
 			return err
 		}
-		if err := state.touch(1); err != nil {
+		if err := state.touch(context.Background(), 1); err != nil {
 			return err
 		}
-		if err := state.appendOutboxRow(runtimeStateRow(state, 1, []byte{9, 9})); err != nil {
+		if err := state.appendOutboxRow(context.Background(), runtimeStateRow(state, 1, []byte{9, 9})); err != nil {
 			return err
 		}
 		return sentinel
@@ -225,7 +225,7 @@ func assertFactLimitRollback(t testing.TB, fixture mutationResultFixture) {
 		if err != nil {
 			return err
 		}
-		return state.appendOutboxRow(runtimeStateRow(state, 1, []byte{1, 2, 3, 4}))
+		return state.appendOutboxRow(context.Background(), runtimeStateRow(state, 1, []byte{1, 2, 3, 4}))
 	})
 	if err == nil {
 		t.Fatal("outbox byte overflow committed")
@@ -266,10 +266,10 @@ func TestAfterCommitInvalidationAndFailureReportingRunOnlyAfterCommit(t *testing
 		if err != nil {
 			return err
 		}
-		if err := state.touch(1); err != nil {
+		if err := state.touch(context.Background(), 1); err != nil {
 			return err
 		}
-		if err := state.addAfterCommit(golem.HookCreate, fixture.userDescriptor.Metadata().ModelID(), func(ctx context.Context) error {
+		if err := state.addAfterCommit(context.Background(), golem.HookCreate, fixture.userDescriptor.Metadata().ModelID(), func(ctx context.Context) error {
 			callbacks.Add(1)
 			var count int
 			if err := fixture.database.GetContext(ctx, &count, `SELECT COUNT(*) FROM "users" WHERE "id"=?`, "00000000-0000-0000-0000-000000000073"); err != nil {
@@ -299,7 +299,7 @@ func TestAfterCommitInvalidationAndFailureReportingRunOnlyAfterCommit(t *testing
 		if err != nil {
 			return err
 		}
-		if err := state.addAfterCommit(golem.HookCreate, fixture.userDescriptor.Metadata().ModelID(), func(context.Context) error { callbacks.Add(1); return nil }); err != nil {
+		if err := state.addAfterCommit(context.Background(), golem.HookCreate, fixture.userDescriptor.Metadata().ModelID(), func(context.Context) error { callbacks.Add(1); return nil }); err != nil {
 			return err
 		}
 		return errors.New("rollback")
@@ -336,10 +336,10 @@ func TestAfterCommitHookAndReporterPanicsAreContained(t *testing.T) {
 	}
 	model := golem.ModelID{1}
 	var second atomic.Int64
-	if err := state.addAfterCommit(golem.HookCreate, model, func(context.Context) error { panic("hook panic") }); err != nil {
+	if err := state.addAfterCommit(context.Background(), golem.HookCreate, model, func(context.Context) error { panic("hook panic") }); err != nil {
 		t.Fatal(err)
 	}
-	if err := state.addAfterCommit(golem.HookCreate, model, func(context.Context) error { second.Add(1); return nil }); err != nil {
+	if err := state.addAfterCommit(context.Background(), golem.HookCreate, model, func(context.Context) error { second.Add(1); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	state.committed(context.Background(), func(context.Context, golem.AfterCommitFailure) { panic("reporter panic") })
@@ -357,7 +357,7 @@ func TestSystemTransactionInvalidationEpochAdvancesOnlyOnDirtyCommit(t *testing.
 		if err != nil {
 			return err
 		}
-		return state.touch(1)
+		return state.touch(context.Background(), 1)
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -370,7 +370,7 @@ func TestSystemTransactionInvalidationEpochAdvancesOnlyOnDirtyCommit(t *testing.
 		if err != nil {
 			return err
 		}
-		if err := state.touch(1); err != nil {
+		if err := state.touch(context.Background(), 1); err != nil {
 			return err
 		}
 		return sentinel

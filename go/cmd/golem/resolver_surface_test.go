@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -295,10 +294,19 @@ func writeResolverSurfaceModule(t *testing.T, resolvers string) string {
 	return application
 }
 
+func copyResolverSurfaceModule(t *testing.T, application string) string {
+	t.Helper()
+	copied := t.TempDir()
+	if err := os.CopyFS(copied, os.DirFS(application)); err != nil {
+		t.Fatal(err)
+	}
+	return copied
+}
+
 func runResolverSurfaceCommand(t *testing.T, application string, arguments ...string) {
 	t.Helper()
 	var stdout, stderr bytes.Buffer
-	if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+	if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 		t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
 	}
 }
@@ -460,6 +468,7 @@ func combinedResolverSurfaceFamilies(families []string) string {
 }
 
 func TestGenerateTypechecksSchemaPackageResolversAgainstTheGeneratedSurface(t *testing.T) {
+	t.Parallel()
 	baseline := strings.Replace(strings.Replace(resolverSurfaceSchema,
 		"\t\tgolem.SemanticIndex(\"related\", \"content\", Notes.Title, Notes.Body),\n", "", 1),
 		"\t\tgolem.FullTextIndex(\"content\",\n\t\t\tgolem.FullTextField(Notes.Title, 3),\n\t\t\tgolem.FullTextField(Notes.Body, 1),\n\t\t),\n", "", 1)
@@ -495,14 +504,18 @@ func TestGenerateTypechecksSchemaPackageResolversAgainstTheGeneratedSurface(t *t
 	families := []string{"selectors", "accessors", "semantic", "fulltext", "events", "system"}
 	for _, family := range families {
 		t.Run(family, func(t *testing.T) {
-			if err := os.WriteFile(resolvers, []byte(resolverSurfaceFamilies[family]), 0o644); err != nil {
+			t.Parallel()
+			application := copyResolverSurfaceModule(t, application)
+			if err := os.WriteFile(filepath.Join(application, "notes", "resolvers.go"), []byte(resolverSurfaceFamilies[family]), 0o644); err != nil {
 				t.Fatal(err)
 			}
 			runResolverSurfaceCommand(t, application, "generate", "--schema", "./notes", "--app-out", "./notes")
 		})
 	}
 	t.Run("every family together checks, builds, and runs", func(t *testing.T) {
-		if err := os.WriteFile(resolvers, []byte(combinedResolverSurfaceFamilies(families)), 0o644); err != nil {
+		t.Parallel()
+		application := copyResolverSurfaceModule(t, application)
+		if err := os.WriteFile(filepath.Join(application, "notes", "resolvers.go"), []byte(combinedResolverSurfaceFamilies(families)), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		mainSource := strings.Replace(resolverSurfaceMain, "DSN", `"file:`+filepath.ToSlash(filepath.Join(application, "notes.db"))+`"`, 1)
@@ -525,6 +538,7 @@ func TestGenerateTypechecksSchemaPackageResolversAgainstTheGeneratedSurface(t *t
 }
 
 func TestGenerateReportsOnlyTheSymbolTheCompleteSurfaceLacks(t *testing.T) {
+	t.Parallel()
 	resolvers := strings.Replace(resolverSurfaceFamilies["selectors"], "\tviews, _ := golem.Value(row, Notes.Views).Get()\n", "\tif _, err := caller.Notes.SearchUnrelated(ctx, \"term\", 1); err != nil {\n\t\treturn 0, err\n\t}\n\tviews, _ := golem.Value(row, Notes.Views).Get()\n", 1)
 	if resolvers == resolverSurfaceFamilies["selectors"] {
 		t.Fatal("the resolver does not reference the missing method")
@@ -532,7 +546,7 @@ func TestGenerateReportsOnlyTheSymbolTheCompleteSurfaceLacks(t *testing.T) {
 	application := writeResolverSurfaceModule(t, resolvers)
 	before := treeSnapshot(t, application)
 	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), application, []string{"generate", "--schema", "./notes", "--app-out", "./notes"}, &stdout, &stderr)
+	code := runGolem(t, application, []string{"generate", "--schema", "./notes", "--app-out", "./notes"}, &stdout, &stderr)
 	if code != 1 || !bytes.Contains(stdout.Bytes(), []byte("P1_METHOD_TYPECHECK")) || !bytes.Contains(stdout.Bytes(), []byte("caller.Notes.SearchUnrelated undefined")) {
 		t.Fatalf("code=%d stdout=%s stderr=%s", code, stdout.String(), stderr.String())
 	}

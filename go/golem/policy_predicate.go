@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -1014,6 +1015,7 @@ type ruleBuilder struct {
 	effect    FrozenEffect
 	condition *predicateNode
 	fields    []FieldID
+	operation *operationReference
 }
 
 type rulesState struct {
@@ -1022,20 +1024,26 @@ type rulesState struct {
 }
 
 func (rules *Rules[M]) appendModelRule(action FrozenAction, effect FrozenEffect, condition Predicate[M]) {
-	rules.state.mu.Lock()
-	defer rules.state.mu.Unlock()
-	rules.state.rules = append(rules.state.rules, ruleBuilder{action: action, effect: effect, condition: condition.node})
+	rules.appendRule(ruleBuilder{action: action, effect: effect, condition: condition.node})
 }
 
 func (rules *Rules[M]) appendFieldRule(action FrozenAction, effect FrozenEffect, condition Predicate[M], first Field[M], rest []Field[M]) {
+	rules.appendRule(ruleBuilder{action: action, effect: effect, condition: condition.node, fields: ruleFieldIdentities(first, rest)})
+}
+
+func (rules *Rules[M]) appendRule(rule ruleBuilder) {
+	rules.state.mu.Lock()
+	defer rules.state.mu.Unlock()
+	rules.state.rules = append(rules.state.rules, rule)
+}
+
+func ruleFieldIdentities[M any](first Field[M], rest []Field[M]) []FieldID {
 	fields := make([]FieldID, 0, len(rest)+1)
 	fields = append(fields, fieldIdentity(first))
 	for _, field := range rest {
 		fields = append(fields, fieldIdentity(field))
 	}
-	rules.state.mu.Lock()
-	defer rules.state.mu.Unlock()
-	rules.state.rules = append(rules.state.rules, ruleBuilder{action: action, effect: effect, condition: condition.node, fields: fields})
+	return fields
 }
 
 func fieldIdentity[M any](field Field[M]) FieldID {
@@ -1056,9 +1064,10 @@ type frozenRule struct {
 }
 
 type FrozenPolicy struct {
-	model     ModelID
-	rules     []frozenRule
-	canonical []byte
+	model      ModelID
+	rules      []frozenRule
+	canonical  []byte
+	operations []frozenOperationRules
 }
 
 func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
@@ -1076,28 +1085,64 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 	}
 	rules.state.mu.RUnlock()
 
-	frozen := make([]frozenRule, len(snapshot))
-	for index, rule := range snapshot {
+	var base []ruleBuilder
+	var operations []frozenOperationRules
+	for _, rule := range snapshot {
+		if rule.operation == nil {
+			base = append(base, rule)
+			continue
+		}
+		index := slices.IndexFunc(operations, func(group frozenOperationRules) bool { return group.reference == *rule.operation })
+		if index < 0 {
+			operations = append(operations, frozenOperationRules{reference: *rule.operation})
+			index = len(operations) - 1
+		}
+		operations[index].builders = append(operations[index].builders, rule)
+	}
+	frozen, err := freezeRuleBuilders(model, base, 0)
+	if err != nil {
+		return FrozenPolicy{}, err
+	}
+	canonical, err := encodeFrozenPolicy(model, frozen)
+	if err != nil {
+		return FrozenPolicy{}, freezeFailure(FreezeInvalidRule, err.Error())
+	}
+	offset := uint32(len(base))
+	for index := range operations {
+		operations[index].rules, err = freezeRuleBuilders(model, operations[index].builders, offset)
+		if err != nil {
+			return FrozenPolicy{}, err
+		}
+		offset += uint32(len(operations[index].builders))
+		operations[index].builders = nil
+	}
+	return FrozenPolicy{model: model, rules: frozen, canonical: canonical, operations: operations}, nil
+}
+
+func freezeRuleBuilders(model ModelID, builders []ruleBuilder, reported uint32) ([]frozenRule, error) {
+	frozen := make([]frozenRule, len(builders))
+	for index, rule := range builders {
+		position := reported + uint32(index)
 		condition, err := freezePredicateNode(rule.condition, make(map[*predicateNode]bool), 0)
 		if err != nil {
 			var failure *FreezeError
 			if errors.As(err, &failure) {
 				copy := *failure
-				copy.RulePosition = uint32(index)
+				copy.RulePosition = position
 				copy.HasRule = true
-				return FrozenPolicy{}, &copy
+				return nil, &copy
 			}
-			return FrozenPolicy{}, err
+			return nil, err
 		}
 		fields, err := freezeRuleFields(rule.fields)
 		if err != nil {
 			failure := err.(*FreezeError)
-			failure.RulePosition = uint32(index)
+			failure.RulePosition = position
 			failure.HasRule = true
-			return FrozenPolicy{}, failure
+			return nil, failure
 		}
-		if !validAction(rule.action) || !validEffect(rule.effect) || (rule.action == FrozenActionDelete && fields != nil) {
-			return FrozenPolicy{}, &FreezeError{Code: FreezeInvalidRule, RulePosition: uint32(index), HasRule: true, Detail: "invalid action, effect, or delete field rule"}
+		if !validAction(rule.action) || !validEffect(rule.effect) || (rule.action == FrozenActionDelete && fields != nil) || (rule.operation != nil && (rule.effect != FrozenEffectGrant || rule.action == FrozenActionRead)) {
+			return nil, &FreezeError{Code: FreezeInvalidRule, RulePosition: position, HasRule: true, Detail: "invalid action, effect, or delete field rule"}
 		}
 		unconditional := condition.kind == FrozenConditionConstant && condition.truth
 		if unconditional {
@@ -1105,11 +1150,7 @@ func (rules *Rules[M]) Freeze(model ModelID) (FrozenPolicy, error) {
 		}
 		frozen[index] = frozenRule{action: rule.action, effect: rule.effect, model: model, condition: condition, fields: fields, position: uint32(index), unconditional: unconditional}
 	}
-	canonical, err := encodeFrozenPolicy(model, frozen)
-	if err != nil {
-		return FrozenPolicy{}, freezeFailure(FreezeInvalidRule, err.Error())
-	}
-	return FrozenPolicy{model: model, rules: frozen, canonical: canonical}, nil
+	return frozen, nil
 }
 
 func freezeRuleFields(fields []FieldID) ([]FieldID, error) {

@@ -5,12 +5,93 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.2
+go get github.com/eleven-am/golem/go@v0.6.3
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.3
+
+**A custom mutation can own a write that policy closes to everyone else.** The
+pattern "an operation validates, then writes; policy closes the generic path so
+callers cannot bypass it" was not expressible. `CannotCreate` also refused the
+operation's own `Create`, because a custom resolver runs as the caller and
+policy made no exception for it. The only escape, `SystemEscape`, hands out an
+unrestricted system client to any code holding the transaction.
+
+`golem.Within(rules, Resolver)` grants a write only while that custom mutation
+runs:
+
+```go
+func (Invite) DefinePolicy(rules *golem.Rules[Invite], actor Actor) {
+	owned := Invites.Owner.Eq(actor.ID)
+	rules.CanRead(owned)
+	rules.CanUpdate(owned)
+	rules.CannotUpdateFields(golem.All[Invite](), Invites.Status)
+	golem.Within(rules, InviteMember).CanCreate(owned)
+	golem.Within(rules, AcceptInvite).CanUpdateFields(owned, Invites.Status)
+}
+```
+
+Callers get no create and cannot change `Status`; the `InviteMember` and
+`AcceptInvite` custom mutations can. GUIDE.md, "Operations that own a write",
+has the full example.
+
+- `Within` offers grant verbs only: `CanCreate`, `CanUpdate`, `CanDelete`,
+  `CanCreateFields` and `CanUpdateFields`. A grant is still a predicate over the
+  actor, so the operation writes only the rows it allows.
+- Inside the operation a write is allowed when a `Within` grant covering it
+  allows it, or when the caller's own policy does. A `Cannot*` rule on anything
+  the grant does not name still refuses.
+- The grant exists only in the running operation. Generic GraphQL and Go
+  writes, calling the resolver function directly, a caller or goroutine that
+  outlives the operation, and another mutation in the same document are all
+  refused with the caller's usual error.
+- A `Within` naming something other than a generated custom mutation fails the
+  policy build with an error naming the function.
+- `Mutate(ctx, caller, Resolver, args)`, generated for applications with custom
+  mutations, runs one from Go through the same dispatch, hooks and observation
+  as GraphQL. Each run is observed as `mutation.custom`.
+
+The change is additive: existing policies, resolvers and generated code for
+schemas without custom mutations are unchanged. Regenerate to use `Within` and
+`Mutate`. `SystemEscape` remains available.
+
+**GraphQL responses list fields in selection order.** HTTP responses and
+subscription frames re-encoded their data through a Go map, so every object's
+keys came out in alphabetical order. They now follow the operation's selection,
+including aliases and fragments. Only key order changes on the wire;
+`Server.Execute` still returns maps.
+
+**A failed hook write leaves nothing behind.** A write made through a hook's
+`HookExecutor` now runs in its own savepoint. If it returns an error, including
+an error from its own after-hook, its rows, events and after-commit hooks are
+all discarded. Before, a failed nested create could still commit its rows when
+the calling hook handled the error, and a failed scalar, upsert or batch write
+failed the whole outer write even when the hook handled it. A hook can now
+handle a failed write and continue.
+
+**Transaction-bound handles stop at the end of their scope.** A hook's
+`HookExecutor` works only while that hook runs; a call after the hook returns,
+from any goroutine, is refused with `P4_RUNTIME_HOOK_EXECUTOR`. A write through
+a caller transaction after its callback has returned is refused with
+`P4_RUNTIME_TRANSACTION`; before, such a write could commit without its change
+event. Calls already in flight finish first. Concurrent writes through hook
+executors on one transaction now run one at a time instead of corrupting each
+other's savepoints.
+
+A transaction now runs every read and write one at a time, so using one
+transaction from several goroutines is safe but not parallel. Inside a hook,
+use the context the hook receives, or its `HookExecutor`; a transaction call
+made from a hook with an unrelated context waits for the write that ran the
+hook, and would never finish.
+
+**Tooling.** The CLI end-to-end tests run in parallel child processes, which
+cuts the package's run time roughly in half.
 
 ---
 

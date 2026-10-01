@@ -23,7 +23,13 @@ import (
 // CallerUpdateMany executes one bounded, exact-set authorized update. Planning,
 // policy classification, provider capability checks, and SQL rendering all
 // complete before transaction acquisition.
-func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
+func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "updateMany", "batch mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+		return callerUpdateMany(ctx, caller, descriptor, where, input)
+	})
+}
+
+func callerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -52,14 +58,20 @@ func CallerUpdateMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 }
 
-func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
+func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "deleteMany", "batch mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (int64, error) {
+		return callerDeleteMany(ctx, caller, descriptor, where)
+	})
+}
+
+func callerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	if caller == nil || caller.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeUnauthenticated, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller execution is unavailable", nil)
 	}
@@ -84,14 +96,20 @@ func CallerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executePublicBatch(ctx, caller.app, caller.executor, program, &hooks)
 }
 
 func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return 0, callErr
+	}
+	defer endCall()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -113,6 +131,12 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return 0, callErr
+	}
+	defer endCall()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -205,7 +229,7 @@ func prepareCallerFrozenBatchHooks[P, A any](ctx context.Context, caller *Caller
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookContext, hookObservation := observeexec.BeginChild(hookContext, model, observe.KindHook, hookObservationOperation(request.Operation()), observe.PhaseBefore)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, request, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, caller.app.bindings, request, validate)
 	finishObservation(hookObservation, err)
 	if err != nil {
 		return mutationbatch.Program{}, err
@@ -331,7 +355,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	if activeBinding == nil {
 		activeBinding = binding
 	}
-	state, stateScope, outerState, err := beginBatchMutationState(app, binding, activeBinding)
+	state, stateScope, outerState, err := beginBatchMutationState(ctx, app, binding, activeBinding)
 	if err != nil {
 		_ = scope.abort()
 		return 0, publicBatchExecutionError(program, err)
@@ -345,7 +369,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		abortErr := scope.abort()
 		rollbackErr := stateScope.rollback()
 		if abortErr != nil || rollbackErr != nil {
-			state.poison(errors.Join(cause, abortErr, rollbackErr))
+			state.poison(ctx, errors.Join(cause, abortErr, rollbackErr))
 		}
 	}
 	defer func() { abandon(err) }()
@@ -401,7 +425,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if program.SemanticIndexed() {
-		if markErr := markBatchSemanticRecords(state, program.ModelID(), program.PrimaryKey(), verification); markErr != nil {
+		if markErr := markBatchSemanticRecords(ctx, state, program.ModelID(), program.PrimaryKey(), verification); markErr != nil {
 			return 0, publicBatchExecutionError(program, markErr)
 		}
 	}
@@ -415,24 +439,19 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if operation == golem.HookUpdateMany {
 			result = golem.RuntimeUpdateManyMutationHookResult(model, verification.Count())
 		}
-		if hooks.executor != nil {
-			result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(activeBinding))
-		}
-		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfter) {
-			if err := invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, result, golem.HookAfter); err != nil {
-				return 0, publicBatchExecutionError(program, err)
-			}
+		if err := invokeBatchAfterHooks(ctx, hooks, activeBinding, model, operation, &result); err != nil {
+			return 0, publicBatchExecutionError(program, err)
 		}
 		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfterCommit) {
 			afterCommitResult := golem.RuntimeMutationHookResultWithoutExecutor(result)
-			if err := state.addAfterCommit(operation, model, func(commitContext context.Context) error {
+			if err := state.addAfterCommit(ctx, operation, model, func(commitContext context.Context) error {
 				return invokeMutationResultHooks(commitContext, hooks.bindings, hooks.actor, afterCommitResult, golem.HookAfterCommit)
 			}); err != nil {
 				return 0, publicBatchExecutionError(program, err)
 			}
 		}
 	}
-	if err := state.touch(int(verification.Count())); err != nil {
+	if err := state.touch(ctx, int(verification.Count())); err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
 	requirement := prepared.FactRequirement()
@@ -443,7 +462,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if value, present := fact.After(); present {
 			after = &value
 		}
-		if _, err := state.buildFact(app.registry, requirement, &before, after, recordedAt); err != nil {
+		if _, err := state.buildFact(ctx, app.registry, requirement, &before, after, recordedAt); err != nil {
 			return 0, publicBatchExecutionError(program, err)
 		}
 	}
@@ -459,7 +478,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if err := stateScope.release(); err != nil {
-		state.poison(err)
+		state.poison(ctx, err)
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if !outerState {
@@ -475,7 +494,7 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 // mutationState itself; enableMutation is the single owner every other mutation
 // family already uses, and its idempotency guard is what keeps one binding from
 // acquiring two states.
-func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executionBinding) (*mutationState, *mutationScope, bool, error) {
+func beginBatchMutationState[P, A any](ctx context.Context, app *App[P, A], binding, active *executionBinding) (*mutationState, *mutationScope, bool, error) {
 	if app == nil || binding == nil || active == nil {
 		return nil, nil, false, fmt.Errorf("batch mutation state is unavailable")
 	}
@@ -484,7 +503,7 @@ func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executio
 		if err != nil {
 			return nil, nil, true, err
 		}
-		scope, err := state.beginScope()
+		scope, err := state.beginScope(ctx)
 		return state, scope, true, err
 	}
 	if err := active.enableMutation(mutationConfig(app, binding)); err != nil {
@@ -494,7 +513,7 @@ func beginBatchMutationState[P, A any](app *App[P, A], binding, active *executio
 	if err != nil {
 		return nil, nil, false, err
 	}
-	scope, err := state.beginScope()
+	scope, err := state.beginScope(ctx)
 	return state, scope, false, err
 }
 
@@ -648,9 +667,9 @@ func beginBatchExecution(ctx context.Context, database *sqlx.DB, provider policy
 			_ = transaction.Rollback()
 			return batchExecutionScope{}, err
 		}
-		return batchExecutionScope{queryer: queryer, execer: transaction, binding: active, finish: func(context.Context) error {
+		return batchExecutionScope{queryer: queryer, execer: transaction, binding: active, finish: func(ctx context.Context) error {
 			defer active.close()
-			return transaction.Commit()
+			return commitWithinOperation(ctx, transaction.Commit)
 		}, abort: func() error {
 			defer active.close()
 			return ignoreTransactionDone(transaction.Rollback())
@@ -749,4 +768,18 @@ func batchOperationName(operation mutationir.Operation) string {
 
 func programModel(program mutationbatch.Program) golem.ModelID {
 	return golem.ModelID(program.ModelID())
+}
+
+func invokeBatchAfterHooks[A any](ctx context.Context, hooks *callerMutationHookExecution[A], binding *executionBinding, model golem.ModelID, operation golem.HookOperation, result *golem.RuntimeMutationHookResult) error {
+	ctx, closeScope := openHookScope(ctx)
+	defer closeScope()
+	if hooks.executor != nil {
+		gate := newHookExecutorGate(ctx, binding)
+		defer gate.usage.close()
+		*result = golem.RuntimeMutationHookResultWithExecutor(*result, hooks.executor(binding, gate))
+	}
+	if !hasMutationHook(hooks.bindings, model, operation, golem.HookAfter) {
+		return nil
+	}
+	return invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, *result, golem.HookAfter)
 }

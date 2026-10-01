@@ -93,6 +93,12 @@ func prepareSystemScalarProjection[P, A, M any](system System[P, A], descriptor 
 // scalar create. Hooks, facts, and nested operations are later P4 layers and
 // cannot enter this scalar path; root upsert has its own guarded kernel.
 func CallerCreate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], input golem.CreateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "create", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerCreate(ctx, caller, descriptor, input, projections...)
+	})
+}
+
+func callerCreate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], input golem.CreateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	projection, err := prepareCallerScalarProjection(caller, descriptor, projections)
 	if err != nil {
 		return golem.Row[M]{}, err
@@ -105,6 +111,12 @@ func CallerCreate[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 }
 
 func CallerUpdate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "update", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerUpdate(ctx, caller, descriptor, target, input, projections...)
+	})
+}
+
+func callerUpdate[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller != nil && caller.app != nil {
 		if err := refuseLegacyVersionedMutation(caller.app.registry, descriptor.Metadata().ModelID(), "update"); err != nil {
 			return golem.Row[M]{}, err
@@ -126,6 +138,12 @@ func CallerUpdate[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 }
 
 func CallerDelete[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "delete", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerDelete(ctx, caller, descriptor, target, projections...)
+	})
+}
+
+func callerDelete[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller != nil && caller.app != nil {
 		if err := refuseLegacyVersionedMutation(caller.app.registry, descriptor.Metadata().ModelID(), "delete"); err != nil {
 			return golem.Row[M]{}, err
@@ -145,6 +163,12 @@ func CallerDelete[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 // CallerUpsert executes exactly one truthful create or update branch. Public
 // values and authorization are frozen/planned before the first transaction.
 func CallerUpsert[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	return callerWrite(ctx, caller, operationConflict(descriptor.Metadata().ModelID(), "upsert", "mutation conflicted"), func(ctx context.Context, caller *Caller[P, A]) (golem.Row[M], error) {
+		return callerUpsert(ctx, caller, descriptor, target, create, update, projections...)
+	})
+}
+
+func callerUpsert[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	if caller != nil && caller.app != nil {
 		if err := refuseLegacyVersionedMutation(caller.app.registry, descriptor.Metadata().ModelID(), "upsert"); err != nil {
 			return golem.Row[M]{}, err
@@ -170,6 +194,12 @@ func CallerUpsert[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 }
 
 func SystemCreate[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], input golem.CreateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
+	}
+	defer endCall()
 	projection, err := prepareSystemScalarProjection(system, descriptor, projections)
 	if err != nil {
 		return golem.Row[M]{}, err
@@ -182,6 +212,12 @@ func SystemCreate[P, A, M any](ctx context.Context, system System[P, A], descrip
 }
 
 func SystemUpdate[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
+	}
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "update"); err != nil {
 			return golem.Row[M]{}, err
@@ -203,6 +239,12 @@ func SystemUpdate[P, A, M any](ctx context.Context, system System[P, A], descrip
 }
 
 func SystemDelete[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
+	}
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "delete"); err != nil {
 			return golem.Row[M]{}, err
@@ -220,6 +262,12 @@ func SystemDelete[P, A, M any](ctx context.Context, system System[P, A], descrip
 }
 
 func SystemUpsert[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
+	ctx = withoutOperationLease(ctx)
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
+	}
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "upsert"); err != nil {
 			return golem.Row[M]{}, err
@@ -313,8 +361,8 @@ func executeCallerRootUpsert[P, A, M any](ctx context.Context, caller *Caller[P,
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executePreparedRootUpsert(ctx, caller.app, caller.executor, descriptor, projection, prepared, caller.policies, &hooks)
@@ -392,7 +440,7 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
 	hookContext, hookObservation := observeexec.BeginChild(hookContext, golem.ModelID(model), observe.KindHook, hookObservationOperation(hookRequest.Operation()), observe.PhaseBefore)
-	transformed, err := golem.RuntimeInvokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
+	transformed, err := invokeMutationBeforeHooks(hookContext, caller.app.bindings, hookRequest, validate)
 	finishObservation(hookObservation, err)
 	if err != nil {
 		return golem.Row[M]{}, publicMutationPreparationError(operation, golem.ModelID(model), err)
@@ -410,8 +458,8 @@ func executeCallerRootScalar[P, A, M any](ctx context.Context, caller *Caller[P,
 	hooks := callerMutationHookExecution[A]{
 		bindings: caller.app.bindings,
 		actor:    caller.actor,
-		executor: func(binding *executionBinding) golem.HookExecutor {
-			return newCallerHookExecutor(caller, binding)
+		executor: func(binding *executionBinding, gate *hookExecutorGate) golem.HookExecutor {
+			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
 	return executeRootScalarProjection(ctx, caller.app, caller.executor, descriptor, projection, program, &hooks)

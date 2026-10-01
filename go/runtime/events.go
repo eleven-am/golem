@@ -570,7 +570,7 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionSourceClosed)
 	}
 	hookContext := golem.RuntimeContextWithActor(ctx, caller.actor)
-	transformed, err := golem.RuntimeInvokeReadBeforeHooks(hookContext, app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
+	transformed, err := invokeReadBeforeHooks(hookContext, app.bindings, envelope, func(value golem.RuntimeReadHookRequest) error {
 		if value.Request().ModelID() != state.model || value.Request().Operation() != golem.ReadFindMany {
 			return fmt.Errorf("event read hook changed operation identity")
 		}
@@ -615,7 +615,7 @@ func (app *App[P, A]) readEventEntity(ctx context.Context, caller *Caller[P, A],
 	for index := range rows {
 		publicRows[index] = rows[index].row
 	}
-	if err := golem.RuntimeInvokeReadResultHooks(hookContext, app.bindings, golem.RuntimeReadHookRows(transformed, publicRows, len(rows) != 0)); err != nil {
+	if err := invokeReadResultHooks(hookContext, app.bindings, golem.RuntimeReadHookRows(transformed, publicRows, len(rows) != 0)); err != nil {
 		return golem.RuntimeModelRow{}, false, events.Failure(events.CodeSubscriptionRevalidation)
 	}
 	if len(rows) == 0 {

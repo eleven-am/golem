@@ -224,7 +224,8 @@ func scalarHookResult(registry *schema.Registry, program mutationsql.Program, ex
 func invokeMutationResultHooks[A any](ctx context.Context, bindings golem.ApplicationBindings[A], actor A, result golem.RuntimeMutationHookResult, phase golem.HookPhase) (resultErr error) {
 	ctx, observation := observeexec.BeginChild(ctx, result.ModelID(), observe.KindHook, hookObservationOperation(result.Operation()), hookObservationPhase(phase))
 	defer func() { finishObservation(observation, resultErr) }()
-	hookContext := golem.RuntimeContextWithActor(ctx, actor)
+	hookContext, closeScope := openHookScope(golem.RuntimeContextWithActor(ctx, actor))
+	defer closeScope()
 	if err := golem.RuntimeInvokeMutationResultHooks(hookContext, bindings, result, phase); err != nil {
 		return &mutationHookFailure{operation: result.Operation(), phase: phase, cause: err}
 	}
@@ -243,7 +244,7 @@ func hasMutationHook[A any](bindings golem.ApplicationBindings[A], model golem.M
 type callerMutationHookExecution[A any] struct {
 	bindings golem.ApplicationBindings[A]
 	actor    A
-	executor func(*executionBinding) golem.HookExecutor
+	executor func(*executionBinding, *hookExecutorGate) golem.HookExecutor
 	capture  func(golem.RuntimeMutationHookResult)
 }
 
@@ -268,8 +269,12 @@ func (hooks callerMutationHookExecution[A]) verifiedObserver(registry *schema.Re
 func (hooks callerMutationHookExecution[A]) observeResult(ctx context.Context, binding *executionBinding, result golem.RuntimeMutationHookResult) error {
 	operation := result.Operation()
 	model := result.ModelID()
+	ctx, closeScope := openHookScope(ctx)
+	defer closeScope()
 	if hooks.executor != nil {
-		result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(binding))
+		gate := newHookExecutorGate(ctx, binding)
+		defer gate.usage.close()
+		result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(binding, gate))
 	}
 	if hooks.capture != nil {
 		hooks.capture(result)
@@ -285,7 +290,7 @@ func (hooks callerMutationHookExecution[A]) observeResult(ctx context.Context, b
 			return err
 		}
 		afterCommitResult := golem.RuntimeMutationHookResultWithoutExecutor(result)
-		if err := state.addAfterCommit(operation, model, func(commitContext context.Context) error {
+		if err := state.addAfterCommit(ctx, operation, model, func(commitContext context.Context) error {
 			return invokeMutationResultHooks(commitContext, hooks.bindings, hooks.actor, afterCommitResult, golem.HookAfterCommit)
 		}); err != nil {
 			return err

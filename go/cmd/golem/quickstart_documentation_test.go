@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +13,7 @@ import (
 const quickstartGolemCommands = 4
 
 func TestQuickstartFromEmptyDirectory(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "QUICKSTART.md"))
 	if err != nil {
@@ -61,7 +61,7 @@ func TestQuickstartFromEmptyDirectory(t *testing.T) {
 			}
 		}
 		var stdout, stderr bytes.Buffer
-		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 			t.Fatalf("documented command %d (%s) exited %d\nstdout:\n%s\nstderr:\n%s", index+1, command, code, stdout.String(), stderr.String())
 		}
 	}
@@ -132,6 +132,7 @@ func quickstartGo(t *testing.T, directory string, arguments ...string) string {
 }
 
 func TestGuideApplicationRuns(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "GUIDE.md"))
 	if err != nil {
@@ -171,7 +172,7 @@ func TestGuideApplicationRuns(t *testing.T) {
 		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
 		}
 	}
@@ -183,6 +184,7 @@ func TestGuideApplicationRuns(t *testing.T) {
 }
 
 func TestQueueApplicationRuns(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "QUEUE.md"))
 	if err != nil {
@@ -222,7 +224,7 @@ func TestQueueApplicationRuns(t *testing.T) {
 		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
 		}
 	}
@@ -236,6 +238,7 @@ func TestQueueApplicationRuns(t *testing.T) {
 }
 
 func TestSemanticApplicationRuns(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "SEMANTIC.md"))
 	if err != nil {
@@ -275,7 +278,7 @@ func TestSemanticApplicationRuns(t *testing.T) {
 		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
 		}
 	}
@@ -289,6 +292,7 @@ func TestSemanticApplicationRuns(t *testing.T) {
 }
 
 func TestFullTextApplicationRuns(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "FULLTEXT.md"))
 	if err != nil {
@@ -326,7 +330,7 @@ func TestFullTextApplicationRuns(t *testing.T) {
 		{"migration", "apply", "--provider", "sqlite", "--dsn", database},
 	} {
 		var stdout, stderr bytes.Buffer
-		if code := run(context.Background(), application, arguments, &stdout, &stderr); code != 0 {
+		if code := runGolem(t, application, arguments, &stdout, &stderr); code != 0 {
 			t.Fatalf("%v exited %d\nstdout:\n%s\nstderr:\n%s", arguments, code, stdout.String(), stderr.String())
 		}
 	}
@@ -338,6 +342,7 @@ func TestFullTextApplicationRuns(t *testing.T) {
 }
 
 func TestRenderApplicationRuns(t *testing.T) {
+	t.Parallel()
 	moduleRoot := commandModuleRoot(t)
 	source, err := os.ReadFile(filepath.Join(moduleRoot, "..", "docs", "golem-go", "RENDER.md"))
 	if err != nil {

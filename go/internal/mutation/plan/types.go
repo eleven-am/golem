@@ -20,6 +20,18 @@ type PolicySet interface {
 
 var _ PolicySet = (*policyruntime.Set)(nil)
 
+type grantRecorder interface {
+	RecordGrant(policyir.ModelID, policyir.Action, *policyir.FieldID)
+}
+
+// RecordGrant reports one authorisation decision to a policy set that tracks
+// which writes depend on an operation's Within grants.
+func RecordGrant(policies PolicySet, model policyir.ModelID, action policyir.Action, field *policyir.FieldID) {
+	if recorder, ok := policies.(grantRecorder); ok {
+		recorder.RecordGrant(model, action, field)
+	}
+}
+
 // Classifier is injectable only so ordering and fail-closed behavior can be
 // proven without a provider. The default delegates to policy/classify.Fields.
 type Classifier interface {

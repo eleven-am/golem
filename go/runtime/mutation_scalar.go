@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	policyruntime "github.com/eleven-am/golem/go/internal/policy/runtime"
 	"reflect"
 	"time"
 
@@ -309,7 +310,10 @@ func executeScalarMutationProgramWithObservers(ctx context.Context, database *sq
 		transactionBinding.discardMutation()
 		return scalarMutationExecution{}, rollbackScalarMutation(transaction, err)
 	}
-	if commitErr := transaction.Commit(); commitErr != nil {
+	if commitErr := commitWithinOperation(ctx, transaction.Commit); commitErr != nil {
+		if errors.Is(commitErr, policyruntime.ErrOperationEnded) {
+			_ = transaction.Rollback()
+		}
 		transactionBinding.discardMutation()
 		return scalarMutationExecution{}, scalarMutationError(program.Operation(), scalarMutationProviderFailureKind(commitErr), 0, 0, "transaction commit failed", commitErr)
 	}
@@ -369,7 +373,7 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 			return
 		}
 		if state, err := binding.mutationState(); err == nil {
-			state.poison(executionErr)
+			state.poison(ctx, executionErr)
 		}
 	}()
 	if queryer == nil {
@@ -424,7 +428,7 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 			return
 		}
 		if state, err := binding.mutationState(); err == nil {
-			state.poison(executionErr)
+			state.poison(ctx, executionErr)
 		}
 	}()
 	if queryer == nil || !program.RequiresConcurrencyPrecheck() || preimage.role != mutationsql.SelectPreImage {
@@ -499,24 +503,24 @@ func commitScalarMutationExecution(ctx context.Context, binding *executionBindin
 	if err != nil {
 		return err
 	}
-	if err := state.touch(1); err != nil {
-		state.poison(err)
+	if err := state.touch(ctx, 1); err != nil {
+		state.poison(ctx, err)
 		return scalarMutationError(program.Operation(), scalarMutationInvalid, 0, 0, "touched rows exceed the configured limit", err)
 	}
 	if requirement := program.FactRequirement(); requirement.Enabled() {
 		before, after, imageErr := scalarMutationFactImages(registry, model, program, result)
 		if imageErr != nil {
-			state.poison(imageErr)
+			state.poison(ctx, imageErr)
 			return imageErr
 		}
-		if _, factErr := state.buildFact(registry, requirement, before, after, time.Now()); factErr != nil {
-			state.poison(factErr)
+		if _, factErr := state.buildFact(ctx, registry, requirement, before, after, time.Now()); factErr != nil {
+			state.poison(ctx, factErr)
 			return factErr
 		}
 	}
 	if program.SemanticIndexed() {
-		if markErr := markScalarSemanticRecord(state, registry, model, program, result); markErr != nil {
-			state.poison(markErr)
+		if markErr := markScalarSemanticRecord(ctx, state, registry, model, program, result); markErr != nil {
+			state.poison(ctx, markErr)
 			return markErr
 		}
 	}
@@ -551,7 +555,7 @@ func commitScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, bindi
 		return err
 	}
 	if err := recordCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, cascade); err != nil {
-		state.poison(err)
+		state.poison(ctx, err)
 		return err
 	}
 	return nil

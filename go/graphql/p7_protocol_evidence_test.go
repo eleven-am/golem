@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -22,11 +23,15 @@ func TestHTTPQueriesMutationsRemainP5Equivalent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	requests := []Request{
-		{Query: `query Current { viewer }`, OperationName: "Current"},
-		{Query: `mutation Change($value: Int!) { setViewer(value: $value) }`, OperationName: "Change", Variables: map[string]any{"value": 9}},
+	requests := []struct {
+		Request
+		body string
+	}{
+		{Request{Query: `query Current { viewer }`, OperationName: "Current"}, `{"data":{"viewer":41,"echo":"ok","items":[{"value":1}],"nested":{"value":1}}}`},
+		{Request{Query: `mutation Change($value: Int!) { setViewer(value: $value) }`, OperationName: "Change", Variables: map[string]any{"value": 9}}, `{"data":{"echo":"ok","items":[{"value":1}],"nested":{"value":1},"viewer":41}}`},
 	}
-	for _, request := range requests {
+	for _, testCase := range requests {
+		request := testCase.Request
 		direct := server.Execute(context.Background(), 41, request)
 		body, err := json.Marshal(requestEnvelope{Query: request.Query, OperationName: request.OperationName, Variables: mustP7JSON(t, request.Variables)})
 		if err != nil {
@@ -39,11 +44,21 @@ func TestHTTPQueriesMutationsRemainP5Equivalent(t *testing.T) {
 		if recorder.Code != http.StatusOK {
 			t.Fatalf("HTTP status=%d body=%s", recorder.Code, recorder.Body.String())
 		}
+		if got := recorder.Body.String(); got != testCase.body+"\n" {
+			t.Fatalf("HTTP body for %q\n got=%s\nwant=%s", request.OperationName, got, testCase.body)
+		}
 		directJSON, err := json.Marshal(direct)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !bytes.Equal(bytes.TrimSpace(recorder.Body.Bytes()), directJSON) {
+		var overHTTP, overDirect any
+		if err := json.Unmarshal(recorder.Body.Bytes(), &overHTTP); err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(directJSON, &overDirect); err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(overHTTP, overDirect) {
 			t.Fatalf("HTTP/direct wire drift for %q: http=%s direct=%s", request.OperationName, recorder.Body.Bytes(), directJSON)
 		}
 	}

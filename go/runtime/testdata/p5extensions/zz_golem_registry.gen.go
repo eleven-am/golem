@@ -23,8 +23,14 @@ func golemGeneratedGenerationDigest() golem.SchemaDigest {
 }
 
 func GolemGeneratedApplicationBindings() (golem.ApplicationBindings[Actor], error) {
-	return golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),
+	bindings, err := golem.GeneratedApplicationBindings(golemGeneratedGenerationDigest(),
 		GolemGeneratedBindings(),
+	)
+	if err != nil {
+		return bindings, err
+	}
+	return golem.GeneratedApplicationOperations(bindings,
+		golem.GeneratedCustomMutationOperation("5f0e7a3ed5f6d094898ae0abe1d5d1ee", TransactionalUser),
 	)
 }
 
@@ -369,6 +375,25 @@ func (app *App[P]) ForPrincipal(ctx context.Context, principal P) (*Caller[P], e
 	result := &Caller[P]{runtime: inner}
 	result.Users = CallerUserClient[P]{runtime: inner}
 	return result, nil
+}
+
+func golemGeneratedOperationCaller[P any](inner *golemruntime.Caller[P, Actor]) *Caller[P] {
+	result := &Caller[P]{runtime: inner}
+	result.Users = CallerUserClient[P]{runtime: inner}
+	return result
+}
+
+// Mutate runs resolver, a custom mutation declared with golem.Mutation,
+// exactly as GraphQL dispatch runs it: resolver receives a caller carrying
+// the Within grants of that operation, observed as mutation.custom, and
+// those grants end when it returns. A function that is not a generated
+// custom mutation is refused with P5_CUSTOM_OPERATION before anything runs.
+func Mutate[P, Args, R any](ctx context.Context, caller *Caller[P], resolver func(context.Context, *Caller[P], Args) (R, error), arguments Args) (R, error) {
+	var inner *golemruntime.Caller[P, Actor]
+	if caller != nil {
+		inner = caller.runtime
+	}
+	return golemruntime.RunCallerOperation(ctx, inner, resolver, golemGeneratedOperationCaller[P], arguments)
 }
 
 func (app *App[P]) System() System[P] {
