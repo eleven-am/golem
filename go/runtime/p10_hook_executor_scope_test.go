@@ -17,7 +17,7 @@ func p10HookWriteIsWaiting() bool {
 	buffer := make([]byte, 1<<22)
 	stacks := string(buffer[:goruntime.Stack(buffer, true)])
 	for _, stack := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(stack, "runtime.withinHookWriteLock") && strings.Contains(stack, "sync.(*Mutex).Lock") {
+		if strings.Contains(stack, "(*executionBinding).lockWrites(") && strings.Contains(stack, "sync.(*Mutex).Lock") {
 			return true
 		}
 	}

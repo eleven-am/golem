@@ -204,11 +204,16 @@ its transaction, fail later.
 
 A hook's executor is valid only while that hook runs. When the hook returns,
 golem waits for any call already in flight on the executor, then refuses every
-later call, from any goroutine. Writes through one transaction are serialised,
-so hook writes started concurrently run one after another. A caller or system
-transaction accepts writes only until its callback returns: golem waits for a
-write already in flight and refuses later ones. Retry to run the write
-under the caller's own policy.
+later call, from any goroutine. A transaction runs its reads and writes one at
+a time, so hook writes started concurrently run one after another. A write a
+hook makes, through its executor or through the transaction, runs inside the
+write that called the hook. Pass it the hook's own context: a transaction call
+made inside a hook with any other context waits until the write that called
+the hook finishes, so a hook that waits for that call never returns. A caller
+or system transaction accepts writes only until its callback returns, or
+panics: golem waits for a write already in flight, refuses later ones, and only
+then commits or rolls back. Retry to run the write under the caller's own
+policy.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
@@ -275,6 +280,10 @@ author, err := system.Authors.Create(ctx,
 
 Each field is set through its own builder, so a field that is `readonly` or
 absent from the schema cannot be written by construction.
+
+A transaction runs its writes one at a time. Using one transaction from several
+goroutines is safe, but its writes do not run in parallel: each waits for the
+one before it, including every hook write that one makes.
 
 ### Mutations return only what you select
 

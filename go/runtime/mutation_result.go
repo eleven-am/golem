@@ -199,6 +199,8 @@ func SystemCreate[P, A, M any](ctx context.Context, system System[P, A], descrip
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	projection, err := prepareSystemScalarProjection(system, descriptor, projections)
 	if err != nil {
 		return golem.Row[M]{}, err
@@ -216,6 +218,8 @@ func SystemUpdate[P, A, M any](ctx context.Context, system System[P, A], descrip
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "update"); err != nil {
 			return golem.Row[M]{}, err
@@ -242,6 +246,8 @@ func SystemDelete[P, A, M any](ctx context.Context, system System[P, A], descrip
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "delete"); err != nil {
 			return golem.Row[M]{}, err
@@ -264,6 +270,8 @@ func SystemUpsert[P, A, M any](ctx context.Context, system System[P, A], descrip
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "upsert"); err != nil {
 			return golem.Row[M]{}, err

@@ -25,6 +25,8 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 			return golem.RuntimeHookExecutorResult{}, errHookExecutorExpired
 		}
 		defer gate.usage.leave()
+		ctx, releaseWrites := binding.lockWrites(ctx, gate.held)
+		defer releaseWrites()
 		transactionCaller := *caller
 		transactionCaller.executor = binding
 		return withinOperationAttempt(ctx, &transactionCaller, func(ctx context.Context, transactionCaller *Caller[P, A]) (golem.RuntimeHookExecutorResult, error) {
@@ -32,22 +34,16 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 			case golem.RuntimeHookExecutorFindManyOperation:
 				return executeCallerHookFindMany(ctx, transactionCaller, request)
 			case golem.RuntimeHookExecutorCreateOperation, golem.RuntimeHookExecutorUpdateOperation, golem.RuntimeHookExecutorDeleteOperation:
-				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
-					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-						return executeCallerHookScalar(ctx, transactionCaller, request)
-					})
+				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+					return executeCallerHookScalar(ctx, transactionCaller, request)
 				})
 			case golem.RuntimeHookExecutorUpdateManyOperation, golem.RuntimeHookExecutorDeleteManyOperation:
-				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
-					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-						return executeCallerHookBatch(ctx, transactionCaller, request)
-					})
+				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+					return executeCallerHookBatch(ctx, transactionCaller, request)
 				})
 			case golem.RuntimeHookExecutorUpsertOperation:
-				return withinHookWriteLock(ctx, gate, func(ctx context.Context) (golem.RuntimeHookExecutorResult, error) {
-					return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
-						return executeCallerHookUpsert(ctx, transactionCaller, request)
-					})
+				return withinHookWriteSavepoint(ctx, binding, func() (golem.RuntimeHookExecutorResult, error) {
+					return executeCallerHookUpsert(ctx, transactionCaller, request)
 				})
 			default:
 				return golem.RuntimeHookExecutorResult{}, fmt.Errorf("P4_RUNTIME_HOOK_EXECUTOR: operation is unknown")

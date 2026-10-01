@@ -263,6 +263,8 @@ func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A]
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -297,6 +299,8 @@ func SystemDeleteVersioned[P, A, M any](ctx context.Context, system System[P, A]
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -400,6 +404,8 @@ func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A]
 		return golem.Row[M]{}, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}

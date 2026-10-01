@@ -143,6 +143,8 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 		return "", errTransactionWriteEnded
 	}
 	defer binding.leaveWrite()
+	ctx, releaseWrites := binding.lockWrites(ctx, nil)
+	defer releaseWrites()
 	executor, err := binding.transactionFor(app.database)
 	if err != nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")

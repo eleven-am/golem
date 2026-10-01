@@ -84,6 +84,12 @@ event. Calls already in flight finish first. Concurrent writes through hook
 executors on one transaction now run one at a time instead of corrupting each
 other's savepoints.
 
+A transaction now runs every read and write one at a time, so using one
+transaction from several goroutines is safe but not parallel. Inside a hook,
+use the context the hook receives, or its `HookExecutor`; a transaction call
+made from a hook with an unrelated context waits for the write that ran the
+hook, and would never finish.
+
 **Tooling.** The CLI end-to-end tests run in parallel child processes, which
 cuts the package's run time roughly in half.
 

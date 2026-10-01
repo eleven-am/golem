@@ -122,6 +122,8 @@ func rankFullTextRows[P, A, M any](ctx context.Context, app *App[P, A], descript
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, "textSearch", prepared.ModelID(), golem.FieldID{}, "full-text candidate statement could not be rendered", err)
 	}
+	ctx, releaseWrites := prepared.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	queryer, err := prepared.executor.queryerFor(app.database)
 	if err != nil {
 		return nil, err

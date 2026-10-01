@@ -109,6 +109,8 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 		return 0, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -135,6 +137,8 @@ func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], des
 		return 0, errTransactionWriteEnded
 	}
 	defer system.executor.leaveWrite()
+	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -437,21 +441,8 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		if operation == golem.HookUpdateMany {
 			result = golem.RuntimeUpdateManyMutationHookResult(model, verification.Count())
 		}
-		var gate *hookExecutorGate
-		if hooks.executor != nil {
-			gate = newHookExecutorGate(ctx, activeBinding)
-			result = golem.RuntimeMutationHookResultWithExecutor(result, hooks.executor(activeBinding, gate))
-		}
-		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfter) {
-			err := invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, result, golem.HookAfter)
-			if gate != nil {
-				gate.usage.close()
-			}
-			if err != nil {
-				return 0, publicBatchExecutionError(program, err)
-			}
-		} else if gate != nil {
-			gate.usage.close()
+		if err := invokeBatchAfterHooks(ctx, hooks, activeBinding, model, operation, &result); err != nil {
+			return 0, publicBatchExecutionError(program, err)
 		}
 		if hasMutationHook(hooks.bindings, model, operation, golem.HookAfterCommit) {
 			afterCommitResult := golem.RuntimeMutationHookResultWithoutExecutor(result)
@@ -779,4 +770,16 @@ func batchOperationName(operation mutationir.Operation) string {
 
 func programModel(program mutationbatch.Program) golem.ModelID {
 	return golem.ModelID(program.ModelID())
+}
+
+func invokeBatchAfterHooks[A any](ctx context.Context, hooks *callerMutationHookExecution[A], binding *executionBinding, model golem.ModelID, operation golem.HookOperation, result *golem.RuntimeMutationHookResult) error {
+	if hooks.executor != nil {
+		gate := newHookExecutorGate(ctx, binding)
+		defer gate.usage.close()
+		*result = golem.RuntimeMutationHookResultWithExecutor(*result, hooks.executor(binding, gate))
+	}
+	if !hasMutationHook(hooks.bindings, model, operation, golem.HookAfter) {
+		return nil
+	}
+	return invokeMutationResultHooks(ctx, hooks.bindings, hooks.actor, *result, golem.HookAfter)
 }

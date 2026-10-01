@@ -36,7 +36,7 @@ type executionBinding struct {
 	observer        observe.Observer
 	queueWake       atomic.Pointer[func()]
 	operationWrites *operationWriteLog
-	hookWrites      sync.Mutex
+	writeLock       sync.Mutex
 	writes          usageGate
 }
 
@@ -380,8 +380,10 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 		_ = transaction.Rollback()
 	})
 
-	callbackErr := callback()
-	binding.closeWrites()
+	callbackErr := func() error {
+		defer binding.closeWrites()
+		return callback()
+	}()
 	if callbackErr != nil {
 		binding.discardMutation()
 		return rollbackTransaction(transaction, callbackErr)

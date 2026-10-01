@@ -116,15 +116,27 @@ func (Invite) AfterCreate(ctx context.Context, result InviteCreateResult) error 
 	return executorHook(ctx, result.Executor())
 }
 
-func (Invite) AfterUpdateMany(ctx context.Context, _ InviteUpdateManyResult) error {
+func (Invite) AfterUpdateMany(ctx context.Context, result InviteUpdateManyResult) error {
 	recordHook("after_update_many")
 	probeLock.Lock()
 	hook := activeInviteManyHook
+	executorHook := activeInviteManyExecutorHook
 	probeLock.Unlock()
-	if hook == nil {
+	if hook != nil {
+		if err := hook(ctx); err != nil {
+			return err
+		}
+	}
+	if executorHook == nil {
 		return nil
 	}
-	return hook(ctx)
+	return executorHook(ctx, result.Executor())
+}
+
+func SetInviteUpdateManyExecutorHook(hook TeamHook) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeInviteManyExecutorHook = hook
 }
 
 func SetInviteUpdateManyHook(hook func(context.Context) error) {
@@ -319,13 +331,14 @@ type Record struct {
 }
 
 var (
-	probeLock                sync.Mutex
-	activeProbe              Probe
-	activeTeamHook           TeamHook
-	activeInviteHook         func(context.Context) error
-	activeInviteExecutorHook TeamHook
-	activeInviteManyHook     func(context.Context) error
-	record                   Record
+	probeLock                    sync.Mutex
+	activeProbe                  Probe
+	activeTeamHook               TeamHook
+	activeInviteHook             func(context.Context) error
+	activeInviteExecutorHook     TeamHook
+	activeInviteManyHook         func(context.Context) error
+	activeInviteManyExecutorHook TeamHook
+	record                       Record
 )
 
 func Reset(probe Probe) {
@@ -336,6 +349,7 @@ func Reset(probe Probe) {
 	activeInviteHook = nil
 	activeInviteExecutorHook = nil
 	activeInviteManyHook = nil
+	activeInviteManyExecutorHook = nil
 	record = Record{}
 }
 

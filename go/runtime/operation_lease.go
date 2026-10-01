@@ -47,7 +47,7 @@ func operationConflict(model golem.ModelID, operation, message string) error {
 }
 
 func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflict error, run func(context.Context, *Caller[P, A]) (R, error)) (R, error) {
-	if ctx == nil || caller == nil || caller.policies == nil {
+	if caller == nil {
 		return run(ctx, caller)
 	}
 	if !caller.executor.enterWrite() {
@@ -55,6 +55,11 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 		return zero, errTransactionWriteEnded
 	}
 	defer caller.executor.leaveWrite()
+	ctx, releaseWrites := caller.executor.lockWrites(ctx, nil)
+	defer releaseWrites()
+	if ctx == nil || caller.policies == nil {
+		return run(ctx, caller)
+	}
 	if existing := operationLeaseFrom(ctx); existing != nil {
 		if caller.policies.WithLease(existing) != caller.policies {
 			attempt := existing.Attempt()

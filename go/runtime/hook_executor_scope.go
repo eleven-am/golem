@@ -54,49 +54,75 @@ func (gate *usageGate) init() *usageGate {
 }
 
 type hookExecutorGate struct {
-	usage  *usageGate
-	writes *sync.Mutex
+	usage *usageGate
+	held  *heldWrite
 }
 
-type heldHookWrite struct {
-	parent *heldHookWrite
-	held   *sync.Mutex
-	child  *sync.Mutex
+type heldWrite struct {
+	scope   *heldWrite
+	binding *executionBinding
+	owner   *heldWrite
+	nested  sync.Mutex
+	ended   bool
 }
 
-type heldHookWriteKey struct{}
+type heldWriteKey struct{}
 
-func heldHookWrites(ctx context.Context) *heldHookWrite {
+func innermostHeldWrite(ctx context.Context) *heldWrite {
 	if ctx == nil {
 		return nil
 	}
-	held, _ := ctx.Value(heldHookWriteKey{}).(*heldHookWrite)
+	held, _ := ctx.Value(heldWriteKey{}).(*heldWrite)
 	return held
 }
 
-func newHookExecutorGate(ctx context.Context, binding *executionBinding) *hookExecutorGate {
-	writes := &binding.hookWrites
-	if held := heldHookWrites(ctx); held != nil {
-		writes = held.child
-	}
-	return &hookExecutorGate{usage: (&usageGate{}).init(), writes: writes}
-}
-
-func (gate *hookExecutorGate) writeLock(ctx context.Context) *sync.Mutex {
-	held := heldHookWrites(ctx)
-	for current := held; current != nil; current = current.parent {
-		if current.held == gate.writes {
-			return held.child
+func heldWriteFor(ctx context.Context, binding *executionBinding) *heldWrite {
+	for held := innermostHeldWrite(ctx); held != nil; held = held.scope {
+		if held.binding == binding {
+			return held
 		}
 	}
-	return gate.writes
+	return nil
 }
 
-func withinHookWriteLock[R any](ctx context.Context, gate *hookExecutorGate, run func(context.Context) (R, error)) (R, error) {
-	lock := gate.writeLock(ctx)
-	lock.Lock()
-	defer lock.Unlock()
-	return run(context.WithValue(ctx, heldHookWriteKey{}, &heldHookWrite{parent: heldHookWrites(ctx), held: lock, child: &sync.Mutex{}}))
+func newHookExecutorGate(ctx context.Context, binding *executionBinding) *hookExecutorGate {
+	return &hookExecutorGate{usage: (&usageGate{}).init(), held: heldWriteFor(ctx, binding)}
+}
+
+func (binding *executionBinding) lockWrites(ctx context.Context, within *heldWrite) (context.Context, func()) {
+	if binding == nil || !binding.scoped {
+		return ctx, func() {}
+	}
+	if held := heldWriteFor(ctx, binding); held != nil {
+		within = held
+	}
+	owner := within
+	for ; owner != nil; owner = owner.owner {
+		owner.nested.Lock()
+		if !owner.ended {
+			break
+		}
+		owner.nested.Unlock()
+	}
+	if owner == nil {
+		binding.writeLock.Lock()
+	}
+	held := &heldWrite{scope: innermostHeldWrite(ctx), binding: binding, owner: owner}
+	if ctx != nil {
+		ctx = context.WithValue(ctx, heldWriteKey{}, held)
+	}
+	return ctx, held.end
+}
+
+func (held *heldWrite) end() {
+	held.nested.Lock()
+	held.ended = true
+	held.nested.Unlock()
+	if held.owner == nil {
+		held.binding.writeLock.Unlock()
+		return
+	}
+	held.owner.nested.Unlock()
 }
 
 func (binding *executionBinding) enterWrite() bool {
