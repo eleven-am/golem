@@ -139,12 +139,11 @@ func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *execution
 	if app == nil || app.queueStore == nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
 	}
-	if !binding.enterWrite() {
-		return "", errTransactionWriteEnded
+	ctx, endCall, callErr := binding.beginCall(ctx)
+	if callErr != nil {
+		return "", callErr
 	}
-	defer binding.leaveWrite()
-	ctx, releaseWrites := binding.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	executor, err := binding.transactionFor(app.database)
 	if err != nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")

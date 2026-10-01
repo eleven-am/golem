@@ -136,8 +136,11 @@ func executeScoped[P, A any](ctx context.Context, app *App[P, A], executor *exec
 	}
 	statement := prepared.statement
 	statementSQL = statement.SQL()
-	ctx, releaseWrites := executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	ctx, endCall, callErr := executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {
 		return nil, scopedError(descriptor, err)

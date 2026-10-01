@@ -25,8 +25,11 @@ func newCallerHookExecutor[P, A any](caller *Caller[P, A], binding *executionBin
 			return golem.RuntimeHookExecutorResult{}, errHookExecutorExpired
 		}
 		defer gate.usage.leave()
-		ctx, releaseWrites := binding.lockWrites(ctx, gate.held)
-		defer releaseWrites()
+		ctx, endCall, callErr := binding.beginHookExecutorCall(ctx, gate.held)
+		if callErr != nil {
+			return golem.RuntimeHookExecutorResult{}, callErr
+		}
+		defer endCall()
 		transactionCaller := *caller
 		transactionCaller.executor = binding
 		return withinOperationAttempt(ctx, &transactionCaller, func(ctx context.Context, transactionCaller *Caller[P, A]) (golem.RuntimeHookExecutorResult, error) {

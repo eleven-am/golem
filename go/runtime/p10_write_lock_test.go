@@ -26,7 +26,7 @@ func p10DirectWriteIsWaiting() bool {
 	buffer := make([]byte, 1<<22)
 	stacks := string(buffer[:goruntime.Stack(buffer, true)])
 	for _, stack := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(stack, "(*executionBinding).lockWrites(") && strings.Contains(stack, "sync.(*Mutex).Lock") && !strings.Contains(stack, "newCallerHookExecutor") {
+		if strings.Contains(stack, "(*executionBinding).acquire(") && strings.Contains(stack, "sync.(*Mutex).Lock") && !strings.Contains(stack, "newCallerHookExecutor") {
 			return true
 		}
 	}
@@ -110,39 +110,54 @@ func TestDirectTransactionWriteOverlappingAFailingHookWriteSurvivesAcrossProvide
 }
 
 func TestBatchAfterHookPanicLeavesItsCapturedExecutorRefusedAcrossProviders(t *testing.T) {
-	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
-		caller := fixture.caller(t, "alpha")
-		invite, late := p10OperationID(t, 6700), p10OperationID(t, 6701)
-		fixture.seedInvite(t, invite)
-		var captured golem.HookExecutor
-		hookRan := false
-		p10operations.Reset(nil)
-		p10operations.SetInviteUpdateManyExecutorHook(func(_ context.Context, executor golem.HookExecutor) error {
-			captured, hookRan = executor, true
-			panic("batch after hook panicked")
+	for _, transaction := range []bool{false, true} {
+		transaction := transaction
+		name := "standalone"
+		if transaction {
+			name = "transaction"
+		}
+		t.Run(name, func(t *testing.T) {
+			forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+				caller := fixture.caller(t, "alpha")
+				invite, late := p10OperationID(t, 6700), p10OperationID(t, 6701)
+				fixture.seedInvite(t, invite)
+				var captured golem.HookExecutor
+				hookRan := false
+				p10operations.Reset(nil)
+				p10operations.SetInviteUpdateManyExecutorHook(func(_ context.Context, executor golem.HookExecutor) error {
+					captured, hookRan = executor, true
+					panic("batch after hook panicked")
+				})
+				update := p10operations.Invites.UpdateMany(p10operations.Invites.TeamID.Set(fixture.alpha))
+				var batchErr, lateErr error
+				if transaction {
+					err := caller.Transaction(context.Background(), func(tx *p10operations.CallerTx[p10operations.Principal]) error {
+						_, batchErr = tx.Invites.UpdateMany(context.Background(), p10operations.Invites.ID.Eq(invite), update)
+						lateErr = fixture.createTeam(context.Background(), captured, late)
+						return errP10CallbackStopped
+					})
+					if !errors.Is(err, errP10CallbackStopped) {
+						t.Fatalf("transaction = %v", err)
+					}
+				} else {
+					_, batchErr = caller.Invites.UpdateMany(context.Background(), p10operations.Invites.ID.Eq(invite), update)
+					lateErr = fixture.createTeam(context.Background(), captured, late)
+				}
+				if batchErr == nil {
+					t.Fatal("a panicking batch after hook did not fail its write")
+				}
+				if !hookRan {
+					t.Fatalf("the batch after hook did not run: %v", batchErr)
+				}
+				if lateErr == nil || !strings.Contains(lateErr.Error(), "after its hook returned") {
+					t.Fatalf("captured executor after a panicking hook = %v", lateErr)
+				}
+				if _, ok := fixture.teamOwner(t, late); ok {
+					t.Fatal("a captured executor's write persisted")
+				}
+			})
 		})
-		var batchErr, lateErr error
-		err := caller.Transaction(context.Background(), func(tx *p10operations.CallerTx[p10operations.Principal]) error {
-			_, batchErr = tx.Invites.UpdateMany(context.Background(), p10operations.Invites.ID.Eq(invite), p10operations.Invites.UpdateMany(p10operations.Invites.TeamID.Set(fixture.alpha)))
-			lateErr = fixture.createTeam(context.Background(), captured, late)
-			return errP10CallbackStopped
-		})
-		if !errors.Is(err, errP10CallbackStopped) {
-			t.Fatalf("transaction = %v", err)
-		}
-		if batchErr == nil {
-			t.Fatal("a panicking batch after hook did not fail its write")
-		}
-		if !hookRan {
-			t.Fatalf("the batch after hook did not run: %v", batchErr)
-		}
-		if lateErr == nil || !strings.Contains(lateErr.Error(), "after its hook returned") {
-			t.Fatalf("captured executor after a panicking hook = %v", lateErr)
-		}
-		if _, ok := fixture.teamOwner(t, late); ok {
-			t.Fatal("a captured executor's write persisted")
-		}
-	})
+	}
 }
 
 func TestCallbackPanicDrainsAnInFlightWriteBeforeRollbackAcrossProviders(t *testing.T) {

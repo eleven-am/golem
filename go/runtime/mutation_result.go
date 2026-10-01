@@ -195,12 +195,11 @@ func callerUpsert[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 
 func SystemCreate[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], input golem.CreateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return golem.Row[M]{}, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	projection, err := prepareSystemScalarProjection(system, descriptor, projections)
 	if err != nil {
 		return golem.Row[M]{}, err
@@ -214,12 +213,11 @@ func SystemCreate[P, A, M any](ctx context.Context, system System[P, A], descrip
 
 func SystemUpdate[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return golem.Row[M]{}, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "update"); err != nil {
 			return golem.Row[M]{}, err
@@ -242,12 +240,11 @@ func SystemUpdate[P, A, M any](ctx context.Context, system System[P, A], descrip
 
 func SystemDelete[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return golem.Row[M]{}, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "delete"); err != nil {
 			return golem.Row[M]{}, err
@@ -266,12 +263,11 @@ func SystemDelete[P, A, M any](ctx context.Context, system System[P, A], descrip
 
 func SystemUpsert[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return golem.Row[M]{}, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return golem.Row[M]{}, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	if system.app != nil {
 		if err := refuseLegacyVersionedMutation(system.app.registry, descriptor.Metadata().ModelID(), "upsert"); err != nil {
 			return golem.Row[M]{}, err

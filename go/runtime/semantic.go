@@ -45,8 +45,11 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	ctx, releaseWrites := prepared.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := prepared.executor.queryerFor(caller.app.database)
 	if err != nil {
 		return nil, err
@@ -80,8 +83,11 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	ctx, releaseWrites := prepared.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := prepared.executor.queryerFor(caller.app.database)
 	if err != nil {
 		return nil, err
@@ -107,8 +113,11 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
-	ctx, releaseWrites := prepared.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := prepared.executor.queryerFor(system.app.database)
 	if err != nil {
 		return nil, err
@@ -138,8 +147,11 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	ctx, releaseWrites := prepared.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
+	if callErr != nil {
+		return nil, callErr
+	}
+	defer endCall()
 	queryer, err := prepared.executor.queryerFor(system.app.database)
 	if err != nil {
 		return nil, err

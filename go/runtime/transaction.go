@@ -37,7 +37,7 @@ type executionBinding struct {
 	queueWake       atomic.Pointer[func()]
 	operationWrites *operationWriteLog
 	writeLock       sync.Mutex
-	writes          usageGate
+	calls           usageGate
 }
 
 func (binding *executionBinding) queueEnqueued(wake func()) {
@@ -381,7 +381,7 @@ func finishTransaction(ctx context.Context, transaction *sqlx.Tx, binding *execu
 	})
 
 	callbackErr := func() error {
-		defer binding.closeWrites()
+		defer binding.closeCalls()
 		return callback()
 	}()
 	if callbackErr != nil {

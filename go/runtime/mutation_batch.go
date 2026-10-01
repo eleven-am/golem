@@ -105,12 +105,11 @@ func callerDeleteMany[P, A, M any](ctx context.Context, caller *Caller[P, A], de
 
 func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (count int64, resultErr error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return 0, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return 0, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -133,12 +132,11 @@ func SystemUpdateMany[P, A, M any](ctx context.Context, system System[P, A], des
 
 func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (count int64, resultErr error) {
 	ctx = withoutOperationLease(ctx)
-	if !system.executor.enterWrite() {
-		return 0, errTransactionWriteEnded
+	ctx, endCall, callErr := system.executor.beginCall(ctx)
+	if callErr != nil {
+		return 0, callErr
 	}
-	defer system.executor.leaveWrite()
-	ctx, releaseWrites := system.executor.lockWrites(ctx, nil)
-	defer releaseWrites()
+	defer endCall()
 	if system.app == nil {
 		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}

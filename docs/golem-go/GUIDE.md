@@ -205,15 +205,18 @@ its transaction, fail later.
 A hook's executor is valid only while that hook runs. When the hook returns,
 golem waits for any call already in flight on the executor, then refuses every
 later call, from any goroutine. A transaction runs its reads and writes one at
-a time, so hook writes started concurrently run one after another. A write a
-hook makes, through its executor or through the transaction, runs inside the
-write that called the hook. Pass it the hook's own context: a transaction call
-made inside a hook with any other context waits until the write that called
-the hook finishes, so a hook that waits for that call never returns. A caller
-or system transaction accepts writes only until its callback returns, or
-panics: golem waits for a write already in flight, refuses later ones, and only
-then commits or rolls back. Retry to run the write under the caller's own
-policy.
+a time, so hook writes started concurrently run one after another. A call
+through a hook's executor always runs inside the write that called the hook,
+whatever context you pass it. A call through the transaction itself runs
+inside the call its context came from while that call is still running, and
+otherwise waits its turn. Inside a hook, pass the hook's own context to the
+transaction: with any other context the call waits until the write that called
+the hook finishes, so a hook that waits for it never returns. The same holds
+for a nested hook calling an outer hook's executor. A caller or system
+transaction accepts reads and writes only until its callback returns, or
+panics: golem waits for every call already in flight, refuses later ones, and
+only then flushes, commits or rolls back. Retry to run the write under the
+caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
