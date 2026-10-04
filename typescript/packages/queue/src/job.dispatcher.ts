@@ -44,6 +44,22 @@ function describeScope(scope: JobScope | null): string {
   return scope ? `${scope.type}:${scope.id}` : 'none';
 }
 
+class ShutdownInterruption extends Error {
+  constructor() {
+    super('Application shutdown interrupted the job');
+  }
+}
+
+interface ClaimedJob {
+  readonly job: ClaimCandidate;
+  readonly leaseExpiresAt: Date;
+}
+
+interface Settlement {
+  readonly resolved: boolean;
+  readonly error?: unknown;
+}
+
 @Injectable()
 export class JobDispatcher implements OnModuleDestroy {
   private readonly logger = new Logger(JobDispatcher.name);
@@ -244,9 +260,7 @@ export class JobDispatcher implements OnModuleDestroy {
       `Shutdown grace of ${this.options.shutdownGraceMs}ms elapsed with ${this.executions.size} job(s) still running; aborting`,
     );
     for (const execution of this.executions.values()) {
-      execution.controller.abort(
-        new Error('Application shutdown interrupted the job'),
-      );
+      execution.controller.abort(new ShutdownInterruption());
     }
     await Promise.allSettled(
       [...this.executions.values()].map(({ completion }) => completion),
@@ -313,7 +327,7 @@ export class JobDispatcher implements OnModuleDestroy {
       if (room !== undefined) capacity = Math.min(capacity, room);
       this.blockedTicks.delete(type);
       const claimed = await this.claim(handler, capacity);
-      for (const job of claimed) this.startExecution(handler, job);
+      for (const claim of claimed) this.startExecution(handler, claim);
     }
   }
 
@@ -321,7 +335,7 @@ export class JobDispatcher implements OnModuleDestroy {
     handler: JobHandler,
     limit: number,
     recoverOnly = false,
-  ): Promise<ClaimCandidate[]> {
+  ): Promise<ClaimedJob[]> {
     const now = new Date();
     const claimPool = this.claimPool(handler);
     const candidates = await this.store.findClaimCandidates({
@@ -329,7 +343,7 @@ export class JobDispatcher implements OnModuleDestroy {
       now,
       limit,
     });
-    const claimed: ClaimCandidate[] = [];
+    const claimed: ClaimedJob[] = [];
     for (const candidate of candidates) {
       const recoveringExpiredLease = candidate.status === 'RUNNING';
       const recoveredAttempts = candidate.attempts + 1;
@@ -386,7 +400,7 @@ export class JobDispatcher implements OnModuleDestroy {
             }
           : {}),
       });
-      if (won) claimed.push(candidate);
+      if (won) claimed.push({ job: candidate, leaseExpiresAt });
     }
     return claimed;
   }
@@ -455,7 +469,7 @@ export class JobDispatcher implements OnModuleDestroy {
 
   private startHeartbeat(
     handler: JobHandler,
-    job: ClaimCandidate,
+    { job, leaseExpiresAt }: ClaimedJob,
     controller: AbortController,
   ): NodeJS.Timeout | undefined {
     const interval = this.options.leaseRenewIntervalMs;
@@ -463,33 +477,39 @@ export class JobDispatcher implements OnModuleDestroy {
     if (interval === undefined || renew === undefined) {
       return undefined;
     }
+    let leaseUntil = leaseExpiresAt;
+    const lose = (reason: string): void => {
+      clearInterval(timer);
+      this.logger.warn(
+        `Job lease lost: type=${handler.type} jobId=${job.id} reason=${reason}`,
+      );
+      controller.abort(
+        new Error(`Lost the lease for job ${job.id}; another worker may own it`),
+      );
+    };
     const timer = setInterval(() => {
       const now = new Date();
+      if (now >= leaseUntil) {
+        lose('expired-without-renewal');
+        return;
+      }
+      const requested = new Date(now.getTime() + this.leaseMs(handler));
       void renew({
         id: job.id,
         leaseOwner: this.workerId,
-        leaseExpiresAt: new Date(now.getTime() + this.leaseMs(handler)),
+        leaseExpiresAt: requested,
         now,
       })
         .then((held) => {
           if (held) {
+            leaseUntil = requested;
             return;
           }
-          clearInterval(timer);
-          this.logger.warn(
-            `Job lease lost: type=${handler.type} jobId=${job.id} reason=another-worker-may-own-it`,
-          );
-          controller.abort(
-            new Error(`Lost the lease for job ${job.id}; another worker may own it`),
-          );
+          lose('renewal-refused');
         })
         .catch((error: unknown) => {
-          clearInterval(timer);
           this.logger.warn(
-            `Job lease renewal failed: type=${handler.type} jobId=${job.id} error=${errorMessage(error)}`,
-          );
-          controller.abort(
-            new Error(`Could not renew the lease for job ${job.id}`),
+            `Job lease renewal failed, retrying next interval: type=${handler.type} jobId=${job.id} leaseExpiresAt=${leaseUntil.toISOString()} error=${errorMessage(error)}`,
           );
         });
     }, interval);
@@ -497,9 +517,10 @@ export class JobDispatcher implements OnModuleDestroy {
     return timer;
   }
 
-  private startExecution(handler: JobHandler, job: ClaimCandidate): void {
+  private startExecution(handler: JobHandler, claim: ClaimedJob): void {
+    const { job } = claim;
     const controller = new AbortController();
-    const heartbeat = this.startHeartbeat(handler, job, controller);
+    const heartbeat = this.startHeartbeat(handler, claim, controller);
     this.cancellations.register(job.id, toScope(job), controller);
     this.inFlight.set(handler.type, (this.inFlight.get(handler.type) ?? 0) + 1);
     const completion = this.run(handler, job, controller)
@@ -629,51 +650,55 @@ export class JobDispatcher implements OnModuleDestroy {
     controller: AbortController,
   ): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<void>((resolve) => {
+    const timeout = new Promise<undefined>((resolve) => {
       timer = setTimeout(() => {
         controller.abort(
           new Error(
             `Job ${handler.type} timed out after ${handler.timeoutMs}ms`,
           ),
         );
-        resolve();
+        resolve(undefined);
       }, handler.timeoutMs);
     });
-    const work = handler.handle(event);
+    const settlement = handler.handle(event).then(
+      (): Settlement => ({ resolved: true }),
+      (error: unknown): Settlement => ({ resolved: false, error }),
+    );
     try {
-      await Promise.race([work, timeout]);
-      if (controller.signal.aborted) {
-        await this.settleOrAbandon(work, handler.type);
-        throw controller.signal.reason;
+      const first = await Promise.race([settlement, timeout]);
+      if (!controller.signal.aborted && first !== undefined) {
+        if (first.resolved) return;
+        throw first.error;
       }
-      await work;
-    } catch (error) {
-      if (controller.signal.aborted) {
-        await this.settleOrAbandon(work, handler.type);
-        throw controller.signal.reason;
+      const outcome = first ?? (await this.settleOrAbandon(settlement, handler.type));
+      if (
+        outcome?.resolved === true &&
+        controller.signal.reason instanceof ShutdownInterruption
+      ) {
+        return;
       }
-      throw error;
+      throw controller.signal.reason;
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
 
   private async settleOrAbandon(
-    work: Promise<void>,
+    settlement: Promise<Settlement>,
     type: string,
-  ): Promise<void> {
-    const settled = await this.settledWithin(
-      work.then(
-        () => undefined,
-        () => undefined,
-      ),
-      this.options.abandonGraceMs,
-    );
-    if (!settled) {
+  ): Promise<Settlement | undefined> {
+    let timer: NodeJS.Timeout | undefined;
+    const abandoned = new Promise<undefined>((resolve) => {
+      timer = setTimeout(() => resolve(undefined), this.options.abandonGraceMs);
+    });
+    const outcome = await Promise.race([settlement, abandoned]);
+    clearTimeout(timer);
+    if (outcome === undefined) {
       this.logger.warn(
         `Job ${type} ignored its abort signal for ${this.options.abandonGraceMs}ms; abandoning it to free the slot`,
       );
     }
+    return outcome;
   }
 
   private async fail(

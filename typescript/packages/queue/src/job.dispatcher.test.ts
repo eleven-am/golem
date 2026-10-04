@@ -417,6 +417,54 @@ describe('JobDispatcher', () => {
     expect(store.get(id)?.status).toBe('SUCCEEDED');
   });
 
+  it('records success for a handler that finishes after the shutdown grace', async () => {
+    const { outcomes, observer } = recorder();
+    const { store, dispatcher } = build(
+      [
+        handler(
+          () => new Promise<void>((resolve) => setTimeout(resolve, 40)),
+          { timeoutMs: 60_000 },
+        ),
+      ],
+      { shutdownGraceMs: 10 },
+      [observer],
+    );
+    const id = await seed(store, { maxAttempts: 3 });
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+    await dispatcher.onModuleDestroy();
+
+    expect(store.get(id)?.status).toBe('SUCCEEDED');
+    expect(store.get(id)?.attempts).toBe(0);
+    expect(outcomes()).toEqual(['started', 'succeeded']);
+  });
+
+  it('still retries a handler that rejects after the shutdown grace', async () => {
+    const { store, dispatcher } = build(
+      [
+        handler(
+          (event) =>
+            new Promise<void>((_, reject) => {
+              event.signal.addEventListener('abort', () =>
+                reject(new Error('aborted by caller')),
+              );
+            }),
+          { timeoutMs: 60_000 },
+        ),
+      ],
+      { shutdownGraceMs: 10 },
+    );
+    const id = await seed(store);
+
+    const internals = dispatcher as unknown as { tick(): Promise<void> };
+    await internals.tick();
+    await dispatcher.onModuleDestroy();
+
+    expect(store.get(id)?.status).toBe('PENDING');
+    expect(store.get(id)?.lastError).toBe('Application shutdown interrupted the job');
+  });
+
   it('abandons a handler that ignores its abort signal', async () => {
     const { store, dispatcher } = build([
       handler(() => new Promise<void>(() => undefined), {
@@ -558,6 +606,113 @@ describe('lease renewal', () => {
 
     await running;
     expect(observedAbort).toBe(true);
+  });
+
+  describe('when renewal errors rather than refuses', () => {
+    const SLOW_RENEWING = { leaseDurationMs: 400, leaseRenewIntervalMs: 50 };
+
+    it('keeps running through a renewal that throws while the lease is still live', async () => {
+      let release: (() => void) | undefined;
+      let aborted = false;
+      const { store, dispatcher } = build(
+        [
+          handler(
+            (event) =>
+              new Promise<void>((resolve) => {
+                event.signal.addEventListener('abort', () => {
+                  aborted = true;
+                });
+                release = resolve;
+              }),
+            { timeoutMs: 5_000 },
+          ),
+        ],
+        SLOW_RENEWING,
+      );
+      const id = await seed(store, { maxAttempts: 1 });
+      const renew = store.renewLease.bind(store);
+      let calls = 0;
+      store.renewLease = (input) => {
+        calls += 1;
+        return calls === 1
+          ? Promise.reject(new Error('connection reset'))
+          : renew(input);
+      };
+
+      const running = tick(dispatcher);
+      await new Promise((resolve) => setTimeout(resolve, 180));
+      release?.();
+      await running;
+
+      expect(calls).toBeGreaterThan(1);
+      expect(aborted).toBe(false);
+      expect(store.get(id)?.status).toBe('SUCCEEDED');
+    });
+
+    it('aborts only once the lease has expired when renewal keeps throwing', async () => {
+      let abortedAt: number | undefined;
+      let callsBeforeAbort: number | undefined;
+      let calls = 0;
+      const { store, dispatcher } = build(
+        [
+          handler(
+            (event) =>
+              new Promise<void>((resolve) => {
+                event.signal.addEventListener('abort', () => {
+                  abortedAt = Date.now();
+                  callsBeforeAbort = calls;
+                  resolve();
+                });
+              }),
+            { timeoutMs: 5_000 },
+          ),
+        ],
+        SLOW_RENEWING,
+      );
+      const id = await seed(store);
+      store.renewLease = () => {
+        calls += 1;
+        return Promise.reject(new Error('database unreachable'));
+      };
+
+      const running = tick(dispatcher);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const claimedLease = leaseOf(store, id)!.getTime();
+      await running;
+
+      expect(callsBeforeAbort).toBeGreaterThan(1);
+      expect(abortedAt!).toBeGreaterThanOrEqual(claimedLease);
+      expect(store.get(id)?.lastError).toContain('Lost the lease');
+    });
+
+    it('aborts once the lease has expired when renewal never answers', async () => {
+      let abortedAt: number | undefined;
+      const { store, dispatcher } = build(
+        [
+          handler(
+            (event) =>
+              new Promise<void>((resolve) => {
+                event.signal.addEventListener('abort', () => {
+                  abortedAt = Date.now();
+                  resolve();
+                });
+              }),
+            { timeoutMs: 3_000 },
+          ),
+        ],
+        SLOW_RENEWING,
+      );
+      const id = await seed(store);
+      store.renewLease = () => new Promise<boolean>(() => undefined);
+
+      const running = tick(dispatcher);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      const claimedLease = leaseOf(store, id)!.getTime();
+      await running;
+
+      expect(abortedAt!).toBeGreaterThanOrEqual(claimedLease);
+      expect(store.get(id)?.lastError).toContain('Lost the lease');
+    });
   });
 
   it('refuses to renew a lease that has already expired', async () => {
