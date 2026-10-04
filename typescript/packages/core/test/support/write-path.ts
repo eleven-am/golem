@@ -1,6 +1,6 @@
 import { AuthorizationProvider, GolemAction } from '../../src/authorization';
 import { DatamodelModel } from '../../src/datamodel';
-import { GolemNotFoundError } from '../../src/errors';
+import { GolemConflictError, GolemNotFoundError, GolemValidationError } from '../../src/errors';
 import { GolemEventBus, GolemEventPayload } from '../../src/events';
 import { GolemEngine } from '../../src/operations';
 import { createEventPublisher, GolemBatchDelegate, GolemBatchRuntime } from '../../src/publisher';
@@ -10,6 +10,7 @@ type Client = Record<string, any>;
 
 export interface WritePathDatabase {
   readonly prisma: Client;
+  readonly concurrent: Client;
   close(): Promise<void>;
 }
 
@@ -72,7 +73,7 @@ const models: DatamodelModel[] = [
 ];
 
 const READABLE: Record<string, unknown> = {
-  Thread: { id: { in: [1] } },
+  Thread: { title: { not: 'hidden' } },
   Watch: { id: { in: [20, 22] } },
   Channel: { slug: { in: ['general'] } },
   Pin: { id: { in: [40, 42] } },
@@ -139,6 +140,40 @@ export function describeWritePath(
     ] });
   });
 
+  function racing(
+    client: Client,
+    delegateName: string,
+    injection: () => Promise<unknown>,
+    afterCall = 1,
+  ): { client: Client; injected: () => boolean } {
+    let injected = false;
+    let calls = 0;
+    const wrap = (inner: Client): Client => new Proxy(inner, {
+      get: (target, property, receiver) => {
+        if (property === '$transaction') {
+          return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+            target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+        }
+        if (property !== delegateName) return Reflect.get(target, property, receiver);
+        return new Proxy(target[delegateName], {
+          get: (delegate, name, delegateReceiver) => {
+            if (name !== 'findFirst') return Reflect.get(delegate, name, delegateReceiver);
+            return async (args: unknown) => {
+              const found = await delegate.findFirst(args);
+              calls += 1;
+              if (calls === afterCall) {
+                injected = true;
+                await injection();
+              }
+              return found;
+            };
+          },
+        });
+      },
+    });
+    return { client: wrap(client), injected: () => injected };
+  }
+
   const outcome = (run: () => Promise<unknown>) =>
     run().then(() => 'succeeded', (error: Error) => `${error.constructor.name}: ${error.message}`);
 
@@ -191,44 +226,122 @@ export function describeWritePath(
     });
 
     it('validates the row connectOrCreate actually connected, after a concurrent insert of an unreadable match', async () => {
-      let injected = false;
-      let probes = 0;
-      const raced = new Proxy(prisma, {
-        get: (target, property, receiver) => {
-          if (property !== 'channel') return Reflect.get(target, property, receiver);
-          const channel = target.channel;
-          return new Proxy(channel, {
-            get: (inner, name, innerReceiver) => {
-              if (name !== 'findFirst') return Reflect.get(inner, name, innerReceiver);
-              return async (args: unknown) => {
-                const found = await inner.findFirst(args);
-                probes += 1;
-                if (probes === 2) {
-                  injected = true;
-                  await target.channel.create({ data: { slug: 'late', title: 'someone else' } });
-                }
-                return found;
-              };
-            },
-          });
-        },
-      });
+      const race = racing(prisma, 'channel', () =>
+        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }));
 
-      await expect(outcome(() => engine(raced).create({
+      await expect(outcome(() => engine(race.client).create({
         model: 'Pin',
         data: { id: 45, channel: { connectOrCreate: { where: { slug: 'late' }, create: { slug: 'late', title: 'mine' } } } },
         context: ctx,
       }))).resolves.toBe('GolemNotFoundError: Channel not found');
 
-      expect(injected).toBe(true);
+      expect(race.injected()).toBe(true);
       await expect(prisma.pin.count({ where: { id: 45 } })).resolves.toBe(0);
-      await expect(prisma.channel.findUnique({ where: { slug: 'late' } }))
-        .resolves.toEqual({ slug: 'late', title: 'someone else' });
+      await expect(prisma.channel.count({ where: { title: 'mine' } })).resolves.toBe(0);
     });
   });
 
   const watchesOf = async (threadId: number) =>
     (await prisma.watch.findMany({ where: { threadId }, orderBy: { id: 'asc' } })).map((row: { id: number }) => row.id);
+
+  describe.each([true, false])('the stored state judges a link, with checkWriteResults %s', (checkWriteResults) => {
+    const ctx = { req: {} };
+    const engine = (client: Client) => new GolemEngine(client, models, {
+      authorization: provider(),
+      checkWriteResults,
+      checkReadFields: false,
+      provider: provider_,
+    });
+
+    const hide = () => database.concurrent.thread.update({ where: { id: 1 }, data: { title: 'hidden' } });
+
+    it('refuses a link whose target a concurrent update hid before the write locked it', async () => {
+      const race = racing(prisma, 'thread', hide);
+
+      await expect(engine(race.client).create({ model: 'Watch', data: { id: 23, threadId: 1 }, context: ctx }))
+        .rejects.toThrow('Thread not found');
+
+      expect(race.injected()).toBe(true);
+      await expect(prisma.watch.count({ where: { id: 23 } })).resolves.toBe(0);
+    });
+
+    it('refuses a connect whose target a concurrent update hid before the write locked it', async () => {
+      const race = racing(prisma, 'thread', hide);
+
+      await expect(engine(race.client).update({
+        model: 'Watch', where: { id: 22 }, data: { thread: { connect: { id: 1 } } }, context: ctx,
+      })).rejects.toThrow('Thread not found');
+
+      expect(race.injected()).toBe(true);
+      await expect(watchesOf(2)).resolves.toEqual([22]);
+    });
+
+    if (provider_ === 'sqlite') {
+      it('judges the link against the state the write stored, after every pre-write read', async () => {
+        const race = racing(prisma, 'thread', hide, 2);
+
+        await expect(engine(race.client).create({ model: 'Watch', data: { id: 24, threadId: 1 }, context: ctx }))
+          .rejects.toThrow('Thread not found');
+
+        expect(race.injected()).toBe(true);
+        await expect(prisma.watch.count({ where: { id: 24 } })).resolves.toBe(0);
+      });
+    } else {
+      it('holds a concurrent update of the target back until the link commits', async () => {
+        const order: string[] = [];
+        let pending: Promise<unknown> = Promise.resolve();
+        const race = racing(prisma, 'thread', async () => {
+          pending = hide().then(() => order.push('target hidden'));
+          await new Promise((resolve) => setTimeout(resolve, 300));
+        }, 2);
+
+        await engine(race.client).create({ model: 'Watch', data: { id: 24, threadId: 1 }, context: ctx });
+        order.push('link committed');
+        await pending;
+
+        expect(race.injected()).toBe(true);
+        expect(order).toEqual(['link committed', 'target hidden']);
+      });
+    }
+  });
+
+  describe.each([true, false])('changing a row identity with checkWriteResults %s', (checkWriteResults) => {
+    const ctx = { req: {} };
+    const engine = () => new GolemEngine(prisma, models, {
+      authorization: provider(),
+      checkWriteResults,
+      checkReadFields: false,
+      provider: provider_,
+    });
+
+    it.each([
+      ['a primary key', () => engine().update({ model: 'Thread', where: { id: 1 }, data: { id: 9 }, context: ctx }), 'Thread.id'],
+      ['a primary key on many rows', () => engine().updateMany({ model: 'Thread', where: { id: 1 }, data: { id: 9 }, context: ctx }), 'Thread.id'],
+      ['a fallback unique identity', () => engine().update({ model: 'Channel', where: { slug: 'general' }, data: { slug: 'renamed' }, context: ctx }), 'Channel.slug'],
+      ['a nested row identity', () => engine().update({
+        model: 'Thread', where: { id: 1 }, data: { watches: { update: [{ where: { id: 20 }, data: { id: 99 } }] } }, context: ctx,
+      }), 'Watch.id'],
+      ['the update branch of an upsert', () => engine().upsert({
+        model: 'Thread', where: { id: 1 }, create: { id: 1, title: 'x' }, update: { id: 9 }, context: ctx,
+      }), 'Thread.id'],
+    ])('refuses changing %s before any query, changing nothing', async (_label, run, field) => {
+      const attempt = run();
+      await expect(attempt).rejects.toBeInstanceOf(GolemValidationError);
+      await expect(attempt).rejects.toThrow(`${field} identifies the row and cannot be changed by an update`);
+      await expect(prisma.thread.findMany({ orderBy: { id: 'asc' } })).resolves.toEqual([
+        { id: 1, title: 'readable' },
+        { id: 2, title: 'hidden' },
+      ]);
+      await expect(prisma.channel.count({ where: { slug: 'general' } })).resolves.toBe(1);
+      await expect(prisma.watch.count({ where: { id: 20 } })).resolves.toBe(1);
+    });
+
+    it('leaves a caller without a context free to change an identity', async () => {
+      await prisma.thread.create({ data: { id: 3, title: 'alone' } });
+      await engine().update({ model: 'Thread', where: { id: 3 }, data: { id: 9 } });
+      await expect(prisma.thread.count({ where: { id: 9 } })).resolves.toBe(1);
+    });
+  });
 
   describe.each([true, false])('removing links with checkWriteResults %s', (checkWriteResults) => {
     const engine = () => new GolemEngine(prisma, models, {

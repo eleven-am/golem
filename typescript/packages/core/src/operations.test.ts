@@ -856,3 +856,57 @@ describe('upsert target identity after a before-create hook', () => {
     expect(create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('verification that cannot find a written row', () => {
+  const rowModels = [
+    {
+      name: 'Item',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'label', type: 'String' }),
+      ],
+    },
+  ];
+
+  function verifyingEngine(delegates: Record<string, Record<string, jest.Mock>>) {
+    const client = {
+      ...delegates,
+      $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(delegates)),
+    };
+    return new GolemEngine(client, rowModels, {
+      authorization: {
+        authorize: jest.fn(async () => undefined),
+        constrain: jest.fn(async () => ({})),
+        check: jest.fn(async () => true),
+        checkField: jest.fn(async () => true),
+      } as never,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
+  }
+
+  it('fails an updateMany instead of skipping a row it cannot read back', async () => {
+    const rows = [{ id: 'i1', label: 'a' }, { id: 'i2', label: 'a' }];
+    const result = { count: 2 } as { count: number; [GOLEM_BATCH_RESULT_ROWS]?: unknown };
+    Object.defineProperty(result, GOLEM_BATCH_RESULT_ROWS, { value: [{ id: 'i1', label: 'b' }], enumerable: false });
+    const engine = verifyingEngine({
+      item: { findMany: jest.fn().mockResolvedValue(rows), updateMany: jest.fn().mockResolvedValue(result) },
+    });
+
+    await expect(engine.updateMany({ model: 'Item', where: {}, data: { label: 'b' }, context: { req: {} } }))
+      .rejects.toThrow(new GolemConflictError('An updated Item could not be read back for verification'));
+  });
+
+  it('fails an update whose written row cannot be read back', async () => {
+    const engine = verifyingEngine({
+      item: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'i1', label: 'a' }),
+        update: jest.fn().mockResolvedValue({ id: 'i1', label: 'b' }),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+    });
+
+    await expect(engine.update({ model: 'Item', where: { id: 'i1' }, data: { label: 'b' }, context: { req: {} } }))
+      .rejects.toThrow(new GolemConflictError('The updated Item could not be read back for verification'));
+  });
+});

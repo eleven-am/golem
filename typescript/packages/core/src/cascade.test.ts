@@ -440,7 +440,7 @@ describe('lockedReadStatement', () => {
         field({ name: 'b', type: 'Int', dbName: 'b"col' }),
       ],
     }]);
-    expect(lockedReadStatement(plan, 'Odd', ['a', 'b'], [['1', 2], ['3', 4]], 7)).toEqual({
+    expect(lockedReadStatement(plan, 'Odd', ['a', 'b'], [['1', 2], ['3', 4]], 7, 'UPDATE')).toEqual({
       sql: 'SELECT "a" AS "a", "b""col" AS "b" FROM "we""ird" WHERE ("a", "b""col") IN (($1, $2), ($3, $4)) ORDER BY "a" LIMIT 7 FOR UPDATE',
       values: ['1', 2, '3', 4],
     });
@@ -453,7 +453,7 @@ describe('lockedReadStatement', () => {
       schema: 'tenant"one',
       fields: [field({ name: 'a', type: 'String', isId: true })],
     }]);
-    expect(lockedReadStatement(plan, 'Odd', ['a'], [['1']], 1).sql).toBe(
+    expect(lockedReadStatement(plan, 'Odd', ['a'], [['1']], 1, 'UPDATE').sql).toBe(
       'SELECT "a" AS "a" FROM "tenant""one"."items" WHERE ("a") IN (($1)) ORDER BY "a" LIMIT 1 FOR UPDATE',
     );
   });

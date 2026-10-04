@@ -64,13 +64,15 @@ function delegates() {
     if (clause.AND) return clause.AND.every((part) => matches(part, row));
     return clause.id === undefined || clause.id === row.id;
   };
-  return {
+  const client = {
+    $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>) => work(client)),
     user: {
       findFirst: jest.fn(async ({ where }: { where: unknown }) =>
         users.find((row) => matches(where, row)) ?? null),
     },
     post: { create: jest.fn(async ({ data }: { data: unknown }) => data) },
   };
+  return client;
 }
 
 describe('collectLinkTargets', () => {
@@ -108,7 +110,7 @@ describe('collectLinkTargets', () => {
 });
 
 describe('linking to a row the caller cannot read', () => {
-  it('refuses an unreadable target exactly as a missing one', async () => {
+  it('refuses an unreadable target exactly as a missing one, inside the write transaction', async () => {
     const client = delegates();
     const engine = new GolemEngine(client, models, {
       authorization: provider(),
@@ -124,6 +126,7 @@ describe('linking to a row the caller cannot read', () => {
     expect(hidden).toBe(`${GolemNotFoundError.name}: User not found`);
     await expect(attempt('readable')).resolves.toBe('created');
     expect(client.post.create).toHaveBeenCalledTimes(1);
+    expect(client.$transaction).toHaveBeenCalledTimes(3);
   });
 
   it('does not check a foreign key written by a before hook', async () => {

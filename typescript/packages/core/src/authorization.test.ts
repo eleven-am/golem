@@ -30,7 +30,8 @@ const models = [
 const datamodel: DatamodelDocument = { models, enums: [] };
 
 function fakeClient() {
-  return {
+  const client = {
+    $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>) => work(client)),
     user: {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue(null),
@@ -52,6 +53,7 @@ function fakeClient() {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
+  return client;
 }
 
 function fakeProvider(constraint: unknown = { ownerId: 'me' }): AuthorizationProvider & {

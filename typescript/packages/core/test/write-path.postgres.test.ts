@@ -1,3 +1,5 @@
+import { PrismaPg } from '@prisma/adapter-pg';
+import { PrismaClient } from './prisma-postgres/generated/client';
 import {
   POSTGRES_OPTIONAL,
   POSTGRES_URL_ENV,
@@ -18,6 +20,17 @@ describe('write path on PostgreSQL', () => {
     });
     return;
   }
-  describeWritePath('postgresql', async () =>
-    openPostgres(await ensureDatabase(url, 'golem_core_write_path')));
+  describeWritePath('postgresql', async () => {
+    const databaseUrl = await ensureDatabase(url, 'golem_core_write_path');
+    const opened = await openPostgres(databaseUrl);
+    const concurrent = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
+    return {
+      prisma: opened.prisma,
+      concurrent,
+      close: async () => {
+        await concurrent.$disconnect();
+        await opened.close();
+      },
+    };
+  });
 });

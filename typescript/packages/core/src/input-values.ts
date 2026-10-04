@@ -22,7 +22,11 @@ function refuse(value: unknown, path: string, open: Set<object>): void {
   }
   open.add(value);
   for (const [key, child] of Object.entries(value)) {
-    refuse(child, path === '' ? key : `${path}.${key}`, open);
+    const childPath = path === '' ? key : `${path}.${key}`;
+    if (key.includes('\u0000')) {
+      throw new GolemValidationError(`The key at ${childPath} contains a NUL byte, which cannot be stored`);
+    }
+    refuse(child, childPath, open);
   }
   open.delete(value);
 }

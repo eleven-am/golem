@@ -11,7 +11,9 @@ import {
   GolemValidationError,
 } from './errors';
 import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
-import { LinkRemoval, LinkTarget, collectLinkRemovals, collectLinkTargets, linkedRowKey } from './link-targets';
+import { LinkGuard, LinkGuardPort } from './link-guard';
+import { refuseIdentityChanges } from './identity-writes';
+import { lockedReadStatement, CascadePlan } from './cascade';
 import { runPolicyChecks } from './concurrency';
 import {
   FieldReferences,
@@ -409,6 +411,7 @@ export class GolemEngine {
   private readonly compiledReadListeners = new Set<(event: CompiledReadEvent) => void>();
   private readonly upsertGuardStripes: number;
   private readonly relationAggregations: ReadonlyMap<string, RelationAggregationPlan>;
+  private readonly locking: CascadePlan;
 
   constructor(
     private readonly client: Record<string, any>,
@@ -420,6 +423,7 @@ export class GolemEngine {
     this.hiddenFields = options.hiddenFields ?? new Map();
     this.modelsByName = new Map(models.map((m) => [m.name, m]));
     this.metadata = buildModelMetadata(models);
+    this.locking = new CascadePlan(models);
     this.hooks = options.hooks;
     this.takeLimits = options.takeLimits ?? new Map();
     this.groupLimits = options.groupLimits ?? new Map();
@@ -668,109 +672,65 @@ export class GolemEngine {
     }
   }
 
-  private async refuseUnreadableLinks(
-    model: string,
-    data: unknown,
-    context: unknown,
-    client?: Record<string, any>,
-  ): Promise<ReadonlySet<string>> {
-    const linked = new Set<string>();
-    if (!this.enforced(context)) {
-      return linked;
+  private refuseIdentityChanges(model: string, data: unknown, context: unknown): void {
+    if (this.enforced(context)) {
+      refuseIdentityChanges(this.metadata, model, data);
     }
-    for (const target of collectLinkTargets(this.metadata, model, data)) {
-      const delegate = this.delegate(target.model, client);
-      const where = this.filterableWhere(target.model, target.where);
-      const select = this.pkSelect(target.model);
-      let readable: unknown = null;
+  }
+
+  private linkGuard(model: string, data: unknown, context: unknown): LinkGuard {
+    const readConstraint = async (target: string): Promise<{ denied: boolean; value?: unknown }> => {
       try {
-        const constraint = await this.constraintFor('read', target.model, context);
-        readable = await this.run(target.model, () =>
-          delegate.findFirst({ where: mergeConstraint(where, constraint), select }),
+        return { denied: false, value: await this.constraintFor('read', target, context) };
+      } catch (error) {
+        if (error instanceof GolemForbiddenError) {
+          return { denied: true };
+        }
+        throw error;
+      }
+    };
+    const port: LinkGuardPort = {
+      metadata: this.metadata,
+      unwrap: (target, where) => this.filterableWhere(target, where),
+      findFirst: (target, where, client) =>
+        this.run(target, () => this.delegate(target, client).findFirst({ where, select: this.pkSelect(target) })),
+      findMany: (target, where, client) =>
+        this.run(target, () => this.delegate(target, client).findMany({ where, select: this.pkSelect(target) })),
+      readable: async (target, where, client) => {
+        const constraint = await readConstraint(target);
+        return constraint.denied
+          ? []
+          : this.run(target, () =>
+              this.delegate(target, client).findMany({ where: mergeConstraint(where, constraint.value), select: this.pkSelect(target) }));
+      },
+      readableRow: async (target, where, client) => {
+        const constraint = await readConstraint(target);
+        return constraint.denied
+          ? null
+          : this.run(target, () =>
+              this.delegate(target, client).findFirst({ where: mergeConstraint(where, constraint.value), select: this.pkSelect(target) }));
+      },
+      lock: async (target, rows, mode, client) => {
+        if (this.provider !== 'postgresql' || rows.length === 0) {
+          return;
+        }
+        const identity = this.identityFields(target).map((field) => field.name);
+        const statement = lockedReadStatement(
+          this.locking,
+          target,
+          identity,
+          rows.map((row) => identity.map((name) => row[name])),
+          rows.length,
+          mode,
         );
-      } catch (error) {
-        if (!(error instanceof GolemForbiddenError)) {
-          throw error;
+        const runner = this.rawRunner(client);
+        if (!runner) {
+          throw new Error(`Locking the rows a write links to on ${target} requires $queryRawUnsafe`);
         }
-      }
-      if (readable) {
-        linked.add(linkedRowKey(this.metadata, target.model, readable as Record<string, unknown>));
-        continue;
-      }
-      const creates = target.createsWhenMissing &&
-        !(await this.run(target.model, () => delegate.findFirst({ where, select })));
-      if (!creates) {
-        throw new GolemNotFoundError(`${target.model} not found`);
-      }
-    }
-    return linked;
-  }
-
-  private linkRemovals(model: string, data: unknown, context: unknown): readonly LinkRemoval[] {
-    if (!this.enforced(context)) {
-      return [];
-    }
-    return collectLinkRemovals(this.metadata, model, data, (target, where) =>
-      this.filterableWhere(target, where));
-  }
-
-  private async refuseUnreadableRemovals(
-    removals: readonly LinkRemoval[],
-    root: Record<string, unknown>,
-    context: unknown,
-    client: Record<string, any>,
-  ): Promise<void> {
-    for (const removal of removals) {
-      const delegate = this.delegate(removal.model, client);
-      const where = removal.linkedTo(root);
-      const select = this.pkSelect(removal.model);
-      const linked = (await this.run(removal.model, () =>
-        delegate.findMany({ where, select }))) as unknown[];
-      let readable: unknown[] = [];
-      try {
-        const constraint = await this.constraintFor('read', removal.model, context);
-        readable = (await this.run(removal.model, () =>
-          delegate.findMany({ where: mergeConstraint(where, constraint), select }))) as unknown[];
-      } catch (error) {
-        if (!(error instanceof GolemForbiddenError)) {
-          throw error;
-        }
-      }
-      if (readable.length !== linked.length) {
-        throw new GolemNotFoundError(`${removal.model} not found`);
-      }
-    }
-  }
-
-  private connectedTargets(model: string, data: unknown, context: unknown): readonly LinkTarget[] {
-    if (!this.enforced(context)) {
-      return [];
-    }
-    return collectLinkTargets(this.metadata, model, data).filter((target) => target.createsWhenMissing);
-  }
-
-  private async refuseUnreadableConnected(
-    targets: readonly LinkTarget[],
-    context: unknown,
-    client: Record<string, any>,
-  ): Promise<void> {
-    for (const target of targets) {
-      const delegate = this.delegate(target.model, client);
-      const where = this.filterableWhere(target.model, target.where);
-      let readable: unknown = null;
-      try {
-        const constraint = await this.constraintFor('read', target.model, context);
-        readable = await this.run(target.model, () =>
-          delegate.findFirst({ where: mergeConstraint(where, constraint), select: this.pkSelect(target.model) }));
-      } catch (error) {
-        if (!(error instanceof GolemForbiddenError)) {
-          throw error;
-        }
-      }
-      if (!readable) {
-        throw new GolemNotFoundError(`${target.model} not found`);
-      }
-    }
+        await this.run(target, () => runner.call(client, statement.sql, ...statement.values));
+      },
+    };
+    return LinkGuard.of(port, model, data, this.enforced(context) !== undefined);
   }
 
   private async writeGuarded<T>(
@@ -1182,15 +1142,14 @@ export class GolemEngine {
       await provider.authorize('create', req.model, req.context);
       await this.authorizeNestedWrites(req.model, req.data, req.context);
     }
-    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
-    const connected = this.connectedTargets(req.model, request.data, req.context);
+    const guard = this.linkGuard(req.model, request.data, req.context);
     const prepared = await this.prepareRead(req);
     let created: unknown;
     let createPlanFast = false;
     let createPlan: { select: PrismaSelect; fastPath: boolean } | undefined;
     if (provider && this.checkWriteResults) {
       const model = this.modelsByName.get(req.model)!;
-      const vctx = this.verifyContext(req.context, linked);
+      const vctx = this.verifyContext(req.context, new Set());
       const constraint = await this.constraintFor('create', req.model, req.context);
       createPlan = await planVerification(
         vctx,
@@ -1204,14 +1163,14 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && !createPlanFast) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context, linked);
       created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
+        await guard.before(txClient);
         const wide = await txDelegate.create({
           data: req.data,
           select: { ...createPlan!.select, ...pkSelect },
         });
-        await this.refuseUnreadableConnected(connected, req.context, txClient);
+        const vctx = this.verifyContext(req.context, await guard.after(txClient));
         await verifyCreatedTree(vctx, model, wide, req.data as Record<string, unknown>);
         return txDelegate.findUnique({
           where: this.pkWhere(req.model, wide),
@@ -1221,7 +1180,8 @@ export class GolemEngine {
         });
       });
     } else {
-      created = await this.writeGuarded(req.model, scope, connected.length > 0, async (client) => {
+      created = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
+        await guard.before(client);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).create({
             data: req.data,
@@ -1230,7 +1190,7 @@ export class GolemEngine {
             ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
           }),
         );
-        await this.refuseUnreadableConnected(connected, req.context, client);
+        await guard.after(client);
         return row;
       });
     }
@@ -1242,6 +1202,7 @@ export class GolemEngine {
   async update(request: UpdateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
+    this.refuseIdentityChanges(req.model, req.data, req.context);
     refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
     await this.classifyFilterFields(
       req.model,
@@ -1250,9 +1211,7 @@ export class GolemEngine {
       'update',
     );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
-    const removals = this.linkRemovals(req.model, request.data, req.context);
-    const connected = this.connectedTargets(req.model, request.data, req.context);
+    const guard = this.linkGuard(req.model, request.data, req.context);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
     let updated: unknown;
@@ -1260,7 +1219,7 @@ export class GolemEngine {
     let updateConstraint: unknown;
     if (provider && this.checkWriteResults) {
       const model = this.modelsByName.get(req.model)!;
-      const vctx = this.verifyContext(req.context, linked);
+      const vctx = this.verifyContext(req.context, new Set());
       updateConstraint = await this.constraintFor('update', req.model, req.context);
       updatePlan = await planVerification(
         vctx,
@@ -1273,7 +1232,6 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && updatePlan && !updatePlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context, linked);
       const constraint = updateConstraint;
       const wide = { ...updatePlan!.select, ...pkSelect };
       updated = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
@@ -1285,30 +1243,29 @@ export class GolemEngine {
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
-        await this.refuseUnreadableRemovals(removals, this.pkScalarWhere(req.model, before), req.context, txClient);
+        await guard.before(txClient, this.pkScalarWhere(req.model, before));
         const after = await txDelegate.update({
           where: this.pkWhere(req.model, before),
           data: req.data,
           select: wide,
         });
-        await this.refuseUnreadableConnected(connected, req.context, txClient);
+        const vctx = this.verifyContext(req.context, await guard.after(txClient));
         await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
-        return txDelegate.findUnique({
+        const result = await txDelegate.findUnique({
           where: this.pkWhere(req.model, before),
           select: prepared.select,
           include: prepared.include,
           ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
         });
+        if (!result) {
+          throw new GolemConflictError(`The updated ${req.model} could not be read back for verification`);
+        }
+        return result;
       });
     } else {
-      updated = await this.writeGuarded(req.model, scope, removals.length + connected.length > 0, async (client) => {
+      updated = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
         const target = await this.resolveConstrainedTarget('update', req, client);
-        await this.refuseUnreadableRemovals(
-          removals,
-          this.filterableWhere(req.model, target.where) as Record<string, unknown>,
-          req.context,
-          client,
-        );
+        await guard.before(client, this.filterableWhere(req.model, target.where) as Record<string, unknown>);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).update({
             where: target.where,
@@ -1318,7 +1275,7 @@ export class GolemEngine {
             ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
           }),
         );
-        await this.refuseUnreadableConnected(connected, req.context, client);
+        await guard.after(client);
         return row;
       });
     }
@@ -1330,15 +1287,16 @@ export class GolemEngine {
   async updateMany(request: UpdateManyRequest, scope?: GolemOpScope): Promise<BatchResult> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('updateMany', request);
+    this.refuseIdentityChanges(req.model, req.data, req.context);
     await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'update');
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
+    const guard = this.linkGuard(req.model, request.data, req.context);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
     let result: BatchResult;
     let manyPlan: { select: PrismaSelect; fastPath: boolean } | undefined;
     if (provider && this.checkWriteResults) {
-      const vctx = this.verifyContext(req.context, linked);
+      const vctx = this.verifyContext(req.context, new Set());
       manyPlan = await planVerification(
         vctx,
         this.modelsByName.get(req.model)!,
@@ -1350,7 +1308,6 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && manyPlan && !manyPlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context, linked);
       const scalars = { ...manyPlan.select, ...pkSelect };
       result = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
@@ -1359,6 +1316,7 @@ export class GolemEngine {
           select: scalars,
         })) as Record<string, unknown>[];
         const identityWhere = this.pkBatchWhere(req.model, beforeRows);
+        await guard.before(txClient);
         const mutationResult = await txDelegate.updateMany({ where: identityWhere, data: req.data });
         const returnedRows = batchEventRows(mutationResult);
         const canReuseReturnedRows =
@@ -1376,18 +1334,25 @@ export class GolemEngine {
         const afterById = new Map(
           afterRows.map((row) => [this.pkIdentity(req.model, row), row] as const),
         );
+        const vctx = this.verifyContext(req.context, await guard.after(txClient));
         await runPolicyChecks(beforeRows.map((before) => async () => {
           const after = afterById.get(this.pkIdentity(req.model, before));
-          if (after) {
-            await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
+          if (!after) {
+            throw new GolemConflictError(`An updated ${req.model} could not be read back for verification`);
           }
+          await verifyUpdatedRow(vctx, model, before, after, req.data as Record<string, unknown>);
         }));
         return { count: beforeRows.length };
       });
     } else {
-      result = (await this.run(req.model, () =>
-        delegate.updateMany({ where: mergeConstraint(req.where, constraint), data: req.data }),
-      )) as BatchResult;
+      result = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
+        await guard.before(client);
+        const written = (await this.run(req.model, () =>
+          this.delegate(req.model, client).updateMany({ where: mergeConstraint(req.where, constraint), data: req.data }),
+        )) as BatchResult;
+        await guard.after(client);
+        return written;
+      });
     }
     await this.runAfter('updateMany', req.model, result, req.context);
     return result;
@@ -1418,6 +1383,7 @@ export class GolemEngine {
   }
 
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
+    this.refuseIdentityChanges(request.model, request.update, request.context);
     refuseUpsertOffTarget(this.metadata, request.model, request.where, request.create);
     if (!this.enforced(request.context)) {
       return this.upsertBranch(request, scope);

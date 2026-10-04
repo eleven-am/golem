@@ -122,6 +122,7 @@ export function lockedReadStatement(
   fields: readonly string[],
   tuples: Tuples,
   limit: number,
+  mode: 'UPDATE' | 'SHARE',
 ): { sql: string; values: unknown[] } {
   const values: unknown[] = [];
   const rows = tuples.map((tuple) =>
@@ -136,7 +137,7 @@ export function lockedReadStatement(
   const columns = fields.map((name) => quote(plan.column(model, name))).join(', ');
   const order = plan.identity(model).map((name) => quote(plan.column(model, name))).join(', ');
   return {
-    sql: `SELECT ${projection} FROM ${plan.qualifiedTable(model)} WHERE (${columns}) IN (${rows.join(', ')}) ORDER BY ${order} LIMIT ${limit} FOR UPDATE`,
+    sql: `SELECT ${projection} FROM ${plan.qualifiedTable(model)} WHERE (${columns}) IN (${rows.join(', ')}) ORDER BY ${order} LIMIT ${limit} FOR ${mode}`,
     values,
   };
 }
@@ -152,7 +153,7 @@ export interface CascadeDialect {
 
 const POSTGRES: (plan: CascadePlan) => CascadeDialect = (plan) => ({
   lockedRead: (transaction, model, fields, tuples, limit) => {
-    const statement = lockedReadStatement(plan, model, fields, tuples, limit);
+    const statement = lockedReadStatement(plan, model, fields, tuples, limit, 'UPDATE');
     return transaction.queryRaw(statement.sql, ...statement.values);
   },
   lockedRoots: async (transaction, model, read) => {

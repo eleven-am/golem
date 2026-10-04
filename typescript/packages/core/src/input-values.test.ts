@@ -14,6 +14,14 @@ describe('refuseNulStrings', () => {
     expect(() => refuseNulStrings(args)).toThrow(message);
   });
 
+  it.each([
+    ['a JSON object key', { data: { meta: { 'a\u0000b': 1 } } }, 'The key at data.meta.a'],
+    ['a nested JSON object key', { data: { meta: [{ inner: { '\u0000': 'x' } }] } }, 'The key at data.meta.0.inner.'],
+  ])('refuses a NUL byte in %s', (_label, args, message) => {
+    expect(() => refuseNulStrings(args)).toThrow(GolemValidationError);
+    expect(() => refuseNulStrings(args)).toThrow(message);
+  });
+
   it('accepts ordinary values of every kind', () => {
     const shared = { label: 'shared' };
     expect(() =>
