@@ -116,8 +116,8 @@ describe('composite primary keys', () => {
     } as never;
   }
 
-  it('resolves a constrained delete through the compound unique identity', async () => {
-    const findFirst = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
+  it('deletes through the compound unique identity in one statement carrying the constraint', async () => {
+    const findFirst = jest.fn();
     const del = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
     const engine = new GolemEngine({ postTag: { findFirst, delete: del } }, compositeModels, {
       authorization: compositeProvider(),
@@ -131,11 +131,8 @@ describe('composite primary keys', () => {
       context: { req: {} },
     });
 
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { AND: [{ postId: 'p1', tagId: 't1' }, {}] },
-      select: { postId: true, tagId: true },
-    });
-    expect(del.mock.calls[0][0].where).toEqual({ postId_tagId: { postId: 'p1', tagId: 't1' } });
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(del.mock.calls[0][0].where).toEqual({ postId_tagId: { postId: 'p1', tagId: 't1' }, AND: [{}] });
   });
 
   it('reports a clear error when a model has no primary key at all', async () => {

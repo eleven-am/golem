@@ -82,7 +82,8 @@ const READABLE: Record<string, unknown> = {
 function provider(): AuthorizationProvider {
   return {
     authorize: async () => undefined,
-    constrain: async (action: GolemAction, model: string) => (action === 'read' ? READABLE[model] ?? {} : {}),
+    constrain: async (action: GolemAction, model: string) =>
+      action === 'read' ? READABLE[model] ?? {} : model === 'Thread' ? { title: { not: 'locked' } } : {},
     check: async () => true,
     checkField: async () => true,
   };
@@ -145,6 +146,7 @@ export function describeWritePath(
     delegateName: string,
     injection: () => Promise<unknown>,
     afterCall = 1,
+    method = 'findFirst',
   ): { client: Client; injected: () => boolean } {
     let injected = false;
     let calls = 0;
@@ -157,7 +159,14 @@ export function describeWritePath(
         if (property !== delegateName) return Reflect.get(target, property, receiver);
         return new Proxy(target[delegateName], {
           get: (delegate, name, delegateReceiver) => {
-            if (name !== 'findFirst') return Reflect.get(delegate, name, delegateReceiver);
+            if (name !== method) return Reflect.get(delegate, name, delegateReceiver);
+            if (method !== 'findFirst') {
+              return async (args: unknown) => {
+                injected = true;
+                await injection();
+                return delegate[method](args);
+              };
+            }
             return async (args: unknown) => {
               const found = await delegate.findFirst(args);
               calls += 1;
@@ -303,6 +312,40 @@ export function describeWritePath(
         expect(order).toEqual(['link committed', 'target hidden']);
       });
     }
+  });
+
+  describe.each([true, false])('a row moved out of policy before its write, with checkWriteResults %s', (checkWriteResults) => {
+    const ctx = { req: {} };
+    const lock = () => database.concurrent.thread.update({ where: { id: 1 }, data: { title: 'locked' } });
+    const engine = (client: Client) => new GolemEngine(client, models, {
+      authorization: provider(),
+      checkWriteResults,
+      checkReadFields: false,
+      provider: provider_,
+    });
+
+    it('deletes nothing and reports not found', async () => {
+      const race = racing(prisma, 'thread', lock, 1, 'delete');
+
+      await expect(outcome(() => engine(race.client).delete({ model: 'Thread', where: { id: 1 }, context: ctx })))
+        .resolves.toBe('GolemNotFoundError: Thread not found');
+
+      expect(race.injected()).toBe(true);
+      await expect(prisma.thread.count({ where: { id: 1 } })).resolves.toBe(1);
+    });
+
+    it('updates nothing and reports not found', async () => {
+      const race = racing(prisma, 'thread', lock, 1, 'update');
+
+      await expect(outcome(() => engine(race.client).update({
+        model: 'Thread', where: { id: 1 }, data: { title: 'renamed' }, context: ctx,
+      }))).resolves.toBe('GolemNotFoundError: Thread not found');
+
+      expect(race.injected()).toBe(true);
+      const row = await prisma.thread.findUnique({ where: { id: 1 } });
+      expect(row).not.toBeNull();
+      expect(row.title).not.toBe('renamed');
+    });
   });
 
   describe.each([true, false])('changing a row identity with checkWriteResults %s', (checkWriteResults) => {

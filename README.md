@@ -189,7 +189,7 @@ Each rule shape maps to a specific enforcement mechanism:
 | Rule | Enforcement |
 |---|---|
 | `can('read', 'Article', { userId })` | Compiled into the SQL `where` of every read, including relation traversals. Rows outside the ability do not exist as far as the caller can tell. |
-| `can('update', 'Article', { userId })` | Fetch-then-mutate. Updating someone else's row returns `NOT_FOUND`, identical to a missing row. No existence leaks. |
+| `can('update', 'Article', { userId })` | The update or delete statement itself carries the constraint, so authorisation and write are one atomic statement and a concurrent change cannot move the row out of policy in between. Updating someone else's row returns `NOT_FOUND`, identical to a missing row. No existence leaks. |
 | `can('create', 'Article', { type: 'PERSONAL' })` | Transactional verification. The write executes, the real resulting row is read back and checked, and a denial rolls everything back. Dynamic defaults, `{ increment }`, and connect-by-any-unique-key are all handled exactly, because nothing is simulated. |
 | `can('update', 'Post', ['published'])` | Field-level write permission by before/after column diff. Changing any other column is rejected with the column named. A no-op write to a restricted column passes. |
 | `can('read', 'User', ['phone'], { id })` | Per-row read masking. Your own row shows the value, other rows show `null`. A field the caller could never read is rejected at request time by name. |

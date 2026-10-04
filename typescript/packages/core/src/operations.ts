@@ -1,6 +1,7 @@
 import {
   AuthorizationProvider,
   GolemAction,
+  constrainUnique,
   mergeConstraint,
 } from './authorization';
 import { DatamodelField, DatamodelModel } from './datamodel';
@@ -777,27 +778,26 @@ export class GolemEngine {
     await this.classifyReferencedFields(context, references, 'filter');
   }
 
-  private async resolveConstrainedTarget(
+  private async constrainedUniqueWhere(
     action: GolemAction,
     request: { model: string; where: unknown; context?: unknown },
-    client?: Record<string, any>,
-  ): Promise<{ where: unknown; row?: Record<string, unknown> }> {
-    const constraint = await this.constraintFor(action, request.model, request.context);
-    if (constraint === undefined) {
-      return { where: request.where };
-    }
-    const pkSelect = this.pkSelect(request.model);
-    const delegate = this.delegate(request.model, client);
-    const found = (await this.run(request.model, () =>
-      delegate.findFirst({
-        where: mergeConstraint(this.filterableWhere(request.model, request.where), constraint),
-        select: pkSelect,
-      }),
+  ): Promise<unknown> {
+    this.identityFields(request.model);
+    return constrainUnique(request.where, await this.constraintFor(action, request.model, request.context));
+  }
+
+  private async rowIdentity(
+    model: string,
+    where: unknown,
+    client: Record<string, any>,
+  ): Promise<Record<string, unknown>> {
+    const found = (await this.run(model, () =>
+      this.delegate(model, client).findFirst({ where: this.filterableWhere(model, where), select: this.pkSelect(model) }),
     )) as Record<string, unknown> | null;
     if (!found) {
-      throw new GolemNotFoundError(`${request.model} not found`);
+      throw new GolemNotFoundError(`${model} not found`);
     }
-    return { where: this.pkWhere(request.model, found), row: found };
+    return this.pkScalarWhere(model, found);
   }
 
   private async runBefore<T extends { model: string; context?: unknown }>(
@@ -1245,7 +1245,7 @@ export class GolemEngine {
         }
         await guard.before(txClient, this.pkScalarWhere(req.model, before));
         const after = await txDelegate.update({
-          where: this.pkWhere(req.model, before),
+          where: constrainUnique(this.pkWhere(req.model, before), constraint),
           data: req.data,
           select: wide,
         });
@@ -1264,11 +1264,11 @@ export class GolemEngine {
       });
     } else {
       updated = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
-        const target = await this.resolveConstrainedTarget('update', req, client);
-        await guard.before(client, this.filterableWhere(req.model, target.where) as Record<string, unknown>);
+        const where = await this.constrainedUniqueWhere('update', req);
+        await guard.before(client, guard.needsRoot ? await this.rowIdentity(req.model, where, client) : undefined);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).update({
-            where: target.where,
+            where,
             data: req.data,
             select: prepared.select,
             include: prepared.include,
@@ -1367,7 +1367,7 @@ export class GolemEngine {
       { where: this.filterableWhere(req.model, req.where) },
       'delete',
     );
-    const { where } = await this.resolveConstrainedTarget('delete', req, scope?.client);
+    const where = await this.constrainedUniqueWhere('delete', req);
     const prepared = await this.prepareRead(req);
     const deleted = await this.run(req.model, () =>
       delegate.delete({

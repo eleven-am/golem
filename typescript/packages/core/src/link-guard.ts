@@ -39,6 +39,10 @@ export class LinkGuard {
     );
   }
 
+  get needsRoot(): boolean {
+    return this.removals.length > 0;
+  }
+
   get needsTransaction(): boolean {
     return this.targets.length + this.removals.length > 0;
   }

@@ -69,3 +69,12 @@ export function mergeConstraint(where: unknown, constraint: unknown): unknown {
   }
   return { AND: [where, constraint] };
 }
+
+export function constrainUnique(where: unknown, constraint: unknown): unknown {
+  if (constraint === undefined) {
+    return where;
+  }
+  const unique = (where ?? {}) as Record<string, unknown>;
+  const existing = unique.AND === undefined ? [] : Array.isArray(unique.AND) ? unique.AND : [unique.AND];
+  return { ...unique, AND: [...existing, constraint] };
+}
