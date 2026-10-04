@@ -33,6 +33,14 @@ as fast, because one database connection runs one statement at a time. Do
 slow non-database work before opening the transaction, and use the queue or a
 fresh caller after commit for background work.
 
+**`golem generate`, `check` and `doctor` are about twice as fast.** Each of
+them ran its whole build twice, though only the final emission stage reads the
+reviewed migration history, and every build ran gqlgen twice although its output
+never depends on the generation stamp. A project is now analysed once per
+command and gqlgen runs once. On the example app, `generate` went from 16.6s to
+7.4s, `check` from 19.8s to 7.5s and `doctor` from 16.1s to 6.5s. Generated
+output is byte-identical.
+
 **A failed savepoint release no longer leaves state open.** A nested write
 whose `RELEASE SAVEPOINT` fails now rolls back its savepoint and closes its
 mutation scope.
