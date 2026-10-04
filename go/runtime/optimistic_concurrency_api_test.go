@@ -601,7 +601,9 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	manualContext = contextWithUpsertAttemptFinishFault(manualContext, func(uint32) error {
 		return &pgconn.PgError{Code: "40001", Message: "scoped nil-transaction binding cannot replay"}
 	})
-	_, err = SystemUpsertVersioned(manualContext, manualSystem, fixture.postDescriptor, fixture.target(29), golem.ExpectAbsent(), createPost(29, "visible"), fixture.updateTitle("unused"))
+	_, err = transactionOperation(manualContext, manualBinding, func(ctx context.Context) (golem.Row[mutationResultPost], error) {
+		return SystemUpsertVersioned(ctx, manualSystem, fixture.postDescriptor, fixture.target(29), golem.ExpectAbsent(), createPost(29, "visible"), fixture.updateTitle("unused"))
+	})
 	assertOptimisticConcurrencyError(t, err, golem.CodeConflict, "mutation conflicted")
 	if manualBegins.Load() != 1 {
 		t.Fatalf("scoped nil-transaction attempt begins=%d, want one", manualBegins.Load())

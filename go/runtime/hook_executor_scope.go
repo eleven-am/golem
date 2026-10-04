@@ -15,6 +15,8 @@ var errTransactionCallEnded = errors.New("P4_RUNTIME_TRANSACTION: transaction us
 
 var errTransactionConcurrentUse = errors.New("P4_RUNTIME_TRANSACTION: transaction used concurrently; a transaction serves one call chain at a time")
 
+var errTransactionOperationNotAdmitted = errors.New("P4_RUNTIME_TRANSACTION: statement ran outside an admitted transaction operation")
+
 type usageGate struct {
 	mu       sync.Mutex
 	idle     sync.Cond
@@ -118,6 +120,27 @@ func (binding *executionBinding) beginCall(ctx context.Context) (context.Context
 		return ctx, func() {}, nil
 	}
 	return binding.acquire(ctx, heldWriteFor(ctx, binding), nil)
+}
+
+func transactionOperation[R any](ctx context.Context, binding *executionBinding, run func(context.Context) (R, error)) (R, error) {
+	ctx, endCall, err := binding.beginCall(ctx)
+	if err != nil {
+		var zero R
+		return zero, err
+	}
+	defer endCall()
+	return run(ctx)
+}
+
+func (binding *executionBinding) requireAdmitted(ctx context.Context) error {
+	if binding == nil || !binding.scoped {
+		return nil
+	}
+	held := heldWriteFor(ctx, binding)
+	if held == nil || held.hook || held.calls.isClosed() {
+		return errTransactionOperationNotAdmitted
+	}
+	return nil
 }
 
 func (binding *executionBinding) beginHookExecutorCall(ctx context.Context, captured *heldWrite) (context.Context, func(), error) {

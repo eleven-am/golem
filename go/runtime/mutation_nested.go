@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"sync"
 	"time"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -1174,8 +1175,17 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 			_ = connection.Close()
 			return nil, err
 		}
-		return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
+		admitted, endOperation, err := binding.beginCall(ctx)
+		if err != nil {
+			binding.close()
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
+			_ = connection.Close()
+			return nil, err
+		}
+		release := sync.OnceFunc(endOperation)
+		return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource, admission: innermostHeldWrite(admitted),
 			commit: func(ctx context.Context) error {
+				defer release()
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
 					return err
 				}
@@ -1185,6 +1195,7 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 				})
 			},
 			rollback: func(ctx context.Context) error {
+				release()
 				_, err := connection.ExecContext(ctx, "ROLLBACK")
 				binding.discardMutation()
 				binding.close()
@@ -1206,8 +1217,16 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 		_ = transaction.Rollback()
 		return nil, err
 	}
-	return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource,
+	admitted, endOperation, err := binding.beginCall(ctx)
+	if err != nil {
+		binding.close()
+		_ = transaction.Rollback()
+		return nil, err
+	}
+	release := sync.OnceFunc(endOperation)
+	return &systemNestedTransaction[P, A]{app: boundary.app, binding: binding, queryer: queryer, stance: boundary.stance, policies: boundary.policies, actor: boundary.actor, hooks: boundary.hooks, runtimeValues: boundary.runtimeValues, suppressRootHooks: boundary.captureRoot, captureRoot: boundary.rootCapture(), rootModel: boundary.rootModel(), verify: boundary.verify, compilations: compilations, nextSource: nextSource, admission: innermostHeldWrite(admitted),
 		commit: func(ctx context.Context) error {
+			defer release()
 			if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 				return err
 			}
@@ -1219,6 +1238,7 @@ func (boundary *systemNestedBoundary[P, A]) BeginNested(ctx context.Context) (mu
 			return nil
 		},
 		rollback: func(context.Context) error {
+			release()
 			binding.discardMutation()
 			binding.close()
 			return ignoreTransactionDone(transaction.Rollback())
@@ -1286,6 +1306,7 @@ type systemNestedTransaction[P, A any] struct {
 	guardOrder        [][32]byte
 	commit            func(context.Context) error
 	rollback          func(context.Context) error
+	admission         *heldWrite
 	dependencyFacts   []beforeParentFactCheckpoint
 	graphFactOrder    *beforeParentFactCheckpoint
 }
@@ -2663,6 +2684,13 @@ func (transaction *systemNestedTransaction[P, A]) CommitNested(ctx context.Conte
 	}
 	return transaction.commit(ctx)
 }
+func (transaction *systemNestedTransaction[P, A]) AdmitNested(ctx context.Context) context.Context {
+	if transaction.admission == nil || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, heldWriteKey{}, transaction.admission)
+}
+
 func (transaction *systemNestedTransaction[P, A]) RollbackNested(ctx context.Context) error {
 	return transaction.rollback(ctx)
 }

@@ -31,6 +31,10 @@ type Attempt interface {
 	Abort() error
 }
 
+type AdmittedAttempt interface {
+	AdmitAttempt(context.Context) context.Context
+}
+
 type Backend interface {
 	Begin(context.Context, mutationsql.TransactionRequirement, uint32) (Attempt, error)
 }
@@ -97,7 +101,11 @@ func Run(ctx context.Context, program Program, backend Backend, freeze Freeze, e
 		if attempt == nil {
 			return Result{}, fail(CodeInvariant, "backend returned a nil attempt", nil)
 		}
-		result, attemptErr := runAttemptProtected(ctx, program, attempt, frozen, executor, ordinal)
+		attemptContext := ctx
+		if admitted, ok := attempt.(AdmittedAttempt); ok {
+			attemptContext = admitted.AdmitAttempt(ctx)
+		}
+		result, attemptErr := runAttemptProtected(attemptContext, program, attempt, frozen, executor, ordinal)
 		if attemptErr == nil {
 			return result, nil
 		}

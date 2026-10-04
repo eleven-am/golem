@@ -124,7 +124,9 @@ func CallerTxEnqueue[P, A any](ctx context.Context, transaction *CallerTx[P, A],
 	if transaction == nil || transaction.caller == nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "caller transaction is unavailable")
 	}
-	return txEnqueue(ctx, transaction.caller.app, transaction.caller.executor, pending)
+	return transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) (queue.JobID, error) {
+		return txEnqueue(ctx, transaction.caller.app, transaction.caller.executor, pending)
+	})
 }
 
 // SystemTxEnqueue is the unrestricted equivalent of CallerTxEnqueue.
@@ -132,18 +134,18 @@ func SystemTxEnqueue[P, A any](ctx context.Context, transaction *SystemTx[P, A],
 	if transaction == nil || transaction.system.app == nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "system transaction is unavailable")
 	}
-	return txEnqueue(ctx, transaction.system.app, transaction.system.executor, pending)
+	return transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) (queue.JobID, error) {
+		return txEnqueue(ctx, transaction.system.app, transaction.system.executor, pending)
+	})
 }
 
 func txEnqueue[P, A any](ctx context.Context, app *App[P, A], binding *executionBinding, pending queue.Pending) (queue.JobID, error) {
 	if app == nil || app.queueStore == nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "queue is not configured")
 	}
-	ctx, endCall, callErr := binding.beginCall(ctx)
-	if callErr != nil {
+	if callErr := binding.requireAdmitted(ctx); callErr != nil {
 		return "", callErr
 	}
-	defer endCall()
 	executor, err := binding.transactionFor(app.database)
 	if err != nil {
 		return "", queue.Fail(queue.CodeConfigInvalid, "transactional enqueue requires a transaction-bound executor")

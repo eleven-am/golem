@@ -297,6 +297,12 @@ func executeScalarMutationProgramWithObservers(ctx context.Context, database *sq
 		return scalarMutationExecution{}, rollbackScalarMutation(transaction, err)
 	}
 	defer transactionBinding.close()
+	ctx, endOperation, admitErr := transactionBinding.beginCall(ctx)
+	if admitErr != nil {
+		transactionBinding.discardMutation()
+		return scalarMutationExecution{}, rollbackScalarMutation(transaction, admitErr)
+	}
+	defer endOperation()
 	result, err = executeScalarProgramOnTransactionObserved(ctx, transaction, transactionBinding, registry, model, provider, program, observer, verified)
 	if err != nil {
 		transactionBinding.discardMutation()

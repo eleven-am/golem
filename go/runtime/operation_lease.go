@@ -50,12 +50,10 @@ func callerWrite[P, A, R any](ctx context.Context, caller *Caller[P, A], conflic
 	if caller == nil {
 		return run(ctx, caller)
 	}
-	ctx, endCall, callErr := caller.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := caller.executor.requireAdmitted(ctx); callErr != nil {
 		var zero R
 		return zero, callErr
 	}
-	defer endCall()
 	if ctx == nil || caller.policies == nil {
 		return run(ctx, caller)
 	}

@@ -295,7 +295,11 @@ absent from the schema cannot be written by construction.
 A transaction serves one call chain at a time. The chain is one call made
 through the transaction and everything nested inside it: the hooks that call
 runs, calls made with a hook's own context, calls through a hook's executor,
-and the hooks those run in turn. Nested calls run inside their parent: each
+and the hooks those run in turn. A call holds the transaction from start to
+finish, as one operation: preparation, every statement, and its before and
+after hooks, for reads as well as writes. A callback that returns while a call
+is still in a hook waits for that call before golem commits. Nested calls run
+inside their parent: each
 hook write gets its own savepoint, and a hook's calls finish before the write
 that ran the hook continues. Calls made one after another always proceed.
 

@@ -51,8 +51,18 @@ const (
 	p10ActionDetachedDirectWrite
 	p10ActionOuterExecutorWrite
 	p10ActionSpawnedDirectWrite
+	p10ActionHookedRead
 	p10ActionCount
 )
+
+type p10ScheduleReadKey struct{}
+
+type p10ScheduleRead struct {
+	child *p10ScheduleWrite
+	ran   atomic.Bool
+}
+
+var errP10ReadNeverRanItsHook = errors.New("the read never reached its hook")
 
 type p10ScheduleStep struct {
 	action p10ScheduleAction
@@ -116,6 +126,7 @@ type p10Schedule struct {
 	pending    sync.WaitGroup
 	progress   atomic.Int64
 	unexpected atomic.Pointer[error]
+	readHooks  atomic.Int64
 }
 
 func (schedule *p10Schedule) intn(n int) int {
@@ -148,7 +159,7 @@ func (schedule *p10Schedule) newWrite(parent *p10ScheduleWrite) *p10ScheduleWrit
 			step.action = p10ActionNestedDirectWrite
 		}
 		switch step.action {
-		case p10ActionExecutorWrite, p10ActionNestedDirectWrite, p10ActionEscapedExecutorWrite, p10ActionOuterExecutorWrite:
+		case p10ActionExecutorWrite, p10ActionNestedDirectWrite, p10ActionEscapedExecutorWrite, p10ActionOuterExecutorWrite, p10ActionHookedRead:
 			step.child = schedule.newWrite(write)
 		case p10ActionDetachedDirectWrite, p10ActionSpawnedDirectWrite:
 			step.child = schedule.newWrite(nil)
@@ -222,6 +233,8 @@ func (schedule *p10Schedule) hook(ctx context.Context, executor golem.HookExecut
 			schedule.finish(step.child, err)
 		case p10ActionNestedRead:
 			_, _ = schedule.tx.Teams.Count(schedule.context(step.source, write, ctx), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+		case p10ActionHookedRead:
+			schedule.read(schedule.context(step.source, write, ctx), step.child)
 		case p10ActionEscapedExecutorWrite:
 			child := step.child
 			child.outer = executor
@@ -254,6 +267,37 @@ func (schedule *p10Schedule) hook(ctx context.Context, executor golem.HookExecut
 	return nil
 }
 
+func (schedule *p10Schedule) read(ctx context.Context, child *p10ScheduleWrite) error {
+	read := &p10ScheduleRead{child: child}
+	_, err := schedule.tx.Teams.FindMany(context.WithValue(ctx, p10ScheduleReadKey{}, read), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+	if child != nil && !read.ran.Load() {
+		schedule.finish(child, errP10ReadNeverRanItsHook)
+	}
+	return err
+}
+
+func (schedule *p10Schedule) readHook(ctx context.Context) error {
+	read, _ := ctx.Value(p10ScheduleReadKey{}).(*p10ScheduleRead)
+	if read == nil || !read.ran.CompareAndSwap(false, true) {
+		return nil
+	}
+	schedule.readHooks.Add(1)
+	if _, err := schedule.tx.Teams.Count(ctx, golem.Where(p10operations.Teams.Owner.Eq("alpha"))); err != nil {
+		failure := fmt.Errorf("a read hook's own transaction call failed: %w", err)
+		schedule.unexpected.Store(&failure)
+	}
+	if read.child == nil {
+		return nil
+	}
+	_, err := schedule.tx.Teams.Create(context.WithValue(ctx, p10ScheduleKey{}, read.child), p10TeamInput(read.child.id))
+	schedule.finish(read.child, err)
+	if err != nil && !read.child.fails {
+		failure := fmt.Errorf("a write made by a read hook through its own context failed: %w", err)
+		schedule.unexpected.Store(&failure)
+	}
+	return nil
+}
+
 func (schedule *p10Schedule) root(worker int) {
 	for round := schedule.intn(4) + 1; round > 0; round-- {
 		var err error
@@ -271,7 +315,11 @@ func (schedule *p10Schedule) root(worker int) {
 			_, err = schedule.tx.Teams.Create(context.WithValue(schedule.retainedContext(), p10ScheduleKey{}, write), p10TeamInput(write.id))
 			schedule.finish(write, err)
 		case 4:
-			_, err = schedule.tx.Teams.FindMany(schedule.retainedContext(), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+			var child *p10ScheduleWrite
+			if schedule.intn(2) == 0 {
+				child = schedule.newWrite(nil)
+			}
+			err = schedule.read(schedule.retainedContext(), child)
 		}
 		if err != nil && !p10ConcurrentUse(err) && !strings.Contains(err.Error(), "after its callback returned") && !strings.Contains(err.Error(), "execution binding is unavailable") {
 			schedule.unexpected.Store(&err)
@@ -302,6 +350,7 @@ func TestRandomTransactionSchedulesFinishAndStayConsistentAcrossProviders(t *tes
 			midFlight := int64(schedule.intn(workers))
 			p10operations.Reset(nil)
 			p10operations.SetTeamHook(schedule.hook)
+			p10operations.SetTeamReadHook(schedule.readHook)
 			before := fixture.outboxRows(t)
 			var transactionErr error
 			var recovered any
@@ -366,7 +415,7 @@ func TestRandomTransactionSchedulesFinishAndStayConsistentAcrossProviders(t *tes
 			if got := fixture.outboxRows(t) - before; got != expected {
 				t.Fatalf("seed %d: outbox rows=%d want %d", seed, got, expected)
 			}
-			t.Log(fmt.Sprintf("seed %d end %d workers %d writes %d persisted %d transaction %v", seed, end, workers, len(schedule.writes), expected, transactionErr))
+			t.Log(fmt.Sprintf("seed %d end %d workers %d writes %d persisted %d read hooks %d transaction %v", seed, end, workers, len(schedule.writes), expected, schedule.readHooks.Load(), transactionErr))
 		}
 	})
 }
