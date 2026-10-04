@@ -34,7 +34,7 @@ const POLICY_OPS = {
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
   const raw = new PrismaClient(options);
-  type TransactionState = { client: Record<string, unknown>; suppressBatchEvents: boolean };
+  type TransactionState = { client: Record<string, unknown>; suppressBatchEvents: boolean; sequential: boolean };
   const transactionContext = new AsyncLocalStorage<TransactionState>();
   const delegateFor = (client: Record<string, unknown>, model: string) =>
     client[model.charAt(0).toLowerCase() + model.slice(1)] as GolemBatchDelegate;
@@ -49,8 +49,14 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
     query: {
       async $allOperations({ model, operation, args, query }) {
         refuseNulStrings(args);
-        if (!model) return query(args);
         const state = transactionContext.getStore();
+        if (state?.sequential) {
+          return transactionContext.run({ client: state.client, suppressBatchEvents: false, sequential: false }, async () => {
+            const target = (model ? delegateFor(state.client, model) : state.client) as unknown as Record<string, (...values: unknown[]) => Promise<unknown>>;
+            return await (model || !Array.isArray(args) ? target[operation](args) : target[operation](...args));
+          });
+        }
+        if (!model) return query(args);
         const activeClient = (state?.client ?? raw) as unknown as Record<string, unknown>;
         const delegate = delegateFor(activeClient, model);
         return interceptor({
@@ -68,7 +74,7 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
                   const current = transactionContext.getStore();
                   const execute = (client: Record<string, unknown>) =>
                     transactionContext.run(
-                      { client, suppressBatchEvents: true },
+                      { client, suppressBatchEvents: true, sequential: false },
                       () => work(delegateFor(client, model), transactionFor(client)),
                     );
                   if (current) return execute(current.client);
@@ -88,10 +94,24 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
   const commitAwareTransaction = ((first: unknown, ...rest: unknown[]) =>
     withBufferedEvents(() => {
       const invoke = transaction as unknown as (...transactionArgs: unknown[]) => Promise<unknown>;
-      if (typeof first !== 'function') return invoke(first, ...rest);
+      if (typeof first !== 'function') {
+        return invoke(
+          (tx: Record<string, unknown>) => transactionContext.run(
+            { client: tx, suppressBatchEvents: false, sequential: true },
+            async () => {
+              const results: unknown[] = [];
+              for (const operation of first as readonly PromiseLike<unknown>[]) {
+                results.push(await operation);
+              }
+              return results;
+            },
+          ),
+          ...rest,
+        );
+      }
       return invoke(
         (tx: Record<string, unknown>) => transactionContext.run(
-          { client: tx, suppressBatchEvents: false },
+          { client: tx, suppressBatchEvents: false, sequential: false },
           () => (first as (client: Record<string, unknown>) => Promise<unknown>)(tx),
         ),
         ...rest,

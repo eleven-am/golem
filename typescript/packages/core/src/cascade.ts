@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import { canonicalToken } from './canonical';
 import { DatamodelField, DatamodelModel, rowIdentityFields } from './datamodel';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -147,29 +148,27 @@ function lockUnavailable(error: unknown): boolean {
 }
 
 export function rowLocker(
-  provider: string | undefined,
+  provider: GolemProvider | undefined,
   plan: CascadePlan,
   run: (sql: string, values: unknown[]) => Promise<unknown>,
 ): RowLocker {
-  if (provider === 'postgresql') {
-    return async ({ model, row, mode }, wait) => {
-      const statement = lockStatement(plan, model, row, mode, wait);
-      try {
-        await run(statement.sql, statement.values);
-      } catch (error) {
-        if (lockUnavailable(error)) {
-          throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
+  switch (provider) {
+    case 'postgresql':
+      return async ({ model, row, mode }, wait) => {
+        const statement = lockStatement(plan, model, row, mode, wait);
+        try {
+          await run(statement.sql, statement.values);
+        } catch (error) {
+          if (lockUnavailable(error)) {
+            throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
+          }
+          throw error;
         }
-        throw error;
-      }
-    };
+      };
+    case 'sqlite':
+    case undefined:
+      return async () => undefined;
   }
-  if (provider === 'sqlite' || provider === undefined) {
-    return async () => undefined;
-  }
-  return async () => {
-    throw new Error(`Golem cannot lock the rows a write touches on provider ${provider}`);
-  };
 }
 
 export class RowLocks {

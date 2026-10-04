@@ -19,6 +19,7 @@ const database = 'golem_core_upsert_guard';
 
 const model: DatamodelModel = {
   name: 'UpsertTarget',
+  dbName: 'upsert_targets',
   fields: [
     field({ name: 'id', type: 'Int', isId: true, hasDefaultValue: true }),
     field({ name: 'key', type: 'String', isUnique: true }),

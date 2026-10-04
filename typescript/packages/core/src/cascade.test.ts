@@ -386,8 +386,9 @@ describe.each(['sqlite', 'postgresql'])('cascaded delete events on %s', (provide
       batch: batch.runtime,
     });
 
-    expect(query).toHaveBeenCalledTimes(1);
-    expect(batch.delegates.get('Post')!.findUnique).not.toHaveBeenCalled();
+    expect(query).not.toHaveBeenCalled();
+    expect(batch.delegates.get('Post')!.update).toHaveBeenCalledTimes(1);
+    expect(batch.statements).toEqual(provider === 'postgresql' ? ['SELECT 1 FROM "posts" WHERE ("id") = ($1) FOR UPDATE'] : []);
     expect(published).toEqual([{ topic: 'golem.Post', events: [{ type: 'UPDATED', model: 'Post', id: 'p1' }] }]);
   });
 });
@@ -523,11 +524,10 @@ describe('transaction row locks', () => {
       .rejects.toThrow(new GolemConflictError('A row of A this write needs is held by a concurrent write'));
   });
 
-  it('refuses a provider it cannot lock rows on', async () => {
-    const lock = rowLocker('mysql', new CascadePlan([]), jest.fn());
-    await expect(lock({ model: 'X', row: {}, mode: 'UPDATE' }, true)).rejects.toThrow(
-      'Golem cannot lock the rows a write touches on provider mysql',
-    );
+  it('issues no lock statement on SQLite, where the database serialises writers', async () => {
+    const run = jest.fn();
+    await rowLocker('sqlite', new CascadePlan([]), run)({ model: 'X', row: {}, mode: 'UPDATE' }, true);
+    expect(run).not.toHaveBeenCalled();
   });
 });
 

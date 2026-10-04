@@ -269,13 +269,11 @@ describe('planning a compiled aggregate', () => {
     ).toMatchObject({ reason: 'orderBy' });
   });
 
-  it('hands back a provider, a table and a policy it cannot compile', async () => {
-    expect(await refused({ provider: 'mysql', _count: true })).toMatchObject({
-      reason: 'provider',
-    });
-    expect(await refused({ provider: undefined, _count: true })).toMatchObject({
-      reason: 'provider',
-    });
+  it('refuses to compile an aggregate for an engine built without a datasource provider', async () => {
+    await expect(refused({ provider: undefined, _count: true })).rejects.toThrow('needs the datasource provider');
+  });
+
+  it('hands back a table and a policy it cannot compile', async () => {
     expect(await refused({ model: models[2]!, _count: true })).toMatchObject({
       reason: 'measure',
     });

@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import type {
   AliasedRawBuilder,
   CompiledQuery,
@@ -106,7 +107,7 @@ export interface ScopedFieldPolicy {
 
 export interface ScopedHost {
   readonly models: readonly DatamodelModel[];
-  readonly provider?: string;
+  readonly provider?: GolemProvider;
   hiddenFields(model: string): ReadonlySet<string>;
   constraint(model: string): Promise<unknown>;
   fieldPolicy?(
@@ -240,19 +241,15 @@ function postgresScopedDialect(): ScopedDialect {
   };
 }
 
-export function resolveScopedDialect(provider: string | undefined): ScopedDialect {
-  if (provider === undefined || provider === '') {
-    refuse(`a scoped query needs the datasource provider: ${PROVIDER_HINT}`);
+export function resolveScopedDialect(provider: GolemProvider | undefined): ScopedDialect {
+  switch (provider) {
+    case 'sqlite':
+      return sqliteScopedDialect();
+    case 'postgresql':
+      return postgresScopedDialect();
+    case undefined:
+      return refuse(`a scoped query needs the datasource provider: ${PROVIDER_HINT}`);
   }
-  if (provider === 'sqlite') {
-    return sqliteScopedDialect();
-  }
-  if (provider === 'postgresql' || provider === 'postgres') {
-    return postgresScopedDialect();
-  }
-  refuse(
-    `a scoped query cannot be compiled for datasource provider "${provider}": golem renders policy predicates for sqlite and postgresql only`,
-  );
 }
 
 export function sqlNodeToRaw(node: SqlNode, dialect: SqlDialect, sql: Sql): RawBuilder<unknown> {

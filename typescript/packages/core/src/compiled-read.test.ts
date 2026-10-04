@@ -836,9 +836,8 @@ describe('refusing to compile a read that reaches a relation', () => {
 });
 
 describe('refusing to compile a read', () => {
-  it('hands back a read whose provider golem does not render SQL for', async () => {
-    expect(await refusal({ provider: 'mongodb' })).toMatchObject({ reason: 'provider' });
-    expect(await refusal({ provider: undefined })).toMatchObject({ reason: 'provider' });
+  it('refuses to compile a read for an engine built without a datasource provider', async () => {
+    await expect(refusal({ provider: undefined })).rejects.toThrow('needs the datasource provider');
   });
 
   it('hands back a read on a model carrying no physical table name', async () => {

@@ -99,10 +99,21 @@ export interface DatamodelEnum {
   values: readonly string[];
 }
 
+export type GolemProvider = 'postgresql' | 'sqlite';
+
+export function supportedProvider(provider: unknown): GolemProvider {
+  if (provider === 'postgresql' || provider === 'sqlite') {
+    return provider;
+  }
+  throw new Error(
+    `Golem supports the postgresql and sqlite datasource providers, not ${provider === undefined ? 'an unspecified provider' : `"${String(provider)}"`}`,
+  );
+}
+
 export interface DatamodelDocument<TModels = Record<string, string>> {
   models: readonly DatamodelModel[];
   enums: readonly DatamodelEnum[];
-  provider?: string;
+  provider?: GolemProvider;
   __models?: TModels;
 }
 

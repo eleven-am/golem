@@ -234,6 +234,39 @@ export function describeWritePath(
     return { publisher, published };
   }
 
+  function observing(onStatement: (sql: string) => Promise<void>): (inner: Client) => Client {
+    const wrap = (inner: Client): Client => new Proxy(inner, {
+      get: (target, property, receiver) => {
+        if (property === '$transaction') {
+          return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+            target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+        }
+        if (property === '$queryRawUnsafe') {
+          return async (sql: string, ...values: unknown[]) => {
+            const rows = await target.$queryRawUnsafe(sql, ...values);
+            await onStatement(sql);
+            return rows;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    return wrap;
+  }
+
+  function observed(onStatement: (sql: string) => Promise<void>): Client {
+    return observing(onStatement)(prisma);
+  }
+
+  function barrier(): { arrive(): void; wait(): Promise<void> } {
+    let arrive!: () => void;
+    const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+    return {
+      arrive: () => arrive(),
+      wait: () => Promise.race([arrived, new Promise<void>((resolve) => setTimeout(resolve, 500))]),
+    };
+  }
+
   const outcome = (run: () => Promise<unknown>) =>
     run().then(() => 'succeeded', (error: Error) => `${error.constructor.name}: ${error.message}`);
 
@@ -428,41 +461,12 @@ export function describeWritePath(
     describe.each([true, false])('locking link targets, with checkWriteResults %s', (checkWriteResults) => {
       const ctx = { req: {} };
 
-      function observed(onStatement: (sql: string) => Promise<void>): Client {
-        const wrap = (inner: Client): Client => new Proxy(inner, {
-          get: (target, property, receiver) => {
-            if (property === '$transaction') {
-              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
-                target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
-            }
-            if (property === '$queryRawUnsafe') {
-              return async (sql: string, ...values: unknown[]) => {
-                const rows = await target.$queryRawUnsafe(sql, ...values);
-                await onStatement(sql);
-                return rows;
-              };
-            }
-            return Reflect.get(target, property, receiver);
-          },
-        });
-        return wrap(prisma);
-      }
-
       const engineOver = (client: Client) => new GolemEngine(client, models, {
         authorization: provider(),
         checkWriteResults,
         checkReadFields: false,
         provider: provider_,
       });
-
-      function barrier(): { arrive(): void; wait(): Promise<void> } {
-        let arrive!: () => void;
-        const arrived = new Promise<void>((resolve) => { arrive = resolve; });
-        return {
-          arrive: () => arrive(),
-          wait: () => Promise.race([arrived, new Promise<void>((resolve) => setTimeout(resolve, 500))]),
-        };
-      }
 
       async function race(first: (client: Client) => Promise<unknown>, second: (client: Client) => Promise<unknown>) {
         const secondLocked = barrier();
@@ -762,6 +766,178 @@ export function describeWritePath(
     });
   });
 
+  describe.each([true, false])('the nested branch that executes, with checkWriteResults %s', (checkWriteResults) => {
+    const ctx = { req: {} };
+    const personEngine = () => new GolemEngine(prisma, [...models, people], {
+      authorization: provider(),
+      checkWriteResults,
+      checkReadFields: false,
+      provider: provider_,
+    });
+
+    beforeEach(async () => {
+      await prisma.person.deleteMany();
+      await prisma.person.createMany({ data: [{ id: 5 }, { id: 6, buddyId: 5 }] });
+    });
+
+    it('connects to an existing row without checking links only its create branch names', async () => {
+      await personEngine().update({
+        model: 'Person',
+        where: { id: 5 },
+        data: { buddy: { connectOrCreate: { where: { id: 6 }, create: { id: 6, buddy: { connect: { id: 999 } } } } } },
+        context: ctx,
+      });
+      await expect(prisma.person.findUnique({ where: { id: 5 } })).resolves.toEqual({ id: 5, buddyId: 6 });
+    });
+
+    it('updates an existing nested row without checking links only its create branch names', async () => {
+      await personEngine().update({
+        model: 'Person',
+        where: { id: 5 },
+        data: { buddiedBy: { upsert: [{ where: { id: 6 }, create: { id: 6, buddiedBy: { connect: [{ id: 999 }] } }, update: {} }] } },
+        context: ctx,
+      });
+      await expect(prisma.person.findUnique({ where: { id: 6 } })).resolves.toEqual({ id: 6, buddyId: 5 });
+    });
+
+    it('still checks the links of the branch that executes', async () => {
+      await expect(personEngine().update({
+        model: 'Person',
+        where: { id: 5 },
+        data: { buddiedBy: { upsert: [{ where: { id: 6 }, create: { id: 6 }, update: { buddiedBy: { connect: [{ id: 999 }] } } }] } },
+        context: ctx,
+      })).rejects.toThrow('Person not found');
+      await expect(personEngine().update({
+        model: 'Person',
+        where: { id: 5 },
+        data: { buddy: { connectOrCreate: { where: { id: 7 }, create: { id: 7, buddy: { connect: { id: 999 } } } } } },
+        context: ctx,
+      })).rejects.toThrow('Person not found');
+      await expect(prisma.person.count()).resolves.toBe(2);
+    });
+  });
+
+  if (provider_ === 'postgresql') {
+    describe.each([true, false])('single-row writes in interactive transactions, with checkWriteResults %s', (checkWriteResults) => {
+      async function crossed(
+        write: (client: Client, id: number) => Promise<unknown>,
+        transact: (watch: (inner: Client) => Client, work: (tx: Client) => Promise<void>) => Promise<unknown>,
+      ) {
+        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+        const secondLocked = barrier();
+        let firstWaited = false;
+        const firstClient = observing(async (sql) => {
+          if (!firstWaited && sql.includes('FROM "threads"')) {
+            firstWaited = true;
+            await secondLocked.wait();
+          }
+        });
+        const secondClient = observing(async (sql) => {
+          if (sql.includes('FROM "threads"')) secondLocked.arrive();
+        });
+        const firstRun = transact(firstClient, async (tx) => {
+          await write(tx, 1);
+          await write(tx, 3);
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const secondRun = transact(secondClient, async (tx) => {
+          await write(tx, 3);
+          await write(tx, 1);
+        });
+        return Promise.allSettled([firstRun, secondRun]);
+      }
+
+      const verdict = (outcomes: PromiseSettledResult<unknown>[]) => outcomes.map((outcome) => {
+        if (outcome.status === 'fulfilled') return 'fulfilled';
+        const reason = (outcome as PromiseRejectedResult).reason;
+        return reason instanceof GolemConflictError ? 'conflict' : `other: ${String(reason).slice(0, 120)}`;
+      });
+
+      it('through the engine, one completes and the other is refused, never a deadlock', async () => {
+        const engine = (client: Client) => new GolemEngine(client, models, {
+          authorization: provider(), checkWriteResults, checkReadFields: false, provider: provider_,
+        });
+        const outcomes = await crossed(
+          (tx, id) => (tx as unknown as { update(request: unknown): Promise<unknown> }).update({
+            model: 'Thread', where: { id }, data: { title: `edited ${id}` },
+          }),
+          (watch, work) => engine(watch(prisma)).transaction({ req: {} }, (tx) => work(tx as unknown as Client)),
+        );
+        expect(verdict(outcomes).sort()).toEqual(['conflict', 'fulfilled']);
+      });
+
+      it('through the unscoped system client, one completes and the other is refused, never a deadlock', async () => {
+        const { publisher } = cascadePublisher();
+        const outcomes = await crossed(
+          (tx, id) => tx.thread.update({ where: { id }, data: { title: `edited ${id}` } }),
+          (watch, work) => golemClient(prisma, publisher, watch).$transaction((tx: Client) => work(tx)),
+        );
+        expect(verdict(outcomes).sort()).toEqual(['conflict', 'fulfilled']);
+      });
+    });
+
+    describe('a row deciding a nested branch that appears while the write locks', () => {
+      it('is refused with a conflict', async () => {
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 5 }, { id: 6, buddyId: 5 }] });
+        const race = racing(prisma, 'person', () => database.concurrent.person.create({ data: { id: 7 } }), 2);
+
+        await expect(new GolemEngine(race.client, [...models, people], {
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+        }).update({
+          model: 'Person',
+          where: { id: 5 },
+          data: { buddy: { connectOrCreate: { where: { id: 7 }, create: { id: 7, buddy: { connect: { id: 6 } } } } } },
+          context: { req: {} },
+        })).rejects.toThrow(new GolemConflictError('The Person row deciding this nested write changed concurrently'));
+        expect(race.injected()).toBe(true);
+        await expect(prisma.person.findUnique({ where: { id: 5 } })).resolves.toEqual({ id: 5, buddyId: null });
+      });
+    });
+
+    describe('a nested mutation row that attaches while the write locks', () => {
+      it('is refused with a conflict', async () => {
+        let attached = false;
+        const raced = new Proxy(prisma, {
+          get: (target, property, receiver) => {
+            if (property === '$transaction') {
+              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+                target.$transaction((tx: Client) => work(new Proxy(tx, {
+                  get: (inner, name, innerReceiver) => {
+                    if (name !== 'reply') return Reflect.get(inner, name, innerReceiver);
+                    return new Proxy(inner.reply, {
+                      get: (delegate, method, delegateReceiver) => {
+                        if (method !== 'findMany') return Reflect.get(delegate, method, delegateReceiver);
+                        return async (args: unknown) => {
+                          const rows = await delegate.findMany(args);
+                          if (!attached) {
+                            attached = true;
+                            await database.concurrent.reply.create({
+                              data: { id: 12, threadId: 1, body: 'late', postedAt: new Date('2026-01-03T00:00:00.000Z') },
+                            });
+                          }
+                          return rows;
+                        };
+                      },
+                    });
+                  },
+                })), ...rest);
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+
+        await expect(new GolemEngine(raced, models, {
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+        }).update({
+          model: 'Thread', where: { id: 1 }, data: { replies: { updateMany: { where: {}, data: { body: 'x' } } } }, context: { req: {} },
+        })).rejects.toThrow(new GolemConflictError('The Reply rows linked to this Thread changed concurrently'));
+        expect(attached).toBe(true);
+        await expect(prisma.reply.count({ where: { body: 'x' } })).resolves.toBe(0);
+      });
+    });
+  }
+
   describe('a delete whose closure changes between enumeration and lock', () => {
     it('is refused, deleting nothing', async () => {
       const { publisher, published } = cascadePublisher();
@@ -820,7 +996,7 @@ export function describeWritePath(
     });
 
     it('updates nothing and reports not found', async () => {
-      const race = racing(prisma, 'thread', lock, 1, 'update');
+      const race = provider_ === 'postgresql' ? racing(prisma, 'thread', lock, 1) : racing(prisma, 'thread', lock, 1, 'update');
 
       await expect(outcome(() => engine(race.client).update({
         model: 'Thread', where: { id: 1 }, data: { title: 'renamed' }, context: ctx,

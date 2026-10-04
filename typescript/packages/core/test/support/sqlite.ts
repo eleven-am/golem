@@ -75,6 +75,10 @@ const DDL = [
      "id" INTEGER PRIMARY KEY,
      "channel_slug" TEXT NOT NULL REFERENCES "channels"("slug") ON DELETE CASCADE
    )`,
+  `CREATE TABLE "people" (
+     "id" INTEGER PRIMARY KEY,
+     "buddy_id" INTEGER REFERENCES "people"("id") ON DELETE SET NULL
+   )`,
   `CREATE TABLE "pins" (
      "id" INTEGER PRIMARY KEY,
      "channel_slug" TEXT REFERENCES "channels"("slug") ON DELETE SET NULL

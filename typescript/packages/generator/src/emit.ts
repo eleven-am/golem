@@ -1,9 +1,11 @@
+import { supportedProvider } from '@eleven-am/golem-core';
 import type { DMMF } from '@prisma/generator-helper';
 
 const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
 const INTERNAL_MODELS = new Set(['GolemUpsertGuard']);
 
-export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string): string {
+export function emitDatamodelModule(datamodel: DMMF.Datamodel, datasourceProvider: string | undefined): string {
+  const provider = supportedProvider(datasourceProvider);
   const indexesByModel = new Map<string, Array<{ kind: string; name?: string; dbName?: string; fields: string[] }>>();
   for (const index of datamodel.indexes ?? []) {
     const entry = {
@@ -96,7 +98,7 @@ declare global {
 }
 
 export const datamodel = ${JSON.stringify(
-    provider === undefined ? { models, enums } : { models, enums, provider },
+    { models, enums, provider },
     null,
     2,
   )} as const;

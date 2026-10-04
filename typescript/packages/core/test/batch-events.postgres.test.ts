@@ -106,6 +106,11 @@ describe('batch-event concurrency against live PostgreSQL', () => {
                 tx.secret.upsert(args as Parameters<typeof tx.secret.upsert>[0]),
               delete: (args: unknown) =>
                 tx.secret.delete(args as Parameters<typeof tx.secret.delete>[0]),
+              create: (args: unknown) => tx.secret.create(args as Parameters<typeof tx.secret.create>[0]),
+              createMany: (args: unknown) => tx.secret.createMany(args as Parameters<typeof tx.secret.createMany>[0]),
+              createManyAndReturn: (args: unknown) =>
+                tx.secret.createManyAndReturn(args as Parameters<typeof tx.secret.createManyAndReturn>[0]),
+              updateMany: (args: unknown) => tx.secret.updateMany(args as Parameters<typeof tx.secret.updateMany>[0]),
               deleteMany: (args: unknown) =>
                 tx.secret.deleteMany(args as Parameters<typeof tx.secret.deleteMany>[0]),
             };

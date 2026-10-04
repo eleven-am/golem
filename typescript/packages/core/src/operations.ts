@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import {
   AuthorizationProvider,
   GolemAction,
@@ -267,7 +268,7 @@ export interface GolemEngineOptions {
   maxDepth?: number;
   checkWriteResults?: boolean;
   checkReadFields?: boolean;
-  provider?: string;
+  provider?: GolemProvider;
   hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;
   upsertGuardStripes?: number;
   relationAggregations?: ReadonlyMap<string, RelationAggregationPlan>;
@@ -405,7 +406,7 @@ export class GolemEngine {
   private readonly maxDepth: number;
   private readonly checkWriteResults: boolean;
   private readonly checkReadFields: boolean;
-  private readonly provider?: string;
+  private readonly provider?: GolemProvider;
   private readonly hiddenFields: ReadonlyMap<string, ReadonlySet<string>>;
   private readonly models: readonly DatamodelModel[];
   private readonly authorizationSessions = new WeakMap<object, AuthorizationProvider>();
@@ -468,6 +469,13 @@ export class GolemEngine {
       context,
       linked,
     };
+  }
+
+  private requiredProvider(feature: string): GolemProvider {
+    if (this.provider === undefined) {
+      throw new Error(`${feature} needs the datasource provider; build the engine from the generated datamodel`);
+    }
+    return this.provider;
   }
 
   private identityFields(model: string): readonly DatamodelField[] {
@@ -1339,7 +1347,7 @@ export class GolemEngine {
       });
     } else {
       const where = mergeConstraint(req.where, constraint);
-      const lockedRoots = guard.needsTransaction || this.provider === 'postgresql';
+      const lockedRoots = guard.needsTransaction;
       result = await this.writeGuarded(req.model, scope, lockedRoots, async (client) => {
         const roots = lockedRoots
           ? (await this.run(req.model, () =>
@@ -1944,7 +1952,7 @@ export class GolemEngine {
           divideAggregationValue(
             aggregate.averageSums[field],
             aggregate.averageCounts[field] ?? 0,
-            { provider: this.provider, field: measureFields.get(field) },
+            { provider: this.requiredProvider('relation aggregation'), field: measureFields.get(field) },
           ),
         ]),
       );

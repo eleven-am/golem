@@ -131,3 +131,12 @@ model Message {
 
   @@map("messages")
 }
+
+model Person {
+  id        Int      @id
+  buddyId   Int?     @map("buddy_id")
+  buddy     Person?  @relation("Buddy", fields: [buddyId], references: [id])
+  buddiedBy Person[] @relation("Buddy")
+
+  @@map("people")
+}

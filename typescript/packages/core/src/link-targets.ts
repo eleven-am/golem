@@ -16,29 +16,32 @@ export interface LinkRemoval {
   linkedTo(root: Filter): Filter;
 }
 
+export interface BranchCondition {
+  readonly model: string;
+  readonly where: unknown;
+  readonly parent?: (root: Filter) => Filter;
+  readonly present: boolean;
+}
+
 export interface LinkTarget {
   readonly model: string;
   readonly where: Record<string, unknown>;
   readonly createsWhenMissing: boolean;
   readonly lock: LinkLock;
+  readonly when: readonly BranchCondition[];
 }
 
 function linkLock(relation: DatamodelField): LinkLock {
   return relation.relationFromFields?.length ? 'SHARE' : 'UPDATE';
 }
 
-const UNRESOLVED = Symbol('unresolved foreign key value');
-
-function foreignKeyValue(model: string, field: string, value: unknown, strict: boolean): unknown {
+function foreignKeyValue(model: string, field: string, value: unknown): unknown {
   if (!isPlainObject(value)) {
     return value;
   }
   const operations = Object.keys(value);
   if (operations.length === 1 && operations[0] === 'set') {
     return value.set;
-  }
-  if (!strict) {
-    return UNRESOLVED;
   }
   throw new GolemValidationError(
     `foreign key ${model}.${field} must be set to a value, not changed arithmetically`,
@@ -49,7 +52,7 @@ function foreignKeyTargets(
   metadata: ModelMetadataIndex,
   model: string,
   data: Record<string, unknown>,
-  strict: boolean,
+  when: readonly BranchCondition[],
   into: LinkTarget[],
 ): void {
   for (const relation of metadata.get(model)!.relations) {
@@ -59,15 +62,12 @@ function foreignKeyTargets(
       continue;
     }
     if (written.length !== from.length) {
-      if (!strict) {
-        continue;
-      }
       throw new GolemValidationError(
         `Every field of the foreign key ${relation.name} on ${model} must be written together`,
       );
     }
-    const values = from.map((name) => foreignKeyValue(model, name, data[name], strict));
-    if (values.some((value) => value === null || value === UNRESOLVED)) {
+    const values = from.map((name) => foreignKeyValue(model, name, data[name]));
+    if (values.some((value) => value === null)) {
       continue;
     }
     into.push(Object.freeze({
@@ -75,6 +75,7 @@ function foreignKeyTargets(
       where: Object.fromEntries(relation.relationToFields!.map((name, index) => [name, values[index]])),
       createsWhenMissing: false,
       lock: 'SHARE',
+      when,
     }));
   }
 }
@@ -83,35 +84,64 @@ function collect(
   metadata: ModelMetadataIndex,
   model: string,
   data: unknown,
-  strict: boolean,
+  parent: ((root: Filter) => Filter) | undefined,
+  when: readonly BranchCondition[],
   into: LinkTarget[],
 ): void {
   if (!data || typeof data !== 'object') {
     return;
   }
   const record = data as Record<string, unknown>;
-  foreignKeyTargets(metadata, model, record, strict, into);
+  foreignKeyTargets(metadata, model, record, when, into);
   for (const relation of planNestedWrites(metadata, metadata.get(model)!.model, record)) {
+    const target = relation.target.name;
+    const linkedTo = parent === undefined
+      ? undefined
+      : (root: Filter): Filter => {
+          const opposite = oppositeRelation(metadata, model, relation.field);
+          return { [opposite.name]: opposite.isList ? { some: parent(root) } : { is: parent(root) } };
+        };
+    const scoped = (where: unknown) =>
+      linkedTo === undefined
+        ? undefined
+        : (root: Filter): Filter => (where && typeof where === 'object' ? { AND: [where as Filter, linkedTo(root)] } : linkedTo(root));
     for (const operation of relation.operations) {
       const linking = operation.kind === 'connect' || operation.kind === 'set' || operation.kind === 'disconnect';
-      if (!linking && operation.kind !== 'connectOrCreate') {
-        continue;
-      }
       for (const payload of operation.payloads) {
-        const where = linking ? payload : (payload as { where?: unknown } | null)?.where;
-        if (!where || typeof where !== 'object') {
-          continue;
+        const item = (payload ?? {}) as { where?: unknown; create?: unknown; update?: unknown; data?: unknown };
+        if (linking || operation.kind === 'connectOrCreate') {
+          const where = linking ? payload : item.where;
+          if (where && typeof where === 'object') {
+            into.push(Object.freeze({
+              model: target,
+              where: where as Record<string, unknown>,
+              createsWhenMissing: operation.kind === 'connectOrCreate',
+              lock: linkLock(relation.field),
+              when,
+            }));
+          }
         }
-        into.push(Object.freeze({
-          model: relation.target.name,
-          where: where as Record<string, unknown>,
-          createsWhenMissing: operation.kind === 'connectOrCreate',
-          lock: linkLock(relation.field),
-        }));
+        if (operation.kind === 'connectOrCreate') {
+          collect(metadata, target, item.create, undefined, [...when, { model: target, where: item.where, present: false }], into);
+        }
+        if (operation.kind === 'create') {
+          collect(metadata, target, payload, undefined, when, into);
+        }
+        if (operation.kind === 'createMany') {
+          for (const entry of Array.isArray(item.data) ? item.data : [item.data]) {
+            collect(metadata, target, entry, undefined, when, into);
+          }
+        }
+        if (operation.kind === 'update' || operation.kind === 'updateMany') {
+          const nested = nestedPayloads('update', payload);
+          collect(metadata, target, nested.data, scoped(nested.where), when, into);
+        }
+        if (operation.kind === 'upsert') {
+          const branch = { model: target, where: item.where, parent: linkedTo };
+          collect(metadata, target, item.create, undefined, [...when, { ...branch, present: false }], into);
+          collect(metadata, target, item.update, scoped(item.where), [...when, { ...branch, present: true }], into);
+        }
       }
-    }
-    for (const nested of [...relation.createPayloads, ...relation.updatePayloads]) {
-      collect(metadata, relation.target.name, nested, strict, into);
     }
   }
 }
@@ -120,10 +150,9 @@ export function collectLinkTargets(
   metadata: ModelMetadataIndex,
   model: string,
   data: unknown,
-  strict = true,
 ): readonly LinkTarget[] {
   const targets: LinkTarget[] = [];
-  collect(metadata, model, data, strict, targets);
+  collect(metadata, model, data, (root) => root, [], targets);
   return targets;
 }
 

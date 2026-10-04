@@ -1,9 +1,10 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { context } from './analytics';
 import { ScopedQuery } from '../../src/scoped';
 import { ScopedFieldSpec, scopedFieldEngine, scopedFieldQuery } from './fixture';
 
 export interface FieldScopeTarget {
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly client: Record<string, any>;
 }
 

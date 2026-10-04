@@ -1,6 +1,7 @@
 import { DatamodelDocument } from './datamodel';
 import { GolemEventBus, GolemEventPayload } from './events';
 import { createEventPublisher } from './publisher';
+import { createGolemEngine } from './schema';
 import { GolemConflictError, GolemValidationError } from './errors';
 import { withBufferedEvents } from './event-buffer';
 import { field } from './testing';
@@ -48,41 +49,44 @@ describe('createEventPublisher', () => {
   it('publishes create, update, both upsert branches and delete with the row id', async () => {
     const { bus, published } = busSpy();
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
-    const query = jest.fn().mockResolvedValue({ id: 'u1' });
+    const query = jest.fn();
+    const batch = fakeBatch({ User: [] }, 'User');
 
-    await publisher({ model: 'User', operation: 'create', args: {}, query });
-    await publisher({ model: 'User', operation: 'update', args: {}, query });
+    await publisher({ model: 'User', operation: 'create', args: { data: { id: 'u1', email: 'a@b.c' } }, query, batch: batch.runtime });
+    await publisher({ model: 'User', operation: 'update', args: { where: { id: 'u1' }, data: { email: 'b@b.c' } }, query, batch: batch.runtime });
     await publisher({
-      model: 'User', operation: 'upsert', args: { where: { id: 'new' } }, query,
-      findExisting: jest.fn().mockResolvedValue(null),
+      model: 'User', operation: 'upsert', query, batch: batch.runtime,
+      args: { where: { id: 'u9' }, create: { id: 'u9', email: 'n@b.c' }, update: {} },
     });
     await publisher({
-      model: 'User', operation: 'upsert', args: { where: { id: 'u1' } }, query,
-      findExisting: jest.fn().mockResolvedValue({ id: 'u1' }),
+      model: 'User', operation: 'upsert', query, batch: batch.runtime,
+      args: { where: { id: 'u1' }, create: { id: 'u1', email: 'x@b.c' }, update: { email: 'c@b.c' } },
     });
-    await publisher({
-      model: 'User', operation: 'delete', args: { where: { id: 'u1' } }, query,
-      batch: fakeBatch({ User: [{ id: 'u1', email: 'a@b.c' }] }, 'User').runtime,
-    });
-    expect(published.map((p) => p.payload.type)).toEqual([
-      'CREATED', 'UPDATED', 'CREATED', 'UPDATED', 'DELETED',
+    await publisher({ model: 'User', operation: 'delete', args: { where: { id: 'u1' } }, query, batch: batch.runtime });
+
+    expect(query).not.toHaveBeenCalled();
+    expect(published.map((p) => `${p.payload.type}:${String(p.payload.id)}`)).toEqual([
+      'CREATED:u1', 'UPDATED:u1', 'CREATED:u9', 'UPDATED:u1', 'DELETED:u1',
     ]);
-    expect(published.every((p) => p.topic === 'golem.User' && p.payload.id === 'u1')).toBe(true);
+    expect(published.every((p) => p.topic === 'golem.User')).toBe(true);
+    expect(batch.tables.get('User')).toEqual([{ id: 'u9', email: 'n@b.c' }]);
   });
 
   it('unions the primary key into narrow selects without leaking the injected field', async () => {
     const { bus, published } = busSpy();
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
-    const query = jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' });
+    const batch = fakeBatch({ User: [{ id: 'u1', email: 'a@b.c' }] }, 'User');
 
     const result = await publisher({
       model: 'User',
       operation: 'update',
-      args: { where: { id: 'u1' }, select: { email: true } },
-      query,
+      args: { where: { id: 'u1' }, data: {}, select: { email: true } },
+      query: jest.fn(),
+      batch: batch.runtime,
     });
-    expect(query).toHaveBeenCalledWith({
+    expect(batch.delegates.get('User')!.update).toHaveBeenCalledWith({
       where: { id: 'u1' },
+      data: {},
       select: { email: true, id: true },
     });
     expect(result).toEqual({ email: 'a@b.c' });
@@ -134,14 +138,16 @@ describe('createEventPublisher', () => {
     expect(query).toHaveBeenCalledTimes(2);
   });
 
-  it('refuses an eventful batch update or upsert issued without the generated client runtime', async () => {
+  it('refuses a write issued without the transaction-bound batch runtime', async () => {
     const publisher = createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set(['User']) });
     const query = jest.fn();
 
     await expect(publisher({ model: 'User', operation: 'updateMany', args: {}, query }))
       .rejects.toThrow('updateMany on User requires the transaction-bound batch runtime');
     await expect(publisher({ model: 'User', operation: 'upsert', args: {}, query }))
-      .rejects.toThrow('upsert on User requires the branch probe of the generated client');
+      .rejects.toThrow('upsert on User requires the transaction-bound batch runtime');
+    await expect(publisher({ model: 'User', operation: 'create', args: {}, query }))
+      .rejects.toThrow('create on User requires the transaction-bound batch runtime');
     expect(query).not.toHaveBeenCalled();
   });
 
@@ -185,21 +191,20 @@ describe('createEventPublisher', () => {
       eventBus: bus,
       models: new Set(['PostTag']),
     });
-    const query = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1', label: 'new' });
-    const findExisting = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
+    const batch = fakeBatch({ PostTag: [{ postId: 'p1', tagId: 't1', label: 'old' }] }, 'PostTag');
 
     await publisher({
       model: 'PostTag',
       operation: 'upsert',
-      args: { where: { postId_tagId: { postId: 'p1', tagId: 't1' } } },
-      query,
-      findExisting,
+      args: {
+        where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+        create: { postId: 'p1', tagId: 't1', label: 'new' },
+        update: { label: 'new' },
+      },
+      query: jest.fn(),
+      batch: batch.runtime,
     });
 
-    expect(findExisting).toHaveBeenCalledWith(
-      { postId_tagId: { postId: 'p1', tagId: 't1' } },
-      { postId: true, tagId: true },
-    );
     expect(published).toEqual([{ topic: 'golem.PostTag', payload: {
       type: 'UPDATED',
       model: 'PostTag',
@@ -214,20 +219,23 @@ describe('createEventPublisher', () => {
       eventBus: bus,
       models: new Set(['PostTag']),
     });
-    const query = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1', label: 'x' });
+    const query = jest.fn();
+    const batch = fakeBatch({ PostTag: [{ postId: 'p1', tagId: 't1', label: 'x' }] }, 'PostTag');
 
     const selected = await publisher({
       model: 'PostTag',
       operation: 'update',
-      args: { select: { label: true, postId: true } },
+      args: { where: { postId_tagId: { postId: 'p1', tagId: 't1' } }, data: {}, select: { label: true, postId: true } },
       query,
+      batch: batch.runtime,
     });
-    expect(query).toHaveBeenLastCalledWith({
+    expect(batch.delegates.get('PostTag')!.update).toHaveBeenLastCalledWith({
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      data: {},
       select: { label: true, postId: true, tagId: true },
     });
     expect(selected).toEqual({ postId: 'p1', label: 'x' });
 
-    const batch = fakeBatch({ PostTag: [{ postId: 'p1', tagId: 't1', label: 'x' }] }, 'PostTag');
     const omitted = await publisher({
       model: 'PostTag',
       operation: 'delete',
@@ -275,7 +283,7 @@ describe('createEventPublisher', () => {
       operation: 'updateMany',
       args: { where: { postId: 'p1' }, data: { label: 'new' } },
       query: jest.fn(),
-      batch: { suppressed: false, run: (work) => work(delegate) },
+      batch: { suppressed: false, run: (work) => work(delegate as never, { scope: {}, delegate: () => delegate as never, queryRaw: async () => [] }) },
     });
 
     expect(delegate.findMany).toHaveBeenCalledWith({
@@ -311,7 +319,7 @@ describe('createEventPublisher', () => {
     });
     await expect(rowPublisher({
       model: 'User', operation: 'updateMany', args: { data: { email: 'x' } }, query,
-      batch: { suppressed: false, run: (work) => work(overRows) },
+      batch: { suppressed: false, run: (work) => work(overRows as never, { scope: {}, delegate: () => overRows as never, queryRaw: async () => [] }) },
     })).rejects.toBeInstanceOf(GolemValidationError);
     expect(overRows.updateManyAndReturn).not.toHaveBeenCalled();
 
@@ -413,10 +421,22 @@ describe('createEventPublisher', () => {
     await expect(withBufferedEvents(async () => {
       await publisher({
         model: 'User', operation: 'updateMany', args: { data: { email: 'x' } }, query: jest.fn(),
-        batch: { suppressed: false, run: (work) => work(delegate) },
+        batch: { suppressed: false, run: (work) => work(delegate as never, { scope: {}, delegate: () => delegate as never, queryRaw: async () => [] }) },
       });
       throw new Error('rollback');
     })).rejects.toThrow('rollback');
     expect(published).toEqual([]);
+  });
+});
+
+describe('the datasource providers golem supports', () => {
+  it('refuses to build an event publisher or an engine for any other provider', () => {
+    const mysql = { ...datamodel, provider: 'mysql' } as unknown as DatamodelDocument;
+    expect(() => createEventPublisher({ datamodel: mysql, eventBus: busSpy().bus, models: new Set() }))
+      .toThrow('Golem supports the postgresql and sqlite datasource providers, not "mysql"');
+    expect(() => createGolemEngine({ datamodel: mysql, client: {} }))
+      .toThrow('Golem supports the postgresql and sqlite datasource providers, not "mysql"');
+    expect(() => createGolemEngine({ datamodel: { ...datamodel, provider: undefined }, client: {} }))
+      .toThrow('not an unspecified provider');
   });
 });

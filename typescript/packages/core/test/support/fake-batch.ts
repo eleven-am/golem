@@ -59,6 +59,18 @@ function project(row: Row, select: unknown): Row {
   return Object.fromEntries(Object.keys(select).map((key) => [key, row[key]]));
 }
 
+function scalarData(data: Row | undefined): Row {
+  return Object.fromEntries(Object.entries(data ?? {}).filter(([, value]) => !value || typeof value !== 'object'));
+}
+
+function shape(row: Row, args: { select?: unknown; omit?: Record<string, boolean> } | undefined): Row {
+  const result = project(row, args?.select);
+  for (const [key, omitted] of Object.entries(args?.omit ?? {})) {
+    if (omitted) delete result[key];
+  }
+  return result;
+}
+
 export interface FakeBatch {
   readonly tables: Map<string, Row[]>;
   readonly statements: string[];
@@ -91,14 +103,35 @@ export function fakeBatch(
         return found ? project(found, args?.select) : null;
       }),
       updateManyAndReturn: jest.fn(),
-      update: jest.fn(async (args: { where?: unknown }) => {
+      create: jest.fn(async (args: { data?: Row; select?: unknown; omit?: Record<string, boolean> }) => {
+        const row = { ...(args?.data ?? {}) };
+        store.set(name, [...rows(), row]);
+        return shape(row, args);
+      }),
+      createMany: jest.fn(async (args: { data?: Row[] }) => {
+        store.set(name, [...rows(), ...(args?.data ?? []).map((row) => ({ ...row }))]);
+        return { count: (args?.data ?? []).length };
+      }),
+      update: jest.fn(async (args: { where?: unknown; data?: Row; select?: unknown; omit?: Record<string, boolean> }) => {
         const found = find(args?.where)[0];
         if (!found) throw Object.assign(new Error('missing'), { code: 'P2025' });
-        return { ...found };
+        Object.assign(found, scalarData(args?.data));
+        return shape(found, args);
       }),
-      upsert: jest.fn(async (args: { where?: unknown; create?: Row }) => {
+      upsert: jest.fn(async (args: { where?: unknown; create?: Row; update?: Row; select?: unknown; omit?: Record<string, boolean> }) => {
         const found = find(args?.where)[0];
-        return { ...(found ?? args?.create ?? {}) };
+        if (found) {
+          Object.assign(found, scalarData(args?.update));
+          return shape(found, args);
+        }
+        const row = { ...(args?.create ?? {}) };
+        store.set(name, [...rows(), row]);
+        return shape(row, args);
+      }),
+      updateMany: jest.fn(async (args: { where?: unknown; data?: Row }) => {
+        const matched = find(args?.where);
+        for (const row of matched) Object.assign(row, scalarData(args?.data));
+        return { count: matched.length };
       }),
       delete: jest.fn(async (args: { where?: unknown; select?: unknown; omit?: Record<string, boolean> }) => {
         const found = find(args?.where)[0];

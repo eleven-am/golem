@@ -23,8 +23,9 @@ describe('generated Golem client', () => {
   it('refuses NUL strings for every operation, model and raw, before it runs', () => {
     expect(output).toContain("import { refuseNulStrings } from '@eleven-am/golem-core'");
     expect(output).toContain(
-      'async $allOperations({ model, operation, args, query }) {\n        refuseNulStrings(args);\n        if (!model) return query(args);',
+      'async $allOperations({ model, operation, args, query }) {\n        refuseNulStrings(args);\n        const state = transactionContext.getStore();',
     );
+    expect(output).toContain('if (!model) return query(args);');
     expect(output).not.toContain('$allModels');
   });
 
@@ -35,7 +36,8 @@ describe('generated Golem client', () => {
     expect(output).toContain('withBufferedEvents(() =>\n                    raw.$transaction');
     expect(output).toContain('$transaction: commitAwareTransaction');
     expect(output).toContain('transactionContext.run(');
-    expect(output).toContain('{ client: tx, suppressBatchEvents: false }');
+    expect(output).toContain('{ client: tx, suppressBatchEvents: false, sequential: false }');
+    expect(output).toContain('{ client: tx, suppressBatchEvents: false, sequential: true }');
   });
 
   it('runs batch-event helpers on the ambient interactive transaction', () => {
@@ -43,7 +45,7 @@ describe('generated Golem client', () => {
     expect(output).toContain('const current = transactionContext.getStore()');
     expect(output).toContain('if (current) return execute(current.client)');
     expect(output).toContain('raw.$transaction((tx) =>');
-    expect(output).toContain('{ client, suppressBatchEvents: true }');
+    expect(output).toContain('{ client, suppressBatchEvents: true, sequential: false }');
     expect(output).toContain('batch: model');
   });
 

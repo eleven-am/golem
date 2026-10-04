@@ -1,3 +1,4 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { COMPILED_READ_BATCH_CHUNK } from '../../src/compiled-read-run';
 import { FindManyRequest, GolemEngine } from '../../src/operations';
 import { context, engineFor } from './analytics';
@@ -35,7 +36,7 @@ export interface ChunkingClient {
 }
 
 export interface ChunkingSubject {
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly client: Record<string, any>;
   readonly owners: number;
 }

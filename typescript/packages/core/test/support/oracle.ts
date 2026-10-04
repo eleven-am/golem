@@ -1,3 +1,4 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { CompiledReadEvent } from '../../src/compiled-read';
 import { FindManyRequest, FindOneRequest, GolemEngine } from '../../src/operations';
 import {
@@ -9,7 +10,7 @@ import {
 } from './analytics';
 
 export interface OracleSubject {
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly client: Record<string, any>;
 }
 

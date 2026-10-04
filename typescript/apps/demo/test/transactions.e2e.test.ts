@@ -93,6 +93,49 @@ describe('application-owned transaction events (e2e)', () => {
     await events.return?.();
   });
 
+  it('discards an intercepted delete and raw statements when a batch transaction rolls back', async () => {
+    const post = await prisma.post.findFirstOrThrow({ where: { title: 'First post' } });
+    const draft = await prisma.post.findFirstOrThrow({ where: { title: 'Draft post' } });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const nextEvent = events.next();
+
+    await expect(prisma.$transaction([
+      prisma.post.delete({ where: { id: post.id } }),
+      prisma.$executeRaw`UPDATE "Post" SET "title" = 'raw batch edit' WHERE "id" = ${draft.id}`,
+      prisma.$executeRawUnsafe('UPDATE "Post" SET "published" = 1 WHERE "id" = ?', draft.id),
+      prisma.user.create({ data: { email: 'roy@example.com' } }),
+    ])).rejects.toThrow();
+
+    await expect(Promise.race([nextEvent.then(() => 'published'), wait(25)]))
+      .resolves.toBe('waiting');
+    await expect(prisma.post.findUnique({ where: { id: post.id }, select: { title: true } }))
+      .resolves.toEqual({ title: 'First post' });
+    await expect(prisma.post.findUnique({ where: { id: draft.id }, select: { title: true, published: true } }))
+      .resolves.toEqual({ title: 'Draft post', published: false });
+    await events.return?.();
+  });
+
+  it('runs a batch transaction in order and publishes its writes after commit', async () => {
+    const post = await prisma.post.findFirstOrThrow({ where: { title: 'First post' } });
+    const events = eventBus.iterate(eventTopic('Post'));
+    const nextEvent = events.next();
+
+    const [updated, read, raw] = await prisma.$transaction([
+      prisma.post.update({ where: { id: post.id }, data: { title: 'batch edit' }, select: { title: true } }),
+      prisma.post.findUnique({ where: { id: post.id }, select: { title: true } }),
+      prisma.$queryRaw<{ title: string }[]>`SELECT "title" FROM "Post" WHERE "id" = ${post.id}`,
+    ]);
+
+    expect(updated).toEqual({ title: 'batch edit' });
+    expect(read).toEqual({ title: 'batch edit' });
+    expect(raw).toEqual([{ title: 'batch edit' }]);
+    await expect(nextEvent).resolves.toMatchObject({
+      value: { type: 'UPDATED', model: 'Post', id: post.id },
+      done: false,
+    });
+    await events.return?.();
+  });
+
   it('emits ordered per-row events for a plain generated-client updateMany', async () => {
     const selected = await prisma.post.findMany({
       where: { title: { in: ['First post', 'Draft post'] } },

@@ -78,9 +78,9 @@ function delegates() {
 describe('collectLinkTargets', () => {
   it('locks a reverse link target for update and a referenced target for share', () => {
     expect(collectLinkTargets(metadata, 'Post', { author: { connect: { id: 'u1' } } }))
-      .toEqual([{ model: 'User', where: { id: 'u1' }, createsWhenMissing: false, lock: 'SHARE' }]);
+      .toEqual([{ model: 'User', where: { id: 'u1' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
     expect(collectLinkTargets(metadata, 'User', { posts: { connect: [{ id: 'p1' }] } }))
-      .toEqual([{ model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE' }]);
+      .toEqual([{ model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE', when: [] }]);
   });
 
   it('collects foreign-key scalars and linking nested operations at every depth', () => {
@@ -93,17 +93,17 @@ describe('collectLinkTargets', () => {
         connectOrCreate: [{ where: { id: 'p4' }, create: { title: 'b' } }],
       },
     })).toEqual([
-      { model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE' },
-      { model: 'Post', where: { id: 'p2' }, createsWhenMissing: false, lock: 'UPDATE' },
-      { model: 'Post', where: { id: 'p3' }, createsWhenMissing: false, lock: 'UPDATE' },
-      { model: 'Post', where: { id: 'p4' }, createsWhenMissing: true, lock: 'UPDATE' },
-      { model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE' },
+      { model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE', when: [] },
+      { model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
+      { model: 'Post', where: { id: 'p2' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
+      { model: 'Post', where: { id: 'p3' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
+      { model: 'Post', where: { id: 'p4' }, createsWhenMissing: true, lock: 'UPDATE', when: [] },
     ]);
   });
 
   it('maps a compound foreign key onto the fields it references', () => {
     expect(collectLinkTargets(metadata, 'Membership', { orgId: 'o1', teamKey: { set: 'k1' } }))
-      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, createsWhenMissing: false, lock: 'SHARE' }]);
+      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
   });
 
   it('refuses a compound foreign key written only in part', () => {
@@ -178,7 +178,7 @@ describe('foreign-key values a link check can probe', () => {
 
   it('reads a set operation as the value it sets', () => {
     expect(collectLinkTargets(metadata, 'Post', { authorId: { set: 'u2' } }))
-      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE' }]);
+      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
   });
 
   it.each(['increment', 'decrement', 'multiply', 'divide'])(
@@ -194,24 +194,19 @@ describe('foreign-key values a link check can probe', () => {
       .toThrow('foreign key Post.authorId must be set to a value, not changed arithmetically');
   });
 
-  it('refuses arithmetic for a context-bound caller before any query and leaves an unscoped caller untouched', async () => {
-    const scoped = delegates();
-    const engine = new GolemEngine(scoped, models, {
+  it.each([
+    ['a context-bound caller', { req: {} }],
+    ['an unscoped caller', undefined],
+  ])('refuses arithmetic on a foreign key for %s before any query', async (_label, context) => {
+    const client = delegates();
+    const engine = new GolemEngine(client, models, {
       authorization: provider(),
       checkWriteResults: false,
       checkReadFields: false,
     });
-    await expect(engine.create({ model: 'Post', data: { id: 'p', title: 't', authorId: { increment: 1 } }, context: ctx }))
+    await expect(engine.create({ model: 'Post', data: { id: 'p', title: 't', authorId: { increment: 1 } }, context }))
       .rejects.toThrow('foreign key Post.authorId must be set to a value, not changed arithmetically');
-    expect(scoped.user.findFirst).not.toHaveBeenCalled();
-    expect(scoped.post.create).not.toHaveBeenCalled();
-
-    const unscoped = delegates();
-    await new GolemEngine(unscoped, models, {
-      authorization: provider(),
-      checkWriteResults: false,
-      checkReadFields: false,
-    }).create({ model: 'Post', data: { id: 'p', title: 't', authorId: { increment: 1 } } });
-    expect(unscoped.post.create).toHaveBeenCalledTimes(1);
+    expect(client.user.findFirst).not.toHaveBeenCalled();
+    expect(client.post.create).not.toHaveBeenCalled();
   });
 });

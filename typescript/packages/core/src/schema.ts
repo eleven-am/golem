@@ -33,6 +33,7 @@ import {
   ModelConfig,
   ModelsConfig,
   rowIdentityFields,
+  supportedProvider,
 } from './datamodel';
 import { GolemError, GolemValidationError } from './errors';
 import { GolemEventBus, eventTopic } from './events';
@@ -446,7 +447,7 @@ export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TMod
     maxDepth: options.defaults?.maxDepth,
     checkWriteResults: options.defaults?.checkWriteResults,
     checkReadFields: options.defaults?.checkReadFields,
-    provider: options.datamodel.provider,
+    provider: supportedProvider(options.datamodel.provider),
     hiddenFields,
     upsertGuardStripes: options.defaults?.upsertGuardStripes,
   });

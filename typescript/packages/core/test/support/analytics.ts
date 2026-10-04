@@ -1,3 +1,4 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { evaluateConditions } from '@eleven-am/golem-policy';
 import { DatamodelModel } from '../../src/datamodel';
 import { GolemEngine } from '../../src/operations';
@@ -283,7 +284,7 @@ export function satisfies(entity: unknown, constraint: unknown): boolean {
 
 export function engineFor(
   client: Record<string, any>,
-  provider: string,
+  provider: GolemProvider,
   constraints: Record<string, unknown>,
   hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>,
   models: readonly DatamodelModel[] = scopedModels,
@@ -315,7 +316,7 @@ export interface FieldMaskSpec {
 
 export interface MaskingEngineOptions {
   readonly client: Record<string, any>;
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly masks: readonly FieldMaskSpec[];
   readonly constraints?: Record<string, unknown>;
   readonly models?: readonly DatamodelModel[];

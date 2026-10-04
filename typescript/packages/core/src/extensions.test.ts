@@ -184,7 +184,7 @@ describe('custom operations', () => {
 describe('createGolemEngine', () => {
   it('builds a standalone engine that schema construction can reuse', async () => {
     const client = fakeClient();
-    const options = { datamodel, client };
+    const options = { datamodel: { ...datamodel, provider: 'sqlite' as const }, client };
     const engine = createGolemEngine(options);
     buildGolemSchema({ ...options, engine });
 

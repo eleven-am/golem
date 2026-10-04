@@ -8,8 +8,13 @@ describe('the emitted datasource provider', () => {
     expect(emitDatamodelModule(empty, 'postgresql')).toContain('"provider": "postgresql"');
   });
 
-  it('omits the provider rather than guessing one when the generator did not supply it', () => {
-    expect(emitDatamodelModule(empty)).not.toContain('"provider"');
+  it('refuses a datasource provider golem does not support', () => {
+    expect(() => emitDatamodelModule(empty, 'mysql')).toThrow(
+      'Golem supports the postgresql and sqlite datasource providers, not "mysql"',
+    );
+    expect(() => emitDatamodelModule(empty, undefined)).toThrow(
+      'Golem supports the postgresql and sqlite datasource providers, not an unspecified provider',
+    );
   });
 });
 
@@ -103,7 +108,7 @@ describe('emitDatamodelModule composite primary keys', () => {
     const output = emitDatamodelModule(
       datamodel([
         model('PostTag', [scalar('postId'), scalar('tagId')], { name: null, fields: ['postId', 'tagId'] }),
-      ]),
+      ]), 'sqlite',
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].primaryKey).toEqual({ fields: ['postId', 'tagId'] });
@@ -113,7 +118,7 @@ describe('emitDatamodelModule composite primary keys', () => {
     const output = emitDatamodelModule(
       datamodel([
         model('Membership', [scalar('userId'), scalar('orgId')], { name: 'membership', fields: ['userId', 'orgId'] }),
-      ]),
+      ]), 'sqlite',
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].primaryKey).toEqual({ name: 'membership', fields: ['userId', 'orgId'] });
@@ -121,7 +126,7 @@ describe('emitDatamodelModule composite primary keys', () => {
 
   it('omits primaryKey for single-field id models', () => {
     const idField = { ...scalar('id'), isId: true } as DMMF.Field;
-    const output = emitDatamodelModule(datamodel([model('User', [idField, scalar('email')], null)]));
+    const output = emitDatamodelModule(datamodel([model('User', [idField, scalar('email')], null)]), 'sqlite');
     const parsed = parseEmitted(output);
     expect(parsed.models[0].primaryKey).toBeUndefined();
   });
@@ -133,7 +138,7 @@ describe('reserved internal models', () => {
     const output = emitDatamodelModule(datamodel([
       model('User', [idField], null),
       model('GolemUpsertGuard', [scalar('stripe'), scalar('seq')], null),
-    ]));
+    ]), 'sqlite');
 
     expect(parseEmitted(output).models.map(({ name }) => name)).toEqual(['User']);
     expect(output).not.toContain('GolemUpsertGuard:');
@@ -149,7 +154,7 @@ describe('emitDatamodelModule compound unique indexes', () => {
         model('Branch', [idField, scalar('authorId'), scalar('name')], null, [
           { name: null, fields: ['authorId', 'name'] },
         ]),
-      ]),
+      ]), 'sqlite',
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].uniqueIndexes).toEqual([{ fields: ['authorId', 'name'] }]);
@@ -161,7 +166,7 @@ describe('emitDatamodelModule compound unique indexes', () => {
         model('Branch', [idField, scalar('authorId'), scalar('name')], null, [
           { name: 'authorNameKey', fields: ['authorId', 'name'] },
         ]),
-      ]),
+      ]), 'sqlite',
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].uniqueIndexes).toEqual([
@@ -173,7 +178,7 @@ describe('emitDatamodelModule compound unique indexes', () => {
     const output = emitDatamodelModule(
       datamodel([
         model('User', [idField, scalar('email')], null, [{ name: null, fields: ['email'] }]),
-      ]),
+      ]), 'sqlite',
     );
     const parsed = parseEmitted(output);
     expect(parsed.models[0].uniqueIndexes).toBeUndefined();
@@ -198,7 +203,7 @@ describe('emitDatamodelModule declared indexes', () => {
         datamodel(
           [model('Article', [idField, scalar('a')], null)],
           [index('Article', 'id', ['id']), index('Article', 'normal', ['a'])],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -215,7 +220,7 @@ describe('emitDatamodelModule declared indexes', () => {
         datamodel(
           [model('Article', [idField, scalar('b'), scalar('c')], null)],
           [index('Article', 'id', ['id']), index('Article', 'normal', ['b', 'c'])],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -230,7 +235,7 @@ describe('emitDatamodelModule declared indexes', () => {
         datamodel(
           [model('Article', [idField, { ...scalar('slug'), isUnique: true } as DMMF.Field], null)],
           [index('Article', 'id', ['id']), index('Article', 'unique', ['slug'])],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -247,7 +252,7 @@ describe('emitDatamodelModule declared indexes', () => {
             index('Naming', 'id', ['id']),
             index('Naming', 'unique', ['c', 'd'], { name: 'clientName', dbName: 'db_name_here' }),
           ],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -272,7 +277,7 @@ describe('emitDatamodelModule declared indexes', () => {
             }),
           ],
           [index('Membership', 'id', ['userId', 'orgId'])],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -294,7 +299,7 @@ describe('emitDatamodelModule declared indexes', () => {
             index('Article', 'normal', ['a']),
             index('Rel', 'id', ['id']),
           ],
-        ),
+        ), 'sqlite',
       ),
     );
 
@@ -308,7 +313,7 @@ describe('emitDatamodelModule declared indexes', () => {
 
   it('omits indexes entirely for a model that declares none', () => {
     const parsed = parseEmitted(
-      emitDatamodelModule(datamodel([model('Bare', [scalar('note')], null)])),
+      emitDatamodelModule(datamodel([model('Bare', [scalar('note')], null)]), 'sqlite'),
     );
 
     expect(parsed.models[0].indexes).toBeUndefined();
@@ -330,7 +335,7 @@ describe('emitDatamodelModule physical names', () => {
       uniqueIndexes: [],
     } as unknown as DMMF.Model;
 
-    const parsed = parseEmitted(emitDatamodelModule(datamodel([mapped])));
+    const parsed = parseEmitted(emitDatamodelModule(datamodel([mapped]), 'sqlite'));
 
     expect(parsed.models[0].dbName).toBe('users');
     expect(parsed.models[0].fields).toEqual([
@@ -341,7 +346,7 @@ describe('emitDatamodelModule physical names', () => {
 
   it('falls back to the Prisma name when no mapping is present', () => {
     const parsed = parseEmitted(
-      emitDatamodelModule(datamodel([model('Post', [scalar('id'), scalar('title')], null)])),
+      emitDatamodelModule(datamodel([model('Post', [scalar('id'), scalar('title')], null)]), 'sqlite'),
     );
 
     expect(parsed.models[0].dbName).toBe('Post');
@@ -352,7 +357,7 @@ describe('emitDatamodelModule physical names', () => {
 describe('emitDatamodelModule extension helpers', () => {
   it('registers the schema with the package so decorators and hook payloads are typed', () => {
     const output = emitDatamodelModule(
-      datamodel([model('User', [scalar('id'), scalar('email')], null)]),
+      datamodel([model('User', [scalar('id'), scalar('email')], null)]), 'sqlite',
     );
 
     expect(output).toContain('declare global {');
@@ -364,7 +369,7 @@ describe('emitDatamodelModule extension helpers', () => {
 
   it('no longer re-exports a generated decorator', () => {
     const output = emitDatamodelModule(
-      datamodel([model('User', [scalar('id'), scalar('email')], null)]),
+      datamodel([model('User', [scalar('id'), scalar('email')], null)]), 'sqlite',
     );
 
     expect(output).not.toContain('createComputedFieldDecorator');
@@ -386,7 +391,7 @@ describe('referential delete actions', () => {
   }
 
   function onDeleteOf(field: DMMF.Field): unknown {
-    const output = emitDatamodelModule(datamodel([model('Comment', [field, scalar('postId')], null)]));
+    const output = emitDatamodelModule(datamodel([model('Comment', [field, scalar('postId')], null)]), 'sqlite');
     return (parseEmitted(output).models[0].fields[0] as { relationOnDelete?: unknown }).relationOnDelete;
   }
 
@@ -412,7 +417,7 @@ describe('multi-schema models', () => {
     const parsed = parseEmitted(emitDatamodelModule(datamodel([
       { ...model('Audit', [idField], null), schema: 'audit' } as DMMF.Model,
       model('User', [idField], null),
-    ])));
+    ]), 'sqlite'));
     expect((parsed.models[0] as { schema?: string }).schema).toBe('audit');
     expect(parsed.models[1]).not.toHaveProperty('schema');
   });

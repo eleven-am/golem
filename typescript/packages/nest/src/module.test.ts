@@ -8,6 +8,7 @@ import { GolemModule } from './index';
 import { golemRequestBoundary } from './request-boundary';
 
 const datamodel: DatamodelDocument<{ User: 'id'; Post: 'id' }> = {
+  provider: 'sqlite',
   models: [
     {
       name: 'User',

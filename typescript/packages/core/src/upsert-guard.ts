@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import { createHash } from 'node:crypto';
 import { canonicalToken } from './canonical';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -49,7 +50,7 @@ export async function acquireUpsertGuard(
   model: string,
   where: unknown,
   stripes: number,
-  provider?: string,
+  provider?: GolemProvider,
 ): Promise<void> {
   const stripe = upsertGuardStripe(model, where, stripes);
   try {
