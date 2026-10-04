@@ -6,6 +6,7 @@ import {
   GolemUnauthorizedError,
   GolemValidationError,
 } from './errors';
+import { HookRegistry } from './hooks';
 import { GolemEngine } from './operations';
 import { GOLEM_BATCH_RESULT_ROWS } from './publisher';
 import { field } from './testing';
@@ -731,5 +732,127 @@ describe('upsert target identity through a relation connect', () => {
       update: {},
     })).rejects.toThrow('upsert create input does not set the target selector tagId on PostTag');
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity through a connect to a compound-key target', () => {
+  const compoundModels = [
+    {
+      name: 'Team',
+      fields: [
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'key', type: 'String' }),
+        field({ name: 'code', type: 'String' }),
+      ],
+      primaryKey: { fields: ['orgId', 'key'] },
+      uniqueIndexes: [{ name: 'teamCode', fields: ['orgId', 'code'] }],
+    },
+    {
+      name: 'Seat',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'teamKey', type: 'String' }),
+        field({ name: 'label', type: 'String' }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'SeatTeam', relationFromFields: ['orgId', 'teamKey'], relationToFields: ['orgId', 'key'] }),
+      ],
+      uniqueIndexes: [{ name: 'seatKey', fields: ['orgId', 'teamKey', 'label'] }],
+    },
+    {
+      name: 'Badge',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'teamCode', type: 'String' }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'BadgeTeam', relationFromFields: ['orgId', 'teamCode'], relationToFields: ['orgId', 'code'] }),
+      ],
+      uniqueIndexes: [{ fields: ['orgId', 'teamCode'] }],
+    },
+  ];
+
+  function engine(model: 'seat' | 'badge', create: jest.Mock) {
+    return new GolemEngine(
+      { [model]: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      compoundModels,
+    );
+  }
+
+  it('reads the members of a connect through the target primary-key selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 's1' });
+    await engine('seat', create).upsert({
+      model: 'Seat',
+      where: { seatKey: { orgId: 'o1', teamKey: 'k1', label: 'a' } },
+      create: { label: 'a', team: { connect: { orgId_key: { orgId: 'o1', key: 'k1' } } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the members of a connect through a named compound unique selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    await engine('badge', create).upsert({
+      model: 'Badge',
+      where: { orgId_teamCode: { orgId: 'o1', teamCode: 'c1' } },
+      create: { team: { connect: { teamCode: { orgId: 'o1', code: 'c1' } } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a compound connect naming a different target', async () => {
+    const create = jest.fn();
+    await expect(engine('seat', create).upsert({
+      model: 'Seat',
+      where: { seatKey: { orgId: 'o1', teamKey: 'k1', label: 'a' } },
+      create: { label: 'a', team: { connect: { orgId_key: { orgId: 'o1', key: 'k2' } } } },
+      update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector teamKey on Seat');
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity after a before-create hook', () => {
+  const hookModels = [
+    {
+      name: 'User',
+      fields: [
+        field({ name: 'id', type: 'Int', isId: true }),
+        field({ name: 'name', type: 'String' }),
+      ],
+    },
+  ];
+
+  function engineWith(rewrite: (data: Record<string, unknown>) => Record<string, unknown>, create: jest.Mock) {
+    const hooks = new HookRegistry();
+    hooks.registerBefore('User', 'create', (request: any) => ({ ...request, data: rewrite(request.data) }));
+    return new GolemEngine(
+      { user: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      hookModels,
+      { hooks },
+    );
+  }
+
+  it('refuses a create branch whose hook rewrites the target selector, creating nothing', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 6 });
+    await expect(engineWith((data) => ({ ...data, id: 6 }), create).upsert({
+      model: 'User', where: { id: 5 }, create: { id: 5, name: 'Five' }, update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector id on User');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('creates when the hook keeps the target selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 5 });
+    await engineWith((data) => ({ ...data, name: 'Renamed' }), create).upsert({
+      model: 'User', where: { id: 5 }, create: { id: 5, name: 'Five' }, update: {},
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ data: { id: 5, name: 'Renamed' } }));
+  });
+
+  it('leaves a plain create free of any target', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 6 });
+    await engineWith((data) => ({ ...data, id: 6 }), create).create({
+      model: 'User', data: { id: 5, name: 'Five' },
+    });
+    expect(create).toHaveBeenCalledTimes(1);
   });
 });

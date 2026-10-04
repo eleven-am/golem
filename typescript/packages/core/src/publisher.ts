@@ -172,6 +172,18 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
   }
 
   const cascades = new CascadePlan(options.datamodel.models);
+  for (const model of options.datamodel.models) {
+    for (const dependency of cascades.dependentsOf(model.name)) {
+      if (dependency.action === 'Cascade' || !options.models.has(dependency.dependent)) continue;
+      const identity = pkByModel.get(dependency.dependent)!;
+      const moved = dependency.from.filter((name) => identity.includes(name));
+      if (moved.length > 0) {
+        throw new Error(
+          `Model ${dependency.dependent} cannot publish events: deleting a ${model.name} would ${dependency.action} ${moved.join(', ')}, which identify its rows, so the change event could not name the row`,
+        );
+      }
+    }
+  }
   const dialect = cascadeDialect(options.datamodel.provider, cascades);
   const cascadeTransaction = (transaction: GolemBatchTransaction): CascadeTransaction => ({
     findMany: (model, args) => transaction.delegate(model).findMany(args),

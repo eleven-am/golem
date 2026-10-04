@@ -1,6 +1,6 @@
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
-import { ModelMetadataIndex } from './model-meta';
+import { flattenUniqueSelectors, ModelMetadataIndex } from './model-meta';
 import { planNestedWrites } from './nested-writes';
 
 export function upsertTargetSelectors(
@@ -9,29 +9,15 @@ export function upsertTargetSelectors(
   where: unknown,
 ): ReadonlyMap<string, unknown> {
   const selectors = new Map<string, unknown>();
-  if (!where || typeof where !== 'object' || Array.isArray(where)) {
-    return selectors;
-  }
   const meta = metadata.get(model);
-  if (!meta) {
+  const flattened = flattenUniqueSelectors(meta, where);
+  if (!meta || !flattened.where || typeof flattened.where !== 'object' || Array.isArray(flattened.where)) {
     return selectors;
   }
-  for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(flattened.where as Record<string, unknown>)) {
     const field = meta.fieldsByName.get(key);
-    if (field) {
-      if (field.kind !== 'object' && (field.isId || field.isUnique)) {
-        selectors.set(key, value);
-      }
-      continue;
-    }
-    const members = key === meta.compoundKeyName
-      ? meta.primaryKeys.map((member) => member.name)
-      : meta.compoundUniqueSelectors.get(key);
-    if (!members || !value || typeof value !== 'object') {
-      continue;
-    }
-    for (const member of members) {
-      selectors.set(member, (value as Record<string, unknown>)[member]);
+    if (field && field.kind !== 'object' && (field.isId || field.isUnique || flattened.members.has(key))) {
+      selectors.set(key, value);
     }
   }
   return selectors;
@@ -52,7 +38,8 @@ function writtenValue(
     if (position < 0 || !connect || typeof connect !== 'object') {
       continue;
     }
-    return (connect as Record<string, unknown>)[relation.relationToFields![position]];
+    const referenced = flattenUniqueSelectors(metadata.get(relation.type), connect).where;
+    return (referenced as Record<string, unknown>)[relation.relationToFields![position]];
   }
   return undefined;
 }

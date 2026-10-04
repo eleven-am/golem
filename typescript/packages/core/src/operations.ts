@@ -46,7 +46,7 @@ import {
   acquireUpsertGuard,
   validateUpsertGuardStripes,
 } from './upsert-guard';
-import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
+import { buildModelMetadata, flattenUniqueSelectors, ModelMetadataIndex } from './model-meta';
 import { NestedWriteKind, NestedWriteOperation, planNestedWrites } from './nested-writes';
 import {
   PreparedReadTree,
@@ -515,38 +515,7 @@ export class GolemEngine {
   }
 
   private filterableWhere(model: string, where: unknown): unknown {
-    if (!where || typeof where !== 'object' || Array.isArray(where)) {
-      return where;
-    }
-    const meta = this.metadata.get(model);
-    if (!meta) {
-      return where;
-    }
-    const selectors = new Set<string>();
-    if (meta.compoundKeyName) {
-      selectors.add(meta.compoundKeyName);
-    }
-    for (const name of meta.compoundUniqueSelectors.keys()) {
-      selectors.add(name);
-    }
-    if (selectors.size === 0) {
-      return where;
-    }
-    const rest: Record<string, unknown> = {};
-    const flattened: Record<string, unknown> = {};
-    let changed = false;
-    for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
-      if (
-        selectors.has(key) && !meta.fieldsByName.has(key) &&
-        value && typeof value === 'object' && !Array.isArray(value)
-      ) {
-        Object.assign(flattened, value as Record<string, unknown>);
-        changed = true;
-      } else {
-        rest[key] = value;
-      }
-    }
-    return changed ? { ...rest, ...flattened } : where;
+    return flattenUniqueSelectors(this.metadata.get(model), where).where;
   }
 
   private async prepareRead(request: {
@@ -1165,8 +1134,17 @@ export class GolemEngine {
   }
 
   async create(request: CreateRequest, scope?: GolemOpScope): Promise<unknown> {
+    return this.createRow(request, scope, undefined);
+  }
+
+  private async createRow(
+    request: CreateRequest,
+    scope: GolemOpScope | undefined,
+    upsertTarget: unknown,
+  ): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('create', request);
+    refuseUpsertOffTarget(this.metadata, req.model, upsertTarget, req.data);
     refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
     const provider = this.enforced(req.context);
     if (provider) {
@@ -1470,7 +1448,7 @@ export class GolemEngine {
         scope,
       );
     }
-    return this.create(
+    return this.createRow(
       {
         model: request.model,
         data: request.create,
@@ -1480,6 +1458,7 @@ export class GolemEngine {
         context: request.context,
       },
       scope,
+      request.where,
     );
   }
 

@@ -453,3 +453,56 @@ describe('lockedReadStatement', () => {
     );
   });
 });
+
+describe('dependents whose identity a delete would rewrite', () => {
+  function layout(onDelete: DatamodelReferentialAction, identityHoldsForeignKey: boolean): DatamodelDocument {
+    return {
+      provider: 'sqlite',
+      enums: [],
+      models: [
+        { name: 'Post', fields: [field({ name: 'id', type: 'String', isId: true })] },
+        {
+          name: 'Label',
+          fields: [
+            field({ name: 'postId', type: 'String', hasDefaultValue: true }),
+            field({ name: 'name', type: 'String' }),
+            field({
+              name: 'post', type: 'Post', kind: 'object', relationName: 'PostLabels',
+              relationFromFields: ['postId'], relationToFields: ['id'], relationOnDelete: onDelete,
+            }),
+          ],
+          primaryKey: { fields: identityHoldsForeignKey ? ['postId', 'name'] : ['name'] },
+        },
+      ],
+    };
+  }
+
+  it.each(['SetDefault', 'SetNull'] as const)(
+    'refuses to publish events for a model whose identity %s would rewrite',
+    (onDelete) => {
+      expect(() => createEventPublisher({
+        datamodel: layout(onDelete, true),
+        eventBus: bus().eventBus,
+        models: new Set(['Label']),
+      })).toThrow(
+        `Model Label cannot publish events: deleting a Post would ${onDelete} postId, which identify its rows`,
+      );
+    },
+  );
+
+  it('accepts the same layout when nobody subscribes to the dependent', () => {
+    expect(() => createEventPublisher({
+      datamodel: layout('SetDefault', true),
+      eventBus: bus().eventBus,
+      models: new Set(['Post']),
+    })).not.toThrow();
+  });
+
+  it('accepts a SetDefault on a foreign key outside the identity', () => {
+    expect(() => createEventPublisher({
+      datamodel: layout('SetDefault', false),
+      eventBus: bus().eventBus,
+      models: new Set(['Label']),
+    })).not.toThrow();
+  });
+});

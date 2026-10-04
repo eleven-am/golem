@@ -33,6 +33,41 @@ class ImmutableMap<K, V> implements ReadonlyMap<K, V> {
   }
 }
 
+export interface FlattenedSelectors {
+  readonly where: unknown;
+  readonly members: ReadonlySet<string>;
+}
+
+export function flattenUniqueSelectors(meta: ModelMetadata | undefined, where: unknown): FlattenedSelectors {
+  const members = new Set<string>();
+  if (!meta || !where || typeof where !== 'object' || Array.isArray(where)) {
+    return { where, members };
+  }
+  const selectors = new Set<string>(meta.compoundUniqueSelectors.keys());
+  if (meta.compoundKeyName) {
+    selectors.add(meta.compoundKeyName);
+  }
+  if (selectors.size === 0) {
+    return { where, members };
+  }
+  const rest: Record<string, unknown> = {};
+  const flattened: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(where as Record<string, unknown>)) {
+    if (
+      selectors.has(key) && !meta.fieldsByName.has(key) &&
+      value && typeof value === 'object' && !Array.isArray(value)
+    ) {
+      Object.assign(flattened, value as Record<string, unknown>);
+      for (const member of Object.keys(value)) {
+        members.add(member);
+      }
+    } else {
+      rest[key] = value;
+    }
+  }
+  return { where: members.size > 0 ? { ...rest, ...flattened } : where, members };
+}
+
 export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMetadataIndex {
   const entries = models.map((model): readonly [string, ModelMetadata] => {
     const fieldsByName = new ImmutableMap(model.fields.map((field) => [field.name, field] as const));
