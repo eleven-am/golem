@@ -22,6 +22,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
 	"github.com/eleven-am/golem/go/internal/generate/pipeline"
 	"github.com/eleven-am/golem/go/internal/generate/publication"
+	graphqlcodegen "github.com/eleven-am/golem/go/internal/graphql/codegen"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/migration/workflow"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -256,35 +257,19 @@ func runGeneration(ctx context.Context, directory string, args []string, stdout,
 		return 1
 	}
 	request.Compile.PreviousModel = head
-	result, err := pipeline.Build(ctx, request)
+	analysis, err := pipeline.Analyze(ctx, request)
 	if err != nil {
 		return writeBuildFailure(stdout, stderr, err)
 	}
-	exists, statErr := migrationPublicationExists(module.directory, migrationRoot)
-	if statErr != nil {
-		writeError(stderr, statErr)
+	reviewed, historyErr := generationHistory(ctx, module.directory, migrationRoot, analysis)
+	if historyErr != nil {
+		if _, err := analysis.Build(ctx, nil); err != nil {
+			return writeBuildFailure(stdout, stderr, err)
+		}
+		writeError(stderr, historyErr)
 		return 1
 	}
-	if !exists {
-		writeError(stderr, errors.New("generated applications require a reviewed non-empty migration history for every declared provider; create the initial migration before generating"))
-		return 1
-	}
-	providers, providerErr := migrationProviders(result.Providers)
-	if providerErr != nil {
-		writeError(stderr, providerErr)
-		return 1
-	}
-	state, loadErr := workflow.Load(ctx, module.directory, migrationRoot, providers)
-	if loadErr != nil {
-		writeError(stderr, loadErr)
-		return 1
-	}
-	if verifyErr := verifyGenerationHistory(result, state); verifyErr != nil {
-		writeError(stderr, verifyErr)
-		return 1
-	}
-	request.ReviewedMigrations = reviewedPipelineMigrations(state, result.Providers)
-	result, err = pipeline.Build(ctx, request)
+	result, err := analysis.Build(ctx, reviewed)
 	if err != nil {
 		return writeBuildFailure(stdout, stderr, err)
 	}
@@ -303,6 +288,28 @@ func runGeneration(ctx context.Context, directory string, args []string, stdout,
 	return 0
 }
 
+func generationHistory(ctx context.Context, moduleDir, migrationRoot string, analysis *pipeline.Analysis) ([]pipeline.ReviewedMigration, error) {
+	exists, err := migrationPublicationExists(moduleDir, migrationRoot)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, errors.New("generated applications require a reviewed non-empty migration history for every declared provider; create the initial migration before generating")
+	}
+	providers, err := migrationProviders(analysis.Providers())
+	if err != nil {
+		return nil, err
+	}
+	state, err := workflow.Load(ctx, moduleDir, migrationRoot, providers)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyGenerationHistory(analysis.ModelFingerprint(), analysis.Providers(), state); err != nil {
+		return nil, err
+	}
+	return reviewedPipelineMigrations(state, analysis.Providers()), nil
+}
+
 func reviewedPipelineMigrations(state workflow.State, providers []pipeline.ProviderResult) []pipeline.ReviewedMigration {
 	result := make([]pipeline.ReviewedMigration, 0, len(providers))
 	for _, provider := range providers {
@@ -312,15 +319,15 @@ func reviewedPipelineMigrations(state workflow.State, providers []pipeline.Provi
 	return result
 }
 
-func verifyGenerationHistory(result pipeline.Result, state workflow.State) error {
+func verifyGenerationHistory(modelFingerprint ir.Fingerprint, providers []pipeline.ProviderResult, state workflow.State) error {
 	if state.HeadModel == nil {
 		return errors.New("reviewed migration history has no ModelIR head")
 	}
 	headFingerprint, err := ir.ModelFingerprint(*state.HeadModel)
-	if err != nil || headFingerprint != result.ModelFingerprint {
+	if err != nil || headFingerprint != modelFingerprint {
 		return errors.New("compiled ModelIR differs from the reviewed migration head; create a migration before generating")
 	}
-	for _, provider := range result.Providers {
+	for _, provider := range providers {
 		history, exists := state.Histories[provider.Provider.Provider]
 		if !exists || len(history.Manifest.Entries) == 0 {
 			return fmt.Errorf("reviewed migration history is missing provider %s head", provider.Provider.Provider)
@@ -355,7 +362,8 @@ func pipelineRequest(directory string, options commonOptions, app modelcodegen.P
 	return pipeline.Request{
 		Compile:    compile.Config{Dir: directory, Pattern: options.schemaPattern, Root: options.root},
 		AppPackage: app, PreviousManifest: previous,
-		Lowerers: []physical.Lowerer{sqlite.New(), postgresql.New()},
+		Lowerers:           []physical.Lowerer{sqlite.New(), postgresql.New()},
+		GraphQLExecutables: &graphqlcodegen.ExecutableCache{},
 	}
 }
 

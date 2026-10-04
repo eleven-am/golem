@@ -222,7 +222,12 @@ func runDoctor(ctx context.Context, directory string, args []string, stdout, std
 	request := pipelineRequest(directory, commonOptions{schemaPattern: *schemaPattern, root: *root}, app, previous)
 	request.Compile.PreviousModel = head
 	request.ReadOnlyDiagnostics = true
-	result, err := pipeline.Build(ctx, request)
+	analysis, err := pipeline.Analyze(ctx, request)
+	if err != nil {
+		output.add("GOLEM_DOCTOR_SCHEMA_COMPILE_FAILED", "error")
+		return emit()
+	}
+	result, err := analysis.Build(ctx, nil)
 	if err != nil {
 		output.add("GOLEM_DOCTOR_SCHEMA_COMPILE_FAILED", "error")
 		return emit()
@@ -259,9 +264,8 @@ func runDoctor(ctx context.Context, directory string, args []string, stdout, std
 	}
 
 	generationComparable := false
-	if loadErr == nil && state.Publication != nil && verifyGenerationHistory(result, state) == nil {
-		request.ReviewedMigrations = reviewedPipelineMigrations(state, result.Providers)
-		reviewed, reviewedErr := pipeline.Build(ctx, request)
+	if loadErr == nil && state.Publication != nil && verifyGenerationHistory(result.ModelFingerprint, result.Providers, state) == nil {
+		reviewed, reviewedErr := analysis.Build(ctx, reviewedPipelineMigrations(state, result.Providers))
 		if reviewedErr == nil {
 			if reviewedSelected, reviewedExists := doctorProviderResult(reviewed, providerID); reviewedExists {
 				result = reviewed
