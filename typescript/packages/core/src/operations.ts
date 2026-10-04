@@ -10,6 +10,8 @@ import {
   GolemNotFoundError,
   GolemValidationError,
 } from './errors';
+import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
+import { collectLinkTargets, linkedRowKey } from './link-targets';
 import { runPolicyChecks } from './concurrency';
 import {
   FieldReferences,
@@ -453,12 +455,13 @@ export class GolemEngine {
     }
   }
 
-  private verifyContext(context: unknown): VerifyContext {
+  private verifyContext(context: unknown, linked: ReadonlySet<string>): VerifyContext {
     return {
       modelsByName: this.modelsByName,
       metadata: this.metadata,
       provider: this.enforced(context)!,
       context,
+      linked,
     };
   }
 
@@ -694,6 +697,44 @@ export class GolemEngine {
         await this.walkNestedWrites(provider, relation.target.name, nested, context);
       }
     }
+  }
+
+  private async refuseUnreadableLinks(
+    model: string,
+    data: unknown,
+    context: unknown,
+    client?: Record<string, any>,
+  ): Promise<ReadonlySet<string>> {
+    const linked = new Set<string>();
+    if (!this.enforced(context)) {
+      return linked;
+    }
+    for (const target of collectLinkTargets(this.metadata, model, data)) {
+      const delegate = this.delegate(target.model, client);
+      const where = this.filterableWhere(target.model, target.where);
+      const select = this.pkSelect(target.model);
+      let readable: unknown = null;
+      try {
+        const constraint = await this.constraintFor('read', target.model, context);
+        readable = await this.run(target.model, () =>
+          delegate.findFirst({ where: mergeConstraint(where, constraint), select }),
+        );
+      } catch (error) {
+        if (!(error instanceof GolemForbiddenError)) {
+          throw error;
+        }
+      }
+      if (readable) {
+        linked.add(linkedRowKey(this.metadata, target.model, readable as Record<string, unknown>));
+        continue;
+      }
+      const creates = target.createsWhenMissing &&
+        !(await this.run(target.model, () => delegate.findFirst({ where, select })));
+      if (!creates) {
+        throw new GolemNotFoundError(`${target.model} not found`);
+      }
+    }
+    return linked;
   }
 
   private async classifyNestedWriteFilters(
@@ -1078,18 +1119,20 @@ export class GolemEngine {
   async create(request: CreateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('create', request);
+    refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
     const provider = this.enforced(req.context);
     if (provider) {
       await provider.authorize('create', req.model, req.context);
       await this.authorizeNestedWrites(req.model, req.data, req.context);
     }
+    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
     const prepared = await this.prepareRead(req);
     let created: unknown;
     let createPlanFast = false;
     let createPlan: { select: PrismaSelect; fastPath: boolean } | undefined;
     if (provider && this.checkWriteResults) {
       const model = this.modelsByName.get(req.model)!;
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       const constraint = await this.constraintFor('create', req.model, req.context);
       createPlan = await planVerification(
         vctx,
@@ -1103,7 +1146,7 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && !createPlanFast) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
         const wide = await txDelegate.create({
@@ -1136,6 +1179,7 @@ export class GolemEngine {
   async update(request: UpdateRequest, scope?: GolemOpScope): Promise<unknown> {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
+    refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
     await this.classifyFilterFields(
       req.model,
       req.context,
@@ -1143,6 +1187,7 @@ export class GolemEngine {
       'update',
     );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
+    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
     let updated: unknown;
@@ -1150,7 +1195,7 @@ export class GolemEngine {
     let updateConstraint: unknown;
     if (provider && this.checkWriteResults) {
       const model = this.modelsByName.get(req.model)!;
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       updateConstraint = await this.constraintFor('update', req.model, req.context);
       updatePlan = await planVerification(
         vctx,
@@ -1163,7 +1208,7 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && updatePlan && !updatePlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       const constraint = updateConstraint;
       const wide = { ...updatePlan!.select, ...pkSelect };
       updated = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
@@ -1210,12 +1255,13 @@ export class GolemEngine {
     const req = await this.runBefore('updateMany', request);
     await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'update');
     await this.authorizeNestedWrites(req.model, req.data, req.context);
+    const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
     let result: BatchResult;
     let manyPlan: { select: PrismaSelect; fastPath: boolean } | undefined;
     if (provider && this.checkWriteResults) {
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       manyPlan = await planVerification(
         vctx,
         this.modelsByName.get(req.model)!,
@@ -1227,7 +1273,7 @@ export class GolemEngine {
     if (provider && this.checkWriteResults && manyPlan && !manyPlan.fastPath) {
       const model = this.modelsByName.get(req.model)!;
       const pkSelect = this.pkSelect(req.model);
-      const vctx = this.verifyContext(req.context);
+      const vctx = this.verifyContext(req.context, linked);
       const scalars = { ...manyPlan.select, ...pkSelect };
       result = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
@@ -1295,6 +1341,7 @@ export class GolemEngine {
   }
 
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
+    refuseUpsertOffTarget(this.metadata, request.model, request.where, request.create);
     if (!this.enforced(request.context)) {
       return this.upsertBranch(request, scope);
     }

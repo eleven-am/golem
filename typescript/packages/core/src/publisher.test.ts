@@ -4,6 +4,7 @@ import { createEventPublisher } from './publisher';
 import { GolemConflictError, GolemValidationError } from './errors';
 import { withBufferedEvents } from './event-buffer';
 import { field } from './testing';
+import { fakeBatch } from '../test/support/fake-batch';
 
 const datamodel: DatamodelDocument = {
   models: [
@@ -29,6 +30,7 @@ const datamodel: DatamodelDocument = {
     },
   ],
   enums: [],
+  provider: 'sqlite',
 };
 
 function busSpy() {
@@ -58,7 +60,10 @@ describe('createEventPublisher', () => {
       model: 'User', operation: 'upsert', args: { where: { id: 'u1' } }, query,
       findExisting: jest.fn().mockResolvedValue({ id: 'u1' }),
     });
-    await publisher({ model: 'User', operation: 'delete', args: {}, query });
+    await publisher({
+      model: 'User', operation: 'delete', args: { where: { id: 'u1' } }, query,
+      batch: fakeBatch({ User: [{ id: 'u1', email: 'a@b.c' }] }, 'User').runtime,
+    });
     expect(published.map((p) => p.payload.type)).toEqual([
       'CREATED', 'UPDATED', 'CREATED', 'UPDATED', 'DELETED',
     ]);
@@ -87,20 +92,24 @@ describe('createEventPublisher', () => {
   it('recovers omitted primary keys for events without returning them to the caller', async () => {
     const { bus, published } = busSpy();
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
-    const query = jest.fn().mockResolvedValue({ id: 'u1', email: 'a@b.c' });
+    const query = jest.fn();
+    const batch = fakeBatch({ User: [{ id: 'u1', email: 'a@b.c' }] }, 'User');
 
     const result = await publisher({
       model: 'User',
       operation: 'delete',
       args: { where: { id: 'u1' }, omit: { id: true } },
       query,
+      batch: batch.runtime,
     });
 
-    expect(query).toHaveBeenCalledWith({
+    expect(query).not.toHaveBeenCalled();
+    expect(batch.delegates.get('User')!.delete).toHaveBeenCalledWith({
       where: { id: 'u1' },
-      omit: { id: false },
+      omit: { id: true },
     });
     expect(result).toEqual({ email: 'a@b.c' });
+    expect(batch.tables.get('User')).toEqual([]);
     expect(published).toEqual([
       {
         topic: 'golem.User',
@@ -120,11 +129,19 @@ describe('createEventPublisher', () => {
     const query = jest.fn().mockResolvedValue({ count: 2 });
 
     await publisher({ model: 'User', operation: 'updateMany', args: {}, query });
-    await publisher({ model: 'User', operation: 'deleteMany', args: {}, query });
     await publisher({ model: 'User', operation: 'findMany', args: {}, query });
     await publisher({ model: 'Post', operation: 'create', args: {}, query });
     expect(published).toEqual([]);
-    expect(query).toHaveBeenCalledTimes(4);
+    expect(query).toHaveBeenCalledTimes(3);
+  });
+
+  it('refuses a delete issued without the transaction-bound batch runtime', async () => {
+    const publisher = createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set() });
+    const query = jest.fn();
+
+    await expect(publisher({ model: 'User', operation: 'deleteMany', args: {}, query }))
+      .rejects.toThrow('deleteMany on User requires the transaction-bound batch runtime');
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('passes through models without a primary key', async () => {
@@ -185,14 +202,17 @@ describe('createEventPublisher', () => {
     });
     expect(selected).toEqual({ postId: 'p1', label: 'x' });
 
+    const batch = fakeBatch({ PostTag: [{ postId: 'p1', tagId: 't1', label: 'x' }] }, 'PostTag');
     const omitted = await publisher({
       model: 'PostTag',
       operation: 'delete',
-      args: { omit: { postId: true, tagId: true } },
+      args: { where: { postId_tagId: { postId: 'p1', tagId: 't1' } }, omit: { postId: true, tagId: true } },
       query,
+      batch: batch.runtime,
     });
-    expect(query).toHaveBeenLastCalledWith({
-      omit: { postId: false, tagId: false },
+    expect(batch.delegates.get('PostTag')!.delete).toHaveBeenLastCalledWith({
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      omit: { postId: true, tagId: true },
     });
     expect(omitted).toEqual({ label: 'x' });
     expect(published[1].payload).toEqual({
@@ -270,11 +290,7 @@ describe('createEventPublisher', () => {
     })).rejects.toBeInstanceOf(GolemValidationError);
     expect(overRows.updateManyAndReturn).not.toHaveBeenCalled();
 
-    const large = {
-      findMany: jest.fn().mockResolvedValue([{ id: '1', email: 'a'.repeat(100) }]),
-      updateManyAndReturn: jest.fn(),
-      deleteMany: jest.fn(),
-    };
+    const large = fakeBatch({ User: [{ id: '1', email: 'a'.repeat(100) }] }, 'User');
     const bytePublisher = createEventPublisher({
       datamodel,
       eventBus: busSpy().bus,
@@ -283,9 +299,16 @@ describe('createEventPublisher', () => {
     });
     await expect(bytePublisher({
       model: 'User', operation: 'deleteMany', args: {}, query,
-      batch: { suppressed: false, run: (work) => work(large) },
+      batch: large.runtime,
     })).rejects.toBeInstanceOf(GolemValidationError);
-    expect(large.deleteMany).not.toHaveBeenCalled();
+    expect(large.delegates.get('User')!.deleteMany).not.toHaveBeenCalled();
+
+    const tooMany = fakeBatch({ User: [{ id: '1', email: 'a' }, { id: '2', email: 'b' }] }, 'User');
+    await expect(rowPublisher({
+      model: 'User', operation: 'deleteMany', args: {}, query,
+      batch: tooMany.runtime,
+    })).rejects.toThrow('Deleting from User would touch more than the maximum of 1 rows');
+    expect(tooMany.delegates.get('User')!.deleteMany).not.toHaveBeenCalled();
 
     const run = jest.fn();
     await expect(rowPublisher({
@@ -302,25 +325,24 @@ describe('createEventPublisher', () => {
       { id: 'u1', email: 'one@example.com' },
       { id: 'u2', email: 'two@example.com' },
     ];
-    const delegate = {
-      findMany: jest.fn().mockResolvedValue(snapshots),
-      updateManyAndReturn: jest.fn(),
-      deleteMany: jest.fn().mockResolvedValue({ count: 2 }),
-    };
+    const batch = fakeBatch({ User: [...snapshots, { id: 'u3', email: 'none' }] }, 'User');
+    const delegate = batch.delegates.get('User')!;
     const result = await publisher({
       model: 'User', operation: 'deleteMany', args: { where: { email: { contains: '@' } } },
       query: jest.fn(),
-      batch: { suppressed: false, run: (work) => work(delegate) },
+      batch: batch.runtime,
     });
 
     expect(delegate.findMany).toHaveBeenCalledWith({
       where: { email: { contains: '@' } },
+      select: { id: true, email: true },
       orderBy: [{ id: 'asc' }],
       take: 1001,
     });
     expect(delegate.deleteMany).toHaveBeenCalledWith({
       where: { OR: [{ id: 'u1' }, { id: 'u2' }] },
     });
+    expect(batch.tables.get('User')).toEqual([{ id: 'u3', email: 'none' }]);
     expect(result).toEqual({ count: 2 });
     expect(published.map(({ payload }) => payload)).toEqual([
       { type: 'DELETED', model: 'User', id: 'u1', entity: snapshots[0] },
@@ -331,14 +353,26 @@ describe('createEventPublisher', () => {
   it('raises a stable conflict and publishes nothing on a delete concurrency mismatch', async () => {
     const { bus, published } = busSpy();
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
-    const delegate = {
-      findMany: jest.fn().mockResolvedValue([{ id: 'u1', email: 'x' }]),
-      updateManyAndReturn: jest.fn(),
+    const batch = fakeBatch({ User: [{ id: 'u1', email: 'x' }] }, 'User', {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
-    };
+    });
     await expect(publisher({
       model: 'User', operation: 'deleteMany', args: {}, query: jest.fn(),
-      batch: { suppressed: false, run: (work) => work(delegate) },
+      batch: batch.runtime,
+    })).rejects.toBeInstanceOf(GolemConflictError);
+    expect(published).toEqual([]);
+
+    const vanished = fakeBatch({ User: [{ id: 'u1', email: 'x' }] }, 'User');
+    const user = vanished.delegates.get('User')!;
+    const locate = user.findMany.getMockImplementation()!;
+    user.findMany.mockImplementationOnce(async (args) => {
+      const located = await locate(args);
+      vanished.tables.set('User', []);
+      return located;
+    });
+    await expect(publisher({
+      model: 'User', operation: 'deleteMany', args: {}, query: jest.fn(),
+      batch: vanished.runtime,
     })).rejects.toBeInstanceOf(GolemConflictError);
     expect(published).toEqual([]);
   });

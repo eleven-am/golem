@@ -2,6 +2,8 @@ import { GolemOperation } from './hooks';
 
 export type DatamodelFieldKind = 'scalar' | 'object' | 'enum';
 
+export type DatamodelReferentialAction = 'Cascade' | 'Restrict' | 'NoAction' | 'SetNull' | 'SetDefault';
+
 export interface DatamodelField {
   name: string;
   dbName?: string;
@@ -19,6 +21,8 @@ export interface DatamodelField {
   relationName?: string;
   relationFromFields?: readonly string[];
   relationToFields?: readonly string[];
+  /** What the database does to this row when the row its foreign key references is deleted. */
+  relationOnDelete?: DatamodelReferentialAction;
 }
 
 export interface DatamodelPrimaryKey {

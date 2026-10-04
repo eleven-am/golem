@@ -20,6 +20,7 @@ const url = process.env[POSTGRES_URL_ENV] ?? '';
 const datamodel: DatamodelDocument = {
   models: [{
     name: 'Secret',
+    dbName: 'secrets',
     fields: [
       field({ name: 'id', type: 'Int', isId: true }),
       field({ name: 'value', type: 'String' }),
@@ -85,20 +86,34 @@ describe('batch-event concurrency against live PostgreSQL', () => {
         query: async () => { throw new Error('the native batch query escaped interception'); },
         batch: {
           suppressed: false,
-          run: (work) => work({
-            findMany: async (args) => {
-              const rows = await tx.secret.findMany(args as Parameters<typeof tx.secret.findMany>[0]);
-              selected.release();
-              await concurrentlyDeleted.promise;
-              return rows;
-            },
-            updateManyAndReturn: (args) =>
-              tx.secret.updateManyAndReturn(
-                args as Parameters<typeof tx.secret.updateManyAndReturn>[0],
-              ),
-            deleteMany: (args) =>
-              tx.secret.deleteMany(args as Parameters<typeof tx.secret.deleteMany>[0]),
-          }),
+          run: (work) => {
+            const delegate = {
+              findMany: async (args: unknown) => {
+                const rows = await tx.secret.findMany(args as Parameters<typeof tx.secret.findMany>[0]);
+                selected.release();
+                await concurrentlyDeleted.promise;
+                return rows;
+              },
+              findUnique: (args: unknown) =>
+                tx.secret.findUnique(args as Parameters<typeof tx.secret.findUnique>[0]),
+              updateManyAndReturn: (args: unknown) =>
+                tx.secret.updateManyAndReturn(
+                  args as Parameters<typeof tx.secret.updateManyAndReturn>[0],
+                ),
+              update: (args: unknown) =>
+                tx.secret.update(args as Parameters<typeof tx.secret.update>[0]),
+              upsert: (args: unknown) =>
+                tx.secret.upsert(args as Parameters<typeof tx.secret.upsert>[0]),
+              delete: (args: unknown) =>
+                tx.secret.delete(args as Parameters<typeof tx.secret.delete>[0]),
+              deleteMany: (args: unknown) =>
+                tx.secret.deleteMany(args as Parameters<typeof tx.secret.deleteMany>[0]),
+            };
+            return work(delegate, {
+              delegate: () => delegate,
+              queryRaw: (sql, ...values) => tx.$queryRawUnsafe(sql, ...values),
+            });
+          },
         },
       })),
     );

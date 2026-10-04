@@ -586,7 +586,7 @@ describe('classifying the filter a write selects rows with', () => {
       engine.upsert({
         model: 'Post',
         where: { id: 'p1', secret: { startsWith: 'a' } },
-        create: { title: 'x' },
+        create: { id: 'p1', title: 'x' },
         update: { title: 'x' },
         select: { title: true },
         context: ctx,

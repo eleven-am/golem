@@ -160,7 +160,7 @@ describe('engine interactive transaction', () => {
     await engine.transaction(ctx, (tx) => tx.upsert({
       model: 'Post',
       where: { id: 'p2' },
-      create: { title: 'new' },
+      create: { id: 'p2', title: 'new' },
       update: { title: 'updated' },
     }));
 

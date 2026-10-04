@@ -197,7 +197,7 @@ describe('engine hooks', () => {
     await engine.upsert({
       model: 'User',
       where: { id: 'u1' },
-      create: { email: 'new@example.com' },
+      create: { id: 'u1', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
     });
 
@@ -224,7 +224,7 @@ describe('engine hooks', () => {
     await engine.upsert({
       model: 'User',
       where: { id: 'missing' },
-      create: { email: 'new@example.com' },
+      create: { id: 'missing', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
     });
 
@@ -263,7 +263,7 @@ describe('engine hooks', () => {
     await engine.upsert({
       model: 'User',
       where: { id: 'missing' },
-      create: { email: 'new@example.com' },
+      create: { id: 'missing', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
       context: {},
     });

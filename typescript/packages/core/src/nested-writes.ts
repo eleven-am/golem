@@ -97,12 +97,12 @@ function actionSets(operations: readonly NestedWriteOperation[]) {
     if (kind === 'create' || kind === 'createMany') {
       model.add('create'); added.add('create');
     } else if (kind === 'connectOrCreate') {
-      model.add('create'); model.add('update'); added.add('create'); added.add('update');
+      model.add('create'); model.add('read'); added.add('create');
     } else if (kind === 'connect') {
-      model.add('update'); added.add('update');
+      model.add('read'); added.add('read');
     } else if (kind === 'disconnect' || kind === 'set') {
-      model.add('update'); removed.add('update');
-      if (kind === 'set') added.add('update');
+      model.add('read'); removed.add('read');
+      if (kind === 'set') added.add('read');
     } else if (kind === 'update' || kind === 'updateMany') {
       model.add('update'); retained.add('update');
     } else if (kind === 'upsert') {

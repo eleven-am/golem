@@ -257,7 +257,7 @@ describe('compound unique selectors in filterable where', () => {
     await engine.upsert({
       model: 'Branch',
       where: { authorNameKey: { authorId: 'a1', name: 'main' }, id: 'b9' },
-      create: { authorId: 'a1', name: 'main' },
+      create: { id: 'b9', authorId: 'a1', name: 'main' },
       update: { name: 'main' },
       select: { id: true },
     });
@@ -276,7 +276,7 @@ describe('compound unique selectors in filterable where', () => {
     await engine.upsert({
       model: 'Branch',
       where: { id: 'b9' },
-      create: { authorId: 'a1', name: 'main' },
+      create: { id: 'b9', authorId: 'a1', name: 'main' },
       update: { name: 'main' },
       select: { id: true },
     });
@@ -519,6 +519,217 @@ describe('the upsert branch probe', () => {
       }),
     ).rejects.toBeInstanceOf(GolemUnauthorizedError);
     expect(findFirst).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity', () => {
+  const identityModels = [
+    {
+      name: 'User',
+      fields: [
+        field({ name: 'id', type: 'Int', isId: true }),
+        field({ name: 'email', type: 'String', isUnique: true }),
+        field({ name: 'name', type: 'String' }),
+      ],
+    },
+    {
+      name: 'Branch',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'authorId', type: 'String' }),
+        field({ name: 'name', type: 'String' }),
+      ],
+      uniqueIndexes: [{ fields: ['authorId', 'name'] }],
+    },
+  ];
+
+  type Delegates = Record<string, Record<string, jest.Mock>>;
+
+  function unscoped(delegates: Delegates) {
+    return new GolemEngine(delegates, identityModels);
+  }
+
+  function scoped(delegates: Delegates) {
+    const golemUpsertGuard = { upsert: jest.fn().mockResolvedValue({ stripe: 1 }) };
+    const client = {
+      ...delegates,
+      golemUpsertGuard,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+        run({ ...delegates, golemUpsertGuard }),
+      ),
+    };
+    return new GolemEngine(client, identityModels, {
+      authorization: {
+        authorize: jest.fn(async () => undefined),
+        constrain: jest.fn(async () => ({})),
+        check: jest.fn(async () => true),
+        checkField: jest.fn(async () => true),
+      } as never,
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
+  }
+
+  const engines: ReadonlyArray<[string, (delegates: Delegates) => GolemEngine, unknown]> = [
+    ['an unscoped engine', unscoped, undefined],
+    ['a context-bound engine', scoped, { req: {} }],
+  ];
+
+  describe.each(engines)('on %s', (_label, build, context) => {
+    it('refuses a create branch whose input names a different id, creating nothing', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 6 });
+      const engine = build({ user: { findFirst, create, update: jest.fn() } });
+
+      const outcome = engine.upsert({
+        model: 'User',
+        where: { id: 5 },
+        create: { id: 6, email: 'six@example.com', name: 'Six' },
+        update: { name: 'Five' },
+        context,
+      });
+
+      await expect(outcome).rejects.toBeInstanceOf(GolemValidationError);
+      await expect(outcome).rejects.toThrow(
+        'upsert create input does not set the target selector id on User',
+      );
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a create branch that leaves the target selector to a default', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 1 });
+      const engine = build({ user: { findFirst, create, update: jest.fn() } });
+
+      await expect(
+        engine.upsert({
+          model: 'User',
+          where: { email: 'new@example.com' },
+          create: { name: 'New' },
+          update: { name: 'New' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector email on User');
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a compound target whose create input disagrees on one member', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 'b1' });
+      const engine = build({ branch: { findFirst, create, update: jest.fn() } });
+
+      await expect(
+        engine.upsert({
+          model: 'Branch',
+          where: { authorId_name: { authorId: 'a1', name: 'main' } },
+          create: { authorId: 'a2', name: 'main' },
+          update: { name: 'main' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector authorId on Branch');
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('creates when every target selector is set to the target value', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 'b1' });
+      const engine = build({ branch: { findFirst, create, update: jest.fn() } });
+
+      await engine.upsert({
+        model: 'Branch',
+        where: { authorId_name: { authorId: 'a1', name: 'main' } },
+        create: { authorId: 'a1', name: 'main' },
+        update: { name: 'main' },
+        context,
+      });
+
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a mismatched create input even when the target exists, before any query', async () => {
+      const findFirst = jest.fn().mockResolvedValue({ id: 5 });
+      const update = jest.fn().mockResolvedValue({ id: 5 });
+      const create = jest.fn();
+      const engine = build({ user: { findFirst, create, update } });
+
+      await expect(
+        engine.upsert({
+          model: 'User',
+          where: { id: 5 },
+          create: { id: 6, email: 'six@example.com', name: 'Six' },
+          update: { name: 'Five' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector id on User');
+
+      expect(findFirst).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('takes the update branch when the create input carries the target', async () => {
+      const findFirst = jest.fn().mockResolvedValue({ id: 5 });
+      const update = jest.fn().mockResolvedValue({ id: 5 });
+      const create = jest.fn();
+      const engine = build({ user: { findFirst, create, update } });
+
+      await engine.upsert({
+        model: 'User',
+        where: { id: 5 },
+        create: { id: 5, email: 'five@example.com', name: 'Five' },
+        update: { name: 'Five' },
+        context,
+      });
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(create).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('upsert target identity through a relation connect', () => {
+  const linkModels = [
+    { name: 'Post', fields: [field({ name: 'id', type: 'String', isId: true })] },
+    { name: 'Tag', fields: [field({ name: 'id', type: 'String', isId: true })] },
+    {
+      name: 'PostTag',
+      fields: [
+        field({ name: 'postId', type: 'String' }),
+        field({ name: 'tagId', type: 'String' }),
+        field({ name: 'post', type: 'Post', kind: 'object', relationName: 'PostToPostTag', relationFromFields: ['postId'], relationToFields: ['id'] }),
+        field({ name: 'tag', type: 'Tag', kind: 'object', relationName: 'PostTagToTag', relationFromFields: ['tagId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['postId', 'tagId'] },
+    },
+  ];
+
+  function engine(create: jest.Mock) {
+    return new GolemEngine(
+      { postTag: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      linkModels,
+    );
+  }
+
+  it('accepts a selector field set by connecting the relation it belongs to', async () => {
+    const create = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
+    await engine(create).upsert({
+      model: 'PostTag',
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      create: { post: { connect: { id: 'p1' } }, tag: { connect: { id: 't1' } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a connect that names a different target', async () => {
+    const create = jest.fn();
+    await expect(engine(create).upsert({
+      model: 'PostTag',
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      create: { post: { connect: { id: 'p1' } }, tag: { connect: { id: 't2' } } },
+      update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector tagId on PostTag');
     expect(create).not.toHaveBeenCalled();
   });
 });

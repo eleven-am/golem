@@ -12,6 +12,7 @@ export * from './errors';
 export * from './events';
 export * from './extensions';
 export * from './hooks';
+export * from './input-values';
 export * from './model-meta';
 export * from './nested-writes';
 export * from './publisher';

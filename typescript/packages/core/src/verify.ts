@@ -6,6 +6,7 @@ import {
 import { runPolicyChecks } from './concurrency';
 import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
+import { linkedRowKey } from './link-targets';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { NestedRelationWritePlan, nestedPlanTargetsRow, planNestedWrites } from './nested-writes';
 import {
@@ -21,6 +22,7 @@ export interface VerifyContext {
   metadata?: ModelMetadataIndex;
   provider: AuthorizationProvider;
   context: unknown;
+  linked?: ReadonlySet<string>;
 }
 
 function metadataFor(ctx: Pick<VerifyContext, 'modelsByName' | 'metadata'>): ModelMetadataIndex {
@@ -117,6 +119,10 @@ async function verifyAppearedRow(
   relation: NestedRelationWritePlan,
   row: Record<string, unknown>,
 ): Promise<void> {
+  if (ctx.linked?.has(linkedRowKey(metadataFor(ctx), relation.target.name, row))) {
+    await checkRow(ctx, 'read', relation.target.name, row);
+    return;
+  }
   await runPolicyChecks([...relation.addedActions].map((action) => () =>
     checkRow(ctx, action, relation.target.name, row)));
   if (relation.addedActions.has('create')) {

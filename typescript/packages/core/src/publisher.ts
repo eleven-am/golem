@@ -1,5 +1,16 @@
 import { DatamodelDocument } from './datamodel';
 import { canonicalToken } from './canonical';
+import {
+  CascadePlan,
+  CascadeRow,
+  CascadeTouched,
+  CascadeTransaction,
+  cascadeDialect,
+  enumerateCascade,
+  enumerateNestedDeletes,
+  hasNestedDeletes,
+  tooManyTouchedRows,
+} from './cascade';
 import { bufferEvent } from './event-buffer';
 import { encodedGolemEventBytes } from './event-codec';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -26,7 +37,6 @@ export type GolemQueryInterceptor = (params: GolemQueryParams) => Promise<any>;
 const OPERATION_EVENTS: Record<string, GolemEventType> = {
   create: 'CREATED',
   update: 'UPDATED',
-  delete: 'DELETED',
 };
 
 export interface CreateEventPublisherOptions {
@@ -46,14 +56,23 @@ export interface GolemBatchEventOptions {
 
 export interface GolemBatchDelegate {
   findMany(args: unknown): Promise<Record<string, unknown>[]>;
+  findUnique(args: unknown): Promise<Record<string, unknown> | null>;
   updateManyAndReturn?(args: unknown): Promise<Record<string, unknown>[]>;
+  update(args: unknown): Promise<unknown>;
+  upsert(args: unknown): Promise<unknown>;
+  delete(args: unknown): Promise<unknown>;
   deleteMany(args: unknown): Promise<{ count: number }>;
+}
+
+export interface GolemBatchTransaction {
+  delegate(model: string): GolemBatchDelegate;
+  queryRaw(sql: string, ...values: unknown[]): Promise<unknown>;
 }
 
 export interface GolemBatchRuntime {
   /** True only for auxiliary operations issued by the publisher itself. */
   suppressed: boolean;
-  run<T>(work: (delegate: GolemBatchDelegate) => Promise<T>): Promise<T>;
+  run<T>(work: (delegate: GolemBatchDelegate, transaction: GolemBatchTransaction) => Promise<T>): Promise<T>;
 }
 
 export const GOLEM_BATCH_RESULT_ROWS = Symbol.for('@eleven-am/golem.batch-result-rows');
@@ -151,109 +170,58 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     }
   }
 
-  return async ({ model, operation, args, query, findExisting, batch }) => {
-    if (batch?.suppressed) return query(args);
-    if (
-      model &&
-      options.models.has(model) &&
-      (operation === 'updateMany' || operation === 'deleteMany')
-    ) {
-      const pks = pkByModel.get(model);
-      if (!pks || !batch) return query(args);
-      if (
-        operation === 'updateMany' &&
-        pks.some((pk) => Object.prototype.hasOwnProperty.call(args?.data ?? {}, pk))
-      ) {
+  const cascades = new CascadePlan(options.datamodel.models);
+  const dialect = cascadeDialect(options.datamodel.provider, cascades);
+  const cascadeTransaction = (transaction: GolemBatchTransaction): CascadeTransaction => ({
+    findMany: (model, args) => transaction.delegate(model).findMany(args),
+    queryRaw: (sql, ...values) => transaction.queryRaw(sql, ...values) as Promise<Record<string, unknown>[]>,
+  });
+  const touchedEvents = (
+    operation: string,
+    model: string,
+    touched: CascadeTouched,
+  ): Map<string, GolemEventPayload[]> => {
+    const topics = new Map<string, GolemEventPayload[]>();
+    for (const [type, entries] of [['DELETED', touched.deleted], ['UPDATED', touched.updated]] as const) {
+      for (const { model: touchedModel, row } of entries) {
+        if (!options.models.has(touchedModel)) continue;
+        const events = topics.get(touchedModel) ?? [];
+        events.push({
+          type,
+          model: touchedModel,
+          id: identityOf(row, pkByModel.get(touchedModel)!),
+          ...(type === 'DELETED' ? { entity: row } : {}),
+        });
+        topics.set(touchedModel, events);
+      }
+    }
+    for (const [touchedModel, events] of topics) {
+      const payloadBytes = encodedGolemEventBytes({ kind: 'batch', events });
+      if (payloadBytes > maxBatchPayloadBytes) {
         throw new GolemValidationError(
-          `Eventful updateMany cannot modify primary key fields on ${model}`,
+          `Eventful ${operation} on ${model} produces ${payloadBytes} event bytes for ${touchedModel}, exceeding the maximum of ${maxBatchPayloadBytes}`,
         );
       }
-      const select = Object.fromEntries(pks.map((pk) => [pk, true]));
-      return batch.run(async (delegate) => {
-        const rows = await delegate.findMany({
-          where: args?.where,
-          ...(operation === 'updateMany' ? { select } : {}),
-          orderBy: stableOrder(pks),
-          take: maxBatchRows + 1,
-        });
-        if (rows.length > maxBatchRows) {
-          throw new GolemValidationError(
-            `Eventful ${operation} on ${model} exceeds the maximum of ${maxBatchRows} rows`,
-          );
-        }
-        if (rows.length === 0) return { count: 0 };
-        const eventType: GolemEventType = operation === 'updateMany' ? 'UPDATED' : 'DELETED';
-        const events: GolemEventPayload[] = rows.map((row) => ({
-          type: eventType,
-          model,
-          id: identityOf(row, pks),
-          ...(eventType === 'DELETED' ? { entity: row } : {}),
-        }));
-        const payloadBytes = encodedGolemEventBytes({ kind: 'batch', events });
-        if (payloadBytes > maxBatchPayloadBytes) {
-          throw new GolemValidationError(
-            `Eventful ${operation} on ${model} produces ${payloadBytes} event bytes, exceeding the maximum of ${maxBatchPayloadBytes}`,
-          );
-        }
-        const where = exactRowsWhere(rows, pks);
-        let updatedRows: readonly Record<string, unknown>[] | undefined;
-        if (operation === 'updateMany') {
-          if (!delegate.updateManyAndReturn) {
-            throw new GolemValidationError(
-              `Eventful updateMany on ${model} requires transaction-bound updateManyAndReturn`,
-            );
-          }
-          const updated = await delegate.updateManyAndReturn({
-            where,
-            data: args.data,
-            select: scalarSelectByModel.get(model) ?? select,
-          });
-          updatedRows = updated;
-          if (updated.length !== rows.length) {
-            throw new GolemConflictError(
-              `Eventful updateMany on ${model} changed ${updated.length} rows after selecting ${rows.length}`,
-            );
-          }
-          const updatedByIdentity = new Map(
-            updated.map((row) => [canonicalToken(identityOf(row, pks)), row]),
-          );
-          if (rows.some((row) => !updatedByIdentity.has(canonicalToken(identityOf(row, pks))))) {
-            throw new GolemConflictError(
-              `Eventful updateMany on ${model} returned a different identity set`,
-            );
-          }
-        } else {
-          const deleted = await delegate.deleteMany({ where });
-          if (deleted.count !== rows.length) {
-            throw new GolemConflictError(
-              `Eventful deleteMany on ${model} deleted ${deleted.count} rows after selecting ${rows.length}`,
-            );
-          }
-        }
-        const deferred = bufferEvent({
-          publish: () => publishEvents(options.eventBus, eventTopic(model), events),
-        });
-        if (!deferred) await publishEvents(options.eventBus, eventTopic(model), events);
-        return batchResult(rows.length, updatedRows);
-      });
     }
-    let type = OPERATION_EVENTS[operation];
-    if (operation === 'upsert') {
-      if (!model || !options.models.has(model)) return query(args);
-      const pks = pkByModel.get(model);
-      if (!pks || !findExisting) return query(args);
-      const existing = await findExisting(
-        args?.where,
-        Object.fromEntries(pks.map((pk) => [pk, true])),
-      );
-      type = existing ? 'UPDATED' : 'CREATED';
-    }
-    if (!type || !model || !options.models.has(model)) {
-      return query(args);
-    }
+    return topics;
+  };
+  const publishTopics = async (topics: Map<string, GolemEventPayload[]>): Promise<void> => {
+    const publishAll = async () => {
+      for (const [touchedModel, events] of topics) {
+        await publishEvents(options.eventBus, eventTopic(touchedModel), events);
+      }
+    };
+    if (!bufferEvent({ publish: publishAll })) await publishAll();
+  };
+  const writeRow = async (
+    type: GolemEventType,
+    model: string,
+    args: any,
+    run: (args: any) => Promise<any>,
+  ): Promise<any> => {
     const pks = pkByModel.get(model);
-    if (!pks) {
-      return query(args);
+    if (!pks || !options.models.has(model)) {
+      return run(args);
     }
     const injectedSelect = new Set(
       args?.select ? pks.filter((pk) => args.select[pk] !== true) : [],
@@ -276,7 +244,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
             },
           }
         : args;
-    const result = await query(finalArgs);
+    const result = await run(finalArgs);
     const eventEntity =
       result && typeof result === 'object' && !Array.isArray(result)
         ? { ...(result as Record<string, unknown>) }
@@ -286,14 +254,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       : Object.fromEntries(
           pks.map((pk) => [pk, (result as Record<string, GolemEventIdentityScalar>)[pk]]),
         );
-    const payload = {
-      type,
-      model,
-      id: identity,
-      ...(type === 'DELETED' && eventEntity
-        ? { entity: eventEntity }
-        : {}),
-    };
+    const payload = { type, model, id: identity };
     const deferred = bufferEvent({
       publish: () => options.eventBus.publish(eventTopic(model), payload),
     });
@@ -308,5 +269,169 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       return publicResult;
     }
     return result;
+  };
+  const single = (read: Promise<Record<string, unknown> | null>) =>
+    read.then((row) => (row ? [row] : []));
+
+  return async ({ model, operation, args, query, findExisting, batch }) => {
+    if (batch?.suppressed) return query(args);
+    if (model && pkByModel.has(model) && (operation === 'delete' || operation === 'deleteMany')) {
+      if (!batch) {
+        throw new Error(`${operation} on ${model} requires the transaction-bound batch runtime`);
+      }
+      const pks = pkByModel.get(model)!;
+      return batch.run(async (delegate, transaction) => {
+        const tx = cascadeTransaction(transaction);
+        const rows = await dialect.lockedRoots(tx, model, (select) =>
+          operation === 'delete'
+            ? single(delegate.findUnique({ where: args?.where, select }))
+            : delegate.findMany({
+                where: args?.where,
+                select,
+                orderBy: stableOrder(pks),
+                take: maxBatchRows + 1,
+              }));
+        if (rows.length > maxBatchRows) {
+          throw tooManyTouchedRows(model, maxBatchRows);
+        }
+        if (rows.length === 0) {
+          return operation === 'delete' ? delegate.delete(args) : { count: 0 };
+        }
+        const touched = await enumerateCascade(
+          cascades,
+          dialect,
+          tx,
+          model,
+          rows.map((row) => ({ model, row })),
+          maxBatchRows,
+        );
+        const topics = touchedEvents(operation, model, touched);
+        let result: unknown;
+        if (operation === 'delete') {
+          result = await delegate.delete(args);
+        } else {
+          const deleted = await delegate.deleteMany({ where: exactRowsWhere(rows, pks) });
+          if (deleted.count !== rows.length) {
+            throw new GolemConflictError(
+              `Eventful deleteMany on ${model} deleted ${deleted.count} rows after selecting ${rows.length}`,
+            );
+          }
+          result = batchResult(rows.length);
+        }
+        await publishTopics(topics);
+        return result;
+      });
+    }
+    const nestedData = operation === 'upsert' ? args?.update : args?.data;
+    if (
+      model &&
+      pkByModel.has(model) &&
+      (operation === 'update' || operation === 'upsert') &&
+      hasNestedDeletes(cascades, model, nestedData)
+    ) {
+      if (!batch) {
+        throw new Error(`${operation} on ${model} requires the transaction-bound batch runtime`);
+      }
+      return batch.run(async (delegate, transaction) => {
+        const tx = cascadeTransaction(transaction);
+        const parents = await dialect.lockedRoots(tx, model, (select) =>
+          single(delegate.findUnique({ where: args?.where, select })));
+        const removed: CascadeRow[] = [];
+        await enumerateNestedDeletes(cascades, dialect, tx, model, parents, nestedData, maxBatchRows, removed);
+        const touched = await enumerateCascade(cascades, dialect, tx, model, removed, maxBatchRows);
+        const topics = touchedEvents(operation, model, touched);
+        const result = await writeRow(
+          operation === 'upsert' && parents.length === 0 ? 'CREATED' : 'UPDATED',
+          model,
+          args,
+          (finalArgs) => (operation === 'upsert' ? delegate.upsert(finalArgs) : delegate.update(finalArgs)),
+        );
+        await publishTopics(topics);
+        return result;
+      });
+    }
+    if (
+      model &&
+      options.models.has(model) &&
+      operation === 'updateMany'
+    ) {
+      const pks = pkByModel.get(model);
+      if (!pks || !batch) return query(args);
+      if (pks.some((pk) => Object.prototype.hasOwnProperty.call(args?.data ?? {}, pk))) {
+        throw new GolemValidationError(
+          `Eventful updateMany cannot modify primary key fields on ${model}`,
+        );
+      }
+      const select = Object.fromEntries(pks.map((pk) => [pk, true]));
+      return batch.run(async (delegate) => {
+        const rows = await delegate.findMany({
+          where: args?.where,
+          select,
+          orderBy: stableOrder(pks),
+          take: maxBatchRows + 1,
+        });
+        if (rows.length > maxBatchRows) {
+          throw new GolemValidationError(
+            `Eventful ${operation} on ${model} exceeds the maximum of ${maxBatchRows} rows`,
+          );
+        }
+        if (rows.length === 0) return { count: 0 };
+        const events: GolemEventPayload[] = rows.map((row) => ({
+          type: 'UPDATED',
+          model,
+          id: identityOf(row, pks),
+        }));
+        const payloadBytes = encodedGolemEventBytes({ kind: 'batch', events });
+        if (payloadBytes > maxBatchPayloadBytes) {
+          throw new GolemValidationError(
+            `Eventful ${operation} on ${model} produces ${payloadBytes} event bytes, exceeding the maximum of ${maxBatchPayloadBytes}`,
+          );
+        }
+        const where = exactRowsWhere(rows, pks);
+        if (!delegate.updateManyAndReturn) {
+          throw new GolemValidationError(
+            `Eventful updateMany on ${model} requires transaction-bound updateManyAndReturn`,
+          );
+        }
+        const updatedRows = await delegate.updateManyAndReturn({
+          where,
+          data: args.data,
+          select: scalarSelectByModel.get(model) ?? select,
+        });
+        if (updatedRows.length !== rows.length) {
+          throw new GolemConflictError(
+            `Eventful updateMany on ${model} changed ${updatedRows.length} rows after selecting ${rows.length}`,
+          );
+        }
+        const updatedByIdentity = new Map(
+          updatedRows.map((row) => [canonicalToken(identityOf(row, pks)), row]),
+        );
+        if (rows.some((row) => !updatedByIdentity.has(canonicalToken(identityOf(row, pks))))) {
+          throw new GolemConflictError(
+            `Eventful updateMany on ${model} returned a different identity set`,
+          );
+        }
+        const deferred = bufferEvent({
+          publish: () => publishEvents(options.eventBus, eventTopic(model), events),
+        });
+        if (!deferred) await publishEvents(options.eventBus, eventTopic(model), events);
+        return batchResult(rows.length, updatedRows);
+      });
+    }
+    let type = OPERATION_EVENTS[operation];
+    if (operation === 'upsert') {
+      if (!model || !options.models.has(model)) return query(args);
+      const pks = pkByModel.get(model);
+      if (!pks || !findExisting) return query(args);
+      const existing = await findExisting(
+        args?.where,
+        Object.fromEntries(pks.map((pk) => [pk, true])),
+      );
+      type = existing ? 'UPDATED' : 'CREATED';
+    }
+    if (!type || !model) {
+      return query(args);
+    }
+    return writeRow(type, model, args, query);
   };
 }

@@ -45,6 +45,9 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
         ...(field.relationName ? { relationName: field.relationName } : {}),
         ...(field.relationFromFields?.length ? { relationFromFields: [...field.relationFromFields] } : {}),
         ...(field.relationToFields?.length ? { relationToFields: [...(field.relationToFields as string[])] } : {}),
+        ...(field.relationFromFields?.length
+          ? { relationOnDelete: field.relationOnDelete ?? (field.isRequired ? 'Restrict' : 'SetNull') }
+          : {}),
       })),
     ...(model.primaryKey
       ? {

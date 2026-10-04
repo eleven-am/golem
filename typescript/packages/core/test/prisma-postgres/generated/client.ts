@@ -74,3 +74,18 @@ export type Metric = Prisma.MetricModel
  * 
  */
 export type Profile = Prisma.ProfileModel
+/**
+ * Model Thread
+ * 
+ */
+export type Thread = Prisma.ThreadModel
+/**
+ * Model Reply
+ * 
+ */
+export type Reply = Prisma.ReplyModel
+/**
+ * Model Watch
+ * 
+ */
+export type Watch = Prisma.WatchModel

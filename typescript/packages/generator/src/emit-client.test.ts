@@ -20,11 +20,19 @@ describe('generated Golem client', () => {
     expect(output).toContain('query: query as');
   });
 
+  it('refuses NUL strings for every operation, model and raw, before it runs', () => {
+    expect(output).toContain("import { refuseNulStrings } from '@eleven-am/golem-core'");
+    expect(output).toContain(
+      'async $allOperations({ model, operation, args, query }) {\n        refuseNulStrings(args);\n        if (!model) return query(args);',
+    );
+    expect(output).not.toContain('$allModels');
+  });
+
   it('buffers intercepted writes until the native transaction commits', () => {
     expect(output).toContain("import { withBufferedEvents } from '@eleven-am/golem-core'");
     expect(output).toContain('const transaction = instrumented.$transaction.bind(instrumented)');
     expect(output).toContain('withBufferedEvents(() =>');
-    expect(output).toContain('withBufferedEvents(() =>\n                      raw.$transaction');
+    expect(output).toContain('withBufferedEvents(() =>\n                    raw.$transaction');
     expect(output).toContain('$transaction: commitAwareTransaction');
     expect(output).toContain('transactionContext.run(');
     expect(output).toContain('{ client: tx, suppressBatchEvents: false }');

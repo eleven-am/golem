@@ -156,6 +156,7 @@ describe('transactional create verification', () => {
         create: jest.fn().mockResolvedValue(row),
         findUnique: jest.fn().mockResolvedValue(row),
       },
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'u-roy' }) },
     };
     const client = txClient(delegates);
     const authz = provider({
@@ -266,7 +267,7 @@ describe('nested relation diff verification', () => {
     expect(authz.check).not.toHaveBeenCalledWith('create', 'Post', expect.objectContaining({ id: 'old1' }), ctx);
   });
 
-  it('checks connected rows under the update action and both actions when ambiguous', async () => {
+  it('checks connected rows under the read action and created rows under create', async () => {
     const beforeUser = { id: 'u1', email: 'a@b.c', posts: [] as unknown[] };
     const appeared = { id: 'pX', title: 'joined', type: 'PERSONAL', published: false, views: 0, authorId: 'u1' };
     const delegates = {
@@ -275,6 +276,7 @@ describe('nested relation diff verification', () => {
         update: jest.fn().mockResolvedValue({ ...beforeUser, posts: [appeared] }),
         findUnique: jest.fn().mockResolvedValue({ id: 'u1' }),
       },
+      post: { findFirst: jest.fn().mockResolvedValue({ id: 'pX' }) },
     };
     const client = txClient(delegates);
     const authz = provider({ classifyFields: undefined });
@@ -290,20 +292,23 @@ describe('nested relation diff verification', () => {
       data: { posts: { connect: [{ id: 'pX' }] } },
       context: ctx,
     });
-    expect(authz.check).toHaveBeenCalledWith('update', 'Post', appeared, ctx);
+    expect(authz.check).toHaveBeenCalledWith('read', 'Post', appeared, ctx);
     expect(authz.check).not.toHaveBeenCalledWith('create', 'Post', appeared, ctx);
+    expect(authz.check).not.toHaveBeenCalledWith('update', 'Post', appeared, ctx);
 
     (authz.check as jest.Mock).mockClear();
+    const created = { ...appeared, id: 'pNew' };
     delegates.user.findFirst.mockResolvedValue(beforeUser);
-    delegates.user.update.mockResolvedValue({ ...beforeUser, posts: [appeared] });
+    delegates.user.update.mockResolvedValue({ ...beforeUser, posts: [appeared, created] });
     await engine.update({
       model: 'User',
       where: { id: 'u1' },
       data: { posts: { connect: [{ id: 'pX' }], create: [{ title: 'joined' }] } },
       context: ctx,
     });
-    expect(authz.check).toHaveBeenCalledWith('update', 'Post', appeared, ctx);
-    expect(authz.check).toHaveBeenCalledWith('create', 'Post', appeared, ctx);
+    expect(authz.check).toHaveBeenCalledWith('read', 'Post', appeared, ctx);
+    expect(authz.check).not.toHaveBeenCalledWith('create', 'Post', appeared, ctx);
+    expect(authz.check).toHaveBeenCalledWith('create', 'Post', created, ctx);
   });
 
   it('checks row and changed fields for an existing child updated in place', async () => {
@@ -367,8 +372,8 @@ describe('nested relation diff verification', () => {
   });
 
   it.each([
-    ['disconnect', { disconnect: [{ id: 'p1' }] }, 'update'],
-    ['set', { set: [] }, 'update'],
+    ['disconnect', { disconnect: [{ id: 'p1' }] }, 'read'],
+    ['set', { set: [] }, 'read'],
     ['delete', { delete: [{ id: 'p1' }] }, 'delete'],
     ['deleteMany', { deleteMany: [{ id: 'p1' }] }, 'delete'],
   ])('checks removed children for nested %s', async (_name, envelope, expectedAction) => {
@@ -380,6 +385,7 @@ describe('nested relation diff verification', () => {
         update: jest.fn().mockResolvedValue({ ...beforeUser, posts: [] }),
         findUnique: jest.fn(),
       },
+      post: { findFirst: jest.fn().mockResolvedValue({ id: 'p1' }) },
     };
     const authz = provider({
       check: jest.fn(async (action, model) => !(action === expectedAction && model === 'Post')),
@@ -433,9 +439,9 @@ describe('flag off and upsert', () => {
     const client = txClient(delegates);
     const engine = new GolemEngine(client, models, {});
 
-    await engine.upsert({ model: 'Post', where: { id: 'p1' }, create: { title: 'new' }, update: { title: 'edited' } });
+    await engine.upsert({ model: 'Post', where: { id: 'p1' }, create: { id: 'p1', title: 'new' }, update: { title: 'edited' } });
     expect(delegates.post.update).toHaveBeenCalled();
-    await engine.upsert({ model: 'Post', where: { id: 'p9' }, create: { title: 'new' }, update: { title: 'edited' } });
+    await engine.upsert({ model: 'Post', where: { id: 'p9' }, create: { id: 'p9', title: 'new' }, update: { title: 'edited' } });
     expect(delegates.post.create).toHaveBeenCalled();
   });
 });

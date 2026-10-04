@@ -128,6 +128,7 @@ describe('engine authorization', () => {
 
   it('gates create and walks nested writes per touched model', async () => {
     const client = fakeClient();
+    client.post.findFirst.mockResolvedValue({ id: 'p9' });
     const provider = fakeProvider();
     const engine = new GolemEngine(client, models, rowPolicy(provider));
 
@@ -142,7 +143,7 @@ describe('engine authorization', () => {
     expect(provider.authorizeCalls).toEqual([
       ['create', 'User'],
       ['create', 'Post'],
-      ['update', 'Post'],
+      ['read', 'Post'],
     ]);
   });
 

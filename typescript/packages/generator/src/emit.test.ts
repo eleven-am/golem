@@ -371,3 +371,37 @@ describe('emitDatamodelModule extension helpers', () => {
     expect(output).not.toContain('export const ComputedField');
   });
 });
+
+describe('referential delete actions', () => {
+  function relation(name: string, extra: Partial<DMMF.Field>): DMMF.Field {
+    return {
+      ...scalar(name),
+      kind: 'object',
+      type: 'Post',
+      relationName: `${name}Relation`,
+      relationFromFields: ['postId'],
+      relationToFields: ['id'],
+      ...extra,
+    } as DMMF.Field;
+  }
+
+  function onDeleteOf(field: DMMF.Field): unknown {
+    const output = emitDatamodelModule(datamodel([model('Comment', [field, scalar('postId')], null)]));
+    return (parseEmitted(output).models[0].fields[0] as { relationOnDelete?: unknown }).relationOnDelete;
+  }
+
+  it('carries an explicitly declared action', () => {
+    expect(onDeleteOf(relation('post', { relationOnDelete: 'Cascade' }))).toBe('Cascade');
+    expect(onDeleteOf(relation('post', { relationOnDelete: 'SetDefault' }))).toBe('SetDefault');
+  });
+
+  it('carries the action Prisma applies when none is declared', () => {
+    expect(onDeleteOf(relation('post', { isRequired: true }))).toBe('Restrict');
+    expect(onDeleteOf(relation('post', { isRequired: false }))).toBe('SetNull');
+  });
+
+  it('carries no action on the side of a relation that holds no foreign key', () => {
+    expect(onDeleteOf(relation('post', { relationFromFields: [], relationToFields: [], isList: true })))
+      .toBeUndefined();
+  });
+});

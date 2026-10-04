@@ -16,7 +16,7 @@ export const POSTGRES_URL_HINT =
   `Set ${POSTGRES_OPTIONAL_ENV}=1 to skip the Postgres suite while iterating locally.`;
 
 const DDL = [
-  `DROP TABLE IF EXISTS "posts", "profiles", "metrics", "users", "secrets", "plays", "upsert_targets", "_golem_upsert_guard"`,
+  `DROP TABLE IF EXISTS "replies", "watches", "threads", "posts", "profiles", "metrics", "users", "secrets", "plays", "upsert_targets", "_golem_upsert_guard"`,
   `CREATE TABLE "_golem_upsert_guard" (
      "stripe" INTEGER PRIMARY KEY,
      "seq" BIGINT NOT NULL DEFAULT 0
@@ -73,6 +73,21 @@ const DDL = [
      "artist_name" TEXT NOT NULL
    )`,
   `CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id")`,
+  `CREATE TABLE "threads" (
+     "id" INTEGER PRIMARY KEY,
+     "title" TEXT NOT NULL
+   )`,
+  `CREATE TABLE "replies" (
+     "id" INTEGER PRIMARY KEY,
+     "thread_id" INTEGER NOT NULL REFERENCES "threads"("id") ON DELETE CASCADE,
+     "body" TEXT NOT NULL,
+     "amount" DECIMAL(65,30),
+     "posted_at" TIMESTAMP(3) NOT NULL
+   )`,
+  `CREATE TABLE "watches" (
+     "id" INTEGER PRIMARY KEY,
+     "thread_id" INTEGER REFERENCES "threads"("id") ON DELETE SET NULL
+   )`,
 ];
 
 export interface PostgresHandle {
