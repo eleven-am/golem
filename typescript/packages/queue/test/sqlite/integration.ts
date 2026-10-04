@@ -283,6 +283,24 @@ async function main(): Promise<void> {
   // pool on one database file. Reading before writing the guard row leaves a
   // deferred reader that cannot upgrade while another worker holds the writer
   // lock, which surfaces as a timeout rather than a refusal.
+  await test('refuses every outcome from a holder whose lease has expired', async () => {
+    await seed('gone');
+    await seed('live');
+    assert.equal(await store.claim(claimOf('gone', { leaseExpiresAt: new Date(Date.now() - 1000) })), true);
+    assert.equal(await store.claim(claimOf('live')), true);
+    const gone = { id: 'gone', leaseOwner: 'worker-gone' };
+
+    assert.equal(await store.complete(gone), false);
+    assert.equal(await store.fail({ ...gone, attempts: 1, lastError: 'late' }), false);
+    assert.equal(await store.retry({ ...gone, attempts: 1, lastError: 'late', runAt: new Date() }), false);
+    assert.equal(await store.findOwned(gone), null);
+    const row = await prisma.job.findUnique({ where: { id: 'gone' } });
+    assert.equal(row?.status, 'RUNNING');
+    assert.equal(row?.lastError, null);
+    assert.equal(await store.complete({ id: 'live', leaseOwner: 'worker-live' }), true);
+    assert.equal(await prisma.job.count({ where: { status: 'SUCCEEDED' } }), 1);
+  });
+
   await test('bounds a pool across worker processes without timeouts', async () => {
     const WORKERS = 8;
     const ids = Array.from({ length: WORKERS }, (_, i) => `x${i}`);

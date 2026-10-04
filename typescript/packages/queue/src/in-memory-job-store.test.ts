@@ -112,3 +112,33 @@ describe('InMemoryJobStore scope serialization', () => {
     expect(await store.claim({ ...base, id: 'b', leaseOwner: 'worker-2' })).toBe(true);
   });
 });
+
+describe('InMemoryJobStore lease fence', () => {
+  async function claimUntil(store: InMemoryJobStore, id: string, leaseExpiresAt: Date) {
+    await seed(store, id, null);
+    expect(
+      await store.claim({ id, fromStatus: 'PENDING', now: new Date(), leaseOwner: 'worker-1', leaseExpiresAt }),
+    ).toBe(true);
+  }
+
+  it('refuses every outcome from a holder whose lease has expired', async () => {
+    const store = new InMemoryJobStore();
+    await claimUntil(store, 'gone', new Date(Date.now() - 1));
+    const owned = { id: 'gone', leaseOwner: 'worker-1' };
+
+    expect(await store.complete(owned)).toBe(false);
+    expect(await store.fail({ ...owned, attempts: 1, lastError: 'late' })).toBe(false);
+    expect(await store.retry({ ...owned, attempts: 1, lastError: 'late', runAt: new Date() })).toBe(false);
+    expect(await store.findOwned(owned)).toBeNull();
+    expect(store.get('gone')?.status).toBe('RUNNING');
+    expect(store.get('gone')?.lastError).toBeNull();
+  });
+
+  it('accepts the outcome from a holder whose lease is live', async () => {
+    const store = new InMemoryJobStore();
+    await claimUntil(store, 'live', new Date(Date.now() + 60_000));
+
+    expect(await store.complete({ id: 'live', leaseOwner: 'worker-1' })).toBe(true);
+    expect(store.get('live')?.status).toBe('SUCCEEDED');
+  });
+});

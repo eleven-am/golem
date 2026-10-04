@@ -450,7 +450,7 @@ export class PrismaJobStore implements JobStore {
 
   async complete(input: { id: string; leaseOwner: string }): Promise<boolean> {
     const result = await this.prisma.job.updateMany({
-      where: { id: input.id, status: 'RUNNING', leaseOwner: input.leaseOwner },
+      where: heldLease(input.id, input.leaseOwner),
       data: {
         status: 'SUCCEEDED',
         dedupeKey: null,
@@ -467,7 +467,7 @@ export class PrismaJobStore implements JobStore {
     leaseOwner: string;
   }): Promise<OwnedJob | null> {
     const row = await this.prisma.job.findFirst({
-      where: { id: input.id, status: 'RUNNING', leaseOwner: input.leaseOwner },
+      where: heldLease(input.id, input.leaseOwner),
       select: {
         type: true,
         payload: true,
@@ -482,7 +482,7 @@ export class PrismaJobStore implements JobStore {
 
   async fail(input: FailInput): Promise<boolean> {
     const result = await this.prisma.job.updateMany({
-      where: { id: input.id, status: 'RUNNING', leaseOwner: input.leaseOwner },
+      where: heldLease(input.id, input.leaseOwner),
       data: {
         status: 'FAILED',
         attempts: input.attempts,
@@ -497,7 +497,7 @@ export class PrismaJobStore implements JobStore {
 
   async retry(input: RetryInput): Promise<boolean> {
     const result = await this.prisma.job.updateMany({
-      where: { id: input.id, status: 'RUNNING', leaseOwner: input.leaseOwner },
+      where: heldLease(input.id, input.leaseOwner),
       data: {
         status: 'PENDING',
         attempts: input.attempts,
@@ -613,6 +613,15 @@ export class PrismaJobStore implements JobStore {
     });
     return result.count;
   }
+}
+
+function heldLease(id: string, leaseOwner: string): Where {
+  return {
+    id,
+    status: 'RUNNING',
+    leaseOwner,
+    leaseExpiresAt: { gt: new Date() },
+  };
 }
 
 function queryWhere(query: JobQuery): Where {

@@ -561,25 +561,6 @@ describe('lease renewal', () => {
     return jobs.get(id)?.leaseExpiresAt ?? null;
   }
 
-  it('keeps a job past its lease duration while it heartbeats', async () => {
-    let release: (() => void) | undefined;
-    const { store, dispatcher } = build(
-      [handler(() => new Promise<void>((resolve) => { release = resolve; }), { timeoutMs: 5_000 })],
-      RENEWING,
-    );
-    const id = await seed(store);
-
-    const running = tick(dispatcher);
-    await new Promise((resolve) => setTimeout(resolve, 90));
-    const renewed = leaseOf(store, id);
-    expect(renewed).not.toBeNull();
-    expect(renewed!.getTime()).toBeGreaterThan(Date.now());
-
-    release?.();
-    await running;
-    expect((await store.findJobs({ limit: 10 }))[0]?.status).toBe('SUCCEEDED');
-  });
-
   it('aborts the handler when the lease is lost', async () => {
     let observedAbort = false;
     const { store, dispatcher } = build(
@@ -608,110 +589,206 @@ describe('lease renewal', () => {
     expect(observedAbort).toBe(true);
   });
 
-  describe('when renewal errors rather than refuses', () => {
-    const SLOW_RENEWING = { leaseDurationMs: 400, leaseRenewIntervalMs: 50 };
+  describe('lease deadline on a fake clock', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
+
+    afterEach(() => {
+      jest.useRealTimers();
+    });
+
+    function abortWatcher() {
+      const state: { abortedAt?: number } = {};
+      const work = handler(
+        (event) =>
+          new Promise<void>((resolve) => {
+            event.signal.addEventListener('abort', () => {
+              state.abortedAt = Date.now();
+              resolve();
+            });
+          }),
+        { timeoutMs: 60_000 },
+      );
+      return { state, work };
+    }
+
+    async function startOne(
+      work: JobHandler,
+      options: GolemQueueOptions,
+      renewLease?: (store: InMemoryJobStore) => InMemoryJobStore['renewLease'],
+    ) {
+      const { store, dispatcher } = build([work], options);
+      await seed(store);
+      if (renewLease) store.renewLease = renewLease(store);
+      const startedAt = Date.now();
+      await (dispatcher as unknown as { tick(): Promise<void> }).tick();
+      return { store, startedAt };
+    }
+
+    it('keeps a job past its lease duration while it heartbeats', async () => {
+      let release: (() => void) | undefined;
+      const { store, dispatcher } = build(
+        [handler(() => new Promise<void>((resolve) => { release = resolve; }), { timeoutMs: 5_000 })],
+        RENEWING,
+      );
+      const id = await seed(store);
+      await (dispatcher as unknown as { tick(): Promise<void> }).tick();
+
+      await jest.advanceTimersByTimeAsync(90);
+      const renewed = leaseOf(store, id);
+      expect(renewed).not.toBeNull();
+      expect(renewed!.getTime()).toBeGreaterThan(Date.now());
+
+      release?.();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(store.get(id)?.status).toBe('SUCCEEDED');
+    });
 
     it('keeps running through a renewal that throws while the lease is still live', async () => {
       let release: (() => void) | undefined;
       let aborted = false;
-      const { store, dispatcher } = build(
-        [
-          handler(
-            (event) =>
-              new Promise<void>((resolve) => {
-                event.signal.addEventListener('abort', () => {
-                  aborted = true;
-                });
-                release = resolve;
-              }),
-            { timeoutMs: 5_000 },
-          ),
-        ],
-        SLOW_RENEWING,
+      let calls = 0;
+      const work = handler(
+        (event) =>
+          new Promise<void>((resolve) => {
+            event.signal.addEventListener('abort', () => {
+              aborted = true;
+            });
+            release = resolve;
+          }),
+        { timeoutMs: 60_000 },
       );
+      const { store, dispatcher } = build([work], { leaseDurationMs: 400, leaseRenewIntervalMs: 100 });
       const id = await seed(store, { maxAttempts: 1 });
       const renew = store.renewLease.bind(store);
-      let calls = 0;
       store.renewLease = (input) => {
         calls += 1;
-        return calls === 1
-          ? Promise.reject(new Error('connection reset'))
-          : renew(input);
+        return calls === 1 ? Promise.reject(new Error('connection reset')) : renew(input);
       };
+      await (dispatcher as unknown as { tick(): Promise<void> }).tick();
 
-      const running = tick(dispatcher);
-      await new Promise((resolve) => setTimeout(resolve, 180));
+      await jest.advanceTimersByTimeAsync(250);
       release?.();
-      await running;
+      await jest.advanceTimersByTimeAsync(0);
 
-      expect(calls).toBeGreaterThan(1);
+      expect(calls).toBe(2);
       expect(aborted).toBe(false);
       expect(store.get(id)?.status).toBe('SUCCEEDED');
     });
 
-    it('aborts only once the lease has expired when renewal keeps throwing', async () => {
-      let abortedAt: number | undefined;
-      let callsBeforeAbort: number | undefined;
+    it('records nothing for a holder whose renewals keep throwing until the lease expires', async () => {
+      const { state, work } = abortWatcher();
       let calls = 0;
-      const { store, dispatcher } = build(
-        [
-          handler(
-            (event) =>
-              new Promise<void>((resolve) => {
-                event.signal.addEventListener('abort', () => {
-                  abortedAt = Date.now();
-                  callsBeforeAbort = calls;
-                  resolve();
-                });
-              }),
-            { timeoutMs: 5_000 },
-          ),
-        ],
-        SLOW_RENEWING,
+      const { store, startedAt } = await startOne(
+        work,
+        { leaseDurationMs: 400, leaseRenewIntervalMs: 100 },
+        () => () => {
+          calls += 1;
+          return Promise.reject(new Error('database unreachable'));
+        },
       );
-      const id = await seed(store);
-      store.renewLease = () => {
-        calls += 1;
-        return Promise.reject(new Error('database unreachable'));
-      };
 
-      const running = tick(dispatcher);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const claimedLease = leaseOf(store, id)!.getTime();
-      await running;
+      await jest.advanceTimersByTimeAsync(399);
+      expect(state.abortedAt).toBeUndefined();
+      expect(calls).toBe(3);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(state.abortedAt! - startedAt).toBe(400);
+      await jest.advanceTimersByTimeAsync(0);
 
-      expect(callsBeforeAbort).toBeGreaterThan(1);
-      expect(abortedAt!).toBeGreaterThanOrEqual(claimedLease);
-      expect(store.get(id)?.lastError).toContain('Lost the lease');
+      const [job] = store.all();
+      expect(job.status).toBe('RUNNING');
+      expect(job.lastError).toBeNull();
     });
 
-    it('aborts once the lease has expired when renewal never answers', async () => {
-      let abortedAt: number | undefined;
-      const { store, dispatcher } = build(
-        [
-          handler(
-            (event) =>
-              new Promise<void>((resolve) => {
-                event.signal.addEventListener('abort', () => {
-                  abortedAt = Date.now();
-                  resolve();
-                });
-              }),
-            { timeoutMs: 3_000 },
-          ),
-        ],
-        SLOW_RENEWING,
+    it('aborts at the expiry when a renewal never answers, sending no second one', async () => {
+      const { state, work } = abortWatcher();
+      let calls = 0;
+      const { store, startedAt } = await startOne(
+        work,
+        { leaseDurationMs: 400, leaseRenewIntervalMs: 100 },
+        () => () => {
+          calls += 1;
+          return new Promise<boolean>(() => undefined);
+        },
       );
-      const id = await seed(store);
-      store.renewLease = () => new Promise<boolean>(() => undefined);
 
-      const running = tick(dispatcher);
-      await new Promise((resolve) => setTimeout(resolve, 5));
-      const claimedLease = leaseOf(store, id)!.getTime();
-      await running;
+      await jest.advanceTimersByTimeAsync(400);
+      await jest.advanceTimersByTimeAsync(0);
 
-      expect(abortedAt!).toBeGreaterThanOrEqual(claimedLease);
-      expect(store.get(id)?.lastError).toContain('Lost the lease');
+      expect(state.abortedAt! - startedAt).toBe(400);
+      expect(calls).toBe(1);
+      expect(store.all()[0].status).toBe('RUNNING');
+    });
+
+    it('aborts at the exact expiry when it falls between renewal intervals', async () => {
+      const { state, work } = abortWatcher();
+      const { startedAt } = await startOne(
+        work,
+        { leaseDurationMs: 400, leaseRenewIntervalMs: 300 },
+        () => () => Promise.reject(new Error('database unreachable')),
+      );
+
+      await jest.advanceTimersByTimeAsync(399);
+      expect(state.abortedAt).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(state.abortedAt! - startedAt).toBe(400);
+    });
+
+    it('moves the abort to the renewed expiry once a renewal lands', async () => {
+      const { state, work } = abortWatcher();
+      let calls = 0;
+      const { startedAt } = await startOne(
+        work,
+        { leaseDurationMs: 400, leaseRenewIntervalMs: 100 },
+        (store) => {
+          const renew = store.renewLease.bind(store);
+          return (input) => {
+            calls += 1;
+            return calls === 1 ? renew(input) : new Promise<boolean>(() => undefined);
+          };
+        },
+      );
+
+      await jest.advanceTimersByTimeAsync(499);
+      expect(state.abortedAt).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(state.abortedAt! - startedAt).toBe(500);
+    });
+
+    it('keeps one renewal in flight, so a late reply cannot regress the deadline', async () => {
+      const { state, work } = abortWatcher();
+      const replies: Array<(held: boolean) => void> = [];
+      const requested: number[] = [];
+      const { startedAt } = await startOne(
+        work,
+        { leaseDurationMs: 1_000, leaseRenewIntervalMs: 100 },
+        (store) => {
+          const renew = store.renewLease.bind(store);
+          return (input) => {
+            requested.push(input.leaseExpiresAt.getTime() - startedAt);
+            return new Promise<boolean>((resolve) => {
+              replies.push((held) => {
+                void renew(input).then(() => resolve(held));
+              });
+            });
+          };
+        },
+      );
+
+      await jest.advanceTimersByTimeAsync(350);
+      expect(requested).toEqual([1_100]);
+
+      replies[0](true);
+      await jest.advanceTimersByTimeAsync(99);
+      expect(requested).toEqual([1_100]);
+      await jest.advanceTimersByTimeAsync(1);
+      expect(requested).toEqual([1_100, 1_450]);
+
+      await jest.advanceTimersByTimeAsync(649);
+      expect(state.abortedAt).toBeUndefined();
+      await jest.advanceTimersByTimeAsync(1);
+      expect(state.abortedAt! - startedAt).toBe(1_100);
     });
   });
 
