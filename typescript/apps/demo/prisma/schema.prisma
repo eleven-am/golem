@@ -49,6 +49,8 @@ model Post {
   authorId        String
   postTags        PostTag[]
   readingSessions ReadingSession[]
+  comments        Comment[]
+  bookmarks       Bookmark[]
 }
 
 model Profile {
@@ -103,4 +105,29 @@ model ReadingSession {
   note     String?
   post     Post    @relation(fields: [postId], references: [id])
   postId   String
+}
+
+model Comment {
+  id        String     @id @default(cuid())
+  body      String
+  authorId  String
+  post      Post       @relation(fields: [postId], references: [id], onDelete: Cascade)
+  postId    String
+  reactions Reaction[]
+}
+
+model Reaction {
+  id        String  @id @default(cuid())
+  emoji     String
+  authorId  String
+  comment   Comment @relation(fields: [commentId], references: [id], onDelete: Cascade)
+  commentId String
+}
+
+model Bookmark {
+  id      String  @id @default(cuid())
+  label   String
+  ownerId String
+  post    Post?   @relation(fields: [postId], references: [id], onDelete: SetNull)
+  postId  String?
 }

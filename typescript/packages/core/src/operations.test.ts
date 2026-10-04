@@ -1,3 +1,5 @@
+import { guardedClient } from '../test/support/guarded-client';
+import { prismaDecimal } from './compiled-read-decode';
 import { CompiledReadEvent } from './compiled-read';
 import {
   GolemConflictError,
@@ -6,6 +8,7 @@ import {
   GolemUnauthorizedError,
   GolemValidationError,
 } from './errors';
+import { HookRegistry } from './hooks';
 import { GolemEngine } from './operations';
 import { GOLEM_BATCH_RESULT_ROWS } from './publisher';
 import { field } from './testing';
@@ -15,7 +18,7 @@ const models = [
 ];
 
 function engineWith(user: Record<string, jest.Mock>) {
-  return new GolemEngine({ user }, models);
+  return new GolemEngine(guardedClient({ user }), models);
 }
 
 describe('GolemEngine', () => {
@@ -56,7 +59,7 @@ describe('GolemEngine', () => {
       create: { id: 'raced' },
       update: { id: 'raced' },
     })).rejects.toBeInstanceOf(GolemConflictError);
-    expect(findFirst).toHaveBeenCalledTimes(1);
+    expect(findFirst).toHaveBeenCalledTimes(2);
     expect(create).toHaveBeenCalledTimes(1);
   });
 
@@ -115,8 +118,8 @@ describe('composite primary keys', () => {
     } as never;
   }
 
-  it('resolves a constrained delete through the compound unique identity', async () => {
-    const findFirst = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
+  it('deletes through the compound unique identity in one statement carrying the constraint', async () => {
+    const findFirst = jest.fn();
     const del = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
     const engine = new GolemEngine({ postTag: { findFirst, delete: del } }, compositeModels, {
       authorization: compositeProvider(),
@@ -130,11 +133,8 @@ describe('composite primary keys', () => {
       context: { req: {} },
     });
 
-    expect(findFirst).toHaveBeenCalledWith({
-      where: { AND: [{ postId: 'p1', tagId: 't1' }, {}] },
-      select: { postId: true, tagId: true },
-    });
-    expect(del.mock.calls[0][0].where).toEqual({ postId_tagId: { postId: 'p1', tagId: 't1' } });
+    expect(findFirst).not.toHaveBeenCalled();
+    expect(del.mock.calls[0][0].where).toEqual({ postId_tagId: { postId: 'p1', tagId: 't1' }, AND: [{}] });
   });
 
   it('reports a clear error when a model has no primary key at all', async () => {
@@ -199,7 +199,7 @@ describe('composite updateMany identity', () => {
 
     expect(result).toEqual({ count: 2 });
     expect(updateMany).toHaveBeenCalledWith({
-      where: { OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] },
+      where: { AND: [{ OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] }, {}] },
       data: { addedAt: 2 },
     });
     expect(findMany).toHaveBeenCalledTimes(1);
@@ -222,7 +222,7 @@ describe('compound unique selectors in filterable where', () => {
   it('unwraps an unnamed compound unique selector in the upsert probe', async () => {
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), unnamedModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -252,12 +252,12 @@ describe('compound unique selectors in filterable where', () => {
     ];
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, namedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), namedModels);
 
     await engine.upsert({
       model: 'Branch',
       where: { authorNameKey: { authorId: 'a1', name: 'main' }, id: 'b9' },
-      create: { authorId: 'a1', name: 'main' },
+      create: { id: 'b9', authorId: 'a1', name: 'main' },
       update: { name: 'main' },
       select: { id: true },
     });
@@ -271,12 +271,12 @@ describe('compound unique selectors in filterable where', () => {
   it('leaves a where without any compound selector untouched', async () => {
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), unnamedModels);
 
     await engine.upsert({
       model: 'Branch',
       where: { id: 'b9' },
-      create: { authorId: 'a1', name: 'main' },
+      create: { id: 'b9', authorId: 'a1', name: 'main' },
       update: { name: 'main' },
       select: { id: true },
     });
@@ -299,7 +299,7 @@ describe('compound unique selectors in filterable where', () => {
     ];
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, collisionModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), collisionModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -406,6 +406,7 @@ describe('the upsert branch probe', () => {
     };
     const guard = {
       upsert: jest.fn(async () => { calls.push('guard'); return { stripe: 1 }; }),
+      createMany: jest.fn(async () => { calls.push('guard'); return { count: 0 }; }),
     };
     const client = {
       user: delegate,
@@ -428,7 +429,7 @@ describe('the upsert branch probe', () => {
       context: { req: {} },
     });
 
-    expect(calls).toEqual(['guard', 'probe', 'create']);
+    expect(calls).toEqual(['guard', 'probe', 'probe', 'create']);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -520,5 +521,569 @@ describe('the upsert branch probe', () => {
     ).rejects.toBeInstanceOf(GolemUnauthorizedError);
     expect(findFirst).not.toHaveBeenCalled();
     expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity', () => {
+  const identityModels = [
+    {
+      name: 'User',
+      fields: [
+        field({ name: 'id', type: 'Int', isId: true }),
+        field({ name: 'email', type: 'String', isUnique: true }),
+        field({ name: 'name', type: 'String' }),
+      ],
+    },
+    {
+      name: 'Branch',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'authorId', type: 'String' }),
+        field({ name: 'name', type: 'String' }),
+      ],
+      uniqueIndexes: [{ fields: ['authorId', 'name'] }],
+    },
+  ];
+
+  type Delegates = Record<string, Record<string, jest.Mock>>;
+
+  function unscoped(delegates: Delegates) {
+    return new GolemEngine(guardedClient(delegates), identityModels);
+  }
+
+  function scoped(delegates: Delegates) {
+    const golemUpsertGuard = { upsert: jest.fn().mockResolvedValue({ stripe: 1 }) };
+    const client = {
+      ...delegates,
+      golemUpsertGuard,
+      $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) =>
+        run({ ...delegates, golemUpsertGuard }),
+      ),
+    };
+    return new GolemEngine(client, identityModels, {
+      authorization: {
+        authorize: jest.fn(async () => undefined),
+        constrain: jest.fn(async () => ({})),
+        check: jest.fn(async () => true),
+        checkField: jest.fn(async () => true),
+      } as never,
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
+  }
+
+  const engines: ReadonlyArray<[string, (delegates: Delegates) => GolemEngine, unknown]> = [
+    ['an unscoped engine', unscoped, undefined],
+    ['a context-bound engine', scoped, { req: {} }],
+  ];
+
+  describe.each(engines)('on %s', (_label, build, context) => {
+    it('refuses a create branch whose input names a different id, creating nothing', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 6 });
+      const engine = build({ user: { findFirst, create, update: jest.fn() } });
+
+      const outcome = engine.upsert({
+        model: 'User',
+        where: { id: 5 },
+        create: { id: 6, email: 'six@example.com', name: 'Six' },
+        update: { name: 'Five' },
+        context,
+      });
+
+      await expect(outcome).rejects.toBeInstanceOf(GolemValidationError);
+      await expect(outcome).rejects.toThrow(
+        'upsert create input does not set the target selector id on User',
+      );
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a create branch that leaves the target selector to a default', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 1 });
+      const engine = build({ user: { findFirst, create, update: jest.fn() } });
+
+      await expect(
+        engine.upsert({
+          model: 'User',
+          where: { email: 'new@example.com' },
+          create: { name: 'New' },
+          update: { name: 'New' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector email on User');
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('refuses a compound target whose create input disagrees on one member', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 'b1' });
+      const engine = build({ branch: { findFirst, create, update: jest.fn() } });
+
+      await expect(
+        engine.upsert({
+          model: 'Branch',
+          where: { authorId_name: { authorId: 'a1', name: 'main' } },
+          create: { authorId: 'a2', name: 'main' },
+          update: { name: 'main' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector authorId on Branch');
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('creates when every target selector is set to the target value', async () => {
+      const findFirst = jest.fn().mockResolvedValue(null);
+      const create = jest.fn().mockResolvedValue({ id: 'b1' });
+      const engine = build({ branch: { findFirst, create, update: jest.fn() } });
+
+      await engine.upsert({
+        model: 'Branch',
+        where: { authorId_name: { authorId: 'a1', name: 'main' } },
+        create: { authorId: 'a1', name: 'main' },
+        update: { name: 'main' },
+        context,
+      });
+
+      expect(create).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a mismatched create input even when the target exists, before any query', async () => {
+      const findFirst = jest.fn().mockResolvedValue({ id: 5 });
+      const update = jest.fn().mockResolvedValue({ id: 5 });
+      const create = jest.fn();
+      const engine = build({ user: { findFirst, create, update } });
+
+      await expect(
+        engine.upsert({
+          model: 'User',
+          where: { id: 5 },
+          create: { id: 6, email: 'six@example.com', name: 'Six' },
+          update: { name: 'Five' },
+          context,
+        }),
+      ).rejects.toThrow('upsert create input does not set the target selector id on User');
+
+      expect(findFirst).not.toHaveBeenCalled();
+      expect(update).not.toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+    });
+
+    it('takes the update branch when the create input carries the target', async () => {
+      const findFirst = jest.fn().mockResolvedValue({ id: 5 });
+      const update = jest.fn().mockResolvedValue({ id: 5 });
+      const create = jest.fn();
+      const engine = build({ user: { findFirst, create, update } });
+
+      await engine.upsert({
+        model: 'User',
+        where: { id: 5 },
+        create: { id: 5, email: 'five@example.com', name: 'Five' },
+        update: { name: 'Five' },
+        context,
+      });
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(create).not.toHaveBeenCalled();
+    });
+  });
+});
+
+describe('upsert target identity through a relation connect', () => {
+  const linkModels = [
+    { name: 'Post', fields: [field({ name: 'id', type: 'String', isId: true })] },
+    { name: 'Tag', fields: [field({ name: 'id', type: 'String', isId: true })] },
+    {
+      name: 'PostTag',
+      fields: [
+        field({ name: 'postId', type: 'String' }),
+        field({ name: 'tagId', type: 'String' }),
+        field({ name: 'post', type: 'Post', kind: 'object', relationName: 'PostToPostTag', relationFromFields: ['postId'], relationToFields: ['id'] }),
+        field({ name: 'tag', type: 'Tag', kind: 'object', relationName: 'PostTagToTag', relationFromFields: ['tagId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['postId', 'tagId'] },
+    },
+  ];
+
+  function engine(create: jest.Mock) {
+    return new GolemEngine(
+      guardedClient({ postTag: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
+      linkModels,
+    );
+  }
+
+  it('accepts a selector field set by connecting the relation it belongs to', async () => {
+    const create = jest.fn().mockResolvedValue({ postId: 'p1', tagId: 't1' });
+    await engine(create).upsert({
+      model: 'PostTag',
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      create: { post: { connect: { id: 'p1' } }, tag: { connect: { id: 't1' } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a connect that names a different target', async () => {
+    const create = jest.fn();
+    await expect(engine(create).upsert({
+      model: 'PostTag',
+      where: { postId_tagId: { postId: 'p1', tagId: 't1' } },
+      create: { post: { connect: { id: 'p1' } }, tag: { connect: { id: 't2' } } },
+      update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector tagId on PostTag');
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity through a connect to a compound-key target', () => {
+  const compoundModels = [
+    {
+      name: 'Team',
+      fields: [
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'key', type: 'String' }),
+        field({ name: 'code', type: 'String' }),
+      ],
+      primaryKey: { fields: ['orgId', 'key'] },
+      uniqueIndexes: [{ name: 'teamCode', fields: ['orgId', 'code'] }],
+    },
+    {
+      name: 'Seat',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'teamKey', type: 'String' }),
+        field({ name: 'label', type: 'String' }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'SeatTeam', relationFromFields: ['orgId', 'teamKey'], relationToFields: ['orgId', 'key'] }),
+      ],
+      uniqueIndexes: [{ name: 'seatKey', fields: ['orgId', 'teamKey', 'label'] }],
+    },
+    {
+      name: 'Badge',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'orgId', type: 'String' }),
+        field({ name: 'teamCode', type: 'String' }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'BadgeTeam', relationFromFields: ['orgId', 'teamCode'], relationToFields: ['orgId', 'code'] }),
+      ],
+      uniqueIndexes: [{ fields: ['orgId', 'teamCode'] }],
+    },
+  ];
+
+  function engine(model: 'seat' | 'badge', create: jest.Mock) {
+    return new GolemEngine(
+      guardedClient({ [model]: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
+      compoundModels,
+    );
+  }
+
+  it('reads the members of a connect through the target primary-key selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 's1' });
+    await engine('seat', create).upsert({
+      model: 'Seat',
+      where: { seatKey: { orgId: 'o1', teamKey: 'k1', label: 'a' } },
+      create: { label: 'a', team: { connect: { orgId_key: { orgId: 'o1', key: 'k1' } } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('reads the members of a connect through a named compound unique selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'b1' });
+    await engine('badge', create).upsert({
+      model: 'Badge',
+      where: { orgId_teamCode: { orgId: 'o1', teamCode: 'c1' } },
+      create: { team: { connect: { teamCode: { orgId: 'o1', code: 'c1' } } } },
+      update: {},
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a compound connect naming a different target', async () => {
+    const create = jest.fn();
+    await expect(engine('seat', create).upsert({
+      model: 'Seat',
+      where: { seatKey: { orgId: 'o1', teamKey: 'k1', label: 'a' } },
+      create: { label: 'a', team: { connect: { orgId_key: { orgId: 'o1', key: 'k2' } } } },
+      update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector teamKey on Seat');
+    expect(create).not.toHaveBeenCalled();
+  });
+});
+
+describe('upsert target identity after a before-create hook', () => {
+  const hookModels = [
+    {
+      name: 'User',
+      fields: [
+        field({ name: 'id', type: 'Int', isId: true }),
+        field({ name: 'name', type: 'String' }),
+      ],
+    },
+  ];
+
+  function engineWith(rewrite: (data: Record<string, unknown>) => Record<string, unknown>, create: jest.Mock) {
+    const hooks = new HookRegistry();
+    hooks.registerBefore('User', 'create', (request: any) => ({ ...request, data: rewrite(request.data) }));
+    return new GolemEngine(
+      guardedClient({ user: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
+      hookModels,
+      { hooks },
+    );
+  }
+
+  it('refuses a create branch whose hook rewrites the target selector, creating nothing', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 6 });
+    await expect(engineWith((data) => ({ ...data, id: 6 }), create).upsert({
+      model: 'User', where: { id: 5 }, create: { id: 5, name: 'Five' }, update: {},
+    })).rejects.toThrow('upsert create input does not set the target selector id on User');
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('creates when the hook keeps the target selector', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 5 });
+    await engineWith((data) => ({ ...data, name: 'Renamed' }), create).upsert({
+      model: 'User', where: { id: 5 }, create: { id: 5, name: 'Five' }, update: {},
+    });
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({ data: { id: 5, name: 'Renamed' } }));
+  });
+
+  it('leaves a plain create free of any target', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 6 });
+    await engineWith((data) => ({ ...data, id: 6 }), create).create({
+      model: 'User', data: { id: 5, name: 'Five' },
+    });
+    expect(create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('verification that cannot find a written row', () => {
+  const rowModels = [
+    {
+      name: 'Item',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'label', type: 'String' }),
+      ],
+    },
+  ];
+
+  function verifyingEngine(delegates: Record<string, Record<string, jest.Mock>>) {
+    const client = {
+      ...delegates,
+      $transaction: jest.fn(async (fn: (tx: unknown) => Promise<unknown>) => fn(delegates)),
+    };
+    return new GolemEngine(client, rowModels, {
+      authorization: {
+        authorize: jest.fn(async () => undefined),
+        constrain: jest.fn(async () => ({})),
+        check: jest.fn(async () => true),
+        checkField: jest.fn(async () => true),
+      } as never,
+      checkWriteResults: true,
+      checkReadFields: false,
+    });
+  }
+
+  it('fails an updateMany instead of skipping a row it cannot read back', async () => {
+    const rows = [{ id: 'i1', label: 'a' }, { id: 'i2', label: 'a' }];
+    const result = { count: 2 } as { count: number; [GOLEM_BATCH_RESULT_ROWS]?: unknown };
+    Object.defineProperty(result, GOLEM_BATCH_RESULT_ROWS, { value: [{ id: 'i1', label: 'b' }], enumerable: false });
+    const engine = verifyingEngine({
+      item: { findMany: jest.fn().mockResolvedValue(rows), updateMany: jest.fn().mockResolvedValue(result) },
+    });
+
+    await expect(engine.updateMany({ model: 'Item', where: {}, data: { label: 'b' }, context: { req: {} } }))
+      .rejects.toThrow(new GolemConflictError('An updated Item could not be read back for verification'));
+  });
+
+  it('fails an update whose written row cannot be read back', async () => {
+    const engine = verifyingEngine({
+      item: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'i1', label: 'a' }),
+        update: jest.fn().mockResolvedValue({ id: 'i1', label: 'b' }),
+        findUnique: jest.fn().mockResolvedValue(null),
+      },
+    });
+
+    await expect(engine.update({ model: 'Item', where: { id: 'i1' }, data: { label: 'b' }, context: { req: {} } }))
+      .rejects.toThrow(new GolemConflictError('The updated Item could not be read back for verification'));
+  });
+});
+
+describe('connect-or-create target identity', () => {
+  const cocModels = [
+    {
+      name: 'Author',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'notes', type: 'Note', kind: 'object', isList: true, relationName: 'AuthorToNote' }),
+        field({ name: 'memberships', type: 'Membership', kind: 'object', isList: true, relationName: 'AuthorToMembership' }),
+      ],
+    },
+    {
+      name: 'Note',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'title', type: 'String' }),
+        field({ name: 'authorId', type: 'String', isRequired: false }),
+        field({ name: 'author', type: 'Author', kind: 'object', isRequired: false, relationName: 'AuthorToNote', relationFromFields: ['authorId'], relationToFields: ['id'] }),
+        field({ name: 'tags', type: 'Tag', kind: 'object', isList: true, relationName: 'NoteToTag' }),
+      ],
+    },
+    {
+      name: 'Tag',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'label', type: 'String', isUnique: true }),
+        field({ name: 'noteId', type: 'String', isRequired: false }),
+        field({ name: 'note', type: 'Note', kind: 'object', isRequired: false, relationName: 'NoteToTag', relationFromFields: ['noteId'], relationToFields: ['id'] }),
+      ],
+    },
+    { name: 'Team', fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'memberships', type: 'Membership', kind: 'object', isList: true, relationName: 'MembershipToTeam' }),
+    ] },
+    {
+      name: 'Membership',
+      fields: [
+        field({ name: 'authorId', type: 'String' }),
+        field({ name: 'teamId', type: 'String' }),
+        field({ name: 'role', type: 'String' }),
+        field({ name: 'author', type: 'Author', kind: 'object', relationName: 'AuthorToMembership', relationFromFields: ['authorId'], relationToFields: ['id'] }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'MembershipToTeam', relationFromFields: ['teamId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['authorId', 'teamId'] },
+    },
+  ];
+  const delegate = () => ({
+    findFirst: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    findUnique: jest.fn().mockResolvedValue({ id: 'a1' }),
+    create: jest.fn().mockResolvedValue({ id: 'a1' }),
+    update: jest.fn().mockResolvedValue({ id: 'a1' }),
+  });
+  const engineFor = () => {
+    const delegates = { author: delegate(), note: delegate(), tag: delegate(), team: delegate(), membership: delegate() };
+    delegates.author.findFirst.mockResolvedValue({ id: 'a1' });
+    return { delegates, engine: new GolemEngine(guardedClient(delegates), cocModels) };
+  };
+
+  it('refuses a where its create cannot reproduce, such as a defaulted id, before any query', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { notes: { connectOrCreate: [{ where: { id: 'requested' }, create: { title: 'x' } }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector id on Note'));
+    expect(delegates.note.findFirst).not.toHaveBeenCalled();
+    expect(delegates.author.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mismatch at any depth', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.create({
+      model: 'Author',
+      data: { id: 'a1', notes: { create: [{ title: 'n', tags: { connectOrCreate: [{ where: { label: 'red' }, create: { label: 'blue' } }] } }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector label on Tag'));
+    expect(delegates.author.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a matching connect-or-create at a nested depth', async () => {
+    const { delegates, engine } = engineFor();
+    const data = { id: 'a1', notes: { create: [{ title: 'n', tags: { connectOrCreate: [{ where: { label: 'red' }, create: { label: 'red' } }] } }] } };
+    await engine.create({ model: 'Author', data });
+    expect(delegates.author.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: { id: 'a1', notes: { create: [{ title: 'n', tags: { create: [{ label: 'red' }] } }] } },
+    }));
+  });
+
+  it('accepts a selector set by connecting its relation, or implied by the parent it is nested under', async () => {
+    const { delegates, engine } = engineFor();
+    await engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { memberships: { connectOrCreate: [{
+        where: { authorId_teamId: { authorId: 'a1', teamId: 't1' } },
+        create: { role: 'owner', team: { connect: { id: 't1' } } },
+      }] } },
+    });
+    expect(delegates.author.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a selector the parent would imply with a different value', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { memberships: { connectOrCreate: [{
+        where: { authorId_teamId: { authorId: 'someone-else', teamId: 't1' } },
+        create: { role: 'owner', team: { connect: { id: 't1' } } },
+      }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector authorId on Membership'));
+    expect(delegates.author.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('connect-or-create target identity implied by an object-valued parent key', () => {
+  const Decimal = prismaDecimal()!;
+  const keyedModels = (type: 'Decimal' | 'Bytes') => [
+    {
+      name: 'Account',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'code', type, isUnique: true }),
+        field({ name: 'seats', type: 'Seat', kind: 'object', isList: true, relationName: 'AccountToSeat' }),
+      ],
+    },
+    { name: 'Team', fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'seats', type: 'Seat', kind: 'object', isList: true, relationName: 'SeatToTeam' }),
+    ] },
+    {
+      name: 'Seat',
+      fields: [
+        field({ name: 'accountCode', type }),
+        field({ name: 'teamId', type: 'String' }),
+        field({ name: 'account', type: 'Account', kind: 'object', relationName: 'AccountToSeat', relationFromFields: ['accountCode'], relationToFields: ['code'] }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'SeatToTeam', relationFromFields: ['teamId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['accountCode', 'teamId'] },
+    },
+  ];
+  const delegate = () => ({
+    findFirst: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn().mockResolvedValue({ id: 'a1' }),
+    update: jest.fn().mockResolvedValue({ id: 'a1' }),
+  });
+  const updateThrough = async (type: 'Decimal' | 'Bytes', parentKey: unknown, selectorKey: unknown) => {
+    const delegates = { account: delegate(), team: delegate(), seat: delegate() };
+    delegates.account.findFirst.mockResolvedValue({ id: 'a1' });
+    const engine = new GolemEngine(guardedClient(delegates), keyedModels(type));
+    await engine.update({
+      model: 'Account',
+      where: { code: parentKey },
+      data: { seats: { connectOrCreate: [{
+        where: { accountCode_teamId: { accountCode: selectorKey, teamId: 't1' } },
+        create: { team: { connect: { id: 't1' } } },
+      }] } },
+    });
+    return delegates;
+  };
+
+  it('accepts a Decimal parent key as the value its nested selector names', async () => {
+    const delegates = await updateThrough('Decimal', new Decimal('1.50'), new Decimal('1.50'));
+    expect(delegates.account.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a Bytes parent key as the value its nested selector names', async () => {
+    const delegates = await updateThrough('Bytes', new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3]));
+    expect(delegates.account.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a Decimal selector the parent key does not equal', async () => {
+    await expect(updateThrough('Decimal', new Decimal('1.50'), new Decimal('2.50')))
+      .rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector accountCode on Seat'));
   });
 });

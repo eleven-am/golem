@@ -1,6 +1,6 @@
 import { GraphQLResolveInfo } from 'graphql';
 import { parseResolveInfo, ResolveTree } from 'graphql-parse-resolve-info';
-import { DatamodelModel } from './datamodel';
+import { DatamodelModel, rowIdentityFields } from './datamodel';
 import { ComputedRequiresMap } from './extensions';
 import { relationCountTypeName } from './naming';
 
@@ -16,17 +16,11 @@ export interface PrismaSelectRelation {
 export type PrismaSelect = { [field: string]: boolean | PrismaSelectRelation };
 
 export function primaryKeySelect(model: DatamodelModel): PrismaSelect {
-  const select: PrismaSelect = {};
-  const compound = new Set(model.primaryKey?.fields ?? []);
-  for (const field of model.fields) {
-    if (field.isId || compound.has(field.name)) {
-      select[field.name] = true;
-    }
+  const identity = rowIdentityFields(model);
+  if (!identity) {
+    throw new Error(`Model ${model.name} has no primary key or required unique field to select`);
   }
-  if (Object.keys(select).length === 0) {
-    throw new Error(`Model ${model.name} has no primary key field to select`);
-  }
-  return select;
+  return Object.fromEntries(identity.map((name) => [name, true]));
 }
 
 function relationCountSelect(tree: ResolveTree, model: DatamodelModel): PrismaSelect | undefined {

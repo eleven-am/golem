@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import type { AliasedRawBuilder, RawBuilder, SelectQueryBuilder } from 'kysely';
 import {
   UNSUPPORTED_CONDITION_ERROR_NAME,
@@ -33,7 +34,6 @@ import {
 
 const ROOT_ALIAS = 't0';
 
-const COMPILABLE_PROVIDERS = new Set(['sqlite', 'postgresql', 'postgres']);
 
 const MEASURE_GROUPS = ['_count', '_sum', '_avg', '_min', '_max'] as const;
 
@@ -47,7 +47,7 @@ export interface CompiledAggregateInput {
   readonly model: DatamodelModel;
   readonly models: readonly DatamodelModel[];
   readonly metadata: ModelMetadataIndex;
-  readonly provider?: string;
+  readonly provider?: GolemProvider;
   readonly where?: unknown;
   readonly constraint?: unknown;
   readonly by?: readonly string[];
@@ -550,12 +550,6 @@ export async function planCompiledAggregate(
 ): Promise<CompiledAggregatePlan> {
   const grouped = input.by !== undefined;
   const model = input.model;
-  if (input.provider === undefined || !COMPILABLE_PROVIDERS.has(input.provider)) {
-    return fallback(
-      'provider',
-      `golem compiles aggregates for sqlite and postgresql, not ${input.provider ?? 'an unknown provider'}`,
-    );
-  }
   if (model.dbName == null) {
     return fallback(
       'measure',

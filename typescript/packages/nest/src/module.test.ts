@@ -8,6 +8,7 @@ import { GolemModule } from './index';
 import { golemRequestBoundary } from './request-boundary';
 
 const datamodel: DatamodelDocument<{ User: 'id'; Post: 'id' }> = {
+  provider: 'sqlite',
   models: [
     {
       name: 'User',
@@ -43,12 +44,20 @@ const datamodel: DatamodelDocument<{ User: 'id'; Post: 'id' }> = {
   enums: [],
 };
 
-class FakeClient {
+class UnguardedClient {
   readonly user = {};
   readonly post = {};
 
   async $connect(): Promise<void> {}
   async $disconnect(): Promise<void> {}
+}
+
+class FakeClient extends UnguardedClient {
+  readonly golemUpsertGuard = {
+    upsert: async () => ({}),
+    createMany: async () => ({ count: 0 }),
+    findFirst: async () => null,
+  };
 }
 
 @Injectable()
@@ -61,12 +70,15 @@ class FakeAuthorization implements AuthorizationProvider {
 }
 
 describe('GolemModule extension validation', () => {
-  it('fails startup when authorization needs serialized upsert but the guard model is absent', async () => {
+  it.each([
+    ['without', undefined],
+    ['with', FakeAuthorization],
+  ])('fails startup when the upsert guard model is absent, %s authorization', async (_label, authorization) => {
     const moduleRef = await Test.createTestingModule({
       imports: [GolemModule.forRoot({
-        client: FakeClient,
+        client: UnguardedClient,
         datamodel,
-        authorization: FakeAuthorization,
+        ...(authorization ? { authorization } : {}),
       })],
     }).compile();
 

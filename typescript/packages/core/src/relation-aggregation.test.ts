@@ -130,6 +130,7 @@ function engine(
   authorization?: AuthorizationProvider,
 ): GolemEngine {
   return new GolemEngine(fake, models, {
+    provider: 'postgresql',
     relationAggregations: new Map([['Play', plan()]]),
     authorization,
     checkReadFields: authorization !== undefined,

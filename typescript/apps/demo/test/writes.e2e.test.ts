@@ -189,7 +189,7 @@ describe('predicted-row checks (e2e)', () => {
     const attempt = (id: string) =>
       prisma.forContext(ctxFor('ada@example.com')).user.upsert({
         where: { id },
-        create: { email: `never-${id}@example.com` },
+        create: { id, email: `never-${id}@example.com` },
         update: { name: 'hijacked' },
       });
 

@@ -12,7 +12,7 @@ This upgrade closes the context-aware upsert race, bounds subscription and batch
 
 ### 1. Add the internal upsert guard migration
 
-Every database used by an authorization-enabled Golem application must contain this reserved model:
+Every database used by a Golem application must contain this reserved model, and the generator refuses a schema without it. Every upsert, including those on the unscoped client and nested `upsert`/`connectOrCreate`, takes it. Nest startup validates it with or without authorization and, on PostgreSQL, creates every stripe row once; if you run the engine outside Nest, call `prepareUpsertGuard(client, provider, stripes)` before serving writes. Regenerate so the datamodel carries the guard's table and `@@schema`:
 
 ```prisma
 model GolemUpsertGuard {
@@ -26,6 +26,8 @@ model GolemUpsertGuard {
 Copy the model from `typescript/packages/core/prisma/golem-core.prisma` or apply the provider SQL in `typescript/packages/core/prisma/migrations/sqlite/001_golem_upsert_guard.sql` or `typescript/packages/core/prisma/migrations/postgresql/001_golem_upsert_guard.sql`, then run your normal Prisma migration and generation workflow. Golem reserves `GolemUpsertGuard`, removes it from generated GraphQL and `forContext` model surfaces, and validates the delegate/table during Nest startup. Missing infrastructure now fails deployment rather than waiting for the first upsert.
 
 The table stays bounded by `defaults.upsertGuardStripes` (4,096 by default). It stores only a stripe and monotonic sequence; model names and unique selector values are hashed and never persisted. All participating context-aware upserts for the same canonical model/selector serialize before the policy branch probe. Plain Prisma/external writers and differently addressed selectors do not participate. A caller-owned SQLite transaction that established an incompatible snapshot before the guard write now returns stable `CONFLICT`; retry only by repeating the complete transaction when that is safe.
+
+A nested `connectOrCreate` now follows the same identity rule as `upsert`: its `create` must set every unique selector in its `where` to the same value, directly, through a `connect` on that key's relation, or through the parent it is nested under. A `connectOrCreate` whose `create` leaves the selected id to a default used to create a new row on every call; it is now refused with `BAD_USER_INPUT` before any query. Copy the selector into `create`.
 
 ### 2. Regenerate GraphQL and TypeScript clients
 

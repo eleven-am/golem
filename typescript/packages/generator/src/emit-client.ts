@@ -7,7 +7,8 @@ export function emitClientModule(modelNames: readonly string[], clientImport: st
   return `import { AsyncLocalStorage } from 'node:async_hooks';
 import { Prisma, PrismaClient } from '${clientImport}';
 import { withBufferedEvents } from '@eleven-am/golem-core';
-import type { GolemBatchDelegate, GolemEngineRef, GolemQueryInterceptor, RelationGroupByRequest, RelationGroupByRow, ScopedQuery } from '@eleven-am/golem-core';
+import { refuseNulStrings } from '@eleven-am/golem-core';
+import type { GolemBatchDelegate, GolemBatchTransaction, GolemEngineRef, GolemQueryInterceptor, RelationGroupByRequest, RelationGroupByRow, ScopedQuery } from '@eleven-am/golem-core';
 
 export type GolemClientOptions = ConstructorParameters<typeof PrismaClient>[0];
 
@@ -33,51 +34,59 @@ const POLICY_OPS = {
 
 function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryInterceptor) {
   const raw = new PrismaClient(options);
-  type TransactionState = { client: Record<string, unknown>; suppressBatchEvents: boolean };
+  type TransactionState = { client: Record<string, unknown>; suppressBatchEvents: boolean; sequential: boolean };
   const transactionContext = new AsyncLocalStorage<TransactionState>();
   const delegateFor = (client: Record<string, unknown>, model: string) =>
-    client[model.charAt(0).toLowerCase() + model.slice(1)] as {
-      findUnique(args: unknown): Promise<unknown>;
-      findMany(args: unknown): Promise<Record<string, unknown>[]>;
-      updateManyAndReturn?(args: unknown): Promise<Record<string, unknown>[]>;
-      deleteMany(args: unknown): Promise<{ count: number }>;
-    };
+    client[model.charAt(0).toLowerCase() + model.slice(1)] as GolemBatchDelegate;
+  const transactionFor = (client: Record<string, unknown>): GolemBatchTransaction => ({
+    scope: client,
+    delegate: (model) => delegateFor(client, model),
+    queryRaw: (sql, ...values) =>
+      (client as { $queryRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown> })
+        .$queryRawUnsafe(sql, ...values),
+  });
   const instrumented = raw.$extends({
     query: {
-      $allModels: {
-        $allOperations({ model, operation, args, query }) {
-          const state = transactionContext.getStore();
-          const activeClient = (state?.client ?? raw) as unknown as Record<string, unknown>;
-          const delegate = model ? delegateFor(activeClient, model) : undefined;
-          return interceptor({
-            model,
-            operation,
-            args,
-            query: query as (value: unknown) => Promise<unknown>,
-            findExisting: model
-              ? (where, select) => delegate!.findUnique({ where, select })
-              : undefined,
-            batch: model
-              ? {
-                  suppressed: state?.suppressBatchEvents ?? false,
-                  run: async <T>(work: (delegate: GolemBatchDelegate) => Promise<T>) => {
-                    const current = transactionContext.getStore();
-                    const execute = (client: Record<string, unknown>) =>
-                      transactionContext.run(
-                        { client, suppressBatchEvents: true },
-                        () => work(delegateFor(client, model)),
-                      );
-                    if (current) return execute(current.client);
-                    return withBufferedEvents(() =>
-                      raw.$transaction((tx) =>
-                        execute(tx as unknown as Record<string, unknown>),
-                      ),
-                    );
-                  },
-                }
-              : undefined,
+      async $allOperations({ model, operation, args, query }) {
+        refuseNulStrings(args);
+        const state = transactionContext.getStore();
+        if (state?.sequential) {
+          return transactionContext.run({ client: state.client, suppressBatchEvents: false, sequential: false }, async () => {
+            const target = (model ? delegateFor(state.client, model) : state.client) as unknown as Record<string, (...values: unknown[]) => Promise<unknown>>;
+            return await (model || !Array.isArray(args) ? target[operation](args) : target[operation](...args));
           });
-        },
+        }
+        if (!model) return query(args);
+        const activeClient = (state?.client ?? raw) as unknown as Record<string, unknown>;
+        const delegate = delegateFor(activeClient, model);
+        return interceptor({
+          model,
+          operation,
+          args,
+          query: query as (value: unknown) => Promise<unknown>,
+          findExisting: model
+            ? (where, select) => delegate!.findUnique({ where, select })
+            : undefined,
+          batch: model
+            ? {
+                suppressed: state?.suppressBatchEvents ?? false,
+                run: async <T>(work: (delegate: GolemBatchDelegate, transaction: GolemBatchTransaction) => Promise<T>) => {
+                  const current = transactionContext.getStore();
+                  const execute = (client: Record<string, unknown>) =>
+                    transactionContext.run(
+                      { client, suppressBatchEvents: true, sequential: false },
+                      () => work(delegateFor(client, model), transactionFor(client)),
+                    );
+                  if (current) return execute(current.client);
+                  return withBufferedEvents(() =>
+                    raw.$transaction((tx) =>
+                      execute(tx as unknown as Record<string, unknown>),
+                    ),
+                  );
+                },
+              }
+            : undefined,
+        });
       },
     },
   });
@@ -85,10 +94,24 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
   const commitAwareTransaction = ((first: unknown, ...rest: unknown[]) =>
     withBufferedEvents(() => {
       const invoke = transaction as unknown as (...transactionArgs: unknown[]) => Promise<unknown>;
-      if (typeof first !== 'function') return invoke(first, ...rest);
+      if (typeof first !== 'function') {
+        return invoke(
+          (tx: Record<string, unknown>) => transactionContext.run(
+            { client: tx, suppressBatchEvents: false, sequential: true },
+            async () => {
+              const results: unknown[] = [];
+              for (const operation of first as readonly PromiseLike<unknown>[]) {
+                results.push(await operation);
+              }
+              return results;
+            },
+          ),
+          ...rest,
+        );
+      }
       return invoke(
         (tx: Record<string, unknown>) => transactionContext.run(
-          { client: tx, suppressBatchEvents: false },
+          { client: tx, suppressBatchEvents: false, sequential: false },
           () => (first as (client: Record<string, unknown>) => Promise<unknown>)(tx),
         ),
         ...rest,

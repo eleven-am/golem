@@ -50,9 +50,9 @@ export const NESTED_WRITE_ACTIONS: Record<string, GolemAction> = {
   create: 'create',
   createMany: 'create',
   connectOrCreate: 'create',
-  connect: 'update',
-  disconnect: 'update',
-  set: 'update',
+  connect: 'read',
+  disconnect: 'read',
+  set: 'read',
   update: 'update',
   updateMany: 'update',
   upsert: 'update',
@@ -68,4 +68,13 @@ export function mergeConstraint(where: unknown, constraint: unknown): unknown {
     return constraint;
   }
   return { AND: [where, constraint] };
+}
+
+export function constrainUnique(where: unknown, constraint: unknown): unknown {
+  if (constraint === undefined) {
+    return where;
+  }
+  const unique = (where ?? {}) as Record<string, unknown>;
+  const existing = unique.AND === undefined ? [] : Array.isArray(unique.AND) ? unique.AND : [unique.AND];
+  return { ...unique, AND: [...existing, constraint] };
 }

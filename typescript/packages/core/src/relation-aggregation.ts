@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import { canonicalToken } from './canonical';
 import type {
   AggregationsConfig,
@@ -355,20 +356,22 @@ function exactDecimalQuotient(
 export function divideAggregationValue(
   sum: unknown,
   count: number,
-  options: { provider?: string; field?: DatamodelField } = {},
+  options: { provider: GolemProvider; field?: DatamodelField },
 ): unknown {
   if (sum === null || sum === undefined || count === 0) return null;
   if (typeof sum === 'number') return sum / count;
   if (typeof sum === 'bigint') return Number(sum) / count;
-  if (options.provider === 'sqlite') {
-    const Constructor = decimalConstructor(sum);
-    if (Constructor) return new Constructor(Number(String(sum)) / count);
-  }
-  if (options.provider === 'postgresql') {
-    const scale = postgresDecimalScale(options.field);
-    if (scale !== undefined) {
-      const quotient = exactDecimalQuotient(sum, count, scale);
+  switch (options.provider) {
+    case 'sqlite': {
+      const Constructor = decimalConstructor(sum);
+      if (Constructor) return new Constructor(Number(String(sum)) / count);
+      break;
+    }
+    case 'postgresql': {
+      const scale = postgresDecimalScale(options.field);
+      const quotient = scale === undefined ? undefined : exactDecimalQuotient(sum, count, scale);
       if (quotient !== undefined) return quotient;
+      break;
     }
   }
   const divide =

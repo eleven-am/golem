@@ -78,11 +78,34 @@ describe('golem authorization (e2e)', () => {
 
   it('gates nested writes against the target model', async () => {
     const response = await gql(
-      `mutation { createPost(data: { title: "sneaky", author: { connect: { email: "guest@example.com" } } }) { id } }`,
+      `mutation { createPost(data: { title: "sneaky", author: { create: { email: "sneaky@example.com" } } }) { id } }`,
       'token-guest@example.com',
     );
     expect(response.body.errors[0].extensions.code).toBe('FORBIDDEN');
     const none = await prisma.post.findFirst({ where: { title: 'sneaky' } });
+    expect(none).toBeNull();
+    await expect(prisma.user.count({ where: { email: 'sneaky@example.com' } })).resolves.toBe(0);
+  });
+
+  it('lets a caller link to a readable row its create policy allows', async () => {
+    const response = await gql(
+      `mutation { createPost(data: { title: "self-linked", published: true, author: { connect: { email: "guest@example.com" } } }) { title } }`,
+      'token-guest@example.com',
+    );
+    expect(response.body.errors).toBeUndefined();
+    expect(response.body.data.createPost.title).toBe('self-linked');
+    const guest = await prisma.user.findUniqueOrThrow({ where: { email: 'guest@example.com' } });
+    await expect(prisma.post.findFirst({ where: { title: 'self-linked' } }))
+      .resolves.toMatchObject({ authorId: guest.id });
+  });
+
+  it('refuses attributing a created row to another readable user', async () => {
+    const response = await gql(
+      `mutation { createPost(data: { title: "misattributed", author: { connect: { email: "roy@example.com" } } }) { id } }`,
+      'token-guest@example.com',
+    );
+    expect(response.body.errors[0].extensions.code).toBe('FORBIDDEN');
+    const none = await prisma.post.findFirst({ where: { title: 'misattributed' } });
     expect(none).toBeNull();
   });
 

@@ -58,10 +58,18 @@ export class DemoRules implements WillAuthorize {
     if (demoUser.name === 'REVOKED') {
       return;
     }
+    if (demoUser.email === 'linker@example.com') {
+      can(['read', 'update'], 'User', { id: demoUser.id });
+      can('read', 'Post', { published: true });
+      can(['create', 'update'], 'Post', { authorId: demoUser.id });
+      can('create', 'ReadingSession');
+      can(['read', 'update'], 'ReadingSession', { post: { is: { authorId: demoUser.id } } });
+      return;
+    }
     if (demoUser.email === 'guest@example.com') {
       can('read', 'User', ['id', 'email', 'name']);
       can('read', 'Post', { published: true });
-      can('create', 'Post');
+      can('create', 'Post', { authorId: demoUser.id });
     } else {
       can('read', 'User');
       cannot('read', 'User', ['phone']);
@@ -83,6 +91,8 @@ export class DemoRules implements WillAuthorize {
     }
     can(['update', 'delete'], 'Post', { authorId: demoUser.id, type: 'PERSONAL' });
     can('read', 'Play', { userId: demoUser.id });
+    can('read', ['Comment', 'Reaction'], { authorId: demoUser.id });
+    can('read', 'Bookmark', { ownerId: demoUser.id });
     can('read', 'Profile', { userId: demoUser.id });
     can('read', 'PostTag');
     can(['create', 'update', 'delete'], 'PostTag', { post: { is: { authorId: demoUser.id } } });

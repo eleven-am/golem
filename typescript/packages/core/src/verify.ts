@@ -6,6 +6,7 @@ import {
 import { runPolicyChecks } from './concurrency';
 import { DatamodelField, DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
+import { linkedRowKey } from './link-targets';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
 import { NestedRelationWritePlan, nestedPlanTargetsRow, planNestedWrites } from './nested-writes';
 import {
@@ -21,6 +22,7 @@ export interface VerifyContext {
   metadata?: ModelMetadataIndex;
   provider: AuthorizationProvider;
   context: unknown;
+  linked?: ReadonlySet<string>;
 }
 
 function metadataFor(ctx: Pick<VerifyContext, 'modelsByName' | 'metadata'>): ModelMetadataIndex {
@@ -117,6 +119,10 @@ async function verifyAppearedRow(
   relation: NestedRelationWritePlan,
   row: Record<string, unknown>,
 ): Promise<void> {
+  if (ctx.linked?.has(linkedRowKey(metadataFor(ctx), relation.target.name, row))) {
+    await checkRow(ctx, 'read', relation.target.name, row);
+    return;
+  }
   await runPolicyChecks([...relation.addedActions].map((action) => () =>
     checkRow(ctx, action, relation.target.name, row)));
   if (relation.addedActions.has('create')) {
@@ -185,10 +191,10 @@ export async function verifyUpdatedRow(
   await checkFields(ctx, 'update', model.name, before, changed);
   for (const relation of planNestedWrites(metadata, model, data)) {
     const targetMeta = metadata.get(relation.target.name);
-    const pkFields = targetMeta?.primaryKeys ?? [];
+    const pkFields = targetMeta?.identityFields ?? [];
     if (pkFields.length === 0) {
       throw new GolemForbiddenError(
-        `Cannot verify nested writes to ${relation.target.name}: model has no primary key`,
+        `Cannot verify nested writes to ${relation.target.name}: model has no primary key or required unique field`,
       );
     }
     const identityOf = (row: Record<string, unknown>): string =>
@@ -304,8 +310,11 @@ export async function planVerification(
   const scalarNames = new Set(metadata.get(model.name)!.scalarFields.map((f) => f.name));
   const needed = new Set<string>();
   const fieldDependencies: PrismaSelect = {};
+  for (const field of metadata.get(model.name)!.identityFields) {
+    needed.add(field.name);
+  }
   for (const field of metadata.get(model.name)!.scalarFields) {
-    if (field.isId || field.isUpdatedAt) {
+    if (field.isUpdatedAt) {
       needed.add(field.name);
     }
   }

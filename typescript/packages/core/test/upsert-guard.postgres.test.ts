@@ -1,3 +1,5 @@
+import { DEFAULT_UPSERT_GUARD_STRIPES, prepareUpsertGuard } from '../src/upsert-guard';
+import { upsertGuardModel } from './support/upsert-guard-model';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { AuthorizationProvider } from '../src/authorization';
 import { DatamodelModel } from '../src/datamodel';
@@ -19,6 +21,7 @@ const database = 'golem_core_upsert_guard';
 
 const model: DatamodelModel = {
   name: 'UpsertTarget',
+  dbName: 'upsert_targets',
   fields: [
     field({ name: 'id', type: 'Int', isId: true, hasDefaultValue: true }),
     field({ name: 'key', type: 'String', isUnique: true }),
@@ -54,6 +57,7 @@ describe('serialized context-aware upsert against live PostgreSQL', () => {
   beforeAll(async () => {
     const databaseUrl = await ensureDatabase(url, database);
     const initialized = await openPostgres(databaseUrl);
+    await prepareUpsertGuard(initialized.prisma as unknown as Record<string, unknown>, 'postgresql', DEFAULT_UPSERT_GUARD_STRIPES);
     first = initialized.prisma;
     second = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
     await second.$connect();
@@ -73,6 +77,7 @@ describe('serialized context-aware upsert against live PostgreSQL', () => {
         checkReadFields: false,
         checkWriteResults: false,
         provider: 'postgresql',
+        upsertGuard: upsertGuardModel,
       },
     ));
     const attempts = Array.from({ length: 24 }, (_, index) =>

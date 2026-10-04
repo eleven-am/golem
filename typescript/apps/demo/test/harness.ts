@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, rmSync } from 'fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmdirSync, rmSync } from 'fs';
 import { tmpdir } from 'os';
 import { basename, join, resolve } from 'path';
 import { INestApplication } from '@nestjs/common';
@@ -11,7 +11,7 @@ import { seed } from '../src/seed';
 import type { DemoGolemOptions } from '../src/app.module';
 
 const SCHEMA_TEMPLATE = resolve(__dirname, '../prisma/dev.db');
-const ARTIFACT_ROOT = join(tmpdir(), 'golem-demo-e2e');
+const ARTIFACT_ROOT = mkdtempSync(join(tmpdir(), 'golem-demo-e2e-'));
 
 export interface DemoTestContext {
   moduleRef: TestingModule;
@@ -28,15 +28,18 @@ export function removeDatabaseFiles(databaseFile: string): void {
   for (const suffix of ['', '-journal', '-wal', '-shm']) {
     rmSync(`${databaseFile}${suffix}`, { force: true });
   }
+  if (existsSync(ARTIFACT_ROOT) && readdirSync(ARTIFACT_ROOT).length === 0) {
+    rmdirSync(ARTIFACT_ROOT);
+  }
 }
 
 export function provisionDatabase(testPath: string): string {
   if (!existsSync(SCHEMA_TEMPLATE)) {
     throw new Error(`Demo schema template missing at ${SCHEMA_TEMPLATE}; run "npm run push -w demo" first`);
   }
-  mkdirSync(ARTIFACT_ROOT, { recursive: true });
   const databaseFile = databaseFileFor(testPath);
   removeDatabaseFiles(databaseFile);
+  mkdirSync(ARTIFACT_ROOT, { recursive: true });
   copyFileSync(SCHEMA_TEMPLATE, databaseFile);
   return databaseFile;
 }

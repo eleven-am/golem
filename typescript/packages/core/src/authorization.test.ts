@@ -30,7 +30,8 @@ const models = [
 const datamodel: DatamodelDocument = { models, enums: [] };
 
 function fakeClient() {
-  return {
+  const client = {
+    $transaction: jest.fn(async (work: (tx: unknown) => Promise<unknown>) => work(client)),
     user: {
       findMany: jest.fn().mockResolvedValue([]),
       findUnique: jest.fn().mockResolvedValue(null),
@@ -52,6 +53,7 @@ function fakeClient() {
       deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
     },
   };
+  return client;
 }
 
 function fakeProvider(constraint: unknown = { ownerId: 'me' }): AuthorizationProvider & {
@@ -93,26 +95,21 @@ describe('engine authorization', () => {
     );
   });
 
-  it('uses fetch-then-mutate for update and hides constrained rows as NOT_FOUND', async () => {
+  it('updates in one statement carrying the constraint and hides constrained rows as NOT_FOUND', async () => {
     const client = fakeClient();
-    client.post.findFirst.mockResolvedValueOnce({ id: 'p1' });
     const provider = fakeProvider({ authorId: 'me' });
     const engine = new GolemEngine(client, models, rowPolicy(provider));
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: 'new' }, context: ctx });
-    expect(client.post.findFirst).toHaveBeenCalledWith({
-      where: { AND: [{ id: 'p1' }, { authorId: 'me' }] },
-      select: { id: true },
-    });
+    expect(client.post.findFirst).not.toHaveBeenCalled();
     expect(client.post.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'p1' } }),
+      expect.objectContaining({ where: { id: 'p1', AND: [{ authorId: 'me' }] } }),
     );
 
-    client.post.findFirst.mockResolvedValueOnce(null);
+    client.post.update.mockRejectedValueOnce(Object.assign(new Error('no row'), { code: 'P2025' }));
     await expect(
       engine.update({ model: 'Post', where: { id: 'p2' }, data: { title: 'x' }, context: ctx }),
     ).rejects.toBeInstanceOf(GolemNotFoundError);
-    expect(client.post.update).toHaveBeenCalledTimes(1);
   });
 
   it('merges constraints into batch operations directly', async () => {
@@ -128,6 +125,7 @@ describe('engine authorization', () => {
 
   it('gates create and walks nested writes per touched model', async () => {
     const client = fakeClient();
+    client.post.findFirst.mockResolvedValue({ id: 'p9' });
     const provider = fakeProvider();
     const engine = new GolemEngine(client, models, rowPolicy(provider));
 
@@ -142,7 +140,7 @@ describe('engine authorization', () => {
     expect(provider.authorizeCalls).toEqual([
       ['create', 'User'],
       ['create', 'Post'],
-      ['update', 'Post'],
+      ['read', 'Post'],
     ]);
   });
 

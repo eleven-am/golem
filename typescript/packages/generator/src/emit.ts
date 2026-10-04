@@ -1,9 +1,12 @@
+import { supportedProvider } from '@eleven-am/golem-core';
 import type { DMMF } from '@prisma/generator-helper';
 
 const SUPPORTED_KINDS = new Set(['scalar', 'object', 'enum']);
-const INTERNAL_MODELS = new Set(['GolemUpsertGuard']);
+const UPSERT_GUARD_MODEL = 'GolemUpsertGuard';
+const INTERNAL_MODELS = new Set([UPSERT_GUARD_MODEL]);
 
-export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string): string {
+export function emitDatamodelModule(datamodel: DMMF.Datamodel, datasourceProvider: string | undefined): string {
+  const provider = supportedProvider(datasourceProvider);
   const indexesByModel = new Map<string, Array<{ kind: string; name?: string; dbName?: string; fields: string[] }>>();
   for (const index of datamodel.indexes ?? []) {
     const entry = {
@@ -20,11 +23,10 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
     }
   }
 
-  const models = datamodel.models
-    .filter((model) => !INTERNAL_MODELS.has(model.name))
-    .map((model) => ({
+  const toDatamodelModel = (model: DMMF.Model) => ({
     name: model.name,
     dbName: model.dbName ?? model.name,
+    ...(model.schema ? { schema: model.schema } : {}),
     fields: model.fields
       .filter((field) => SUPPORTED_KINDS.has(field.kind))
       .map((field) => ({
@@ -45,6 +47,9 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
         ...(field.relationName ? { relationName: field.relationName } : {}),
         ...(field.relationFromFields?.length ? { relationFromFields: [...field.relationFromFields] } : {}),
         ...(field.relationToFields?.length ? { relationToFields: [...(field.relationToFields as string[])] } : {}),
+        ...(field.relationFromFields?.length
+          ? { relationOnDelete: field.relationOnDelete ?? (field.isRequired ? 'Restrict' : 'SetNull') }
+          : {}),
       })),
     ...(model.primaryKey
       ? {
@@ -67,7 +72,16 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
       const indexes = indexesByModel.get(model.name) ?? [];
       return indexes.length > 0 ? { indexes } : {};
     })(),
-    }));
+  });
+  const upsertGuard = datamodel.models.find((model) => model.name === UPSERT_GUARD_MODEL);
+  if (!upsertGuard) {
+    throw new Error(
+      `Golem requires the ${UPSERT_GUARD_MODEL} model in the Prisma schema; copy it from @eleven-am/golem-core/prisma/golem-core.prisma`,
+    );
+  }
+  const models = datamodel.models
+    .filter((model) => !INTERNAL_MODELS.has(model.name))
+    .map(toDatamodelModel);
   const enums = datamodel.enums.map((e) => ({
     name: e.name,
     values: e.values.map((v) => v.name),
@@ -92,7 +106,7 @@ declare global {
 }
 
 export const datamodel = ${JSON.stringify(
-    provider === undefined ? { models, enums } : { models, enums, provider },
+    { models, enums, provider, upsertGuard: toDatamodelModel(upsertGuard) },
     null,
     2,
   )} as const;

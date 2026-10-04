@@ -2,6 +2,8 @@ import { GolemOperation } from './hooks';
 
 export type DatamodelFieldKind = 'scalar' | 'object' | 'enum';
 
+export type DatamodelReferentialAction = 'Cascade' | 'Restrict' | 'NoAction' | 'SetNull' | 'SetDefault';
+
 export interface DatamodelField {
   name: string;
   dbName?: string;
@@ -19,6 +21,8 @@ export interface DatamodelField {
   relationName?: string;
   relationFromFields?: readonly string[];
   relationToFields?: readonly string[];
+  /** What the database does to this row when the row its foreign key references is deleted. */
+  relationOnDelete?: DatamodelReferentialAction;
 }
 
 export interface DatamodelPrimaryKey {
@@ -43,10 +47,35 @@ export interface DatamodelIndex {
 export interface DatamodelModel {
   name: string;
   dbName?: string;
+  schema?: string;
   fields: readonly DatamodelField[];
   primaryKey?: DatamodelPrimaryKey;
   uniqueIndexes?: readonly DatamodelUniqueIndex[];
   indexes?: readonly DatamodelIndex[];
+}
+
+export interface RowIdentity {
+  readonly fields: readonly string[];
+  readonly selector: string;
+}
+
+export function rowIdentity(model: DatamodelModel): RowIdentity | undefined {
+  if (model.primaryKey?.fields.length) {
+    const fields = model.primaryKey.fields;
+    return { fields, selector: fields.length === 1 ? fields[0] : model.primaryKey.name ?? fields.join('_') };
+  }
+  const scalars = model.fields.filter((field) => field.kind !== 'object' && !field.isList);
+  const id = scalars.find((field) => field.isId) ?? scalars.find((field) => field.isUnique && field.isRequired);
+  if (id) {
+    return { fields: [id.name], selector: id.name };
+  }
+  const compound = (model.uniqueIndexes ?? []).find((index) =>
+    index.fields.every((name) => scalars.some((field) => field.name === name && field.isRequired)));
+  return compound && { fields: compound.fields, selector: compound.name ?? compound.fields.join('_') };
+}
+
+export function rowIdentityFields(model: DatamodelModel): readonly string[] | undefined {
+  return rowIdentity(model)?.fields;
 }
 
 export function isEqualityIndexed(model: DatamodelModel, fieldName: string): boolean {
@@ -70,10 +99,22 @@ export interface DatamodelEnum {
   values: readonly string[];
 }
 
+export type GolemProvider = 'postgresql' | 'sqlite';
+
+export function supportedProvider(provider: unknown): GolemProvider {
+  if (provider === 'postgresql' || provider === 'sqlite') {
+    return provider;
+  }
+  throw new Error(
+    `Golem supports the postgresql and sqlite datasource providers, not ${provider === undefined ? 'an unspecified provider' : `"${String(provider)}"`}`,
+  );
+}
+
 export interface DatamodelDocument<TModels = Record<string, string>> {
   models: readonly DatamodelModel[];
   enums: readonly DatamodelEnum[];
-  provider?: string;
+  provider?: GolemProvider;
+  upsertGuard?: DatamodelModel;
   __models?: TModels;
 }
 

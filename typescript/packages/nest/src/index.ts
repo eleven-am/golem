@@ -27,8 +27,12 @@ import {
   createEventPublisher,
   subscribableModels,
   validateUpsertGuardInfrastructure,
+  prepareUpsertGuard,
+  supportedProvider,
+  DEFAULT_UPSERT_GUARD_STRIPES,
 } from '@eleven-am/golem-core';
 import { PubSub, PubSubEngine } from 'graphql-subscriptions';
+import type { GolemProvider } from '@eleven-am/golem-core';
 import type { GraphQLSchema } from 'graphql';
 import { PubSubEventBus } from './event-bus';
 import { extractExtensionSpecs } from './extensions';
@@ -88,16 +92,15 @@ interface ConnectableClient {
 class GolemClientLifecycle implements OnModuleInit, OnModuleDestroy {
   constructor(
     private readonly client: ConnectableClient,
-    private readonly validateUpsertGuard: boolean,
+    private readonly provider: GolemProvider,
+    private readonly upsertGuardStripes: number,
   ) {}
 
   async onModuleInit(): Promise<void> {
     await this.client.$connect();
-    if (this.validateUpsertGuard) {
-      await validateUpsertGuardInfrastructure(
-        this.client as unknown as Record<string, unknown>,
-      );
-    }
+    const client = this.client as unknown as Record<string, unknown>;
+    await validateUpsertGuardInfrastructure(client);
+    await prepareUpsertGuard(client, this.provider, this.upsertGuardStripes);
   }
 
   onModuleDestroy(): Promise<void> {
@@ -188,6 +191,7 @@ export class GolemModule implements NestModule {
               eventBus,
               models: subscribableModels(options),
               batch: options.batchEvents,
+              upsertGuardStripes: options.defaults?.upsertGuardStripes,
             });
             return new (options.client as unknown as GeneratedGolemClient)(
               clientOptions,
@@ -200,7 +204,11 @@ export class GolemModule implements NestModule {
         {
           provide: GOLEM_CLIENT_LIFECYCLE,
           useFactory: (client: ConnectableClient) =>
-            new GolemClientLifecycle(client, options.authorization !== undefined),
+            new GolemClientLifecycle(
+              client,
+              supportedProvider(options.datamodel.provider),
+              options.defaults?.upsertGuardStripes ?? DEFAULT_UPSERT_GUARD_STRIPES,
+            ),
           inject: [options.client],
         },
         {

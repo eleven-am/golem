@@ -116,7 +116,7 @@ export function dependencyHydrationSelect(
       (RELATION_FILTER_KEYS as readonly string[]).includes(name)
     ) {
       if (dependency === true) {
-        const identity = meta?.primaryKeys[0] ?? meta?.scalarFields[0];
+        const identity = meta?.identityFields[0] ?? meta?.scalarFields[0];
         if (identity) {
           select[identity.name] = true;
         } else {
@@ -143,7 +143,7 @@ export function dependencyHydrationSelect(
       continue;
     }
     if (dependency === true) {
-      const identity = metadata.get(target.name)?.primaryKeys[0] ??
+      const identity = metadata.get(target.name)?.identityFields[0] ??
         metadata.get(target.name)?.scalarFields[0];
       if (!identity) {
         complete = false;
@@ -196,7 +196,7 @@ export function constraintHydrationSelect(
     if (!target || !value || typeof value !== 'object') {
       if (!target) state.complete = false;
       if (target && (value === null || value === undefined)) {
-        const identity = metadata.get(target.name)?.primaryKeys[0] ??
+        const identity = metadata.get(target.name)?.identityFields[0] ??
           metadata.get(target.name)?.scalarFields[0];
         if (identity) into[key] = { select: { [identity.name]: true } };
         else state.complete = false;
@@ -213,7 +213,7 @@ export function constraintHydrationSelect(
     const nested: PrismaSelect = {};
     for (const condition of conditions) {
       if (condition === null) {
-        const identity = metadata.get(target.name)?.primaryKeys[0] ??
+        const identity = metadata.get(target.name)?.identityFields[0] ??
           metadata.get(target.name)?.scalarFields[0];
         if (identity) nested[identity.name] = true;
         else state.complete = false;

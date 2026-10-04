@@ -1,10 +1,11 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { CompiledReadEvent } from '../../src/compiled-read';
 import { AggregateRequest, GolemEngine, GroupByRequest } from '../../src/operations';
 import { context, engineFor } from './analytics';
 import { describeShape } from './oracle';
 
 export interface AggregateSubject {
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly client: Record<string, any>;
 }
 

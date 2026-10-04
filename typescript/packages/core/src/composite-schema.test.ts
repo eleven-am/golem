@@ -1,3 +1,4 @@
+import { guardedClient } from '../test/support/guarded-client';
 import { graphql, printSchema } from 'graphql';
 import { DatamodelDocument } from './datamodel';
 import { buildGolemSchema } from './schema';
@@ -59,12 +60,12 @@ function delegate() {
 }
 
 function client() {
-  return {
+  return guardedClient({
     postTag: delegate(),
     membership: delegate(),
     branch: delegate(),
     repository: delegate(),
-  };
+  });
 }
 
 describe('composite selectors on the generated GraphQL surface', () => {
@@ -200,7 +201,7 @@ describe('compound selectors in generated nested writes', () => {
   };
 
   function nestedClient() {
-    return { user: delegate(), membership: delegate() };
+    return guardedClient({ user: delegate(), membership: delegate() });
   }
 
   it('uses the compound unique input for connect-or-create, nested update, upsert, and delete', () => {
@@ -213,9 +214,13 @@ describe('compound selectors in generated nested writes', () => {
     expect(sdl).toContain('delete: [MembershipWhereUniqueInput!]');
   });
 
-  it('passes compound nested payloads through unchanged', async () => {
+  it.each([
+    ['missing', null, { create: [{ teamId: 't1', role: 'owner' }] }],
+    ['present', { userId: 'u1', teamId: 't1' }, { connect: [{ userId_teamId: { userId: 'u1', teamId: 't1' } }] }],
+  ])('decides a compound connect-or-create by its flattened selector and writes the %s branch explicitly', async (_label, found, memberships) => {
     const prisma = nestedClient();
     prisma.user.create.mockResolvedValue({ id: 'u1' });
+    prisma.membership.findFirst.mockResolvedValue(found);
     const schema = buildGolemSchema({ datamodel: nestedDatamodel, client: prisma });
     const result = await graphql({
       schema,
@@ -231,17 +236,13 @@ describe('compound selectors in generated nested writes', () => {
     });
 
     expect(result.errors).toBeUndefined();
-    expect(prisma.user.create).toHaveBeenCalledWith({
-      data: {
-        id: 'u1',
-        memberships: {
-          connectOrCreate: [{
-            where: { userId_teamId: { userId: 'u1', teamId: 't1' } },
-            create: { teamId: 't1', role: 'owner' },
-          }],
-        },
-      },
-      select: { id: true },
+    expect(prisma.membership.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'u1', teamId: 't1' },
+      select: { userId: true, teamId: true },
     });
+    expect(prisma.user.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: { id: 'u1', memberships },
+      select: { id: true },
+    }));
   });
 });

@@ -1,3 +1,4 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { AuthorizationProvider, FieldClassification } from '../../src/authorization';
 import { DatamodelModel } from '../../src/datamodel';
 import { GolemEngine, GolemEngineOptions } from '../../src/operations';
@@ -173,7 +174,7 @@ export interface ScopedFieldSpec {
 }
 
 export interface ScopedFieldHostOptions {
-  readonly provider?: string;
+  readonly provider?: GolemProvider;
   readonly models?: readonly DatamodelModel[];
   readonly constraints?: Record<string, unknown>;
   readonly hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;

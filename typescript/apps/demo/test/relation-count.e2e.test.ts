@@ -165,6 +165,8 @@ describe('counting a relation over GraphQL (e2e)', () => {
     const counted = await gql(`{ __type(name: "PostCountOutputType") { fields { name } } }`);
     expect(counted.body.data.__type.fields.map((field: { name: string }) => field.name)).toEqual([
       'readingSessions',
+      'comments',
+      'bookmarks',
     ]);
   });
 

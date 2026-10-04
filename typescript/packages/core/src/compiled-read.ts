@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import type { AliasedRawBuilder, RawBuilder, SelectQueryBuilder } from 'kysely';
 import {
   UNSUPPORTED_CONDITION_ERROR_NAME,
@@ -35,7 +36,6 @@ const COUNT_COLUMN = '_golem_count';
 
 const MAX_IDENTIFIER = 63;
 
-const COMPILABLE_PROVIDERS = new Set(['sqlite', 'postgresql', 'postgres']);
 
 const SQLITE_MASKABLE_TYPES = new Set(['String', 'Float', 'BigInt']);
 
@@ -107,7 +107,7 @@ export interface CompiledReadInput {
   readonly models: readonly DatamodelModel[];
   readonly metadata: ModelMetadataIndex;
   readonly prepared: PreparedReadTree;
-  readonly provider?: string;
+  readonly provider?: GolemProvider;
   readonly where?: unknown;
   readonly constraint?: unknown;
   readonly orderBy?: unknown;
@@ -466,7 +466,7 @@ function primaryOrder(
   metadata: ModelMetadataIndex,
   alias: string,
 ): readonly OrderTerm[] | CompiledReadFallback {
-  const keys = metadata.get(model.name)?.primaryKeys ?? [];
+  const keys = metadata.get(model.name)?.identityFields ?? [];
   if (keys.length === 0) {
     return fallback(
       'orderBy',
@@ -1656,12 +1656,6 @@ function withoutHydration(
 }
 
 export async function planCompiledRead(input: CompiledReadInput): Promise<CompiledReadPlan> {
-  if (input.provider === undefined || !COMPILABLE_PROVIDERS.has(input.provider)) {
-    return fallback(
-      'provider',
-      `golem compiles reads for sqlite and postgresql, not ${input.provider ?? 'an unknown provider'}`,
-    );
-  }
   if (input.model.dbName == null) {
     return fallback(
       'projection',

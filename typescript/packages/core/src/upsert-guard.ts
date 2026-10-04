@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import { createHash } from 'node:crypto';
 import { canonicalToken } from './canonical';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -31,6 +32,7 @@ export interface UpsertGuardDelegate {
     update: { seq: { increment: bigint } };
     select: { stripe: true };
   }): Promise<unknown>;
+  createMany(args: { data: { stripe: number; seq: bigint }[]; skipDuplicates: true }): Promise<unknown>;
   findFirst?(args: { select: { stripe: true } }): Promise<unknown>;
 }
 
@@ -45,15 +47,35 @@ export function upsertGuardDelegate(client: Record<string, unknown>): UpsertGuar
 }
 
 export async function acquireUpsertGuard(
-  client: Record<string, unknown>,
+  guard: UpsertGuardDelegate,
   model: string,
   where: unknown,
   stripes: number,
-  provider?: string,
+  provider: GolemProvider | undefined,
+  lock: (row: { stripe: number }) => Promise<boolean>,
 ): Promise<void> {
   const stripe = upsertGuardStripe(model, where, stripes);
+  switch (provider) {
+    case 'postgresql':
+      if (!(await lock({ stripe }))) {
+        throw new GolemValidationError(
+          `Upsert guard stripe ${stripe} does not exist; prepare the guard with prepareUpsertGuard for ${stripes} stripes before serving writes`,
+        );
+      }
+      return;
+    case 'sqlite':
+    case undefined:
+      return bumpUpsertGuard(guard, stripe, provider);
+  }
+}
+
+async function bumpUpsertGuard(
+  guard: UpsertGuardDelegate,
+  stripe: number,
+  provider: GolemProvider | undefined,
+): Promise<void> {
   try {
-    await upsertGuardDelegate(client).upsert({
+    await guard.upsert({
       where: { stripe },
       create: { stripe, seq: 1n },
       update: { seq: { increment: 1n } },
@@ -74,6 +96,24 @@ export async function acquireUpsertGuard(
       );
     }
     throw error;
+  }
+}
+
+export async function prepareUpsertGuard(
+  client: Record<string, unknown>,
+  provider: GolemProvider,
+  stripes: number,
+): Promise<void> {
+  const count = validateUpsertGuardStripes(stripes);
+  switch (provider) {
+    case 'postgresql':
+      await upsertGuardDelegate(client).createMany({
+        data: Array.from({ length: count }, (_value, stripe) => ({ stripe, seq: 0n })),
+        skipDuplicates: true,
+      });
+      return;
+    case 'sqlite':
+      return;
   }
 }
 

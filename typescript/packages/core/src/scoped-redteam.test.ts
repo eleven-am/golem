@@ -1,3 +1,4 @@
+import type { GolemProvider } from './datamodel';
 import type { Kysely, KyselyPlugin, Sql } from 'kysely';
 import { GolemValidationError } from './errors';
 import { scopedContext, scopedEngine, scopedFieldQuery } from '../test/support/fixture';
@@ -613,7 +614,7 @@ describe('builder methods that do not defeat the scoped root', () => {
 
 const WITHHELD = [{ model: 'Post', field: 'secretNote', access: 'never' as const }];
 
-function withheld(provider = 'sqlite') {
+function withheld(provider: GolemProvider = 'sqlite') {
   return scopedFieldQuery(
     {
       provider,
@@ -760,7 +761,7 @@ describe('a field the caller may not read, reached through every clause the buil
 });
 
 describe('a conditionally readable field, whose mask the whole query reads through', () => {
-  function masked(provider = 'sqlite') {
+  function masked(provider: GolemProvider = 'sqlite') {
     return scopedFieldQuery(
       {
         provider,

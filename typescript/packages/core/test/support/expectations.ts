@@ -1,8 +1,9 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { GolemEngine } from '../../src/operations';
 import { context, engineFor, integers } from './analytics';
 
 export interface AnalyticsSubject {
-  readonly provider: string;
+  readonly provider: GolemProvider;
   readonly client: Record<string, any>;
 }
 

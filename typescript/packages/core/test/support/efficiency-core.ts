@@ -1,3 +1,4 @@
+import type { GolemProvider } from '../../src/datamodel';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { DatamodelModel } from '../../src/datamodel';
 import { field } from '../../src/testing';
@@ -60,7 +61,7 @@ interface RawClient {
   $executeRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown>;
 }
 
-export async function seedEfficiencyPlays(client: RawClient, provider: string): Promise<void> {
+export async function seedEfficiencyPlays(client: RawClient, provider: GolemProvider): Promise<void> {
   const sqlite = provider === 'sqlite';
   const placeholder = (position: number) => (sqlite ? '?' : `$${position}`);
   await client.$executeRawUnsafe(`DROP TABLE IF EXISTS "efficiency_plays"`);
@@ -117,7 +118,7 @@ const constraints: Record<EfficiencyPersona, unknown> = {
 
 export function efficiencyRunner(
   client: Record<string, any>,
-  provider: string,
+  provider: GolemProvider,
 ): (persona: EfficiencyPersona, shape: EfficiencyShape) => Promise<Record<string, unknown>[]> {
   const sql = dialectFor(provider);
   return async (persona, shape) => {

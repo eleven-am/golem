@@ -1,3 +1,4 @@
+import { supportedProvider } from './datamodel';
 import {
   scopedContext,
   scopedEngine,
@@ -262,14 +263,13 @@ describe('the scoped root', () => {
     ).rejects.toThrow('regenerate the golem client');
   });
 
-  it('refuses a datasource provider it cannot render a predicate for', async () => {
-    const engine = scopedEngine({ provider: 'mysql' });
-    await expect(
-      engine
-        .scoped({ model: 'Post', context: scopedContext })
-        .query((qb) => qb.select('Post.id'))
-        .compile(),
-    ).rejects.toThrow('sqlite and postgresql only');
+  it('refuses a datasource provider golem does not support', () => {
+    expect(() => supportedProvider('mysql')).toThrow(
+      'Golem supports the postgresql and sqlite datasource providers, not "mysql"',
+    );
+    expect(() => supportedProvider(undefined)).toThrow(
+      'Golem supports the postgresql and sqlite datasource providers, not an unspecified provider',
+    );
   });
 });
 

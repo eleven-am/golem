@@ -1,3 +1,4 @@
+import { guardedClient } from '../test/support/guarded-client';
 import { GolemValidationError } from './errors';
 import { HookRegistry } from './hooks';
 import { GolemEngine } from './operations';
@@ -192,12 +193,12 @@ describe('engine hooks', () => {
     registry.registerAfter('User', 'create', afterCreate);
     registry.registerAfter('User', 'update', afterUpdate);
     const user = fakeUserDelegate();
-    const engine = new GolemEngine({ user }, models, { hooks: registry });
+    const engine = new GolemEngine(guardedClient({ user }), models, { hooks: registry });
 
     await engine.upsert({
       model: 'User',
       where: { id: 'u1' },
-      create: { email: 'new@example.com' },
+      create: { id: 'u1', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
     });
 
@@ -219,12 +220,12 @@ describe('engine hooks', () => {
     registry.registerAfter('User', 'update', afterUpdate);
     const user = fakeUserDelegate();
     user.findFirst.mockResolvedValue(null);
-    const engine = new GolemEngine({ user }, models, { hooks: registry });
+    const engine = new GolemEngine(guardedClient({ user }), models, { hooks: registry });
 
     await engine.upsert({
       model: 'User',
       where: { id: 'missing' },
-      create: { email: 'new@example.com' },
+      create: { id: 'missing', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
     });
 
@@ -263,7 +264,7 @@ describe('engine hooks', () => {
     await engine.upsert({
       model: 'User',
       where: { id: 'missing' },
-      create: { email: 'new@example.com' },
+      create: { id: 'missing', email: 'new@example.com' },
       update: { email: 'edited@example.com' },
       context: {},
     });
