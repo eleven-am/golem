@@ -154,37 +154,37 @@ func SystemDeleteMany[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func CallerTxUpdateMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
-	if transaction == nil || transaction.caller == nil {
-		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
-	}
-	return transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) (int64, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.caller == nil {
+			return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
+		}
 		return CallerUpdateMany(ctx, transaction.caller, descriptor, where, input)
 	})
 }
 
 func CallerTxDeleteMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
-	if transaction == nil || transaction.caller == nil {
-		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
-	}
-	return transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) (int64, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.caller == nil {
+			return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
+		}
 		return CallerDeleteMany(ctx, transaction.caller, descriptor, where)
 	})
 }
 
 func SystemTxUpdateMany[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M], input golem.UpdateManyInput[M]) (int64, error) {
-	if transaction == nil || transaction.system.app == nil {
-		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
-	}
-	return transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) (int64, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.system.app == nil {
+			return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "updateMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
+		}
 		return SystemUpdateMany(ctx, transaction.system, descriptor, where, input)
 	})
 }
 
 func SystemTxDeleteMany[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], where golem.Predicate[M]) (int64, error) {
-	if transaction == nil || transaction.system.app == nil {
-		return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
-	}
-	return transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) (int64, error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.system.app == nil {
+			return 0, golem.RuntimeOperationError(golem.CodeBadUserInput, "deleteMany", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
+		}
 		return SystemDeleteMany(ctx, transaction.system, descriptor, where)
 	})
 }

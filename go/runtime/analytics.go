@@ -105,50 +105,50 @@ func SystemRelationGroupBy[P, A, M any](ctx context.Context, system System[P, A]
 }
 
 func CallerTxAggregate[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.AggregateRequest[M]) (golem.AggregateResult[M], error) {
-	if tx == nil || tx.caller == nil {
-		return golem.AggregateResult[M]{}, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.caller.executor, func(ctx context.Context) (golem.AggregateResult[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) (golem.AggregateResult[M], error) {
+		if tx == nil || tx.caller == nil {
+			return golem.AggregateResult[M]{}, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
+		}
 		return CallerAggregate(ctx, tx.caller, descriptor, request)
 	})
 }
 func SystemTxAggregate[P, A, M any](ctx context.Context, tx *SystemTx[P, A], descriptor golem.ModelDescriptor[M], request golem.AggregateRequest[M]) (golem.AggregateResult[M], error) {
-	if tx == nil || tx.system.app == nil {
-		return golem.AggregateResult[M]{}, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.system.executor, func(ctx context.Context) (golem.AggregateResult[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) (golem.AggregateResult[M], error) {
+		if tx == nil || tx.system.app == nil {
+			return golem.AggregateResult[M]{}, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
+		}
 		return SystemAggregate(ctx, tx.system, descriptor, request)
 	})
 }
 func CallerTxGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.GroupRequest[M]) ([]golem.GroupRow[M], error) {
-	if tx == nil || tx.caller == nil {
-		return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.caller.executor, func(ctx context.Context) ([]golem.GroupRow[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.GroupRow[M], error) {
+		if tx == nil || tx.caller == nil {
+			return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
+		}
 		return CallerGroupBy(ctx, tx.caller, descriptor, request)
 	})
 }
 func SystemTxGroupBy[P, A, M any](ctx context.Context, tx *SystemTx[P, A], descriptor golem.ModelDescriptor[M], request golem.GroupRequest[M]) ([]golem.GroupRow[M], error) {
-	if tx == nil || tx.system.app == nil {
-		return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.system.executor, func(ctx context.Context) ([]golem.GroupRow[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.GroupRow[M], error) {
+		if tx == nil || tx.system.app == nil {
+			return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
+		}
 		return SystemGroupBy(ctx, tx.system, descriptor, request)
 	})
 }
 func CallerTxRelationGroupBy[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], request golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error) {
-	if tx == nil || tx.caller == nil {
-		return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.caller.executor, func(ctx context.Context) ([]golem.RelationGroupRow[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.RelationGroupRow[M], error) {
+		if tx == nil || tx.caller == nil {
+			return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: caller transaction unavailable")
+		}
 		return CallerRelationGroupBy(ctx, tx.caller, descriptor, request)
 	})
 }
 func SystemTxRelationGroupBy[P, A, M any](ctx context.Context, tx *SystemTx[P, A], descriptor golem.ModelDescriptor[M], request golem.RelationGroupRequest[M]) ([]golem.RelationGroupRow[M], error) {
-	if tx == nil || tx.system.app == nil {
-		return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
-	}
-	return transactionOperation(ctx, tx.system.executor, func(ctx context.Context) ([]golem.RelationGroupRow[M], error) {
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.RelationGroupRow[M], error) {
+		if tx == nil || tx.system.app == nil {
+			return nil, fmt.Errorf("P6_ANALYTICS_TRANSACTION: system transaction unavailable")
+		}
 		return SystemRelationGroupBy(ctx, tx.system, descriptor, request)
 	})
 }

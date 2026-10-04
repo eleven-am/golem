@@ -64,37 +64,37 @@ func systemTextSearch[P, A, M any](ctx context.Context, system System[P, A], des
 }
 
 func CallerTxTextSearch[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
 		return CallerTextSearch(ctx, transaction.caller, descriptor, indexName, query, take, predicates...)
 	})
 }
 
 func CallerTxTextSearchSelect[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
 		return CallerTextSearchSelect(ctx, transaction.caller, descriptor, indexName, query, take, projection, predicates...)
 	})
 }
 
 func SystemTxTextSearch[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
 		return SystemTextSearch(ctx, transaction.system, descriptor, indexName, query, take, predicates...)
 	})
 }
 
 func SystemTxTextSearchSelect[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, projection golem.Projection[M], predicates ...golem.Predicate[M]) ([]golem.FullTextResult[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.FullTextResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
 		return SystemTextSearchSelect(ctx, transaction.system, descriptor, indexName, query, take, projection, predicates...)
 	})
 }

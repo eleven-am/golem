@@ -132,6 +132,29 @@ func transactionOperation[R any](ctx context.Context, binding *executionBinding,
 	return run(ctx)
 }
 
+func (transaction *CallerTx[P, A]) binding() *executionBinding {
+	if transaction == nil || transaction.caller == nil {
+		return nil
+	}
+	return transaction.caller.executor
+}
+
+func (transaction *SystemTx[P, A]) binding() *executionBinding {
+	if transaction == nil {
+		return nil
+	}
+	return transaction.system.executor
+}
+
+type foundRowResult[M any] struct {
+	row   golem.Row[M]
+	found bool
+}
+
+func foundRow[M any](result foundRowResult[M], err error) (golem.Row[M], bool, error) {
+	return result.row, result.found, err
+}
+
 func (binding *executionBinding) requireAdmitted(ctx context.Context) error {
 	if binding == nil || !binding.scoped {
 		return nil

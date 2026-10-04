@@ -57,31 +57,46 @@ func returnsError(function *ast.FuncDecl) bool {
 	return ok && ident.Name == "error"
 }
 
-func delegatesThroughTheSeam(function *ast.FuncDecl, handle, member string) bool {
-	seamed := false
-	ast.Inspect(function.Body, func(node ast.Node) bool {
-		call, ok := node.(*ast.CallExpr)
-		if !ok || len(call.Args) < 3 {
-			return true
-		}
-		name, ok := call.Fun.(*ast.Ident)
-		if !ok || name.Name != "transactionOperation" {
-			return true
-		}
-		executor, ok := call.Args[1].(*ast.SelectorExpr)
-		if !ok || executor.Sel.Name != "executor" {
-			return true
-		}
-		owner, ok := executor.X.(*ast.SelectorExpr)
-		if !ok || owner.Sel.Name != member {
-			return true
-		}
-		if variable, ok := owner.X.(*ast.Ident); ok && variable.Name == handle {
-			seamed = true
-		}
-		return true
-	})
-	return seamed
+func seamCall(expression ast.Expr, handle string) bool {
+	call, ok := expression.(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	if unpack, ok := call.Fun.(*ast.Ident); ok && unpack.Name == "foundRow" && len(call.Args) == 1 {
+		return seamCall(call.Args[0], handle)
+	}
+	name, ok := call.Fun.(*ast.Ident)
+	if !ok || name.Name != "transactionOperation" || len(call.Args) != 3 {
+		return false
+	}
+	if context, ok := call.Args[0].(*ast.Ident); !ok || context.Name != "ctx" {
+		return false
+	}
+	accessor, ok := call.Args[1].(*ast.CallExpr)
+	if !ok || len(accessor.Args) != 0 {
+		return false
+	}
+	selector, ok := accessor.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != "binding" {
+		return false
+	}
+	variable, ok := selector.X.(*ast.Ident)
+	if !ok || variable.Name != handle {
+		return false
+	}
+	_, ok = call.Args[2].(*ast.FuncLit)
+	return ok
+}
+
+func delegatesThroughTheSeam(function *ast.FuncDecl, handle, _ string) bool {
+	if function.Body == nil || len(function.Body.List) != 1 {
+		return false
+	}
+	statement, ok := function.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(statement.Results) != 1 {
+		return false
+	}
+	return seamCall(statement.Results[0], handle)
 }
 
 func exportedTransactionWrappers(t testing.TB) []transactionWrapper {
@@ -350,7 +365,7 @@ func TestEveryTransactionWrapperRunsAsOneAdmittedOperation(t *testing.T) {
 		wrapper := wrapper
 		t.Run(wrapper.name, func(t *testing.T) {
 			if !wrapper.seamed {
-				t.Fatalf("%s does not run its operation through transactionOperation on its own transaction", wrapper.name)
+				t.Fatalf("%s must be exactly one return of transactionOperation(ctx, handle.binding(), func...) with all of its work inside the seam", wrapper.name)
 			}
 			run, ok := runs[wrapper.name]
 			if _, covered := external[wrapper.name]; covered {
