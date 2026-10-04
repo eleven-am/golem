@@ -75,7 +75,7 @@ const models: DatamodelModel[] = [
 const READABLE: Record<string, unknown> = {
   Thread: { title: { not: 'hidden' } },
   Watch: { id: { in: [20, 22] } },
-  Channel: { slug: { in: ['general'] } },
+  Channel: { OR: [{ slug: { in: ['general'] } }, { title: 'open' }] },
   Pin: { id: { in: [40, 42] } },
 };
 
@@ -313,6 +313,65 @@ export function describeWritePath(
       });
     }
   });
+
+  if (provider_ === 'postgresql') {
+    describe.each([true, false])('a connectOrCreate target supplied concurrently, with checkWriteResults %s', (checkWriteResults) => {
+      it('holds a concurrent change to the connected row back until the link commits', async () => {
+        const order: string[] = [];
+        let pending: Promise<unknown> = Promise.resolve();
+        let calls = 0;
+        const onCall = async () => {
+          calls += 1;
+          if (calls === 1) {
+            await database.concurrent.channel.create({ data: { slug: 'late', title: 'open' } });
+          }
+          if (calls === 3) {
+            pending = database.concurrent.channel
+              .update({ where: { slug: 'late' }, data: { title: 'closed' } })
+              .then(() => order.push('target hidden'));
+            await new Promise((resolve) => setTimeout(resolve, 300));
+          }
+        };
+        const wrap = (inner: Client): Client => new Proxy(inner, {
+          get: (target, property, receiver) => {
+            if (property === '$transaction') {
+              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+                target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+            }
+            if (property !== 'channel') return Reflect.get(target, property, receiver);
+            return new Proxy(target.channel, {
+              get: (delegate, name, delegateReceiver) => {
+                if (name !== 'findFirst') return Reflect.get(delegate, name, delegateReceiver);
+                return async (args: unknown) => {
+                  const found = await delegate.findFirst(args);
+                  await onCall();
+                  return found;
+                };
+              },
+            });
+          },
+        });
+        const engine = new GolemEngine(wrap(prisma), models, {
+          authorization: provider(),
+          checkWriteResults,
+          checkReadFields: false,
+          provider: provider_,
+        });
+
+        await engine.create({
+          model: 'Pin',
+          data: { id: 46, channel: { connectOrCreate: { where: { slug: 'late' }, create: { slug: 'late', title: 'mine' } } } },
+          context: { req: {} },
+        });
+        order.push('link committed');
+        await pending;
+
+        expect(calls).toBeGreaterThanOrEqual(3);
+        expect(order).toEqual(['link committed', 'target hidden']);
+        await expect(prisma.pin.findUnique({ where: { id: 46 } })).resolves.toEqual({ id: 46, channelSlug: 'late' });
+      });
+    });
+  }
 
   describe.each([true, false])('a row moved out of policy before its write, with checkWriteResults %s', (checkWriteResults) => {
     const ctx = { req: {} };

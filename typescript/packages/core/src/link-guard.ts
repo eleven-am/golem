@@ -80,7 +80,13 @@ export class LinkGuard {
   async after(client: Client): Promise<ReadonlySet<string>> {
     const linked = new Set<string>();
     for (const target of this.targets) {
-      const row = await this.port.readableRow(target.model, this.port.unwrap(target.model, target.where), client);
+      const where = this.port.unwrap(target.model, target.where);
+      const stored = await this.port.findFirst(target.model, where, client);
+      if (!stored) {
+        throw new GolemNotFoundError(`${target.model} not found`);
+      }
+      await this.port.lock(target.model, [stored], 'SHARE', client);
+      const row = await this.port.readableRow(target.model, where, client);
       if (!row) {
         throw new GolemNotFoundError(`${target.model} not found`);
       }
