@@ -4,6 +4,8 @@ import { withBufferedEvents } from '../src/event-buffer';
 import type { GolemEventBus, GolemEventPayload } from '../src/events';
 import { createEventPublisher, GolemBatchDelegate, GolemBatchRuntime } from '../src/publisher';
 import { field } from '../src/testing';
+import { DEFAULT_UPSERT_GUARD_STRIPES, upsertGuardStripe } from '../src/upsert-guard';
+import { upsertGuardModel } from './support/upsert-guard-model';
 import { PrismaClient } from './prisma-postgres/generated/client';
 import {
   POSTGRES_OPTIONAL,
@@ -194,6 +196,51 @@ describe('cascaded delete events against live PostgreSQL', () => {
     expect(outcome).toBeInstanceOf(Error);
     expect(published.filter((event) => event.model === 'Reply').map((event) => event.id)).toEqual([10, 11]);
     await expect(first.reply.count()).resolves.toBe(0);
+  });
+
+  it('takes the upsert guard in the schema the datamodel declares for it, not a same-named table on the search path', async () => {
+    const stripe = upsertGuardStripe('Thread', { id: 5 }, DEFAULT_UPSERT_GUARD_STRIPES);
+    await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""guard" CASCADE');
+    await first.$executeRawUnsafe('CREATE SCHEMA "golem""guard"');
+    await first.$executeRawUnsafe(
+      'CREATE TABLE "golem""guard"."_golem_upsert_guard" ("stripe" INTEGER PRIMARY KEY, "seq" BIGINT NOT NULL DEFAULT 0)',
+    );
+    await first.$executeRawUnsafe(`INSERT INTO "golem""guard"."_golem_upsert_guard" ("stripe") VALUES (${stripe})`);
+    const qualifiedPublisher = createEventPublisher({
+      datamodel: { ...datamodel, upsertGuard: { ...upsertGuardModel, schema: 'golem"guard' } },
+      eventBus: { publish: async () => undefined, iterate: (async function* () {})() as never },
+      models: new Set(),
+    });
+    const holding = latch();
+    const released = latch();
+    const holder = second.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe(`SELECT 1 FROM "golem""guard"."_golem_upsert_guard" WHERE "stripe" = ${stripe} FOR UPDATE`);
+      holding.release();
+      await released.promise;
+    });
+
+    try {
+      await holding.promise;
+      let upserted = false;
+      const upserting = withBufferedEvents(() =>
+        first.$transaction((tx) => qualifiedPublisher({
+          model: 'Thread',
+          operation: 'upsert',
+          args: { where: { id: 5 }, create: { id: 5, title: 'five' }, update: { title: 'five' } },
+          query: async () => { throw new Error('the native upsert escaped interception'); },
+          batch: runtimeOver(tx, 'Thread'),
+        })),
+      ).then(() => { upserted = true; });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(upserted).toBe(false);
+      released.release();
+      await holder;
+      await upserting;
+      expect(upserted).toBe(true);
+    } finally {
+      released.release();
+      await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""guard" CASCADE');
+    }
   });
 
   it('locks dependents in the schema their model declares, not a same-named table on the search path', async () => {

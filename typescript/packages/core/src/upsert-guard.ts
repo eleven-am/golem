@@ -1,4 +1,4 @@
-import type { DatamodelField, DatamodelModel, GolemProvider } from './datamodel';
+import type { GolemProvider } from './datamodel';
 import { createHash } from 'node:crypto';
 import { canonicalToken } from './canonical';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -6,25 +6,6 @@ import { GolemConflictError, GolemValidationError } from './errors';
 export const GOLEM_UPSERT_GUARD_MODEL = 'GolemUpsertGuard';
 export const GOLEM_UPSERT_GUARD_DELEGATE = 'golemUpsertGuard';
 export const DEFAULT_UPSERT_GUARD_STRIPES = 4_096;
-
-const guardColumn = (name: string, type: string): DatamodelField => ({
-  name,
-  kind: 'scalar',
-  type,
-  isList: false,
-  isRequired: true,
-  isUnique: false,
-  isId: name === 'stripe',
-  hasDefaultValue: name === 'seq',
-  isReadOnly: false,
-  isUpdatedAt: false,
-});
-
-export const GOLEM_UPSERT_GUARD_TABLE: DatamodelModel = Object.freeze({
-  name: GOLEM_UPSERT_GUARD_MODEL,
-  dbName: '_golem_upsert_guard',
-  fields: [guardColumn('stripe', 'Int'), guardColumn('seq', 'BigInt')],
-});
 
 export function validateUpsertGuardStripes(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -71,13 +52,16 @@ export async function acquireUpsertGuard(
   where: unknown,
   stripes: number,
   provider: GolemProvider | undefined,
-  lock: (row: { stripe: number }) => Promise<void>,
+  lock: (row: { stripe: number }) => Promise<boolean>,
 ): Promise<void> {
   const stripe = upsertGuardStripe(model, where, stripes);
   switch (provider) {
     case 'postgresql':
-      await guard.createMany({ data: [{ stripe, seq: 0n }], skipDuplicates: true });
-      await lock({ stripe });
+      if (!(await lock({ stripe }))) {
+        throw new GolemValidationError(
+          `Upsert guard stripe ${stripe} does not exist; prepare the guard with prepareUpsertGuard for ${stripes} stripes before serving writes`,
+        );
+      }
       return;
     case 'sqlite':
     case undefined:
@@ -112,6 +96,24 @@ async function bumpUpsertGuard(
       );
     }
     throw error;
+  }
+}
+
+export async function prepareUpsertGuard(
+  client: Record<string, unknown>,
+  provider: GolemProvider,
+  stripes: number,
+): Promise<void> {
+  const count = validateUpsertGuardStripes(stripes);
+  switch (provider) {
+    case 'postgresql':
+      await upsertGuardDelegate(client).createMany({
+        data: Array.from({ length: count }, (_value, stripe) => ({ stripe, seq: 0n })),
+        skipDuplicates: true,
+      });
+      return;
+    case 'sqlite':
+      return;
   }
 }
 

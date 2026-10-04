@@ -70,7 +70,6 @@ export interface GolemBatchDelegate {
   updateMany(args: unknown): Promise<{ count: number }>;
   updateManyAndReturn?(args: unknown): Promise<Record<string, unknown>[]>;
   update(args: unknown): Promise<unknown>;
-  upsert(args: unknown): Promise<unknown>;
   delete(args: unknown): Promise<unknown>;
   deleteMany(args: unknown): Promise<{ count: number }>;
 }
@@ -276,7 +275,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     }
   }
 
-  const cascades = new CascadePlan(options.datamodel.models);
+  const cascades = new CascadePlan(options.datamodel.models, options.datamodel.upsertGuard);
   for (const model of options.datamodel.models) {
     for (const dependency of cascades.dependentsOf(model.name)) {
       if (dependency.action === 'Cascade' || !options.models.has(dependency.dependent)) continue;
@@ -458,8 +457,8 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       const lockWrite = (data: unknown, roots: readonly Record<string, unknown>[]) =>
         LinkGuard.of(port, model, data, false).before(transaction.scope, roots);
       if (operation === 'create') {
-        await lockWrite(args?.data, []);
-        return writeRow('CREATED', model, args, (finalArgs) => delegate.create(finalArgs));
+        const data = await lockWrite(args?.data, []);
+        return writeRow('CREATED', model, { ...args, data }, (finalArgs) => delegate.create(finalArgs));
       }
       if (operation === 'createMany' || operation === 'createManyAndReturn') {
         const items: unknown[] = Array.isArray(args?.data) ? args.data : [args?.data];
@@ -485,8 +484,10 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
           : await decideBranch(port, transaction.scope, model, args?.where, () =>
               delegate.findUnique({ where: args?.where, select: identitySelect }));
         const creates = operation === 'upsert' && !root;
-        const data = operation === 'upsert' ? (root ? args?.update : args?.create) : args?.data;
-        await lockWrite(data, root ? [root] : []);
+        const data = await lockWrite(
+          operation === 'upsert' ? (root ? args?.update : args?.create) : args?.data,
+          root ? [root] : [],
+        );
         const tx = cascadeTransaction(transaction);
         const nestedData = creates ? undefined : data;
         const touched = !hasNestedDeletes(cascades, model, nestedData) ? { deleted: [], updated: [] } : await lockCascade(
@@ -505,11 +506,8 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
         );
         const topics = touchedEvents(operation, model, touched);
         const result = await writeRow(creates ? 'CREATED' : 'UPDATED', model, args, (finalArgs) => {
-          if (operation === 'update') {
-            return delegate.update(finalArgs);
-          }
-          const { where, create, update, ...projection } = finalArgs;
-          return creates ? delegate.create({ ...projection, data: create }) : delegate.update({ ...projection, where, data: update });
+          const projection = { select: finalArgs.select, include: finalArgs.include, omit: finalArgs.omit };
+          return creates ? delegate.create({ ...projection, data }) : delegate.update({ ...projection, where: finalArgs.where, data });
         });
         await publishTopics(topics);
         return result;

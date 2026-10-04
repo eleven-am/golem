@@ -1,4 +1,4 @@
-import { GOLEM_UPSERT_GUARD_TABLE } from './upsert-guard';
+import { GOLEM_UPSERT_GUARD_MODEL } from './upsert-guard';
 import type { GolemProvider } from './datamodel';
 import { canonicalToken } from './canonical';
 import { DatamodelField, DatamodelModel, rowIdentityFields } from './datamodel';
@@ -56,8 +56,8 @@ export class CascadePlan {
   private readonly modelsByName: ReadonlyMap<string, DatamodelModel>;
   readonly metadata: ModelMetadataIndex;
 
-  constructor(models: readonly DatamodelModel[]) {
-    this.modelsByName = new Map([...models, GOLEM_UPSERT_GUARD_TABLE].map((model) => [model.name, model]));
+  constructor(models: readonly DatamodelModel[], upsertGuard?: DatamodelModel) {
+    this.modelsByName = new Map([...models, ...(upsertGuard ? [upsertGuard] : [])].map((model) => [model.name, model]));
     this.metadata = buildModelMetadata(models);
     for (const model of models) {
       for (const field of model.fields) {
@@ -83,8 +83,18 @@ export class CascadePlan {
     return this.dependencies.get(model) ?? [];
   }
 
+  private definition(model: string): DatamodelModel {
+    const found = this.modelsByName.get(model);
+    if (!found) {
+      throw new GolemValidationError(model === GOLEM_UPSERT_GUARD_MODEL
+        ? 'The datamodel does not declare GolemUpsertGuard; regenerate the Golem client from a schema that contains it'
+        : `Model ${model} is not in the datamodel`);
+    }
+    return found;
+  }
+
   identity(model: string): readonly string[] {
-    const identity = rowIdentityFields(this.modelsByName.get(model)!);
+    const identity = rowIdentityFields(this.definition(model));
     if (!identity) {
       throw new GolemValidationError(
         `Cannot delete from ${model}: it has no primary key or required unique field to identify the rows a delete touches`,
@@ -94,7 +104,7 @@ export class CascadePlan {
   }
 
   scalarFields(model: string): readonly DatamodelField[] {
-    return this.modelsByName.get(model)!.fields.filter((field) => field.kind !== 'object');
+    return this.definition(model).fields.filter((field) => field.kind !== 'object');
   }
 
   scalarSelect(model: string): Record<string, true> {
@@ -102,12 +112,12 @@ export class CascadePlan {
   }
 
   column(model: string, name: string): string {
-    const field = this.modelsByName.get(model)!.fields.find((candidate) => candidate.name === name)!;
+    const field = this.definition(model).fields.find((candidate) => candidate.name === name)!;
     return field.dbName ?? field.name;
   }
 
   qualifiedTable(model: string): string {
-    const definition = this.modelsByName.get(model)!;
+    const definition = this.definition(model);
     const table = quote(definition.dbName ?? definition.name);
     return definition.schema ? `${quote(definition.schema)}.${table}` : table;
   }
@@ -141,7 +151,7 @@ export interface LockRequest {
   readonly mode: LockMode;
 }
 
-export type RowLocker = (request: LockRequest, wait: boolean) => Promise<void>;
+export type RowLocker = (request: LockRequest, wait: boolean) => Promise<boolean>;
 
 function lockUnavailable(error: unknown): boolean {
   const meta = (error as { meta?: { code?: unknown } } | null)?.meta;
@@ -158,7 +168,7 @@ export function rowLocker(
       return async ({ model, row, mode }, wait) => {
         const statement = lockStatement(plan, model, row, mode, wait);
         try {
-          await run(statement.sql, statement.values);
+          return ((await run(statement.sql, statement.values)) as readonly unknown[]).length > 0;
         } catch (error) {
           if (lockUnavailable(error)) {
             throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
@@ -168,7 +178,7 @@ export function rowLocker(
       };
     case 'sqlite':
     case undefined:
-      return async () => undefined;
+      return async () => true;
   }
 }
 

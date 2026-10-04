@@ -27,8 +27,12 @@ import {
   createEventPublisher,
   subscribableModels,
   validateUpsertGuardInfrastructure,
+  prepareUpsertGuard,
+  supportedProvider,
+  DEFAULT_UPSERT_GUARD_STRIPES,
 } from '@eleven-am/golem-core';
 import { PubSub, PubSubEngine } from 'graphql-subscriptions';
+import type { GolemProvider } from '@eleven-am/golem-core';
 import type { GraphQLSchema } from 'graphql';
 import { PubSubEventBus } from './event-bus';
 import { extractExtensionSpecs } from './extensions';
@@ -86,11 +90,17 @@ interface ConnectableClient {
 }
 
 class GolemClientLifecycle implements OnModuleInit, OnModuleDestroy {
-  constructor(private readonly client: ConnectableClient) {}
+  constructor(
+    private readonly client: ConnectableClient,
+    private readonly provider: GolemProvider,
+    private readonly upsertGuardStripes: number,
+  ) {}
 
   async onModuleInit(): Promise<void> {
     await this.client.$connect();
-    await validateUpsertGuardInfrastructure(this.client as unknown as Record<string, unknown>);
+    const client = this.client as unknown as Record<string, unknown>;
+    await validateUpsertGuardInfrastructure(client);
+    await prepareUpsertGuard(client, this.provider, this.upsertGuardStripes);
   }
 
   onModuleDestroy(): Promise<void> {
@@ -194,7 +204,11 @@ export class GolemModule implements NestModule {
         {
           provide: GOLEM_CLIENT_LIFECYCLE,
           useFactory: (client: ConnectableClient) =>
-            new GolemClientLifecycle(client),
+            new GolemClientLifecycle(
+              client,
+              supportedProvider(options.datamodel.provider),
+              options.defaults?.upsertGuardStripes ?? DEFAULT_UPSERT_GUARD_STRIPES,
+            ),
           inject: [options.client],
         },
         {

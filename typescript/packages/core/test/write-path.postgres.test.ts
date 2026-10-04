@@ -1,3 +1,4 @@
+import { DEFAULT_UPSERT_GUARD_STRIPES, prepareUpsertGuard } from '../src/upsert-guard';
 import { PrismaPg } from '@prisma/adapter-pg';
 import { PrismaClient } from './prisma-postgres/generated/client';
 import {
@@ -23,6 +24,7 @@ describe('write path on PostgreSQL', () => {
   describeWritePath('postgresql', async () => {
     const databaseUrl = await ensureDatabase(url, 'golem_core_write_path');
     const opened = await openPostgres(databaseUrl);
+    await prepareUpsertGuard(opened.prisma as unknown as Record<string, unknown>, 'postgresql', DEFAULT_UPSERT_GUARD_STRIPES);
     const concurrent = new PrismaClient({ adapter: new PrismaPg({ connectionString: databaseUrl }) });
     return {
       prisma: opened.prisma,

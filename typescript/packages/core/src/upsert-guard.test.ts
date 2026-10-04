@@ -1,6 +1,7 @@
 import { GolemConflictError, GolemValidationError } from './errors';
 import {
   acquireUpsertGuard,
+  prepareUpsertGuard,
   upsertGuardStripe,
   validateUpsertGuardInfrastructure,
   validateUpsertGuardStripes,
@@ -62,18 +63,33 @@ describe('serialized upsert guard keys', () => {
     )).rejects.toBeInstanceOf(GolemConflictError);
   });
 
-  it('on PostgreSQL ensures the stripe row exists and takes it through the row lock order', async () => {
-    const calls: string[] = [];
+  it('on PostgreSQL only locks the existing stripe row through the row lock order', async () => {
     const upsert = jest.fn();
-    const createMany = jest.fn(async () => { calls.push('ensure'); return { count: 1 }; });
-    const lock = jest.fn(async () => { calls.push('lock'); });
+    const createMany = jest.fn();
+    const lock = jest.fn(async () => true);
     await acquireUpsertGuard({ upsert, createMany }, 'User', { email: 'secret@example.com' }, 8, 'postgresql', lock);
 
-    const stripe = upsertGuardStripe('User', { email: 'secret@example.com' }, 8);
-    expect(createMany).toHaveBeenCalledWith({ data: [{ stripe, seq: 0n }], skipDuplicates: true });
-    expect(lock).toHaveBeenCalledWith({ stripe });
-    expect(calls).toEqual(['ensure', 'lock']);
+    expect(lock).toHaveBeenCalledWith({ stripe: upsertGuardStripe('User', { email: 'secret@example.com' }, 8) });
+    expect(createMany).not.toHaveBeenCalled();
     expect(upsert).not.toHaveBeenCalled();
+  });
+
+  it('on PostgreSQL refuses a stripe row that was never prepared', async () => {
+    const stripe = upsertGuardStripe('User', { id: 1 }, 8);
+    await expect(acquireUpsertGuard({ upsert: jest.fn(), createMany: jest.fn() }, 'User', { id: 1 }, 8, 'postgresql', async () => false))
+      .rejects.toThrow(`Upsert guard stripe ${stripe} does not exist; prepare the guard with prepareUpsertGuard for 8 stripes before serving writes`);
+  });
+
+  it('prepares every stripe once on PostgreSQL and nothing on SQLite, where the guard write creates its row', async () => {
+    const createMany = jest.fn();
+    await prepareUpsertGuard({ golemUpsertGuard: { upsert: jest.fn(), createMany } }, 'postgresql', 3);
+    expect(createMany).toHaveBeenCalledWith({
+      data: [{ stripe: 0, seq: 0n }, { stripe: 1, seq: 0n }, { stripe: 2, seq: 0n }],
+      skipDuplicates: true,
+    });
+    createMany.mockClear();
+    await prepareUpsertGuard({ golemUpsertGuard: { upsert: jest.fn(), createMany } }, 'sqlite', 3);
+    expect(createMany).not.toHaveBeenCalled();
   });
 });
 

@@ -16,28 +16,11 @@ export interface LinkRemoval {
   linkedTo(root: Filter): Filter;
 }
 
-export interface BranchDecision {
-  readonly model: string;
-  readonly where: unknown;
-  readonly parent?: (root: Filter) => Filter;
-}
-
-export interface BranchCondition {
-  readonly decision: BranchDecision;
-  readonly present: boolean;
-}
-
-export interface LinkPlan {
-  readonly targets: LinkTarget[];
-  readonly decisions: BranchDecision[];
-}
 
 export interface LinkTarget {
   readonly model: string;
   readonly where: Record<string, unknown>;
-  readonly createsWhenMissing: boolean;
   readonly lock: LinkLock;
-  readonly when: readonly BranchCondition[];
 }
 
 function linkLock(relation: DatamodelField): LinkLock {
@@ -61,7 +44,6 @@ function foreignKeyTargets(
   metadata: ModelMetadataIndex,
   model: string,
   data: Record<string, unknown>,
-  when: readonly BranchCondition[],
   into: LinkTarget[],
 ): void {
   for (const relation of metadata.get(model)!.relations) {
@@ -82,9 +64,7 @@ function foreignKeyTargets(
     into.push(Object.freeze({
       model: relation.type,
       where: Object.fromEntries(relation.relationToFields!.map((name, index) => [name, values[index]])),
-      createsWhenMissing: false,
       lock: 'SHARE',
-      when,
     }));
   }
 }
@@ -93,79 +73,36 @@ function collect(
   metadata: ModelMetadataIndex,
   model: string,
   data: unknown,
-  parent: ((root: Filter) => Filter) | undefined,
-  when: readonly BranchCondition[],
-  into: LinkPlan,
+  into: LinkTarget[],
 ): void {
   if (!data || typeof data !== 'object') {
     return;
   }
   const record = data as Record<string, unknown>;
-  foreignKeyTargets(metadata, model, record, when, into.targets);
+  foreignKeyTargets(metadata, model, record, into);
   for (const relation of planNestedWrites(metadata, metadata.get(model)!.model, record)) {
     const target = relation.target.name;
-    const linkedTo = parent === undefined
-      ? undefined
-      : (root: Filter): Filter => {
-          const opposite = oppositeRelation(metadata, model, relation.field);
-          return { [opposite.name]: opposite.isList ? { some: parent(root) } : { is: parent(root) } };
-        };
-    const scoped = (where: unknown) =>
-      linkedTo === undefined
-        ? undefined
-        : (root: Filter): Filter => (where && typeof where === 'object' ? { AND: [where as Filter, linkedTo(root)] } : linkedTo(root));
     for (const operation of relation.operations) {
       const linking = operation.kind === 'connect' || operation.kind === 'set' || operation.kind === 'disconnect';
       for (const payload of operation.payloads) {
-        const item = (payload ?? {}) as { where?: unknown; create?: unknown; update?: unknown; data?: unknown };
-        if (linking || operation.kind === 'connectOrCreate') {
-          const where = linking ? payload : item.where;
-          if (where && typeof where === 'object') {
-            into.targets.push(Object.freeze({
-              model: target,
-              where: where as Record<string, unknown>,
-              createsWhenMissing: operation.kind === 'connectOrCreate',
-              lock: linkLock(relation.field),
-              when,
-            }));
-          }
-        }
-        if (operation.kind === 'connectOrCreate') {
-          const decision: BranchDecision = Object.freeze({ model: target, where: item.where });
-          into.decisions.push(decision);
-          collect(metadata, target, item.create, undefined, [...when, { decision, present: false }], into);
+        if (linking && payload && typeof payload === 'object') {
+          into.push(Object.freeze({ model: target, where: payload as Record<string, unknown>, lock: linkLock(relation.field) }));
         }
         if (operation.kind === 'create') {
-          collect(metadata, target, payload, undefined, when, into);
+          collect(metadata, target, payload, into);
         }
         if (operation.kind === 'createMany') {
+          const item = (payload ?? {}) as { data?: unknown };
           for (const entry of Array.isArray(item.data) ? item.data : [item.data]) {
-            collect(metadata, target, entry, undefined, when, into);
+            collect(metadata, target, entry, into);
           }
         }
         if (operation.kind === 'update' || operation.kind === 'updateMany') {
-          const nested = nestedPayloads('update', payload);
-          collect(metadata, target, nested.data, scoped(nested.where), when, into);
-        }
-        if (operation.kind === 'upsert') {
-          const decision: BranchDecision = Object.freeze({ model: target, where: item.where, parent: linkedTo });
-          into.decisions.push(decision);
-          collect(metadata, target, item.create, undefined, [...when, { decision, present: false }], into);
-          collect(metadata, target, item.update, scoped(item.where), [...when, { decision, present: true }], into);
+          collect(metadata, target, nestedPayloads('update', payload).data, into);
         }
       }
     }
   }
-}
-
-export function collectLinkPlan(
-  metadata: ModelMetadataIndex,
-  model: string,
-  data: unknown,
-): LinkPlan {
-  const plan: LinkPlan = { targets: [], decisions: [] };
-  collect(metadata, model, data, (root) => root, [], plan);
-  return plan;
 }
 
 export function collectLinkTargets(
@@ -173,7 +110,113 @@ export function collectLinkTargets(
   model: string,
   data: unknown,
 ): readonly LinkTarget[] {
-  return collectLinkPlan(metadata, model, data).targets;
+  const targets: LinkTarget[] = [];
+  collect(metadata, model, data, targets);
+  return targets;
+}
+
+export function hasNestedBranches(metadata: ModelMetadataIndex, model: string, data: unknown): boolean {
+  if (!data || typeof data !== 'object') {
+    return false;
+  }
+  return planNestedWrites(metadata, metadata.get(model)!.model, data as Record<string, unknown>).some((relation) =>
+    relation.operations.some((operation) =>
+      operation.kind === 'upsert'
+      || operation.kind === 'connectOrCreate'
+      || (operation.kind === 'create' && operation.payloads.some((payload) => hasNestedBranches(metadata, relation.target.name, payload)))
+      || (operation.kind === 'update'
+        && operation.payloads.some((payload) => hasNestedBranches(metadata, relation.target.name, nestedPayloads('update', payload).data)))));
+}
+
+export type BranchDecider = (model: string, filter: unknown) => Promise<Record<string, unknown> | null>;
+
+function identityWhere(metadata: ModelMetadataIndex, model: string, row: Record<string, unknown>): Record<string, unknown> {
+  const meta = metadata.get(model)!;
+  const scalars = Object.fromEntries(meta.identityFields.map((field) => [field.name, row[field.name]]));
+  return meta.identityFields.length === 1 ? scalars : { [meta.identitySelector!]: scalars };
+}
+
+export async function resolveNestedBranches(
+  metadata: ModelMetadataIndex,
+  model: string,
+  data: unknown,
+  root: Filter | undefined,
+  unwrap: (model: string, where: unknown) => unknown,
+  decide: BranchDecider,
+  created: LinkTarget[] = [],
+): Promise<unknown> {
+  const resolve = async (current: string, payload: unknown, parent: ((root: Filter) => Filter) | undefined): Promise<unknown> => {
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+    const record: Record<string, unknown> = { ...(payload as Record<string, unknown>) };
+    for (const relation of planNestedWrites(metadata, metadata.get(current)!.model, record)) {
+      const target = relation.target.name;
+      const list = relation.field.isList;
+      const linkedTo = parent === undefined
+        ? undefined
+        : (base: Filter): Filter => {
+            const opposite = oppositeRelation(metadata, current, relation.field);
+            return { [opposite.name]: opposite.isList ? { some: parent(base) } : { is: parent(base) } };
+          };
+      const scoped = (where: unknown) => linkedTo === undefined
+        ? undefined
+        : (base: Filter): Filter => (where && typeof where === 'object'
+          ? { AND: [unwrap(target, where) as Filter, linkedTo(base)] }
+          : linkedTo(base));
+      const selected = (where: unknown) => {
+        const filter = scoped(where);
+        return filter ? filter(root!) : unwrap(target, where);
+      };
+      const envelope = record[relation.field.name] as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      const explicit: Record<'create' | 'update' | 'connect', unknown[]> = { create: [], update: [], connect: [] };
+      for (const [key, value] of Object.entries(envelope)) {
+        const items = Array.isArray(value) ? value : [value];
+        if (key === 'create') {
+          for (const item of items) explicit.create.push(await resolve(target, item, undefined));
+        } else if (key === 'update') {
+          for (const item of items) {
+            const nested = nestedPayloads('update', item);
+            const resolved = await resolve(target, nested.data, scoped(nested.where));
+            explicit.update.push(nested.data === item ? resolved : { ...(item as Record<string, unknown>), data: resolved });
+          }
+        } else if (key === 'connect') {
+          explicit.connect.push(...items);
+        } else if (key === 'upsert') {
+          for (const item of items as Array<{ where?: unknown; create?: unknown; update?: unknown }>) {
+            const row = await decide(target, selected(item.where));
+            if (row) {
+              const resolved = await resolve(target, item.update, scoped(item.where));
+              explicit.update.push(list ? { where: identityWhere(metadata, target, row), data: resolved } : resolved);
+            } else {
+              explicit.create.push(await resolve(target, item.create, undefined));
+            }
+          }
+        } else if (key === 'connectOrCreate') {
+          for (const item of items as Array<{ where?: unknown; create?: unknown }>) {
+            const row = await decide(target, unwrap(target, item.where));
+            if (row) {
+              explicit.connect.push(identityWhere(metadata, target, row));
+            } else {
+              explicit.create.push(await resolve(target, item.create, undefined));
+              created.push(Object.freeze({ model: target, where: item.where as Record<string, unknown>, lock: linkLock(relation.field) }));
+            }
+          }
+        } else {
+          out[key] = value;
+        }
+      }
+      for (const [key, entries] of Object.entries(explicit)) {
+        if (entries.length > 0) {
+          out[key] = list ? entries : entries.length === 1 ? entries[0] : entries;
+        }
+      }
+      record[relation.field.name] = out;
+    }
+    return record;
+  };
+  return resolve(model, data, root === undefined ? undefined : (base) => base);
 }
 
 export function linkedRowKey(

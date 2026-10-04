@@ -159,7 +159,7 @@ export function fakeBatch(
     queryRaw: async (sql, ...values) => {
       statements.push(sql);
       lockValues.push(values);
-      return [];
+      return [{ locked: 1 }];
     },
   };
   for (const name of new Set([model, ...store.keys()])) {

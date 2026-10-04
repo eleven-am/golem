@@ -114,6 +114,7 @@ export interface DatamodelDocument<TModels = Record<string, string>> {
   models: readonly DatamodelModel[];
   enums: readonly DatamodelEnum[];
   provider?: GolemProvider;
+  upsertGuard?: DatamodelModel;
   __models?: TModels;
 }
 

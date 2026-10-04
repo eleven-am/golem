@@ -4,7 +4,7 @@ import { GolemNotFoundError, GolemValidationError } from './errors';
 import { HookRegistry } from './hooks';
 import { buildModelMetadata } from './model-meta';
 import { GolemEngine } from './operations';
-import { collectLinkTargets } from './link-targets';
+import { collectLinkTargets, resolveNestedBranches } from './link-targets';
 import { field } from './testing';
 
 const post: DatamodelModel = {
@@ -78,9 +78,9 @@ function delegates() {
 describe('collectLinkTargets', () => {
   it('locks a reverse link target for update and a referenced target for share', () => {
     expect(collectLinkTargets(metadata, 'Post', { author: { connect: { id: 'u1' } } }))
-      .toEqual([{ model: 'User', where: { id: 'u1' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
+      .toEqual([{ model: 'User', where: { id: 'u1' }, lock: 'SHARE' }]);
     expect(collectLinkTargets(metadata, 'User', { posts: { connect: [{ id: 'p1' }] } }))
-      .toEqual([{ model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE', when: [] }]);
+      .toEqual([{ model: 'Post', where: { id: 'p1' }, lock: 'UPDATE' }]);
   });
 
   it('collects foreign-key scalars and linking nested operations at every depth', () => {
@@ -90,20 +90,18 @@ describe('collectLinkTargets', () => {
         connect: [{ id: 'p1' }],
         set: [{ id: 'p2' }],
         disconnect: [{ id: 'p3' }],
-        connectOrCreate: [{ where: { id: 'p4' }, create: { title: 'b' } }],
       },
     })).toEqual([
-      { model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE', when: [] },
-      { model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
-      { model: 'Post', where: { id: 'p2' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
-      { model: 'Post', where: { id: 'p3' }, createsWhenMissing: false, lock: 'UPDATE', when: [] },
-      { model: 'Post', where: { id: 'p4' }, createsWhenMissing: true, lock: 'UPDATE', when: [] },
+      { model: 'User', where: { id: 'u2' }, lock: 'SHARE' },
+      { model: 'Post', where: { id: 'p1' }, lock: 'UPDATE' },
+      { model: 'Post', where: { id: 'p2' }, lock: 'UPDATE' },
+      { model: 'Post', where: { id: 'p3' }, lock: 'UPDATE' },
     ]);
   });
 
   it('maps a compound foreign key onto the fields it references', () => {
     expect(collectLinkTargets(metadata, 'Membership', { orgId: 'o1', teamKey: { set: 'k1' } }))
-      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
+      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, lock: 'SHARE' }]);
   });
 
   it('refuses a compound foreign key written only in part', () => {
@@ -178,7 +176,7 @@ describe('foreign-key values a link check can probe', () => {
 
   it('reads a set operation as the value it sets', () => {
     expect(collectLinkTargets(metadata, 'Post', { authorId: { set: 'u2' } }))
-      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE', when: [] }]);
+      .toEqual([{ model: 'User', where: { id: 'u2' }, lock: 'SHARE' }]);
   });
 
   it.each(['increment', 'decrement', 'multiply', 'divide'])(
@@ -208,5 +206,54 @@ describe('foreign-key values a link check can probe', () => {
       .rejects.toThrow('foreign key Post.authorId must be set to a value, not changed arithmetically');
     expect(client.user.findFirst).not.toHaveBeenCalled();
     expect(client.post.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('resolving nested branches into explicit writes', () => {
+  const unwrap = (_model: string, where: unknown) => where;
+
+  it('turns a connect-or-create into a connect by identity or a create, by what was decided', async () => {
+    const data = { posts: { connectOrCreate: [
+      { where: { id: 'p1' }, create: { title: 'one' } },
+      { where: { id: 'p2' }, create: { title: 'two', author: { connect: { id: 'u9' } } } },
+    ] } };
+    const decide = jest.fn(async (_model: string, filter: unknown) => ((filter as { id: string }).id === 'p1' ? { id: 'p1' } : null));
+
+    await expect(resolveNestedBranches(metadata, 'User', data, undefined, unwrap, decide)).resolves.toEqual({
+      posts: {
+        create: [{ title: 'two', author: { connect: { id: 'u9' } } }],
+        connect: [{ id: 'p1' }],
+      },
+    });
+  });
+
+  it('turns an upsert into an update by identity or a create, scoped to the parent', async () => {
+    const data = { posts: { upsert: [
+      { where: { id: 'p1' }, create: { id: 'p1', title: 'new' }, update: { title: 'kept' } },
+      { where: { id: 'p2' }, create: { id: 'p2', title: 'fresh' }, update: { title: 'never' } },
+    ] } };
+    const decide = jest.fn(async (_model: string, filter: unknown) =>
+      (JSON.stringify(filter).includes('"p1"') ? { id: 'p1' } : null));
+
+    await expect(resolveNestedBranches(metadata, 'User', data, { id: 'u1' }, unwrap, decide)).resolves.toEqual({
+      posts: {
+        create: [{ id: 'p2', title: 'fresh' }],
+        update: [{ where: { id: 'p1' }, data: { title: 'kept' } }],
+      },
+    });
+    expect(decide).toHaveBeenCalledWith('Post', { AND: [{ id: 'p1' }, { author: { is: { id: 'u1' } } }] });
+  });
+
+  it('never decides a branch nested under one that does not run', async () => {
+    const data = { posts: { upsert: [{
+      where: { id: 'p1' },
+      create: { id: 'p1', title: 'new' },
+      update: { author: { connectOrCreate: { where: { id: 'u7' }, create: { id: 'u7' } } } },
+    }] } };
+    const decide = jest.fn(async () => null);
+
+    await resolveNestedBranches(metadata, 'User', data, { id: 'u1' }, unwrap, decide);
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(decide).toHaveBeenCalledWith('Post', expect.anything());
   });
 });

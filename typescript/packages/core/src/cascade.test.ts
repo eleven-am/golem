@@ -1,3 +1,4 @@
+import { upsertGuardModel } from '../test/support/upsert-guard-model';
 import { CascadePlan, lockStatement, rowLocker, transactionRowLocks } from './cascade';
 import { DatamodelDocument, DatamodelReferentialAction } from './datamodel';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -30,6 +31,7 @@ function many(name: string, type: string, relationName: string) {
 
 function datamodel(provider: string): DatamodelDocument {
   return {
+    upsertGuard: upsertGuardModel,
     provider,
     enums: [],
     models: [

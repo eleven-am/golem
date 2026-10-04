@@ -2,14 +2,16 @@ import { GolemConflictError, GolemNotFoundError } from './errors';
 import { LockRequest, RowLocker, RowLocks } from './cascade';
 import type { GolemProvider } from './datamodel';
 import {
-  BranchDecision,
   LinkRemoval,
   LinkTarget,
-  collectLinkPlan,
   collectLinkRemovals,
+  collectLinkTargets,
   collectNestedMutations,
+  hasNestedBranches,
   linkedRowKey,
+  resolveNestedBranches,
 } from './link-targets';
+import { canonicalToken } from './canonical';
 import { ModelMetadataIndex } from './model-meta';
 import { GOLEM_UPSERT_GUARD_MODEL, UpsertGuardDelegate, acquireUpsertGuard } from './upsert-guard';
 
@@ -39,8 +41,14 @@ export async function decideBranch(
 ): Promise<Row | null> {
   const locks = port.locks(client);
   const locker = port.locker(client);
-  await acquireUpsertGuard(port.upsertGuard(client), model, selector, port.upsertGuardStripes, port.provider, (row) =>
-    locks.acquire([{ model: GOLEM_UPSERT_GUARD_MODEL, row, mode: 'UPDATE' }], locker));
+  await acquireUpsertGuard(port.upsertGuard(client), model, selector, port.upsertGuardStripes, port.provider, async (row) => {
+    let present = true;
+    await locks.acquire([{ model: GOLEM_UPSERT_GUARD_MODEL, row, mode: 'UPDATE' }], async (request, wait) => {
+      present = await locker(request, wait);
+      return present;
+    });
+    return present;
+  });
   const decided = await find();
   if (decided) {
     await locks.acquire([{ model, row: decided, mode: 'UPDATE' }], locker);
@@ -54,31 +62,25 @@ export async function decideBranch(
 }
 
 export class LinkGuard {
-  private readonly preExisting = new Set<LinkTarget>();
-  private active: readonly LinkTarget[] = [];
+  private targets: readonly LinkTarget[] = [];
+  private created: LinkTarget[] = [];
 
   private constructor(
     private readonly port: LinkGuardPort,
     private readonly model: string,
     private readonly enforced: boolean,
-    private readonly targets: readonly LinkTarget[],
-    private readonly removals: readonly LinkRemoval[],
-    private readonly mutations: readonly LinkRemoval[],
-    private readonly decisions: readonly BranchDecision[],
+    private readonly data: unknown,
+    private readonly written: unknown,
+    private readonly branching: boolean,
+    private readonly linking: boolean,
   ) {}
 
-  static of(port: LinkGuardPort, model: string, data: unknown, enforced: boolean): LinkGuard {
+  static of(port: LinkGuardPort, model: string, data: unknown, enforced: boolean, written: unknown = data): LinkGuard {
     const unwrap = (target: string, where: unknown) => port.unwrap(target, where);
-    const plan = collectLinkPlan(port.metadata, model, data);
-    return new LinkGuard(
-      port,
-      model,
-      enforced,
-      plan.targets,
-      collectLinkRemovals(port.metadata, model, data, unwrap),
-      collectNestedMutations(port.metadata, model, data, unwrap),
-      plan.decisions,
-    );
+    const branching = hasNestedBranches(port.metadata, model, data) || hasNestedBranches(port.metadata, model, written);
+    const linking = collectLinkTargets(port.metadata, model, data).length
+      + collectLinkRemovals(port.metadata, model, data, unwrap).length > 0;
+    return new LinkGuard(port, model, enforced, data, written, branching, linking);
   }
 
   get needsRoot(): boolean {
@@ -86,50 +88,57 @@ export class LinkGuard {
   }
 
   get needsTransaction(): boolean {
-    return (this.enforced && this.targets.length + this.removals.length > 0)
-      || this.decisions.length > 0
-      || this.port.provider === 'postgresql';
+    return (this.enforced && this.linking) || this.branching || this.port.provider === 'postgresql';
   }
 
   private key(model: string, row: Row): string {
     return linkedRowKey(this.port.metadata, model, row);
   }
 
-  async before(client: Client, roots: readonly Row[]): Promise<void> {
+  async before(client: Client, roots: readonly Row[]): Promise<unknown> {
     if (!this.needsTransaction) {
-      return;
+      return this.written;
     }
     const root = roots[0];
+    const unwrap = (target: string, where: unknown) => this.port.unwrap(target, where);
+    const decisions = new Map<string, Promise<Row | null>>();
+    const decide = (model: string, filter: unknown): Promise<Row | null> => {
+      const key = `${model}\u0000${canonicalToken(filter)}`;
+      const known = decisions.get(key);
+      if (known) {
+        return known;
+      }
+      const decided = decideBranch(this.port, client, model, filter, () => this.port.findFirst(model, filter, client));
+      decisions.set(key, decided);
+      return decided;
+    };
+    this.created = [];
+    const data = await resolveNestedBranches(this.port.metadata, this.model, this.data, root, unwrap, decide, this.created);
+    const written = this.written === this.data
+      ? data
+      : await resolveNestedBranches(this.port.metadata, this.model, this.written, root, unwrap, decide);
+    this.targets = collectLinkTargets(this.port.metadata, this.model, data);
     const requests: LockRequest[] = roots.map((row) => ({ model: this.model, row, mode: 'UPDATE' as const }));
     const mutated: Array<{ model: string; where: unknown; rows: Row[] }> = [];
-    for (const mutation of this.mutations) {
+    for (const mutation of collectNestedMutations(this.port.metadata, this.model, data, unwrap)) {
       const where = mutation.linkedTo(root!);
       const rows = await this.port.findMany(mutation.model, where, client);
       mutated.push({ model: mutation.model, where, rows });
       requests.push(...rows.map((row) => ({ model: mutation.model, row, mode: mutation.lock })));
     }
     const removed: Array<{ removal: LinkRemoval; where: unknown; rows: Row[] }> = [];
-    for (const removal of this.removals) {
+    for (const removal of collectLinkRemovals(this.port.metadata, this.model, data, unwrap)) {
       const where = removal.linkedTo(root!);
       const rows = await this.port.findMany(removal.model, where, client);
       removed.push({ removal, where, rows });
       requests.push(...rows.map((row) => ({ model: removal.model, row, mode: removal.lock })));
     }
-    const decided = new Map<BranchDecision, Row | null>();
-    for (const decision of this.decisions) {
-      const where = this.port.unwrap(decision.model, decision.where);
-      const filter = decision.parent ? { AND: [where, decision.parent(root!)] } : where;
-      decided.set(decision, await decideBranch(this.port, client, decision.model, filter, () =>
-        this.port.findFirst(decision.model, filter, client)));
-    }
-    this.active = this.targets.filter((target) =>
-      target.when.every((condition) => (decided.get(condition.decision) !== null) === condition.present));
     const found: Array<{ target: LinkTarget; where: unknown }> = [];
-    for (const target of this.active) {
+    for (const target of this.targets) {
       const where = this.port.unwrap(target.model, target.where);
       const row = await this.port.findFirst(target.model, where, client);
       if (!row) {
-        if (this.enforced && !target.createsWhenMissing) {
+        if (this.enforced) {
           throw new GolemNotFoundError(`${target.model} not found`);
         }
         continue;
@@ -152,14 +161,11 @@ export class LinkGuard {
       }
     }
     for (const { target, where } of found) {
-      if (!this.enforced) {
-        continue;
-      }
-      if (!(await this.port.readableRow(target.model, where, client))) {
+      if (this.enforced && !(await this.port.readableRow(target.model, where, client))) {
         throw new GolemNotFoundError(`${target.model} not found`);
       }
-      this.preExisting.add(target);
     }
+    return written;
   }
 
   private async refuseChanged(model: string, where: unknown, locked: readonly Row[], client: Client): Promise<Row[]> {
@@ -178,7 +184,7 @@ export class LinkGuard {
     }
     const stored: Array<{ target: LinkTarget; where: unknown }> = [];
     const requests: LockRequest[] = [];
-    for (const target of this.active) {
+    for (const target of [...this.targets, ...this.created]) {
       const where = this.port.unwrap(target.model, target.where);
       const row = await this.port.findFirst(target.model, where, client);
       if (!row) {
@@ -194,7 +200,7 @@ export class LinkGuard {
       if (!row) {
         throw new GolemNotFoundError(`${target.model} not found`);
       }
-      if (this.preExisting.has(target)) {
+      if (this.targets.includes(target)) {
         linked.add(this.key(target.model, row));
       }
     }

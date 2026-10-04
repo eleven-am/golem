@@ -450,6 +450,7 @@ export function createGolemEngine<TModels>(options: BuildGolemSchemaOptions<TMod
     provider: supportedProvider(options.datamodel.provider),
     hiddenFields,
     upsertGuardStripes: options.defaults?.upsertGuardStripes,
+    upsertGuard: options.datamodel.upsertGuard,
   });
 }
 
@@ -480,6 +481,7 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
       checkReadFields: options.defaults?.checkReadFields,
       provider: options.datamodel.provider,
       upsertGuardStripes: options.defaults?.upsertGuardStripes,
+      upsertGuard: options.datamodel.upsertGuard,
     });
 
   const hiddenFor = (name: string): ReadonlySet<string> => settings.get(name)?.hidden ?? new Set();

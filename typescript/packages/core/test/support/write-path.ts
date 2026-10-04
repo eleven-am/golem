@@ -6,6 +6,7 @@ import { GolemEngine } from '../../src/operations';
 import { createEventPublisher, GolemBatchDelegate, GolemBatchRuntime } from '../../src/publisher';
 import { field } from '../../src/testing';
 import { golemClient } from './golem-client';
+import { upsertGuardModel } from './upsert-guard-model';
 
 type Client = Record<string, any>;
 
@@ -231,7 +232,7 @@ export function describeWritePath(
       iterate: (async function* () {})() as never,
     };
     const publisher = createEventPublisher({
-      datamodel: { models: [...models, people], enums: [], provider: provider_ },
+      datamodel: { models: [...models, people], enums: [], provider: provider_, upsertGuard: upsertGuardModel },
       eventBus: bus,
       models: eventful,
     });
@@ -279,7 +280,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
     const ctx = { req: {} };
 
@@ -337,15 +338,15 @@ export function describeWritePath(
       await expect(prisma.channel.count({ where: { title: 'mine' } })).resolves.toBe(0);
     });
 
-    it('validates the row connectOrCreate actually connected, after a concurrent insert of an unreadable match', async () => {
-      const race = racing(prisma, 'channel', () =>
-        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }), 3);
+    (provider_ === 'postgresql' ? it : it.skip)('creates explicitly once it decided the row was missing, so a concurrent insert of an unreadable match is a conflict, never a link', async () => {
+      const race = racing(prisma, 'pin', () =>
+        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }), 1, 'create');
 
       await expect(outcome(() => engine(race.client).create({
         model: 'Pin',
         data: { id: 45, channel: { connectOrCreate: { where: { slug: 'late' }, create: { slug: 'late', title: 'mine' } } } },
         context: ctx,
-      }))).resolves.toBe('GolemNotFoundError: Channel not found');
+      }))).resolves.toMatch(/^GolemConflictError: /);
 
       expect(race.injected()).toBe(true);
       await expect(prisma.pin.count({ where: { id: 45 } })).resolves.toBe(0);
@@ -362,7 +363,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
 
     const hide = () => database.concurrent.thread.update({ where: { id: 1 }, data: { title: 'hidden' } });
@@ -420,15 +421,13 @@ export function describeWritePath(
   if (provider_ === 'postgresql') {
     describe.each([true, false])('a connectOrCreate target supplied concurrently, with checkWriteResults %s', (checkWriteResults) => {
       it('holds a concurrent change to the connected row back until the link commits', async () => {
+        await prisma.channel.create({ data: { slug: 'late', title: 'open' } });
         const order: string[] = [];
         let pending: Promise<unknown> = Promise.resolve();
         let calls = 0;
         const onCall = async () => {
           calls += 1;
-          if (calls === 3) {
-            await database.concurrent.channel.create({ data: { slug: 'late', title: 'open' } });
-          }
-          if (calls === 5) {
+          if (calls === 2) {
             pending = database.concurrent.channel
               .update({ where: { slug: 'late' }, data: { title: 'closed' } })
               .then(() => order.push('target hidden'));
@@ -458,7 +457,7 @@ export function describeWritePath(
           authorization: provider(),
           checkWriteResults,
           checkReadFields: false,
-          provider: provider_,
+          provider: provider_, upsertGuard: upsertGuardModel,
         });
 
         await engine.create({
@@ -469,7 +468,7 @@ export function describeWritePath(
         order.push('link committed');
         await pending;
 
-        expect(calls).toBeGreaterThanOrEqual(5);
+        expect(calls).toBeGreaterThanOrEqual(2);
         expect(order).toEqual(['link committed', 'target hidden']);
         await expect(prisma.pin.findUnique({ where: { id: 46 } })).resolves.toEqual({ id: 46, channelSlug: 'late' });
       });
@@ -484,7 +483,7 @@ export function describeWritePath(
         authorization: provider(),
         checkWriteResults,
         checkReadFields: false,
-        provider: provider_,
+        provider: provider_, upsertGuard: upsertGuardModel,
       });
 
       async function race(first: (client: Client) => Promise<unknown>, second: (client: Client) => Promise<unknown>) {
@@ -512,7 +511,7 @@ export function describeWritePath(
           authorization: provider(),
           checkWriteResults,
           checkReadFields: false,
-          provider: provider_,
+          provider: provider_, upsertGuard: upsertGuardModel,
         });
         const secondLocked = barrier();
         let firstWaited = false;
@@ -549,7 +548,7 @@ export function describeWritePath(
           authorization: provider(),
           checkWriteResults,
           checkReadFields: false,
-          provider: provider_,
+          provider: provider_, upsertGuard: upsertGuardModel,
         });
         const secondLocked = barrier();
         let firstWaited = false;
@@ -639,7 +638,7 @@ export function describeWritePath(
           authorization: provider(),
           checkWriteResults,
           checkReadFields: false,
-          provider: provider_,
+          provider: provider_, upsertGuard: upsertGuardModel,
         });
 
         const outcomes = await deleteRacesLink(
@@ -663,7 +662,7 @@ export function describeWritePath(
           authorization: provider(),
           checkWriteResults,
           checkReadFields: false,
-          provider: provider_,
+          provider: provider_, upsertGuard: upsertGuardModel,
         });
         const hooked = (onStatement: (sql: string) => Promise<void>) => (tx: Client): Client => new Proxy(tx, {
           get: (target, property, receiver) => {
@@ -791,7 +790,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
 
     beforeEach(async () => {
@@ -874,7 +873,7 @@ export function describeWritePath(
 
       it('through the engine, one completes and the other is refused, never a deadlock', async () => {
         const engine = (client: Client) => new GolemEngine(client, models, {
-          authorization: provider(), checkWriteResults, checkReadFields: false, provider: provider_,
+          authorization: provider(), checkWriteResults, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
         });
         const outcomes = await crossed(
           (tx, id) => (tx as unknown as { update(request: unknown): Promise<unknown> }).update({
@@ -902,7 +901,7 @@ export function describeWritePath(
         const race = racing(prisma, 'person', () => database.concurrent.person.create({ data: { id: 7 } }), 2);
 
         await expect(new GolemEngine(race.client, [...models, people], {
-          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
         }).update({
           model: 'Person',
           where: { id: 5 },
@@ -952,7 +951,7 @@ export function describeWritePath(
       it.each([true, false])('is refused with a conflict through the engine, with a caller %s', async (scoped) => {
         const race = racing(prisma, 'thread', theirs, 1);
         const engine = new GolemEngine(race.client, models, {
-          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
         });
 
         await expect(engine.upsert({
@@ -996,6 +995,93 @@ export function describeWritePath(
       });
     });
 
+    describe('the first upsert of a selector racing a transaction that holds a row', () => {
+      it('completes or is refused with a conflict, never a deadlock', async () => {
+        const selector = 424242;
+        const holdsRow = barrier();
+        const { publisher } = cascadePublisher();
+        const client = () => golemClient(prisma, publisher);
+        const upsert = (tx: Client, title: string) =>
+          tx.thread.upsert({ where: { id: selector }, create: { id: selector, title }, update: { title } });
+        const first = client().$transaction(async (tx: Client) => {
+          await upsert(tx, 'first');
+          await holdsRow.wait();
+          await tx.thread.update({ where: { id: 1 }, data: { title: 'first' } });
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const second = client().$transaction(async (tx: Client) => {
+          await tx.thread.update({ where: { id: 1 }, data: { title: 'second' } });
+          holdsRow.arrive();
+          await upsert(tx, 'second');
+        });
+
+        const outcomes = await Promise.allSettled([first, second]);
+        const verdicts = outcomes.map((outcome) => {
+          if (outcome.status === 'fulfilled') return 'fulfilled';
+          const reason = (outcome as PromiseRejectedResult).reason;
+          return reason instanceof GolemConflictError ? 'conflict' : `other: ${String(reason).slice(0, 160)}`;
+        });
+        expect(verdicts.sort()).toEqual(['conflict', 'fulfilled']);
+      });
+    });
+
+    describe('a nested upsert judged missing whose child a concurrent create attaches', () => {
+      it.each([true, false])('is refused with a conflict and never writes the update branch link, with checkWriteResults %s', async (checkWriteResults) => {
+        const race = racing(prisma, 'watch', () =>
+          database.concurrent.watch.create({ data: { id: 23, threadId: 1 } }), 2);
+        const engine = new GolemEngine(race.client, models, {
+          authorization: provider(), checkWriteResults, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
+        });
+
+        await expect(outcome(() => engine.update({
+          model: 'Thread',
+          where: { id: 1 },
+          data: { watches: { upsert: [{ where: { id: 23 }, create: { id: 23 }, update: { thread: { connect: { id: 2 } } } }] } },
+          context: { req: {} },
+        }))).resolves.toMatch(/^GolemConflictError: /);
+        expect(race.injected()).toBe(true);
+        await expect(prisma.watch.findUnique({ where: { id: 23 } })).resolves.toEqual({ id: 23, threadId: 1 });
+      });
+    });
+
+    describe('a nested branch under an outer branch that does not run', () => {
+      it('takes no stripe and no lock, so a concurrent holder of its row does not hold the write back', async () => {
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 5 }, { id: 6, buddyId: 5 }, { id: 8 }] });
+        const holding = barrier();
+        let releaseHolder!: () => void;
+        const holder = database.concurrent.$transaction(async (tx: Client) => {
+          await tx.$queryRawUnsafe('SELECT 1 FROM "people" WHERE "id" = 8 FOR UPDATE');
+          holding.arrive();
+          await new Promise<void>((resolve) => { releaseHolder = resolve; });
+        });
+        await holding.wait();
+        const engine = new GolemEngine(prisma, [...models, people], {
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
+        });
+
+        const writing = engine.update({
+          model: 'Person',
+          where: { id: 5 },
+          data: { buddiedBy: { upsert: [{
+            where: { id: 6 },
+            create: { id: 6, buddiedBy: { connectOrCreate: { where: { id: 8 }, create: { id: 8 } } } },
+            update: {},
+          }] } },
+          context: { req: {} },
+        });
+        const verdict = await Promise.race([
+          writing.then(() => 'written'),
+          new Promise((resolve) => setTimeout(() => resolve('held back'), 1500)),
+        ]);
+        releaseHolder();
+        await holder;
+        await writing;
+        expect(verdict).toBe('written');
+        await expect(prisma.person.findUnique({ where: { id: 8 } })).resolves.toEqual({ id: 8, buddyId: null });
+      });
+    });
+
     describe('a nested mutation row that attaches while the write locks', () => {
       it('is refused with a conflict', async () => {
         let attached = false;
@@ -1029,7 +1115,7 @@ export function describeWritePath(
         });
 
         await expect(new GolemEngine(raced, models, {
-          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
         }).update({
           model: 'Thread', where: { id: 1 }, data: { replies: { updateMany: { where: {}, data: { body: 'x' } } } }, context: { req: {} },
         })).rejects.toThrow(new GolemConflictError('The Reply rows linked to this Thread changed concurrently'));
@@ -1048,7 +1134,7 @@ export function describeWritePath(
         iterate: (async function* () {})() as never,
       };
       const publisher = createEventPublisher({
-        datamodel: { models: [...models, people], enums: [], provider: provider_ },
+        datamodel: { models: [...models, people], enums: [], provider: provider_, upsertGuard: upsertGuardModel },
         eventBus: bus,
         models: new Set(eventful ? ['Thread', 'Reply'] : []),
       });
@@ -1164,7 +1250,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
 
     it('deletes nothing and reports not found', async () => {
@@ -1197,7 +1283,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
 
     it.each([
@@ -1234,7 +1320,7 @@ export function describeWritePath(
       authorization: provider(),
       checkWriteResults,
       checkReadFields: false,
-      provider: provider_,
+      provider: provider_, upsertGuard: upsertGuardModel,
     });
     const ctx = { req: {} };
 
@@ -1293,7 +1379,7 @@ export function describeWritePath(
         iterate: (async function* () {})() as never,
       };
       const publisher = createEventPublisher({
-        datamodel: { models, enums: [], provider: provider_ },
+        datamodel: { models, enums: [], provider: provider_, upsertGuard: upsertGuardModel },
         eventBus: bus,
         models: new Set(['Message']),
         ...(maxRows === undefined ? {} : { batch: { maxRows } }),

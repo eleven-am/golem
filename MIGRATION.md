@@ -12,7 +12,7 @@ This upgrade closes the context-aware upsert race, bounds subscription and batch
 
 ### 1. Add the internal upsert guard migration
 
-Every database used by a Golem application must contain this reserved model. Every upsert, including those on the unscoped client and nested `upsert`/`connectOrCreate`, takes it, and Nest startup validates it with or without authorization:
+Every database used by a Golem application must contain this reserved model, and the generator refuses a schema without it. Every upsert, including those on the unscoped client and nested `upsert`/`connectOrCreate`, takes it. Nest startup validates it with or without authorization and, on PostgreSQL, creates every stripe row once; if you run the engine outside Nest, call `prepareUpsertGuard(client, provider, stripes)` before serving writes. Regenerate so the datamodel carries the guard's table and `@@schema`:
 
 ```prisma
 model GolemUpsertGuard {

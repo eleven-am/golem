@@ -2,7 +2,7 @@ import type { DMMF } from '@prisma/generator-helper';
 import { emitDatamodelModule } from './emit';
 
 describe('the emitted datasource provider', () => {
-  const empty = { models: [], enums: [], types: [], indexes: [] } as unknown as DMMF.Datamodel;
+  const empty = datamodel([]);
 
   it('carries the provider so the scoped root knows which dialect to render', () => {
     expect(emitDatamodelModule(empty, 'postgresql')).toContain('"provider": "postgresql"');
@@ -52,7 +52,19 @@ describe('native scalar metadata', () => {
   });
 });
 
+function guardModel(schema?: string): DMMF.Model {
+  return {
+    ...model('GolemUpsertGuard', [{ ...scalar('stripe'), type: 'Int', isId: true }, { ...scalar('seq'), type: 'BigInt', hasDefaultValue: true }], null),
+    dbName: '_golem_upsert_guard',
+    ...(schema ? { schema } : {}),
+  } as DMMF.Model;
+}
+
 function datamodel(models: DMMF.Model[], indexes: DMMF.Index[] = []): DMMF.Datamodel {
+  return bare([...models, guardModel()], indexes);
+}
+
+function bare(models: DMMF.Model[], indexes: DMMF.Index[] = []): DMMF.Datamodel {
   return { models, enums: [], types: [], indexes } as unknown as DMMF.Datamodel;
 }
 
@@ -135,13 +147,31 @@ describe('emitDatamodelModule composite primary keys', () => {
 describe('reserved internal models', () => {
   it('omits GolemUpsertGuard from the public datamodel and registered model types', () => {
     const idField = { ...scalar('id'), isId: true } as DMMF.Field;
-    const output = emitDatamodelModule(datamodel([
-      model('User', [idField], null),
-      model('GolemUpsertGuard', [scalar('stripe'), scalar('seq')], null),
-    ]), 'sqlite');
+    const output = emitDatamodelModule(datamodel([model('User', [idField], null)]), 'sqlite');
 
     expect(parseEmitted(output).models.map(({ name }) => name)).toEqual(['User']);
     expect(output).not.toContain('GolemUpsertGuard:');
+  });
+
+  it('emits where the upsert guard lives, its schema included, so every lock on it is qualified', () => {
+    const idField = { ...scalar('id'), isId: true } as DMMF.Field;
+    const output = emitDatamodelModule(bare([model('User', [idField], null), guardModel('audit')]), 'postgresql');
+    const marker = 'export const datamodel = ';
+    const start = output.indexOf(marker) + marker.length;
+    const parsed = JSON.parse(output.slice(start, output.indexOf(' as const;', start)));
+
+    expect(parsed.upsertGuard).toMatchObject({
+      name: 'GolemUpsertGuard',
+      dbName: '_golem_upsert_guard',
+      schema: 'audit',
+      fields: [{ name: 'stripe', isId: true }, { name: 'seq' }],
+    });
+  });
+
+  it('refuses a schema without the upsert guard model', () => {
+    const idField = { ...scalar('id'), isId: true } as DMMF.Field;
+    expect(() => emitDatamodelModule(bare([model('User', [idField], null)]), 'sqlite'))
+      .toThrow('Golem requires the GolemUpsertGuard model in the Prisma schema');
   });
 });
 

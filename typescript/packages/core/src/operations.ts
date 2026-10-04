@@ -271,6 +271,7 @@ export interface GolemEngineOptions {
   provider?: GolemProvider;
   hiddenFields?: ReadonlyMap<string, ReadonlySet<string>>;
   upsertGuardStripes?: number;
+  upsertGuard?: DatamodelModel;
   relationAggregations?: ReadonlyMap<string, RelationAggregationPlan>;
 }
 
@@ -425,7 +426,7 @@ export class GolemEngine {
     this.hiddenFields = options.hiddenFields ?? new Map();
     this.modelsByName = new Map(models.map((m) => [m.name, m]));
     this.metadata = buildModelMetadata(models);
-    this.locking = new CascadePlan(models);
+    this.locking = new CascadePlan(models, options.upsertGuard);
     this.hooks = options.hooks;
     this.takeLimits = options.takeLimits ?? new Map();
     this.groupLimits = options.groupLimits ?? new Map();
@@ -687,8 +688,8 @@ export class GolemEngine {
     }
   }
 
-  private linkGuard(model: string, data: unknown, context: unknown): LinkGuard {
-    return LinkGuard.of(this.linkGuardPort(context), model, data, this.enforced(context) !== undefined);
+  private linkGuard(model: string, data: unknown, context: unknown, written: unknown): LinkGuard {
+    return LinkGuard.of(this.linkGuardPort(context), model, data, this.enforced(context) !== undefined, written);
   }
 
   private linkGuardPort(context: unknown): LinkGuardPort {
@@ -729,7 +730,7 @@ export class GolemEngine {
         if (!runner) {
           throw new Error('Locking the rows a write links to requires $queryRawUnsafe');
         }
-        await runner.call(client, sql, ...values);
+        return runner.call(client, sql, ...values);
       }),
       upsertGuard: (client) => upsertGuardDelegate(client),
       provider: this.provider,
@@ -1146,7 +1147,7 @@ export class GolemEngine {
       await provider.authorize('create', req.model, req.context);
       await this.authorizeNestedWrites(req.model, req.data, req.context);
     }
-    const guard = this.linkGuard(req.model, request.data, req.context);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
     const prepared = await this.prepareRead(req);
     let created: unknown;
     let createPlanFast = false;
@@ -1169,9 +1170,9 @@ export class GolemEngine {
       const pkSelect = this.pkSelect(req.model);
       created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
-        await guard.before(txClient, []);
+        const data = await guard.before(txClient, []);
         const wide = await txDelegate.create({
-          data: req.data,
+          data,
           select: { ...createPlan!.select, ...pkSelect },
         });
         const vctx = this.verifyContext(req.context, await guard.after(txClient));
@@ -1185,10 +1186,10 @@ export class GolemEngine {
       });
     } else {
       created = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
-        await guard.before(client, []);
+        const data = await guard.before(client, []);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).create({
-            data: req.data,
+            data,
             select: prepared.select,
             include: prepared.include,
             ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
@@ -1215,7 +1216,7 @@ export class GolemEngine {
       'update',
     );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const guard = this.linkGuard(req.model, request.data, req.context);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
     let updated: unknown;
@@ -1247,10 +1248,10 @@ export class GolemEngine {
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
-        await guard.before(txClient, [this.pkScalarWhere(req.model, before)]);
+        const data = await guard.before(txClient, [this.pkScalarWhere(req.model, before)]);
         const after = await txDelegate.update({
           where: constrainUnique(this.pkWhere(req.model, before), constraint),
-          data: req.data,
+          data,
           select: wide,
         });
         const vctx = this.verifyContext(req.context, await guard.after(txClient));
@@ -1269,11 +1270,11 @@ export class GolemEngine {
     } else {
       updated = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
         const where = await this.constrainedUniqueWhere('update', req);
-        await guard.before(client, guard.needsRoot ? [await this.rowIdentity(req.model, where, client)] : []);
+        const data = await guard.before(client, guard.needsRoot ? [await this.rowIdentity(req.model, where, client)] : []);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).update({
             where,
-            data: req.data,
+            data,
             select: prepared.select,
             include: prepared.include,
             ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
@@ -1294,7 +1295,7 @@ export class GolemEngine {
     this.refuseIdentityChanges(req.model, req.data, req.context);
     await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'update');
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const guard = this.linkGuard(req.model, request.data, req.context);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
     let result: BatchResult;
@@ -1320,10 +1321,10 @@ export class GolemEngine {
           select: scalars,
         })) as Record<string, unknown>[];
         const identityWhere = this.pkBatchWhere(req.model, beforeRows);
-        await guard.before(txClient, beforeRows.map((row) => this.pkScalarWhere(req.model, row)));
+        const data = await guard.before(txClient, beforeRows.map((row) => this.pkScalarWhere(req.model, row)));
         const mutationResult = await txDelegate.updateMany({
           where: mergeConstraint(identityWhere, constraint),
-          data: req.data,
+          data,
         });
         const returnedRows = batchEventRows(mutationResult);
         const canReuseReturnedRows =
@@ -1360,11 +1361,11 @@ export class GolemEngine {
               this.delegate(req.model, client).findMany({ where, select: this.pkSelect(req.model) }),
             )) as Record<string, unknown>[]
           : [];
-        await guard.before(client, roots.map((row) => this.pkScalarWhere(req.model, row)));
+        const data = await guard.before(client, roots.map((row) => this.pkScalarWhere(req.model, row)));
         const written = (await this.run(req.model, () =>
           this.delegate(req.model, client).updateMany({
             where: lockedRoots ? { AND: [where, this.pkBatchWhere(req.model, roots)] } : where,
-            data: req.data,
+            data,
           }),
         )) as BatchResult;
         await guard.after(client);
