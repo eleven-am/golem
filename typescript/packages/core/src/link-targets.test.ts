@@ -159,3 +159,49 @@ describe('linking to a row the caller cannot read', () => {
     expect(client.post.create).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('foreign-key values a link check can probe', () => {
+  it('treats an optional compound foreign key with any null member as no reference', () => {
+    expect(collectLinkTargets(metadata, 'Membership', { orgId: 'o1', teamKey: null })).toEqual([]);
+    expect(collectLinkTargets(metadata, 'Membership', { orgId: { set: null }, teamKey: 'k1' })).toEqual([]);
+  });
+
+  it('reads a set operation as the value it sets', () => {
+    expect(collectLinkTargets(metadata, 'Post', { authorId: { set: 'u2' } }))
+      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false }]);
+  });
+
+  it.each(['increment', 'decrement', 'multiply', 'divide'])(
+    'refuses %s on a foreign key with a stable error naming the field',
+    (operation) => {
+      expect(() => collectLinkTargets(metadata, 'Post', { authorId: { [operation]: 1 } }))
+        .toThrow(new GolemValidationError('foreign key Post.authorId must be set to a value, not changed arithmetically'));
+    },
+  );
+
+  it('refuses a set combined with another operation', () => {
+    expect(() => collectLinkTargets(metadata, 'Post', { authorId: { set: 'u2', increment: 1 } }))
+      .toThrow('foreign key Post.authorId must be set to a value, not changed arithmetically');
+  });
+
+  it('refuses arithmetic for a context-bound caller before any query and leaves an unscoped caller untouched', async () => {
+    const scoped = delegates();
+    const engine = new GolemEngine(scoped, models, {
+      authorization: provider(),
+      checkWriteResults: false,
+      checkReadFields: false,
+    });
+    await expect(engine.create({ model: 'Post', data: { id: 'p', title: 't', authorId: { increment: 1 } }, context: ctx }))
+      .rejects.toThrow('foreign key Post.authorId must be set to a value, not changed arithmetically');
+    expect(scoped.user.findFirst).not.toHaveBeenCalled();
+    expect(scoped.post.create).not.toHaveBeenCalled();
+
+    const unscoped = delegates();
+    await new GolemEngine(unscoped, models, {
+      authorization: provider(),
+      checkWriteResults: false,
+      checkReadFields: false,
+    }).create({ model: 'Post', data: { id: 'p', title: 't', authorId: { increment: 1 } } });
+    expect(unscoped.post.create).toHaveBeenCalledTimes(1);
+  });
+});

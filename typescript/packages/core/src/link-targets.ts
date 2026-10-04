@@ -1,3 +1,4 @@
+import { isPlainObject } from '@eleven-am/golem-policy';
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
 import { ModelMetadataIndex } from './model-meta';
@@ -16,11 +17,17 @@ export interface LinkTarget {
   readonly createsWhenMissing: boolean;
 }
 
-function scalarValue(value: unknown): unknown {
-  if (value && typeof value === 'object' && !(value instanceof Date) && 'set' in value) {
-    return (value as { set: unknown }).set;
+function foreignKeyValue(model: string, field: string, value: unknown): unknown {
+  if (!isPlainObject(value)) {
+    return value;
   }
-  return value;
+  const operations = Object.keys(value);
+  if (operations.length === 1 && operations[0] === 'set') {
+    return value.set;
+  }
+  throw new GolemValidationError(
+    `foreign key ${model}.${field} must be set to a value, not changed arithmetically`,
+  );
 }
 
 function foreignKeyTargets(
@@ -40,8 +47,8 @@ function foreignKeyTargets(
         `Every field of the foreign key ${relation.name} on ${model} must be written together`,
       );
     }
-    const values = from.map((name) => scalarValue(data[name]));
-    if (values.every((value) => value === null)) {
+    const values = from.map((name) => foreignKeyValue(model, name, data[name]));
+    if (values.some((value) => value === null)) {
       continue;
     }
     into.push(Object.freeze({
