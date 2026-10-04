@@ -38,7 +38,8 @@ model Job {
   @@index([status, runAt])
   @@index([status, leaseExpiresAt])
   @@index([scopeType, scopeId, status])
-  @@index([type, startedAt])
+  @@index([type, status, runAt])
+  @@index([status, updatedAt])
 }
 
 model JobGuard {
@@ -50,6 +51,12 @@ model JobGuard {
 ```
 
 `JobGuard` is the serialization point for claim guards; rows are created as needed. `startedAt` records when a job most recently entered RUNNING and is written on every claim, so both are required even if you never declare a guard.
+
+`[type, status, runAt]` serves the claim poll, which every handler runs every `pollIntervalMs`; `[status, updatedAt]` serves the retention sweep. Without them both scan every due job, or every row, on each pass.
+
+### Upgrading an existing schema
+
+Schemas copied from 0.4.2 or earlier lack two indexes. Add `@@index([type, status, runAt])` and `@@index([status, updatedAt])` to `Job`, generate the migration with `prisma migrate dev`, and apply it with `prisma migrate deploy`. The queue runs correctly without them, only slower. A plain `CREATE INDEX` blocks writes to `Job` while it builds, so on a large Postgres table either apply the migration in a quiet window or build the indexes with `CREATE INDEX CONCURRENTLY`, which must run outside a transaction. Copies of an older README also carried `@@index([type, startedAt])`; nothing queries it, and it can be dropped.
 
 ## 2. Declare your job types
 
@@ -192,7 +199,9 @@ GolemQueueModule.forRootAsync({
 
 Now the lease is short regardless of job length, and `timeoutMs` is purely a cap on total duration. A job may run for an hour while a crashed worker is still recovered in a minute.
 
-**If a renewal fails, the handler is aborted.** A worker that lost its lease — deposed, paused past expiry, partitioned — stops working immediately, because another worker may already own the job. Its `signal` fires exactly as it does for a timeout or a cancellation, so honouring the signal is what makes this safe. Without that abort, renewal would turn a bounded double-execution window into an unbounded one.
+**If the lease is lost, the handler is aborted.** The lease is lost when a renewal is refused — the row is no longer this worker's running job — or when the lease reaches its expiry without a renewal landing. A worker that lost its lease — deposed, paused past expiry, partitioned — stops working, because another worker may already own the job. Its `signal` fires exactly as it does for a timeout or a cancellation, so honouring the signal is what makes this safe. Without that abort, renewal would turn a bounded double-execution window into an unbounded one.
+
+A renewal that errors — a dropped connection, a busy database — is not a lost lease. The lease it failed to extend is still valid, so the handler keeps running and the next interval tries again. Only if the errors last until the lease expires is the handler aborted.
 
 Renewal engages only when `leaseDurationMs` is set **and** the store implements `renewLease`. Both bundled stores do. A custom store without it keeps the write-once behaviour, unchanged.
 
@@ -314,7 +323,8 @@ retention: { olderThanMs: 7 * 24 * 60 * 60 * 1000, sweepIntervalMs: 60_000 }
 
 - a worker dies mid-job and its lease expires, so another worker recovers it;
 - a handler ignores its `AbortSignal` past `abandonGraceMs` — the slot is freed and the job retried while the original work may still be running;
-- the process is killed after the handler finished but before the completion write landed.
+- the process is killed after the handler finished but before the completion write landed;
+- the application shuts down while a handler is still running when `shutdownGraceMs` ends — its `signal` is aborted and the job is retried, even if the handler then resolves, because a handler that cleans up and returns on abort cannot be told apart from one that finished. Only a handler that resolved before the grace ran out is recorded as succeeded.
 
 **Write your handlers to be idempotent.** `dedupeKey` only prevents duplicate *enqueues*; it does not make execution exactly-once.
 

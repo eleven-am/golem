@@ -514,7 +514,13 @@ export class InMemoryJobStore implements JobStore {
 
   private owned(id: string, leaseOwner: string): StoredJob | undefined {
     const job = this.jobs.get(id);
-    if (!job || job.status !== 'RUNNING' || job.leaseOwner !== leaseOwner) {
+    if (
+      !job ||
+      job.status !== 'RUNNING' ||
+      job.leaseOwner !== leaseOwner ||
+      job.leaseExpiresAt === null ||
+      job.leaseExpiresAt <= new Date()
+    ) {
       return undefined;
     }
     return job;

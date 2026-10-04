@@ -255,6 +255,13 @@ export interface JobStore {
     ids: readonly string[];
     leaseOwner: string;
   }): Promise<string[]>;
+  /**
+   * Terminal writes — `complete`, `fail`, `retry` — and `findOwned` MUST match
+   * only a row that is RUNNING, owned by `leaseOwner`, and whose
+   * `leaseExpiresAt` is still in the future, all in the statement that writes.
+   * Once the lease has expired another worker may have reclaimed the job, so a
+   * late outcome from the previous holder is refused whatever it believes.
+   */
   complete(input: { id: string; leaseOwner: string }): Promise<boolean>;
   findOwned(input: {
     id: string;

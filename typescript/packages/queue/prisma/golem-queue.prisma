@@ -26,6 +26,8 @@ model Job {
   @@index([status, runAt])
   @@index([status, leaseExpiresAt])
   @@index([scopeType, scopeId, status])
+  @@index([type, status, runAt])
+  @@index([status, updatedAt])
 }
 
 model JobGuard {

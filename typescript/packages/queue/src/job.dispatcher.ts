@@ -44,6 +44,11 @@ function describeScope(scope: JobScope | null): string {
   return scope ? `${scope.type}:${scope.id}` : 'none';
 }
 
+interface ClaimedJob {
+  readonly job: ClaimCandidate;
+  readonly leaseExpiresAt: Date;
+}
+
 @Injectable()
 export class JobDispatcher implements OnModuleDestroy {
   private readonly logger = new Logger(JobDispatcher.name);
@@ -313,7 +318,7 @@ export class JobDispatcher implements OnModuleDestroy {
       if (room !== undefined) capacity = Math.min(capacity, room);
       this.blockedTicks.delete(type);
       const claimed = await this.claim(handler, capacity);
-      for (const job of claimed) this.startExecution(handler, job);
+      for (const claim of claimed) this.startExecution(handler, claim);
     }
   }
 
@@ -321,7 +326,7 @@ export class JobDispatcher implements OnModuleDestroy {
     handler: JobHandler,
     limit: number,
     recoverOnly = false,
-  ): Promise<ClaimCandidate[]> {
+  ): Promise<ClaimedJob[]> {
     const now = new Date();
     const claimPool = this.claimPool(handler);
     const candidates = await this.store.findClaimCandidates({
@@ -329,7 +334,7 @@ export class JobDispatcher implements OnModuleDestroy {
       now,
       limit,
     });
-    const claimed: ClaimCandidate[] = [];
+    const claimed: ClaimedJob[] = [];
     for (const candidate of candidates) {
       const recoveringExpiredLease = candidate.status === 'RUNNING';
       const recoveredAttempts = candidate.attempts + 1;
@@ -386,7 +391,7 @@ export class JobDispatcher implements OnModuleDestroy {
             }
           : {}),
       });
-      if (won) claimed.push(candidate);
+      if (won) claimed.push({ job: candidate, leaseExpiresAt });
     }
     return claimed;
   }
@@ -455,51 +460,80 @@ export class JobDispatcher implements OnModuleDestroy {
 
   private startHeartbeat(
     handler: JobHandler,
-    job: ClaimCandidate,
+    { job, leaseExpiresAt }: ClaimedJob,
     controller: AbortController,
-  ): NodeJS.Timeout | undefined {
+  ): (() => void) | undefined {
     const interval = this.options.leaseRenewIntervalMs;
     const renew = this.store.renewLease?.bind(this.store);
     if (interval === undefined || renew === undefined) {
       return undefined;
     }
-    const timer = setInterval(() => {
+    let leaseUntil = leaseExpiresAt;
+    let stopped = false;
+    let expiry: NodeJS.Timeout | undefined;
+    let next: NodeJS.Timeout | undefined;
+    const stop = (): void => {
+      stopped = true;
+      clearTimeout(expiry);
+      clearTimeout(next);
+    };
+    const lose = (reason: string): void => {
+      if (stopped) return;
+      stop();
+      this.logger.warn(
+        `Job lease lost: type=${handler.type} jobId=${job.id} reason=${reason}`,
+      );
+      controller.abort(
+        new Error(`Lost the lease for job ${job.id}; another worker may own it`),
+      );
+    };
+    const armExpiry = (): void => {
+      clearTimeout(expiry);
+      expiry = setTimeout(
+        () => lose('expired-without-renewal'),
+        Math.max(0, leaseUntil.getTime() - Date.now()),
+      );
+      expiry.unref?.();
+    };
+    const scheduleRenewal = (): void => {
+      if (stopped) return;
+      next = setTimeout(renewOnce, interval);
+      next.unref?.();
+    };
+    const renewOnce = (): void => {
       const now = new Date();
+      const requested = new Date(now.getTime() + this.leaseMs(handler));
       void renew({
         id: job.id,
         leaseOwner: this.workerId,
-        leaseExpiresAt: new Date(now.getTime() + this.leaseMs(handler)),
+        leaseExpiresAt: requested,
         now,
       })
         .then((held) => {
-          if (held) {
+          if (!held) {
+            lose('renewal-refused');
             return;
           }
-          clearInterval(timer);
-          this.logger.warn(
-            `Job lease lost: type=${handler.type} jobId=${job.id} reason=another-worker-may-own-it`,
-          );
-          controller.abort(
-            new Error(`Lost the lease for job ${job.id}; another worker may own it`),
-          );
+          if (stopped) return;
+          leaseUntil = requested;
+          armExpiry();
         })
         .catch((error: unknown) => {
-          clearInterval(timer);
           this.logger.warn(
-            `Job lease renewal failed: type=${handler.type} jobId=${job.id} error=${errorMessage(error)}`,
+            `Job lease renewal failed, retrying next interval: type=${handler.type} jobId=${job.id} leaseExpiresAt=${leaseUntil.toISOString()} error=${errorMessage(error)}`,
           );
-          controller.abort(
-            new Error(`Could not renew the lease for job ${job.id}`),
-          );
-        });
-    }, interval);
-    timer.unref?.();
-    return timer;
+        })
+        .finally(scheduleRenewal);
+    };
+    armExpiry();
+    scheduleRenewal();
+    return stop;
   }
 
-  private startExecution(handler: JobHandler, job: ClaimCandidate): void {
+  private startExecution(handler: JobHandler, claim: ClaimedJob): void {
+    const { job } = claim;
     const controller = new AbortController();
-    const heartbeat = this.startHeartbeat(handler, job, controller);
+    const stopHeartbeat = this.startHeartbeat(handler, claim, controller);
     this.cancellations.register(job.id, toScope(job), controller);
     this.inFlight.set(handler.type, (this.inFlight.get(handler.type) ?? 0) + 1);
     const completion = this.run(handler, job, controller)
@@ -509,7 +543,7 @@ export class JobDispatcher implements OnModuleDestroy {
         );
       })
       .finally(() => {
-        if (heartbeat !== undefined) clearInterval(heartbeat);
+        stopHeartbeat?.();
         this.cancellations.unregister(job.id);
         this.executions.delete(job.id);
         this.inFlight.set(
