@@ -1,3 +1,4 @@
+import { guardedClient } from '../test/support/guarded-client';
 import { CompiledReadEvent } from './compiled-read';
 import {
   GolemConflictError,
@@ -16,7 +17,7 @@ const models = [
 ];
 
 function engineWith(user: Record<string, jest.Mock>) {
-  return new GolemEngine({ user }, models);
+  return new GolemEngine(guardedClient({ user }), models);
 }
 
 describe('GolemEngine', () => {
@@ -57,7 +58,7 @@ describe('GolemEngine', () => {
       create: { id: 'raced' },
       update: { id: 'raced' },
     })).rejects.toBeInstanceOf(GolemConflictError);
-    expect(findFirst).toHaveBeenCalledTimes(1);
+    expect(findFirst).toHaveBeenCalledTimes(2);
     expect(create).toHaveBeenCalledTimes(1);
   });
 
@@ -220,7 +221,7 @@ describe('compound unique selectors in filterable where', () => {
   it('unwraps an unnamed compound unique selector in the upsert probe', async () => {
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), unnamedModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -250,7 +251,7 @@ describe('compound unique selectors in filterable where', () => {
     ];
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, namedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), namedModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -269,7 +270,7 @@ describe('compound unique selectors in filterable where', () => {
   it('leaves a where without any compound selector untouched', async () => {
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, unnamedModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), unnamedModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -297,7 +298,7 @@ describe('compound unique selectors in filterable where', () => {
     ];
     const findFirst = jest.fn().mockResolvedValue(null);
     const create = jest.fn().mockResolvedValue({ id: 'b1' });
-    const engine = new GolemEngine({ branch: { findFirst, create } }, collisionModels);
+    const engine = new GolemEngine(guardedClient({ branch: { findFirst, create } }), collisionModels);
 
     await engine.upsert({
       model: 'Branch',
@@ -404,6 +405,7 @@ describe('the upsert branch probe', () => {
     };
     const guard = {
       upsert: jest.fn(async () => { calls.push('guard'); return { stripe: 1 }; }),
+      createMany: jest.fn(async () => { calls.push('guard'); return { count: 0 }; }),
     };
     const client = {
       user: delegate,
@@ -426,7 +428,7 @@ describe('the upsert branch probe', () => {
       context: { req: {} },
     });
 
-    expect(calls).toEqual(['guard', 'probe', 'create']);
+    expect(calls).toEqual(['guard', 'probe', 'probe', 'create']);
     expect(client.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -545,7 +547,7 @@ describe('upsert target identity', () => {
   type Delegates = Record<string, Record<string, jest.Mock>>;
 
   function unscoped(delegates: Delegates) {
-    return new GolemEngine(delegates, identityModels);
+    return new GolemEngine(guardedClient(delegates), identityModels);
   }
 
   function scoped(delegates: Delegates) {
@@ -704,7 +706,7 @@ describe('upsert target identity through a relation connect', () => {
 
   function engine(create: jest.Mock) {
     return new GolemEngine(
-      { postTag: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      guardedClient({ postTag: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
       linkModels,
     );
   }
@@ -769,7 +771,7 @@ describe('upsert target identity through a connect to a compound-key target', ()
 
   function engine(model: 'seat' | 'badge', create: jest.Mock) {
     return new GolemEngine(
-      { [model]: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      guardedClient({ [model]: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
       compoundModels,
     );
   }
@@ -823,7 +825,7 @@ describe('upsert target identity after a before-create hook', () => {
     const hooks = new HookRegistry();
     hooks.registerBefore('User', 'create', (request: any) => ({ ...request, data: rewrite(request.data) }));
     return new GolemEngine(
-      { user: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } },
+      guardedClient({ user: { findFirst: jest.fn().mockResolvedValue(null), create, update: jest.fn() } }),
       hookModels,
       { hooks },
     );

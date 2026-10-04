@@ -1,3 +1,4 @@
+import { guardedClient } from '../test/support/guarded-client';
 import { AuthorizationProvider, FieldClassification } from './authorization';
 import { DatamodelModel } from './datamodel';
 import { GolemForbiddenError } from './errors';
@@ -434,13 +435,12 @@ describe('flag off and upsert', () => {
   it('dispatches upsert to the matching branch', async () => {
     const delegates = {
       post: {
-        findFirst: jest.fn().mockResolvedValueOnce({ id: 'p1' }).mockResolvedValue(null),
+        findFirst: jest.fn().mockResolvedValueOnce({ id: 'p1' }).mockResolvedValueOnce({ id: 'p1' }).mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'p2' }),
         update: jest.fn().mockResolvedValue({ id: 'p1' }),
       },
     };
-    const client = txClient(delegates);
-    const engine = new GolemEngine(client, models, {});
+    const engine = new GolemEngine(guardedClient(delegates), models, {});
 
     await engine.upsert({ model: 'Post', where: { id: 'p1' }, create: { id: 'p1', title: 'new' }, update: { title: 'edited' } });
     expect(delegates.post.update).toHaveBeenCalled();

@@ -26,15 +26,18 @@ describe('serialized upsert guard keys', () => {
     }
   });
 
-  it('persists only a bounded stripe and sequence increment, never selector material', async () => {
+  it('persists only a bounded stripe and sequence increment on SQLite, never selector material', async () => {
     const upsert = jest.fn().mockResolvedValue({ stripe: 3 });
+    const lock = jest.fn();
     await acquireUpsertGuard(
-      { golemUpsertGuard: { upsert } },
+      { upsert, createMany: jest.fn() },
       'User',
       { email: 'secret@example.com' },
       8,
-      'postgresql',
+      'sqlite',
+      lock,
     );
+    expect(lock).not.toHaveBeenCalled();
 
     expect(upsert).toHaveBeenCalledWith({
       where: { stripe: expect.any(Number) },
@@ -50,12 +53,27 @@ describe('serialized upsert guard keys', () => {
   it('normalizes SQLite lock and snapshot failures to a stable conflict', async () => {
     const upsert = jest.fn().mockRejectedValue(new Error('database is locked: SQLITE_BUSY_SNAPSHOT'));
     await expect(acquireUpsertGuard(
-      { golemUpsertGuard: { upsert } },
+      { upsert, createMany: jest.fn() },
       'User',
       { email: 'x@example.com' },
       4096,
       'sqlite',
+      jest.fn(),
     )).rejects.toBeInstanceOf(GolemConflictError);
+  });
+
+  it('on PostgreSQL ensures the stripe row exists and takes it through the row lock order', async () => {
+    const calls: string[] = [];
+    const upsert = jest.fn();
+    const createMany = jest.fn(async () => { calls.push('ensure'); return { count: 1 }; });
+    const lock = jest.fn(async () => { calls.push('lock'); });
+    await acquireUpsertGuard({ upsert, createMany }, 'User', { email: 'secret@example.com' }, 8, 'postgresql', lock);
+
+    const stripe = upsertGuardStripe('User', { email: 'secret@example.com' }, 8);
+    expect(createMany).toHaveBeenCalledWith({ data: [{ stripe, seq: 0n }], skipDuplicates: true });
+    expect(lock).toHaveBeenCalledWith({ stripe });
+    expect(calls).toEqual(['ensure', 'lock']);
+    expect(upsert).not.toHaveBeenCalled();
   });
 });
 

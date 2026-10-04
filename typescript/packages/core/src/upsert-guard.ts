@@ -1,4 +1,4 @@
-import type { GolemProvider } from './datamodel';
+import type { DatamodelField, DatamodelModel, GolemProvider } from './datamodel';
 import { createHash } from 'node:crypto';
 import { canonicalToken } from './canonical';
 import { GolemConflictError, GolemValidationError } from './errors';
@@ -6,6 +6,25 @@ import { GolemConflictError, GolemValidationError } from './errors';
 export const GOLEM_UPSERT_GUARD_MODEL = 'GolemUpsertGuard';
 export const GOLEM_UPSERT_GUARD_DELEGATE = 'golemUpsertGuard';
 export const DEFAULT_UPSERT_GUARD_STRIPES = 4_096;
+
+const guardColumn = (name: string, type: string): DatamodelField => ({
+  name,
+  kind: 'scalar',
+  type,
+  isList: false,
+  isRequired: true,
+  isUnique: false,
+  isId: name === 'stripe',
+  hasDefaultValue: name === 'seq',
+  isReadOnly: false,
+  isUpdatedAt: false,
+});
+
+export const GOLEM_UPSERT_GUARD_TABLE: DatamodelModel = Object.freeze({
+  name: GOLEM_UPSERT_GUARD_MODEL,
+  dbName: '_golem_upsert_guard',
+  fields: [guardColumn('stripe', 'Int'), guardColumn('seq', 'BigInt')],
+});
 
 export function validateUpsertGuardStripes(value: number): number {
   if (!Number.isSafeInteger(value) || value < 1) {
@@ -32,6 +51,7 @@ export interface UpsertGuardDelegate {
     update: { seq: { increment: bigint } };
     select: { stripe: true };
   }): Promise<unknown>;
+  createMany(args: { data: { stripe: number; seq: bigint }[]; skipDuplicates: true }): Promise<unknown>;
   findFirst?(args: { select: { stripe: true } }): Promise<unknown>;
 }
 
@@ -46,15 +66,32 @@ export function upsertGuardDelegate(client: Record<string, unknown>): UpsertGuar
 }
 
 export async function acquireUpsertGuard(
-  client: Record<string, unknown>,
+  guard: UpsertGuardDelegate,
   model: string,
   where: unknown,
   stripes: number,
-  provider?: GolemProvider,
+  provider: GolemProvider | undefined,
+  lock: (row: { stripe: number }) => Promise<void>,
 ): Promise<void> {
   const stripe = upsertGuardStripe(model, where, stripes);
+  switch (provider) {
+    case 'postgresql':
+      await guard.createMany({ data: [{ stripe, seq: 0n }], skipDuplicates: true });
+      await lock({ stripe });
+      return;
+    case 'sqlite':
+    case undefined:
+      return bumpUpsertGuard(guard, stripe, provider);
+  }
+}
+
+async function bumpUpsertGuard(
+  guard: UpsertGuardDelegate,
+  stripe: number,
+  provider: GolemProvider | undefined,
+): Promise<void> {
   try {
-    await upsertGuardDelegate(client).upsert({
+    await guard.upsert({
       where: { stripe },
       create: { stripe, seq: 1n },
       update: { seq: { increment: 1n } },

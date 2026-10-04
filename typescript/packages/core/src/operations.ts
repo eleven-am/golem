@@ -13,7 +13,7 @@ import {
   GolemValidationError,
 } from './errors';
 import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
-import { LinkGuard, LinkGuardPort } from './link-guard';
+import { LinkGuard, LinkGuardPort, decideBranch } from './link-guard';
 import { refuseIdentityChanges } from './identity-writes';
 import { CascadePlan, rowLocker, transactionRowLocks } from './cascade';
 import { runPolicyChecks } from './concurrency';
@@ -47,7 +47,7 @@ import { lcFirst } from './naming';
 import { batchEventRows } from './publisher';
 import {
   DEFAULT_UPSERT_GUARD_STRIPES,
-  acquireUpsertGuard,
+  upsertGuardDelegate,
   validateUpsertGuardStripes,
 } from './upsert-guard';
 import { buildModelMetadata, flattenUniqueSelectors, ModelMetadataIndex } from './model-meta';
@@ -688,6 +688,10 @@ export class GolemEngine {
   }
 
   private linkGuard(model: string, data: unknown, context: unknown): LinkGuard {
+    return LinkGuard.of(this.linkGuardPort(context), model, data, this.enforced(context) !== undefined);
+  }
+
+  private linkGuardPort(context: unknown): LinkGuardPort {
     const readConstraint = async (target: string): Promise<{ denied: boolean; value?: unknown }> => {
       try {
         return { denied: false, value: await this.constraintFor('read', target, context) };
@@ -720,7 +724,6 @@ export class GolemEngine {
               this.delegate(target, client).findFirst({ where: mergeConstraint(where, constraint.value), select: this.pkSelect(target) }));
       },
       locks: (client) => transactionRowLocks(client, this.locking),
-      locksRows: this.provider === 'postgresql',
       locker: (client) => rowLocker(this.provider, this.locking, async (sql, values) => {
         const runner = this.rawRunner(client);
         if (!runner) {
@@ -728,8 +731,11 @@ export class GolemEngine {
         }
         await runner.call(client, sql, ...values);
       }),
+      upsertGuard: (client) => upsertGuardDelegate(client),
+      provider: this.provider,
+      upsertGuardStripes: this.upsertGuardStripes,
     };
-    return LinkGuard.of(port, model, data, this.enforced(context) !== undefined);
+    return port;
   }
 
   private async writeGuarded<T>(
@@ -1396,17 +1402,7 @@ export class GolemEngine {
   async upsert(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
     this.refuseIdentityChanges(request.model, request.update, request.context);
     refuseUpsertOffTarget(this.metadata, request.model, request.where, request.create);
-    if (!this.enforced(request.context)) {
-      return this.upsertBranch(request, scope);
-    }
     if (scope?.ambient) {
-      await acquireUpsertGuard(
-        scope.client,
-        request.model,
-        request.where,
-        this.upsertGuardStripes,
-        this.provider,
-      );
       return this.upsertBranch(request, scope);
     }
     const transaction = (this.client as {
@@ -1419,39 +1415,35 @@ export class GolemEngine {
     }
     return withBufferedEvents(() =>
       this.run(request.model, () =>
-        transaction.call(this.client, async (tx) => {
-          // This must remain the first statement on the engine-owned transaction.
-          await acquireUpsertGuard(
-            tx,
-            request.model,
-            request.where,
-            this.upsertGuardStripes,
-            this.provider,
-          );
-          return this.upsertBranch(request, { client: tx, ambient: true });
-        }),
+        transaction.call(this.client, (tx) => this.upsertBranch(request, { client: tx, ambient: true })),
       ),
     );
   }
 
-  private async upsertBranch(request: UpsertRequest, scope?: GolemOpScope): Promise<unknown> {
-    const delegate = this.delegate(request.model, scope?.client);
+  private async upsertBranch(request: UpsertRequest, scope: GolemOpScope): Promise<unknown> {
+    const delegate = this.delegate(request.model, scope.client);
     await this.classifyFilterFields(request.model, request.context, {
       where: this.filterableWhere(request.model, request.where),
     });
     const pkSelect = this.pkSelect(request.model);
     const reach = await this.updateReach(request.model, request.context);
-    const existing = reach.denied
-      ? null
-      : await this.run(request.model, () =>
-          delegate.findFirst({
-            where: mergeConstraint(
-              this.filterableWhere(request.model, request.where),
-              reach.constraint,
-            ),
-            select: pkSelect,
-          }),
-        );
+    const existing = await decideBranch(
+      this.linkGuardPort(request.context),
+      scope.client,
+      request.model,
+      request.where,
+      async () => reach.denied
+        ? null
+        : this.run(request.model, () =>
+            delegate.findFirst({
+              where: mergeConstraint(
+                this.filterableWhere(request.model, request.where),
+                reach.constraint,
+              ),
+              select: pkSelect,
+            }),
+          ),
+    );
     if (existing) {
       return this.update(
         {

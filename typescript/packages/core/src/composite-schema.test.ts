@@ -1,3 +1,4 @@
+import { guardedClient } from '../test/support/guarded-client';
 import { graphql, printSchema } from 'graphql';
 import { DatamodelDocument } from './datamodel';
 import { buildGolemSchema } from './schema';
@@ -59,12 +60,12 @@ function delegate() {
 }
 
 function client() {
-  return {
+  return guardedClient({
     postTag: delegate(),
     membership: delegate(),
     branch: delegate(),
     repository: delegate(),
-  };
+  });
 }
 
 describe('composite selectors on the generated GraphQL surface', () => {
@@ -200,7 +201,7 @@ describe('compound selectors in generated nested writes', () => {
   };
 
   function nestedClient() {
-    return { user: delegate(), membership: delegate() };
+    return guardedClient({ user: delegate(), membership: delegate() });
   }
 
   it('uses the compound unique input for connect-or-create, nested update, upsert, and delete', () => {

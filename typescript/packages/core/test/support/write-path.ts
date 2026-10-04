@@ -220,6 +220,10 @@ export function describeWritePath(
   }
 
   function cascadePublisher() {
+    return cascadePublisherWith(new Set());
+  }
+
+  function cascadePublisherWith(eventful: ReadonlySet<string>) {
     const published: GolemEventPayload[] = [];
     const bus: GolemEventBus = {
       publish: async (_topic, event) => { published.push(event); },
@@ -229,7 +233,7 @@ export function describeWritePath(
     const publisher = createEventPublisher({
       datamodel: { models: [...models, people], enums: [], provider: provider_ },
       eventBus: bus,
-      models: new Set(),
+      models: eventful,
     });
     return { publisher, published };
   }
@@ -318,9 +322,24 @@ export function describeWritePath(
       await expect(prisma.pin.count({ where: { channelSlug: 'general' } })).resolves.toBe(2);
     });
 
+    it('refuses a connectOrCreate whose where row appears after it decided to create', async () => {
+      const race = racing(prisma, 'channel', () =>
+        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }), 1);
+
+      await expect(outcome(() => engine(race.client).create({
+        model: 'Pin',
+        data: { id: 45, channel: { connectOrCreate: { where: { slug: 'late' }, create: { slug: 'late', title: 'mine' } } } },
+        context: ctx,
+      }))).resolves.toBe('GolemConflictError: The Channel row deciding this write changed concurrently');
+
+      expect(race.injected()).toBe(true);
+      await expect(prisma.pin.count({ where: { id: 45 } })).resolves.toBe(0);
+      await expect(prisma.channel.count({ where: { title: 'mine' } })).resolves.toBe(0);
+    });
+
     it('validates the row connectOrCreate actually connected, after a concurrent insert of an unreadable match', async () => {
       const race = racing(prisma, 'channel', () =>
-        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }));
+        database.concurrent.channel.create({ data: { slug: 'late', title: 'someone else' } }), 3);
 
       await expect(outcome(() => engine(race.client).create({
         model: 'Pin',
@@ -406,10 +425,10 @@ export function describeWritePath(
         let calls = 0;
         const onCall = async () => {
           calls += 1;
-          if (calls === 1) {
+          if (calls === 3) {
             await database.concurrent.channel.create({ data: { slug: 'late', title: 'open' } });
           }
-          if (calls === 3) {
+          if (calls === 5) {
             pending = database.concurrent.channel
               .update({ where: { slug: 'late' }, data: { title: 'closed' } })
               .then(() => order.push('target hidden'));
@@ -450,7 +469,7 @@ export function describeWritePath(
         order.push('link committed');
         await pending;
 
-        expect(calls).toBeGreaterThanOrEqual(3);
+        expect(calls).toBeGreaterThanOrEqual(5);
         expect(order).toEqual(['link committed', 'target hidden']);
         await expect(prisma.pin.findUnique({ where: { id: 46 } })).resolves.toEqual({ id: 46, channelSlug: 'late' });
       });
@@ -889,9 +908,91 @@ export function describeWritePath(
           where: { id: 5 },
           data: { buddy: { connectOrCreate: { where: { id: 7 }, create: { id: 7, buddy: { connect: { id: 6 } } } } } },
           context: { req: {} },
-        })).rejects.toThrow(new GolemConflictError('The Person row deciding this nested write changed concurrently'));
+        })).rejects.toThrow(new GolemConflictError('The Person row deciding this write changed concurrently'));
         expect(race.injected()).toBe(true);
         await expect(prisma.person.findUnique({ where: { id: 5 } })).resolves.toEqual({ id: 5, buddyId: null });
+      });
+    });
+
+    describe('a top-level upsert whose selector row appears after it decided', () => {
+      const afterFirstFind = (method: string, inject: () => Promise<unknown>) => {
+        let injected = false;
+        const wrap = (tx: Client): Client => new Proxy(tx, {
+          get: (target, property, receiver) => {
+            if (property !== 'thread') return Reflect.get(target, property, receiver);
+            return new Proxy(target.thread, {
+              get: (delegate, name, delegateReceiver) => {
+                if (name !== method) return Reflect.get(delegate, name, delegateReceiver);
+                return async (args: unknown) => {
+                  const found = await delegate[method](args);
+                  if (!injected) {
+                    injected = true;
+                    await inject();
+                  }
+                  return found;
+                };
+              },
+            });
+          },
+        });
+        return { wrap, injected: () => injected };
+      };
+      const theirs = () => database.concurrent.thread.create({ data: { id: 7, title: 'theirs' } });
+
+      it('is refused with a conflict on the unscoped client, never taking the other branch', async () => {
+        const race = afterFirstFind('findUnique', theirs);
+        const client = golemClient(prisma, cascadePublisher().publisher, race.wrap);
+
+        await expect(client.thread.upsert({ where: { id: 7 }, create: { id: 7, title: 'mine' }, update: { title: 'updated' } }))
+          .rejects.toThrow(new GolemConflictError('The Thread row deciding this write changed concurrently'));
+        expect(race.injected()).toBe(true);
+        await expect(prisma.thread.findUnique({ where: { id: 7 } })).resolves.toEqual({ id: 7, title: 'theirs' });
+      });
+
+      it.each([true, false])('is refused with a conflict through the engine, with a caller %s', async (scoped) => {
+        const race = racing(prisma, 'thread', theirs, 1);
+        const engine = new GolemEngine(race.client, models, {
+          authorization: provider(), checkWriteResults: false, checkReadFields: false, provider: provider_,
+        });
+
+        await expect(engine.upsert({
+          model: 'Thread', where: { id: 7 }, create: { id: 7, title: 'mine' }, update: { title: 'updated' },
+          ...(scoped ? { context: { req: {} } } : {}),
+        })).rejects.toThrow(new GolemConflictError('The Thread row deciding this write changed concurrently'));
+        expect(race.injected()).toBe(true);
+        await expect(prisma.thread.findUnique({ where: { id: 7 } })).resolves.toEqual({ id: 7, title: 'theirs' });
+      });
+
+      it('serializes two unscoped upserts of an absent row through the stripe guard', async () => {
+        const bothDecided = barrier();
+        let finds = 0;
+        const wrap = (tx: Client): Client => new Proxy(tx, {
+          get: (target, property, receiver) => {
+            if (property !== 'thread') return Reflect.get(target, property, receiver);
+            return new Proxy(target.thread, {
+              get: (delegate, name, delegateReceiver) => {
+                if (name !== 'findUnique') return Reflect.get(delegate, name, delegateReceiver);
+                return async (args: unknown) => {
+                  const found = await delegate.findUnique(args);
+                  finds += 1;
+                  if (finds === 2) bothDecided.arrive();
+                  await bothDecided.wait();
+                  return found;
+                };
+              },
+            });
+          },
+        });
+        const { publisher, published } = cascadePublisherWith(new Set(['Thread']));
+        const client = golemClient(prisma, publisher, wrap);
+        const upsert = (title: string) =>
+          client.thread.upsert({ where: { id: 7 }, create: { id: 7, title }, update: { title } });
+
+        const outcomes = await Promise.allSettled([upsert('first'), upsert('second')]);
+
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+        expect(published.map(({ type }) => type).sort()).toEqual(['CREATED', 'UPDATED']);
+        await expect(prisma.thread.count({ where: { id: 7 } })).resolves.toBe(1);
       });
     });
 
@@ -937,6 +1038,87 @@ export function describeWritePath(
       });
     });
   }
+
+  describe.each([true, false])('the result each intercepted operation returns, with Thread eventful %s', (eventful) => {
+    function shaped() {
+      const published: GolemEventPayload[] = [];
+      const bus: GolemEventBus = {
+        publish: async (_topic, event) => { published.push(event); },
+        publishMany: async (_topic, events) => { published.push(...events); },
+        iterate: (async function* () {})() as never,
+      };
+      const publisher = createEventPublisher({
+        datamodel: { models: [...models, people], enums: [], provider: provider_ },
+        eventBus: bus,
+        models: new Set(eventful ? ['Thread', 'Reply'] : []),
+      });
+      const events = () => published.map(({ type, model, id }) => `${type} ${model} ${JSON.stringify(id)}`).sort();
+      return { client: golemClient(prisma, publisher), events };
+    }
+    const expected = (...events: string[]) => (eventful ? events.sort() : []);
+
+    it('returns projected rows from createManyAndReturn', async () => {
+      const { client, events } = shaped();
+      await expect(client.thread.createManyAndReturn({
+        data: [{ id: 5, title: 'five' }, { id: 6, title: 'six' }],
+        select: { title: true },
+      })).resolves.toEqual([{ title: 'five' }, { title: 'six' }]);
+      await expect(client.reply.createManyAndReturn({
+        data: [{ id: 15, threadId: 1, body: 'c', postedAt: new Date('2026-01-03T00:00:00.000Z') }],
+        omit: { postedAt: true, amount: true },
+        include: { thread: { select: { title: true } } },
+      })).resolves.toEqual([{ id: 15, threadId: 1, body: 'c', thread: { title: 'readable' } }]);
+      expect(events()).toEqual(expected('CREATED Thread 5', 'CREATED Thread 6', 'CREATED Reply 15'));
+    });
+
+    it('returns the count from createMany', async () => {
+      const { client, events } = shaped();
+      await expect(client.thread.createMany({ data: [{ id: 5, title: 'five' }, { id: 6, title: 'six' }] }))
+        .resolves.toEqual({ count: 2 });
+      expect(events()).toEqual(expected('CREATED Thread 5', 'CREATED Thread 6'));
+    });
+
+    it('returns projected rows from updateManyAndReturn', async () => {
+      const { client, events } = shaped();
+      const selected = await client.thread.updateManyAndReturn({
+        where: { id: { in: [1, 2] } },
+        data: { title: 'renamed' },
+        select: { title: true },
+      });
+      expect(selected).toEqual([{ title: 'renamed' }, { title: 'renamed' }]);
+      expect(Array.isArray(selected)).toBe(true);
+      const omitted = await client.thread.updateManyAndReturn({
+        where: { id: { in: [1, 2] } },
+        data: { title: 'again' },
+        omit: { title: true },
+      });
+      expect([...omitted].sort((a: { id: number }, b: { id: number }) => a.id - b.id)).toEqual([{ id: 1 }, { id: 2 }]);
+      expect(events()).toEqual(expected('UPDATED Thread 1', 'UPDATED Thread 1', 'UPDATED Thread 2', 'UPDATED Thread 2'));
+    });
+
+    it('returns the count from updateMany and deleteMany', async () => {
+      const { client, events } = shaped();
+      await expect(client.thread.updateMany({ where: { id: { in: [1, 2] } }, data: { title: 'renamed' } }))
+        .resolves.toEqual({ count: 2 });
+      await expect(client.watch.deleteMany({ where: { id: 21 } })).resolves.toEqual({ count: 1 });
+      expect(events()).toEqual(expected('UPDATED Thread 1', 'UPDATED Thread 2'));
+    });
+
+    it('returns the projected row from create, update, upsert and delete', async () => {
+      const { client, events } = shaped();
+      await expect(client.thread.create({ data: { id: 5, title: 'five' }, select: { title: true } }))
+        .resolves.toEqual({ title: 'five' });
+      await expect(client.thread.update({ where: { id: 5 }, data: { title: 'fifth' }, omit: { id: true } }))
+        .resolves.toEqual({ title: 'fifth' });
+      await expect(client.thread.upsert({ where: { id: 5 }, create: { id: 5, title: 'no' }, update: { title: 'kept' }, select: { title: true } }))
+        .resolves.toEqual({ title: 'kept' });
+      await expect(client.thread.upsert({ where: { id: 6 }, create: { id: 6, title: 'six' }, update: {}, select: { title: true } }))
+        .resolves.toEqual({ title: 'six' });
+      await expect(client.thread.delete({ where: { id: 6 }, select: { title: true } }))
+        .resolves.toEqual({ title: 'six' });
+      expect(events()).toEqual(expected('CREATED Thread 5', 'UPDATED Thread 5', 'UPDATED Thread 5', 'CREATED Thread 6', 'DELETED Thread 6'));
+    });
+  });
 
   describe('a delete whose closure changes between enumeration and lock', () => {
     it('is refused, deleting nothing', async () => {

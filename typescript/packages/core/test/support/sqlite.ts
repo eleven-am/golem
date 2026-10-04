@@ -5,6 +5,10 @@ import { PrismaBetterSqlite3 } from '@prisma/adapter-better-sqlite3';
 import { PrismaClient } from '../prisma/generated/client';
 
 const DDL = [
+  `CREATE TABLE "_golem_upsert_guard" (
+     "stripe" INTEGER NOT NULL PRIMARY KEY,
+     "seq" BIGINT NOT NULL DEFAULT 0
+   )`,
   `CREATE TABLE "users" (
      "user_id" INTEGER PRIMARY KEY,
      "name" TEXT NOT NULL,

@@ -86,18 +86,11 @@ interface ConnectableClient {
 }
 
 class GolemClientLifecycle implements OnModuleInit, OnModuleDestroy {
-  constructor(
-    private readonly client: ConnectableClient,
-    private readonly validateUpsertGuard: boolean,
-  ) {}
+  constructor(private readonly client: ConnectableClient) {}
 
   async onModuleInit(): Promise<void> {
     await this.client.$connect();
-    if (this.validateUpsertGuard) {
-      await validateUpsertGuardInfrastructure(
-        this.client as unknown as Record<string, unknown>,
-      );
-    }
+    await validateUpsertGuardInfrastructure(this.client as unknown as Record<string, unknown>);
   }
 
   onModuleDestroy(): Promise<void> {
@@ -188,6 +181,7 @@ export class GolemModule implements NestModule {
               eventBus,
               models: subscribableModels(options),
               batch: options.batchEvents,
+              upsertGuardStripes: options.defaults?.upsertGuardStripes,
             });
             return new (options.client as unknown as GeneratedGolemClient)(
               clientOptions,
@@ -200,7 +194,7 @@ export class GolemModule implements NestModule {
         {
           provide: GOLEM_CLIENT_LIFECYCLE,
           useFactory: (client: ConnectableClient) =>
-            new GolemClientLifecycle(client, options.authorization !== undefined),
+            new GolemClientLifecycle(client),
           inject: [options.client],
         },
         {

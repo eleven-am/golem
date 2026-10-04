@@ -16,11 +16,20 @@ export interface LinkRemoval {
   linkedTo(root: Filter): Filter;
 }
 
-export interface BranchCondition {
+export interface BranchDecision {
   readonly model: string;
   readonly where: unknown;
   readonly parent?: (root: Filter) => Filter;
+}
+
+export interface BranchCondition {
+  readonly decision: BranchDecision;
   readonly present: boolean;
+}
+
+export interface LinkPlan {
+  readonly targets: LinkTarget[];
+  readonly decisions: BranchDecision[];
 }
 
 export interface LinkTarget {
@@ -86,13 +95,13 @@ function collect(
   data: unknown,
   parent: ((root: Filter) => Filter) | undefined,
   when: readonly BranchCondition[],
-  into: LinkTarget[],
+  into: LinkPlan,
 ): void {
   if (!data || typeof data !== 'object') {
     return;
   }
   const record = data as Record<string, unknown>;
-  foreignKeyTargets(metadata, model, record, when, into);
+  foreignKeyTargets(metadata, model, record, when, into.targets);
   for (const relation of planNestedWrites(metadata, metadata.get(model)!.model, record)) {
     const target = relation.target.name;
     const linkedTo = parent === undefined
@@ -112,7 +121,7 @@ function collect(
         if (linking || operation.kind === 'connectOrCreate') {
           const where = linking ? payload : item.where;
           if (where && typeof where === 'object') {
-            into.push(Object.freeze({
+            into.targets.push(Object.freeze({
               model: target,
               where: where as Record<string, unknown>,
               createsWhenMissing: operation.kind === 'connectOrCreate',
@@ -122,7 +131,9 @@ function collect(
           }
         }
         if (operation.kind === 'connectOrCreate') {
-          collect(metadata, target, item.create, undefined, [...when, { model: target, where: item.where, present: false }], into);
+          const decision: BranchDecision = Object.freeze({ model: target, where: item.where });
+          into.decisions.push(decision);
+          collect(metadata, target, item.create, undefined, [...when, { decision, present: false }], into);
         }
         if (operation.kind === 'create') {
           collect(metadata, target, payload, undefined, when, into);
@@ -137,13 +148,24 @@ function collect(
           collect(metadata, target, nested.data, scoped(nested.where), when, into);
         }
         if (operation.kind === 'upsert') {
-          const branch = { model: target, where: item.where, parent: linkedTo };
-          collect(metadata, target, item.create, undefined, [...when, { ...branch, present: false }], into);
-          collect(metadata, target, item.update, scoped(item.where), [...when, { ...branch, present: true }], into);
+          const decision: BranchDecision = Object.freeze({ model: target, where: item.where, parent: linkedTo });
+          into.decisions.push(decision);
+          collect(metadata, target, item.create, undefined, [...when, { decision, present: false }], into);
+          collect(metadata, target, item.update, scoped(item.where), [...when, { decision, present: true }], into);
         }
       }
     }
   }
+}
+
+export function collectLinkPlan(
+  metadata: ModelMetadataIndex,
+  model: string,
+  data: unknown,
+): LinkPlan {
+  const plan: LinkPlan = { targets: [], decisions: [] };
+  collect(metadata, model, data, (root) => root, [], plan);
+  return plan;
 }
 
 export function collectLinkTargets(
@@ -151,9 +173,7 @@ export function collectLinkTargets(
   model: string,
   data: unknown,
 ): readonly LinkTarget[] {
-  const targets: LinkTarget[] = [];
-  collect(metadata, model, data, (root) => root, [], targets);
-  return targets;
+  return collectLinkPlan(metadata, model, data).targets;
 }
 
 export function linkedRowKey(

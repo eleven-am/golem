@@ -1,15 +1,17 @@
 import { GolemConflictError, GolemNotFoundError } from './errors';
 import { LockRequest, RowLocker, RowLocks } from './cascade';
+import type { GolemProvider } from './datamodel';
 import {
-  BranchCondition,
+  BranchDecision,
   LinkRemoval,
   LinkTarget,
+  collectLinkPlan,
   collectLinkRemovals,
-  collectLinkTargets,
   collectNestedMutations,
   linkedRowKey,
 } from './link-targets';
 import { ModelMetadataIndex } from './model-meta';
+import { GOLEM_UPSERT_GUARD_MODEL, UpsertGuardDelegate, acquireUpsertGuard } from './upsert-guard';
 
 type Row = Record<string, unknown>;
 type Client = Record<string, any>;
@@ -22,8 +24,33 @@ export interface LinkGuardPort {
   readable(model: string, where: unknown, client: Client): Promise<Row[]>;
   readableRow(model: string, where: unknown, client: Client): Promise<Row | null>;
   locks(client: Client): RowLocks;
-  readonly locksRows: boolean;
   locker(client: Client): RowLocker;
+  upsertGuard(client: Client): UpsertGuardDelegate;
+  readonly provider: GolemProvider | undefined;
+  readonly upsertGuardStripes: number;
+}
+
+export async function decideBranch(
+  port: LinkGuardPort,
+  client: Client,
+  model: string,
+  selector: unknown,
+  find: () => Promise<Row | null>,
+): Promise<Row | null> {
+  const locks = port.locks(client);
+  const locker = port.locker(client);
+  await acquireUpsertGuard(port.upsertGuard(client), model, selector, port.upsertGuardStripes, port.provider, (row) =>
+    locks.acquire([{ model: GOLEM_UPSERT_GUARD_MODEL, row, mode: 'UPDATE' }], locker));
+  const decided = await find();
+  if (decided) {
+    await locks.acquire([{ model, row: decided, mode: 'UPDATE' }], locker);
+  }
+  const rechecked = await find();
+  const key = (row: Row | null) => (row ? linkedRowKey(port.metadata, model, row) : null);
+  if (key(decided) !== key(rechecked)) {
+    throw new GolemConflictError(`The ${model} row deciding this write changed concurrently`);
+  }
+  return decided;
 }
 
 export class LinkGuard {
@@ -37,17 +64,20 @@ export class LinkGuard {
     private readonly targets: readonly LinkTarget[],
     private readonly removals: readonly LinkRemoval[],
     private readonly mutations: readonly LinkRemoval[],
+    private readonly decisions: readonly BranchDecision[],
   ) {}
 
   static of(port: LinkGuardPort, model: string, data: unknown, enforced: boolean): LinkGuard {
     const unwrap = (target: string, where: unknown) => port.unwrap(target, where);
+    const plan = collectLinkPlan(port.metadata, model, data);
     return new LinkGuard(
       port,
       model,
       enforced,
-      collectLinkTargets(port.metadata, model, data),
+      plan.targets,
       collectLinkRemovals(port.metadata, model, data, unwrap),
       collectNestedMutations(port.metadata, model, data, unwrap),
+      plan.decisions,
     );
   }
 
@@ -56,7 +86,9 @@ export class LinkGuard {
   }
 
   get needsTransaction(): boolean {
-    return (this.enforced && this.targets.length + this.removals.length > 0) || this.port.locksRows;
+    return (this.enforced && this.targets.length + this.removals.length > 0)
+      || this.decisions.length > 0
+      || this.port.provider === 'postgresql';
   }
 
   private key(model: string, row: Row): string {
@@ -83,26 +115,15 @@ export class LinkGuard {
       removed.push({ removal, where, rows });
       requests.push(...rows.map((row) => ({ model: removal.model, row, mode: removal.lock })));
     }
-    const conditions = [...new Set(this.targets.flatMap((target) => target.when))];
-    const branchFilter = (condition: BranchCondition): unknown => {
-      const where = this.port.unwrap(condition.model, condition.where);
-      return condition.parent ? { AND: [where, condition.parent(root!)] } : where;
-    };
-    const presence = async (): Promise<Map<BranchCondition, Row | null>> => {
-      const rows = new Map<BranchCondition, Row | null>();
-      for (const condition of conditions) {
-        rows.set(condition, await this.port.findFirst(condition.model, branchFilter(condition), client));
-      }
-      return rows;
-    };
-    const decided = await presence();
-    for (const [condition, row] of decided) {
-      if (row) {
-        requests.push({ model: condition.model, row, mode: 'SHARE' });
-      }
+    const decided = new Map<BranchDecision, Row | null>();
+    for (const decision of this.decisions) {
+      const where = this.port.unwrap(decision.model, decision.where);
+      const filter = decision.parent ? { AND: [where, decision.parent(root!)] } : where;
+      decided.set(decision, await decideBranch(this.port, client, decision.model, filter, () =>
+        this.port.findFirst(decision.model, filter, client)));
     }
     this.active = this.targets.filter((target) =>
-      target.when.every((condition) => (decided.get(condition) !== null) === condition.present));
+      target.when.every((condition) => (decided.get(condition.decision) !== null) === condition.present));
     const found: Array<{ target: LinkTarget; where: unknown }> = [];
     for (const target of this.active) {
       const where = this.port.unwrap(target.model, target.where);
@@ -117,12 +138,6 @@ export class LinkGuard {
       requests.push({ model: target.model, row, mode: target.lock });
     }
     await this.port.locks(client).acquire(requests, this.port.locker(client));
-    const rechecked = await presence();
-    for (const condition of conditions) {
-      if ((decided.get(condition) === null) !== (rechecked.get(condition) === null)) {
-        throw new GolemConflictError(`The ${condition.model} row deciding this nested write changed concurrently`);
-      }
-    }
     for (const { model, where, rows } of mutated) {
       await this.refuseChanged(model, where, rows, client);
     }

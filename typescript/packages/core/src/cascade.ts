@@ -1,3 +1,4 @@
+import { GOLEM_UPSERT_GUARD_TABLE } from './upsert-guard';
 import type { GolemProvider } from './datamodel';
 import { canonicalToken } from './canonical';
 import { DatamodelField, DatamodelModel, rowIdentityFields } from './datamodel';
@@ -56,7 +57,7 @@ export class CascadePlan {
   readonly metadata: ModelMetadataIndex;
 
   constructor(models: readonly DatamodelModel[]) {
-    this.modelsByName = new Map(models.map((model) => [model.name, model]));
+    this.modelsByName = new Map([...models, GOLEM_UPSERT_GUARD_TABLE].map((model) => [model.name, model]));
     this.metadata = buildModelMetadata(models);
     for (const model of models) {
       for (const field of model.fields) {

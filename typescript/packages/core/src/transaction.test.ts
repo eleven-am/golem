@@ -150,7 +150,10 @@ describe('engine interactive transaction', () => {
         create: jest.fn().mockResolvedValue({ id: 'p2', title: 'new' }),
       },
     };
-    const txClient = guardTxClient(txDelegates);
+    const txClient = guardTxClient({
+      ...txDelegates,
+      golemUpsertGuard: { upsert: jest.fn().mockResolvedValue({ stripe: 1 }), createMany: jest.fn() },
+    });
     const client = {
       post: { findFirst: jest.fn(), create: jest.fn() },
       $transaction: jest.fn(async (run: (tx: unknown) => Promise<unknown>) => run(txClient)),
@@ -164,7 +167,7 @@ describe('engine interactive transaction', () => {
       update: { title: 'updated' },
     }));
 
-    expect(txDelegates.post.findFirst).toHaveBeenCalledTimes(1);
+    expect(txDelegates.post.findFirst).toHaveBeenCalledTimes(2);
     expect(txDelegates.post.create).toHaveBeenCalledTimes(1);
     expect(client.post.findFirst).not.toHaveBeenCalled();
     expect(client.post.create).not.toHaveBeenCalled();
