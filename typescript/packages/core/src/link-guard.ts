@@ -5,6 +5,7 @@ import {
   LinkTarget,
   collectLinkRemovals,
   collectLinkTargets,
+  collectNestedMutations,
   linkedRowKey,
 } from './link-targets';
 import { ModelMetadataIndex } from './model-meta';
@@ -20,6 +21,7 @@ export interface LinkGuardPort {
   readable(model: string, where: unknown, client: Client): Promise<Row[]>;
   readableRow(model: string, where: unknown, client: Client): Promise<Row | null>;
   locks(client: Client): RowLocks;
+  readonly locksRows: boolean;
   locker(client: Client): RowLocker;
 }
 
@@ -29,19 +31,21 @@ export class LinkGuard {
   private constructor(
     private readonly port: LinkGuardPort,
     private readonly model: string,
+    private readonly enforced: boolean,
     private readonly targets: readonly LinkTarget[],
     private readonly removals: readonly LinkRemoval[],
+    private readonly mutations: readonly LinkRemoval[],
   ) {}
 
   static of(port: LinkGuardPort, model: string, data: unknown, enforced: boolean): LinkGuard {
-    if (!enforced) {
-      return new LinkGuard(port, model, [], []);
-    }
+    const unwrap = (target: string, where: unknown) => port.unwrap(target, where);
     return new LinkGuard(
       port,
       model,
-      collectLinkTargets(port.metadata, model, data),
-      collectLinkRemovals(port.metadata, model, data, (target, where) => port.unwrap(target, where)),
+      enforced,
+      collectLinkTargets(port.metadata, model, data, enforced),
+      collectLinkRemovals(port.metadata, model, data, unwrap),
+      collectNestedMutations(port.metadata, model, data, unwrap),
     );
   }
 
@@ -50,18 +54,24 @@ export class LinkGuard {
   }
 
   get needsTransaction(): boolean {
-    return this.targets.length + this.removals.length > 0;
+    const links = this.targets.length + this.removals.length;
+    return (this.enforced && links > 0) || (this.port.locksRows && links + this.mutations.length > 0);
   }
 
   private key(model: string, row: Row): string {
     return linkedRowKey(this.port.metadata, model, row);
   }
 
-  async before(client: Client, root?: Row): Promise<void> {
-    if (!this.needsTransaction) {
+  async before(client: Client, roots: readonly Row[]): Promise<void> {
+    if (!this.needsTransaction && !(this.port.locksRows && roots.length > 1)) {
       return;
     }
-    const requests: LockRequest[] = root ? [{ model: this.model, row: root, mode: 'UPDATE' }] : [];
+    const root = roots[0];
+    const requests: LockRequest[] = roots.map((row) => ({ model: this.model, row, mode: 'UPDATE' as const }));
+    for (const mutation of this.mutations) {
+      const rows = await this.port.findMany(mutation.model, mutation.linkedTo(root!), client);
+      requests.push(...rows.map((row) => ({ model: mutation.model, row, mode: mutation.lock })));
+    }
     const removed: Array<{ removal: LinkRemoval; where: unknown; rows: Row[] }> = [];
     for (const removal of this.removals) {
       const where = removal.linkedTo(root!);
@@ -74,7 +84,7 @@ export class LinkGuard {
       const where = this.port.unwrap(target.model, target.where);
       const row = await this.port.findFirst(target.model, where, client);
       if (!row) {
-        if (!target.createsWhenMissing) {
+        if (this.enforced && !target.createsWhenMissing) {
           throw new GolemNotFoundError(`${target.model} not found`);
         }
         continue;
@@ -89,12 +99,18 @@ export class LinkGuard {
       if (current.some((row) => !locked.has(this.key(removal.model, row)))) {
         throw new GolemConflictError(`The ${removal.model} rows linked to this ${this.model} changed concurrently`);
       }
+      if (!this.enforced) {
+        continue;
+      }
       const readable = await this.port.readable(removal.model, where, client);
       if (readable.length !== current.length) {
         throw new GolemNotFoundError(`${removal.model} not found`);
       }
     }
     for (const { target, where } of found) {
+      if (!this.enforced) {
+        continue;
+      }
       if (!(await this.port.readableRow(target.model, where, client))) {
         throw new GolemNotFoundError(`${target.model} not found`);
       }
@@ -103,6 +119,9 @@ export class LinkGuard {
   }
 
   async after(client: Client): Promise<ReadonlySet<string>> {
+    if (!this.enforced) {
+      return new Set();
+    }
     const stored: Array<{ target: LinkTarget; where: unknown }> = [];
     const requests: LockRequest[] = [];
     for (const target of this.targets) {

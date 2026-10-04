@@ -712,6 +712,7 @@ export class GolemEngine {
               this.delegate(target, client).findFirst({ where: mergeConstraint(where, constraint.value), select: this.pkSelect(target) }));
       },
       locks: (client) => transactionRowLocks(client, this.locking),
+      locksRows: this.provider === 'postgresql',
       locker: (client) => rowLocker(this.provider, this.locking, async (sql, values) => {
         const runner = this.rawRunner(client);
         if (!runner) {
@@ -1154,7 +1155,7 @@ export class GolemEngine {
       const pkSelect = this.pkSelect(req.model);
       created = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
-        await guard.before(txClient);
+        await guard.before(txClient, []);
         const wide = await txDelegate.create({
           data: req.data,
           select: { ...createPlan!.select, ...pkSelect },
@@ -1170,7 +1171,7 @@ export class GolemEngine {
       });
     } else {
       created = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
-        await guard.before(client);
+        await guard.before(client, []);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).create({
             data: req.data,
@@ -1232,7 +1233,7 @@ export class GolemEngine {
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
-        await guard.before(txClient, this.pkScalarWhere(req.model, before));
+        await guard.before(txClient, [this.pkScalarWhere(req.model, before)]);
         const after = await txDelegate.update({
           where: constrainUnique(this.pkWhere(req.model, before), constraint),
           data: req.data,
@@ -1254,7 +1255,7 @@ export class GolemEngine {
     } else {
       updated = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
         const where = await this.constrainedUniqueWhere('update', req);
-        await guard.before(client, guard.needsRoot ? await this.rowIdentity(req.model, where, client) : undefined);
+        await guard.before(client, guard.needsRoot ? [await this.rowIdentity(req.model, where, client)] : []);
         const row = await this.run(req.model, () =>
           this.delegate(req.model, client).update({
             where,
@@ -1305,8 +1306,11 @@ export class GolemEngine {
           select: scalars,
         })) as Record<string, unknown>[];
         const identityWhere = this.pkBatchWhere(req.model, beforeRows);
-        await guard.before(txClient);
-        const mutationResult = await txDelegate.updateMany({ where: identityWhere, data: req.data });
+        await guard.before(txClient, beforeRows.map((row) => this.pkScalarWhere(req.model, row)));
+        const mutationResult = await txDelegate.updateMany({
+          where: mergeConstraint(identityWhere, constraint),
+          data: req.data,
+        });
         const returnedRows = batchEventRows(mutationResult);
         const canReuseReturnedRows =
           returnedRows !== undefined &&
@@ -1334,10 +1338,20 @@ export class GolemEngine {
         return { count: beforeRows.length };
       });
     } else {
-      result = await this.writeGuarded(req.model, scope, guard.needsTransaction, async (client) => {
-        await guard.before(client);
+      const where = mergeConstraint(req.where, constraint);
+      const lockedRoots = guard.needsTransaction || this.provider === 'postgresql';
+      result = await this.writeGuarded(req.model, scope, lockedRoots, async (client) => {
+        const roots = lockedRoots
+          ? (await this.run(req.model, () =>
+              this.delegate(req.model, client).findMany({ where, select: this.pkSelect(req.model) }),
+            )) as Record<string, unknown>[]
+          : [];
+        await guard.before(client, roots.map((row) => this.pkScalarWhere(req.model, row)));
         const written = (await this.run(req.model, () =>
-          this.delegate(req.model, client).updateMany({ where: mergeConstraint(req.where, constraint), data: req.data }),
+          this.delegate(req.model, client).updateMany({
+            where: lockedRoots ? { AND: [where, this.pkBatchWhere(req.model, roots)] } : where,
+            data: req.data,
+          }),
         )) as BatchResult;
         await guard.after(client);
         return written;

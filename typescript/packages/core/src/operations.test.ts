@@ -197,7 +197,7 @@ describe('composite updateMany identity', () => {
 
     expect(result).toEqual({ count: 2 });
     expect(updateMany).toHaveBeenCalledWith({
-      where: { OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] },
+      where: { AND: [{ OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] }, {}] },
       data: { addedAt: 2 },
     });
     expect(findMany).toHaveBeenCalledTimes(1);

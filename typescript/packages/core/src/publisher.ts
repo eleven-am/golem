@@ -144,6 +144,40 @@ async function publishEvents(
   for (const event of events) await bus.publish(topic, event);
 }
 
+const DELETE_ARGUMENTS: Record<'delete' | 'deleteMany', ReadonlySet<string>> = {
+  delete: new Set(['where', 'select', 'include', 'omit']),
+  deleteMany: new Set(['where', 'limit']),
+};
+
+function deleteSelection(
+  model: string,
+  operation: 'delete' | 'deleteMany',
+  args: unknown,
+  pks: readonly string[],
+  select: Record<string, true>,
+  maxRows: number,
+): Record<string, unknown> {
+  const given = (args ?? {}) as Record<string, unknown>;
+  for (const [name, value] of Object.entries(given)) {
+    if (value !== undefined && !DELETE_ARGUMENTS[operation].has(name)) {
+      throw new GolemValidationError(`${operation} on ${model} does not support the argument ${name}`);
+    }
+  }
+  if (operation === 'delete') {
+    return { where: given.where, select };
+  }
+  const limit = given.limit;
+  if (limit !== undefined && (typeof limit !== 'number' || !Number.isSafeInteger(limit) || limit < 0)) {
+    throw new GolemValidationError(`deleteMany on ${model} needs a non-negative integer limit`);
+  }
+  return {
+    where: given.where,
+    select,
+    orderBy: stableOrder(pks),
+    take: limit === undefined ? maxRows + 1 : Math.min(limit, maxRows + 1),
+  };
+}
+
 export function createEventPublisher(options: CreateEventPublisherOptions): GolemQueryInterceptor {
   const maxBatchRows = positiveLimit(
     options.batch?.maxRows ?? DEFAULT_BATCH_EVENT_MAX_ROWS,
@@ -297,16 +331,11 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       }
       const pks = cascades.identity(model);
       return batch.run(async (delegate, transaction) => {
-        const select = cascades.scalarSelect(model);
+        const selection = deleteSelection(model, operation, args, pks, cascades.scalarSelect(model), maxBatchRows);
         const readScope = async () => {
           const found = operation === 'delete'
-            ? await single(delegate.findUnique({ where: args?.where, select }))
-            : await delegate.findMany({
-                where: args?.where,
-                select,
-                orderBy: stableOrder(pks),
-                take: maxBatchRows + 1,
-              });
+            ? await single(delegate.findUnique(selection))
+            : await delegate.findMany(selection);
           if (found.length > maxBatchRows) {
             throw tooManyTouchedRows(model, maxBatchRows);
           }

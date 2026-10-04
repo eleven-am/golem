@@ -482,6 +482,43 @@ export function describeWritePath(
         return Promise.allSettled([firstRun, secondRun]);
       }
 
+      it('serialises two self-relation updateMany calls that each point at the other row', async () => {
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 1 }, { id: 2 }] });
+        const personEngine = (client: Client) => new GolemEngine(client, [...models, people], {
+          authorization: provider(),
+          checkWriteResults,
+          checkReadFields: false,
+          provider: provider_,
+        });
+        const secondLocked = barrier();
+        let firstWaited = false;
+        const firstClient = observed(async (sql) => {
+          if (!firstWaited && sql.includes('FROM "people"')) {
+            firstWaited = true;
+            await secondLocked.wait();
+          }
+        });
+        const secondClient = observed(async (sql) => {
+          if (sql.includes('FROM "people"')) secondLocked.arrive();
+        });
+
+        const firstRun = personEngine(firstClient).updateMany({
+          model: 'Person', where: { id: 1 }, data: { buddyId: 2 }, context: ctx,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const secondRun = personEngine(secondClient).updateMany({
+          model: 'Person', where: { id: 2 }, data: { buddyId: 1 }, context: ctx,
+        });
+        const outcomes = await Promise.allSettled([firstRun, secondRun]);
+
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.person.findMany({ orderBy: { id: 'asc' } })).resolves.toEqual([
+          { id: 1, buddyId: 2 },
+          { id: 2, buddyId: 1 },
+        ]);
+      });
+
       it('serialises two self-relation updates that each link the other row without a deadlock', async () => {
         await prisma.person.deleteMany();
         await prisma.person.createMany({ data: [{ id: 1 }, { id: 2 }] });
@@ -595,8 +632,16 @@ export function describeWritePath(
       });
 
       it('keeps one lock order across the link check and the nested delete of the same update', async () => {
-        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 5 }, { id: 6, buddyId: 5 }] });
+        await prisma.person.create({ data: { id: 2, buddyId: 6 } });
         const { publisher } = cascadePublisher();
+        const personEngine = (client: Client) => new GolemEngine(client, [...models, people], {
+          authorization: provider(),
+          checkWriteResults,
+          checkReadFields: false,
+          provider: provider_,
+        });
         const hooked = (onStatement: (sql: string) => Promise<void>) => (tx: Client): Client => new Proxy(tx, {
           get: (target, property, receiver) => {
             if (property !== '$queryRawUnsafe') return Reflect.get(target, property, receiver);
@@ -608,39 +653,36 @@ export function describeWritePath(
           },
         });
         const secondLocked = barrier();
-        let firstWaited = false;
+        let firstStatements = 0;
         const first = golemClient(prisma, publisher, hooked(async (sql) => {
-          if (!firstWaited && sql.includes('FROM "watches"')) {
-            firstWaited = true;
-            await secondLocked.wait();
+          if (sql.includes('FROM "people"')) {
+            firstStatements += 1;
+            if (firstStatements === 2) await secondLocked.wait();
           }
         }));
         const second = golemClient(prisma, publisher, hooked(async (sql) => {
-          if (sql.includes('FROM "replies"')) secondLocked.arrive();
+          if (sql.includes('FROM "people"')) secondLocked.arrive();
         }));
 
-        const firstRun = engineOver(first).update({
-          model: 'Thread',
-          where: { id: 1 },
-          data: { watches: { connect: [{ id: 22 }] }, replies: { delete: [{ id: 10 }] } },
-          context: ctx,
+        const firstRun = personEngine(first).update({
+          model: 'Person', where: { id: 5 }, data: { buddiedBy: { delete: [{ id: 6 }] } }, context: ctx,
         });
         await new Promise((resolve) => setTimeout(resolve, 100));
-        const secondRun = engineOver(second).update({
-          model: 'Thread',
-          where: { id: 3 },
-          data: { replies: { connect: [{ id: 10 }] }, watches: { connect: [{ id: 22 }] } },
-          context: ctx,
+        const secondRun = personEngine(second).update({
+          model: 'Person', where: { id: 2 }, data: { buddy: { connect: { id: 5 } } }, context: ctx,
         });
         const outcomes = await Promise.allSettled([firstRun, secondRun]);
 
         expect(outcomes[1].status).toBe('fulfilled');
         expect(outcomes[0].status).toBe('rejected');
         expect((outcomes[0] as PromiseRejectedResult).reason).toEqual(
-          new GolemConflictError('A row of Reply this write needs is held by a concurrent write'),
+          new GolemConflictError('A row of Person this write needs is held by a concurrent write'),
         );
-        await expect(prisma.reply.findUnique({ where: { id: 10 } })).resolves.toMatchObject({ threadId: 3 });
-        await expect(prisma.watch.findUnique({ where: { id: 22 } })).resolves.toEqual({ id: 22, threadId: 3 });
+        await expect(prisma.person.findMany({ orderBy: { id: 'asc' } })).resolves.toEqual([
+          { id: 2, buddyId: 5 },
+          { id: 5, buddyId: null },
+          { id: 6, buddyId: 5 },
+        ]);
       });
 
       it('serialises two reverse connects of the same child without a deadlock', async () => {
@@ -691,6 +733,34 @@ export function describeWritePath(
       });
     });
   }
+
+  describe('the rows a deleteMany selects', () => {
+    const run = (args: Record<string, unknown>) => {
+      const { publisher } = cascadePublisher();
+      return prisma.$transaction((tx: Client) => publisher({
+        model: 'Watch', operation: 'deleteMany', args,
+        query: async () => { throw new Error('the native delete escaped interception'); },
+        batch: runtimeOver(tx, 'Watch'),
+      }));
+    };
+
+    it('deletes no more rows than its limit', async () => {
+      await expect(run({ where: { threadId: 1 }, limit: 1 })).resolves.toEqual({ count: 1 });
+      await expect(prisma.watch.count({ where: { threadId: 1 } })).resolves.toBe(1);
+      await expect(run({ where: { threadId: 1 }, limit: 0 })).resolves.toEqual({ count: 0 });
+      await expect(prisma.watch.count({ where: { threadId: 1 } })).resolves.toBe(1);
+    });
+
+    it('refuses an argument it does not know how to honour, deleting nothing', async () => {
+      await expect(run({ where: { threadId: 1 }, take: 1 })).rejects.toThrow(
+        new GolemValidationError('deleteMany on Watch does not support the argument take'),
+      );
+      await expect(run({ where: { threadId: 1 }, limit: -1 })).rejects.toThrow(
+        new GolemValidationError('deleteMany on Watch needs a non-negative integer limit'),
+      );
+      await expect(prisma.watch.count({ where: { threadId: 1 } })).resolves.toBe(2);
+    });
+  });
 
   describe('a delete whose closure changes between enumeration and lock', () => {
     it('is refused, deleting nothing', async () => {
