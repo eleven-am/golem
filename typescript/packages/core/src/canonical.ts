@@ -109,3 +109,21 @@ function token(value: unknown, path: string, open: readonly object[]): string {
 export function canonicalToken(value: unknown): string {
   return token(value, '', []);
 }
+
+export function isScalarValue(value: unknown): boolean {
+  switch (typeof value) {
+    case 'string':
+    case 'number':
+    case 'boolean':
+    case 'bigint':
+      return true;
+    case 'object':
+      return value === null || value instanceof Date || value instanceof Uint8Array || isDecimalLike(value);
+    default:
+      return false;
+  }
+}
+
+export function sameValue(left: unknown, right: unknown): boolean {
+  return canonicalToken(left) === canonicalToken(right);
+}

@@ -1,5 +1,5 @@
 import { isPlainObject } from '@eleven-am/golem-policy';
-import { canonicalToken } from './canonical';
+import { canonicalToken, isScalarValue } from './canonical';
 import { GolemValidationError } from './errors';
 import { LockMode } from './cascade';
 import { DatamodelField } from './datamodel';
@@ -28,12 +28,12 @@ function linkLock(relation: DatamodelField): LinkLock {
 }
 
 function foreignKeyValue(model: string, field: string, value: unknown): unknown {
-  if (!isPlainObject(value)) {
+  if (isScalarValue(value)) {
     return value;
   }
-  const operations = Object.keys(value);
+  const operations = isPlainObject(value) ? Object.keys(value) : [];
   if (operations.length === 1 && operations[0] === 'set') {
-    return value.set;
+    return (value as { set: unknown }).set;
   }
   throw new GolemValidationError(
     `foreign key ${model}.${field} must be set to a value, not changed arithmetically`,

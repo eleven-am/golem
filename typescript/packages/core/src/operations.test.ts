@@ -1,4 +1,5 @@
 import { guardedClient } from '../test/support/guarded-client';
+import { prismaDecimal } from './compiled-read-decode';
 import { CompiledReadEvent } from './compiled-read';
 import {
   GolemConflictError,
@@ -1021,5 +1022,68 @@ describe('connect-or-create target identity', () => {
       }] } },
     })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector authorId on Membership'));
     expect(delegates.author.update).not.toHaveBeenCalled();
+  });
+});
+
+describe('connect-or-create target identity implied by an object-valued parent key', () => {
+  const Decimal = prismaDecimal()!;
+  const keyedModels = (type: 'Decimal' | 'Bytes') => [
+    {
+      name: 'Account',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'code', type, isUnique: true }),
+        field({ name: 'seats', type: 'Seat', kind: 'object', isList: true, relationName: 'AccountToSeat' }),
+      ],
+    },
+    { name: 'Team', fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'seats', type: 'Seat', kind: 'object', isList: true, relationName: 'SeatToTeam' }),
+    ] },
+    {
+      name: 'Seat',
+      fields: [
+        field({ name: 'accountCode', type }),
+        field({ name: 'teamId', type: 'String' }),
+        field({ name: 'account', type: 'Account', kind: 'object', relationName: 'AccountToSeat', relationFromFields: ['accountCode'], relationToFields: ['code'] }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'SeatToTeam', relationFromFields: ['teamId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['accountCode', 'teamId'] },
+    },
+  ];
+  const delegate = () => ({
+    findFirst: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    create: jest.fn().mockResolvedValue({ id: 'a1' }),
+    update: jest.fn().mockResolvedValue({ id: 'a1' }),
+  });
+  const updateThrough = async (type: 'Decimal' | 'Bytes', parentKey: unknown, selectorKey: unknown) => {
+    const delegates = { account: delegate(), team: delegate(), seat: delegate() };
+    delegates.account.findFirst.mockResolvedValue({ id: 'a1' });
+    const engine = new GolemEngine(guardedClient(delegates), keyedModels(type));
+    await engine.update({
+      model: 'Account',
+      where: { code: parentKey },
+      data: { seats: { connectOrCreate: [{
+        where: { accountCode_teamId: { accountCode: selectorKey, teamId: 't1' } },
+        create: { team: { connect: { id: 't1' } } },
+      }] } },
+    });
+    return delegates;
+  };
+
+  it('accepts a Decimal parent key as the value its nested selector names', async () => {
+    const delegates = await updateThrough('Decimal', new Decimal('1.50'), new Decimal('1.50'));
+    expect(delegates.account.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts a Bytes parent key as the value its nested selector names', async () => {
+    const delegates = await updateThrough('Bytes', new Uint8Array([1, 2, 3]), new Uint8Array([1, 2, 3]));
+    expect(delegates.account.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('still refuses a Decimal selector the parent key does not equal', async () => {
+    await expect(updateThrough('Decimal', new Decimal('1.50'), new Decimal('2.50')))
+      .rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector accountCode on Seat'));
   });
 });

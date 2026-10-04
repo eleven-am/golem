@@ -1,4 +1,4 @@
-import { canonicalToken, CanonicalValueError } from './canonical';
+import { canonicalToken, CanonicalValueError, isScalarValue, sameValue } from './canonical';
 import { prismaDecimal } from './compiled-read-decode';
 
 describe('canonical typed values', () => {
@@ -38,5 +38,28 @@ describe('canonical typed values', () => {
     const accessed = Object.defineProperty({}, 'secret', { get: getter });
     expect(() => canonicalToken(accessed)).toThrow('accessor property');
     expect(getter).not.toHaveBeenCalled();
+  });
+});
+
+describe('scalar values and their equality', () => {
+  const Decimal = prismaDecimal()!;
+
+  it('recognises every Prisma scalar representation, objects included, and nothing else', () => {
+    for (const value of [null, 'a', 1, true, 2n, new Date(0), new Uint8Array([1]), new Decimal('1.5')]) {
+      expect(isScalarValue(value)).toBe(true);
+    }
+    for (const value of [undefined, { set: 1 }, [1], () => 1]) {
+      expect(isScalarValue(value)).toBe(false);
+    }
+  });
+
+  it('compares scalars by value, exactly and by type', () => {
+    expect(sameValue(new Decimal('1.50'), new Decimal('1.50'))).toBe(true);
+    expect(sameValue(new Decimal('1.50'), new Decimal('2.50'))).toBe(false);
+    expect(sameValue(new Uint8Array([1, 2]), new Uint8Array([1, 2]))).toBe(true);
+    expect(sameValue(new Uint8Array([1, 2]), new Uint8Array([2, 1]))).toBe(false);
+    expect(sameValue(new Date(5), new Date(5))).toBe(true);
+    expect(sameValue(5n, 5n)).toBe(true);
+    expect(sameValue(5n, 5)).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { canonicalToken } from './canonical';
+import { isScalarValue, sameValue } from './canonical';
 import { GolemValidationError } from './errors';
 import { flattenUniqueSelectors, ModelMetadataIndex } from './model-meta';
 import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
@@ -58,7 +58,7 @@ function refuseOffTarget(
   const input = create && typeof create === 'object' ? create as Record<string, unknown> : {};
   for (const [name, target] of upsertTargetSelectors(metadata, model, where)) {
     const written = writtenValue(metadata, model, input, name, implied);
-    if (written === undefined || canonicalToken(written) !== canonicalToken(target)) {
+    if (written === undefined || !sameValue(written, target)) {
       throw new GolemValidationError(
         `${operation} create input does not set the target selector ${name} on ${model}`,
       );
@@ -80,7 +80,7 @@ function scalarValues(data: unknown): Known {
     return {};
   }
   return Object.fromEntries(Object.entries(data as Record<string, unknown>)
-    .filter(([, value]) => value === null || typeof value !== 'object' || value instanceof Date));
+    .filter(([, value]) => isScalarValue(value)));
 }
 
 function selectedValues(metadata: ModelMetadataIndex, model: string, where: unknown): Known {
