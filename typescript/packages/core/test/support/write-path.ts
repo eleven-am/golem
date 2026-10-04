@@ -373,6 +373,113 @@ export function describeWritePath(
     });
   }
 
+  if (provider_ === 'postgresql') {
+    describe.each([true, false])('locking link targets, with checkWriteResults %s', (checkWriteResults) => {
+      const ctx = { req: {} };
+
+      function observed(onStatement: (sql: string) => Promise<void>): Client {
+        const wrap = (inner: Client): Client => new Proxy(inner, {
+          get: (target, property, receiver) => {
+            if (property === '$transaction') {
+              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+                target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+            }
+            if (property === '$queryRawUnsafe') {
+              return async (sql: string, ...values: unknown[]) => {
+                const rows = await target.$queryRawUnsafe(sql, ...values);
+                await onStatement(sql);
+                return rows;
+              };
+            }
+            return Reflect.get(target, property, receiver);
+          },
+        });
+        return wrap(prisma);
+      }
+
+      const engineOver = (client: Client) => new GolemEngine(client, models, {
+        authorization: provider(),
+        checkWriteResults,
+        checkReadFields: false,
+        provider: provider_,
+      });
+
+      function barrier(): { arrive(): void; wait(): Promise<void> } {
+        let arrive!: () => void;
+        const arrived = new Promise<void>((resolve) => { arrive = resolve; });
+        return {
+          arrive: () => arrive(),
+          wait: () => Promise.race([arrived, new Promise<void>((resolve) => setTimeout(resolve, 500))]),
+        };
+      }
+
+      async function race(first: (client: Client) => Promise<unknown>, second: (client: Client) => Promise<unknown>) {
+        const secondLocked = barrier();
+        let firstWaited = false;
+        const firstClient = observed(async (sql) => {
+          if (!firstWaited && sql.includes('FROM "watches"')) {
+            firstWaited = true;
+            await secondLocked.wait();
+          }
+        });
+        const secondClient = observed(async (sql) => {
+          if (sql.includes('FROM "watches"')) secondLocked.arrive();
+        });
+        const firstRun = first(firstClient);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const secondRun = second(secondClient);
+        return Promise.allSettled([firstRun, secondRun]);
+      }
+
+      it('serialises two reverse connects of the same child without a deadlock', async () => {
+        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+
+        const outcomes = await race(
+          (client) => engineOver(client).update({
+            model: 'Thread', where: { id: 1 }, data: { watches: { connect: [{ id: 22 }] } }, context: ctx,
+          }),
+          (client) => engineOver(client).update({
+            model: 'Thread', where: { id: 3 }, data: { watches: { connect: [{ id: 22 }] } }, context: ctx,
+          }),
+        );
+
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.watch.findUnique({ where: { id: 22 } })).resolves.toEqual({ id: 22, threadId: 3 });
+      });
+
+      it('locks overlapping link targets in one order, whatever order the inputs name them', async () => {
+        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+
+        const outcomes = await race(
+          (client) => engineOver(client).update({
+            model: 'Thread', where: { id: 3 }, data: { watches: { connect: [{ id: 20 }, { id: 22 }] } }, context: ctx,
+          }),
+          (client) => engineOver(client).update({
+            model: 'Thread', where: { id: 1 }, data: { watches: { connect: [{ id: 22 }, { id: 20 }] } }, context: ctx,
+          }),
+        );
+
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+        await expect(watchesOf(1)).resolves.toEqual([20, 21, 22]);
+      });
+
+      it('takes a share lock on a target a forward foreign key only references, and an update lock on a child it moves', async () => {
+        const statements: string[] = [];
+        const client = observed(async (sql) => { statements.push(sql); });
+
+        await engineOver(client).create({ model: 'Watch', data: { id: 25, threadId: 1 }, context: ctx });
+        const forward = statements.splice(0);
+        await engineOver(client).update({
+          model: 'Thread', where: { id: 1 }, data: { watches: { connect: [{ id: 22 }] } }, context: ctx,
+        });
+
+        expect(forward.filter((sql) => sql.includes('FROM "threads"'))).not.toHaveLength(0);
+        expect(forward.every((sql) => sql.endsWith('FOR SHARE'))).toBe(true);
+        expect(statements.find((sql) => sql.includes('FROM "watches"'))).toMatch(/FOR UPDATE$/);
+      });
+    });
+  }
+
   describe.each([true, false])('a row moved out of policy before its write, with checkWriteResults %s', (checkWriteResults) => {
     const ctx = { req: {} };
     const lock = () => database.concurrent.thread.update({ where: { id: 1 }, data: { title: 'locked' } });

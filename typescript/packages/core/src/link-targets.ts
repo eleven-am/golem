@@ -1,13 +1,17 @@
 import { isPlainObject } from '@eleven-am/golem-policy';
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
+import { DatamodelField } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
 import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
 
 type Filter = Record<string, unknown>;
 
+export type LinkLock = 'UPDATE' | 'SHARE';
+
 export interface LinkRemoval {
   readonly model: string;
+  readonly lock: LinkLock;
   linkedTo(root: Filter): Filter;
 }
 
@@ -15,6 +19,11 @@ export interface LinkTarget {
   readonly model: string;
   readonly where: Record<string, unknown>;
   readonly createsWhenMissing: boolean;
+  readonly lock: LinkLock;
+}
+
+function linkLock(relation: DatamodelField): LinkLock {
+  return relation.relationFromFields?.length ? 'SHARE' : 'UPDATE';
 }
 
 function foreignKeyValue(model: string, field: string, value: unknown): unknown {
@@ -55,6 +64,7 @@ function foreignKeyTargets(
       model: relation.type,
       where: Object.fromEntries(relation.relationToFields!.map((name, index) => [name, values[index]])),
       createsWhenMissing: false,
+      lock: 'SHARE',
     }));
   }
 }
@@ -85,6 +95,7 @@ function collect(
           model: relation.target.name,
           where: where as Record<string, unknown>,
           createsWhenMissing: operation.kind === 'connectOrCreate',
+          lock: linkLock(relation.field),
         }));
       }
     }
@@ -132,7 +143,7 @@ function collectRemovals(
     });
     for (const operation of relation.operations) {
       if (operation.kind === 'set' || (operation.kind === 'disconnect' && operation.payloads.includes(true))) {
-        into.push(Object.freeze({ model: target, linkedTo }));
+        into.push(Object.freeze({ model: target, lock: linkLock(relation.field), linkedTo }));
       }
       if (operation.kind !== 'update' && operation.kind !== 'upsert') {
         continue;

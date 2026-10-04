@@ -76,6 +76,13 @@ function delegates() {
 }
 
 describe('collectLinkTargets', () => {
+  it('locks a reverse link target for update and a referenced target for share', () => {
+    expect(collectLinkTargets(metadata, 'Post', { author: { connect: { id: 'u1' } } }))
+      .toEqual([{ model: 'User', where: { id: 'u1' }, createsWhenMissing: false, lock: 'SHARE' }]);
+    expect(collectLinkTargets(metadata, 'User', { posts: { connect: [{ id: 'p1' }] } }))
+      .toEqual([{ model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE' }]);
+  });
+
   it('collects foreign-key scalars and linking nested operations at every depth', () => {
     expect(collectLinkTargets(metadata, 'User', {
       posts: {
@@ -86,17 +93,17 @@ describe('collectLinkTargets', () => {
         connectOrCreate: [{ where: { id: 'p4' }, create: { title: 'b' } }],
       },
     })).toEqual([
-      { model: 'Post', where: { id: 'p1' }, createsWhenMissing: false },
-      { model: 'Post', where: { id: 'p2' }, createsWhenMissing: false },
-      { model: 'Post', where: { id: 'p3' }, createsWhenMissing: false },
-      { model: 'Post', where: { id: 'p4' }, createsWhenMissing: true },
-      { model: 'User', where: { id: 'u2' }, createsWhenMissing: false },
+      { model: 'Post', where: { id: 'p1' }, createsWhenMissing: false, lock: 'UPDATE' },
+      { model: 'Post', where: { id: 'p2' }, createsWhenMissing: false, lock: 'UPDATE' },
+      { model: 'Post', where: { id: 'p3' }, createsWhenMissing: false, lock: 'UPDATE' },
+      { model: 'Post', where: { id: 'p4' }, createsWhenMissing: true, lock: 'UPDATE' },
+      { model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE' },
     ]);
   });
 
   it('maps a compound foreign key onto the fields it references', () => {
     expect(collectLinkTargets(metadata, 'Membership', { orgId: 'o1', teamKey: { set: 'k1' } }))
-      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, createsWhenMissing: false }]);
+      .toEqual([{ model: 'Team', where: { orgId: 'o1', key: 'k1' }, createsWhenMissing: false, lock: 'SHARE' }]);
   });
 
   it('refuses a compound foreign key written only in part', () => {
@@ -171,7 +178,7 @@ describe('foreign-key values a link check can probe', () => {
 
   it('reads a set operation as the value it sets', () => {
     expect(collectLinkTargets(metadata, 'Post', { authorId: { set: 'u2' } }))
-      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false }]);
+      .toEqual([{ model: 'User', where: { id: 'u2' }, createsWhenMissing: false, lock: 'SHARE' }]);
   });
 
   it.each(['increment', 'decrement', 'multiply', 'divide'])(
