@@ -44,20 +44,9 @@ function describeScope(scope: JobScope | null): string {
   return scope ? `${scope.type}:${scope.id}` : 'none';
 }
 
-class ShutdownInterruption extends Error {
-  constructor() {
-    super('Application shutdown interrupted the job');
-  }
-}
-
 interface ClaimedJob {
   readonly job: ClaimCandidate;
   readonly leaseExpiresAt: Date;
-}
-
-interface Settlement {
-  readonly resolved: boolean;
-  readonly error?: unknown;
 }
 
 @Injectable()
@@ -260,7 +249,9 @@ export class JobDispatcher implements OnModuleDestroy {
       `Shutdown grace of ${this.options.shutdownGraceMs}ms elapsed with ${this.executions.size} job(s) still running; aborting`,
     );
     for (const execution of this.executions.values()) {
-      execution.controller.abort(new ShutdownInterruption());
+      execution.controller.abort(
+        new Error('Application shutdown interrupted the job'),
+      );
     }
     await Promise.allSettled(
       [...this.executions.values()].map(({ completion }) => completion),
@@ -672,55 +663,51 @@ export class JobDispatcher implements OnModuleDestroy {
     controller: AbortController,
   ): Promise<void> {
     let timer: NodeJS.Timeout | undefined;
-    const timeout = new Promise<undefined>((resolve) => {
+    const timeout = new Promise<void>((resolve) => {
       timer = setTimeout(() => {
         controller.abort(
           new Error(
             `Job ${handler.type} timed out after ${handler.timeoutMs}ms`,
           ),
         );
-        resolve(undefined);
+        resolve();
       }, handler.timeoutMs);
     });
-    const settlement = handler.handle(event).then(
-      (): Settlement => ({ resolved: true }),
-      (error: unknown): Settlement => ({ resolved: false, error }),
-    );
+    const work = handler.handle(event);
     try {
-      const first = await Promise.race([settlement, timeout]);
-      if (!controller.signal.aborted && first !== undefined) {
-        if (first.resolved) return;
-        throw first.error;
+      await Promise.race([work, timeout]);
+      if (controller.signal.aborted) {
+        await this.settleOrAbandon(work, handler.type);
+        throw controller.signal.reason;
       }
-      const outcome = first ?? (await this.settleOrAbandon(settlement, handler.type));
-      if (
-        outcome?.resolved === true &&
-        controller.signal.reason instanceof ShutdownInterruption
-      ) {
-        return;
+      await work;
+    } catch (error) {
+      if (controller.signal.aborted) {
+        await this.settleOrAbandon(work, handler.type);
+        throw controller.signal.reason;
       }
-      throw controller.signal.reason;
+      throw error;
     } finally {
       if (timer) clearTimeout(timer);
     }
   }
 
   private async settleOrAbandon(
-    settlement: Promise<Settlement>,
+    work: Promise<void>,
     type: string,
-  ): Promise<Settlement | undefined> {
-    let timer: NodeJS.Timeout | undefined;
-    const abandoned = new Promise<undefined>((resolve) => {
-      timer = setTimeout(() => resolve(undefined), this.options.abandonGraceMs);
-    });
-    const outcome = await Promise.race([settlement, abandoned]);
-    clearTimeout(timer);
-    if (outcome === undefined) {
+  ): Promise<void> {
+    const settled = await this.settledWithin(
+      work.then(
+        () => undefined,
+        () => undefined,
+      ),
+      this.options.abandonGraceMs,
+    );
+    if (!settled) {
       this.logger.warn(
         `Job ${type} ignored its abort signal for ${this.options.abandonGraceMs}ms; abandoning it to free the slot`,
       );
     }
-    return outcome;
   }
 
   private async fail(

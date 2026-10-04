@@ -417,27 +417,87 @@ describe('JobDispatcher', () => {
     expect(store.get(id)?.status).toBe('SUCCEEDED');
   });
 
-  it('records success for a handler that finishes after the shutdown grace', async () => {
-    const { outcomes, observer } = recorder();
-    const { store, dispatcher } = build(
-      [
-        handler(
-          () => new Promise<void>((resolve) => setTimeout(resolve, 40)),
-          { timeoutMs: 60_000 },
-        ),
-      ],
-      { shutdownGraceMs: 10 },
-      [observer],
-    );
-    const id = await seed(store, { maxAttempts: 3 });
+  describe('shutdown on a fake clock', () => {
+    beforeEach(() => {
+      jest.useFakeTimers();
+    });
 
-    const internals = dispatcher as unknown as { tick(): Promise<void> };
-    await internals.tick();
-    await dispatcher.onModuleDestroy();
+    afterEach(() => {
+      jest.useRealTimers();
+    });
 
-    expect(store.get(id)?.status).toBe('SUCCEEDED');
-    expect(store.get(id)?.attempts).toBe(0);
-    expect(outcomes()).toEqual(['started', 'succeeded']);
+    function dispatcherOn(store: InMemoryJobStore, work: JobHandler, options: GolemQueueOptions, observers: JobLifecycleObserver[] = []) {
+      return new JobDispatcher(
+        store,
+        [work],
+        new JobCancellationRegistry(),
+        resolveQueueOptions({ workerId: WORKER, ...options }),
+        observerRegistry(observers),
+      );
+    }
+
+    it('retries a handler that finishes only after the shutdown grace, and runs it again', async () => {
+      const { outcomes, observer } = recorder();
+      let runs = 0;
+      const work = handler(
+        () => {
+          runs += 1;
+          return new Promise<void>((resolve) => setTimeout(resolve, 40));
+        },
+        { timeoutMs: 60_000 },
+      );
+      const options = { shutdownGraceMs: 10, baseBackoffMs: 0, maxBackoffMs: 0 };
+      const store = new InMemoryJobStore();
+      const id = await seed(store);
+      const first = dispatcherOn(store, work, options, [observer]);
+      await (first as unknown as { tick(): Promise<void> }).tick();
+
+      const shutdown = first.onModuleDestroy();
+      await jest.advanceTimersByTimeAsync(40);
+      await shutdown;
+
+      expect(store.get(id)?.status).toBe('PENDING');
+      expect(store.get(id)?.attempts).toBe(1);
+      expect(store.get(id)?.lastError).toBe('Application shutdown interrupted the job');
+      expect(outcomes()).toEqual(['started', 'retry-scheduled']);
+
+      const second = dispatcherOn(store, work, options);
+      await (second as unknown as { tick(): Promise<void> }).tick();
+      await jest.advanceTimersByTimeAsync(40);
+
+      expect(runs).toBe(2);
+      expect(store.get(id)?.status).toBe('SUCCEEDED');
+    });
+
+    it('records success for a handler that resolved before the grace ran out, though its completion lands after', async () => {
+      const { outcomes, observer } = recorder();
+      let aborted = false;
+      const work = handler(
+        (event) => {
+          event.signal.addEventListener('abort', () => {
+            aborted = true;
+          });
+          return new Promise<void>((resolve) => setTimeout(resolve, 5));
+        },
+        { timeoutMs: 60_000 },
+      );
+      const store = new InMemoryJobStore();
+      const id = await seed(store);
+      const complete = store.complete.bind(store);
+      store.complete = (input) =>
+        new Promise<boolean>((resolve) => setTimeout(() => resolve(complete(input)), 50));
+      const dispatcher = dispatcherOn(store, work, { shutdownGraceMs: 10 }, [observer]);
+      await (dispatcher as unknown as { tick(): Promise<void> }).tick();
+
+      const shutdown = dispatcher.onModuleDestroy();
+      await jest.advanceTimersByTimeAsync(10);
+      expect(aborted).toBe(true);
+      await jest.advanceTimersByTimeAsync(50);
+      await shutdown;
+
+      expect(store.get(id)?.status).toBe('SUCCEEDED');
+      expect(outcomes()).toEqual(['started', 'succeeded']);
+    });
   });
 
   it('still retries a handler that rejects after the shutdown grace', async () => {

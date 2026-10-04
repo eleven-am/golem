@@ -323,7 +323,8 @@ retention: { olderThanMs: 7 * 24 * 60 * 60 * 1000, sweepIntervalMs: 60_000 }
 
 - a worker dies mid-job and its lease expires, so another worker recovers it;
 - a handler ignores its `AbortSignal` past `abandonGraceMs` — the slot is freed and the job retried while the original work may still be running;
-- the process is killed after the handler finished but before the completion write landed.
+- the process is killed after the handler finished but before the completion write landed;
+- the application shuts down while a handler is still running when `shutdownGraceMs` ends — its `signal` is aborted and the job is retried, even if the handler then resolves, because a handler that cleans up and returns on abort cannot be told apart from one that finished. Only a handler that resolved before the grace ran out is recorded as succeeded.
 
 **Write your handlers to be idempotent.** `dedupeKey` only prevents duplicate *enqueues*; it does not make execution exactly-once.
 
