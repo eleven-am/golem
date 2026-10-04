@@ -67,3 +67,13 @@ export type Reply = Prisma.ReplyModel
  * 
  */
 export type Watch = Prisma.WatchModel
+/**
+ * Model Channel
+ * 
+ */
+export type Channel = Prisma.ChannelModel
+/**
+ * Model Message
+ * 
+ */
+export type Message = Prisma.MessageModel

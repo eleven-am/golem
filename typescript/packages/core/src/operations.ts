@@ -11,7 +11,7 @@ import {
   GolemValidationError,
 } from './errors';
 import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
-import { collectLinkTargets, linkedRowKey } from './link-targets';
+import { LinkRemoval, collectLinkRemovals, collectLinkTargets, linkedRowKey } from './link-targets';
 import { runPolicyChecks } from './concurrency';
 import {
   FieldReferences,
@@ -737,6 +737,54 @@ export class GolemEngine {
     return linked;
   }
 
+  private linkRemovals(model: string, data: unknown, context: unknown): readonly LinkRemoval[] {
+    if (!this.enforced(context)) {
+      return [];
+    }
+    return collectLinkRemovals(this.metadata, model, data, (target, where) =>
+      this.filterableWhere(target, where));
+  }
+
+  private async refuseUnreadableRemovals(
+    removals: readonly LinkRemoval[],
+    root: Record<string, unknown>,
+    context: unknown,
+    client: Record<string, any>,
+  ): Promise<void> {
+    for (const removal of removals) {
+      const delegate = this.delegate(removal.model, client);
+      const where = removal.linkedTo(root);
+      const select = this.pkSelect(removal.model);
+      const linked = (await this.run(removal.model, () =>
+        delegate.findMany({ where, select }))) as unknown[];
+      let readable: unknown[] = [];
+      try {
+        const constraint = await this.constraintFor('read', removal.model, context);
+        readable = (await this.run(removal.model, () =>
+          delegate.findMany({ where: mergeConstraint(where, constraint), select }))) as unknown[];
+      } catch (error) {
+        if (!(error instanceof GolemForbiddenError)) {
+          throw error;
+        }
+      }
+      if (readable.length !== linked.length) {
+        throw new GolemNotFoundError(`${removal.model} not found`);
+      }
+    }
+  }
+
+  private async writeWithRemovals<T>(
+    model: string,
+    scope: GolemOpScope | undefined,
+    removals: readonly LinkRemoval[],
+    work: (client: Record<string, any>) => Promise<T>,
+  ): Promise<T> {
+    if (removals.length === 0) {
+      return work(scope?.client ?? this.client);
+    }
+    return this.runVerifiedWrite(model, scope, work);
+  }
+
   private async classifyNestedWriteFilters(
     model: string,
     operations: readonly NestedWriteOperation[],
@@ -1188,6 +1236,7 @@ export class GolemEngine {
     );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
     const linked = await this.refuseUnreadableLinks(req.model, request.data, req.context, scope?.client);
+    const removals = this.linkRemovals(req.model, request.data, req.context);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
     let updated: unknown;
@@ -1220,6 +1269,7 @@ export class GolemEngine {
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
+        await this.refuseUnreadableRemovals(removals, this.pkScalarWhere(req.model, before), req.context, txClient);
         const after = await txDelegate.update({
           where: this.pkWhere(req.model, before),
           data: req.data,
@@ -1234,16 +1284,24 @@ export class GolemEngine {
         });
       });
     } else {
-      const target = await this.resolveConstrainedTarget('update', req, scope?.client);
-      updated = await this.run(req.model, () =>
-        delegate.update({
-          where: target.where,
-          data: req.data,
-          select: prepared.select,
-          include: prepared.include,
-          ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
-        }),
-      );
+      updated = await this.writeWithRemovals(req.model, scope, removals, async (client) => {
+        const target = await this.resolveConstrainedTarget('update', req, client);
+        await this.refuseUnreadableRemovals(
+          removals,
+          this.filterableWhere(req.model, target.where) as Record<string, unknown>,
+          req.context,
+          client,
+        );
+        return this.run(req.model, () =>
+          this.delegate(req.model, client).update({
+            where: target.where,
+            data: req.data,
+            select: prepared.select,
+            include: prepared.include,
+            ...(prepared.omit !== undefined ? { omit: prepared.omit } : {}),
+          }),
+        );
+      });
     }
     await this.finishRead(updated, prepared, req.context);
     await this.runAfter('update', req.model, updated, req.context);

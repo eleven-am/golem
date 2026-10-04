@@ -128,11 +128,21 @@ describe('createEventPublisher', () => {
     const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['User']) });
     const query = jest.fn().mockResolvedValue({ count: 2 });
 
-    await publisher({ model: 'User', operation: 'updateMany', args: {}, query });
     await publisher({ model: 'User', operation: 'findMany', args: {}, query });
     await publisher({ model: 'Post', operation: 'create', args: {}, query });
     expect(published).toEqual([]);
-    expect(query).toHaveBeenCalledTimes(3);
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses an eventful batch update or upsert issued without the generated client runtime', async () => {
+    const publisher = createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set(['User']) });
+    const query = jest.fn();
+
+    await expect(publisher({ model: 'User', operation: 'updateMany', args: {}, query }))
+      .rejects.toThrow('updateMany on User requires the transaction-bound batch runtime');
+    await expect(publisher({ model: 'User', operation: 'upsert', args: {}, query }))
+      .rejects.toThrow('upsert on User requires the branch probe of the generated client');
+    expect(query).not.toHaveBeenCalled();
   });
 
   it('refuses a delete issued without the transaction-bound batch runtime', async () => {
@@ -144,13 +154,28 @@ describe('createEventPublisher', () => {
     expect(query).not.toHaveBeenCalled();
   });
 
-  it('passes through models without a primary key', async () => {
-    const { bus, published } = busSpy();
-    const publisher = createEventPublisher({ datamodel, eventBus: bus, models: new Set(['Log']) });
-    const query = jest.fn().mockResolvedValue({ entry: 'x' });
+  it('passes Prisma models outside the golem datamodel straight through', async () => {
+    const publisher = createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set() });
+    const query = jest.fn().mockResolvedValue({ stripe: 1 });
 
-    await publisher({ model: 'Log', operation: 'create', args: {}, query });
-    expect(published).toEqual([]);
+    await publisher({ model: 'GolemUpsertGuard', operation: 'upsert', args: { where: { stripe: 1 } }, query });
+    await publisher({ model: 'GolemUpsertGuard', operation: 'delete', args: { where: { stripe: 1 } }, query });
+    expect(query).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses to publish events for a model with no row identity', () => {
+    expect(() => createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set(['Log']) }))
+      .toThrow('Model Log has no primary key or required unique field and cannot publish events');
+  });
+
+  it('refuses to delete from a model with no row identity instead of passing the delete through', async () => {
+    const publisher = createEventPublisher({ datamodel, eventBus: busSpy().bus, models: new Set() });
+    const batch = fakeBatch({ Log: [{ entry: 'x' }] }, 'Log');
+
+    await expect(publisher({
+      model: 'Log', operation: 'deleteMany', args: {}, query: jest.fn(), batch: batch.runtime,
+    })).rejects.toThrow('Cannot delete from Log: it has no primary key or required unique field');
+    expect(batch.tables.get('Log')).toEqual([{ entry: 'x' }]);
   });
 
   it('publishes every composite primary-key component in declared order', async () => {

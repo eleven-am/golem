@@ -60,7 +60,9 @@ export const ModelName = {
   Profile: 'Profile',
   Thread: 'Thread',
   Reply: 'Reply',
-  Watch: 'Watch'
+  Watch: 'Watch',
+  Channel: 'Channel',
+  Message: 'Message'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -175,6 +177,22 @@ export const WatchScalarFieldEnum = {
 } as const
 
 export type WatchScalarFieldEnum = (typeof WatchScalarFieldEnum)[keyof typeof WatchScalarFieldEnum]
+
+
+export const ChannelScalarFieldEnum = {
+  slug: 'slug',
+  title: 'title'
+} as const
+
+export type ChannelScalarFieldEnum = (typeof ChannelScalarFieldEnum)[keyof typeof ChannelScalarFieldEnum]
+
+
+export const MessageScalarFieldEnum = {
+  id: 'id',
+  channelSlug: 'channelSlug'
+} as const
+
+export type MessageScalarFieldEnum = (typeof MessageScalarFieldEnum)[keyof typeof MessageScalarFieldEnum]
 
 
 export const SortOrder = {

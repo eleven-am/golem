@@ -53,6 +53,24 @@ export interface DatamodelModel {
   indexes?: readonly DatamodelIndex[];
 }
 
+export function rowIdentityFields(model: DatamodelModel): readonly string[] | undefined {
+  if (model.primaryKey?.fields.length) {
+    return model.primaryKey.fields;
+  }
+  const scalars = model.fields.filter((field) => field.kind !== 'object' && !field.isList);
+  const id = scalars.filter((field) => field.isId);
+  if (id.length > 0) {
+    return id.map((field) => field.name);
+  }
+  const unique = scalars.find((field) => field.isUnique && field.isRequired);
+  if (unique) {
+    return [unique.name];
+  }
+  const compound = (model.uniqueIndexes ?? []).find((index) =>
+    index.fields.every((name) => scalars.some((field) => field.name === name && field.isRequired)));
+  return compound?.fields;
+}
+
 export function isEqualityIndexed(model: DatamodelModel, fieldName: string): boolean {
   const leadsAnIndex = (model.indexes ?? []).some(
     (index) => index.kind !== 'fulltext' && index.fields[0] === fieldName,

@@ -1,4 +1,4 @@
-import { DatamodelDocument } from './datamodel';
+import { DatamodelDocument, rowIdentityFields } from './datamodel';
 import { canonicalToken } from './canonical';
 import {
   CascadePlan,
@@ -154,10 +154,11 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
   const pkByModel = new Map<string, readonly string[]>();
   const scalarSelectByModel = new Map<string, Readonly<Record<string, true>>>();
   for (const model of options.datamodel.models) {
-    const keys = model.primaryKey?.fields ?? model.fields
-      .filter((field) => field.isId)
-      .map((field) => field.name);
-    if (keys.length > 0) {
+    const keys = rowIdentityFields(model);
+    if (!keys && options.models.has(model.name)) {
+      throw new Error(`Model ${model.name} has no primary key or required unique field and cannot publish events`);
+    }
+    if (keys) {
       pkByModel.set(model.name, keys);
       scalarSelectByModel.set(
         model.name,
@@ -219,10 +220,10 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     args: any,
     run: (args: any) => Promise<any>,
   ): Promise<any> => {
-    const pks = pkByModel.get(model);
-    if (!pks || !options.models.has(model)) {
+    if (!options.models.has(model)) {
       return run(args);
     }
+    const pks = pkByModel.get(model)!;
     const injectedSelect = new Set(
       args?.select ? pks.filter((pk) => args.select[pk] !== true) : [],
     );
@@ -275,11 +276,12 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
 
   return async ({ model, operation, args, query, findExisting, batch }) => {
     if (batch?.suppressed) return query(args);
-    if (model && pkByModel.has(model) && (operation === 'delete' || operation === 'deleteMany')) {
+    const golemModel = model !== undefined && cascades.metadata.has(model);
+    if (golemModel && (operation === 'delete' || operation === 'deleteMany')) {
       if (!batch) {
         throw new Error(`${operation} on ${model} requires the transaction-bound batch runtime`);
       }
-      const pks = pkByModel.get(model)!;
+      const pks = cascades.primaryKey(model);
       return batch.run(async (delegate, transaction) => {
         const tx = cascadeTransaction(transaction);
         const rows = await dialect.lockedRoots(tx, model, (select) =>
@@ -324,8 +326,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     }
     const nestedData = operation === 'upsert' ? args?.update : args?.data;
     if (
-      model &&
-      pkByModel.has(model) &&
+      golemModel &&
       (operation === 'update' || operation === 'upsert') &&
       hasNestedDeletes(cascades, model, nestedData)
     ) {
@@ -355,8 +356,10 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       options.models.has(model) &&
       operation === 'updateMany'
     ) {
-      const pks = pkByModel.get(model);
-      if (!pks || !batch) return query(args);
+      const pks = pkByModel.get(model)!;
+      if (!batch) {
+        throw new Error(`updateMany on ${model} requires the transaction-bound batch runtime`);
+      }
       if (pks.some((pk) => Object.prototype.hasOwnProperty.call(args?.data ?? {}, pk))) {
         throw new GolemValidationError(
           `Eventful updateMany cannot modify primary key fields on ${model}`,
@@ -421,8 +424,10 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     let type = OPERATION_EVENTS[operation];
     if (operation === 'upsert') {
       if (!model || !options.models.has(model)) return query(args);
-      const pks = pkByModel.get(model);
-      if (!pks || !findExisting) return query(args);
+      const pks = pkByModel.get(model)!;
+      if (!findExisting) {
+        throw new Error(`upsert on ${model} requires the branch probe of the generated client`);
+      }
       const existing = await findExisting(
         args?.where,
         Object.fromEntries(pks.map((pk) => [pk, true])),

@@ -106,3 +106,19 @@ model Watch {
 
   @@map("watches")
 }
+
+model Channel {
+  slug     String    @unique
+  title    String
+  messages Message[]
+
+  @@map("channels")
+}
+
+model Message {
+  id          Int     @id
+  channelSlug String  @map("channel_slug")
+  channel     Channel @relation(fields: [channelSlug], references: [slug], onDelete: Cascade)
+
+  @@map("messages")
+}

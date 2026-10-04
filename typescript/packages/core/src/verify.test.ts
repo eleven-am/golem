@@ -385,7 +385,10 @@ describe('nested relation diff verification', () => {
         update: jest.fn().mockResolvedValue({ ...beforeUser, posts: [] }),
         findUnique: jest.fn(),
       },
-      post: { findFirst: jest.fn().mockResolvedValue({ id: 'p1' }) },
+      post: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'p1' }),
+        findMany: jest.fn().mockResolvedValue([{ id: 'p1' }]),
+      },
     };
     const authz = provider({
       check: jest.fn(async (action, model) => !(action === expectedAction && model === 'Post')),

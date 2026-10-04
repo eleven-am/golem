@@ -1,7 +1,14 @@
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
 import { ModelMetadataIndex } from './model-meta';
-import { planNestedWrites } from './nested-writes';
+import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
+
+type Filter = Record<string, unknown>;
+
+export interface LinkRemoval {
+  readonly model: string;
+  linkedTo(root: Filter): Filter;
+}
 
 export interface LinkTarget {
   readonly model: string;
@@ -97,4 +104,49 @@ export function linkedRowKey(
 ): string {
   const key = metadata.get(model)!.primaryKeys.map((field) => row[field.name]);
   return `${model}\u0000${canonicalToken(key)}`;
+}
+
+function collectRemovals(
+  metadata: ModelMetadataIndex,
+  model: string,
+  data: unknown,
+  parent: (root: Filter) => Filter,
+  unwrap: (model: string, where: unknown) => unknown,
+  into: LinkRemoval[],
+): void {
+  if (!data || typeof data !== 'object') {
+    return;
+  }
+  for (const relation of planNestedWrites(metadata, metadata.get(model)!.model, data as Filter)) {
+    const target = relation.target.name;
+    const opposite = oppositeRelation(metadata, model, relation.field);
+    const linkedTo = (root: Filter): Filter => ({
+      [opposite.name]: opposite.isList ? { some: parent(root) } : { is: parent(root) },
+    });
+    for (const operation of relation.operations) {
+      if (operation.kind === 'set' || (operation.kind === 'disconnect' && operation.payloads.includes(true))) {
+        into.push(Object.freeze({ model: target, linkedTo }));
+      }
+      if (operation.kind !== 'update' && operation.kind !== 'upsert') {
+        continue;
+      }
+      for (const payload of operation.payloads) {
+        const nested = nestedPayloads(operation.kind, payload);
+        const where = nested.where && typeof nested.where === 'object' ? unwrap(target, nested.where) : undefined;
+        const child = (root: Filter): Filter => (where ? { AND: [where, linkedTo(root)] } : linkedTo(root));
+        collectRemovals(metadata, target, nested.data, child, unwrap, into);
+      }
+    }
+  }
+}
+
+export function collectLinkRemovals(
+  metadata: ModelMetadataIndex,
+  model: string,
+  data: unknown,
+  unwrap: (model: string, where: unknown) => unknown,
+): readonly LinkRemoval[] {
+  const removals: LinkRemoval[] = [];
+  collectRemovals(metadata, model, data, (root) => root, unwrap, removals);
+  return removals;
 }

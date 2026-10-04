@@ -78,3 +78,47 @@ model Profile {
 
   @@map("profiles")
 }
+
+model Thread {
+  id      Int     @id
+  title   String
+  replies Reply[]
+  watches Watch[]
+
+  @@map("threads")
+}
+
+model Reply {
+  id       Int      @id
+  threadId Int      @map("thread_id")
+  body     String
+  amount   Decimal?
+  postedAt DateTime @map("posted_at")
+  thread   Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+
+  @@map("replies")
+}
+
+model Watch {
+  id       Int     @id
+  threadId Int?    @map("thread_id")
+  thread   Thread? @relation(fields: [threadId], references: [id], onDelete: SetNull)
+
+  @@map("watches")
+}
+
+model Channel {
+  slug     String    @unique
+  title    String
+  messages Message[]
+
+  @@map("channels")
+}
+
+model Message {
+  id          Int     @id
+  channelSlug String  @map("channel_slug")
+  channel     Channel @relation(fields: [channelSlug], references: [slug], onDelete: Cascade)
+
+  @@map("messages")
+}

@@ -145,6 +145,36 @@ export function planNestedWrites(
   return Object.freeze(plans);
 }
 
+export function oppositeRelation(
+  metadata: ModelMetadataIndex,
+  parent: string,
+  field: DatamodelField,
+): DatamodelField {
+  const opposite = metadata.get(field.type)!.relations.find(
+    (candidate) =>
+      candidate.relationName === field.relationName &&
+      !(field.type === parent && candidate.name === field.name),
+  );
+  if (!opposite) {
+    throw new Error(`Relation ${parent}.${field.name} has no opposite field on ${field.type}`);
+  }
+  return opposite;
+}
+
+export function nestedPayloads(
+  kind: 'update' | 'upsert',
+  payload: unknown,
+): { where?: unknown; data: unknown } {
+  const item = (payload ?? {}) as { where?: unknown; data?: unknown; update?: unknown };
+  if (kind === 'upsert') {
+    return { where: item.where, data: item.update };
+  }
+  if (item.data && typeof item.data === 'object') {
+    return { where: item.where, data: item.data };
+  }
+  return { data: item };
+}
+
 function compareFilter(value: unknown, filter: unknown): boolean {
   if (value instanceof Date || filter instanceof Date) {
     const left = value instanceof Date ? value.getTime() : value;

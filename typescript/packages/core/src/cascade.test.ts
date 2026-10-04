@@ -80,6 +80,26 @@ function datamodel(provider: string): DatamodelDocument {
         ],
       },
       {
+        name: 'Channel',
+        dbName: 'channels',
+        fields: [
+          field({ name: 'slug', type: 'String', isUnique: true }),
+          field({ name: 'title', type: 'String' }),
+          many('messages', 'Message', 'ChannelMessages'),
+        ],
+      },
+      {
+        name: 'Message',
+        fields: [
+          field({ name: 'id', type: 'String', isId: true }),
+          field({ name: 'channelSlug', type: 'String', dbName: 'channel_slug' }),
+          field({
+            name: 'channel', type: 'Channel', kind: 'object', relationName: 'ChannelMessages',
+            relationFromFields: ['channelSlug'], relationToFields: ['slug'], relationOnDelete: 'Cascade',
+          }),
+        ],
+      },
+      {
         name: 'Node',
         fields: [
           field({ name: 'id', type: 'String', isId: true }),
@@ -106,6 +126,12 @@ function tables() {
     ],
     Bookmark: [{ id: 'b1', postId: 'p1' }, { id: 'b2', postId: 'p2' }],
     Citation: [{ id: 'x1', postId: 'p2' }],
+    Channel: [{ slug: 'general', title: 'General' }, { slug: 'random', title: 'Random' }],
+    Message: [
+      { id: 'm1', channelSlug: 'general' },
+      { id: 'm2', channelSlug: 'general' },
+      { id: 'm3', channelSlug: 'random' },
+    ],
     Node: [
       { id: 'n1', parentId: 'n3' },
       { id: 'n2', parentId: 'n1' },
@@ -220,6 +246,34 @@ describe.each(['sqlite', 'postgresql'])('cascaded delete events on %s', (provide
     });
 
     expect(published[0].events.map((event) => event.id)).toEqual(['n1', 'n2', 'n3']);
+  });
+
+  it('identifies a unique-only root by its unique field and publishes its dependents', async () => {
+    const { publisher, published } = publisherFor(provider, ['Message']);
+    const batch = batchFor(provider, 'Channel');
+
+    await publisher({
+      model: 'Channel', operation: 'delete', args: { where: { slug: 'general' } }, query: jest.fn(),
+      batch: batch.runtime,
+    });
+
+    expect(published).toEqual([{ topic: 'golem.Message', events: [
+      { type: 'DELETED', model: 'Message', id: 'm1', entity: { id: 'm1', channelSlug: 'general' } },
+      { type: 'DELETED', model: 'Message', id: 'm2', entity: { id: 'm2', channelSlug: 'general' } },
+    ] }]);
+    expect(batch.delegates.get('Channel')!.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('counts the dependents of a unique-only root against the cap', async () => {
+    const { publisher, published } = publisherFor(provider, ['Message'], 2);
+    const batch = batchFor(provider, 'Channel');
+
+    await expect(publisher({
+      model: 'Channel', operation: 'deleteMany', args: { where: { slug: 'general' } }, query: jest.fn(),
+      batch: batch.runtime,
+    })).rejects.toThrow('Deleting from Channel would touch more than the maximum of 2 rows');
+    expect(batch.delegates.get('Channel')!.deleteMany).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
   });
 
   it('leaves Restrict dependents to the database', async () => {

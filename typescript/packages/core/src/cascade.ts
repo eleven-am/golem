@@ -1,8 +1,8 @@
 import { canonicalToken } from './canonical';
-import { DatamodelField, DatamodelModel } from './datamodel';
+import { DatamodelField, DatamodelModel, rowIdentityFields } from './datamodel';
 import { GolemConflictError, GolemValidationError } from './errors';
 import { buildModelMetadata, ModelMetadataIndex } from './model-meta';
-import { planNestedWrites } from './nested-writes';
+import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
 
 type Row = Record<string, unknown>;
 type Tuples = readonly (readonly unknown[])[];
@@ -83,9 +83,13 @@ export class CascadePlan {
   }
 
   primaryKey(model: string): readonly string[] {
-    const definition = this.modelsByName.get(model)!;
-    return definition.primaryKey?.fields ??
-      definition.fields.filter((field) => field.isId).map((field) => field.name);
+    const identity = rowIdentityFields(this.modelsByName.get(model)!);
+    if (!identity) {
+      throw new GolemValidationError(
+        `Cannot delete from ${model}: it has no primary key or required unique field to identify the rows a delete touches`,
+      );
+    }
+    return identity;
   }
 
   scalarFields(model: string): readonly DatamodelField[] {
@@ -247,29 +251,6 @@ export async function enumerateCascade(
   return { deleted, updated };
 }
 
-function oppositeRelation(plan: CascadePlan, parent: string, field: DatamodelField): DatamodelField {
-  const opposite = plan.metadata.get(field.type)!.relations.find(
-    (candidate) =>
-      candidate.relationName === field.relationName &&
-      !(field.type === parent && candidate.name === field.name),
-  );
-  if (!opposite) {
-    throw new Error(`Relation ${parent}.${field.name} has no opposite field on ${field.type}`);
-  }
-  return opposite;
-}
-
-function nestedPayloads(kind: 'update' | 'upsert', payload: unknown): { where?: unknown; data: unknown } {
-  const item = (payload ?? {}) as { where?: unknown; data?: unknown; update?: unknown };
-  if (kind === 'upsert') {
-    return { where: item.where, data: item.update };
-  }
-  if (item.data && typeof item.data === 'object') {
-    return { where: item.where, data: item.data };
-  }
-  return { data: item };
-}
-
 export async function enumerateNestedDeletes(
   plan: CascadePlan,
   dialect: CascadeDialect,
@@ -287,7 +268,7 @@ export async function enumerateNestedDeletes(
   const parentWhere = tupleWhere(keys, parents.map((row) => keys.map((name) => row[name])));
   for (const relation of planNestedWrites(plan.metadata, plan.metadata.get(model)!.model, data as Row)) {
     const target = relation.target.name;
-    const opposite = oppositeRelation(plan, model, relation.field);
+    const opposite = oppositeRelation(plan.metadata, model, relation.field);
     const link = { [opposite.name]: opposite.isList ? { some: parentWhere } : { is: parentWhere } };
     const rowsWhere = async (where: unknown): Promise<Row[]> => {
       const filter = where && typeof where === 'object' ? { AND: [where, link] } : link;

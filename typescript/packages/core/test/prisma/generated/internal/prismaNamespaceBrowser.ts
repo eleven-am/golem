@@ -57,7 +57,12 @@ export const ModelName = {
   User: 'User',
   Secret: 'Secret',
   Metric: 'Metric',
-  Profile: 'Profile'
+  Profile: 'Profile',
+  Thread: 'Thread',
+  Reply: 'Reply',
+  Watch: 'Watch',
+  Channel: 'Channel',
+  Message: 'Message'
 } as const
 
 export type ModelName = (typeof ModelName)[keyof typeof ModelName]
@@ -142,6 +147,49 @@ export const ProfileScalarFieldEnum = {
 } as const
 
 export type ProfileScalarFieldEnum = (typeof ProfileScalarFieldEnum)[keyof typeof ProfileScalarFieldEnum]
+
+
+export const ThreadScalarFieldEnum = {
+  id: 'id',
+  title: 'title'
+} as const
+
+export type ThreadScalarFieldEnum = (typeof ThreadScalarFieldEnum)[keyof typeof ThreadScalarFieldEnum]
+
+
+export const ReplyScalarFieldEnum = {
+  id: 'id',
+  threadId: 'threadId',
+  body: 'body',
+  amount: 'amount',
+  postedAt: 'postedAt'
+} as const
+
+export type ReplyScalarFieldEnum = (typeof ReplyScalarFieldEnum)[keyof typeof ReplyScalarFieldEnum]
+
+
+export const WatchScalarFieldEnum = {
+  id: 'id',
+  threadId: 'threadId'
+} as const
+
+export type WatchScalarFieldEnum = (typeof WatchScalarFieldEnum)[keyof typeof WatchScalarFieldEnum]
+
+
+export const ChannelScalarFieldEnum = {
+  slug: 'slug',
+  title: 'title'
+} as const
+
+export type ChannelScalarFieldEnum = (typeof ChannelScalarFieldEnum)[keyof typeof ChannelScalarFieldEnum]
+
+
+export const MessageScalarFieldEnum = {
+  id: 'id',
+  channelSlug: 'channelSlug'
+} as const
+
+export type MessageScalarFieldEnum = (typeof MessageScalarFieldEnum)[keyof typeof MessageScalarFieldEnum]
 
 
 export const SortOrder = {

@@ -52,6 +52,29 @@ const DDL = [
      "artist_name" TEXT NOT NULL
    )`,
   `CREATE INDEX "posts_author_id_idx" ON "posts" ("author_id")`,
+  `CREATE TABLE "threads" (
+     "id" INTEGER PRIMARY KEY,
+     "title" TEXT NOT NULL
+   )`,
+  `CREATE TABLE "replies" (
+     "id" INTEGER PRIMARY KEY,
+     "thread_id" INTEGER NOT NULL REFERENCES "threads"("id") ON DELETE CASCADE,
+     "body" TEXT NOT NULL,
+     "amount" DECIMAL,
+     "posted_at" DATETIME NOT NULL
+   )`,
+  `CREATE TABLE "watches" (
+     "id" INTEGER PRIMARY KEY,
+     "thread_id" INTEGER REFERENCES "threads"("id") ON DELETE SET NULL
+   )`,
+  `CREATE TABLE "channels" (
+     "slug" TEXT NOT NULL UNIQUE,
+     "title" TEXT NOT NULL
+   )`,
+  `CREATE TABLE "messages" (
+     "id" INTEGER PRIMARY KEY,
+     "channel_slug" TEXT NOT NULL REFERENCES "channels"("slug") ON DELETE CASCADE
+   )`,
 ];
 
 export interface SqliteHandle {
