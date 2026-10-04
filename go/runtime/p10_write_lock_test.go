@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -22,91 +21,8 @@ type p10SoakWrite struct {
 
 var errP10CallbackStopped = errors.New("callback stopped by the test")
 
-func p10DirectWriteIsWaiting() bool {
-	buffer := make([]byte, 1<<22)
-	stacks := string(buffer[:goruntime.Stack(buffer, true)])
-	for _, stack := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(stack, "(*executionBinding).acquire(") && strings.Contains(stack, "sync.(*Mutex).Lock") && !strings.Contains(stack, "newCallerHookExecutor") {
-			return true
-		}
-	}
-	return false
-}
-
 func p10TeamInput(id golem.UUID) p10operations.TeamCreateInput {
 	return p10operations.Teams.Create(p10operations.Teams.ID.Create(id), p10operations.Teams.Owner.Create("alpha"))
-}
-
-func TestDirectTransactionWriteOverlappingAFailingHookWriteSurvivesAcrossProviders(t *testing.T) {
-	directWrites := map[string]func(context.Context, *p10operations.CallerTx[p10operations.Principal], golem.UUID) error{
-		"caller": func(ctx context.Context, tx *p10operations.CallerTx[p10operations.Principal], id golem.UUID) error {
-			_, err := tx.Teams.Create(ctx, p10TeamInput(id))
-			return err
-		},
-		"system escape": func(ctx context.Context, tx *p10operations.CallerTx[p10operations.Principal], id golem.UUID) error {
-			_, err := p10operations.SystemEscape(tx).Teams.Create(ctx, p10TeamInput(id))
-			return err
-		},
-	}
-	for _, nested := range []bool{false, true} {
-		for name, direct := range directWrites {
-			nested, direct := nested, direct
-			if nested {
-				name += " through the hook context"
-			}
-			t.Run(name, func(t *testing.T) {
-				forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
-					caller := fixture.caller(t, "alpha")
-					outer, inner, overlapping := p10OperationID(t, 6600), p10OperationID(t, 6601), p10OperationID(t, 6602)
-					directDone := make(chan struct{})
-					directResult := make(chan error, 1)
-					var transaction *p10operations.CallerTx[p10operations.Principal]
-					var innerErr error
-					p10operations.Reset(nil)
-					p10operations.SetTeamHook(func(ctx context.Context, executor golem.HookExecutor) error {
-						switch p10AttemptDepth(ctx) {
-						case 0:
-							directContext := context.Background()
-							if nested {
-								directContext = ctx
-							}
-							go func() {
-								directResult <- direct(context.WithValue(directContext, p10AttemptDepthKey{}, 9), transaction, overlapping)
-								close(directDone)
-							}()
-							innerErr = fixture.createTeam(context.WithValue(ctx, p10AttemptDepthKey{}, 1), executor, inner)
-						case 1:
-							p10AwaitCondition(func() bool { return p10Closed(directDone) || p10DirectWriteIsWaiting() })
-							return errP10FailingInnerHook
-						}
-						return nil
-					})
-					before := fixture.outboxRows(t)
-					err := caller.Transaction(context.Background(), func(tx *p10operations.CallerTx[p10operations.Principal]) error {
-						transaction = tx
-						if _, err := tx.Teams.Create(context.Background(), p10TeamInput(outer)); err != nil {
-							return err
-						}
-						return <-directResult
-					})
-					if err != nil {
-						t.Fatalf("transaction = %v", err)
-					}
-					if innerErr == nil {
-						t.Fatal("the failing hook write succeeded")
-					}
-					for id, want := range map[golem.UUID]bool{outer: true, overlapping: true, inner: false} {
-						if _, ok := fixture.teamOwner(t, id); ok != want {
-							t.Fatalf("team %s persisted=%t want %t", id, ok, want)
-						}
-					}
-					if got := fixture.outboxRows(t) - before; got != 2 {
-						t.Fatalf("outbox rows=%d want 2 for the outer and the overlapping write", got)
-					}
-				})
-			})
-		}
-	}
 }
 
 func TestBatchAfterHookPanicLeavesItsCapturedExecutorRefusedAcrossProviders(t *testing.T) {
@@ -210,7 +126,7 @@ func TestCallbackPanicDrainsAnInFlightWriteBeforeRollbackAcrossProviders(t *test
 	})
 }
 
-func TestConcurrentWritesAndReadsOnOneTransactionStayConsistentAcrossProviders(t *testing.T) {
+func TestOverlappingWritesAndReadsOnOneTransactionAreRefusedAndStayConsistentAcrossProviders(t *testing.T) {
 	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
 		caller := fixture.caller(t, "alpha")
 		const workers, rounds = 8, 4
@@ -255,7 +171,7 @@ func TestConcurrentWritesAndReadsOnOneTransactionStayConsistentAcrossProviders(t
 							persisted[id] = err == nil
 							persisted[child] = err == nil && !spec.fails
 							mu.Unlock()
-							if err != nil {
+							if err != nil && !p10ConcurrentUse(err) {
 								failures <- fmt.Errorf("direct write %d = %w", index, err)
 							}
 						case 2:
@@ -264,17 +180,17 @@ func TestConcurrentWritesAndReadsOnOneTransactionStayConsistentAcrossProviders(t
 							persisted[id] = err == nil
 							persisted[child] = false
 							mu.Unlock()
-							if err != nil {
+							if err != nil && !p10ConcurrentUse(err) {
 								failures <- fmt.Errorf("system write %d = %w", index, err)
 							}
 						case 3:
 							mu.Lock()
 							persisted[id], persisted[child] = false, false
 							mu.Unlock()
-							if _, err := tx.Teams.Count(context.Background(), golem.Where(p10operations.Teams.Owner.Eq("alpha"))); err != nil {
+							if _, err := tx.Teams.Count(context.Background(), golem.Where(p10operations.Teams.Owner.Eq("alpha"))); err != nil && !p10ConcurrentUse(err) {
 								failures <- fmt.Errorf("count %d = %w", index, err)
 							}
-							if _, err := tx.Teams.FindMany(context.Background(), golem.Where(p10operations.Teams.Owner.Eq("alpha"))); err != nil {
+							if _, err := tx.Teams.FindMany(context.Background(), golem.Where(p10operations.Teams.Owner.Eq("alpha"))); err != nil && !p10ConcurrentUse(err) {
 								failures <- fmt.Errorf("read %d = %w", index, err)
 							}
 						}

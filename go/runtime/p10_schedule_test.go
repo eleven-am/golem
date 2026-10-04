@@ -7,6 +7,7 @@ import (
 	"math/rand"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -103,17 +104,18 @@ func (write *p10ScheduleWrite) persisted(committed bool) bool {
 }
 
 type p10Schedule struct {
-	t        *testing.T
-	fixture  *p10OperationFixture
-	tx       *p10operations.CallerTx[p10operations.Principal]
-	mu       sync.Mutex
-	random   *rand.Rand
-	next     int
-	base     int
-	writes   []*p10ScheduleWrite
-	retained []context.Context
-	pending  sync.WaitGroup
-	progress atomic.Int64
+	t          *testing.T
+	fixture    *p10OperationFixture
+	tx         *p10operations.CallerTx[p10operations.Principal]
+	mu         sync.Mutex
+	random     *rand.Rand
+	next       int
+	base       int
+	writes     []*p10ScheduleWrite
+	retained   []context.Context
+	pending    sync.WaitGroup
+	progress   atomic.Int64
+	unexpected atomic.Pointer[error]
 }
 
 func (schedule *p10Schedule) intn(n int) int {
@@ -215,11 +217,11 @@ func (schedule *p10Schedule) hook(ctx context.Context, executor golem.HookExecut
 			_, _ = golem.HookFindManyRows(schedule.context(step.source, write, ctx), executor, p10operations.GolemGeneratedTeamDescriptor, golem.Where(p10operations.Teams.Owner.Eq("alpha")))
 		case p10ActionNestedDirectWrite:
 			step.child.outer = executor
-			callCtx := context.WithValue(ctx, p10ScheduleKey{}, step.child)
+			callCtx := context.WithValue(schedule.context(step.source, write, ctx), p10ScheduleKey{}, step.child)
 			_, err := schedule.tx.Teams.Create(callCtx, p10TeamInput(step.child.id))
 			schedule.finish(step.child, err)
 		case p10ActionNestedRead:
-			_, _ = schedule.tx.Teams.Count(ctx, golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+			_, _ = schedule.tx.Teams.Count(schedule.context(step.source, write, ctx), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
 		case p10ActionEscapedExecutorWrite:
 			child := step.child
 			child.outer = executor
@@ -254,21 +256,25 @@ func (schedule *p10Schedule) hook(ctx context.Context, executor golem.HookExecut
 
 func (schedule *p10Schedule) root(worker int) {
 	for round := schedule.intn(4) + 1; round > 0; round-- {
+		var err error
 		switch schedule.intn(5) {
 		case 0, 1:
 			write := schedule.newWrite(nil)
-			_, err := schedule.tx.Teams.Create(context.WithValue(context.Background(), p10ScheduleKey{}, write), p10TeamInput(write.id))
+			_, err = schedule.tx.Teams.Create(context.WithValue(context.Background(), p10ScheduleKey{}, write), p10TeamInput(write.id))
 			schedule.finish(write, err)
 		case 2:
 			write := schedule.newWrite(nil)
-			_, err := p10operations.SystemEscape(schedule.tx).Teams.Create(context.Background(), p10TeamInput(write.id))
+			_, err = p10operations.SystemEscape(schedule.tx).Teams.Create(context.Background(), p10TeamInput(write.id))
 			schedule.finish(write, err)
 		case 3:
 			write := schedule.newWrite(nil)
-			_, err := schedule.tx.Teams.Create(context.WithValue(schedule.retainedContext(), p10ScheduleKey{}, write), p10TeamInput(write.id))
+			_, err = schedule.tx.Teams.Create(context.WithValue(schedule.retainedContext(), p10ScheduleKey{}, write), p10TeamInput(write.id))
 			schedule.finish(write, err)
 		case 4:
-			_, _ = schedule.tx.Teams.FindMany(schedule.retainedContext(), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+			_, err = schedule.tx.Teams.FindMany(schedule.retainedContext(), golem.Where(p10operations.Teams.Owner.Eq("alpha")))
+		}
+		if err != nil && !p10ConcurrentUse(err) && !strings.Contains(err.Error(), "after its callback returned") && !strings.Contains(err.Error(), "execution binding is unavailable") {
+			schedule.unexpected.Store(&err)
 		}
 		schedule.progress.Add(1)
 	}
@@ -333,6 +339,9 @@ func TestRandomTransactionSchedulesFinishAndStayConsistentAcrossProviders(t *tes
 				}()
 				schedule.pending.Wait()
 			})
+			if unexpected := schedule.unexpected.Load(); unexpected != nil {
+				t.Fatalf("seed %d: a root call failed for a reason other than overlap or the callback ending: %v", seed, *unexpected)
+			}
 			if end == p10SchedulePanicsMidFlight {
 				if recovered != "schedule panicked" {
 					t.Fatalf("seed %d: recovered %v", seed, recovered)

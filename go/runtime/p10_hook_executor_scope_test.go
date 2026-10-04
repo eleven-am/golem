@@ -4,25 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	goruntime "runtime"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/eleven-am/golem/go/golem"
 	"github.com/eleven-am/golem/go/runtime/testdata/p10operations"
 )
-
-func p10HookWriteIsWaiting() bool {
-	buffer := make([]byte, 1<<22)
-	stacks := string(buffer[:goruntime.Stack(buffer, true)])
-	for _, stack := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(stack, "(*executionBinding).acquire(") && strings.Contains(stack, "sync.(*Mutex).Lock") {
-			return true
-		}
-	}
-	return false
-}
 
 func p10Closed(channel chan struct{}) bool {
 	select {
@@ -115,74 +102,6 @@ func TestEscapedHookExecutorIsRefusedAfterItsHookReturnsAcrossProviders(t *testi
 				}
 				if exists, _, _ := fixture.inviteExists(t, invite); exists {
 					t.Fatal("an escaped executor's grant write persisted")
-				}
-			})
-		})
-	}
-}
-
-func TestConcurrentHookWritesOnOneTransactionAcrossProviders(t *testing.T) {
-	for _, secondFails := range []bool{false, true} {
-		secondFails := secondFails
-		name := "both succeed"
-		if secondFails {
-			name = "one fails"
-		}
-		t.Run(name, func(t *testing.T) {
-			forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
-				caller := fixture.caller(t, "alpha")
-				outer, first, second := p10OperationID(t, 6100), p10OperationID(t, 6101), p10OperationID(t, 6102)
-				firstArrived, secondArrived, firstDone := make(chan struct{}), make(chan struct{}), make(chan struct{})
-				var firstErr, secondErr error
-				p10operations.Reset(nil)
-				p10operations.SetTeamHook(func(ctx context.Context, executor golem.HookExecutor) error {
-					switch ctx.Value(p10AttemptDepthKey{}) {
-					case nil:
-						var wait sync.WaitGroup
-						wait.Add(2)
-						go func() {
-							defer wait.Done()
-							firstErr = fixture.createTeam(context.WithValue(ctx, p10AttemptDepthKey{}, "first"), executor, first)
-							close(firstDone)
-						}()
-						go func() {
-							defer wait.Done()
-							secondErr = fixture.createTeam(context.WithValue(ctx, p10AttemptDepthKey{}, "second"), executor, second)
-						}()
-						wait.Wait()
-						return nil
-					case "first":
-						close(firstArrived)
-						p10AwaitCondition(func() bool { return p10Closed(secondArrived) || p10HookWriteIsWaiting() })
-						return nil
-					case "second":
-						if p10Closed(firstArrived) && !p10Closed(firstDone) && !p10HookWriteIsWaiting() {
-							close(secondArrived)
-							<-firstDone
-						} else {
-							close(secondArrived)
-						}
-						if secondFails {
-							return errP10FailingInnerHook
-						}
-						return nil
-					}
-					return nil
-				})
-				_, err := caller.Teams.Create(context.Background(), p10operations.Teams.Create(p10operations.Teams.ID.Create(outer), p10operations.Teams.Owner.Create("alpha")))
-				if err != nil {
-					t.Fatalf("outer write with concurrent hook writes = %v", err)
-				}
-				if firstErr != nil {
-					t.Fatalf("first concurrent hook write = %v", firstErr)
-				}
-				if secondFails != (secondErr != nil) {
-					t.Fatalf("second concurrent hook write = %v", secondErr)
-				}
-				for id, want := range map[golem.UUID]bool{outer: true, first: true, second: !secondFails} {
-					if _, ok := fixture.teamOwner(t, id); ok != want {
-						t.Fatalf("team %s persisted=%t want %t", id, ok, want)
-					}
 				}
 			})
 		})

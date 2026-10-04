@@ -13,6 +13,8 @@ var errHookExecutorExpired = errors.New("P4_RUNTIME_HOOK_EXECUTOR: executor used
 
 var errTransactionCallEnded = errors.New("P4_RUNTIME_TRANSACTION: transaction used after its callback returned")
 
+var errTransactionConcurrentUse = errors.New("P4_RUNTIME_TRANSACTION: transaction used concurrently; a transaction serves one call chain at a time")
+
 type usageGate struct {
 	mu       sync.Mutex
 	idle     sync.Cond
@@ -51,6 +53,12 @@ func (gate *usageGate) close() {
 	}
 }
 
+func (gate *usageGate) isClosed() bool {
+	gate.mu.Lock()
+	defer gate.mu.Unlock()
+	return gate.closed
+}
+
 func (gate *usageGate) init() *usageGate {
 	gate.idle.L = &gate.mu
 	return gate
@@ -65,9 +73,9 @@ type heldWrite struct {
 	scope   *heldWrite
 	binding *executionBinding
 	owner   *heldWrite
-	nested  sync.Mutex
-	ended   atomic.Bool
-	hook    *usageGate
+	hook    bool
+	calls   *usageGate
+	active  atomic.Bool
 }
 
 type heldWriteKey struct{}
@@ -126,26 +134,18 @@ func (binding *executionBinding) beginHookExecutorCall(ctx context.Context, capt
 func (binding *executionBinding) acquire(ctx context.Context, start, floor *heldWrite) (context.Context, func(), error) {
 	owner := start
 	for owner != nil {
-		if owner.hook != nil {
-			if owner.hook.enter() {
-				owner.nested.Lock()
+		if owner.calls.enter() {
+			if owner.active.CompareAndSwap(false, true) {
 				break
 			}
-			if owner == floor {
-				return ctx, nil, errHookExecutorExpired
-			}
-			if owner = owner.owner; owner != nil {
-				owner = owner.owner
-			}
-			continue
+			owner.calls.leave()
+			return ctx, nil, errTransactionConcurrentUse
 		}
-		owner.nested.Lock()
-		if !owner.ended.Load() {
-			break
-		}
-		owner.nested.Unlock()
 		if owner == floor {
 			return ctx, nil, errHookExecutorExpired
+		}
+		if owner.hook && owner.owner != nil {
+			owner = owner.owner
 		}
 		owner = owner.owner
 	}
@@ -153,9 +153,12 @@ func (binding *executionBinding) acquire(ctx context.Context, start, floor *held
 		if !binding.calls.enter() {
 			return ctx, nil, errTransactionCallEnded
 		}
-		binding.writeLock.Lock()
+		if !binding.serving.CompareAndSwap(false, true) {
+			binding.calls.leave()
+			return ctx, nil, errTransactionConcurrentUse
+		}
 	}
-	held := &heldWrite{scope: innermostHeldWrite(ctx), binding: binding, owner: owner}
+	held := &heldWrite{scope: innermostHeldWrite(ctx), binding: binding, owner: owner, calls: (&usageGate{}).init()}
 	if ctx != nil {
 		ctx = context.WithValue(ctx, heldWriteKey{}, held)
 	}
@@ -163,17 +166,13 @@ func (binding *executionBinding) acquire(ctx context.Context, start, floor *held
 }
 
 func (held *heldWrite) end() {
-	held.nested.Lock()
-	held.ended.Store(true)
-	held.nested.Unlock()
+	held.calls.close()
 	if held.owner != nil {
-		held.owner.nested.Unlock()
-		if held.owner.hook != nil {
-			held.owner.hook.leave()
-		}
+		held.owner.active.Store(false)
+		held.owner.calls.leave()
 		return
 	}
-	held.binding.writeLock.Unlock()
+	held.binding.serving.Store(false)
 	held.binding.calls.leave()
 }
 
@@ -191,25 +190,18 @@ func openHookScope(ctx context.Context) (context.Context, func()) {
 			continue
 		}
 		seen[held.binding] = true
-		if held.hook != nil || held.ended.Load() {
+		if held.hook || held.calls.isClosed() {
 			continue
 		}
-		scope := &heldWrite{scope: innermostHeldWrite(ctx), binding: held.binding, owner: held, hook: (&usageGate{}).init()}
+		scope := &heldWrite{scope: innermostHeldWrite(ctx), binding: held.binding, owner: held, hook: true, calls: (&usageGate{}).init()}
 		ctx = context.WithValue(ctx, heldWriteKey{}, scope)
 		scopes = append(scopes, scope)
 	}
 	return ctx, func() {
 		for _, scope := range scopes {
-			scope.closeHookScope()
+			scope.calls.close()
 		}
 	}
-}
-
-func (scope *heldWrite) closeHookScope() {
-	scope.hook.close()
-	scope.nested.Lock()
-	scope.ended.Store(true)
-	scope.nested.Unlock()
 }
 
 func withinHookScope[R any](ctx context.Context, run func(context.Context) (R, error)) (R, error) {

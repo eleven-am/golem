@@ -36,7 +36,7 @@ type executionBinding struct {
 	observer        observe.Observer
 	queueWake       atomic.Pointer[func()]
 	operationWrites *operationWriteLog
-	writeLock       sync.Mutex
+	serving         atomic.Bool
 	calls           usageGate
 }
 
