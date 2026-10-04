@@ -2,6 +2,8 @@ package codegen
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -9,6 +11,7 @@ import (
 	"go/format"
 	"go/parser"
 	"go/token"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,17 +47,148 @@ type GeneratedFile struct {
 	Source   []byte
 }
 
+// ExecutableCache reuses one pinned gqlgen run for every Emit whose gqlgen
+// inputs are identical. Only the generation stamp differs between such emits,
+// so the cached unstamped files are stamped per request. The zero value is
+// ready for use and is safe for concurrent use.
+type ExecutableCache struct {
+	mu          sync.Mutex
+	executables map[[sha256.Size]byte][]GeneratedFile
+	generations int
+}
+
+// Generations reports how many pinned gqlgen runs the cache has performed.
+func (cache *ExecutableCache) Generations() int {
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	return cache.generations
+}
+
+func (cache *ExecutableCache) executable(request Request, schema *gqlast.Schema, moduleDir string, module privateModule) ([]GeneratedFile, error) {
+	key, err := executableKey(request, moduleDir, module)
+	if err != nil {
+		return nil, err
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if files, ok := cache.executables[key]; ok {
+		return files, nil
+	}
+	files, err := generateUnstampedExecutable(request, schema, moduleDir, module.source)
+	if err != nil {
+		return nil, err
+	}
+	if cache.executables == nil {
+		cache.executables = map[[sha256.Size]byte][]GeneratedFile{}
+	}
+	cache.executables[key] = files
+	cache.generations++
+	return files, nil
+}
+
+func executableKey(request Request, moduleDir string, module privateModule) ([sha256.Size]byte, error) {
+	hash := sha256.New()
+	write := func(value string) {
+		var length [8]byte
+		binary.BigEndian.PutUint64(length[:], uint64(len(value)))
+		hash.Write(length[:])
+		hash.Write([]byte(value))
+	}
+	write(GQLGenVersion)
+	write(request.SDL)
+	write(request.GraphQLImportPath)
+	write(moduleDir)
+	write(string(module.source))
+	for _, environment := range [][]string{request.Env, os.Environ()} {
+		write(strconv.Itoa(len(environment)))
+		for _, value := range environment {
+			write(value)
+		}
+	}
+	write(module.directory)
+	if module.directory != "" {
+		if err := writeSourceTree(module.directory, write); err != nil {
+			return [sha256.Size]byte{}, fmt.Errorf("fingerprint private gqlgen module source %s: %w", module.directory, err)
+		}
+	}
+	var key [sha256.Size]byte
+	copy(key[:], hash.Sum(nil))
+	return key, nil
+}
+
+func writeSourceTree(root string, write func(string)) error {
+	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) && path != root {
+				return nil
+			}
+			return err
+		}
+		name := entry.Name()
+		if entry.IsDir() {
+			if path == root {
+				return nil
+			}
+			if name == "testdata" || strings.HasPrefix(name, ".") || strings.HasPrefix(name, "_") || strings.HasPrefix(name, "golemgqlgentmp") {
+				return filepath.SkipDir
+			}
+			if _, statErr := os.Stat(filepath.Join(path, "go.mod")); statErr == nil {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if name != "go.mod" && name != "go.sum" && (!strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go")) {
+			return nil
+		}
+		content, readErr := os.ReadFile(path)
+		if errors.Is(readErr, fs.ErrNotExist) {
+			return nil
+		}
+		if readErr != nil {
+			return readErr
+		}
+		relative, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		write(filepath.ToSlash(relative))
+		write(string(content))
+		return nil
+	})
+}
+
 func generateExecutable(request Request, schema *gqlast.Schema) ([]GeneratedFile, error) {
 	moduleDir, err := generationModuleDir(request.ModuleDir)
 	if err != nil {
 		return nil, err
 	}
+	module, err := resolvePrivateGQLGenModule(request, moduleDir)
+	if err != nil {
+		return nil, err
+	}
+	var files []GeneratedFile
+	if request.Executables == nil {
+		files, err = generateUnstampedExecutable(request, schema, moduleDir, module.source)
+	} else {
+		files, err = request.Executables.executable(request, schema, moduleDir, module)
+	}
+	if err != nil {
+		return nil, err
+	}
+	stamped := make([]GeneratedFile, len(files))
+	for index, file := range files {
+		stamped[index] = GeneratedFile{Filename: file.Filename, Source: stampGeneratedSource(file.Source, request)}
+	}
+	return stamped, nil
+}
+
+func generateUnstampedExecutable(request Request, schema *gqlast.Schema, moduleDir string, moduleSource []byte) ([]GeneratedFile, error) {
 	directory, err := os.MkdirTemp(moduleDir, "golemgqlgentmp")
 	if err != nil {
 		return nil, fmt.Errorf("create gqlgen prospective workspace: %w", err)
 	}
 	defer os.RemoveAll(directory)
-	if err := writePrivateGQLGenModule(directory, request, moduleDir); err != nil {
+	if err := writePrivateGQLGenModuleSource(directory, moduleSource); err != nil {
 		return nil, err
 	}
 
@@ -129,7 +263,7 @@ func generateExecutable(request Request, schema *gqlast.Schema) ([]GeneratedFile
 		// process working directory. Canonicalize it to the final layout where
 		// the executable package is a child of the application package.
 		source = generatedSDLSource.ReplaceAll(source, []byte(`{Name: "../`+SDLFilename+`", Input:`))
-		files[index].Source = stampGeneratedSource(source, request)
+		files[index].Source = source
 	}
 	return files, nil
 }
@@ -145,16 +279,43 @@ type moduleResolution struct {
 	} `json:"Replace"`
 }
 
-func writePrivateGQLGenModule(directory string, request Request, consumerModuleDir string) error {
+type privateModule struct {
+	source    []byte
+	directory string
+}
+
+func resolvePrivateGQLGenModule(request Request, consumerModuleDir string) (privateModule, error) {
 	modulePath := strings.TrimSuffix(request.GolemImportPath, "/golem")
 	resolved, err := resolveConsumerModule(consumerModuleDir, request.Env, modulePath)
 	if err != nil {
-		return err
+		return privateModule{}, err
 	}
 	source, err := privateGQLGenModuleSource(modulePath, resolved)
 	if err != nil {
+		return privateModule{}, err
+	}
+	return privateModule{source: source, directory: privateModuleDirectory(resolved)}, nil
+}
+
+func privateModuleDirectory(resolved moduleResolution) string {
+	if resolved.Replace != nil {
+		return resolved.Replace.Dir
+	}
+	if resolved.Version == "" {
+		return resolved.Dir
+	}
+	return ""
+}
+
+func writePrivateGQLGenModule(directory string, request Request, consumerModuleDir string) error {
+	module, err := resolvePrivateGQLGenModule(request, consumerModuleDir)
+	if err != nil {
 		return err
 	}
+	return writePrivateGQLGenModuleSource(directory, module.source)
+}
+
+func writePrivateGQLGenModuleSource(directory string, source []byte) error {
 	if err := os.WriteFile(filepath.Join(directory, "go.mod"), source, 0o600); err != nil {
 		return fmt.Errorf("write private gqlgen module: %w", err)
 	}

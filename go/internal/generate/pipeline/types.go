@@ -12,6 +12,7 @@ import (
 	modelcodegen "github.com/eleven-am/golem/go/internal/codegen/model"
 	"github.com/eleven-am/golem/go/internal/compiler/compile"
 	"github.com/eleven-am/golem/go/internal/compiler/ir"
+	graphqlcodegen "github.com/eleven-am/golem/go/internal/graphql/codegen"
 	"github.com/eleven-am/golem/go/internal/migration"
 	"github.com/eleven-am/golem/go/internal/physical"
 )
@@ -44,6 +45,9 @@ type Request struct {
 	// generated application. Production CLI generation supplies exactly one
 	// non-empty history for every declared provider.
 	ReviewedMigrations []ReviewedMigration
+	// GraphQLExecutables shares pinned gqlgen runs across every Build that
+	// receives the same cache. Build supplies its own cache when it is nil.
+	GraphQLExecutables *graphqlcodegen.ExecutableCache
 }
 
 type ReviewedMigration struct {
@@ -83,4 +87,25 @@ func (e *DiagnosticsError) Error() string {
 
 func Build(ctx context.Context, request Request) (Result, error) {
 	return build(ctx, request)
+}
+
+// Analyze runs every Build stage that reviewed migration history cannot
+// change: source compilation, binding discovery, contract canonicalization,
+// and provider lowering. Build is Analyze followed by Analysis.Build.
+func Analyze(ctx context.Context, request Request) (*Analysis, error) {
+	return analyze(ctx, request)
+}
+
+// Build emits, stamps, and prospectively compiles the analysed graph with the
+// given reviewed migration history in place of Request.ReviewedMigrations.
+func (analysis *Analysis) Build(ctx context.Context, reviewed []ReviewedMigration) (Result, error) {
+	return analysis.build(ctx, reviewed)
+}
+
+func (analysis *Analysis) ModelFingerprint() ir.Fingerprint {
+	return analysis.modelFingerprint
+}
+
+func (analysis *Analysis) Providers() []ProviderResult {
+	return append([]ProviderResult(nil), analysis.providers...)
 }

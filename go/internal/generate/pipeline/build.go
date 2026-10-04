@@ -32,59 +32,76 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
+// Analysis holds the outcome of every Build stage before artifact emission.
+type Analysis struct {
+	request             Request
+	compiled            compile.Result
+	compilation         ir.CompilationIR
+	entries             []bindings.Entry
+	providers           []ProviderResult
+	modelFingerprint    ir.Fingerprint
+	contractFingerprint ir.Fingerprint
+	generatorVersion    string
+	templateABI         string
+}
+
 func build(ctx context.Context, request Request) (Result, error) {
-	if err := ctx.Err(); err != nil {
+	analysis, err := analyze(ctx, request)
+	if err != nil {
 		return Result{}, err
+	}
+	return analysis.build(ctx, request.ReviewedMigrations)
+}
+
+func analyze(ctx context.Context, request Request) (*Analysis, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	compiled := compile.Compile(ctx, request.Compile)
 	if len(compiled.Diagnostics) != 0 {
-		return Result{}, diagnosticsError(compiled.Diagnostics)
+		return nil, diagnosticsError(compiled.Diagnostics)
 	}
 	if compiled.Compilation == nil || compiled.ModuleDir == "" || compiled.ModulePath == "" {
-		return Result{}, fmt.Errorf("generation compile returned incomplete package metadata")
+		return nil, fmt.Errorf("generation compile returned incomplete package metadata")
 	}
 	appPackage, err := resolveAppPackage(request.AppPackage, compiled)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	request.AppPackage = appPackage
 
 	compilation := *compiled.Compilation
 	discovered, err := discoverBindings(ctx, request, compiled, compilation)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	if len(discovered.Diagnostics) != 0 {
-		return Result{}, diagnosticsError(discovered.Diagnostics)
+		return nil, diagnosticsError(discovered.Diagnostics)
 	}
 	compilation.Contract.Methods = mergeBindingMethods(compilation.Contract.Methods, discovered.Methods)
 	if diagnostics := graphqlcontract.ValidateHookOwnedMethods(compilation); len(diagnostics) != 0 {
-		return Result{}, diagnosticsError(diagnostics)
+		return nil, diagnosticsError(diagnostics)
 	}
 	canonicalContract, err := canonicalContract(compilation.Contract)
 	if err != nil {
-		return Result{}, fmt.Errorf("canonicalize discovered contract: %w", err)
+		return nil, fmt.Errorf("canonicalize discovered contract: %w", err)
 	}
 	compilation.Contract = canonicalContract
 	modelFingerprint, err := ir.ModelFingerprint(compilation.Model)
 	if err != nil {
-		return Result{}, fmt.Errorf("fingerprint final model: %w", err)
+		return nil, fmt.Errorf("fingerprint final model: %w", err)
 	}
 	if modelFingerprint != compiled.ModelFingerprint {
-		return Result{}, fmt.Errorf("typed binding discovery changed persisted ModelIR")
+		return nil, fmt.Errorf("typed binding discovery changed persisted ModelIR")
 	}
 	contractFingerprint, err := ir.ContractFingerprint(compilation.Contract)
 	if err != nil {
-		return Result{}, fmt.Errorf("fingerprint discovered contract: %w", err)
+		return nil, fmt.Errorf("fingerprint discovered contract: %w", err)
 	}
 
 	providers, err := lowerProviders(ctx, compilation.Model, request.Lowerers, request.LowerOptions)
 	if err != nil {
-		return Result{}, err
-	}
-	migrationDocuments, err := reviewedMigrationDocuments(request.ReviewedMigrations, providers, modelFingerprint)
-	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	generatorVersion := request.GeneratorVersion
 	if generatorVersion == "" {
@@ -94,9 +111,28 @@ func build(ctx context.Context, request Request) (Result, error) {
 	if templateABI == "" {
 		templateABI = manifest.TemplateABIVersion
 	}
+	if request.GraphQLExecutables == nil {
+		request.GraphQLExecutables = &graphqlcodegen.ExecutableCache{}
+	}
+	request.ReviewedMigrations = nil
+	return &Analysis{
+		request: request, compiled: compiled, compilation: compilation,
+		entries: append([]bindings.Entry(nil), discovered.Entries...), providers: providers,
+		modelFingerprint: modelFingerprint, contractFingerprint: contractFingerprint,
+		generatorVersion: generatorVersion, templateABI: templateABI,
+	}, nil
+}
 
+func (analysis *Analysis) build(ctx context.Context, reviewed []ReviewedMigration) (Result, error) {
+	compiled, request, compilation := analysis.compiled, analysis.request, analysis.compilation
+	providers, modelFingerprint, contractFingerprint := analysis.providers, analysis.modelFingerprint, analysis.contractFingerprint
+	generatorVersion, templateABI := analysis.generatorVersion, analysis.templateABI
+	migrationDocuments, err := reviewedMigrationDocuments(reviewed, providers, modelFingerprint)
+	if err != nil {
+		return Result{}, err
+	}
 	emit := func(digest string) ([]manifest.Artifact, error) {
-		return emitArtifacts(compiled, request, compilation, discovered.Entries, providers, migrationDocuments, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI)
+		return emitArtifacts(compiled, request, compilation, analysis.entries, providers, migrationDocuments, modelFingerprint, contractFingerprint, digest, generatorVersion, templateABI)
 	}
 	provisionalArtifacts, err := emit(strings.Repeat("0", 64))
 	if err != nil {
@@ -125,7 +161,7 @@ func build(ctx context.Context, request Request) (Result, error) {
 	return Result{
 		Prospective: prospective, Compilation: compilation, ModelFingerprint: modelFingerprint,
 		ContractFingerprint: contractFingerprint, ModulePath: compiled.ModulePath, ModuleDir: compiled.ModuleDir,
-		Bindings: append([]bindings.Entry(nil), discovered.Entries...), Providers: providers,
+		Bindings: append([]bindings.Entry(nil), analysis.entries...), Providers: append([]ProviderResult(nil), providers...),
 	}, nil
 }
 
@@ -369,6 +405,7 @@ func emitArtifacts(compiled compile.Result, request Request, compilation ir.Comp
 		SDL: graphqlDocument.SDL, ContractFingerprint: contractFingerprint, Actor: compilation.Model.Schema.Actor,
 		MutationModels: graphqlMutationModels(compilation), Compilation: &compilation, GolemImportPath: request.GolemImportPath,
 		GenerationDigest: digest, GeneratorVersion: generatorVersion, TemplateABIVersion: templateABI,
+		Executables: request.GraphQLExecutables,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("emit GraphQL Go adapter: %w", err)

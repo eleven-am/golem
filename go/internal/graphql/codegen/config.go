@@ -54,6 +54,7 @@ type Request struct {
 	GenerationDigest    string
 	GeneratorVersion    string
 	TemplateABIVersion  string
+	Executables         *ExecutableCache
 }
 
 type MutationModel struct {
