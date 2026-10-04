@@ -27,6 +27,8 @@ Copy the model from `typescript/packages/core/prisma/golem-core.prisma` or apply
 
 The table stays bounded by `defaults.upsertGuardStripes` (4,096 by default). It stores only a stripe and monotonic sequence; model names and unique selector values are hashed and never persisted. All participating context-aware upserts for the same canonical model/selector serialize before the policy branch probe. Plain Prisma/external writers and differently addressed selectors do not participate. A caller-owned SQLite transaction that established an incompatible snapshot before the guard write now returns stable `CONFLICT`; retry only by repeating the complete transaction when that is safe.
 
+A nested `connectOrCreate` now follows the same identity rule as `upsert`: its `create` must set every unique selector in its `where` to the same value, directly, through a `connect` on that key's relation, or through the parent it is nested under. A `connectOrCreate` whose `create` leaves the selected id to a default used to create a new row on every call; it is now refused with `BAD_USER_INPUT` before any query. Copy the selector into `create`.
+
 ### 2. Regenerate GraphQL and TypeScript clients
 
 With authorization and `checkReadFields` enabled, every visible scalar/enum model output is now nullable, including required database columns. Inputs retain their existing Prisma requiredness, lists keep their list/item structure, and event identities stay non-null. Re-run GraphQL codegen and fix consumers that assumed a selected scalar could never be `null`.

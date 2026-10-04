@@ -909,3 +909,117 @@ describe('verification that cannot find a written row', () => {
       .rejects.toThrow(new GolemConflictError('The updated Item could not be read back for verification'));
   });
 });
+
+describe('connect-or-create target identity', () => {
+  const cocModels = [
+    {
+      name: 'Author',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true }),
+        field({ name: 'notes', type: 'Note', kind: 'object', isList: true, relationName: 'AuthorToNote' }),
+        field({ name: 'memberships', type: 'Membership', kind: 'object', isList: true, relationName: 'AuthorToMembership' }),
+      ],
+    },
+    {
+      name: 'Note',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'title', type: 'String' }),
+        field({ name: 'authorId', type: 'String', isRequired: false }),
+        field({ name: 'author', type: 'Author', kind: 'object', isRequired: false, relationName: 'AuthorToNote', relationFromFields: ['authorId'], relationToFields: ['id'] }),
+        field({ name: 'tags', type: 'Tag', kind: 'object', isList: true, relationName: 'NoteToTag' }),
+      ],
+    },
+    {
+      name: 'Tag',
+      fields: [
+        field({ name: 'id', type: 'String', isId: true, hasDefaultValue: true }),
+        field({ name: 'label', type: 'String', isUnique: true }),
+        field({ name: 'noteId', type: 'String', isRequired: false }),
+        field({ name: 'note', type: 'Note', kind: 'object', isRequired: false, relationName: 'NoteToTag', relationFromFields: ['noteId'], relationToFields: ['id'] }),
+      ],
+    },
+    { name: 'Team', fields: [
+      field({ name: 'id', type: 'String', isId: true }),
+      field({ name: 'memberships', type: 'Membership', kind: 'object', isList: true, relationName: 'MembershipToTeam' }),
+    ] },
+    {
+      name: 'Membership',
+      fields: [
+        field({ name: 'authorId', type: 'String' }),
+        field({ name: 'teamId', type: 'String' }),
+        field({ name: 'role', type: 'String' }),
+        field({ name: 'author', type: 'Author', kind: 'object', relationName: 'AuthorToMembership', relationFromFields: ['authorId'], relationToFields: ['id'] }),
+        field({ name: 'team', type: 'Team', kind: 'object', relationName: 'MembershipToTeam', relationFromFields: ['teamId'], relationToFields: ['id'] }),
+      ],
+      primaryKey: { fields: ['authorId', 'teamId'] },
+    },
+  ];
+  const delegate = () => ({
+    findFirst: jest.fn().mockResolvedValue(null),
+    findMany: jest.fn().mockResolvedValue([]),
+    findUnique: jest.fn().mockResolvedValue({ id: 'a1' }),
+    create: jest.fn().mockResolvedValue({ id: 'a1' }),
+    update: jest.fn().mockResolvedValue({ id: 'a1' }),
+  });
+  const engineFor = () => {
+    const delegates = { author: delegate(), note: delegate(), tag: delegate(), team: delegate(), membership: delegate() };
+    delegates.author.findFirst.mockResolvedValue({ id: 'a1' });
+    return { delegates, engine: new GolemEngine(guardedClient(delegates), cocModels) };
+  };
+
+  it('refuses a where its create cannot reproduce, such as a defaulted id, before any query', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { notes: { connectOrCreate: [{ where: { id: 'requested' }, create: { title: 'x' } }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector id on Note'));
+    expect(delegates.note.findFirst).not.toHaveBeenCalled();
+    expect(delegates.author.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a mismatch at any depth', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.create({
+      model: 'Author',
+      data: { id: 'a1', notes: { create: [{ title: 'n', tags: { connectOrCreate: [{ where: { label: 'red' }, create: { label: 'blue' } }] } }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector label on Tag'));
+    expect(delegates.author.create).not.toHaveBeenCalled();
+  });
+
+  it('accepts a matching connect-or-create at a nested depth', async () => {
+    const { delegates, engine } = engineFor();
+    const data = { id: 'a1', notes: { create: [{ title: 'n', tags: { connectOrCreate: [{ where: { label: 'red' }, create: { label: 'red' } }] } }] } };
+    await engine.create({ model: 'Author', data });
+    expect(delegates.author.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: { id: 'a1', notes: { create: [{ title: 'n', tags: { create: [{ label: 'red' }] } }] } },
+    }));
+  });
+
+  it('accepts a selector set by connecting its relation, or implied by the parent it is nested under', async () => {
+    const { delegates, engine } = engineFor();
+    await engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { memberships: { connectOrCreate: [{
+        where: { authorId_teamId: { authorId: 'a1', teamId: 't1' } },
+        create: { role: 'owner', team: { connect: { id: 't1' } } },
+      }] } },
+    });
+    expect(delegates.author.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a selector the parent would imply with a different value', async () => {
+    const { delegates, engine } = engineFor();
+    await expect(engine.update({
+      model: 'Author',
+      where: { id: 'a1' },
+      data: { memberships: { connectOrCreate: [{
+        where: { authorId_teamId: { authorId: 'someone-else', teamId: 't1' } },
+        create: { role: 'owner', team: { connect: { id: 't1' } } },
+      }] } },
+    })).rejects.toThrow(new GolemValidationError('connectOrCreate create input does not set the target selector authorId on Membership'));
+    expect(delegates.author.update).not.toHaveBeenCalled();
+  });
+});

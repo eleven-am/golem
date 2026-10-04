@@ -1,6 +1,6 @@
 import { INestApplication } from '@nestjs/common';
 import request from 'supertest';
-import { GolemNotFoundError } from '@eleven-am/golem';
+import { GolemNotFoundError, GolemValidationError } from '@eleven-am/golem';
 import { GolemPrismaService } from '../src/generated/golem/client';
 import { bootDemoApp, shutdownDemoApp } from './harness';
 
@@ -144,7 +144,7 @@ describe('a caller links only to rows it can read (e2e)', () => {
           post: {
             connectOrCreate: {
               where: { id: draftId },
-              create: { title: 'Duplicate', author: { connect: { id: linkerId } } },
+              create: { id: draftId, title: 'Duplicate', author: { connect: { id: linkerId } } },
             },
           },
         },
@@ -152,6 +152,23 @@ describe('a caller links only to rows it can read (e2e)', () => {
     ).rejects.toBeInstanceOf(GolemNotFoundError);
     await expect(prisma.post.count()).resolves.toBe(before);
     await expect(sessionsOn(draftId)).resolves.toBe(0);
+  });
+
+  it('refuses a connectOrCreate whose create cannot reproduce its where, before writing anything', async () => {
+    const before = await prisma.post.count();
+    const attempt = asLinker().readingSession.create({
+      data: {
+        post: {
+          connectOrCreate: {
+            where: { id: 'requested' },
+            create: { title: 'Defaulted id', author: { connect: { id: linkerId } } },
+          },
+        },
+      },
+    });
+    await expect(attempt).rejects.toBeInstanceOf(GolemValidationError);
+    await expect(attempt).rejects.toThrow('connectOrCreate create input does not set the target selector id on Post');
+    await expect(prisma.post.count()).resolves.toBe(before);
   });
 
   it('creates through connectOrCreate when the target is missing', async () => {
@@ -192,7 +209,7 @@ describe('a caller links only to rows it can read (e2e)', () => {
         post: {
           connectOrCreate: {
             where: { id: publishedId },
-            create: { title: 'Never created', author: { connect: { id: linkerId } } },
+            create: { id: publishedId, title: 'Never created', author: { connect: { id: linkerId } } },
           },
         },
       },

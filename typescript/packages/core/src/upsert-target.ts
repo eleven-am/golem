@@ -1,7 +1,7 @@
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
 import { flattenUniqueSelectors, ModelMetadataIndex } from './model-meta';
-import { planNestedWrites } from './nested-writes';
+import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
 
 export function upsertTargetSelectors(
   metadata: ModelMetadataIndex,
@@ -23,11 +23,14 @@ export function upsertTargetSelectors(
   return selectors;
 }
 
+type Known = Readonly<Record<string, unknown>>;
+
 function writtenValue(
   metadata: ModelMetadataIndex,
   model: string,
   input: Record<string, unknown>,
   name: string,
+  implied: Known,
 ): unknown {
   if (input[name] !== undefined) {
     return input[name];
@@ -41,7 +44,26 @@ function writtenValue(
     const referenced = flattenUniqueSelectors(metadata.get(relation.type), connect).where;
     return (referenced as Record<string, unknown>)[relation.relationToFields![position]];
   }
-  return undefined;
+  return implied[name];
+}
+
+function refuseOffTarget(
+  metadata: ModelMetadataIndex,
+  operation: 'upsert' | 'connectOrCreate',
+  model: string,
+  where: unknown,
+  create: unknown,
+  implied: Known,
+): void {
+  const input = create && typeof create === 'object' ? create as Record<string, unknown> : {};
+  for (const [name, target] of upsertTargetSelectors(metadata, model, where)) {
+    const written = writtenValue(metadata, model, input, name, implied);
+    if (written === undefined || canonicalToken(written) !== canonicalToken(target)) {
+      throw new GolemValidationError(
+        `${operation} create input does not set the target selector ${name} on ${model}`,
+      );
+    }
+  }
 }
 
 export function refuseUpsertOffTarget(
@@ -50,37 +72,73 @@ export function refuseUpsertOffTarget(
   where: unknown,
   create: unknown,
 ): void {
-  const input = create && typeof create === 'object' ? create as Record<string, unknown> : {};
-  for (const [name, target] of upsertTargetSelectors(metadata, model, where)) {
-    const written = writtenValue(metadata, model, input, name);
-    if (written === undefined || canonicalToken(written) !== canonicalToken(target)) {
-      throw new GolemValidationError(
-        `upsert create input does not set the target selector ${name} on ${model}`,
-      );
-    }
-  }
+  refuseOffTarget(metadata, 'upsert', model, where, create, {});
 }
 
-export function refuseNestedUpsertsOffTarget(
-  metadata: ModelMetadataIndex,
-  model: string,
-  data: unknown,
-): void {
+function scalarValues(data: unknown): Known {
+  if (!data || typeof data !== 'object') {
+    return {};
+  }
+  return Object.fromEntries(Object.entries(data as Record<string, unknown>)
+    .filter(([, value]) => value === null || typeof value !== 'object' || value instanceof Date));
+}
+
+function selectedValues(metadata: ModelMetadataIndex, model: string, where: unknown): Known {
+  return scalarValues(flattenUniqueSelectors(metadata.get(model), where).where);
+}
+
+const NESTED_ROWS = new Set(['create', 'createMany', 'connectOrCreate', 'upsert', 'update']);
+
+function refuseBranchesOffTarget(metadata: ModelMetadataIndex, model: string, data: unknown, known: Known): void {
   if (!data || typeof data !== 'object') {
     return;
   }
   for (const relation of planNestedWrites(metadata, metadata.get(model)!.model, data as Record<string, unknown>)) {
-    for (const operation of relation.operations) {
-      if (operation.kind !== 'upsert') {
-        continue;
-      }
-      for (const payload of operation.payloads) {
-        const item = payload as { where?: unknown; create?: unknown } | null;
-        refuseUpsertOffTarget(metadata, relation.target.name, item?.where, item?.create);
-      }
+    const target = relation.target.name;
+    if (!relation.operations.some((operation) => NESTED_ROWS.has(operation.kind))) {
+      continue;
     }
-    for (const nested of [...relation.createPayloads, ...relation.updatePayloads]) {
-      refuseNestedUpsertsOffTarget(metadata, relation.target.name, nested);
+    const opposite = oppositeRelation(metadata, model, relation.field);
+    const implied: Known = Object.fromEntries((opposite.relationFromFields ?? [])
+      .map((name, index) => [name, known[opposite.relationToFields![index]]])
+      .filter(([, value]) => value !== undefined));
+    const created = (payload: unknown) => refuseBranchesOffTarget(metadata, target, payload, { ...scalarValues(payload), ...implied });
+    const updated = (where: unknown, payload: unknown) =>
+      refuseBranchesOffTarget(metadata, target, payload, { ...implied, ...selectedValues(metadata, target, where) });
+    for (const operation of relation.operations) {
+      for (const payload of operation.payloads) {
+        const item = (payload ?? {}) as { where?: unknown; create?: unknown; update?: unknown; data?: unknown };
+        if (operation.kind === 'upsert' || operation.kind === 'connectOrCreate') {
+          refuseOffTarget(metadata, operation.kind, target, item.where, item.create, implied);
+          created(item.create);
+        }
+        if (operation.kind === 'upsert') {
+          updated(item.where, item.update);
+        }
+        if (operation.kind === 'create') {
+          created(payload);
+        }
+        if (operation.kind === 'createMany') {
+          for (const entry of Array.isArray(item.data) ? item.data : [item.data]) created(entry);
+        }
+        if (operation.kind === 'update') {
+          const nested = nestedPayloads('update', payload);
+          updated(nested.where, nested.data);
+        }
+      }
     }
   }
+}
+
+export function refuseCreatedBranchesOffTarget(metadata: ModelMetadataIndex, model: string, data: unknown): void {
+  refuseBranchesOffTarget(metadata, model, data, scalarValues(data));
+}
+
+export function refuseUpdatedBranchesOffTarget(
+  metadata: ModelMetadataIndex,
+  model: string,
+  where: unknown,
+  data: unknown,
+): void {
+  refuseBranchesOffTarget(metadata, model, data, selectedValues(metadata, model, where));
 }

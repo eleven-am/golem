@@ -12,7 +12,7 @@ import {
   GolemNotFoundError,
   GolemValidationError,
 } from './errors';
-import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
+import { refuseCreatedBranchesOffTarget, refuseUpdatedBranchesOffTarget, refuseUpsertOffTarget } from './upsert-target';
 import { LinkGuard, LinkGuardPort, decideBranch } from './link-guard';
 import { refuseIdentityChanges } from './identity-writes';
 import { CascadePlan, rowLocker, transactionRowLocks } from './cascade';
@@ -1141,7 +1141,7 @@ export class GolemEngine {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('create', request);
     refuseUpsertOffTarget(this.metadata, req.model, upsertTarget, req.data);
-    refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
+    refuseCreatedBranchesOffTarget(this.metadata, req.model, req.data);
     const provider = this.enforced(req.context);
     if (provider) {
       await provider.authorize('create', req.model, req.context);
@@ -1208,7 +1208,7 @@ export class GolemEngine {
     const delegate = this.delegate(request.model, scope?.client);
     const req = await this.runBefore('update', request);
     this.refuseIdentityChanges(req.model, req.data, req.context);
-    refuseNestedUpsertsOffTarget(this.metadata, req.model, req.data);
+    refuseUpdatedBranchesOffTarget(this.metadata, req.model, req.where, req.data);
     await this.classifyFilterFields(
       req.model,
       req.context,
