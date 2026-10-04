@@ -82,7 +82,7 @@ export class CascadePlan {
     return this.dependencies.get(model) ?? [];
   }
 
-  primaryKey(model: string): readonly string[] {
+  identity(model: string): readonly string[] {
     const identity = rowIdentityFields(this.modelsByName.get(model)!);
     if (!identity) {
       throw new GolemValidationError(
@@ -105,13 +105,14 @@ export class CascadePlan {
     return field.dbName ?? field.name;
   }
 
-  tableOf(model: string): string {
+  qualifiedTable(model: string): string {
     const definition = this.modelsByName.get(model)!;
-    return definition.dbName ?? definition.name;
+    const table = quote(definition.dbName ?? definition.name);
+    return definition.schema ? `${quote(definition.schema)}.${table}` : table;
   }
 
   rowKey(model: string, row: Row): string {
-    return `${model}\u0000${canonicalToken(this.primaryKey(model).map((name) => row[name]))}`;
+    return `${model}\u0000${canonicalToken(this.identity(model).map((name) => row[name]))}`;
   }
 }
 
@@ -133,9 +134,9 @@ export function lockedReadStatement(
     .map((field) => `${quote(field.dbName ?? field.name)} AS ${quote(field.name)}`)
     .join(', ');
   const columns = fields.map((name) => quote(plan.column(model, name))).join(', ');
-  const order = plan.primaryKey(model).map((name) => quote(plan.column(model, name))).join(', ');
+  const order = plan.identity(model).map((name) => quote(plan.column(model, name))).join(', ');
   return {
-    sql: `SELECT ${projection} FROM ${quote(plan.tableOf(model))} WHERE (${columns}) IN (${rows.join(', ')}) ORDER BY ${order} LIMIT ${limit} FOR UPDATE`,
+    sql: `SELECT ${projection} FROM ${plan.qualifiedTable(model)} WHERE (${columns}) IN (${rows.join(', ')}) ORDER BY ${order} LIMIT ${limit} FOR UPDATE`,
     values,
   };
 }
@@ -155,7 +156,7 @@ const POSTGRES: (plan: CascadePlan) => CascadeDialect = (plan) => ({
     return transaction.queryRaw(statement.sql, ...statement.values);
   },
   lockedRoots: async (transaction, model, read) => {
-    const keys = plan.primaryKey(model);
+    const keys = plan.identity(model);
     const located = await read(Object.fromEntries(keys.map((name) => [name, true])));
     if (located.length === 0) {
       return located;
@@ -176,7 +177,7 @@ const SQLITE: (plan: CascadePlan) => CascadeDialect = (plan) => ({
     transaction.findMany(model, {
       where: tupleWhere(fields, tuples),
       select: plan.scalarSelect(model),
-      orderBy: plan.primaryKey(model).map((name) => ({ [name]: 'asc' })),
+      orderBy: plan.identity(model).map((name) => ({ [name]: 'asc' })),
       take: limit,
     }),
   lockedRoots: (_transaction, model, read) => read(plan.scalarSelect(model)),
@@ -264,7 +265,7 @@ export async function enumerateNestedDeletes(
   if (!data || typeof data !== 'object' || parents.length === 0) {
     return;
   }
-  const keys = plan.primaryKey(model);
+  const keys = plan.identity(model);
   const parentWhere = tupleWhere(keys, parents.map((row) => keys.map((name) => row[name])));
   for (const relation of planNestedWrites(plan.metadata, plan.metadata.get(model)!.model, data as Row)) {
     const target = relation.target.name;
@@ -276,7 +277,7 @@ export async function enumerateNestedDeletes(
         transaction.findMany(target, {
           where: filter,
           select,
-          orderBy: plan.primaryKey(target).map((name) => ({ [name]: 'asc' })),
+          orderBy: plan.identity(target).map((name) => ({ [name]: 'asc' })),
           take: limit + 1,
         }));
       if (rows.length > limit) {

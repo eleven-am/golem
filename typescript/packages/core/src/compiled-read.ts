@@ -466,7 +466,7 @@ function primaryOrder(
   metadata: ModelMetadataIndex,
   alias: string,
 ): readonly OrderTerm[] | CompiledReadFallback {
-  const keys = metadata.get(model.name)?.primaryKeys ?? [];
+  const keys = metadata.get(model.name)?.identityFields ?? [];
   if (keys.length === 0) {
     return fallback(
       'orderBy',

@@ -293,7 +293,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       if (!batch) {
         throw new Error(`${operation} on ${model} requires the transaction-bound batch runtime`);
       }
-      const pks = cascades.primaryKey(model);
+      const pks = cascades.identity(model);
       return batch.run(async (delegate, transaction) => {
         const tx = cascadeTransaction(transaction);
         const rows = await dialect.lockedRoots(tx, model, (select) =>

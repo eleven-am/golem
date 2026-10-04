@@ -111,8 +111,17 @@ model Channel {
   slug     String    @unique
   title    String
   messages Message[]
+  pins     Pin[]
 
   @@map("channels")
+}
+
+model Pin {
+  id          Int      @id
+  channelSlug String?  @map("channel_slug")
+  channel     Channel? @relation(fields: [channelSlug], references: [slug], onDelete: SetNull)
+
+  @@map("pins")
 }
 
 model Message {

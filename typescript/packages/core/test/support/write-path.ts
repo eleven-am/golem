@@ -42,6 +42,19 @@ const models: DatamodelModel[] = [
       field({ name: 'slug', type: 'String', isUnique: true }),
       field({ name: 'title', type: 'String' }),
       field({ name: 'messages', type: 'Message', kind: 'object', isList: true, relationName: 'ChannelToMessage' }),
+      field({ name: 'pins', type: 'Pin', kind: 'object', isList: true, relationName: 'ChannelToPin' }),
+    ],
+  },
+  {
+    name: 'Pin',
+    dbName: 'pins',
+    fields: [
+      field({ name: 'id', type: 'Int', isId: true }),
+      field({ name: 'channelSlug', type: 'String', isRequired: false, dbName: 'channel_slug' }),
+      field({
+        name: 'channel', type: 'Channel', kind: 'object', isRequired: false, relationName: 'ChannelToPin',
+        relationFromFields: ['channelSlug'], relationToFields: ['slug'], relationOnDelete: 'SetNull',
+      }),
     ],
   },
   {
@@ -61,6 +74,8 @@ const models: DatamodelModel[] = [
 const READABLE: Record<string, unknown> = {
   Thread: { id: { in: [1] } },
   Watch: { id: { in: [20, 22] } },
+  Channel: { slug: { in: ['general'] } },
+  Pin: { id: { in: [40, 42] } },
 };
 
 function provider(): AuthorizationProvider {
@@ -100,6 +115,7 @@ export function describeWritePath(
   });
 
   beforeEach(async () => {
+    await prisma.pin.deleteMany();
     await prisma.watch.deleteMany();
     await prisma.thread.deleteMany();
     await prisma.message.deleteMany();
@@ -116,6 +132,99 @@ export function describeWritePath(
       { id: 31, channelSlug: 'general' },
       { id: 32, channelSlug: 'quiet' },
     ] });
+    await prisma.pin.createMany({ data: [
+      { id: 40, channelSlug: 'general' },
+      { id: 41, channelSlug: 'general' },
+      { id: 42, channelSlug: 'quiet' },
+    ] });
+  });
+
+  const outcome = (run: () => Promise<unknown>) =>
+    run().then(() => 'succeeded', (error: Error) => `${error.constructor.name}: ${error.message}`);
+
+  describe.each([true, false])('linking to a unique-only model with checkWriteResults %s', (checkWriteResults) => {
+    const engine = (client: Client = prisma) => new GolemEngine(client, models, {
+      authorization: provider(),
+      checkWriteResults,
+      checkReadFields: false,
+      provider: provider_,
+    });
+    const ctx = { req: {} };
+
+    it('links a foreign-key scalar only to a readable row, refusing a hidden one exactly as a missing one', async () => {
+      const write = (channelSlug: string, id: number) =>
+        outcome(() => engine().create({ model: 'Message', data: { id, channelSlug }, context: ctx }));
+
+      await expect(write('general', 33)).resolves.toBe('succeeded');
+      const hidden = await write('quiet', 34);
+      expect(hidden).toBe(await write('nowhere', 35));
+      expect(hidden).toBe('GolemNotFoundError: Channel not found');
+      await expect(prisma.message.count({ where: { id: { in: [34, 35] } } })).resolves.toBe(0);
+    });
+
+    it('connects only to a readable row', async () => {
+      const connect = (slug: string, id: number) =>
+        outcome(() => engine().create({ model: 'Pin', data: { id, channel: { connect: { slug } } }, context: ctx }));
+
+      await expect(connect('general', 43)).resolves.toBe('succeeded');
+      await expect(connect('quiet', 44)).resolves.toBe('GolemNotFoundError: Channel not found');
+      await expect(prisma.pin.count({ where: { id: 44 } })).resolves.toBe(0);
+    });
+
+    it('disconnects only from a readable row', async () => {
+      await expect(outcome(() => engine().update({
+        model: 'Pin', where: { id: 42 }, data: { channel: { disconnect: true } }, context: ctx,
+      }))).resolves.toBe('GolemNotFoundError: Channel not found');
+      await expect(prisma.pin.findUnique({ where: { id: 42 } })).resolves.toEqual({ id: 42, channelSlug: 'quiet' });
+
+      await expect(outcome(() => engine().update({
+        model: 'Pin', where: { id: 40 }, data: { channel: { disconnect: true } }, context: ctx,
+      }))).resolves.toBe('succeeded');
+      await expect(prisma.pin.findUnique({ where: { id: 40 } })).resolves.toEqual({ id: 40, channelSlug: null });
+    });
+
+    it('detaches from a unique-only parent only rows the caller can read', async () => {
+      await expect(outcome(() => engine().update({
+        model: 'Channel', where: { slug: 'general' }, data: { pins: { set: [] } }, context: ctx,
+      }))).resolves.toBe('GolemNotFoundError: Pin not found');
+      await expect(prisma.pin.count({ where: { channelSlug: 'general' } })).resolves.toBe(2);
+    });
+
+    it('validates the row connectOrCreate actually connected, after a concurrent insert of an unreadable match', async () => {
+      let injected = false;
+      let probes = 0;
+      const raced = new Proxy(prisma, {
+        get: (target, property, receiver) => {
+          if (property !== 'channel') return Reflect.get(target, property, receiver);
+          const channel = target.channel;
+          return new Proxy(channel, {
+            get: (inner, name, innerReceiver) => {
+              if (name !== 'findFirst') return Reflect.get(inner, name, innerReceiver);
+              return async (args: unknown) => {
+                const found = await inner.findFirst(args);
+                probes += 1;
+                if (probes === 2) {
+                  injected = true;
+                  await target.channel.create({ data: { slug: 'late', title: 'someone else' } });
+                }
+                return found;
+              };
+            },
+          });
+        },
+      });
+
+      await expect(outcome(() => engine(raced).create({
+        model: 'Pin',
+        data: { id: 45, channel: { connectOrCreate: { where: { slug: 'late' }, create: { slug: 'late', title: 'mine' } } } },
+        context: ctx,
+      }))).resolves.toBe('GolemNotFoundError: Channel not found');
+
+      expect(injected).toBe(true);
+      await expect(prisma.pin.count({ where: { id: 45 } })).resolves.toBe(0);
+      await expect(prisma.channel.findUnique({ where: { slug: 'late' } }))
+        .resolves.toEqual({ slug: 'late', title: 'someone else' });
+    });
   });
 
   const watchesOf = async (threadId: number) =>

@@ -109,7 +109,7 @@ export function linkedRowKey(
   model: string,
   row: Record<string, unknown>,
 ): string {
-  const key = metadata.get(model)!.primaryKeys.map((field) => row[field.name]);
+  const key = metadata.get(model)!.identityFields.map((field) => row[field.name]);
   return `${model}\u0000${canonicalToken(key)}`;
 }
 

@@ -95,6 +95,11 @@ export type Watch = Prisma.WatchModel
  */
 export type Channel = Prisma.ChannelModel
 /**
+ * Model Pin
+ * 
+ */
+export type Pin = Prisma.PinModel
+/**
  * Model Message
  * 
  */

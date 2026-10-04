@@ -14,7 +14,7 @@ describe('model metadata', () => {
     const index = buildModelMetadata([model]);
     const metadata = index.get('User')!;
 
-    expect(metadata.primaryKey?.name).toBe('id');
+    expect(metadata.identityFields.map((entry) => entry.name)).toEqual(['id']);
     expect(metadata.fieldsByName.get('email')?.type).toBe('String');
     expect(metadata.scalarFields.map((entry) => entry.name)).toEqual(['id', 'email']);
     expect(metadata.relations.map((entry) => entry.name)).toEqual(['posts']);
@@ -24,7 +24,7 @@ describe('model metadata', () => {
     expect(Object.isFrozen(metadata)).toBe(true);
   });
 
-  it('reports a single-field primary key through primaryKeys without a compound key name', () => {
+  it('reports a single-field primary key as the identity without a compound key name', () => {
     const index = buildModelMetadata([
       {
         name: 'User',
@@ -32,9 +32,10 @@ describe('model metadata', () => {
       },
     ]);
     const metadata = index.get('User')!;
-    expect(metadata.primaryKey?.name).toBe('id');
-    expect(metadata.primaryKeys.map((entry) => entry.name)).toEqual(['id']);
+    expect(metadata.identityFields.map((entry) => entry.name)).toEqual(['id']);
+    expect(metadata.identitySelector).toBe('id');
     expect(metadata.compoundKeyName).toBeUndefined();
+    expect(metadata.compoundKeyFields).toEqual([]);
   });
 
   it('resolves composite primary keys in declared order and derives the compound key name', () => {
@@ -50,9 +51,10 @@ describe('model metadata', () => {
       },
     ]);
     const metadata = index.get('PostTag')!;
-    expect(metadata.primaryKey).toBeUndefined();
-    expect(metadata.primaryKeys.map((entry) => entry.name)).toEqual(['postId', 'tagId']);
+    expect(metadata.identityFields.map((entry) => entry.name)).toEqual(['postId', 'tagId']);
+    expect(metadata.identitySelector).toBe('postId_tagId');
     expect(metadata.compoundKeyName).toBe('postId_tagId');
+    expect(metadata.compoundKeyFields).toEqual(['postId', 'tagId']);
   });
 
   it('honours a named composite primary key', () => {
@@ -97,3 +99,28 @@ describe('model metadata', () => {
   });
 });
 
+
+describe('row identity without a primary key', () => {
+  it('identifies a model by its first required unique field', () => {
+    const metadata = buildModelMetadata([{
+      name: 'Channel',
+      fields: [
+        field({ name: 'alias', type: 'String', isUnique: true, isRequired: false }),
+        field({ name: 'slug', type: 'String', isUnique: true }),
+      ],
+    }]).get('Channel')!;
+    expect(metadata.identityFields.map((entry) => entry.name)).toEqual(['slug']);
+    expect(metadata.identitySelector).toBe('slug');
+  });
+
+  it('identifies a model by its first compound unique over required fields, by its selector name', () => {
+    const metadata = buildModelMetadata([{
+      name: 'Seat',
+      fields: [field({ name: 'row', type: 'String' }), field({ name: 'number', type: 'Int' })],
+      uniqueIndexes: [{ name: 'seatKey', fields: ['row', 'number'] }],
+    }]).get('Seat')!;
+    expect(metadata.identityFields.map((entry) => entry.name)).toEqual(['row', 'number']);
+    expect(metadata.identitySelector).toBe('seatKey');
+    expect(metadata.compoundKeyFields).toEqual([]);
+  });
+});

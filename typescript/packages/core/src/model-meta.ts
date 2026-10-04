@@ -1,13 +1,14 @@
-import { DatamodelField, DatamodelModel } from './datamodel';
+import { DatamodelField, DatamodelModel, rowIdentity } from './datamodel';
 
 export interface ModelMetadata {
   readonly model: DatamodelModel;
   readonly fieldsByName: ReadonlyMap<string, DatamodelField>;
   readonly scalarFields: readonly DatamodelField[];
   readonly relations: readonly DatamodelField[];
-  readonly primaryKey?: DatamodelField;
-  readonly primaryKeys: readonly DatamodelField[];
+  readonly identityFields: readonly DatamodelField[];
+  readonly identitySelector?: string;
   readonly compoundKeyName?: string;
+  readonly compoundKeyFields: readonly string[];
   readonly compoundUniqueSelectors: ReadonlyMap<string, readonly string[]>;
 }
 
@@ -73,20 +74,12 @@ export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMeta
     const fieldsByName = new ImmutableMap(model.fields.map((field) => [field.name, field] as const));
     const scalarFields = Object.freeze(model.fields.filter((field) => field.kind !== 'object'));
     const relations = Object.freeze(model.fields.filter((field) => field.kind === 'object'));
-    const singleId = scalarFields.find((field) => field.isId);
-    const compound = model.primaryKey;
-    let primaryKeys: readonly DatamodelField[];
-    let compoundKeyName: string | undefined;
-    if (compound && compound.fields.length > 0) {
-      primaryKeys = Object.freeze(
-        compound.fields
-          .map((name) => fieldsByName.get(name))
-          .filter((entry): entry is DatamodelField => entry !== undefined),
-      );
-      compoundKeyName = compound.name ?? compound.fields.join('_');
-    } else {
-      primaryKeys = Object.freeze(singleId ? [singleId] : []);
-    }
+    const compound = model.primaryKey?.fields.length ? model.primaryKey : undefined;
+    const compoundKeyName = compound ? compound.name ?? compound.fields.join('_') : undefined;
+    const compoundKeyFields = Object.freeze([...(compound?.fields ?? [])]);
+    const identity = rowIdentity(model);
+    const identityFields = Object.freeze((identity?.fields ?? []).map((name) => fieldsByName.get(name)!));
+    const identitySelector = identity?.selector;
     const compoundUniqueSelectors = new ImmutableMap(
       (model.uniqueIndexes ?? [])
         .filter((index) => index.fields.length > 1)
@@ -102,9 +95,10 @@ export function buildModelMetadata(models: readonly DatamodelModel[]): ModelMeta
         fieldsByName,
         scalarFields,
         relations,
-        primaryKey: singleId,
-        primaryKeys,
+        identityFields,
+        identitySelector,
         compoundKeyName,
+        compoundKeyFields,
         compoundUniqueSelectors,
       }),
     ];

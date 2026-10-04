@@ -446,6 +446,18 @@ describe('lockedReadStatement', () => {
     });
   });
 
+  it('qualifies the table with the schema its model declares', () => {
+    const plan = new CascadePlan([{
+      name: 'Odd',
+      dbName: 'items',
+      schema: 'tenant"one',
+      fields: [field({ name: 'a', type: 'String', isId: true })],
+    }]);
+    expect(lockedReadStatement(plan, 'Odd', ['a'], [['1']], 1).sql).toBe(
+      'SELECT "a" AS "a" FROM "tenant""one"."items" WHERE ("a") IN (($1)) ORDER BY "a" LIMIT 1 FOR UPDATE',
+    );
+  });
+
   it('refuses a provider it cannot lock rows on', async () => {
     const dialect = cascadeDialect('mysql', new CascadePlan([]));
     expect(() => dialect.lockedRead({} as never, 'X', [], [], 1)).toThrow(

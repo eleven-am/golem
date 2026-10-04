@@ -408,6 +408,7 @@ export const ModelName = {
   Reply: 'Reply',
   Watch: 'Watch',
   Channel: 'Channel',
+  Pin: 'Pin',
   Message: 'Message'
 } as const
 
@@ -424,7 +425,7 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
     omit: GlobalOmitOptions
   }
   meta: {
-    modelProps: "golemUpsertGuard" | "upsertTarget" | "post" | "user" | "secret" | "metric" | "profile" | "thread" | "reply" | "watch" | "channel" | "message"
+    modelProps: "golemUpsertGuard" | "upsertTarget" | "post" | "user" | "secret" | "metric" | "profile" | "thread" | "reply" | "watch" | "channel" | "pin" | "message"
     txIsolationLevel: TransactionIsolationLevel
   }
   model: {
@@ -1242,6 +1243,80 @@ export type TypeMap<ExtArgs extends runtime.Types.Extensions.InternalArgs = runt
         }
       }
     }
+    Pin: {
+      payload: Prisma.$PinPayload<ExtArgs>
+      fields: Prisma.PinFieldRefs
+      operations: {
+        findUnique: {
+          args: Prisma.PinFindUniqueArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload> | null
+        }
+        findUniqueOrThrow: {
+          args: Prisma.PinFindUniqueOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        findFirst: {
+          args: Prisma.PinFindFirstArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload> | null
+        }
+        findFirstOrThrow: {
+          args: Prisma.PinFindFirstOrThrowArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        findMany: {
+          args: Prisma.PinFindManyArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>[]
+        }
+        create: {
+          args: Prisma.PinCreateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        createMany: {
+          args: Prisma.PinCreateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        createManyAndReturn: {
+          args: Prisma.PinCreateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>[]
+        }
+        delete: {
+          args: Prisma.PinDeleteArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        update: {
+          args: Prisma.PinUpdateArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        deleteMany: {
+          args: Prisma.PinDeleteManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateMany: {
+          args: Prisma.PinUpdateManyArgs<ExtArgs>
+          result: BatchPayload
+        }
+        updateManyAndReturn: {
+          args: Prisma.PinUpdateManyAndReturnArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>[]
+        }
+        upsert: {
+          args: Prisma.PinUpsertArgs<ExtArgs>
+          result: runtime.Types.Utils.PayloadToResult<Prisma.$PinPayload>
+        }
+        aggregate: {
+          args: Prisma.PinAggregateArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.AggregatePin>
+        }
+        groupBy: {
+          args: Prisma.PinGroupByArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.PinGroupByOutputType>[]
+        }
+        count: {
+          args: Prisma.PinCountArgs<ExtArgs>
+          result: runtime.Types.Utils.Optional<Prisma.PinCountAggregateOutputType> | number
+        }
+      }
+    }
     Message: {
       payload: Prisma.$MessagePayload<ExtArgs>
       fields: Prisma.MessageFieldRefs
@@ -1456,6 +1531,14 @@ export const ChannelScalarFieldEnum = {
 } as const
 
 export type ChannelScalarFieldEnum = (typeof ChannelScalarFieldEnum)[keyof typeof ChannelScalarFieldEnum]
+
+
+export const PinScalarFieldEnum = {
+  id: 'id',
+  channelSlug: 'channelSlug'
+} as const
+
+export type PinScalarFieldEnum = (typeof PinScalarFieldEnum)[keyof typeof PinScalarFieldEnum]
 
 
 export const MessageScalarFieldEnum = {
@@ -1698,6 +1781,7 @@ export type GlobalOmitConfig = {
   reply?: Prisma.ReplyOmit
   watch?: Prisma.WatchOmit
   channel?: Prisma.ChannelOmit
+  pin?: Prisma.PinOmit
   message?: Prisma.MessageOmit
 }
 

@@ -25,6 +25,7 @@ export function emitDatamodelModule(datamodel: DMMF.Datamodel, provider?: string
     .map((model) => ({
     name: model.name,
     dbName: model.dbName ?? model.name,
+    ...(model.schema ? { schema: model.schema } : {}),
     fields: model.fields
       .filter((field) => SUPPORTED_KINDS.has(field.kind))
       .map((field) => ({

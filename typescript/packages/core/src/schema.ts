@@ -32,6 +32,7 @@ import {
   DatamodelModel,
   ModelConfig,
   ModelsConfig,
+  rowIdentityFields,
 } from './datamodel';
 import { GolemError, GolemValidationError } from './errors';
 import { GolemEventBus, eventTopic } from './events';
@@ -217,9 +218,7 @@ function resolveModelSettings(
   const immutable = new Set(config?.immutable ?? []);
   const readOnly = new Set(config?.readOnly ?? []);
   const writeOnly = new Set(config?.writeOnly ?? []);
-  const primaryKeyFields = new Set(
-    model.primaryKey?.fields ?? model.fields.filter((field) => field.isId).map((field) => field.name),
-  );
+  const primaryKeyFields = new Set(rowIdentityFields(model) ?? []);
   for (const name of [...hidden, ...immutable, ...readOnly, ...writeOnly]) {
     if (!fieldNames.has(name)) {
       throw new Error(`Unknown field ${name} in configuration for model ${model.name}`);
@@ -1240,12 +1239,10 @@ export function buildGolemSchema<TModels>(options: BuildGolemSchemaOptions<TMode
 
     if (subscribable.has(model.name)) {
       const eventBus = options.eventBus!;
-      const pkNames = model.primaryKey?.fields ?? model.fields
-        .filter((field) => field.isId)
-        .map((field) => field.name);
+      const pkNames = rowIdentityFields(model) ?? [];
       const pkFields = pkNames.map((name) => model.fields.find((field) => field.name === name));
       if (pkFields.length === 0 || pkFields.some((field) => !field)) {
-        throw new Error(`Model ${model.name} has no primary key field and cannot be subscribable`);
+        throw new Error(`Model ${model.name} has no primary key or required unique field and cannot be subscribable`);
       }
       const keys = pkFields as DatamodelField[];
       const eventTypeName = `${model.name}Event`;

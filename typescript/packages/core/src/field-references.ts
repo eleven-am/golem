@@ -90,7 +90,7 @@ export function addNestedFields(
       const field = meta?.fieldsByName.get(key);
       if (field === undefined) {
         const compoundFields = key === meta?.compoundKeyName
-          ? meta.primaryKeys.map((primaryKey) => primaryKey.name)
+          ? meta.compoundKeyFields
           : meta?.compoundUniqueSelectors.get(key);
         if (compoundFields) {
           for (const name of compoundFields) referenceField(into, model, name);
@@ -160,7 +160,7 @@ export function addCursorFields(
       continue;
     }
     const compoundFields = key === metadata.compoundKeyName
-      ? metadata.primaryKeys.map((field) => field.name)
+      ? metadata.compoundKeyFields
       : metadata.compoundUniqueSelectors.get(key);
     if (compoundFields) {
       for (const field of compoundFields) referenceField(into, model, field);

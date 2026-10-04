@@ -160,12 +160,28 @@ describe('a caller links only to rows it can read (e2e)', () => {
         post: {
           connectOrCreate: {
             where: { id: 'linker-created-post' },
-            create: { id: 'linker-created-post', title: 'Created', author: { connect: { id: linkerId } } },
+            create: { id: 'linker-created-post', title: 'Created', published: true, author: { connect: { id: linkerId } } },
           },
         },
       },
     });
     await expect(sessionsOn('linker-created-post')).resolves.toBe(1);
+  });
+
+  it('refuses a connectOrCreate that would link a row the caller cannot read, even one it creates', async () => {
+    await expect(
+      asLinker().readingSession.create({
+        data: {
+          post: {
+            connectOrCreate: {
+              where: { id: 'linker-hidden-post' },
+              create: { id: 'linker-hidden-post', title: 'Unpublished', author: { connect: { id: linkerId } } },
+            },
+          },
+        },
+      }),
+    ).rejects.toBeInstanceOf(GolemNotFoundError);
+    await expect(prisma.post.count({ where: { id: 'linker-hidden-post' } })).resolves.toBe(0);
   });
 
   it('links to a row it can read but neither update nor create', async () => {

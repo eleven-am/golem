@@ -159,12 +159,14 @@ export type ChannelWhereInput = {
   slug?: Prisma.StringFilter<"Channel"> | string
   title?: Prisma.StringFilter<"Channel"> | string
   messages?: Prisma.MessageListRelationFilter
+  pins?: Prisma.PinListRelationFilter
 }
 
 export type ChannelOrderByWithRelationInput = {
   slug?: Prisma.SortOrder
   title?: Prisma.SortOrder
   messages?: Prisma.MessageOrderByRelationAggregateInput
+  pins?: Prisma.PinOrderByRelationAggregateInput
 }
 
 export type ChannelWhereUniqueInput = Prisma.AtLeast<{
@@ -174,6 +176,7 @@ export type ChannelWhereUniqueInput = Prisma.AtLeast<{
   NOT?: Prisma.ChannelWhereInput | Prisma.ChannelWhereInput[]
   title?: Prisma.StringFilter<"Channel"> | string
   messages?: Prisma.MessageListRelationFilter
+  pins?: Prisma.PinListRelationFilter
 }, "slug">
 
 export type ChannelOrderByWithAggregationInput = {
@@ -196,24 +199,28 @@ export type ChannelCreateInput = {
   slug: string
   title: string
   messages?: Prisma.MessageCreateNestedManyWithoutChannelInput
+  pins?: Prisma.PinCreateNestedManyWithoutChannelInput
 }
 
 export type ChannelUncheckedCreateInput = {
   slug: string
   title: string
   messages?: Prisma.MessageUncheckedCreateNestedManyWithoutChannelInput
+  pins?: Prisma.PinUncheckedCreateNestedManyWithoutChannelInput
 }
 
 export type ChannelUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   title?: Prisma.StringFieldUpdateOperationsInput | string
   messages?: Prisma.MessageUpdateManyWithoutChannelNestedInput
+  pins?: Prisma.PinUpdateManyWithoutChannelNestedInput
 }
 
 export type ChannelUncheckedUpdateInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   title?: Prisma.StringFieldUpdateOperationsInput | string
   messages?: Prisma.MessageUncheckedUpdateManyWithoutChannelNestedInput
+  pins?: Prisma.PinUncheckedUpdateManyWithoutChannelNestedInput
 }
 
 export type ChannelCreateManyInput = {
@@ -246,9 +253,30 @@ export type ChannelMinOrderByAggregateInput = {
   title?: Prisma.SortOrder
 }
 
+export type ChannelNullableScalarRelationFilter = {
+  is?: Prisma.ChannelWhereInput | null
+  isNot?: Prisma.ChannelWhereInput | null
+}
+
 export type ChannelScalarRelationFilter = {
   is?: Prisma.ChannelWhereInput
   isNot?: Prisma.ChannelWhereInput
+}
+
+export type ChannelCreateNestedOneWithoutPinsInput = {
+  create?: Prisma.XOR<Prisma.ChannelCreateWithoutPinsInput, Prisma.ChannelUncheckedCreateWithoutPinsInput>
+  connectOrCreate?: Prisma.ChannelCreateOrConnectWithoutPinsInput
+  connect?: Prisma.ChannelWhereUniqueInput
+}
+
+export type ChannelUpdateOneWithoutPinsNestedInput = {
+  create?: Prisma.XOR<Prisma.ChannelCreateWithoutPinsInput, Prisma.ChannelUncheckedCreateWithoutPinsInput>
+  connectOrCreate?: Prisma.ChannelCreateOrConnectWithoutPinsInput
+  upsert?: Prisma.ChannelUpsertWithoutPinsInput
+  disconnect?: Prisma.ChannelWhereInput | boolean
+  delete?: Prisma.ChannelWhereInput | boolean
+  connect?: Prisma.ChannelWhereUniqueInput
+  update?: Prisma.XOR<Prisma.XOR<Prisma.ChannelUpdateToOneWithWhereWithoutPinsInput, Prisma.ChannelUpdateWithoutPinsInput>, Prisma.ChannelUncheckedUpdateWithoutPinsInput>
 }
 
 export type ChannelCreateNestedOneWithoutMessagesInput = {
@@ -265,14 +293,56 @@ export type ChannelUpdateOneRequiredWithoutMessagesNestedInput = {
   update?: Prisma.XOR<Prisma.XOR<Prisma.ChannelUpdateToOneWithWhereWithoutMessagesInput, Prisma.ChannelUpdateWithoutMessagesInput>, Prisma.ChannelUncheckedUpdateWithoutMessagesInput>
 }
 
+export type ChannelCreateWithoutPinsInput = {
+  slug: string
+  title: string
+  messages?: Prisma.MessageCreateNestedManyWithoutChannelInput
+}
+
+export type ChannelUncheckedCreateWithoutPinsInput = {
+  slug: string
+  title: string
+  messages?: Prisma.MessageUncheckedCreateNestedManyWithoutChannelInput
+}
+
+export type ChannelCreateOrConnectWithoutPinsInput = {
+  where: Prisma.ChannelWhereUniqueInput
+  create: Prisma.XOR<Prisma.ChannelCreateWithoutPinsInput, Prisma.ChannelUncheckedCreateWithoutPinsInput>
+}
+
+export type ChannelUpsertWithoutPinsInput = {
+  update: Prisma.XOR<Prisma.ChannelUpdateWithoutPinsInput, Prisma.ChannelUncheckedUpdateWithoutPinsInput>
+  create: Prisma.XOR<Prisma.ChannelCreateWithoutPinsInput, Prisma.ChannelUncheckedCreateWithoutPinsInput>
+  where?: Prisma.ChannelWhereInput
+}
+
+export type ChannelUpdateToOneWithWhereWithoutPinsInput = {
+  where?: Prisma.ChannelWhereInput
+  data: Prisma.XOR<Prisma.ChannelUpdateWithoutPinsInput, Prisma.ChannelUncheckedUpdateWithoutPinsInput>
+}
+
+export type ChannelUpdateWithoutPinsInput = {
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  title?: Prisma.StringFieldUpdateOperationsInput | string
+  messages?: Prisma.MessageUpdateManyWithoutChannelNestedInput
+}
+
+export type ChannelUncheckedUpdateWithoutPinsInput = {
+  slug?: Prisma.StringFieldUpdateOperationsInput | string
+  title?: Prisma.StringFieldUpdateOperationsInput | string
+  messages?: Prisma.MessageUncheckedUpdateManyWithoutChannelNestedInput
+}
+
 export type ChannelCreateWithoutMessagesInput = {
   slug: string
   title: string
+  pins?: Prisma.PinCreateNestedManyWithoutChannelInput
 }
 
 export type ChannelUncheckedCreateWithoutMessagesInput = {
   slug: string
   title: string
+  pins?: Prisma.PinUncheckedCreateNestedManyWithoutChannelInput
 }
 
 export type ChannelCreateOrConnectWithoutMessagesInput = {
@@ -294,11 +364,13 @@ export type ChannelUpdateToOneWithWhereWithoutMessagesInput = {
 export type ChannelUpdateWithoutMessagesInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   title?: Prisma.StringFieldUpdateOperationsInput | string
+  pins?: Prisma.PinUpdateManyWithoutChannelNestedInput
 }
 
 export type ChannelUncheckedUpdateWithoutMessagesInput = {
   slug?: Prisma.StringFieldUpdateOperationsInput | string
   title?: Prisma.StringFieldUpdateOperationsInput | string
+  pins?: Prisma.PinUncheckedUpdateManyWithoutChannelNestedInput
 }
 
 
@@ -308,10 +380,12 @@ export type ChannelUncheckedUpdateWithoutMessagesInput = {
 
 export type ChannelCountOutputType = {
   messages: number
+  pins: number
 }
 
 export type ChannelCountOutputTypeSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   messages?: boolean | ChannelCountOutputTypeCountMessagesArgs
+  pins?: boolean | ChannelCountOutputTypeCountPinsArgs
 }
 
 /**
@@ -331,11 +405,19 @@ export type ChannelCountOutputTypeCountMessagesArgs<ExtArgs extends runtime.Type
   where?: Prisma.MessageWhereInput
 }
 
+/**
+ * ChannelCountOutputType without action
+ */
+export type ChannelCountOutputTypeCountPinsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  where?: Prisma.PinWhereInput
+}
+
 
 export type ChannelSelect<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetSelect<{
   slug?: boolean
   title?: boolean
   messages?: boolean | Prisma.Channel$messagesArgs<ExtArgs>
+  pins?: boolean | Prisma.Channel$pinsArgs<ExtArgs>
   _count?: boolean | Prisma.ChannelCountOutputTypeDefaultArgs<ExtArgs>
 }, ExtArgs["result"]["channel"]>
 
@@ -357,6 +439,7 @@ export type ChannelSelectScalar = {
 export type ChannelOmit<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = runtime.Types.Extensions.GetOmit<"slug" | "title", ExtArgs["result"]["channel"]>
 export type ChannelInclude<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
   messages?: boolean | Prisma.Channel$messagesArgs<ExtArgs>
+  pins?: boolean | Prisma.Channel$pinsArgs<ExtArgs>
   _count?: boolean | Prisma.ChannelCountOutputTypeDefaultArgs<ExtArgs>
 }
 export type ChannelIncludeCreateManyAndReturn<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {}
@@ -366,6 +449,7 @@ export type $ChannelPayload<ExtArgs extends runtime.Types.Extensions.InternalArg
   name: "Channel"
   objects: {
     messages: Prisma.$MessagePayload<ExtArgs>[]
+    pins: Prisma.$PinPayload<ExtArgs>[]
   }
   scalars: runtime.Types.Extensions.GetPayloadResult<{
     slug: string
@@ -765,6 +849,7 @@ readonly fields: ChannelFieldRefs;
 export interface Prisma__ChannelClient<T, Null = never, ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs, GlobalOmitOptions = {}> extends Prisma.PrismaPromise<T> {
   readonly [Symbol.toStringTag]: "PrismaPromise"
   messages<T extends Prisma.Channel$messagesArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Channel$messagesArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$MessagePayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
+  pins<T extends Prisma.Channel$pinsArgs<ExtArgs> = {}>(args?: Prisma.Subset<T, Prisma.Channel$pinsArgs<ExtArgs>>): Prisma.PrismaPromise<runtime.Types.Result.GetResult<Prisma.$PinPayload<ExtArgs>, T, "findMany", GlobalOmitOptions> | Null>
   /**
    * Attaches callbacks for the resolution and/or rejection of the Promise.
    * @param onfulfilled The callback to execute when the Promise is resolved.
@@ -1210,6 +1295,30 @@ export type Channel$messagesArgs<ExtArgs extends runtime.Types.Extensions.Intern
   take?: number
   skip?: number
   distinct?: Prisma.MessageScalarFieldEnum | Prisma.MessageScalarFieldEnum[]
+}
+
+/**
+ * Channel.pins
+ */
+export type Channel$pinsArgs<ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs> = {
+  /**
+   * Select specific fields to fetch from the Pin
+   */
+  select?: Prisma.PinSelect<ExtArgs> | null
+  /**
+   * Omit specific fields from the Pin
+   */
+  omit?: Prisma.PinOmit<ExtArgs> | null
+  /**
+   * Choose, which related nodes to fetch as well
+   */
+  include?: Prisma.PinInclude<ExtArgs> | null
+  where?: Prisma.PinWhereInput
+  orderBy?: Prisma.PinOrderByWithRelationInput | Prisma.PinOrderByWithRelationInput[]
+  cursor?: Prisma.PinWhereUniqueInput
+  take?: number
+  skip?: number
+  distinct?: Prisma.PinScalarFieldEnum | Prisma.PinScalarFieldEnum[]
 }
 
 /**

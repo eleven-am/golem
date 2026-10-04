@@ -62,6 +62,7 @@ export const ModelName = {
   Reply: 'Reply',
   Watch: 'Watch',
   Channel: 'Channel',
+  Pin: 'Pin',
   Message: 'Message'
 } as const
 
@@ -185,6 +186,14 @@ export const ChannelScalarFieldEnum = {
 } as const
 
 export type ChannelScalarFieldEnum = (typeof ChannelScalarFieldEnum)[keyof typeof ChannelScalarFieldEnum]
+
+
+export const PinScalarFieldEnum = {
+  id: 'id',
+  channelSlug: 'channelSlug'
+} as const
+
+export type PinScalarFieldEnum = (typeof PinScalarFieldEnum)[keyof typeof PinScalarFieldEnum]
 
 
 export const MessageScalarFieldEnum = {

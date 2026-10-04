@@ -194,4 +194,46 @@ describe('cascaded delete events against live PostgreSQL', () => {
     expect(published.filter((event) => event.model === 'Reply').map((event) => event.id)).toEqual([10, 11]);
     await expect(first.reply.count()).resolves.toBe(0);
   });
+
+  it('reads dependents from the schema their model declares, not a same-named table on the search path', async () => {
+    await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""other" CASCADE');
+    await first.$executeRawUnsafe('CREATE SCHEMA "golem""other"');
+    await first.$executeRawUnsafe(`CREATE TABLE "golem""other"."replies" (
+      "id" INTEGER PRIMARY KEY,
+      "thread_id" INTEGER NOT NULL REFERENCES "public"."threads"("id") ON DELETE CASCADE,
+      "body" TEXT NOT NULL,
+      "amount" DECIMAL(65,30),
+      "posted_at" TIMESTAMP(3) NOT NULL
+    )`);
+    await first.$executeRawUnsafe(
+      `INSERT INTO "golem""other"."replies" ("id", "thread_id", "body", "posted_at") VALUES (100, 1, 'elsewhere', now()), (101, 1, 'elsewhere', now())`,
+    );
+    const qualified: DatamodelDocument = {
+      ...datamodel,
+      models: datamodel.models.map((model) => (model.name === 'Reply' ? { ...model, schema: 'golem"other' } : model)),
+    };
+    const events: GolemEventPayload[] = [];
+    const bus: GolemEventBus = {
+      publish: async (_topic, event) => { events.push(event); },
+      publishMany: async (_topic, batch) => { events.push(...batch); },
+      iterate: (async function* () {})() as never,
+    };
+    const qualifiedPublisher = createEventPublisher({ datamodel: qualified, eventBus: bus, models: new Set(['Reply']) });
+
+    try {
+      await withBufferedEvents(() =>
+        first.$transaction((tx) => qualifiedPublisher({
+          model: 'Thread',
+          operation: 'delete',
+          args: { where: { id: 1 } },
+          query: async () => { throw new Error('the native delete escaped interception'); },
+          batch: runtimeOver(tx, 'Thread'),
+        })),
+      );
+      expect(events.map((event) => event.id)).toEqual([100, 101]);
+    } finally {
+      await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""other" CASCADE');
+    }
+  });
+
 });

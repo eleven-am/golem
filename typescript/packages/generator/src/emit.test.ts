@@ -405,3 +405,15 @@ describe('referential delete actions', () => {
       .toBeUndefined();
   });
 });
+
+describe('multi-schema models', () => {
+  it('carries the schema a model lives in, and omits it when the model declares none', () => {
+    const idField = { ...scalar('id'), isId: true } as DMMF.Field;
+    const parsed = parseEmitted(emitDatamodelModule(datamodel([
+      { ...model('Audit', [idField], null), schema: 'audit' } as DMMF.Model,
+      model('User', [idField], null),
+    ])));
+    expect((parsed.models[0] as { schema?: string }).schema).toBe('audit');
+    expect(parsed.models[1]).not.toHaveProperty('schema');
+  });
+});
