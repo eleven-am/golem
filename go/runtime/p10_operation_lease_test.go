@@ -449,3 +449,42 @@ func TestOperationCommitInProgressWhenTheOperationEndsCompletesAcrossProviders(t
 		}
 	})
 }
+
+func TestOperationWriteThroughAnOperationHookContextCannotCommitAfterTheOperationEndsAcrossProviders(t *testing.T) {
+	forEachP10OperationProfile(t, func(t *testing.T, fixture *p10OperationFixture) {
+		ctx := context.Background()
+		caller := fixture.caller(t, "alpha")
+		created := p10OperationID(t, 930)
+		team := p10OperationID(t, 931)
+		late := make(chan error, 1)
+		var spawn sync.Once
+		var reached func() bool
+		var proceed func()
+		p10operations.Reset(func(probeContext context.Context, operation string, scoped *p10operations.Caller[p10operations.Principal]) error {
+			if operation != "inviteMember" {
+				return nil
+			}
+			p10operations.SetTeamHook(func(hookContext context.Context, _ golem.HookExecutor) error {
+				spawn.Do(func() {
+					go func() { late <- fixture.genericCreate(hookContext, scoped, created) }()
+				})
+				return nil
+			})
+			if _, err := scoped.Teams.Create(probeContext, p10TeamInput(team)); err != nil {
+				return err
+			}
+			p10AwaitCondition(reached)
+			return errP10StopOperation
+		})
+		reached, proceed = p10BlockAfterCreate()
+		defer proceed()
+		if _, err := p10operations.Mutate(ctx, caller, p10operations.InviteMember, fixture.inviteArgs(p10OperationID(t, 932), "stop@example.test")); !errors.Is(err, errP10StopOperation) {
+			t.Fatalf("operation = %v", err)
+		}
+		proceed()
+		assertP10Conflict(t, "write through the operation's hook context", p10Conflict{operation: "create", model: p10InviteModel(), message: "mutation conflicted"}, <-late)
+		if exists, _, _ := fixture.inviteExists(t, created); exists {
+			t.Fatal("a write planned through the operation's hook context committed after the operation ended")
+		}
+	})
+}

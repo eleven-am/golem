@@ -47,23 +47,27 @@ func SystemScoped[P, A, M any](ctx context.Context, system System[P, A], descrip
 }
 
 func CallerTxScoped[P, A, M any](ctx context.Context, tx *CallerTx[P, A], descriptor golem.ModelDescriptor[M], query golem.ScopedQuery[M]) ([]golem.ScopedRow, error) {
-	if tx == nil || tx.caller == nil {
-		return nil, scopedError(descriptor.Metadata().ModelID(), fmt.Errorf("caller transaction unavailable"))
-	}
-	return CallerScoped(ctx, tx.caller, descriptor, query)
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.ScopedRow, error) {
+		if tx == nil || tx.caller == nil {
+			return nil, scopedError(descriptor.Metadata().ModelID(), fmt.Errorf("caller transaction unavailable"))
+		}
+		return CallerScoped(ctx, tx.caller, descriptor, query)
+	})
 }
 func SystemTxScoped[P, A, M any](ctx context.Context, tx *SystemTx[P, A], descriptor golem.ModelDescriptor[M], query golem.ScopedQuery[M]) ([]golem.ScopedRow, error) {
-	if tx == nil || tx.system.app == nil {
-		return nil, scopedError(descriptor.Metadata().ModelID(), fmt.Errorf("system transaction unavailable"))
-	}
-	frozen, err := golem.RuntimeFreezeScopedQuery(query)
-	if err != nil {
-		failure := scopedError(descriptor.Metadata().ModelID(), err)
-		reportScoped(ctx, tx.system.app, golem.FrozenScopedQuery{}, "", tx.execution, true, "", time.Now(), 0, golem.ScopedOutcomeRefused)
-		observeScopedInputRefusal(ctx, tx.system.app, tx.system.executor, descriptor.Metadata().ModelID(), failure)
-		return nil, failure
-	}
-	return executeScoped(ctx, tx.system.app, tx.system.executor, nil, true, "", tx.execution, descriptor.Metadata().ModelID(), frozen)
+	return transactionOperation(ctx, tx.binding(), func(ctx context.Context) ([]golem.ScopedRow, error) {
+		if tx == nil || tx.system.app == nil {
+			return nil, scopedError(descriptor.Metadata().ModelID(), fmt.Errorf("system transaction unavailable"))
+		}
+		frozen, err := golem.RuntimeFreezeScopedQuery(query)
+		if err != nil {
+			failure := scopedError(descriptor.Metadata().ModelID(), err)
+			reportScoped(ctx, tx.system.app, golem.FrozenScopedQuery{}, "", tx.execution, true, "", time.Now(), 0, golem.ScopedOutcomeRefused)
+			observeScopedInputRefusal(ctx, tx.system.app, tx.system.executor, descriptor.Metadata().ModelID(), failure)
+			return nil, failure
+		}
+		return executeScoped(ctx, tx.system.app, tx.system.executor, nil, true, "", tx.execution, descriptor.Metadata().ModelID(), frozen)
+	})
 }
 
 func observeScopedInputRefusal[P, A any](ctx context.Context, app *App[P, A], executor *executionBinding, model golem.ModelID, failure error) {
@@ -136,11 +140,9 @@ func executeScoped[P, A any](ctx context.Context, app *App[P, A], executor *exec
 	}
 	statement := prepared.statement
 	statementSQL = statement.SQL()
-	ctx, endCall, callErr := executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {
 		return nil, scopedError(descriptor, err)

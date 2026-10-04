@@ -35,10 +35,7 @@ func p10ParentIsWaitingForItsNestedCall() bool {
 	buffer := make([]byte, 1<<22)
 	stacks := string(buffer[:goruntime.Stack(buffer, true)])
 	for _, stack := range strings.Split(stacks, "\n\n") {
-		if strings.Contains(stack, "(*heldWrite).end(") && strings.Contains(stack, "sync.(*Mutex).Lock") {
-			return true
-		}
-		if strings.Contains(stack, "(*heldWrite).closeHookScope(") && strings.Contains(stack, "sync.(*Cond).Wait") {
+		if strings.Contains(stack, "runtime.openHookScope.func") && strings.Contains(stack, "sync.(*Cond).Wait") {
 			return true
 		}
 	}

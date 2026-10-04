@@ -60,6 +60,10 @@ type FinalGraphTransaction interface {
 	FinalizeNested(context.Context, []AppliedNode) error
 }
 
+type AdmittedTransaction interface {
+	AdmitNested(context.Context) context.Context
+}
+
 type TransformStage uint8
 
 const (
@@ -390,6 +394,9 @@ func Execute(ctx context.Context, graph mutationir.Graph, maxTouchedRows uint32,
 	}
 	if transaction == nil {
 		return ExecutionReceipt{}, fmt.Errorf("P4_NESTED_EXEC_INPUT: transaction boundary returned nil")
+	}
+	if admitted, ok := transaction.(AdmittedTransaction); ok {
+		ctx = admitted.AdmitNested(ctx)
 	}
 	committed := false
 	defer func() {

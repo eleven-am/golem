@@ -36,7 +36,7 @@ type executionBinding struct {
 	observer        observe.Observer
 	queueWake       atomic.Pointer[func()]
 	operationWrites *operationWriteLog
-	writeLock       sync.Mutex
+	serving         atomic.Bool
 	calls           usageGate
 }
 
@@ -473,57 +473,75 @@ func commitSQLiteImmediate(ctx context.Context, connection sqliteImmediateConnec
 // Generated Tx model clients call this seam; it preserves caller hooks and
 // policy isolation while forcing every statement through the bound sqlx.Tx.
 func CallerTxFindMany[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerFindMany(ctx, transaction.caller, descriptor, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.Row[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerFindMany(ctx, transaction.caller, descriptor, options...)
+	})
 }
 
 func CallerTxFindFirst[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
-	if transaction == nil || transaction.caller == nil {
-		return golem.Row[M]{}, false, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerFindFirst(ctx, transaction.caller, descriptor, options...)
+	return foundRow(transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (foundRowResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return foundRowResult[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		row, present, err := CallerFindFirst(ctx, transaction.caller, descriptor, options...)
+		return foundRowResult[M]{row: row, found: present}, err
+	}))
 }
 
 func CallerTxFindUnique[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerFindUnique(ctx, transaction.caller, descriptor, selector, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerFindUnique(ctx, transaction.caller, descriptor, selector, options...)
+	})
 }
 
 func CallerTxCount[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
-	if transaction == nil || transaction.caller == nil {
-		return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerCount(ctx, transaction.caller, descriptor, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.caller == nil {
+			return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerCount(ctx, transaction.caller, descriptor, options...)
+	})
 }
 
 func SystemTxFindMany[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) ([]golem.Row[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemFindMany(ctx, transaction.system, descriptor, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.Row[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemFindMany(ctx, transaction.system, descriptor, options...)
+	})
 }
 
 func SystemTxFindFirst[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (golem.Row[M], bool, error) {
-	if transaction == nil || transaction.system.app == nil {
-		return golem.Row[M]{}, false, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemFindFirst(ctx, transaction.system, descriptor, options...)
+	return foundRow(transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (foundRowResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return foundRowResult[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		row, present, err := SystemFindFirst(ctx, transaction.system, descriptor, options...)
+		return foundRowResult[M]{row: row, found: present}, err
+	}))
 }
 
 func SystemTxFindUnique[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], selector golem.UniqueSelectorValue[M], options ...golem.ReadOption[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemFindUnique(ctx, transaction.system, descriptor, selector, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return golem.Row[M]{}, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemFindUnique(ctx, transaction.system, descriptor, selector, options...)
+	})
 }
 
 func SystemTxCount[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], options ...golem.ReadOption[M]) (int64, error) {
-	if transaction == nil || transaction.system.app == nil {
-		return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemCount(ctx, transaction.system, descriptor, options...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (int64, error) {
+		if transaction == nil || transaction.system.app == nil {
+			return 0, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemCount(ctx, transaction.system, descriptor, options...)
+	})
 }

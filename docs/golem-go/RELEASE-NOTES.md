@@ -5,12 +5,46 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.3
+go get github.com/eleven-am/golem/go@v0.6.4
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.4
+
+**Behaviour change: a transaction serves one call chain at a time.** A call
+that overlaps an active call on the same transaction, without belonging to its
+chain, now fails immediately with `P4_RUNTIME_TRANSACTION: transaction used
+concurrently; a transaction serves one call chain at a time` instead of
+waiting. That covers:
+
+- sibling goroutines in a transaction callback;
+- overlapping calls through one hook's executor;
+- a hook calling the transaction with a context that isn't its own, which
+  previously deadlocked.
+
+Calls made one after another, and calls nested through a hook's context or
+executor, are unchanged. Use a transaction from one goroutine; a loop is just
+as fast, because one database connection runs one statement at a time. Do
+slow non-database work before opening the transaction, and use the queue or a
+fresh caller after commit for background work.
+
+**`golem generate`, `check` and `doctor` are about twice as fast.** Each of
+them ran its whole build twice, though only the final emission stage reads the
+reviewed migration history, and every build ran gqlgen twice although its
+unstamped output does not depend on the generation stamp. A project is now
+analysed once per command, and gqlgen runs once with its unstamped output
+stamped for each build. On the example app, `generate` went from 16.6s to
+7.4s, `check` from 19.8s to 7.5s and `doctor` from 16.1s to 6.5s. Generated
+output is byte-identical.
+
+**A failed savepoint release no longer leaves state open.** A nested write
+whose `RELEASE SAVEPOINT` fails now rolls back its savepoint and closes its
+mutation scope.
 
 ---
 

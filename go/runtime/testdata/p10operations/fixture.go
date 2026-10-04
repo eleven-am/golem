@@ -94,6 +94,16 @@ func (Team) AfterCreate(ctx context.Context, result TeamCreateResult) error {
 	return hook(ctx, result.Executor())
 }
 
+func (Team) AfterFindMany(ctx context.Context, _ TeamFindManyResult) error {
+	probeLock.Lock()
+	hook := activeTeamReadHook
+	probeLock.Unlock()
+	if hook == nil {
+		return nil
+	}
+	return hook(ctx)
+}
+
 func (Invite) BeforeCreate(ctx context.Context, _ *InviteCreateRequest) error {
 	recordHook("before_create")
 	return nil
@@ -319,6 +329,12 @@ func SetTeamHook(hook TeamHook) {
 	activeTeamHook = hook
 }
 
+func SetTeamReadHook(hook func(context.Context) error) {
+	probeLock.Lock()
+	defer probeLock.Unlock()
+	activeTeamReadHook = hook
+}
+
 func SetInviteHook(hook func(context.Context) error) {
 	probeLock.Lock()
 	defer probeLock.Unlock()
@@ -334,6 +350,7 @@ var (
 	probeLock                    sync.Mutex
 	activeProbe                  Probe
 	activeTeamHook               TeamHook
+	activeTeamReadHook           func(context.Context) error
 	activeInviteHook             func(context.Context) error
 	activeInviteExecutorHook     TeamHook
 	activeInviteManyHook         func(context.Context) error
@@ -346,6 +363,7 @@ func Reset(probe Probe) {
 	defer probeLock.Unlock()
 	activeProbe = probe
 	activeTeamHook = nil
+	activeTeamReadHook = nil
 	activeInviteHook = nil
 	activeInviteExecutorHook = nil
 	activeInviteManyHook = nil

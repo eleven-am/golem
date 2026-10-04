@@ -204,25 +204,25 @@ its transaction, fail later.
 
 A hook's executor is valid only while that hook runs. When the hook returns,
 golem waits for any call already in flight on the executor, then refuses every
-later call, from any goroutine. A transaction runs its reads and writes one at
-a time, so hook writes started concurrently run one after another. A call
-through a hook's executor always runs inside the write that called the hook,
-whatever context you pass it. A call through the transaction itself runs
-inside the call its context came from while that call is still running, and
-otherwise waits its turn. A call made through a hook's context belongs to that
-hook, like a call through its executor: when the hook returns, golem waits for
-any such call already started before the write continues, and a call started
-after that runs once that write has finished; when the hook belongs to a write
-made through an outer hook's executor, that is when the executor call
-finishes, not the outer write. Finish those calls before the hook
-returns if the write depends on them. Inside a hook, pass the hook's own
-context to the transaction: with any other context the call waits until the
-write that called the hook finishes, so a hook that waits for it never
-returns. The same holds for a nested hook calling an outer hook's executor. A
-caller or system transaction accepts reads and writes only until its callback
-returns, or panics: golem waits for every call already in flight, refuses
-later ones, and only then flushes, commits or rolls back. Retry to run the
-write under the caller's own policy.
+later call, from any goroutine. A call through a hook's executor always runs
+inside the write that called the hook, whatever context you pass it. A call
+through the transaction itself with the hook's own context also runs inside
+that write. Both belong to the hook: when the hook returns, golem waits for any
+such call already started before the write continues, so finish those calls
+before the hook returns if the write depends on them. A call made later with
+that context no longer belongs to the hook and runs as a call of its own. The
+hook's calls run one at a time, like every call on a transaction (see
+[Transactions serve one call chain at a time](#transactions-serve-one-call-chain-at-a-time)):
+inside a hook, a call with any other context, or a second call started while
+one through the same hook is still running, fails at once with
+`P4_RUNTIME_TRANSACTION: transaction used concurrently; a transaction serves
+one call chain at a time`. It never waits, so a hook can never block on its
+own transaction. A nested hook may call an outer hook's executor: that call is
+inside the chain and runs inside the nested write. A caller or system
+transaction accepts reads and writes only until its callback returns, or
+panics: golem waits for every call already in flight, refuses later ones, and
+only then flushes, commits or rolls back. Retry to run the write under the
+caller's own policy.
 
 `Within` must name a generated custom mutation. Any other function, including
 a custom query resolver, fails the policy build when the caller is created,
@@ -290,9 +290,33 @@ author, err := system.Authors.Create(ctx,
 Each field is set through its own builder, so a field that is `readonly` or
 absent from the schema cannot be written by construction.
 
-A transaction runs its writes one at a time. Using one transaction from several
-goroutines is safe, but its writes do not run in parallel: each waits for the
-one before it, including every hook write that one makes.
+### Transactions serve one call chain at a time
+
+A transaction serves one call chain at a time. The chain is one call made
+through the transaction and everything nested inside it: the hooks that call
+runs, calls made with a hook's own context, calls through a hook's executor,
+and the hooks those run in turn. A call holds the transaction from start to
+finish, as one operation: preparation, every statement, and its before and
+after hooks, for reads as well as writes. A callback that returns while a call
+is still in a hook waits for that call before golem commits. Nested calls run
+inside their parent: each
+hook write gets its own savepoint, and a hook's calls finish before the write
+that ran the hook continues. Calls made one after another always proceed.
+
+A call that would overlap the active call without belonging to its chain fails
+immediately with `P4_RUNTIME_TRANSACTION: transaction used concurrently; a
+transaction serves one call chain at a time`. That covers a sibling goroutine
+started from the callback, a call inside a hook with a context that is not the
+hook's own, a second executor call started while the hook's first is still
+running, and an escaped executor used while its hook's call is busy. Such a
+call never waits, so it can never deadlock, and the call already running is
+unaffected.
+
+Don't share a transaction across goroutines. A loop is just as fast: the
+transaction holds one connection, and a connection runs one statement at a
+time. Do slow work that doesn't touch the database before you open the
+transaction, and hand background work to the queue, or to a fresh caller after
+commit.
 
 ### Mutations return only what you select
 

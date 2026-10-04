@@ -110,6 +110,26 @@ func runInSystemTransaction[P, A any](t testing.TB, system System[mutationResult
 	return outcome
 }
 
+func runInAdmittedCallerTransaction(t testing.TB, caller *Caller[mutationResultPrincipal, mutationResultActor], body func(context.Context, *CallerTx[mutationResultPrincipal, mutationResultActor]) error) semanticEntryPointOutcome {
+	t.Helper()
+	return runInCallerTransaction(t, caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+		_, err := transactionOperation(ctx, transaction.caller.executor, func(ctx context.Context) (struct{}, error) {
+			return struct{}{}, body(ctx, transaction)
+		})
+		return err
+	})
+}
+
+func runInAdmittedSystemTransaction[P, A any](t testing.TB, system System[mutationResultPrincipal, mutationResultActor], body func(context.Context, *SystemTx[mutationResultPrincipal, mutationResultActor]) error) semanticEntryPointOutcome {
+	t.Helper()
+	return runInSystemTransaction[P, A](t, system, func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+		_, err := transactionOperation(ctx, transaction.system.executor, func(ctx context.Context) (struct{}, error) {
+			return struct{}{}, body(ctx, transaction)
+		})
+		return err
+	})
+}
+
 // mutationEntryPointManifest names every exported mutation entry point in the
 // runtime package. Each entry drives that exact function and reports the marks
 // and durable facts its transaction accumulated; the AST scan below fails when
@@ -118,7 +138,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 	return map[string]func(testing.TB, *semanticEntryPointHarness) (semanticEntryPointOutcome, byte){
 		"CallerCreate": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerCreate(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.createPost(id, golem.UUID{15: 1}, "entry"))
 				return err
 			}), id
@@ -132,7 +152,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		},
 		"SystemCreate": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemCreate(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.createPost(id, golem.UUID{15: 1}, "entry"))
 				return err
 			}), id
@@ -147,7 +167,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerUpdate": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerUpdate(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.target(id), harness.plain.updateTitle("entry"))
 				return err
 			}), id
@@ -163,7 +183,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemUpdate": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemUpdate(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.target(id), harness.plain.updateTitle("entry"))
 				return err
 			}), id
@@ -179,7 +199,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerDelete": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerDelete(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.target(id))
 				return err
 			}), id
@@ -195,7 +215,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemDelete": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemDelete(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.target(id))
 				return err
 			}), id
@@ -210,7 +230,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		},
 		"CallerUpsert": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerUpsert(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.target(id), harness.plain.createPost(id, golem.UUID{15: 1}, "entry"), harness.plain.updateTitle("entry"))
 				return err
 			}), id
@@ -224,7 +244,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		},
 		"SystemUpsert": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemUpsert(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.target(id), harness.plain.createPost(id, golem.UUID{15: 1}, "entry"), harness.plain.updateTitle("entry"))
 				return err
 			}), id
@@ -239,7 +259,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerUpdateMany": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerUpdateMany(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.postID.In(golem.UUID{15: id}), harness.plain.updateManyTitle("entry"))
 				return err
 			}), id
@@ -255,7 +275,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemUpdateMany": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemUpdateMany(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.postID.In(golem.UUID{15: id}), harness.plain.updateManyTitle("entry"))
 				return err
 			}), id
@@ -271,7 +291,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerDeleteMany": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.caller, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerDeleteMany(ctx, transaction.caller, harness.plain.postDescriptor, harness.plain.postID.In(golem.UUID{15: id}))
 				return err
 			}), id
@@ -287,7 +307,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemDeleteMany": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedPlain(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.plain.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemDeleteMany(ctx, transaction.system, harness.plain.postDescriptor, harness.plain.postID.In(golem.UUID{15: id}))
 				return err
 			}), id
@@ -303,7 +323,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerUpdateVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedVersioned(t, id)
-			return runInCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerUpdateVersioned(ctx, transaction.caller, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectVersion(1), harness.versioned.updateTitle("entry"))
 				return err
 			}), id
@@ -319,7 +339,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemUpdateVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedVersioned(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemUpdateVersioned(ctx, transaction.system, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectVersion(1), harness.versioned.updateTitle("entry"))
 				return err
 			}), id
@@ -335,7 +355,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"CallerDeleteVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedVersioned(t, id)
-			return runInCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerDeleteVersioned(ctx, transaction.caller, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectVersion(1))
 				return err
 			}), id
@@ -351,7 +371,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		"SystemDeleteVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
 			harness.seedVersioned(t, id)
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemDeleteVersioned(ctx, transaction.system, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectVersion(1))
 				return err
 			}), id
@@ -366,7 +386,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		},
 		"CallerUpsertVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedCallerTransaction(t, harness.versioner, func(ctx context.Context, transaction *CallerTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := CallerUpsertVersioned(ctx, transaction.caller, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectAbsent(), harness.versionedCreate(id, "entry"), harness.versioned.updateTitle("unused"))
 				return err
 			}), id
@@ -380,7 +400,7 @@ func mutationEntryPointManifest() map[string]func(testing.TB, *semanticEntryPoin
 		},
 		"SystemUpsertVersioned": func(t testing.TB, harness *semanticEntryPointHarness) (semanticEntryPointOutcome, byte) {
 			id := harness.id()
-			return runInSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
+			return runInAdmittedSystemTransaction[mutationResultPrincipal, mutationResultActor](t, harness.versioned.app.System(), func(ctx context.Context, transaction *SystemTx[mutationResultPrincipal, mutationResultActor]) error {
 				_, err := SystemUpsertVersioned(ctx, transaction.system, harness.versioned.postDescriptor, harness.versioned.target(id), golem.ExpectAbsent(), harness.versionedCreate(id, "entry"), harness.versioned.updateTitle("unused"))
 				return err
 			}), id

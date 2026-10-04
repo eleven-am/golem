@@ -45,11 +45,9 @@ func CallerSearch[P, A, M any](ctx context.Context, caller *Caller[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := prepared.executor.queryerFor(caller.app.database)
 	if err != nil {
 		return nil, err
@@ -83,11 +81,9 @@ func CallerSimilar[P, A, M any](ctx context.Context, caller *Caller[P, A], descr
 	if err != nil {
 		return nil, err
 	}
-	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := prepared.executor.queryerFor(caller.app.database)
 	if err != nil {
 		return nil, err
@@ -113,11 +109,9 @@ func SystemSearch[P, A, M any](ctx context.Context, system System[P, A], descrip
 	if err != nil {
 		return nil, err
 	}
-	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := prepared.executor.queryerFor(system.app.database)
 	if err != nil {
 		return nil, err
@@ -147,11 +141,9 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 	if err != nil {
 		return nil, err
 	}
-	ctx, endCall, callErr := prepared.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := prepared.executor.queryerFor(system.app.database)
 	if err != nil {
 		return nil, err
@@ -166,31 +158,39 @@ func SystemSimilar[P, A, M any](ctx context.Context, system System[P, A], descri
 }
 
 func CallerTxSearch[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerSearch(ctx, transaction.caller, descriptor, indexName, query, take, predicates...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerSearch(ctx, transaction.caller, descriptor, indexName, query, take, predicates...)
+	})
 }
 
 func CallerTxSimilar[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
-	}
-	return CallerSimilar(ctx, transaction.caller, descriptor, indexName, source, take, predicates...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: caller transaction is unavailable")
+		}
+		return CallerSimilar(ctx, transaction.caller, descriptor, indexName, source, take, predicates...)
+	})
 }
 
 func SystemTxSearch[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName, query string, take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemSearch(ctx, transaction.system, descriptor, indexName, query, take, predicates...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemSearch(ctx, transaction.system, descriptor, indexName, query, take, predicates...)
+	})
 }
 
 func SystemTxSimilar[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], indexName string, source golem.UniqueSelectorValue[M], take int, predicates ...golem.Predicate[M]) ([]golem.SemanticResult[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
-	}
-	return SystemSimilar(ctx, transaction.system, descriptor, indexName, source, take, predicates...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) ([]golem.SemanticResult[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return nil, fmt.Errorf("P4_RUNTIME_TRANSACTION: system transaction is unavailable")
+		}
+		return SystemSimilar(ctx, transaction.system, descriptor, indexName, source, take, predicates...)
+	})
 }
 
 func prepareSystemFindManyRead[P, A, M any](system System[P, A], descriptor golem.ModelDescriptor[M], options []golem.ReadOption[M]) (PreparedRead, error) {

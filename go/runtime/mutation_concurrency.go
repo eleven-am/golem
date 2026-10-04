@@ -259,11 +259,9 @@ func callerDeleteVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	ctx, endCall, callErr := system.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := system.executor.requireAdmitted(ctx); callErr != nil {
 		return golem.Row[M]{}, callErr
 	}
-	defer endCall()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -294,11 +292,9 @@ func SystemUpdateVersioned[P, A, M any](ctx context.Context, system System[P, A]
 
 func SystemDeleteVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	ctx, endCall, callErr := system.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := system.executor.requireAdmitted(ctx); callErr != nil {
 		return golem.Row[M]{}, callErr
 	}
-	defer endCall()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -336,31 +332,39 @@ func executeSystemVersionedRootScalar[P, A, M any](ctx context.Context, system S
 }
 
 func CallerTxUpdateVersioned[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
-	}
-	return CallerUpdateVersioned(ctx, transaction.caller, descriptor, target, expected, input, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
+		}
+		return CallerUpdateVersioned(ctx, transaction.caller, descriptor, target, expected, input, projections...)
+	})
 }
 
 func CallerTxDeleteVersioned[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
-	}
-	return CallerDeleteVersioned(ctx, transaction.caller, descriptor, target, expected, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
+		}
+		return CallerDeleteVersioned(ctx, transaction.caller, descriptor, target, expected, projections...)
+	})
 }
 
 func SystemTxUpdateVersioned[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, input golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
-	}
-	return SystemUpdateVersioned(ctx, transaction.system, descriptor, target, expected, input, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "update", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
+		}
+		return SystemUpdateVersioned(ctx, transaction.system, descriptor, target, expected, input, projections...)
+	})
 }
 
 func SystemTxDeleteVersioned[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ExistingVersion, projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
-	}
-	return SystemDeleteVersioned(ctx, transaction.system, descriptor, target, expected, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "delete", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
+		}
+		return SystemDeleteVersioned(ctx, transaction.system, descriptor, target, expected, projections...)
+	})
 }
 
 func CallerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
@@ -398,11 +402,9 @@ func callerUpsertVersioned[P, A, M any](ctx context.Context, caller *Caller[P, A
 
 func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
 	ctx = withoutOperationLease(ctx)
-	ctx, endCall, callErr := system.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := system.executor.requireAdmitted(ctx); callErr != nil {
 		return golem.Row[M]{}, callErr
 	}
-	defer endCall()
 	if system.app == nil {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system execution is unavailable", nil)
 	}
@@ -428,17 +430,21 @@ func SystemUpsertVersioned[P, A, M any](ctx context.Context, system System[P, A]
 }
 
 func CallerTxUpsertVersioned[P, A, M any](ctx context.Context, transaction *CallerTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.caller == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
-	}
-	return CallerUpsertVersioned(ctx, transaction.caller, descriptor, target, expected, create, update, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.caller == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "caller transaction is unavailable", nil)
+		}
+		return CallerUpsertVersioned(ctx, transaction.caller, descriptor, target, expected, create, update, projections...)
+	})
 }
 
 func SystemTxUpsertVersioned[P, A, M any](ctx context.Context, transaction *SystemTx[P, A], descriptor golem.ModelDescriptor[M], target golem.MutationTarget[M], expected golem.ConcurrencyExpectation, create golem.CreateInput[M], update golem.UpdateInput[M], projections ...golem.Projection[M]) (golem.Row[M], error) {
-	if transaction == nil || transaction.system.app == nil {
-		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
-	}
-	return SystemUpsertVersioned(ctx, transaction.system, descriptor, target, expected, create, update, projections...)
+	return transactionOperation(ctx, transaction.binding(), func(ctx context.Context) (golem.Row[M], error) {
+		if transaction == nil || transaction.system.app == nil {
+			return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", descriptor.Metadata().ModelID(), golem.FieldID{}, "system transaction is unavailable", nil)
+		}
+		return SystemUpsertVersioned(ctx, transaction.system, descriptor, target, expected, create, update, projections...)
+	})
 }
 
 func freezeVersionedUpsertInputs[M any](registry *schema.Registry, target golem.MutationTarget[M], create golem.CreateInput[M], update golem.UpdateInput[M], hookOwned func(golem.FrozenMutationInput) ([]golem.FieldID, error)) (golem.FrozenMutationTarget, golem.FrozenMutationInput, golem.FrozenMutationInput, error) {
@@ -566,6 +572,7 @@ func executeAbsentVersionedUpsertAttempt[P, A, M any](ctx context.Context, app *
 	if !ok || attempt == nil {
 		return golem.Row[M]{}, publicRootUpsertError(descriptor.Metadata().ModelID(), fmt.Errorf("expect-absent upsert received a foreign transaction"))
 	}
+	ctx = attempt.AdmitAttempt(ctx)
 	committed := false
 	defer func() {
 		if !committed {
@@ -833,6 +840,7 @@ func executeVersionedScalarKernel[P, A, M any](ctx context.Context, app *App[P, 
 	if !ok || attempt == nil {
 		return golem.Row[M]{}, publicScalarMutationError(descriptor.Metadata().ModelID(), scalarMutationError(initial.Operation(), scalarMutationInvariant, 0, 0, "concurrency transaction is invalid", nil))
 	}
+	ctx = attempt.AdmitAttempt(ctx)
 	committed := false
 	defer func() {
 		if !committed {

@@ -377,8 +377,16 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			_ = transaction.Rollback()
 			return nil, err
 		}
-		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, binding,
+		admitted, endOperation, err := binding.beginCall(ctx)
+		if err != nil {
+			binding.close()
+			_ = transaction.Rollback()
+			return nil, err
+		}
+		release := sync.OnceFunc(endOperation)
+		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), newSQLXUpsertAttempt(queryer, binding,
 			func(ctx context.Context) error {
+				defer release()
 				if err := flushMutationBinding(ctx, transaction, binding); err != nil {
 					return err
 				}
@@ -391,11 +399,12 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 				return nil
 			},
 			func() error {
+				release()
 				defer binding.close()
 				binding.discardMutation()
 				return ignoreTransactionDone(transaction.Rollback())
 			},
-		)), nil
+		))), nil
 	case policyir.ProviderSQLite:
 		if requirement != mutationsql.SQLiteImmediateTransaction {
 			return nil, fmt.Errorf("SQLite upsert has the wrong transaction requirement")
@@ -422,8 +431,17 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			_ = connection.Close()
 			return nil, err
 		}
-		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, binding,
+		admitted, endOperation, err := binding.beginCall(ctx)
+		if err != nil {
+			binding.close()
+			_ = execMutationCleanup(ctx, connection, "ROLLBACK")
+			_ = connection.Close()
+			return nil, err
+		}
+		release := sync.OnceFunc(endOperation)
+		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), newSQLXUpsertAttempt(queryer, binding,
 			func(ctx context.Context) error {
+				defer release()
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
 					return err
 				}
@@ -442,13 +460,14 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 				return nil
 			},
 			func() error {
+				release()
 				rollbackErr := execMutationCleanup(ctx, connection, "ROLLBACK")
 				binding.discardMutation()
 				binding.close()
 				closeErr := connection.Close()
 				return errors.Join(rollbackErr, closeErr)
 			},
-		)), nil
+		))), nil
 	default:
 		return nil, fmt.Errorf("upsert provider is unsupported")
 	}
@@ -499,12 +518,25 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 }
 
 type sqlxUpsertAttempt struct {
-	queryer sqlx.QueryerContext
-	binding *executionBinding
-	finish  func(context.Context) error
-	abort   func() error
-	mu      sync.Mutex
-	done    bool
+	queryer   sqlx.QueryerContext
+	binding   *executionBinding
+	finish    func(context.Context) error
+	abort     func() error
+	mu        sync.Mutex
+	done      bool
+	admission *heldWrite
+}
+
+func withUpsertAdmission(admission *heldWrite, attempt *sqlxUpsertAttempt) *sqlxUpsertAttempt {
+	attempt.admission = admission
+	return attempt
+}
+
+func (attempt *sqlxUpsertAttempt) AdmitAttempt(ctx context.Context) context.Context {
+	if attempt.admission == nil || ctx == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, heldWriteKey{}, attempt.admission)
 }
 
 func newSQLXUpsertAttempt(queryer sqlx.QueryerContext, binding *executionBinding, finish func(context.Context) error, abort func() error) *sqlxUpsertAttempt {

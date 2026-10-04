@@ -993,11 +993,9 @@ func executeRenderedPlan[P, A any](ctx context.Context, app *App[P, A], executor
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read decoder could not be built", err)
 	}
-	ctx, endCall, callErr := executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := executor.requireAdmitted(ctx); callErr != nil {
 		return nil, callErr
 	}
-	defer endCall()
 	queryer, err := executor.queryerFor(app.database)
 	if err != nil {
 		return nil, golem.RuntimeReadError(golem.CodeBadUserInput, operationName(operation), golem.ModelID(planned.ModelID()), golem.FieldID{}, "read execution binding is unavailable", err)
@@ -1362,11 +1360,9 @@ func executeCount[P, A any](ctx context.Context, app *App[P, A], prepared Prepar
 }
 
 func executePreparedCount[P, A any](ctx context.Context, app *App[P, A], prepared preparedReadStatement) (result int64, resultErr error) {
-	ctx, endCall, callErr := prepared.prepared.executor.beginCall(ctx)
-	if callErr != nil {
+	if callErr := prepared.prepared.executor.requireAdmitted(ctx); callErr != nil {
 		return 0, callErr
 	}
-	defer endCall()
 	queryer, err := prepared.prepared.executor.queryerFor(app.database)
 	if err != nil {
 		return 0, golem.RuntimeReadError(golem.CodeBadUserInput, "count", prepared.prepared.ModelID(), golem.FieldID{}, "count execution binding is unavailable", err)
