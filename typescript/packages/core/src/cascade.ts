@@ -28,7 +28,6 @@ export interface CascadeTouched {
 
 export interface CascadeTransaction {
   findMany(model: string, args: unknown): Promise<Row[]>;
-  queryRaw(sql: string, ...values: unknown[]): Promise<Row[]>;
 }
 
 const CASCADING = new Set<string>(['Cascade', 'SetNull', 'SetDefault']);
@@ -116,86 +115,149 @@ export class CascadePlan {
   }
 }
 
-export function lockedReadStatement(
+export function lockStatement(
   plan: CascadePlan,
   model: string,
-  fields: readonly string[],
-  tuples: Tuples,
-  limit: number,
+  row: Row,
   mode: 'UPDATE' | 'SHARE',
+  wait: boolean,
 ): { sql: string; values: unknown[] } {
-  const values: unknown[] = [];
-  const rows = tuples.map((tuple) =>
-    `(${tuple.map((value) => {
-      values.push(value);
-      return `$${values.length}`;
-    }).join(', ')})`,
-  );
-  const projection = plan.scalarFields(model)
-    .map((field) => `${quote(field.dbName ?? field.name)} AS ${quote(field.name)}`)
-    .join(', ');
-  const columns = fields.map((name) => quote(plan.column(model, name))).join(', ');
-  const order = plan.identity(model).map((name) => quote(plan.column(model, name))).join(', ');
+  const identity = plan.identity(model);
+  const columns = identity.map((name) => quote(plan.column(model, name))).join(', ');
+  const placeholders = identity.map((_name, index) => `$${index + 1}`).join(', ');
   return {
-    sql: `SELECT ${projection} FROM ${plan.qualifiedTable(model)} WHERE (${columns}) IN (${rows.join(', ')}) ORDER BY ${order} LIMIT ${limit} FOR ${mode}`,
-    values,
+    sql: `SELECT 1 FROM ${plan.qualifiedTable(model)} WHERE (${columns}) = (${placeholders}) FOR ${mode}${wait ? '' : ' NOWAIT'}`,
+    values: identity.map((name) => row[name]),
   };
 }
 
-export interface CascadeDialect {
-  lockedRead(transaction: CascadeTransaction, model: string, fields: readonly string[], tuples: Tuples, limit: number): Promise<Row[]>;
-  lockedRoots(
-    transaction: CascadeTransaction,
-    model: string,
-    read: (select: Record<string, true>) => Promise<Row[]>,
-  ): Promise<Row[]>;
+export type LockMode = 'UPDATE' | 'SHARE';
+
+export interface LockRequest {
+  readonly model: string;
+  readonly row: Row;
+  readonly mode: LockMode;
 }
 
-const POSTGRES: (plan: CascadePlan) => CascadeDialect = (plan) => ({
-  lockedRead: (transaction, model, fields, tuples, limit) => {
-    const statement = lockedReadStatement(plan, model, fields, tuples, limit, 'UPDATE');
-    return transaction.queryRaw(statement.sql, ...statement.values);
-  },
-  lockedRoots: async (transaction, model, read) => {
-    const keys = plan.identity(model);
-    const located = await read(Object.fromEntries(keys.map((name) => [name, true])));
-    if (located.length === 0) {
-      return located;
-    }
-    const tuples = located.map((row) => keys.map((name) => row[name]));
-    const rows = await POSTGRES(plan).lockedRead(transaction, model, keys, tuples, located.length);
-    if (rows.length !== located.length) {
-      throw new GolemConflictError(
-        `Deleting from ${model} found ${rows.length} rows to lock after selecting ${located.length}`,
-      );
-    }
-    return rows;
-  },
-});
+export type RowLocker = (request: LockRequest, wait: boolean) => Promise<void>;
 
-const SQLITE: (plan: CascadePlan) => CascadeDialect = (plan) => ({
-  lockedRead: (transaction, model, fields, tuples, limit) =>
-    transaction.findMany(model, {
-      where: tupleWhere(fields, tuples),
-      select: plan.scalarSelect(model),
-      orderBy: plan.identity(model).map((name) => ({ [name]: 'asc' })),
-      take: limit,
-    }),
-  lockedRoots: (_transaction, model, read) => read(plan.scalarSelect(model)),
-});
+function lockUnavailable(error: unknown): boolean {
+  const meta = (error as { meta?: { code?: unknown } } | null)?.meta;
+  return meta?.code === '55P03' || /55P03|could not obtain lock/.test(String((error as Error)?.message ?? ''));
+}
 
-export function cascadeDialect(provider: string | undefined, plan: CascadePlan): CascadeDialect {
-  if (provider === 'postgresql') return POSTGRES(plan);
-  if (provider === 'sqlite') return SQLITE(plan);
-  const refuse = (): never => {
-    throw new Error(`Deletes cannot lock the rows they touch on provider ${String(provider)}`);
+export function rowLocker(
+  provider: string | undefined,
+  plan: CascadePlan,
+  run: (sql: string, values: unknown[]) => Promise<unknown>,
+): RowLocker {
+  if (provider === 'postgresql') {
+    return async ({ model, row, mode }, wait) => {
+      const statement = lockStatement(plan, model, row, mode, wait);
+      try {
+        await run(statement.sql, statement.values);
+      } catch (error) {
+        if (lockUnavailable(error)) {
+          throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
+        }
+        throw error;
+      }
+    };
+  }
+  if (provider === 'sqlite' || provider === undefined) {
+    return async () => undefined;
+  }
+  return async () => {
+    throw new Error(`Golem cannot lock the rows a write touches on provider ${provider}`);
   };
-  return { lockedRead: refuse, lockedRoots: refuse };
+}
+
+export class RowLocks {
+  private readonly held = new Map<string, LockMode>();
+
+  constructor(private readonly plan: CascadePlan) {}
+
+  async acquire(requests: readonly LockRequest[], lock: RowLocker): Promise<void> {
+    const wanted = new Map<string, LockRequest>();
+    for (const request of requests) {
+      const key = this.plan.rowKey(request.model, request.row);
+      const known = wanted.get(key);
+      if (!known || (known.mode === 'SHARE' && request.mode === 'UPDATE')) {
+        wanted.set(key, request);
+      }
+    }
+    const ordered = [...wanted.entries()].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+    const highest = [...this.held.keys()].reduce((top, key) => (key > top ? key : top), '');
+    for (const [key, request] of ordered) {
+      const held = this.held.get(key);
+      if (held === 'UPDATE' || held === request.mode) {
+        continue;
+      }
+      await lock(request, key > highest);
+      this.held.set(key, request.mode);
+    }
+  }
+}
+
+const transactionLocks = new WeakMap<object, RowLocks>();
+
+export function transactionRowLocks(transaction: object, plan: CascadePlan): RowLocks {
+  const existing = transactionLocks.get(transaction);
+  if (existing) {
+    return existing;
+  }
+  const locks = new RowLocks(plan);
+  transactionLocks.set(transaction, locks);
+  return locks;
+}
+
+export interface CascadeScope {
+  readonly roots: readonly CascadeRow[];
+  readonly parents: readonly CascadeRow[];
+}
+
+export interface LockedCascade extends CascadeTouched {
+  readonly roots: readonly CascadeRow[];
+}
+
+function scopeKeys(plan: CascadePlan, scope: CascadeScope, touched: CascadeTouched): string[] {
+  return [
+    ...scope.parents.map(({ model, row }) => `parent\u0000${plan.rowKey(model, row)}`),
+    ...touched.deleted.map(({ model, row }) => `deleted\u0000${plan.rowKey(model, row)}`),
+    ...touched.updated.map(({ model, row }) => `updated\u0000${plan.rowKey(model, row)}`),
+  ].sort();
+}
+
+export async function lockCascade(
+  plan: CascadePlan,
+  transaction: CascadeTransaction,
+  locks: RowLocks,
+  lock: RowLocker,
+  operationModel: string,
+  readScope: () => Promise<CascadeScope>,
+  limit: number,
+): Promise<LockedCascade> {
+  const scope = await readScope();
+  const touched = await enumerateCascade(plan, transaction, operationModel, scope.roots, limit);
+  await locks.acquire([
+    ...scope.parents.map((entry) => ({ ...entry, mode: 'UPDATE' as const })),
+    ...touched.deleted.map((entry) => ({ ...entry, mode: 'UPDATE' as const })),
+    ...touched.updated.map((entry) => ({ ...entry, mode: 'UPDATE' as const })),
+  ], lock);
+  const lockedScope = await readScope();
+  const lockedTouched = await enumerateCascade(plan, transaction, operationModel, lockedScope.roots, limit);
+  const before = scopeKeys(plan, scope, touched);
+  const after = scopeKeys(plan, lockedScope, lockedTouched);
+  if (before.length !== after.length || before.some((key, index) => key !== after[index])) {
+    throw new GolemConflictError(
+      `The rows deleting from ${operationModel} touches changed while they were being locked`,
+    );
+  }
+  return { roots: lockedScope.roots, ...lockedTouched };
 }
 
 export async function enumerateCascade(
   plan: CascadePlan,
-  dialect: CascadeDialect,
   transaction: CascadeTransaction,
   operationModel: string,
   roots: readonly CascadeRow[],
@@ -219,7 +281,12 @@ export async function enumerateCascade(
     const parent = level[0].model;
     for (const dependency of plan.dependentsOf(parent)) {
       const tuples = level.map(({ row }) => dependency.to.map((name) => row[name]));
-      const found = await dialect.lockedRead(transaction, dependency.dependent, dependency.from, tuples, limit + 1);
+      const found = await transaction.findMany(dependency.dependent, {
+        where: tupleWhere(dependency.from, tuples),
+        select: plan.scalarSelect(dependency.dependent),
+        orderBy: plan.identity(dependency.dependent).map((name) => ({ [name]: 'asc' })),
+        take: limit + 1,
+      });
       if (found.length > limit) {
         throw tooManyTouchedRows(operationModel, limit);
       }
@@ -255,7 +322,6 @@ export async function enumerateCascade(
 
 export async function enumerateNestedDeletes(
   plan: CascadePlan,
-  dialect: CascadeDialect,
   transaction: CascadeTransaction,
   model: string,
   parents: readonly Row[],
@@ -274,13 +340,12 @@ export async function enumerateNestedDeletes(
     const link = { [opposite.name]: opposite.isList ? { some: parentWhere } : { is: parentWhere } };
     const rowsWhere = async (where: unknown): Promise<Row[]> => {
       const filter = where && typeof where === 'object' ? { AND: [where, link] } : link;
-      const rows = await dialect.lockedRoots(transaction, target, (select) =>
-        transaction.findMany(target, {
-          where: filter,
-          select,
-          orderBy: plan.identity(target).map((name) => ({ [name]: 'asc' })),
-          take: limit + 1,
-        }));
+      const rows = await transaction.findMany(target, {
+        where: filter,
+        select: plan.scalarSelect(target),
+        orderBy: plan.identity(target).map((name) => ({ [name]: 'asc' })),
+        take: limit + 1,
+      });
       if (rows.length > limit) {
         throw tooManyTouchedRows(model, limit);
       }
@@ -299,7 +364,6 @@ export async function enumerateNestedDeletes(
           const nested = nestedPayloads(operation.kind, payload);
           await enumerateNestedDeletes(
             plan,
-            dialect,
             transaction,
             target,
             await rowsWhere(nested.where),

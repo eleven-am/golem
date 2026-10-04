@@ -104,3 +104,8 @@ export type Pin = Prisma.PinModel
  * 
  */
 export type Message = Prisma.MessageModel
+/**
+ * Model Person
+ * 
+ */
+export type Person = Prisma.PersonModel

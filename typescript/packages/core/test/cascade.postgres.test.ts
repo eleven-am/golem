@@ -78,6 +78,7 @@ function runtimeOver(
   return {
     suppressed: false,
     run: (work) => work(delegate(model), {
+      scope: tx,
       delegate,
       queryRaw: async (sql, ...values) => {
         const rows = await tx.$queryRawUnsafe(sql, ...values);
@@ -159,7 +160,7 @@ describe('cascaded delete events against live PostgreSQL', () => {
     await expect(first.watch.findUnique({ where: { id: 20 } })).resolves.toEqual({ id: 20, threadId: null });
   });
 
-  it('holds a new dependent back until the delete commits, so none is cascaded silently', async () => {
+  it('holds a new dependent back once the delete holds its parent, so none is cascaded silently', async () => {
     const enumerated = latch();
     const proceed = latch();
     const deleting = withBufferedEvents(() =>
@@ -169,7 +170,7 @@ describe('cascaded delete events against live PostgreSQL', () => {
         args: { where: { id: 1 } },
         query: async () => { throw new Error('the native delete escaped interception'); },
         batch: runtimeOver(tx, 'Thread', async (sql) => {
-          if (sql.includes('FROM "replies"')) {
+          if (sql.includes('FROM "threads"')) {
             enumerated.release();
             await proceed.promise;
           }
@@ -195,33 +196,32 @@ describe('cascaded delete events against live PostgreSQL', () => {
     await expect(first.reply.count()).resolves.toBe(0);
   });
 
-  it('reads dependents from the schema their model declares, not a same-named table on the search path', async () => {
+  it('locks dependents in the schema their model declares, not a same-named table on the search path', async () => {
     await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""other" CASCADE');
     await first.$executeRawUnsafe('CREATE SCHEMA "golem""other"');
-    await first.$executeRawUnsafe(`CREATE TABLE "golem""other"."replies" (
-      "id" INTEGER PRIMARY KEY,
-      "thread_id" INTEGER NOT NULL REFERENCES "public"."threads"("id") ON DELETE CASCADE,
-      "body" TEXT NOT NULL,
-      "amount" DECIMAL(65,30),
-      "posted_at" TIMESTAMP(3) NOT NULL
-    )`);
-    await first.$executeRawUnsafe(
-      `INSERT INTO "golem""other"."replies" ("id", "thread_id", "body", "posted_at") VALUES (100, 1, 'elsewhere', now()), (101, 1, 'elsewhere', now())`,
-    );
+    await first.$executeRawUnsafe(`CREATE TABLE "golem""other"."replies" ("id" INTEGER PRIMARY KEY)`);
+    await first.$executeRawUnsafe(`INSERT INTO "golem""other"."replies" ("id") VALUES (10)`);
     const qualified: DatamodelDocument = {
       ...datamodel,
       models: datamodel.models.map((model) => (model.name === 'Reply' ? { ...model, schema: 'golem"other' } : model)),
     };
-    const events: GolemEventPayload[] = [];
-    const bus: GolemEventBus = {
-      publish: async (_topic, event) => { events.push(event); },
-      publishMany: async (_topic, batch) => { events.push(...batch); },
-      iterate: (async function* () {})() as never,
-    };
-    const qualifiedPublisher = createEventPublisher({ datamodel: qualified, eventBus: bus, models: new Set(['Reply']) });
+    const qualifiedPublisher = createEventPublisher({
+      datamodel: qualified,
+      eventBus: { publish: async () => undefined, iterate: (async function* () {})() as never },
+      models: new Set(),
+    });
+    const holding = latch();
+    const released = latch();
+    const holder = second.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe('SELECT 1 FROM "golem""other"."replies" WHERE "id" = 10 FOR UPDATE');
+      holding.release();
+      await released.promise;
+    });
 
     try {
-      await withBufferedEvents(() =>
+      await holding.promise;
+      let deleted = false;
+      const deleting = withBufferedEvents(() =>
         first.$transaction((tx) => qualifiedPublisher({
           model: 'Thread',
           operation: 'delete',
@@ -229,9 +229,15 @@ describe('cascaded delete events against live PostgreSQL', () => {
           query: async () => { throw new Error('the native delete escaped interception'); },
           batch: runtimeOver(tx, 'Thread'),
         })),
-      );
-      expect(events.map((event) => event.id)).toEqual([100, 101]);
+      ).then(() => { deleted = true; });
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      expect(deleted).toBe(false);
+      released.release();
+      await holder;
+      await deleting;
+      expect(deleted).toBe(true);
     } finally {
+      released.release();
       await first.$executeRawUnsafe('DROP SCHEMA IF EXISTS "golem""other" CASCADE');
     }
   });

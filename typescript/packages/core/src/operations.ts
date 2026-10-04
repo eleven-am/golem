@@ -14,7 +14,7 @@ import {
 import { refuseNestedUpsertsOffTarget, refuseUpsertOffTarget } from './upsert-target';
 import { LinkGuard, LinkGuardPort } from './link-guard';
 import { refuseIdentityChanges } from './identity-writes';
-import { lockedReadStatement, CascadePlan } from './cascade';
+import { CascadePlan, rowLocker, transactionRowLocks } from './cascade';
 import { runPolicyChecks } from './concurrency';
 import {
   FieldReferences,
@@ -711,25 +711,14 @@ export class GolemEngine {
           : this.run(target, () =>
               this.delegate(target, client).findFirst({ where: mergeConstraint(where, constraint.value), select: this.pkSelect(target) }));
       },
-      lock: async (target, rows, mode, client) => {
-        if (this.provider !== 'postgresql' || rows.length === 0) {
-          return;
-        }
-        const identity = this.identityFields(target).map((field) => field.name);
-        const statement = lockedReadStatement(
-          this.locking,
-          target,
-          identity,
-          rows.map((row) => identity.map((name) => row[name])),
-          rows.length,
-          mode,
-        );
+      locks: (client) => transactionRowLocks(client, this.locking),
+      locker: (client) => rowLocker(this.provider, this.locking, async (sql, values) => {
         const runner = this.rawRunner(client);
         if (!runner) {
-          throw new Error(`Locking the rows a write links to on ${target} requires $queryRawUnsafe`);
+          throw new Error('Locking the rows a write links to requires $queryRawUnsafe');
         }
-        await this.run(target, () => runner.call(client, statement.sql, ...statement.values));
-      },
+        await runner.call(client, sql, ...values);
+      }),
     };
     return LinkGuard.of(port, model, data, this.enforced(context) !== undefined);
   }

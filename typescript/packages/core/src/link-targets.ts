@@ -1,13 +1,14 @@
 import { isPlainObject } from '@eleven-am/golem-policy';
 import { canonicalToken } from './canonical';
 import { GolemValidationError } from './errors';
+import { LockMode } from './cascade';
 import { DatamodelField } from './datamodel';
 import { ModelMetadataIndex } from './model-meta';
 import { nestedPayloads, oppositeRelation, planNestedWrites } from './nested-writes';
 
 type Filter = Record<string, unknown>;
 
-export type LinkLock = 'UPDATE' | 'SHARE';
+export type LinkLock = LockMode;
 
 export interface LinkRemoval {
   readonly model: string;

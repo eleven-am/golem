@@ -1,6 +1,6 @@
 import { GolemConflictError, GolemNotFoundError } from './errors';
+import { LockRequest, RowLocker, RowLocks } from './cascade';
 import {
-  LinkLock,
   LinkRemoval,
   LinkTarget,
   collectLinkRemovals,
@@ -12,8 +12,6 @@ import { ModelMetadataIndex } from './model-meta';
 type Row = Record<string, unknown>;
 type Client = Record<string, any>;
 
-export type LockMode = LinkLock;
-
 export interface LinkGuardPort {
   readonly metadata: ModelMetadataIndex;
   unwrap(model: string, where: unknown): unknown;
@@ -21,18 +19,12 @@ export interface LinkGuardPort {
   findMany(model: string, where: unknown, client: Client): Promise<Row[]>;
   readable(model: string, where: unknown, client: Client): Promise<Row[]>;
   readableRow(model: string, where: unknown, client: Client): Promise<Row | null>;
-  lock(model: string, rows: readonly Row[], mode: LockMode, client: Client): Promise<void>;
-}
-
-interface LockRequest {
-  readonly model: string;
-  readonly row: Row;
-  readonly mode: LockMode;
+  locks(client: Client): RowLocks;
+  locker(client: Client): RowLocker;
 }
 
 export class LinkGuard {
   private readonly preExisting = new Set<LinkTarget>();
-  private readonly held = new Map<string, LockMode>();
 
   private constructor(
     private readonly port: LinkGuardPort,
@@ -65,33 +57,11 @@ export class LinkGuard {
     return linkedRowKey(this.port.metadata, model, row);
   }
 
-  private async lockInOrder(requests: readonly LockRequest[], client: Client): Promise<void> {
-    const wanted = new Map<string, LockRequest>();
-    for (const request of requests) {
-      const key = this.key(request.model, request.row);
-      const known = wanted.get(key);
-      if (!known || (known.mode === 'SHARE' && request.mode === 'UPDATE')) {
-        wanted.set(key, request);
-      }
-    }
-    const ordered = [...wanted.entries()].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
-    for (const [key, request] of ordered) {
-      if (this.held.get(key) === 'UPDATE' || this.held.get(key) === request.mode) {
-        continue;
-      }
-      await this.port.lock(request.model, [request.row], request.mode, client);
-      this.held.set(key, request.mode);
-    }
-  }
-
   async before(client: Client, root?: Row): Promise<void> {
     if (!this.needsTransaction) {
       return;
     }
-    if (root) {
-      await this.lockInOrder([{ model: this.model, row: root, mode: 'UPDATE' }], client);
-    }
-    const requests: LockRequest[] = [];
+    const requests: LockRequest[] = root ? [{ model: this.model, row: root, mode: 'UPDATE' }] : [];
     const removed: Array<{ removal: LinkRemoval; where: unknown; rows: Row[] }> = [];
     for (const removal of this.removals) {
       const where = removal.linkedTo(root!);
@@ -112,7 +82,7 @@ export class LinkGuard {
       found.push({ target, where });
       requests.push({ model: target.model, row, mode: target.lock });
     }
-    await this.lockInOrder(requests, client);
+    await this.port.locks(client).acquire(requests, this.port.locker(client));
     for (const { removal, where, rows } of removed) {
       const current = await this.port.findMany(removal.model, where, client);
       const locked = new Set(rows.map((row) => this.key(removal.model, row)));
@@ -144,7 +114,7 @@ export class LinkGuard {
       stored.push({ target, where });
       requests.push({ model: target.model, row, mode: 'SHARE' });
     }
-    await this.lockInOrder(requests, client);
+    await this.port.locks(client).acquire(requests, this.port.locker(client));
     const linked = new Set<string>();
     for (const { target, where } of stored) {
       const row = await this.port.readableRow(target.model, where, client);

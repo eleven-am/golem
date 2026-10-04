@@ -5,9 +5,10 @@ import {
   CascadeRow,
   CascadeTouched,
   CascadeTransaction,
-  cascadeDialect,
-  enumerateCascade,
   enumerateNestedDeletes,
+  transactionRowLocks,
+  lockCascade,
+  rowLocker,
   hasNestedDeletes,
   tooManyTouchedRows,
 } from './cascade';
@@ -65,6 +66,7 @@ export interface GolemBatchDelegate {
 }
 
 export interface GolemBatchTransaction {
+  readonly scope: object;
   delegate(model: string): GolemBatchDelegate;
   queryRaw(sql: string, ...values: unknown[]): Promise<unknown>;
 }
@@ -184,11 +186,11 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       }
     }
   }
-  const dialect = cascadeDialect(options.datamodel.provider, cascades);
   const cascadeTransaction = (transaction: GolemBatchTransaction): CascadeTransaction => ({
     findMany: (model, args) => transaction.delegate(model).findMany(args),
-    queryRaw: (sql, ...values) => transaction.queryRaw(sql, ...values) as Promise<Record<string, unknown>[]>,
   });
+  const lockerFor = (transaction: GolemBatchTransaction) =>
+    rowLocker(options.datamodel.provider, cascades, (sql, values) => transaction.queryRaw(sql, ...values));
   const touchedEvents = (
     operation: string,
     model: string,
@@ -295,30 +297,34 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       }
       const pks = cascades.identity(model);
       return batch.run(async (delegate, transaction) => {
-        const tx = cascadeTransaction(transaction);
-        const rows = await dialect.lockedRoots(tx, model, (select) =>
-          operation === 'delete'
-            ? single(delegate.findUnique({ where: args?.where, select }))
-            : delegate.findMany({
+        const select = cascades.scalarSelect(model);
+        const readScope = async () => {
+          const found = operation === 'delete'
+            ? await single(delegate.findUnique({ where: args?.where, select }))
+            : await delegate.findMany({
                 where: args?.where,
                 select,
                 orderBy: stableOrder(pks),
                 take: maxBatchRows + 1,
-              }));
-        if (rows.length > maxBatchRows) {
-          throw tooManyTouchedRows(model, maxBatchRows);
-        }
+              });
+          if (found.length > maxBatchRows) {
+            throw tooManyTouchedRows(model, maxBatchRows);
+          }
+          return { roots: found.map((row) => ({ model, row })), parents: [] };
+        };
+        const touched = await lockCascade(
+          cascades,
+          cascadeTransaction(transaction),
+          transactionRowLocks(transaction.scope, cascades),
+          lockerFor(transaction),
+          model,
+          readScope,
+          maxBatchRows,
+        );
+        const rows = touched.roots.map(({ row }) => row);
         if (rows.length === 0) {
           return operation === 'delete' ? delegate.delete(args) : { count: 0 };
         }
-        const touched = await enumerateCascade(
-          cascades,
-          dialect,
-          tx,
-          model,
-          rows.map((row) => ({ model, row })),
-          maxBatchRows,
-        );
         const topics = touchedEvents(operation, model, touched);
         let result: unknown;
         if (operation === 'delete') {
@@ -347,11 +353,22 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
       }
       return batch.run(async (delegate, transaction) => {
         const tx = cascadeTransaction(transaction);
-        const parents = await dialect.lockedRoots(tx, model, (select) =>
-          single(delegate.findUnique({ where: args?.where, select })));
-        const removed: CascadeRow[] = [];
-        await enumerateNestedDeletes(cascades, dialect, tx, model, parents, nestedData, maxBatchRows, removed);
-        const touched = await enumerateCascade(cascades, dialect, tx, model, removed, maxBatchRows);
+        let parents: Record<string, unknown>[] = [];
+        const readScope = async () => {
+          parents = await single(delegate.findUnique({ where: args?.where, select: cascades.scalarSelect(model) }));
+          const removed: CascadeRow[] = [];
+          await enumerateNestedDeletes(cascades, tx, model, parents, nestedData, maxBatchRows, removed);
+          return { roots: removed, parents: parents.map((row) => ({ model, row })) };
+        };
+        const touched = await lockCascade(
+          cascades,
+          tx,
+          transactionRowLocks(transaction.scope, cascades),
+          lockerFor(transaction),
+          model,
+          readScope,
+          maxBatchRows,
+        );
         const topics = touchedEvents(operation, model, touched);
         const result = await writeRow(
           operation === 'upsert' && parents.length === 0 ? 'CREATED' : 'UPDATED',

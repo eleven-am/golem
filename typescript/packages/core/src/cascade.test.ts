@@ -1,6 +1,6 @@
-import { CascadePlan, cascadeDialect, lockedReadStatement } from './cascade';
+import { CascadePlan, lockStatement, rowLocker, transactionRowLocks } from './cascade';
 import { DatamodelDocument, DatamodelReferentialAction } from './datamodel';
-import { GolemValidationError } from './errors';
+import { GolemConflictError, GolemValidationError } from './errors';
 import { GolemEventBus, GolemEventPayload } from './events';
 import { createEventPublisher } from './publisher';
 import { field } from './testing';
@@ -392,8 +392,8 @@ describe.each(['sqlite', 'postgresql'])('cascaded delete events on %s', (provide
   });
 });
 
-describe('one locked read per delete level', () => {
-  it('reads the deleted row and each dependent level once on SQLite', async () => {
+describe('one lock order for every row a delete touches', () => {
+  it('enumerates the closure, then re-reads it under the locks, on SQLite', async () => {
     const { publisher } = publisherFor('sqlite', ['Post']);
     const batch = batchFor('sqlite', 'Post');
 
@@ -404,11 +404,11 @@ describe('one locked read per delete level', () => {
 
     const reads = (model: string) =>
       batch.delegates.get(model)!.findMany.mock.calls.length + batch.delegates.get(model)!.findUnique.mock.calls.length;
-    expect([reads('Post'), reads('Comment'), reads('Bookmark'), reads('Reaction')]).toEqual([1, 1, 1, 2]);
+    expect([reads('Post'), reads('Comment'), reads('Bookmark'), reads('Reaction')]).toEqual([2, 2, 2, 4]);
     expect(batch.statements).toEqual([]);
   });
 
-  it('locks the deleted rows and each dependent level in one statement each on PostgreSQL', async () => {
+  it('locks every touched row in model then identity order on PostgreSQL', async () => {
     const { publisher } = publisherFor('postgresql', ['Post']);
     const batch = batchFor('postgresql', 'Post');
 
@@ -418,31 +418,50 @@ describe('one locked read per delete level', () => {
     });
 
     expect(batch.statements).toEqual([
-      'SELECT "id" AS "id" FROM "posts" WHERE ("id") IN (($1)) ORDER BY "id" LIMIT 1 FOR UPDATE',
-      'SELECT "id" AS "id", "post_id" AS "postId" FROM "Comment" WHERE ("post_id") IN (($1)) ORDER BY "id" LIMIT 1001 FOR UPDATE',
-      'SELECT "id" AS "id", "commentId" AS "commentId", "pinnedPostId" AS "pinnedPostId" FROM "Reaction" WHERE ("pinnedPostId") IN (($1)) ORDER BY "id" LIMIT 1001 FOR UPDATE',
-      'SELECT "id" AS "id", "postId" AS "postId" FROM "Bookmark" WHERE ("postId") IN (($1)) ORDER BY "id" LIMIT 1001 FOR UPDATE',
-      'SELECT "id" AS "id", "commentId" AS "commentId", "pinnedPostId" AS "pinnedPostId" FROM "Reaction" WHERE ("commentId") IN (($1), ($2)) ORDER BY "id" LIMIT 1001 FOR UPDATE',
+      'SELECT 1 FROM "Bookmark" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Comment" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Comment" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "posts" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Reaction" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Reaction" WHERE ("id") = ($1) FOR UPDATE',
     ]);
-    expect(batch.delegates.get('Comment')!.findMany).not.toHaveBeenCalled();
-    expect(batch.delegates.get('Post')!.findMany).not.toHaveBeenCalled();
-    expect(batch.delegates.get('Post')!.findUnique).toHaveBeenCalledTimes(1);
+    expect(batch.values).toEqual([['b1'], ['c1'], ['c2'], ['p1'], ['r1'], ['r2']]);
+  });
+
+  it.each(['sqlite', 'postgresql'])('refuses a delete whose closure changes between enumeration and lock on %s', async (provider) => {
+    const { publisher, published } = publisherFor(provider, ['Post', 'Comment']);
+    const batch = batchFor(provider, 'Post');
+    const comments = batch.delegates.get('Comment')!;
+    const enumerate = comments.findMany.getMockImplementation()!;
+    comments.findMany.mockImplementationOnce(async (args: unknown) => {
+      const found = await enumerate(args);
+      batch.tables.get('Comment')!.push({ id: 'c9', postId: 'p1' });
+      return found;
+    });
+
+    await expect(publisher({
+      model: 'Post', operation: 'delete', args: { where: { id: 'p1' } }, query: jest.fn(),
+      batch: batch.runtime,
+    })).rejects.toThrow(new GolemConflictError('The rows deleting from Post touches changed while they were being locked'));
+    expect(batch.delegates.get('Post')!.delete).not.toHaveBeenCalled();
+    expect(published).toEqual([]);
   });
 });
 
-describe('lockedReadStatement', () => {
-  it('binds every tuple and quotes identifiers', () => {
+describe('lockStatement', () => {
+  it('binds the row identity and quotes identifiers', () => {
     const plan = new CascadePlan([{
       name: 'Odd',
       dbName: 'we"ird',
       fields: [
-        field({ name: 'a', type: 'String', isId: true }),
+        field({ name: 'a', type: 'String' }),
         field({ name: 'b', type: 'Int', dbName: 'b"col' }),
       ],
+      primaryKey: { fields: ['a', 'b'] },
     }]);
-    expect(lockedReadStatement(plan, 'Odd', ['a', 'b'], [['1', 2], ['3', 4]], 7, 'UPDATE')).toEqual({
-      sql: 'SELECT "a" AS "a", "b""col" AS "b" FROM "we""ird" WHERE ("a", "b""col") IN (($1, $2), ($3, $4)) ORDER BY "a" LIMIT 7 FOR UPDATE',
-      values: ['1', 2, '3', 4],
+    expect(lockStatement(plan, 'Odd', { a: '1', b: 2 }, 'SHARE', true)).toEqual({
+      sql: 'SELECT 1 FROM "we""ird" WHERE ("a", "b""col") = ($1, $2) FOR SHARE',
+      values: ['1', 2],
     });
   });
 
@@ -453,15 +472,61 @@ describe('lockedReadStatement', () => {
       schema: 'tenant"one',
       fields: [field({ name: 'a', type: 'String', isId: true })],
     }]);
-    expect(lockedReadStatement(plan, 'Odd', ['a'], [['1']], 1, 'UPDATE').sql).toBe(
-      'SELECT "a" AS "a" FROM "tenant""one"."items" WHERE ("a") IN (($1)) ORDER BY "a" LIMIT 1 FOR UPDATE',
+    expect(lockStatement(plan, 'Odd', { a: '1' }, 'UPDATE', true).sql).toBe(
+      'SELECT 1 FROM "tenant""one"."items" WHERE ("a") = ($1) FOR UPDATE',
     );
   });
 
+  it('takes a lock without waiting when told not to', () => {
+    const plan = new CascadePlan([{ name: 'Odd', fields: [field({ name: 'a', type: 'String', isId: true })] }]);
+    expect(lockStatement(plan, 'Odd', { a: '1' }, 'SHARE', false).sql).toBe(
+      'SELECT 1 FROM "Odd" WHERE ("a") = ($1) FOR SHARE NOWAIT',
+    );
+  });
+});
+
+describe('transaction row locks', () => {
+  const plan = new CascadePlan([
+    { name: 'A', fields: [field({ name: 'id', type: 'String', isId: true })] },
+    { name: 'B', fields: [field({ name: 'id', type: 'String', isId: true })] },
+  ]);
+
+  it('is one instance per transaction', () => {
+    const transaction = {};
+    expect(transactionRowLocks(transaction, plan)).toBe(transactionRowLocks(transaction, plan));
+    expect(transactionRowLocks({}, plan)).not.toBe(transactionRowLocks(transaction, plan));
+  });
+
+  it('waits for rows that sort after everything held and never for one that sorts before', async () => {
+    const taken: string[] = [];
+    const lock = async (request: { model: string; row: Record<string, unknown> }, wait: boolean) => {
+      taken.push(`${request.model}:${String(request.row.id)}:${wait ? 'wait' : 'nowait'}`);
+    };
+    const locks = transactionRowLocks({}, plan);
+    await locks.acquire([
+      { model: 'B', row: { id: '1' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '2' }, mode: 'SHARE' },
+    ], lock);
+    await locks.acquire([
+      { model: 'A', row: { id: '1' }, mode: 'UPDATE' },
+      { model: 'B', row: { id: '2' }, mode: 'UPDATE' },
+      { model: 'B', row: { id: '1' }, mode: 'SHARE' },
+    ], lock);
+    expect(taken).toEqual(['A:2:wait', 'B:1:wait', 'A:1:nowait', 'B:2:wait']);
+  });
+
+  it('reports a row another write holds as a conflict when it cannot wait for it', async () => {
+    const lock = rowLocker('postgresql', plan, async () => {
+      throw Object.assign(new Error('could not obtain lock on row in relation "A"'), { meta: { code: '55P03' } });
+    });
+    await expect(lock({ model: 'A', row: { id: '1' }, mode: 'UPDATE' }, false))
+      .rejects.toThrow(new GolemConflictError('A row of A this write needs is held by a concurrent write'));
+  });
+
   it('refuses a provider it cannot lock rows on', async () => {
-    const dialect = cascadeDialect('mysql', new CascadePlan([]));
-    expect(() => dialect.lockedRead({} as never, 'X', [], [], 1)).toThrow(
-      'Deletes cannot lock the rows they touch on provider mysql',
+    const lock = rowLocker('mysql', new CascadePlan([]), jest.fn());
+    await expect(lock({ model: 'X', row: {}, mode: 'UPDATE' }, true)).rejects.toThrow(
+      'Golem cannot lock the rows a write touches on provider mysql',
     );
   });
 });

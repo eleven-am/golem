@@ -5,6 +5,7 @@ import { GolemEventBus, GolemEventPayload } from '../../src/events';
 import { GolemEngine } from '../../src/operations';
 import { createEventPublisher, GolemBatchDelegate, GolemBatchRuntime } from '../../src/publisher';
 import { field } from '../../src/testing';
+import { golemClient } from './golem-client';
 
 type Client = Record<string, any>;
 
@@ -22,6 +23,22 @@ const models: DatamodelModel[] = [
       field({ name: 'id', type: 'Int', isId: true }),
       field({ name: 'title', type: 'String' }),
       field({ name: 'watches', type: 'Watch', kind: 'object', isList: true, relationName: 'ThreadToWatch' }),
+      field({ name: 'replies', type: 'Reply', kind: 'object', isList: true, relationName: 'ReplyToThread' }),
+    ],
+  },
+  {
+    name: 'Reply',
+    dbName: 'replies',
+    fields: [
+      field({ name: 'id', type: 'Int', isId: true }),
+      field({ name: 'threadId', type: 'Int', dbName: 'thread_id' }),
+      field({ name: 'body', type: 'String' }),
+      field({ name: 'amount', type: 'Decimal', isRequired: false }),
+      field({ name: 'postedAt', type: 'DateTime', dbName: 'posted_at' }),
+      field({
+        name: 'thread', type: 'Thread', kind: 'object', relationName: 'ReplyToThread',
+        relationFromFields: ['threadId'], relationToFields: ['id'], relationOnDelete: 'Cascade',
+      }),
     ],
   },
   {
@@ -72,6 +89,20 @@ const models: DatamodelModel[] = [
   },
 ];
 
+const people: DatamodelModel = {
+  name: 'Person',
+  dbName: 'people',
+  fields: [
+    field({ name: 'id', type: 'Int', isId: true }),
+    field({ name: 'buddyId', type: 'Int', isRequired: false, dbName: 'buddy_id' }),
+    field({
+      name: 'buddy', type: 'Person', kind: 'object', isRequired: false, relationName: 'Buddy',
+      relationFromFields: ['buddyId'], relationToFields: ['id'], relationOnDelete: 'SetNull',
+    }),
+    field({ name: 'buddiedBy', type: 'Person', kind: 'object', isList: true, relationName: 'Buddy' }),
+  ],
+};
+
 const READABLE: Record<string, unknown> = {
   Thread: { title: { not: 'hidden' } },
   Watch: { id: { in: [20, 22] } },
@@ -94,6 +125,7 @@ function runtimeOver(tx: Client, model: string): GolemBatchRuntime {
   return {
     suppressed: false,
     run: (work) => work(delegate(model), {
+      scope: tx,
       delegate,
       queryRaw: (sql, ...values) => tx.$queryRawUnsafe(sql, ...values),
     }),
@@ -123,6 +155,10 @@ export function describeWritePath(
     await prisma.message.deleteMany();
     await prisma.channel.deleteMany();
     await prisma.thread.createMany({ data: [{ id: 1, title: 'readable' }, { id: 2, title: 'hidden' }] });
+    await prisma.reply.createMany({ data: [
+      { id: 10, threadId: 1, body: 'a', postedAt: new Date('2026-01-01T00:00:00.000Z') },
+      { id: 11, threadId: 1, body: 'b', postedAt: new Date('2026-01-02T00:00:00.000Z') },
+    ] });
     await prisma.watch.createMany({ data: [
       { id: 20, threadId: 1 },
       { id: 21, threadId: 1 },
@@ -181,6 +217,21 @@ export function describeWritePath(
       },
     });
     return { client: wrap(client), injected: () => injected };
+  }
+
+  function cascadePublisher() {
+    const published: GolemEventPayload[] = [];
+    const bus: GolemEventBus = {
+      publish: async (_topic, event) => { published.push(event); },
+      publishMany: async (_topic, events) => { published.push(...events); },
+      iterate: (async function* () {})() as never,
+    };
+    const publisher = createEventPublisher({
+      datamodel: { models: [...models, people], enums: [], provider: provider_ },
+      eventBus: bus,
+      models: new Set(),
+    });
+    return { publisher, published };
   }
 
   const outcome = (run: () => Promise<unknown>) =>
@@ -431,6 +482,167 @@ export function describeWritePath(
         return Promise.allSettled([firstRun, secondRun]);
       }
 
+      it('serialises two self-relation updates that each link the other row without a deadlock', async () => {
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 1 }, { id: 2 }] });
+        const personEngine = (client: Client) => new GolemEngine(client, [...models, people], {
+          authorization: provider(),
+          checkWriteResults,
+          checkReadFields: false,
+          provider: provider_,
+        });
+        const secondLocked = barrier();
+        let firstWaited = false;
+        const firstClient = observed(async (sql) => {
+          if (!firstWaited && sql.includes('FROM "people"')) {
+            firstWaited = true;
+            await secondLocked.wait();
+          }
+        });
+        const secondClient = observed(async (sql) => {
+          if (sql.includes('FROM "people"')) secondLocked.arrive();
+        });
+
+        const firstRun = personEngine(firstClient).update({
+          model: 'Person', where: { id: 1 }, data: { buddy: { connect: { id: 2 } } }, context: ctx,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const secondRun = personEngine(secondClient).update({
+          model: 'Person', where: { id: 2 }, data: { buddy: { connect: { id: 1 } } }, context: ctx,
+        });
+        const outcomes = await Promise.allSettled([firstRun, secondRun]);
+
+        expect(outcomes.map((outcome) => outcome.status)).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.person.findMany({ orderBy: { id: 'asc' } })).resolves.toEqual([
+          { id: 1, buddyId: 2 },
+          { id: 2, buddyId: 1 },
+        ]);
+      });
+
+      async function deleteRacesLink(
+        link: (client: Client) => Promise<unknown>,
+        model: string,
+        where: Record<string, unknown>,
+      ): Promise<string[]> {
+        const { publisher } = cascadePublisher();
+        const cascadeLocked = barrier();
+        let linkWaited = false;
+        const linkClient = observed(async () => {
+          if (!linkWaited) {
+            linkWaited = true;
+            await cascadeLocked.wait();
+          }
+        });
+        const cascadeClient = observed(async () => { cascadeLocked.arrive(); });
+        const linking = link(linkClient);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const deleting = cascadeClient.$transaction((tx: Client) => publisher({
+          model, operation: 'delete', args: { where },
+          query: async () => { throw new Error('the native delete escaped interception'); },
+          batch: runtimeOver(tx, model),
+        }));
+        const outcomes = await Promise.allSettled([linking, deleting]);
+        return outcomes.map((result) => result.status === 'fulfilled' ? 'fulfilled' : String((result as PromiseRejectedResult).reason));
+      }
+
+      it('serialises a cascade delete of a parent with a write linking its existing child to it', async () => {
+        const outcomes = await deleteRacesLink(
+          (client) => engineOver(client).update({
+            model: 'Watch', where: { id: 20 }, data: { thread: { connect: { id: 1 } } }, context: ctx,
+          }),
+          'Thread',
+          { id: 1 },
+        );
+
+        expect(outcomes).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.thread.count({ where: { id: 1 } })).resolves.toBe(0);
+        await expect(prisma.watch.findUnique({ where: { id: 20 } })).resolves.toEqual({ id: 20, threadId: null });
+      });
+
+      it('serialises a cascade delete of a parent with a write reattaching a child whose model sorts first', async () => {
+        const outcomes = await deleteRacesLink(
+          (client) => engineOver(client).update({
+            model: 'Thread', where: { id: 1 }, data: { replies: { connect: [{ id: 10 }] } }, context: ctx,
+          }),
+          'Thread',
+          { id: 1 },
+        );
+
+        expect(outcomes).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.reply.count({ where: { threadId: 1 } })).resolves.toBe(0);
+      });
+
+      it('serialises a self-relation cascade delete with a write linking the dependent row to it', async () => {
+        await prisma.person.deleteMany();
+        await prisma.person.createMany({ data: [{ id: 2 }, { id: 1, buddyId: 2 }] });
+        const personEngine = (client: Client) => new GolemEngine(client, [...models, people], {
+          authorization: provider(),
+          checkWriteResults,
+          checkReadFields: false,
+          provider: provider_,
+        });
+
+        const outcomes = await deleteRacesLink(
+          (client) => personEngine(client).update({
+            model: 'Person', where: { id: 1 }, data: { buddy: { connect: { id: 2 } } }, context: ctx,
+          }),
+          'Person',
+          { id: 2 },
+        );
+
+        expect(outcomes).toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.person.findMany()).resolves.toEqual([{ id: 1, buddyId: null }]);
+      });
+
+      it('keeps one lock order across the link check and the nested delete of the same update', async () => {
+        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+        const { publisher } = cascadePublisher();
+        const hooked = (onStatement: (sql: string) => Promise<void>) => (tx: Client): Client => new Proxy(tx, {
+          get: (target, property, receiver) => {
+            if (property !== '$queryRawUnsafe') return Reflect.get(target, property, receiver);
+            return async (sql: string, ...values: unknown[]) => {
+              const rows = await target.$queryRawUnsafe(sql, ...values);
+              await onStatement(sql);
+              return rows;
+            };
+          },
+        });
+        const secondLocked = barrier();
+        let firstWaited = false;
+        const first = golemClient(prisma, publisher, hooked(async (sql) => {
+          if (!firstWaited && sql.includes('FROM "watches"')) {
+            firstWaited = true;
+            await secondLocked.wait();
+          }
+        }));
+        const second = golemClient(prisma, publisher, hooked(async (sql) => {
+          if (sql.includes('FROM "replies"')) secondLocked.arrive();
+        }));
+
+        const firstRun = engineOver(first).update({
+          model: 'Thread',
+          where: { id: 1 },
+          data: { watches: { connect: [{ id: 22 }] }, replies: { delete: [{ id: 10 }] } },
+          context: ctx,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const secondRun = engineOver(second).update({
+          model: 'Thread',
+          where: { id: 3 },
+          data: { replies: { connect: [{ id: 10 }] }, watches: { connect: [{ id: 22 }] } },
+          context: ctx,
+        });
+        const outcomes = await Promise.allSettled([firstRun, secondRun]);
+
+        expect(outcomes[1].status).toBe('fulfilled');
+        expect(outcomes[0].status).toBe('rejected');
+        expect((outcomes[0] as PromiseRejectedResult).reason).toEqual(
+          new GolemConflictError('A row of Reply this write needs is held by a concurrent write'),
+        );
+        await expect(prisma.reply.findUnique({ where: { id: 10 } })).resolves.toMatchObject({ threadId: 3 });
+        await expect(prisma.watch.findUnique({ where: { id: 22 } })).resolves.toEqual({ id: 22, threadId: 3 });
+      });
+
       it('serialises two reverse connects of the same child without a deadlock', async () => {
         await prisma.thread.create({ data: { id: 3, title: 'third' } });
 
@@ -479,6 +691,43 @@ export function describeWritePath(
       });
     });
   }
+
+  describe('a delete whose closure changes between enumeration and lock', () => {
+    it('is refused, deleting nothing', async () => {
+      const { publisher, published } = cascadePublisher();
+      let inserted = false;
+      const wrapped = (tx: Client): Client => new Proxy(tx, {
+        get: (target, property, receiver) => {
+          if (property !== 'reply') return Reflect.get(target, property, receiver);
+          return new Proxy(target.reply, {
+            get: (delegate, name, delegateReceiver) => {
+              if (name !== 'findMany') return Reflect.get(delegate, name, delegateReceiver);
+              return async (args: unknown) => {
+                const found = await delegate.findMany(args);
+                if (!inserted) {
+                  inserted = true;
+                  await database.concurrent.reply.create({
+                    data: { id: 12, threadId: 1, body: 'late', postedAt: new Date('2026-01-03T00:00:00.000Z') },
+                  });
+                }
+                return found;
+              };
+            },
+          });
+        },
+      });
+
+      await expect(prisma.$transaction((tx: Client) => publisher({
+        model: 'Thread', operation: 'delete', args: { where: { id: 1 } },
+        query: async () => { throw new Error('the native delete escaped interception'); },
+        batch: runtimeOver(wrapped(tx), 'Thread'),
+      }))).rejects.toThrow(new GolemConflictError('The rows deleting from Thread touches changed while they were being locked'));
+
+      expect(inserted).toBe(true);
+      expect(published).toEqual([]);
+      await expect(prisma.thread.count({ where: { id: 1 } })).resolves.toBe(1);
+    });
+  });
 
   describe.each([true, false])('a row moved out of policy before its write, with checkWriteResults %s', (checkWriteResults) => {
     const ctx = { req: {} };

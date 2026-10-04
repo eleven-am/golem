@@ -62,28 +62,9 @@ function project(row: Row, select: unknown): Row {
 export interface FakeBatch {
   readonly tables: Map<string, Row[]>;
   readonly statements: string[];
+  readonly values: unknown[][];
   readonly runtime: GolemBatchRuntime;
   readonly delegates: Map<string, Record<string, jest.Mock>>;
-}
-
-function lockedRows(world: World, sql: string, values: unknown[]): Row[] {
-  const match = /FROM "([^"]+)" WHERE \(([^)]*)\) IN .* LIMIT (\d+) FOR UPDATE$/.exec(sql);
-  if (!match || !world.datamodel) {
-    throw new Error(`fake transaction cannot run ${sql}`);
-  }
-  const model = world.datamodel.models.find((candidate) => (candidate.dbName ?? candidate.name) === match[1])!;
-  const fields = match[2].split(', ').map((column) => {
-    const name = column.slice(1, -1);
-    return model.fields.find((field) => (field.dbName ?? field.name) === name)!.name;
-  });
-  const tuples: unknown[][] = [];
-  for (let index = 0; index < values.length; index += fields.length) {
-    tuples.push(values.slice(index, index + fields.length));
-  }
-  return (world.store.get(model.name) ?? [])
-    .filter((row) => tuples.some((tuple) => fields.every((name, position) => row[name] === tuple[position])))
-    .slice(0, Number(match[3]))
-    .map((row) => ({ ...row }));
 }
 
 export function fakeBatch(
@@ -95,6 +76,7 @@ export function fakeBatch(
   const store = new Map(Object.entries(tables).map(([name, rows]) => [name, rows.map((row) => ({ ...row }))]));
   const world: World = { datamodel, store };
   const statements: string[] = [];
+  const lockValues: unknown[][] = [];
   const delegates = new Map<string, Record<string, jest.Mock>>();
   const delegate = (name: string): Record<string, jest.Mock> => {
     const existing = delegates.get(name);
@@ -139,10 +121,12 @@ export function fakeBatch(
     return created;
   };
   const transaction: GolemBatchTransaction = {
+    scope: store,
     delegate: (name) => delegate(name) as unknown as GolemBatchDelegate,
     queryRaw: async (sql, ...values) => {
       statements.push(sql);
-      return lockedRows(world, sql, values);
+      lockValues.push(values);
+      return [];
     },
   };
   for (const name of new Set([model, ...store.keys()])) {
@@ -151,6 +135,7 @@ export function fakeBatch(
   return {
     tables: store,
     statements,
+    values: lockValues,
     delegates,
     runtime: {
       suppressed: false,

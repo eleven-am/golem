@@ -39,6 +39,7 @@ function createBaseClient(options: GolemClientOptions, interceptor: GolemQueryIn
   const delegateFor = (client: Record<string, unknown>, model: string) =>
     client[model.charAt(0).toLowerCase() + model.slice(1)] as GolemBatchDelegate;
   const transactionFor = (client: Record<string, unknown>): GolemBatchTransaction => ({
+    scope: client,
     delegate: (model) => delegateFor(client, model),
     queryRaw: (sql, ...values) =>
       (client as { $queryRawUnsafe(sql: string, ...values: unknown[]): Promise<unknown> })

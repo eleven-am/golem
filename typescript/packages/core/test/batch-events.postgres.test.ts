@@ -110,6 +110,7 @@ describe('batch-event concurrency against live PostgreSQL', () => {
                 tx.secret.deleteMany(args as Parameters<typeof tx.secret.deleteMany>[0]),
             };
             return work(delegate, {
+              scope: tx,
               delegate: () => delegate,
               queryRaw: (sql, ...values) => tx.$queryRawUnsafe(sql, ...values),
             });
