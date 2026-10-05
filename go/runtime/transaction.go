@@ -10,8 +10,10 @@ import (
 	"sync/atomic"
 
 	"github.com/eleven-am/golem/go/golem"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
@@ -38,6 +40,7 @@ type executionBinding struct {
 	operationWrites *operationWriteLog
 	serving         atomic.Bool
 	calls           usageGate
+	locks           *rowlock.Ledger
 }
 
 func (binding *executionBinding) queueEnqueued(wake func()) {
@@ -76,15 +79,26 @@ func databaseExecution(database *sqlx.DB) *executionBinding {
 }
 
 func transactionExecution(database *sqlx.DB, transaction *sqlx.Tx) *executionBinding {
-	binding := &executionBinding{database: database, executor: transaction, transaction: transaction, scoped: true}
+	binding := &executionBinding{database: database, executor: transaction, transaction: transaction, scoped: true, locks: rowlock.NewLedger()}
 	binding.active.Store(true)
 	return binding
 }
 
 func scopedExecution(database *sqlx.DB, executor sqlx.QueryerContext) *executionBinding {
-	binding := &executionBinding{database: database, executor: executor, scoped: true}
+	binding := &executionBinding{database: database, executor: executor, scoped: true, locks: rowlock.NewLedger()}
 	binding.active.Store(true)
 	return binding
+}
+
+func (binding *executionBinding) rowLocks() *rowlock.Ledger {
+	if binding == nil {
+		return nil
+	}
+	return binding.locks
+}
+
+func (binding *executionBinding) lockSession(queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, maxParameters int) rowlock.Session {
+	return rowlock.Session{Ledger: binding.rowLocks(), Queryer: queryer, Registry: registry, Provider: provider, MaxParameters: uint32(maxParameters)}
 }
 
 func (binding *executionBinding) queryerFor(database *sqlx.DB) (sqlx.QueryerContext, error) {

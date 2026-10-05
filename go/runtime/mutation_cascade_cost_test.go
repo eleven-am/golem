@@ -22,16 +22,20 @@ func TestDeleteWithoutCascadingDependentsIssuesNoCaptureStatementsAcrossProvider
 		seedCascadeUser(t, fixture, 3, "carol")
 		seedCascadeUser(t, fixture, 4, "dave")
 		caller := mustMutationResultCaller(t, fixture)
+		rowLocks := 0
+		if profile.provider == golem.PostgreSQL {
+			rowLocks = 2
+		}
 		before := len(collector.matching(observe.KindMutation, observe.OperationMutationDelete))
 		if _, err := CallerDelete(ctx, caller, fixture.userDescriptor, cascadeUserTarget(fixture, 3)); err != nil {
 			t.Fatal(err)
 		}
-		assertDeleteStatementCount(t, collector.matching(observe.KindMutation, observe.OperationMutationDelete)[before:], observe.OperationMutationDelete, 2)
+		assertDeleteStatementCount(t, collector.matching(observe.KindMutation, observe.OperationMutationDelete)[before:], observe.OperationMutationDelete, 2+rowLocks)
 		before = len(collector.matching(observe.KindMutation, observe.OperationMutationDeleteMany))
 		if count, err := CallerDeleteMany(ctx, caller, fixture.userDescriptor, fixture.userID.Eq(golem.UUID{15: 4})); err != nil || count != 1 {
 			t.Fatalf("delete-many count=%d err=%v", count, err)
 		}
-		assertDeleteStatementCount(t, collector.matching(observe.KindMutation, observe.OperationMutationDeleteMany)[before:], observe.OperationMutationDeleteMany, 3)
+		assertDeleteStatementCount(t, collector.matching(observe.KindMutation, observe.OperationMutationDeleteMany)[before:], observe.OperationMutationDeleteMany, 3+rowLocks)
 	})
 }
 

@@ -12,6 +12,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -379,7 +380,15 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	defer func() { abandon(err) }()
 	defer undoOnPanic(func() { abandon(nil) })
 
-	captured, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), program.CaptureStatement(), program.SentinelRows())
+	session := activeBinding.lockSession(scope.queryer, app.registry, app.provider, app.mutationLimits.statementParameters)
+	captured, err := rowlock.Select(ctx, session, func(ctx context.Context) ([]mutationdecode.Row, []rowlock.Key, error) {
+		rows, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), program.CaptureStatement(), program.SentinelRows())
+		if err != nil {
+			return nil, nil, err
+		}
+		keys, err := rowlock.RowKeys(app.registry, rows)
+		return rows, keys, err
+	})
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
@@ -388,6 +397,9 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		return 0, publicBatchExecutionError(program, err)
 	}
 	if err := invokeBatchAfterCaptureObserver(ctx); err != nil {
+		return 0, publicBatchExecutionError(program, err)
+	}
+	if err := lockBatchWriteReferences(ctx, session, app.registry, program.ModelID(), program.Writes(), captured); err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
 	var authorized []mutationbatch.AuthorizedRow

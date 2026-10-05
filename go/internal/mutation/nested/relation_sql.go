@@ -422,15 +422,11 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 		field, _ := context.resolver.Field(context.provider, policyir.ModelID(context.endpoint.TargetModelID()), fieldID)
 		order[index] = context.qualified(field.Column) + " ASC"
 	}
-	lock := ""
-	if context.provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
 	limit := uint64(maxRows)
 	if maxRows == context.maxRows {
 		limit++ // sentinel; executor refuses rather than truncates.
 	}
-	text := "SELECT " + fields + " FROM " + context.dialect.Table(context.targetModel) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND ") + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", limit) + lock
+	text := "SELECT " + fields + " FROM " + context.dialect.Table(context.targetModel) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND ") + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", limit)
 	return RelationSQLStatement{role: role, model: policyir.ModelID(context.endpoint.TargetModelID()), text: text, args: args, columns: columns, maxRows: maxRows}, nil
 }
 

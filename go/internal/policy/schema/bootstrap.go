@@ -57,7 +57,7 @@ func newRegistry(bundle golem.SchemaBundle, historical bool) (*Registry, error) 
 	builder := registryBuilder{
 		registry: Registry{
 			generationDigest: bundle.GenerationDigest(), modelFingerprint: modelDocument.Fingerprint(), contractFingerprint: contractDocument.Fingerprint(),
-			models: make(map[golem.ModelID]Model), fields: make(map[golem.ModelID]map[golem.FieldID]Field), relations: make(map[relationKey]RelationEndpoint), deleteEffects: make(map[golem.ModelID][]DeleteEffect),
+			models: make(map[golem.ModelID]Model), fields: make(map[golem.ModelID]map[golem.FieldID]Field), relations: make(map[relationKey]RelationEndpoint), deleteEffects: make(map[golem.ModelID][]DeleteEffect), foreignKeys: make(map[golem.ModelID][]RelationEndpoint),
 			enumValues: make(map[compilerir.EnumID]map[string]compilerir.EnumValueID), enumLabels: make(map[compilerir.EnumID]map[compilerir.EnumValueID]string), physicalModels: make(map[golem.Provider]map[golem.ModelID]PhysicalModel),
 			physicalFields: make(map[golem.Provider]map[golem.ModelID]map[golem.FieldID]PhysicalField), capabilities: make(map[golem.Provider]map[compilerir.CapabilityID]physical.CapabilityFact),
 			physicalModelNames:       make(map[golem.Provider]map[physical.PhysicalName]golem.ModelID),
@@ -493,6 +493,9 @@ func (builder *registryBuilder) indexRelations(relations []compilerir.RelationIR
 			return fail(CodeRelation, path, "duplicate source endpoint")
 		}
 		builder.registry.relations[relationKey{sourceEndpoint.model, sourceEndpoint.field, rid}] = sourceEndpoint
+		if relation.ForeignKey != nil {
+			builder.registry.foreignKeys[sourceEndpoint.model] = append(builder.registry.foreignKeys[sourceEndpoint.model], sourceEndpoint)
+		}
 		if relation.ForeignKey != nil && (relation.ForeignKey.OnDelete == compilerir.ActionCascade || relation.ForeignKey.OnDelete == compilerir.ActionSetNull || relation.ForeignKey.OnDelete == compilerir.ActionSetDefault) {
 			effect := DeleteEffect{source: sourceEndpoint.model, relation: rid, action: relation.ForeignKey.OnDelete}
 			for _, pair := range sourceEndpoint.correlation {

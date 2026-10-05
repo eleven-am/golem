@@ -172,6 +172,7 @@ type Program struct {
 	statements                  []Statement
 	identity                    IdentityVerification
 	authored                    []policyir.FieldID
+	writes                      []mutationir.ScalarOperation
 	fact                        mutationir.FactRequirement
 	concurrency                 *policyir.FieldID
 	requiresConcurrencyPrecheck bool
@@ -183,6 +184,9 @@ func (program Program) Operation() mutationir.Operation                { return 
 func (program Program) ModelID() policyir.ModelID                      { return program.model }
 func (program Program) Stance() mutationir.Stance                      { return program.stance }
 func (program Program) TransactionRequirement() TransactionRequirement { return program.transaction }
+func (program Program) Writes() []mutationir.ScalarOperation {
+	return append([]mutationir.ScalarOperation(nil), program.writes...)
+}
 func (program Program) AuthoredFields() []policyir.FieldID {
 	return append([]policyir.FieldID(nil), program.authored...)
 }

@@ -3,6 +3,8 @@ package upsert
 import (
 	"errors"
 
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	ncrucsqlite "github.com/ncruces/go-sqlite3"
 	moderncsqlite "modernc.org/sqlite"
@@ -12,6 +14,7 @@ const (
 	postgresUniqueViolation              = "23505"
 	postgresSerializationFailure         = "40001"
 	postgresDeadlockDetected             = "40P01"
+	postgresLockNotAvailable             = "55P03"
 	postgresTriggeredDataChangeViolation = "27000"
 )
 
@@ -69,10 +72,15 @@ func providerUniqueCollision(err error) bool {
 }
 
 func providerInterference(err error) bool {
+	var conflict *rowlock.ConflictError
+	var contention *rowlock.ContentionError
+	if errors.As(err, &conflict) || errors.As(err, &contention) {
+		return true
+	}
 	var postgres *pgconn.PgError
 	if errors.As(err, &postgres) {
 		switch postgres.Code {
-		case postgresSerializationFailure, postgresDeadlockDetected, postgresTriggeredDataChangeViolation:
+		case postgresSerializationFailure, postgresDeadlockDetected, postgresLockNotAvailable, postgresTriggeredDataChangeViolation:
 			return true
 		}
 	}

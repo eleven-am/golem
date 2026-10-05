@@ -560,7 +560,7 @@ func executeSystemAbsentVersionedUpsert[P, A, M any](ctx context.Context, system
 }
 
 func executeAbsentVersionedUpsertAttempt[P, A, M any](ctx context.Context, app *App[P, A], source *executionBinding, descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, prepared preparedRuntimeUpsert, policies mutationplan.PolicySet, hooks *callerMutationHookExecution[A], attemptOrdinal uint32) (row golem.Row[M], resultErr error) {
-	backend := sqlxUpsertBackend{database: app.database, provider: app.provider, binding: source, mutation: mutationConfig(app, source)}
+	backend := sqlxUpsertBackend{database: app.database, registry: app.registry, provider: app.provider, binding: source, mutation: mutationConfig(app, source)}
 	if err := applyAbsentUpsertFault(ctx, absentUpsertFaultBegin, nil); err != nil {
 		return golem.Row[M]{}, publicAbsentUpsertExecutionError(descriptor.Metadata().ModelID(), err)
 	}
@@ -585,17 +585,13 @@ func executeAbsentVersionedUpsertAttempt[P, A, M any](ctx context.Context, app *
 	if err := applyAbsentUpsertFault(ctx, absentUpsertFaultGuard, attempt); err != nil {
 		return golem.Row[M]{}, publicAbsentUpsertExecutionError(descriptor.Metadata().ModelID(), err)
 	}
-	rows, err := attempt.Query(ctx, prepared.kernel.GuardStatement())
-	if err != nil || rows != 1 {
-		if err == nil {
-			err = fmt.Errorf("expect-absent selector guard returned %d rows", rows)
-		}
+	if err := attempt.AcquireGuard(ctx, prepared.kernel.Guard()); err != nil {
 		return golem.Row[M]{}, publicAbsentUpsertExecutionError(descriptor.Metadata().ModelID(), err)
 	}
 	if err := applyAbsentUpsertFault(ctx, absentUpsertFaultAuthorizedProbe, attempt); err != nil {
 		return golem.Row[M]{}, publicAbsentUpsertExecutionError(descriptor.Metadata().ModelID(), err)
 	}
-	rows, err = attempt.Query(ctx, prepared.kernel.ProbeStatement())
+	rows, err := attempt.Probe(ctx, prepared.kernel.ProbeStatement())
 	if err != nil || rows > 1 {
 		if err == nil {
 			err = fmt.Errorf("expect-absent authorized probe returned %d rows", rows)
@@ -608,7 +604,7 @@ func executeAbsentVersionedUpsertAttempt[P, A, M any](ctx context.Context, app *
 	if err := applyAbsentUpsertFault(ctx, absentUpsertFaultExactProbe, attempt); err != nil {
 		return golem.Row[M]{}, publicAbsentUpsertExecutionError(descriptor.Metadata().ModelID(), err)
 	}
-	rows, err = attempt.Query(ctx, prepared.kernel.ExactSelectorProbeStatement())
+	rows, err = attempt.Probe(ctx, prepared.kernel.ExactSelectorProbeStatement())
 	if err != nil || rows > 1 {
 		if err == nil {
 			err = fmt.Errorf("expect-absent private selector probe returned %d rows", rows)
@@ -698,7 +694,7 @@ func executeAbsentCreateSavepoint(ctx context.Context, attempt *sqlxUpsertAttemp
 }
 
 func reclassifyAbsentCollision[M any](ctx context.Context, attempt *sqlxUpsertAttempt, program mutationupsert.Program, model golem.ModelID) (golem.Row[M], error) {
-	rows, err := attempt.Query(ctx, program.ProbeStatement())
+	rows, err := attempt.Probe(ctx, program.ProbeStatement())
 	if err != nil || rows > 1 {
 		if err == nil {
 			err = fmt.Errorf("expect-absent collision reach probe returned %d rows", rows)
@@ -708,7 +704,7 @@ func reclassifyAbsentCollision[M any](ctx context.Context, attempt *sqlxUpsertAt
 	if rows == 1 {
 		return golem.Row[M]{}, golem.RuntimeOperationError(golem.CodeConflict, "upsert", model, golem.FieldID{}, "mutation conflicted", nil)
 	}
-	rows, err = attempt.Query(ctx, program.ExactSelectorProbeStatement())
+	rows, err = attempt.Probe(ctx, program.ExactSelectorProbeStatement())
 	if err != nil || rows > 1 {
 		if err == nil {
 			err = fmt.Errorf("expect-absent collision private probe returned %d rows", rows)
@@ -831,7 +827,7 @@ func executeCallerVersionedRootScalar[P, A, M any](ctx context.Context, caller *
 }
 
 func executeVersionedScalarKernel[P, A, M any](ctx context.Context, app *App[P, A], source *executionBinding, descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, initial mutationsql.Program, claim observedConcurrencyClaim, hooks *callerMutationHookExecution[A], afterPrecheck func(context.Context, *sqlxUpsertAttempt) (mutationsql.Program, error), attemptOrdinal uint32) (row golem.Row[M], resultErr error) {
-	backend := sqlxUpsertBackend{database: app.database, provider: app.provider, binding: source, mutation: mutationConfig(app, source)}
+	backend := sqlxUpsertBackend{database: app.database, registry: app.registry, provider: app.provider, binding: source, mutation: mutationConfig(app, source)}
 	generic, err := backend.Begin(ctx, initial.TransactionRequirement(), attemptOrdinal)
 	if err != nil {
 		return golem.Row[M]{}, publicScalarMutationError(descriptor.Metadata().ModelID(), scalarMutationError(initial.Operation(), scalarMutationProviderFailureKind(err), 0, 0, "concurrency transaction could not begin", err))
@@ -858,7 +854,7 @@ func executeVersionedScalarKernel[P, A, M any](ctx context.Context, app *App[P, 
 	if err != nil {
 		return golem.Row[M]{}, publicScalarMutationError(descriptor.Metadata().ModelID(), err)
 	}
-	preimage, err := queryExactlyOneMutationRow(ctx, attempt.queryer, app.registry, policyir.ModelID(descriptor.Metadata().ModelID()), app.provider, initial.Operation(), 0, statements[0], arguments)
+	preimage, err := queryMutationStatement(ctx, attempt.queryer, attempt.binding, app.registry, policyir.ModelID(descriptor.Metadata().ModelID()), app.provider, initial.Operation(), 0, statements[0], arguments)
 	if err != nil {
 		return golem.Row[M]{}, publicScalarMutationError(descriptor.Metadata().ModelID(), err)
 	}

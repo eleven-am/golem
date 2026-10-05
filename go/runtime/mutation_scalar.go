@@ -16,6 +16,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
@@ -404,7 +405,10 @@ func executeScalarProgramOnQueryerObserved(ctx context.Context, queryer sqlx.Que
 				return scalarMutationExecution{}, err
 			}
 		}
-		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
+		if err := lockScalarWriteReferences(ctx, queryer, binding, registry, model, provider, program, uint32(index), statement, result); err != nil {
+			return scalarMutationExecution{}, err
+		}
+		row, err := queryMutationStatement(ctx, queryer, binding, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
 		if err != nil {
 			return scalarMutationExecution{}, err
 		}
@@ -466,7 +470,10 @@ func executeVersionedScalarProgramAfterPrecheck(ctx context.Context, queryer sql
 				return scalarMutationExecution{}, err
 			}
 		}
-		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
+		if err := lockScalarWriteReferences(ctx, queryer, binding, registry, model, provider, program, uint32(index), statement, result); err != nil {
+			return scalarMutationExecution{}, err
+		}
+		row, err := queryMutationStatement(ctx, queryer, binding, registry, model, provider, program.Operation(), uint32(index), statement, arguments)
 		if err != nil {
 			return scalarMutationExecution{}, err
 		}
@@ -549,7 +556,11 @@ func captureScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, bind
 	if err != nil {
 		return nil, err
 	}
-	return captureCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, model, []mutationdecode.Row{parent})
+	effects, err := captureCascadeEffects(ctx, queryer, registry, provider, binding.mutation.limits, state, model, []mutationdecode.Row{parent})
+	if err != nil && mutationupsert.Interference(err) {
+		return nil, scalarMutationError(mutationir.Delete, scalarMutationConflict, mutationsql.ApplyDelete, 0, "cascaded rows could not be locked", err)
+	}
+	return effects, err
 }
 
 func commitScalarCascade(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, provider policyir.Provider, cascade *cascadeEffects) error {
@@ -631,6 +642,80 @@ func scalarMutationArguments(operation mutationir.Operation, statementIndex uint
 		arguments[index] = cloneMutationPhysicalValue(value)
 	}
 	return arguments, nil
+}
+
+func lockScalarWriteReferences(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, program mutationsql.Program, statementIndex uint32, statement mutationsql.Statement, result scalarMutationExecution) error {
+	if statement.Role() != mutationsql.ApplyCreate && statement.Role() != mutationsql.ApplyUpdate {
+		return nil
+	}
+	var before []mutationdecode.Row
+	if preimage, ok := result.statement(0); ok && preimage.role == mutationsql.SelectPreImage {
+		row, err := mutationdecode.FromReadCells(registry, model, preimage.cells)
+		if err != nil {
+			return scalarMutationError(program.Operation(), scalarMutationInvariant, statement.Role(), statementIndex, "pre-image could not form a row for reference locking", err)
+		}
+		before = []mutationdecode.Row{row}
+	}
+	references, err := rowlock.References(registry, model, program.Writes(), before)
+	if err != nil {
+		return scalarMutationError(program.Operation(), scalarMutationInvariant, statement.Role(), statementIndex, "referenced rows could not be determined", err)
+	}
+	if err := binding.lockSession(queryer, registry, provider, binding.mutation.limits.statementParameters).LockReferences(ctx, references); err != nil {
+		return scalarMutationError(program.Operation(), scalarMutationProviderFailureKind(err), statement.Role(), statementIndex, "referenced rows could not be locked", err)
+	}
+	return nil
+}
+
+func lockBatchWriteReferences(ctx context.Context, session rowlock.Session, registry *schema.Registry, model policyir.ModelID, writes []mutationir.ScalarOperation, rows []mutationdecode.Row) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	references, err := rowlock.References(registry, model, writes, rows)
+	if err != nil {
+		return err
+	}
+	return session.LockReferences(ctx, references)
+}
+
+func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, binding *executionBinding, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, arguments []any) (scalarMutationStatementResult, error) {
+	if statement.Role() != mutationsql.SelectPreImage {
+		return queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, operation, statementIndex, statement, arguments)
+	}
+	session := binding.lockSession(queryer, registry, provider, binding.mutation.limits.statementParameters)
+	type selected struct {
+		row   scalarMutationStatementResult
+		found bool
+	}
+	choice, err := rowlock.Select(ctx, session, func(ctx context.Context) (selected, []rowlock.Key, error) {
+		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, operation, statementIndex, statement, arguments)
+		var failure *scalarMutationFailure
+		if errors.As(err, &failure) && failure.kind == scalarMutationNotFound && failure.statement == statementIndex {
+			return selected{}, nil, nil
+		}
+		if err != nil {
+			return selected{}, nil, err
+		}
+		image, err := mutationdecode.FromReadCells(registry, model, row.cells)
+		if err != nil {
+			return selected{}, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image could not be decoded for locking", err)
+		}
+		key, err := rowlock.RowKey(registry, image)
+		if err != nil {
+			return selected{}, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image identity could not be locked", err)
+		}
+		return selected{row: row, found: true}, []rowlock.Key{key}, nil
+	})
+	if err != nil {
+		var failure *scalarMutationFailure
+		if errors.As(err, &failure) {
+			return scalarMutationStatementResult{}, err
+		}
+		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProviderFailureKind(err), statement.Role(), statementIndex, "mutation target could not be locked", err)
+	}
+	if !choice.found {
+		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
+	}
+	return choice.row, nil
 }
 
 func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, arguments []any) (scalarMutationStatementResult, error) {

@@ -59,10 +59,6 @@ func RenderDependents(request DependentsRequest) ([]Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	lock := ""
-	if request.Provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
 	chunk := int(request.MaxParameters) / len(parent.primary)
 	if chunk < 1 {
 		return nil, fail(CodeLimit, request.Parent, policyir.FieldID{}, "parameter bound cannot hold one parent identity", nil)
@@ -80,7 +76,7 @@ func RenderDependents(request DependentsRequest) ([]Statement, error) {
 		}
 		text := "SELECT " + strings.Join(fields, ", ") + " FROM " + child.dialect.Table(child.model) + " AS " + child.dialect.Quote(child.alias) +
 			" WHERE EXISTS (SELECT 1 FROM " + parent.dialect.Table(parent.model) + " AS " + parent.dialect.Quote(parent.alias) + " WHERE (" + where + ") AND " + strings.Join(correlations, " AND ") + ")" +
-			" ORDER BY " + child.orderBy() + fmt.Sprintf(" LIMIT %d", uint64(request.MaxRows)+1) + lock
+			" ORDER BY " + child.orderBy() + fmt.Sprintf(" LIMIT %d", uint64(request.MaxRows)+1)
 		statements = append(statements, Statement{role: CaptureDependents, text: text, bindings: bindings, columns: columns, cardinality: AtMostSentinelRows})
 	}
 	return statements, nil

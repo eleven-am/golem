@@ -115,7 +115,7 @@ func render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		identity.hasBefore = true
 		identity.beforeStatement = 0
 	}
-	program := Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), fact: node.Fact(), semanticIndexed: plan.SemanticIndexed()}
+	program := Program{provider: provider, operation: node.Operation(), model: node.ModelID(), stance: plan.Stance(), transaction: transaction, statements: statements, identity: identity, authored: authoredScalarOperationFields(node.ScalarOperations()), writes: node.ScalarOperations(), fact: node.Fact(), semanticIndexed: plan.SemanticIndexed()}
 	if context.concurrency != nil {
 		field := *context.concurrency
 		program.concurrency = &field
@@ -203,7 +203,7 @@ func (context renderContext) renderCreate() ([]Statement, error) {
 func (context renderContext) renderUpdate() ([]Statement, error) {
 	target, _ := context.node.Target()
 	operations := context.node.ScalarOperations()
-	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields())
+	beforeFields, err := context.returnFields(context.node.BeforeRequirements().Fields(), context.identityVerificationFields(), scalarOperationFields(operations), context.concurrencyFields(), context.writtenForeignKeyFields(operations))
 	if err != nil {
 		return nil, err
 	}
@@ -223,11 +223,7 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		preselect += ", " + authorizationSelect
 		whereBindings = append(whereBindings, authorizationBindings...)
 	}
-	lock := ""
-	if context.provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
-	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where + lock, bindings: whereBindings, columns: preColumns, authorizations: authorizationColumns, cardinality: ExactlyOneRow}}
+	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: whereBindings, columns: preColumns, authorizations: authorizationColumns, cardinality: ExactlyOneRow}}
 
 	assignments := make([]string, len(operations), len(operations)+1)
 	updateBindings := make([]Binding, 0, len(operations))
@@ -323,11 +319,7 @@ func (context renderContext) renderDelete() ([]Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	lock := ""
-	if context.provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
-	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where + lock, bindings: bindings, columns: preColumns, cardinality: ExactlyOneRow}}
+	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: bindings, columns: preColumns, cardinality: ExactlyOneRow}}
 	pkWhere, pkBindings, err := context.priorPrimaryKeyWhere(0)
 	if err != nil {
 		return nil, err
@@ -584,6 +576,29 @@ func (context renderContext) identity(target mutationir.Target) (schema.Identity
 		}
 	}
 	return identity, nil
+}
+
+func (context renderContext) writtenForeignKeyFields(operations []mutationir.ScalarOperation) []policyir.FieldID {
+	written := make(map[policyir.FieldID]struct{}, len(operations))
+	for _, operation := range operations {
+		written[operation.FieldID()] = struct{}{}
+	}
+	var fields []policyir.FieldID
+	for _, endpoint := range context.registry.ForeignKeys(golem.ModelID(context.node.ModelID())) {
+		local := make([]policyir.FieldID, 0, len(endpoint.Correlation()))
+		touched := false
+		for _, pair := range endpoint.Correlation() {
+			field := policyir.FieldID(pair.ParentFieldID())
+			local = append(local, field)
+			if _, present := written[field]; present {
+				touched = true
+			}
+		}
+		if touched {
+			fields = append(fields, local...)
+		}
+	}
+	return fields
 }
 
 func (context renderContext) primaryKey() []policyir.FieldID {

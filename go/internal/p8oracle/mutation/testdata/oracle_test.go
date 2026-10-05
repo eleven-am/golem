@@ -551,35 +551,38 @@ func (f *fixture) assertOrdinaryObservationSamples() {
 		operation     observe.Operation
 		statements    int
 		aggregate     int64
+		rowLocks      int
+		parentLocks   int
 	}
 	expectations := []expectation{
-		{"caller", "create", observe.OperationMutationCreate, 4, 0},
-		{"caller", "update", observe.OperationMutationUpdate, 5, 0},
-		{"caller", "delete", observe.OperationMutationDelete, 6, 0},
-		{"caller", "update-many", observe.OperationMutationUpdateMany, 6, 2},
-		{"caller", "delete-many", observe.OperationMutationDeleteMany, 7, 2},
-		{"caller", "upsert-create", observe.OperationMutationUpsert, 7, 0},
-		{"caller", "upsert-update", observe.OperationMutationUpsert, 8, 0},
-		{"caller-tx", "create", observe.OperationMutationCreate, 2, 0},
-		{"caller-tx", "update", observe.OperationMutationUpdate, 3, 0},
-		{"caller-tx", "delete", observe.OperationMutationDelete, 4, 0},
-		{"caller-tx", "update-many", observe.OperationMutationUpdateMany, 4, 2},
-		{"caller-tx", "delete-many", observe.OperationMutationDeleteMany, 5, 2},
-		{"caller-tx", "upsert-create", observe.OperationMutationUpsert, 5, 0},
-		{"caller-tx", "upsert-update", observe.OperationMutationUpsert, 6, 0},
-		{"graphql", "create", observe.OperationMutationCreate, 5, 0},
-		{"graphql", "update", observe.OperationMutationUpdate, 6, 0},
-		{"graphql", "delete", observe.OperationMutationDelete, 7, 0},
-		{"graphql", "update-many", observe.OperationMutationUpdateMany, 6, 2},
-		{"graphql", "delete-many", observe.OperationMutationDeleteMany, 7, 2},
-		{"graphql", "upsert-create", observe.OperationMutationUpsert, 8, 0},
-		{"graphql", "upsert-update", observe.OperationMutationUpsert, 9, 0},
+		{"caller", "create", observe.OperationMutationCreate, 4, 0, 0, 1},
+		{"caller", "update", observe.OperationMutationUpdate, 5, 0, 1, 0},
+		{"caller", "delete", observe.OperationMutationDelete, 6, 0, 1, 0},
+		{"caller", "update-many", observe.OperationMutationUpdateMany, 6, 2, 1, 0},
+		{"caller", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 1, 0},
+		{"caller", "upsert-create", observe.OperationMutationUpsert, 7, 0, 0, 1},
+		{"caller", "upsert-update", observe.OperationMutationUpsert, 8, 0, 1, 0},
+		{"caller-tx", "create", observe.OperationMutationCreate, 2, 0, 0, 1},
+		{"caller-tx", "update", observe.OperationMutationUpdate, 3, 0, 1, 0},
+		{"caller-tx", "delete", observe.OperationMutationDelete, 4, 0, 1, 0},
+		{"caller-tx", "update-many", observe.OperationMutationUpdateMany, 4, 2, 1, 0},
+		{"caller-tx", "delete-many", observe.OperationMutationDeleteMany, 5, 2, 1, 0},
+		{"caller-tx", "upsert-create", observe.OperationMutationUpsert, 5, 0, 0, 1},
+		{"caller-tx", "upsert-update", observe.OperationMutationUpsert, 6, 0, 1, 0},
+		{"graphql", "create", observe.OperationMutationCreate, 5, 0, 0, 1},
+		{"graphql", "update", observe.OperationMutationUpdate, 6, 0, 1, 0},
+		{"graphql", "delete", observe.OperationMutationDelete, 7, 0, 1, 0},
+		{"graphql", "update-many", observe.OperationMutationUpdateMany, 6, 2, 1, 0},
+		{"graphql", "delete-many", observe.OperationMutationDeleteMany, 7, 2, 1, 0},
+		{"graphql", "upsert-create", observe.OperationMutationUpsert, 8, 0, 0, 1},
+		{"graphql", "upsert-update", observe.OperationMutationUpsert, 9, 0, 1, 0},
 	}
 	if f.db.Provider() == golem.PostgreSQL {
 		for index := range expectations {
 			if strings.HasPrefix(expectations[index].name, "upsert-") {
 				expectations[index].statements--
 			}
+			expectations[index].statements += f.rowLockStatements(expectations[index].rowLocks) + expectations[index].parentLocks
 		}
 	}
 	for _, want := range expectations {
@@ -593,6 +596,20 @@ func (f *fixture) assertOrdinaryObservationSamples() {
 			assertObserved(f.t, key+" ancestor", values, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeSuccess, observe.ReasonNone, "", want.statements, 0)
 		}
 	}
+}
+
+func (f *fixture) parentLockStatements(parents int) int {
+	if f.db.Provider() == golem.PostgreSQL {
+		return parents
+	}
+	return 0
+}
+
+func (f *fixture) rowLockStatements(selections int) int {
+	if f.db.Provider() == golem.PostgreSQL {
+		return 2 * selections
+	}
+	return 0
 }
 
 func assertObserved(t *testing.T, label string, values []observedOperation, kind observe.Kind, operation observe.Operation, outcome observe.Outcome, reason observe.Reason, model string, statements int, aggregate int64) {
@@ -942,21 +959,25 @@ func (f *fixture) assertNestedObservationSamples() {
 		childOperation   observe.Operation
 		childStatements  int
 		childCount       int
+		callerRowLocks   int
+		graphRowLocks    int
+		reReads          int
+		parentLocks      int
 	}
 	expectations := []expectation{
-		{"create", 9, 11, observe.OperationMutationCreate, 2, 1},
-		{"create-many", 12, 15, observe.OperationMutationCreate, 2, 2},
-		{"connect", 10, 11, observe.OperationMutationConnect, 3, 1},
-		{"set", 8, 9, "", 0, 0},
-		{"set-move", 11, 12, observe.OperationMutationSetRelation, 3, 1},
-		{"delete", 10, 11, observe.OperationMutationDelete, 3, 1},
-		{"delete-many", 10, 11, observe.OperationMutationDeleteMany, 3, 1},
-		{"connect-or-create-create", 13, 15, observe.OperationMutationCreate, 2, 1},
-		{"connect-or-create-connect", 13, 14, observe.OperationMutationConnect, 3, 1},
-		{"update", 11, 12, observe.OperationMutationUpdate, 3, 1},
-		{"update-many", 10, 11, observe.OperationMutationUpdateMany, 3, 1},
-		{"upsert-update", 14, 15, observe.OperationMutationUpdate, 3, 1},
-		{"upsert-create", 12, 14, observe.OperationMutationCreate, 2, 1},
+		{"create", 9, 11, observe.OperationMutationCreate, 2, 1, 1, 2, 0, 1},
+		{"create-many", 12, 15, observe.OperationMutationCreate, 2, 2, 1, 2, 0, 1},
+		{"connect", 10, 11, observe.OperationMutationConnect, 3, 1, 2, 2, 0, 0},
+		{"set", 8, 9, "", 0, 0, 2, 2, 1, 0},
+		{"set-move", 11, 12, observe.OperationMutationSetRelation, 3, 1, 2, 2, 1, 0},
+		{"delete", 10, 11, observe.OperationMutationDelete, 3, 1, 2, 2, 0, 0},
+		{"delete-many", 10, 11, observe.OperationMutationDeleteMany, 3, 1, 2, 2, 0, 0},
+		{"connect-or-create-create", 13, 15, observe.OperationMutationCreate, 2, 1, 1, 2, 0, 1},
+		{"connect-or-create-connect", 13, 14, observe.OperationMutationConnect, 3, 1, 2, 2, 0, 0},
+		{"update", 11, 12, observe.OperationMutationUpdate, 3, 1, 2, 2, 0, 0},
+		{"update-many", 10, 11, observe.OperationMutationUpdateMany, 3, 1, 2, 2, 0, 0},
+		{"upsert-update", 14, 15, observe.OperationMutationUpdate, 3, 1, 2, 2, 0, 0},
+		{"upsert-create", 12, 14, observe.OperationMutationCreate, 2, 1, 1, 2, 0, 1},
 	}
 	if f.db.Provider() == golem.PostgreSQL {
 		for index := range expectations {
@@ -964,19 +985,23 @@ func (f *fixture) assertNestedObservationSamples() {
 				expectations[index].callerStatements--
 				expectations[index].graphStatements--
 			}
+			expectations[index].callerStatements += f.rowLockStatements(expectations[index].callerRowLocks) + expectations[index].reReads + expectations[index].parentLocks
+			expectations[index].graphStatements += f.rowLockStatements(expectations[index].graphRowLocks) + expectations[index].reReads
 		}
 	}
 	for _, want := range expectations {
 		for _, surface := range []string{"caller", "graphql"} {
 			key := "nested/" + surface + "/" + want.name
 			values := f.samples[key]
-			statements := want.callerStatements
+			statements, firstChildParentLock := want.callerStatements, 0
 			if surface == "graphql" {
 				statements = want.graphStatements
+			} else if f.db.Provider() == golem.PostgreSQL {
+				firstChildParentLock = want.parentLocks
 			}
 			assertObserved(f.t, key+" root", values, observe.KindMutation, observe.OperationMutationUpdate, observe.OutcomeSuccess, observe.ReasonNone, postModelID, statements, 0)
 			if want.childCount != 0 {
-				assertObservedCount(f.t, key+" child", values, observe.KindMutation, want.childOperation, commentModelID, want.childStatements, want.childCount)
+				assertObservedCount(f.t, key+" child", values, observe.KindMutation, want.childOperation, commentModelID, want.childStatements, want.childCount, firstChildParentLock)
 			}
 			if surface == "graphql" {
 				assertObserved(f.t, key+" ancestor", values, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeSuccess, observe.ReasonNone, "", statements, 0)
@@ -985,7 +1010,7 @@ func (f *fixture) assertNestedObservationSamples() {
 	}
 }
 
-func assertObservedCount(t *testing.T, label string, values []observedOperation, kind observe.Kind, operation observe.Operation, model string, statements, count int) {
+func assertObservedCount(t *testing.T, label string, values []observedOperation, kind observe.Kind, operation observe.Operation, model string, statements, count, firstExtra int) {
 	t.Helper()
 	var matches []observedOperation
 	for _, value := range values {
@@ -996,9 +1021,13 @@ func assertObservedCount(t *testing.T, label string, values []observedOperation,
 	if len(matches) != count {
 		t.Fatalf("%s observations=%+v want count=%d", label, values, count)
 	}
-	for _, got := range matches {
-		if got.Outcome != observe.OutcomeSuccess || got.Reason != observe.ReasonNone || got.Statements != statements {
-			t.Fatalf("%s child observation=%+v want success statements=%d", label, got, statements)
+	for index, got := range matches {
+		want := statements
+		if index == 0 {
+			want += firstExtra
+		}
+		if got.Outcome != observe.OutcomeSuccess || got.Reason != observe.ReasonNone || got.Statements != want {
+			t.Fatalf("%s child observation=%+v want success statements=%d", label, got, want)
 		}
 	}
 }
@@ -1133,25 +1162,26 @@ func (f *fixture) customTransaction() {
 
 func (f *fixture) assertCustomObservationSamples() {
 	f.t.Helper()
+	locked := f.rowLockStatements(1)
 	directSuccess := f.samples["custom/direct-success"]
-	assertObserved(f.t, "custom direct success child", directSuccess, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4, 1)
-	assertObserved(f.t, "custom direct success transaction", directSuccess, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeSuccess, observe.ReasonNone, "", 6, 0)
+	assertObserved(f.t, "custom direct success child", directSuccess, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4+locked, 1)
+	assertObserved(f.t, "custom direct success transaction", directSuccess, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeSuccess, observe.ReasonNone, "", 6+locked, 0)
 
 	graphSuccess := f.samples["custom/graphql-success"]
-	assertObserved(f.t, "custom GraphQL success child", graphSuccess, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4, 1)
-	assertObserved(f.t, "custom GraphQL success transaction", graphSuccess, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeSuccess, observe.ReasonNone, "", 6, 0)
-	assertObserved(f.t, "custom GraphQL success root", graphSuccess, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.OutcomeSuccess, observe.ReasonNone, "", 6, 0)
-	assertObserved(f.t, "custom GraphQL success ancestor", graphSuccess, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeSuccess, observe.ReasonNone, "", 6, 0)
+	assertObserved(f.t, "custom GraphQL success child", graphSuccess, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4+locked, 1)
+	assertObserved(f.t, "custom GraphQL success transaction", graphSuccess, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeSuccess, observe.ReasonNone, "", 6+locked, 0)
+	assertObserved(f.t, "custom GraphQL success root", graphSuccess, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.OutcomeSuccess, observe.ReasonNone, "", 6+locked, 0)
+	assertObserved(f.t, "custom GraphQL success ancestor", graphSuccess, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeSuccess, observe.ReasonNone, "", 6+locked, 0)
 
 	directFailure := f.samples["custom/direct-failure"]
-	assertObserved(f.t, "custom direct rollback child", directFailure, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4, 1)
-	assertObserved(f.t, "custom direct rollback transaction", directFailure, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeFailure, observe.ReasonProvider, "", 4, 0)
+	assertObserved(f.t, "custom direct rollback child", directFailure, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4+locked, 1)
+	assertObserved(f.t, "custom direct rollback transaction", directFailure, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeFailure, observe.ReasonProvider, "", 4+locked, 0)
 
 	graphFailure := f.samples["custom/graphql-failure"]
-	assertObserved(f.t, "custom GraphQL rollback child", graphFailure, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4, 1)
-	assertObserved(f.t, "custom GraphQL rollback transaction", graphFailure, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeFailure, observe.ReasonProvider, "", 4, 0)
-	assertObserved(f.t, "custom GraphQL rollback root", graphFailure, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.OutcomeFailure, observe.ReasonProvider, "", 4, 0)
-	assertObserved(f.t, "custom GraphQL rollback ancestor", graphFailure, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeFailure, observe.ReasonProvider, "", 4, 0)
+	assertObserved(f.t, "custom GraphQL rollback child", graphFailure, observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess, observe.ReasonNone, postModelID, 4+locked, 1)
+	assertObserved(f.t, "custom GraphQL rollback transaction", graphFailure, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeFailure, observe.ReasonProvider, "", 4+locked, 0)
+	assertObserved(f.t, "custom GraphQL rollback root", graphFailure, observe.KindGraphQL, observe.OperationGraphQLCustomMutation, observe.OutcomeFailure, observe.ReasonProvider, "", 4+locked, 0)
+	assertObserved(f.t, "custom GraphQL rollback ancestor", graphFailure, observe.KindGraphQL, observe.OperationGraphQLMutation, observe.OutcomeFailure, observe.ReasonProvider, "", 4+locked, 0)
 }
 
 func (f *fixture) denialAndProviderFailure() {
@@ -1259,13 +1289,13 @@ func (f *fixture) assertDenialProviderObservationSamples() {
 		rootStatements      int
 		withTx, withGraphQL bool
 	}{
-		{key: "provider/caller", rootStatements: 3},
-		{key: "provider/caller-tx", rootStatements: 3, withTx: true},
-		{key: "provider/graphql", rootStatements: 4, withGraphQL: true},
+		{key: "provider/caller", rootStatements: 3 + f.parentLockStatements(2)},
+		{key: "provider/caller-tx", rootStatements: 3 + f.parentLockStatements(2), withTx: true},
+		{key: "provider/graphql", rootStatements: 4 + f.rowLockStatements(1) + f.parentLockStatements(2), withGraphQL: true},
 	}
 	for _, sample := range providerFailures {
 		values := f.samples[sample.key]
-		assertObserved(f.t, sample.key+" child", values, observe.KindMutation, observe.OperationMutationCreate, observe.OutcomeFailure, observe.ReasonProvider, commentModelID, 1, 0)
+		assertObserved(f.t, sample.key+" child", values, observe.KindMutation, observe.OperationMutationCreate, observe.OutcomeFailure, observe.ReasonProvider, commentModelID, 1+f.parentLockStatements(1), 0)
 		assertObserved(f.t, sample.key+" root", values, observe.KindMutation, observe.OperationMutationCreate, observe.OutcomeRefused, observe.ReasonConflict, postModelID, sample.rootStatements, 0)
 		if sample.withTx {
 			assertObserved(f.t, sample.key+" transaction", values, observe.KindTransaction, observe.OperationCallerTransaction, observe.OutcomeRefused, observe.ReasonConflict, "", sample.rootStatements, 0)

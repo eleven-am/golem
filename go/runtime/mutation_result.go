@@ -11,6 +11,7 @@ import (
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
+	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
@@ -508,6 +509,9 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	var cardinality *batchCardinalityError
 	if errors.As(err, &cardinality) {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID{}, "nested batch mutation is not authorized", err)
+	}
+	if mutationupsert.Interference(err) {
+		return golem.RuntimeOperationError(golem.CodeConflict, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation conflicted", err)
 	}
 	return publicMutationPreparationError(operation, model, err)
 }

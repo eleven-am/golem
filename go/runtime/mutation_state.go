@@ -87,6 +87,7 @@ type mutationScope struct {
 	dirty      bool
 	rolledBack bool
 	closed     bool
+	lockMark   int
 }
 
 func (scope *mutationScope) contains(owner *mutationScope) bool {
@@ -144,7 +145,7 @@ func (state *mutationState) beginScope(ctx context.Context) (*mutationScope, err
 	if state.flushed || state.finished {
 		return nil, fmt.Errorf("P4_MUTATION_STATE: transaction state is already finalized")
 	}
-	scope := &mutationScope{state: state, owner: heldWriteFor(ctx, state.binding), parent: state.currentScope(ctx), dirty: state.dirty}
+	scope := &mutationScope{state: state, owner: heldWriteFor(ctx, state.binding), parent: state.currentScope(ctx), dirty: state.dirty, lockMark: state.binding.rowLocks().Mark()}
 	if state.open == nil {
 		state.open = make(map[*heldWrite][]*mutationScope)
 	}
@@ -175,6 +176,7 @@ func (scope *mutationScope) rollback() error {
 		return err
 	}
 	scope.rolledBack = true
+	state.binding.rowLocks().RollbackTo(scope.lockMark)
 	dirty := scope.dirty
 	touches := state.touches[:0]
 	state.touched = 0

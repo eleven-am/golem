@@ -338,6 +338,9 @@ func executeNestedBatchNode[P, A any](ctx context.Context, app *App[P, A], bindi
 	if err != nil {
 		return mutationnested.ApplyResult{}, err
 	}
+	if err := lockBatchWriteReferences(ctx, binding.lockSession(queryer, app.registry, app.provider, app.mutationLimits.statementParameters), app.registry, node.ModelID(), program.Writes(), rows); err != nil {
+		return mutationnested.ApplyResult{}, err
+	}
 	var cascade *cascadeEffects
 	for _, statement := range prepared.Statements() {
 		if statement.Role() == mutationbatch.ApplyDelete && cascade == nil {
@@ -2035,7 +2038,7 @@ func (transaction *systemNestedTransaction[P, A]) ExpandNested(ctx context.Conte
 				}
 			}
 		}
-		return mutationnested.ExpandRelationSQL(ctx, mutationnested.SQLExpansionRequest{Expansion: request, Queryer: transaction.queryer, Registry: transaction.app.registry, Provider: transaction.app.provider, Capabilities: transaction.app.capabilities, MaxRows: uint32(transaction.app.mutationLimits.touchedRows), MaxParameters: uint32(transaction.app.mutationLimits.statementParameters)})
+		return mutationnested.ExpandRelationSQL(ctx, mutationnested.SQLExpansionRequest{Expansion: request, Queryer: transaction.queryer, Registry: transaction.app.registry, Provider: transaction.app.provider, Capabilities: transaction.app.capabilities, MaxRows: uint32(transaction.app.mutationLimits.touchedRows), MaxParameters: uint32(transaction.app.mutationLimits.statementParameters), Ledger: transaction.binding.rowLocks()})
 	}
 	if node.Operation() == mutationir.Create {
 		model := node.ModelID()
@@ -2090,7 +2093,7 @@ func (transaction *systemNestedTransaction[P, A]) acquireNestedSelectorGuard(ctx
 	} else {
 		transaction.guards = make(map[[32]byte]mutationupsert.SelectorGuard)
 	}
-	if err := executeNestedGuardStatement(ctx, transaction.queryer, guard.AcquireStatement()); err != nil {
+	if err := acquireSelectorGuard(ctx, transaction.binding, transaction.queryer, transaction.app.registry, transaction.app.provider, guard); err != nil {
 		return err
 	}
 	transaction.guards[token] = guard

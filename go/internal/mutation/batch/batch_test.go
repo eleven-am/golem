@@ -27,7 +27,7 @@ func TestBatchMutationExactBoundaryAndOverflowWithoutTruncation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if program.SentinelRows() != 3 || !strings.Contains(program.CaptureStatement().SQL(), "LIMIT 3 FOR UPDATE") {
+	if program.SentinelRows() != 3 || !strings.HasSuffix(program.CaptureStatement().SQL(), "LIMIT 3") {
 		t.Fatalf("capture does not expose the exact +1 sentinel: %s", program.CaptureStatement().SQL())
 	}
 	rows := []mutationdecode.Row{postRow(t, fixture, 1, "one"), postRow(t, fixture, 2, "two")}

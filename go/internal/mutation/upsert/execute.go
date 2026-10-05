@@ -26,6 +26,8 @@ type Freeze func(context.Context) (FrozenValues, error)
 // Finish/Abort finalize only this attempt boundary; a caller transaction must
 // therefore implement them as savepoint release/rollback, never outer replay.
 type Attempt interface {
+	AcquireGuard(context.Context, SelectorGuard) error
+	Probe(context.Context, Statement) (uint32, error)
 	Query(context.Context, Statement) (uint32, error)
 	Finish(context.Context) error
 	Abort() error
@@ -135,14 +137,10 @@ func runAttemptProtected(ctx context.Context, program Program, attempt Attempt, 
 }
 
 func runAttempt(ctx context.Context, program Program, attempt Attempt, frozen FrozenValues, executor BranchExecutor, ordinal uint32) (Result, error) {
-	rows, err := attempt.Query(ctx, program.GuardStatement())
-	if err != nil {
+	if err := attempt.AcquireGuard(ctx, program.Guard()); err != nil {
 		return Result{}, err
 	}
-	if rows != 1 {
-		return Result{}, fail(CodeInvariant, fmt.Sprintf("selector guard returned %d rows, want one", rows), nil)
-	}
-	rows, err = attempt.Query(ctx, program.ProbeStatement())
+	rows, err := attempt.Probe(ctx, program.ProbeStatement())
 	if err != nil {
 		return Result{}, err
 	}
@@ -196,6 +194,10 @@ func retryableInterference(err error) bool {
 // upsert/connect-or-create whole-attempt retry. It exposes only the decision;
 // retry ownership and bounds remain with the calling mutation kernel.
 func RetryableInterference(err error) bool { return retryableInterference(err) }
+
+func Interference(err error) bool {
+	return !untrustedRetryCause(err) && ClassifyProviderFault(err) == ProviderFaultInterference
+}
 
 // UniqueCollision identifies only trusted provider unique/primary-key
 // collisions. Expectation-aware absent upsert uses it after rolling back its

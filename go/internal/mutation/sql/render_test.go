@@ -76,7 +76,7 @@ func TestUpdateRendersActionConstraintLockAtomicOperationsAndPostcondition(t *te
 	if identity.Behavior() != mutationir.IdentityUnchanged || !hasBefore || beforeIndex != 0 || identity.AfterStatement() != 1 || !reflect.DeepEqual(identity.Fields(), []policyir.FieldID{policyir.FieldID(fixture.PostID)}) {
 		t.Fatalf("identity verification=%#v", identity)
 	}
-	if statements[0].Role() != SelectPreImage || !strings.HasSuffix(statements[0].SQL(), " FOR UPDATE") {
+	if statements[0].Role() != SelectPreImage || strings.Contains(statements[0].SQL(), "FOR UPDATE") {
 		t.Fatalf("pre-image SQL=%s", statements[0].SQL())
 	}
 	if len(statements[0].AuthorizationColumns()) != 2 {

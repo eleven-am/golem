@@ -149,11 +149,7 @@ func (context renderContext) renderAuthorize(identities [][]any) (Statement, err
 		selects = append(selects, "CASE WHEN ("+condition.text+") THEN 1 ELSE 0 END AS "+context.dialect.Quote(physical.PhysicalName(alias)))
 		authorizations = append(authorizations, AuthorizationColumn{field: authorization.FieldID(), alias: alias})
 	}
-	lock := ""
-	if context.provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
-	statement := Statement{role: AuthorizePreImage, text: "SELECT " + strings.Join(selects, ", ") + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND ") + " ORDER BY " + context.orderBy() + lock, bindings: bindings, columns: columns, authorizations: authorizations, cardinality: ExactlyCapturedRows, expected: uint32(len(identities))}
+	statement := Statement{role: AuthorizePreImage, text: "SELECT " + strings.Join(selects, ", ") + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND ") + " ORDER BY " + context.orderBy(), bindings: bindings, columns: columns, authorizations: authorizations, cardinality: ExactlyCapturedRows, expected: uint32(len(identities))}
 	return context.check(statement)
 }
 
