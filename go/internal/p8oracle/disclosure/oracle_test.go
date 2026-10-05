@@ -3,7 +3,6 @@ package disclosure
 import (
 	_ "embed"
 	"testing"
-	"time"
 
 	"github.com/eleven-am/golem/go/internal/p8oracle"
 )
@@ -23,6 +22,8 @@ func TestP8HookComputedCustomAndAnalyticsDisclosureCorpus(t *testing.T) {
 	p8oracle.RunExternalScenarioRace(t, oracleSource, "hook-computed-custom-analytics")
 }
 
+const publicInputExecutions = 110
+
 func FuzzP8PublicInputNeverDisclosesProtectedCanary(f *testing.F) {
 	const corpus = "external-public-input-corpus-v1"
 	f.Add(corpus)
@@ -30,6 +31,6 @@ func FuzzP8PublicInputNeverDisclosesProtectedCanary(f *testing.F) {
 		if selected != corpus {
 			return
 		}
-		p8oracle.RunExternalFuzz(t, oracleSource, "FuzzP8ExternalPublicInput", 3*time.Second)
+		p8oracle.RunExternalFuzz(t, oracleSource, "FuzzP8ExternalPublicInput", publicInputExecutions)
 	})
 }

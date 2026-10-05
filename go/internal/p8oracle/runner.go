@@ -24,6 +24,11 @@ import (
 	"github.com/eleven-am/golem/go/provider/postgresql"
 )
 
+const (
+	externalFuzzSetupBudget     = 2 * time.Minute
+	externalFuzzExecutionBudget = 5 * time.Second
+)
+
 type liveProfile struct {
 	name      string
 	provider  string
@@ -63,11 +68,12 @@ func runExternalScenario(t *testing.T, source []byte, scenario string, race bool
 // external consumer own the fuzz loop. A single worker preserves disposable
 // database isolation while still exercising multiple generated inputs without
 // rebuilding the CLI or replaying migrations per input.
-func RunExternalFuzz(t *testing.T, source []byte, target string, duration time.Duration) {
+func RunExternalFuzz(t *testing.T, source []byte, target string, executions int) {
 	t.Helper()
-	if target == "" || duration <= 0 {
-		t.Fatal("external fuzz target and positive duration are required")
+	if target == "" || executions < 1 {
+		t.Fatal("external fuzz target and positive execution count are required")
 	}
+	arguments := externalFuzzArguments(target, executions)
 	runExternalProfiles(t, source, func(t *testing.T, consumer string, environment []string) {
 		environment = setEnvironment(environment, "P8_ORACLE_SCENARIO", "external-fuzz")
 		// The Go fuzz coordinator and its workers are separate processes. Give
@@ -78,15 +84,19 @@ func RunExternalFuzz(t *testing.T, source []byte, target string, duration time.D
 			t.Fatalf("create external fuzz canary seed: %v", err)
 		}
 		environment = setEnvironment(environment, "P8_ORACLE_FUZZ_CANARY_SEED", hex.EncodeToString(canarySeed[:]))
-		arguments := []string{
-			"test", "-race", "-run", "^$", "-fuzz", "^" + target + "$",
-			"-fuzztime", duration.String(), "-parallel", "1", ".",
-		}
 		output := strings.TrimSpace(runProcess(t, consumer, environment, "go", arguments...))
 		if output != "" {
 			t.Log(output)
 		}
 	})
+}
+
+func externalFuzzArguments(target string, executions int) []string {
+	timeout := externalFuzzSetupBudget + time.Duration(executions)*externalFuzzExecutionBudget
+	return []string{
+		"test", "-race", "-run", "^$", "-fuzz", "^" + target + "$",
+		"-fuzztime", strconv.Itoa(executions) + "x", "-timeout", timeout.String(), "-parallel", "1", ".",
+	}
 }
 
 // RunExternalBenchmark builds the same clean consumer once, provisions every
