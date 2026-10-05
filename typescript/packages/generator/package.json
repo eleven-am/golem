@@ -1,6 +1,6 @@
 {
   "name": "@eleven-am/golem-generator",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "bin": {
@@ -12,7 +12,7 @@
   },
   "dependencies": {
     "@prisma/generator-helper": "^7.0.0",
-    "@eleven-am/golem-core": "^0.6.1"
+    "@eleven-am/golem-core": "^0.7.0"
   },
   "devDependencies": {
     "@types/jest": "^29.5.14",

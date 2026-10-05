@@ -1,10 +1,123 @@
+# Migrating to 0.7.0
+
+Upgrade `@eleven-am/golem-core`, `@eleven-am/golem-generator`,
+`@eleven-am/golem` and `@eleven-am/golem-authorizer` together, to 0.7.0. Under
+0.x caret ranges `^0.6.1` does not resolve 0.7.0, so a mixed install fails to
+resolve rather than running two cores. `@eleven-am/golem-policy` stays at
+0.6.0 and `@eleven-am/golem-render` at 0.1.0. `@eleven-am/golem-queue` 0.5.0
+is independent of these; see its own section below.
+
+## Required steps
+
+**1. Use PostgreSQL or SQLite.** The generator refuses any other `datasource`
+provider, and the engine refuses one at startup, naming it.
+
+**2. Keep `GolemUpsertGuard` in the schema.** The generator now refuses a
+schema without it, whether or not authorization is enabled. If you added it
+for 0.6.x, nothing changes; otherwise copy it from
+`typescript/packages/core/prisma/golem-core.prisma` (shipped in the package as
+`@eleven-am/golem-core/prisma/golem-core.prisma`) or apply the provider SQL
+under `prisma/migrations/`, and migrate.
+
+**3. Regenerate.** `npx prisma generate` must run with generator 0.7.0 so the
+datamodel carries `upsertGuard`, each model's `@@schema` and each relation's
+`onDelete` action. With a 0.6.x datamodel, upserts can fail asking you to
+regenerate, and deletes do not enumerate, lock or publish events for their
+cascaded dependents.
+
+**4. Prepare the guard outside Nest.** Nest validates the guard table at
+startup, with or without authorization, and on PostgreSQL creates every stripe
+row. If you run the engine without `GolemModule`, call this once before
+serving writes:
+
+```ts
+import { prepareUpsertGuard } from '@eleven-am/golem-core';
+
+await prepareUpsertGuard(
+  prisma as unknown as Record<string, unknown>,
+  'postgresql',
+  4_096,
+);
+```
+
+Pass the same stripe count as `defaults.upsertGuardStripes`. On SQLite it does
+nothing. On PostgreSQL an unprepared stripe is refused when an upsert reaches
+it.
+
+## What fails at startup
+
+- A provider other than `postgresql` or `sqlite`, or a datamodel with none.
+- A subscribable model whose identity includes a foreign key declared
+  `onDelete: SetNull` or `SetDefault`: deleting the parent would rewrite the
+  identity its change event names. Make the relation `Cascade` or `Restrict`,
+  or stop subscribing to the model.
+
+## What fails on traffic
+
+These are refused with `BAD_USER_INPUT` before any query runs. Search your
+callers for them.
+
+- **An upsert or `connectOrCreate` whose `create` does not reproduce its
+  `where`.** Every unique selector in `where` must be set in `create` to the
+  same value, directly, through a `connect` on that key's relation, or through
+  the parent it is nested under. Copy the selector into `create`.
+- **Arithmetic on a foreign key, or a partial compound foreign key**, from any
+  caller including the unscoped client. Write the key as a value or
+  `{ set: value }`, and write every field of a compound key together.
+- **A context-bound update that changes a row's identity** (its primary key,
+  or the unique field Golem identifies it by), at the root or nested.
+- **A NUL byte** (`\u0000`) in any string or JSON object key, anywhere in an
+  operation's arguments or a raw query parameter.
+- **A `deleteMany` argument Golem cannot honour.** `where` and `limit` are
+  accepted.
+- **A delete whose rows plus cascaded dependents exceed
+  `batchEvents.maxRows`** (1,000 by default), and an eventful `createMany` or
+  `createManyAndReturn` with more rows than that. Raise the bound or split the
+  write.
+
+## Behaviour that changes without failing
+
+- **`connect`, `set` and `disconnect` need `read` on the target, not
+  `update`.** Every foreign key a context-bound caller writes must name a row
+  it can read, and a `set` or to-one `disconnect: true` also needs `read` on
+  the rows it detaches. Grant `read` where a caller links rows. An ability
+  that granted `update` on the target and nothing else now gets `NOT_FOUND`.
+- **A missing or unreadable link target is always `NOT_FOUND`.** It used to be
+  `BAD_USER_INPUT` for a foreign-key scalar, a raw provider error for a
+  to-many `connect`, and silent success for `set`. Error handling keyed on the
+  old codes needs updating.
+- **Cascaded deletes publish events.** Each row removed by `onDelete: Cascade`
+  emits `DELETED`; each row whose foreign key is cleared or reset emits
+  `UPDATED`. Subscribers see more events than before.
+- **`createMany`, `createManyAndReturn` and `updateManyAndReturn` publish
+  per-row events** on subscribable models.
+- **`deleteMany` honours `limit`.** It used to be ignored.
+- **Array `$transaction([...])` runs as one interactive transaction** on the
+  generated client, in order, through Golem's interception.
+- **Concurrent writes can answer `CONFLICT`.** An upsert whose row appears or
+  disappears while it decides, a delete or nested write whose rows change
+  while they are locked, and on PostgreSQL a lock that would be taken out of
+  order and is held by another write all refuse with `CONFLICT` rather than
+  wait or act on rows Golem did not check. Retry the whole operation where
+  that is safe.
+- **Every upsert takes the guard**, including those on the unscoped client and
+  nested ones, and is written as an explicit create, update or connect, never a
+  native Prisma upsert.
+- **Writes cost a little more.** A single-row engine update on PostgreSQL takes
+  about 1.2 ms longer; a simple delete on SQLite about 0.15–0.2 ms longer.
+
+Full detail is in `RELEASE_NOTES.md`.
+
+---
+
 # Migrating to 0.6.0
 
 Most of this release fails loudly at startup, which is the easy kind. Four
 things do not: they fail on traffic that works today. Check those first.
 
 `@eleven-am/golem-queue` and `@eleven-am/golem-render` carry no golem
-dependency and did not change. Leave them where they are.
+dependency, so upgrading the golem packages does not require upgrading them.
+The queue has its own migration sections below.
 
 ## Hardening upgrade: required schema and client changes
 
@@ -12,7 +125,7 @@ This upgrade closes the context-aware upsert race, bounds subscription and batch
 
 ### 1. Add the internal upsert guard migration
 
-Every database used by a Golem application must contain this reserved model, and the generator refuses a schema without it. Every upsert, including those on the unscoped client and nested `upsert`/`connectOrCreate`, takes it. Nest startup validates it with or without authorization and, on PostgreSQL, creates every stripe row once; if you run the engine outside Nest, call `prepareUpsertGuard(client, provider, stripes)` before serving writes. Regenerate so the datamodel carries the guard's table and `@@schema`:
+Every database used by an authorization-enabled Golem application must contain this reserved model (from 0.7.0, every Golem application; see above):
 
 ```prisma
 model GolemUpsertGuard {
@@ -26,8 +139,6 @@ model GolemUpsertGuard {
 Copy the model from `typescript/packages/core/prisma/golem-core.prisma` or apply the provider SQL in `typescript/packages/core/prisma/migrations/sqlite/001_golem_upsert_guard.sql` or `typescript/packages/core/prisma/migrations/postgresql/001_golem_upsert_guard.sql`, then run your normal Prisma migration and generation workflow. Golem reserves `GolemUpsertGuard`, removes it from generated GraphQL and `forContext` model surfaces, and validates the delegate/table during Nest startup. Missing infrastructure now fails deployment rather than waiting for the first upsert.
 
 The table stays bounded by `defaults.upsertGuardStripes` (4,096 by default). It stores only a stripe and monotonic sequence; model names and unique selector values are hashed and never persisted. All participating context-aware upserts for the same canonical model/selector serialize before the policy branch probe. Plain Prisma/external writers and differently addressed selectors do not participate. A caller-owned SQLite transaction that established an incompatible snapshot before the guard write now returns stable `CONFLICT`; retry only by repeating the complete transaction when that is safe.
-
-A nested `connectOrCreate` now follows the same identity rule as `upsert`: its `create` must set every unique selector in its `where` to the same value, directly, through a `connect` on that key's relation, or through the parent it is nested under. A `connectOrCreate` whose `create` leaves the selected id to a default used to create a new row on every call; it is now refused with `BAD_USER_INPUT` before any query. Copy the selector into `create`.
 
 ### 2. Regenerate GraphQL and TypeScript clients
 
@@ -219,14 +330,76 @@ Full detail, including where these guarantees stop, is in `RELEASE_NOTES.md`.
 
 # Migrating `@eleven-am/golem-queue` to 0.5.0
 
+The queue has no golem dependency, so this upgrade is independent of the golem
+packages. Coming from 0.4.0 or earlier, apply the 0.4.1 section below first.
+
+## Replace one index with two
+
+The `Job` model gains two indexes and loses one:
+
+```diff
+ model Job {
+   // ...
+   @@index([status, runAt])
+   @@index([status, leaseExpiresAt])
+   @@index([scopeType, scopeId, status])
+-  @@index([type, startedAt])
++  @@index([type, status, runAt])
++  @@index([status, updatedAt])
+ }
+```
+
+`[type, status, runAt]` serves the claim poll, which every handler runs every
+`pollIntervalMs`; `[status, updatedAt]` serves the retention sweep. Without
+them both scan every due job, or every row, on each pass. `[type, startedAt]`
+was listed in earlier READMEs but never in the bundled schema, and nothing
+queries it; drop it if you added it. The complete model is in
+`typescript/packages/queue/prisma/golem-queue.prisma`, shipped in the package
+as `@eleven-am/golem-queue/prisma/golem-queue.prisma`.
+
+Generate the migration with `prisma migrate dev` and apply it with
+`prisma migrate deploy`. The queue runs correctly without the indexes, only
+slower. A plain `CREATE INDEX` blocks writes to `Job` while it builds, so on a
+large Postgres table either apply the migration in a quiet window or build the
+indexes with `CREATE INDEX CONCURRENTLY`, which must run outside a
+transaction.
+
+## Custom stores must fence terminal writes on the lease
+
+If you implement `JobStore` yourself, `complete`, `fail`, `retry` and
+`findOwned` must match only a row that is `RUNNING`, owned by `leaseOwner`,
+and whose `leaseExpiresAt` is still in the future, all in the statement that
+writes. Once the lease has expired another worker may have reclaimed the job,
+so a late outcome from the previous holder must be refused. Nothing checks
+this at startup; a store that does not fence lets an expired worker overwrite
+the outcome of the worker that reclaimed its job. The bundled stores do it.
+
+## Behaviour that changes without failing
+
+- **A renewal error no longer aborts the handler.** A thrown renewal is logged
+  and retried at the next interval. The lease is lost, and the handler
+  aborted, only when a renewal is refused or when the lease reaches its expiry
+  without a renewal landing. Renewals run one at a time.
+- **An expired worker records nothing.** Its `complete`, `fail` or `retry`
+  matches no row, and the job stays `RUNNING` until lease recovery reclaims
+  it, so a job whose worker overran its lease runs again rather than being
+  recorded by the stale worker.
+- **Shutdown.** Work still running when `shutdownGraceMs` ends is aborted and
+  retried, even if the handler then resolves. A handler that resolved before
+  the grace ran out is recorded as succeeded. Handlers must already be
+  idempotent; this is one more case of at-least-once execution.
+
+# Migrating `@eleven-am/golem-queue` to 0.4.1
+
+These changes shipped in 0.4.1. Earlier copies of this guide headed them
+0.5.0, but no 0.5.0 was published before the section above.
+
 Add two things to your schema and migrate:
 
 ```prisma
 model Job {
   // ...
   startedAt      DateTime?
-
-  @@index([type, startedAt])
 }
 
 model JobGuard {
@@ -239,19 +412,9 @@ model JobGuard {
 
 `JobGuard` is the serialization point for claim guards. Every worker competing for the same guard writes one shared row before reading, which is what makes the guard hold across processes and across engines. Rows are created as needed; there is nothing to seed or prune.
 
-`startedAt` records when a job most recently entered RUNNING, set on every claim including lease recovery. Rate budgets count starts inside a sliding window, and `prune` uses it to keep rows that are still inside one.
+`startedAt` records when a job most recently entered RUNNING and is written on every claim, including lease recovery, so both additions are required even if you never declare a guard. Rate budgets are charged on the `JobGuard` row (`windowStart`, `spent`), and retention prunes terminal rows by `updatedAt`.
 
-## `excludes` splits into two constraints
-
-`excludes` promised non-overlap and delivered something else: it stopped the declaring type from *starting*, but the other type was free to start while the declarer was already running. Replace it with whichever you actually meant.
-
-```diff
--@QueueHandler({ type: 'track-hydrate', excludes: ['history-import'] })
-+@QueueHandler({ type: 'track-hydrate', notWhileRunning: ['history-import'] })
-+@QueueHandler({ type: 'history-import', notWhileRunning: ['track-hydrate'] })
-```
-
-`notWhileRunning` prevents overlap and is safe to declare on both sides — **declare it on both**, or the undeclared side can still start underneath the other. Use `waitsFor` instead if you meant "drain that queue before I run"; it blocks on outstanding work rather than only running work, and so remains one-way.
+This section used to tell you to add `@@index([type, startedAt])` as well. Nothing queries it; 0.5.0 replaces it with the two indexes above.
 
 ## The `table` option on `PrismaJobStore` is gone
 
