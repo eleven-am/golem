@@ -247,32 +247,26 @@ row's lifetime belongs to its parent. If you may delete the parent, that
 permission covers every row the cascade removes, including rows owned by other
 users and rows you cannot read. `SetNull` works the same way: deleting the
 parent clears the reference on each dependent without checking a policy on
-that row. Golem finds every affected row, locks them all in its one lock order,
-reads them again, and only then deletes the parent. If the set of rows changed
-while it was locking them, the delete fails with `CONFLICT` and nothing
-changes. It emits
+that row. If another write changes the set of affected rows while the delete
+runs, the delete fails with `CONFLICT` and nothing changes; retry it. It emits
 a change event for each one: a deleted event for every cascaded row and an
 updated event for every cleared reference, in the same transaction as the
 delete. Each subscriber still receives only the events its own read policy
 allows. A delete whose cascade would touch more rows than
 `MutationLimits.MaxTouchedRows` allows (1,000 by default) is refused.
 
-On PostgreSQL every write takes its row locks the same way. Golem first finds
-the rows the write will change, without locking them. It then locks them in
-one order shared by every write, sorted by model and primary key, and reads
-them again. Upsert and connectOrCreate selector guards sort before every row.
-A write that sets a foreign key also locks the row it references, `FOR KEY
-SHARE`, in the same order before it writes; this is the lock PostgreSQL's
-foreign-key check takes anyway. A row first locked `FOR KEY SHARE` and later
-needed `FOR UPDATE` in the same transaction is upgraded without waiting.
-Because all writes lock in that order, two concurrent writes cannot deadlock.
-A write that needs a row sorting before one it already holds does not wait for
-it. If another transaction holds that row, the write stops at once and fails
-with `CONFLICT`, as it does when the rows changed between finding and locking
-them. Retry the write. An upsert, or a nested write containing an upsert or
-connectOrCreate, retries by itself before reporting `CONFLICT`, except inside
-your own transaction, which golem never replays. SQLite runs one writer at a
-time, so none of this applies there.
+On PostgreSQL, concurrent writes that touch the same rows do not deadlock. One
+completes, and the other either waits for it or fails at once with `CONFLICT`.
+A write also fails with `CONFLICT` when another write changed the rows it was
+about to change, for example deleting a row of an `UpdateMany` or adding a row
+that matches its filter. Retry the write. An upsert, or a nested write
+containing an upsert or connectOrCreate, retries by itself before reporting
+`CONFLICT`, except inside your own transaction, which golem never replays. A
+single update, delete or upsert target that another write deleted first is
+treated as missing: `NOT_FOUND` for an update or delete, and the create branch
+for an upsert. `CONFLICT` is most likely between transactions that each write
+several of the same rows, or that both reference a parent row and then both
+update it. SQLite runs one writer at a time, so none of this applies there.
 
 ## Callers and the system client
 
@@ -654,4 +648,4 @@ time zone) is drift.
 |---|---|
 | `P1_BINDING_POLICY_REQUIRED` | an exposed model has no `DefinePolicy` |
 | `generated applications require a reviewed non-empty migration history` | `generate` ran before `migration new` |
-| `CONFLICT: mutation conflicted` | a unique constraint rejected the write, or on PostgreSQL a concurrent write held a row this write needed out of order, or the rows changed while it was locking them |
+| `CONFLICT: mutation conflicted` | a unique constraint rejected the write, or on PostgreSQL a concurrent write touched the same rows, which a retry resolves |

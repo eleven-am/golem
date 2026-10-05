@@ -47,62 +47,44 @@ value instead.
 target's values, even where the update or connect branch is the one you
 expect to run.
 
-**Behaviour change: PostgreSQL writes take their row locks in one order.**
-Every PostgreSQL write now locks its rows through one lock ledger per
-transaction. That covers update and delete targets, nested link and relation
-targets, `UpdateMany` and `DeleteMany` rows, cascaded rows and upsert probes.
-Each write first finds its rows without locking them. It then locks them sorted
-by model and primary key and reads them again. Upsert and connectOrCreate
-selector guards sort before every row. Before, writes locked rows in the order
-they reached them, so two valid concurrent writes could deadlock and PostgreSQL
-aborted one after a second's wait. Cases that deadlocked:
+**Behaviour change: concurrent PostgreSQL writes no longer deadlock.** Before,
+two valid concurrent writes that touched the same rows could deadlock, and
+PostgreSQL aborted one after a second's wait. This covers every PostgreSQL
+write: creates, updates, deletes, upserts, `UpdateMany`, `DeleteMany`, nested
+writes, links and cascades. Cases that deadlocked:
 
 - two updates linking self-related rows to each other in opposite directions;
 - a cascade delete of a parent racing an update that relinked one of its
   children;
+- a cascade delete of a parent racing a transaction that updated one of its
+  children and then created another;
+- two transactions that both reference a parent row and then both update it;
 - an `UpdateMany` racing a link between the same rows;
 - a nested upsert racing a root upsert on the same selector.
 
 Now one write completes and the other either waits for it or fails at once
-with `CONFLICT`.
+with `CONFLICT`. A foreign-key value that names no row still fails as before.
 
-**Foreign-key parents are locked in the same order.** A write that sets a
-foreign key locks the row it references `FOR KEY SHARE` through the ledger
-before its statement runs. That covers a create, an update, an upsert's chosen
-branch, an `UpdateMany`, a nested write and a link through a source relation.
-PostgreSQL's foreign-key check takes that lock anyway; golem now takes it first
-and in order, so it adds no blocking of its own. Before, the check took it in
-the middle of the statement, outside any order. A transaction that updated one
-child of a parent and then created another child could deadlock with a cascade
-delete of that parent. A key already held `FOR KEY SHARE` and needed
-`FOR UPDATE` later in the same transaction is upgraded with `NOWAIT`, so two
-transactions that both reference a parent and then both write it cannot
-deadlock either; one gets `CONFLICT`. A foreign-key value that names no row
-still fails the statement as before. Only relations with a database foreign
-key take these locks.
-
-**Behaviour change: lock contention fails with `CONFLICT`.** A write that needs
-a row, or a selector guard, sorting before one it already holds does not wait.
-If another transaction holds it, the write fails with `CONFLICT: mutation
-conflicted` (`batch mutation conflicted` for a batch). It also fails with
-`CONFLICT` if the rows it found changed before it could lock them, for example
-one row of an `UpdateMany` deleted, a new row matching its filter, or a row
-whose matching values changed; it does not lock again. A single update, delete
-or upsert target that was deleted before it could be locked is reported
-exactly as a missing target: `NOT_FOUND` for an update or delete, and the
-create branch for an upsert. Upserts and nested writes containing an upsert or connectOrCreate retry
-the whole attempt before reporting `CONFLICT`, except inside an application
-transaction. A PostgreSQL deadlock, lock-timeout or serialization failure
-inside a nested write now reports `CONFLICT`. Before, it reported
+**Behaviour change: contention can fail with `CONFLICT`.** Where waiting could
+deadlock, a write does not wait: it fails with `CONFLICT: mutation conflicted`
+(`batch mutation conflicted` for a batch). It also fails with `CONFLICT` if
+another write changed the rows it was about to change, for example deleting
+one row of an `UpdateMany`, adding a row that matches its filter, or changing a
+row's matching values. Retry the write. A single update, delete or upsert
+target that another write deleted first is reported exactly as a missing
+target: `NOT_FOUND` for an update or delete, and the create branch for an
+upsert. Upserts and nested writes containing an upsert or connectOrCreate
+retry the whole attempt before reporting `CONFLICT`, except inside an
+application transaction. A PostgreSQL deadlock, lock-timeout or serialization
+failure inside a nested write now reports `CONFLICT`. Before, it reported
 `BAD_USER_INPUT: mutation request is invalid`.
 
-**Cost.** A PostgreSQL write that locks rows it does not already hold now runs
-two more statements: one lock statement and one read-back. A single-row update
-or delete therefore runs three statements instead of one to select and lock
-its target. A write that sets a foreign key to a parent's primary key runs one
-more statement to lock that parent; a foreign key to another unique key runs
-three. Rows already locked earlier in the same transaction cost nothing extra.
-SQLite is unchanged.
+**Cost.** A PostgreSQL write now runs two more statements for rows the same
+transaction has not already written, so a single-row update or delete runs
+three statements instead of one. A write that sets a foreign key runs one more
+statement, or three when the key references a unique field other than the
+parent's primary key; this applies only to relations with a database foreign
+key. SQLite is unchanged.
 
 ---
 
