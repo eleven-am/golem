@@ -51,12 +51,13 @@ type NotFoundError struct {
 }
 
 type TargetIdentityError struct {
-	Model policyir.ModelID
-	Field policyir.FieldID
+	Operation mutationir.Operation
+	Model     policyir.ModelID
+	Field     policyir.FieldID
 }
 
 func (failure *TargetIdentityError) Error() string {
-	return fmt.Sprintf("P4_NESTED_UPSERT_IDENTITY: model=%x field=%x: created row does not carry the upsert target selector", failure.Model, failure.Field)
+	return fmt.Sprintf("P4_NESTED_UPSERT_IDENTITY: operation=%d model=%x field=%x: create input does not carry the target selector", failure.Operation, failure.Model, failure.Field)
 }
 
 func (failure *NotFoundError) Error() string {

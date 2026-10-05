@@ -740,6 +740,10 @@ func (f *fixture) cardinalityRamp() {
 }
 
 func (f *fixture) mutationCardinalityRamp() {
+	rowLocks, parentLocks := 0, 0
+	if f.database.Provider() == golem.PostgreSQL {
+		rowLocks, parentLocks = 2, 1
+	}
 	for _, size := range []int{1, 2, 4, 8} {
 		inputs := make([]social.CommentCreateInput, size)
 		for index := range inputs {
@@ -757,7 +761,7 @@ func (f *fixture) mutationCardinalityRamp() {
 		// The reviewed nested plan has six fixed parent/transaction/fact
 		// statements and exactly three statements per independently authorized
 		// child. This freezes linear—not merely generous—growth.
-		if want := 6 + 3*size; statements != want {
+		if want := 6 + 3*size + rowLocks + parentLocks; statements != want {
 			f.t.Fatalf("nested size=%d statements=%d want exact reviewed plan=%d", size, statements, want)
 		}
 	}
@@ -777,9 +781,9 @@ func (f *fixture) mutationCardinalityRamp() {
 		statements := singleStatements(f.t, f.trace.snapshot(), observe.KindMutation, observe.OperationMutationUpdateMany, observe.OutcomeSuccess)
 		// The bounded identity capture is one statement through 32 identities;
 		// the 128-identity shape crosses exactly one provider-safe bind chunk.
-		want := 6
+		want := 6 + rowLocks
 		if size == 128 {
-			want = 7
+			want = 7 + rowLocks
 		}
 		if statements != want {
 			f.t.Fatalf("updateMany size=%d statements=%d want exact reviewed plan=%d", size, statements, want)

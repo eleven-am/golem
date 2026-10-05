@@ -11,6 +11,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // ExecutionBoundary is the provider/runtime seam for the nested engine. One
@@ -25,6 +26,7 @@ type ExecutionBoundary interface {
 // delegates row writes to the scalar, batch, and upsert kernels. VerifyNested
 // is called in reverse depth-first order after every write has succeeded.
 type ExecutionTransaction interface {
+	Registry() *schema.Registry
 	ExpandNested(context.Context, ExpansionRequest) (RuntimeExpansion, error)
 	ApplyNested(context.Context, ApplyRequest) (ApplyResult, error)
 	VerifyNested(context.Context, AppliedNode) error
@@ -415,7 +417,7 @@ func Execute(ctx context.Context, graph mutationir.Graph, maxTouchedRows uint32,
 		}
 	}()
 
-	engine := executionEngine{ctx: ctx, transaction: transaction, nodes: nodes, maxTouched: maxTouchedRows}
+	engine := executionEngine{ctx: ctx, transaction: transaction, nodes: nodes, maxTouched: maxTouchedRows, registry: transaction.Registry()}
 	if err = engine.executeNode(nodes[0], nil); err != nil {
 		return ExecutionReceipt{}, err
 	}
@@ -459,7 +461,7 @@ type executionEngine struct {
 	orderEntry        uint32
 	hasOrderEntry     bool
 	dependencyDepth   uint32
-	entryIdentity     *mutationir.Target
+	registry          *schema.Registry
 }
 
 func (engine *executionEngine) executeNode(node mutationir.Node, inherited map[uint32]AppliedNode) error {
@@ -483,8 +485,11 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		value := externalAnchor.clone()
 		anchor = &value
 	}
-	identity, identityRequired, err := engine.requiredUpsertIdentity(node)
+	identity, err := engine.requiredUpsertIdentity(node)
 	if err != nil {
+		return err
+	}
+	if err := engine.refuseContainerOffTarget(node, relationOwner(parent, anchor)); err != nil {
 		return err
 	}
 	if allowTransform && !container(node.Operation()) && !postExpansionTransform(node) {
@@ -494,7 +499,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 				return transformErr
 			}
 			if replaced {
-				return engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity, identityRequired)
+				return engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity)
 			}
 		}
 	}
@@ -534,7 +539,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 					return transformErr
 				}
 				if replaced {
-					if err := engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity, identityRequired); err != nil {
+					if err := engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity); err != nil {
 						return err
 					}
 					continue
@@ -553,11 +558,6 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		}
 		if resultErr := validateApplyResult(node, result); resultErr != nil {
 			return resultErr
-		}
-		if identityRequired {
-			if identityErr := validateUpsertCreateIdentity(identity, node, result); identityErr != nil {
-				return identityErr
-			}
 		}
 		if len(dependencies) != 0 {
 			if ordered, ok := engine.transaction.(BeforeParentTransaction); ok {
@@ -692,17 +692,16 @@ func postExpansionTransform(node mutationir.Node) bool {
 	return ok && position.Kind() == mutationir.PositionCurrentToOne
 }
 
-func (engine *executionEngine) executeReplacement(replacement SubtreeReplacement, parent, anchor *AppliedNode, logicalOrdinal uint32, identity mutationir.Target, identityRequired bool) error {
+func (engine *executionEngine) executeReplacement(replacement SubtreeReplacement, parent, anchor *AppliedNode, logicalOrdinal uint32, identity *targetIdentity) error {
 	nodes := replacement.graph.Nodes()
 	if len(nodes) == 0 || int(replacement.entry) >= len(nodes) {
 		return fmt.Errorf("P4_NESTED_TRANSFORM: replacement graph or entry is invalid")
 	}
-	originalIdentity := engine.entryIdentity
-	engine.entryIdentity = nil
-	if identityRequired {
-		engine.entryIdentity = &identity
+	if identity != nil {
+		if err := refuseNestedCreateOffTarget(engine.registry, nodes, *identity, nodes[replacement.entry], relationOwner(parent, anchor)); err != nil {
+			return err
+		}
 	}
-	defer func() { engine.entryIdentity = originalIdentity }()
 	original := engine.nodes
 	originalPrefix := engine.orderPrefix
 	originalEntry, originalHasEntry := engine.orderEntry, engine.hasOrderEntry
@@ -975,41 +974,60 @@ func validateApplyResult(node mutationir.Node, result ApplyResult) error {
 	return nil
 }
 
-func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (mutationir.Target, bool, error) {
+type targetIdentity struct {
+	operation mutationir.Operation
+	target    mutationir.Target
+}
+
+func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (*targetIdentity, error) {
 	if node.Operation() != mutationir.Create {
-		return mutationir.Target{}, false, nil
+		return nil, nil
 	}
-	if engine.hasOrderEntry && node.Ordinal() == engine.orderEntry && engine.entryIdentity != nil {
-		return *engine.entryIdentity, true, nil
-	}
-	if node.Branch() != mutationir.UpsertCreateBranch {
-		return mutationir.Target{}, false, nil
+	container := map[mutationir.Branch]mutationir.Operation{mutationir.UpsertCreateBranch: mutationir.Upsert, mutationir.ConnectOrCreateCreateBranch: mutationir.ConnectOrCreate}
+	operation, selected := container[node.Branch()]
+	if !selected {
+		return nil, nil
 	}
 	parent, ok := node.ParentOrdinal()
-	if !ok || int(parent) >= len(engine.nodes) || engine.nodes[parent].Operation() != mutationir.Upsert {
-		return mutationir.Target{}, false, fmt.Errorf("P4_NESTED_EXEC_GRAPH: upsert create node %d lacks its upsert container", node.Ordinal())
+	if !ok || int(parent) >= len(engine.nodes) || engine.nodes[parent].Operation() != operation {
+		return nil, fmt.Errorf("P4_NESTED_EXEC_GRAPH: create node %d lacks its upsert or connect-or-create container", node.Ordinal())
 	}
 	position, positioned := engine.nodes[parent].RelationPosition()
 	if !positioned {
-		return mutationir.Target{}, false, nil
+		return nil, nil
 	}
-	target, selected := position.Target()
-	return target, selected, nil
+	target, targeted := position.Target()
+	if !targeted {
+		return nil, nil
+	}
+	return &targetIdentity{operation: operation, target: target}, nil
 }
 
-func validateUpsertCreateIdentity(target mutationir.Target, node mutationir.Node, result ApplyResult) error {
-	after, ok := result.After()
-	if !ok {
-		return fmt.Errorf("P4_NESTED_EXEC_RESULT: upsert create node %d returned no after image", node.Ordinal())
+func relationOwner(parent, anchor *AppliedNode) *AppliedNode {
+	if anchor != nil {
+		return anchor
 	}
-	for _, selector := range target.Values() {
-		cell, present := after.Cell(selector.FieldID())
-		value, valued := cell.PolicyValue()
-		if !present || cell.IsNull() || !valued || !mutationdecode.EqualValue(value, selector.Value()) {
-			return &TargetIdentityError{Model: node.ModelID(), Field: selector.FieldID()}
+	return parent
+}
+
+func (engine *executionEngine) refuseContainerOffTarget(node mutationir.Node, anchor *AppliedNode) error {
+	if node.Operation() != mutationir.Upsert && node.Operation() != mutationir.ConnectOrCreate {
+		return nil
+	}
+	position, positioned := node.RelationPosition()
+	if !positioned {
+		return nil
+	}
+	target, targeted := position.Target()
+	if !targeted {
+		return nil
+	}
+	for _, ordinal := range node.ChildOrdinals() {
+		if int(ordinal) < len(engine.nodes) && engine.nodes[ordinal].Operation() == mutationir.Create {
+			return refuseNestedCreateOffTarget(engine.registry, engine.nodes, targetIdentity{operation: node.Operation(), target: target}, engine.nodes[ordinal], anchor)
 		}
 	}
-	return nil
+	return fmt.Errorf("P4_NESTED_EXEC_GRAPH: %d node %d has no create branch", node.Operation(), node.Ordinal())
 }
 
 func selectedChild(operation mutationir.Operation, branch, selected mutationir.Branch) bool {

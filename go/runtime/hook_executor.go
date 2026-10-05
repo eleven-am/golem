@@ -151,9 +151,6 @@ func (executor *callerHookUpsertBranchExecutor[P, A]) ExecuteBranch(ctx context.
 	if err := validate(transformed); err != nil {
 		return nil, err
 	}
-	if branch == mutationir.UpsertCreateBranch && prepared.createConflict != nil {
-		return nil, prepared.createConflict
-	}
 	selectedInput := &prepared.request.create
 	program := prepared.create
 	if branch == mutationir.UpsertUpdateBranch {
@@ -229,7 +226,7 @@ func executeCallerHookUpsert[P, A any](ctx context.Context, caller *Caller[P, A]
 			return newCallerHookExecutor(caller, binding, gate)
 		},
 	}
-	backend := sqlxUpsertBackend{database: caller.app.database, provider: caller.app.provider, binding: caller.executor, mutation: mutationConfig(caller.app, caller.executor)}
+	backend := sqlxUpsertBackend{database: caller.app.database, registry: caller.app.registry, provider: caller.app.provider, binding: caller.executor, mutation: mutationConfig(caller.app, caller.executor)}
 	executor := &callerHookUpsertBranchExecutor[P, A]{caller: caller, prepared: prepared, hooks: hooks}
 	result, err := mutationupsert.Run(ctx, prepared.kernel, backend, func(context.Context) (mutationupsert.FrozenValues, error) {
 		return mutationupsert.NewFrozenValues(nil), nil

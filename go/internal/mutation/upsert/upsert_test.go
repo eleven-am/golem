@@ -33,7 +33,7 @@ func TestPrepareRendersClosedGuardAndLockedProbePrograms(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if postgres.TransactionRequirement() != mutationsql.PostgreSQLTransaction || postgres.GuardStatement().SQL() != "SELECT pg_catalog.pg_advisory_xact_lock($1)" || !strings.HasSuffix(postgres.ProbeStatement().SQL(), " FOR UPDATE") {
+	if postgres.TransactionRequirement() != mutationsql.PostgreSQLTransaction || postgres.GuardStatement().SQL() != "" || strings.Contains(postgres.ProbeStatement().SQL(), "FOR UPDATE") || !strings.HasPrefix(postgres.ProbeStatement().SQL(), `SELECT "golem_upsert_probe"."id" FROM`) {
 		t.Fatalf("unexpected PostgreSQL program: guard=%q probe=%q", postgres.GuardStatement().SQL(), postgres.ProbeStatement().SQL())
 	}
 	if _, present := postgres.CleanupStatement(); present {
@@ -301,6 +301,14 @@ func (attempt *fakeAttempt) Query(_ context.Context, statement Statement) (uint3
 		return attempt.probeRows, nil
 	}
 	return 1, nil
+}
+func (attempt *fakeAttempt) AcquireGuard(context.Context, SelectorGuard) error {
+	attempt.roles = append(attempt.roles, AcquireSelectorGuard)
+	return nil
+}
+func (attempt *fakeAttempt) Probe(_ context.Context, statement Statement) (uint32, error) {
+	attempt.roles = append(attempt.roles, statement.Role())
+	return attempt.probeRows, nil
 }
 func (attempt *fakeAttempt) Finish(context.Context) error { attempt.finished++; return nil }
 func (attempt *fakeAttempt) Abort() error                 { attempt.aborted++; return nil }

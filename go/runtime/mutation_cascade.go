@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,6 +12,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	semantickey "github.com/eleven-am/golem/go/internal/semantic/key"
@@ -35,6 +37,23 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 	if len(parents) == 0 || len(registry.DeleteEffects(golem.ModelID(model))) == 0 {
 		return nil, nil
 	}
+	session := state.binding.lockSession(queryer, registry, provider, limits.statementParameters)
+	effects, err := rowlock.Select(ctx, session, func(ctx context.Context) (*cascadeEffects, []rowlock.Key, error) {
+		effects, err := enumerateCascadeEffects(ctx, queryer, registry, provider, limits, state, model, parents)
+		if err != nil {
+			return nil, nil, err
+		}
+		keys, err := rowlock.RowKeys(registry, append(append([]mutationdecode.Row(nil), effects.deleted...), effects.nulled...))
+		return effects, keys, err
+	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return &cascadeEffects{}, nil
+	}
+	return effects, err
+}
+
+func enumerateCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, limits normalizedMutationLimits, state *mutationState, model policyir.ModelID, parents []mutationdecode.Row) (*cascadeEffects, error) {
 	remaining, err := state.remainingTouched()
 	if err != nil {
 		return nil, err

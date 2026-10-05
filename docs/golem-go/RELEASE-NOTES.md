@@ -5,12 +5,106 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.4
+go get github.com/eleven-am/golem/go@v0.6.5
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.5
+
+Unreleased.
+
+**Behaviour change: an upsert's create input must name its target, whichever
+branch runs.** An upsert, root or nested at any depth, whose create input does
+not set every field of its unique target to the target's value is now refused
+with `BAD_USER_INPUT` (`upsert create input does not set the target selector`).
+A root upsert is refused before any query runs. A nested upsert is refused when
+its parent row has been written and before the upsert's own probe or either
+branch runs, so the parent's values are known however the parent was selected.
+Before, the refusal came only when the create branch ran, so the same call
+succeeded or failed depending on whether the row already existed. A
+foreign-key field of the target is satisfied by a `Connect` on its relation to
+the row holding that value, or by the value the nested parent's row gives it.
+
+**Behaviour change: `ConnectOrCreate` follows the same rule.** A nested
+`ConnectOrCreate` whose create input does not reproduce its target is refused
+with `BAD_USER_INPUT` (`connectOrCreate create input does not set the target
+selector`) at the same point, before its probe or either branch runs. Before,
+it created a row under a different identity and linked it whenever the target
+was absent. A `Before` create hook that rewrites a nested upsert or
+`ConnectOrCreate` create away from its target is refused before the rewritten
+row is written; before, a rewritten `ConnectOrCreate` create was linked.
+
+**Behaviour change: arithmetic on a foreign key is refused.** An `Increment` or
+`Decrement` on a field that is part of a relation's foreign key is refused with
+`BAD_USER_INPUT: foreign key <Field> cannot be changed by arithmetic` before
+any statement runs, for every caller, in updates and `UpdateMany`. Set the new
+value instead.
+
+**Upgrading.** Give every upsert and `ConnectOrCreate` create input the
+target's values, even where the update or connect branch is the one you
+expect to run.
+
+**Behaviour change: PostgreSQL writes take their row locks in one order.**
+Every PostgreSQL write now locks its rows through one lock ledger per
+transaction. That covers update and delete targets, nested link and relation
+targets, `UpdateMany` and `DeleteMany` rows, cascaded rows and upsert probes.
+Each write first finds its rows without locking them. It then locks them sorted
+by model and primary key and reads them again. Upsert and connectOrCreate
+selector guards sort before every row. Before, writes locked rows in the order
+they reached them, so two valid concurrent writes could deadlock and PostgreSQL
+aborted one after a second's wait. Cases that deadlocked:
+
+- two updates linking self-related rows to each other in opposite directions;
+- a cascade delete of a parent racing an update that relinked one of its
+  children;
+- an `UpdateMany` racing a link between the same rows;
+- a nested upsert racing a root upsert on the same selector.
+
+Now one write completes and the other either waits for it or fails at once
+with `CONFLICT`.
+
+**Foreign-key parents are locked in the same order.** A write that sets a
+foreign key locks the row it references `FOR KEY SHARE` through the ledger
+before its statement runs. That covers a create, an update, an upsert's chosen
+branch, an `UpdateMany`, a nested write and a link through a source relation.
+PostgreSQL's foreign-key check takes that lock anyway; golem now takes it first
+and in order, so it adds no blocking of its own. Before, the check took it in
+the middle of the statement, outside any order. A transaction that updated one
+child of a parent and then created another child could deadlock with a cascade
+delete of that parent. A key already held `FOR KEY SHARE` and needed
+`FOR UPDATE` later in the same transaction is upgraded with `NOWAIT`, so two
+transactions that both reference a parent and then both write it cannot
+deadlock either; one gets `CONFLICT`. A foreign-key value that names no row
+still fails the statement as before. Only relations with a database foreign
+key take these locks.
+
+**Behaviour change: lock contention fails with `CONFLICT`.** A write that needs
+a row, or a selector guard, sorting before one it already holds does not wait.
+If another transaction holds it, the write fails with `CONFLICT: mutation
+conflicted` (`batch mutation conflicted` for a batch). It also fails with
+`CONFLICT` if the rows it found changed before it could lock them, for example
+one row of an `UpdateMany` deleted, a new row matching its filter, or a row
+whose matching values changed; it does not lock again. A single update, delete
+or upsert target that was deleted before it could be locked is reported
+exactly as a missing target: `NOT_FOUND` for an update or delete, and the
+create branch for an upsert. Upserts and nested writes containing an upsert or connectOrCreate retry
+the whole attempt before reporting `CONFLICT`, except inside an application
+transaction. A PostgreSQL deadlock, lock-timeout or serialization failure
+inside a nested write now reports `CONFLICT`. Before, it reported
+`BAD_USER_INPUT: mutation request is invalid`.
+
+**Cost.** A PostgreSQL write that locks rows it does not already hold now runs
+two more statements: one lock statement and one read-back. A single-row update
+or delete therefore runs three statements instead of one to select and lock
+its target. A write that sets a foreign key to a parent's primary key runs one
+more statement to lock that parent; a foreign key to another unique key runs
+three. Rows already locked earlier in the same transaction cost nothing extra.
+SQLite is unchanged.
 
 ---
 

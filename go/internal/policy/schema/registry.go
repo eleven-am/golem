@@ -58,6 +58,7 @@ type Registry struct {
 	fields                   map[golem.ModelID]map[golem.FieldID]Field
 	relations                map[relationKey]RelationEndpoint
 	deleteEffects            map[golem.ModelID][]DeleteEffect
+	foreignKeys              map[golem.ModelID][]RelationEndpoint
 	enumValues               map[compilerir.EnumID]map[string]compilerir.EnumValueID
 	enumLabels               map[compilerir.EnumID]map[compilerir.EnumValueID]string
 	physicalModels           map[golem.Provider]map[golem.ModelID]PhysicalModel
@@ -82,6 +83,18 @@ func (effect DeleteEffect) RelationID() golem.RelationID         { return effect
 func (effect DeleteEffect) Action() compilerir.ReferentialAction { return effect.action }
 func (effect DeleteEffect) Correlation() []Correlation {
 	return append([]Correlation(nil), effect.correlation...)
+}
+
+func (registry *Registry) ForeignKeys(source golem.ModelID) []RelationEndpoint {
+	if registry == nil {
+		return nil
+	}
+	endpoints := registry.foreignKeys[source]
+	result := make([]RelationEndpoint, len(endpoints))
+	for index, endpoint := range endpoints {
+		result[index] = endpoint.clone()
+	}
+	return result
 }
 
 func (registry *Registry) DeleteEffects(target golem.ModelID) []DeleteEffect {
@@ -533,6 +546,7 @@ type Field struct {
 	updated          bool
 	databaseReadOnly bool
 	graphqlName      string
+	logicalName      string
 	modes            []compilerir.FieldMode
 	relation         golem.RelationID
 	relationRole     compilerir.RelationEndpointRole
@@ -558,6 +572,7 @@ func (field Field) Generation() (compilerir.GeneratedColumnIR, bool) {
 func (field Field) Updated() bool          { return field.updated }
 func (field Field) DatabaseReadOnly() bool { return field.databaseReadOnly }
 func (field Field) GraphQLName() string    { return field.graphqlName }
+func (field Field) LogicalName() string    { return field.logicalName }
 func (field Field) Modes() []compilerir.FieldMode {
 	return append([]compilerir.FieldMode(nil), field.modes...)
 }

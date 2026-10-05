@@ -37,8 +37,8 @@ func TestRelationExpansionSQLIsDeterministicForSQLiteAndPostgreSQL(t *testing.T)
 		placeholder := "?1"
 		if provider == policyir.ProviderPostgreSQL {
 			placeholder = "$1"
-			if !strings.HasSuffix(sqlText, " FOR UPDATE") {
-				t.Fatalf("PostgreSQL expansion lacks target lock: %s", sqlText)
+			if strings.Contains(sqlText, "FOR UPDATE") {
+				t.Fatalf("PostgreSQL expansion locks inline instead of through the row-lock ledger: %s", sqlText)
 			}
 		}
 		for _, fragment := range []string{"author_id", "= " + placeholder, "ORDER BY", "id", "LIMIT 6"} {

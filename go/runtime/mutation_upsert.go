@@ -10,13 +10,17 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
+	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
+	readdecode "github.com/eleven-am/golem/go/internal/read/decode"
 	"github.com/eleven-am/golem/go/observe"
 	"github.com/jmoiron/sqlx"
 )
@@ -30,7 +34,6 @@ type preparedRuntimeUpsert struct {
 	updateNested       *mutationnested.Result
 	createNestedPolicy error
 	updateNestedPolicy error
-	createConflict     error
 	request            rootUpsertPrepareRequest
 }
 
@@ -130,6 +133,13 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
+	written, err := mutationnested.RootCreatedValues(app.registry, boundCreate.Operations(), request.create.Relations())
+	if err != nil {
+		return preparedRuntimeUpsert{}, err
+	}
+	if err := mutationnested.RefuseOffTarget(mutationir.Upsert, boundTarget.Target(), written); err != nil {
+		return preparedRuntimeUpsert{}, err
+	}
 	if request.runtimeValues == nil {
 		request.runtimeValues = newMutationRuntimeValues()
 	}
@@ -141,12 +151,6 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
-	if request.concurrencyAbsent {
-		if err := validateAbsentCreateMatchesTarget(boundTarget.Target(), boundCreate.Operations()); err != nil {
-			return preparedRuntimeUpsert{}, err
-		}
-	}
-	createConflict := validateCreateAgreesWithTarget(boundTarget.Target(), boundCreate.Operations())
 	bounds, err := mutationir.NewStatementBounds(uint32(app.mutationLimits.statementParameters), uint32(app.mutationLimits.touchedRows))
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
@@ -213,39 +217,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 			updateNested = &compiled
 		}
 	}
-	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, createConflict: createConflict, request: request}, nil
-}
-
-func validateCreateAgreesWithTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
-	created := make(map[policyir.FieldID]mutationir.ScalarOperation, len(operations))
-	for _, operation := range operations {
-		created[operation.FieldID()] = operation
-	}
-	for _, selector := range target.Values() {
-		operation, written := created[selector.FieldID()]
-		value, present := operation.Value()
-		if !written || operation.Kind() != mutationir.ScalarSet || !present || !equalMutationPhysicalValue(value, selector.Value()) {
-			return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", golem.ModelID(target.ModelID()), golem.FieldID(selector.FieldID()), "upsert create input does not set the target selector", nil)
-		}
-	}
-	return nil
-}
-
-func validateAbsentCreateMatchesTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
-	created := make(map[policyir.FieldID]policyir.Value, len(operations))
-	for _, operation := range operations {
-		value, present := operation.Value()
-		if operation.Kind() == mutationir.ScalarSet && present {
-			created[operation.FieldID()] = value
-		}
-	}
-	for _, selector := range target.Values() {
-		value, present := created[selector.FieldID()]
-		if !present || !equalMutationPhysicalValue(value, selector.Value()) {
-			return fmt.Errorf("expect-absent create input does not match the guarded unique selector")
-		}
-	}
-	return nil
+	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, request: request}, nil
 }
 
 func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, app *App[P, A]) (mutationsql.Program, error) {
@@ -300,6 +272,7 @@ func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, 
 // savepoint attempt for a transaction-bound generated client.
 type sqlxUpsertBackend struct {
 	database *sqlx.DB
+	registry *schema.Registry
 	provider policyir.Provider
 	binding  *executionBinding
 	mutation executionMutationConfig
@@ -351,7 +324,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 		if err != nil {
 			return nil, err
 		}
-		return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, backend.binding, func(context.Context) error { return nil }, func() error { return nil })), nil
+		return applyUpsertAttemptFinishFault(ctx, ordinal, backend.newAttempt(queryer, backend.binding, func(context.Context) error { return nil }, func() error { return nil })), nil
 	}
 	if backend.binding.transaction != nil {
 		return backend.beginSavepoint(ctx, requirement, ordinal)
@@ -384,7 +357,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			return nil, err
 		}
 		release := sync.OnceFunc(endOperation)
-		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), newSQLXUpsertAttempt(queryer, binding,
+		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), backend.newAttempt(queryer, binding,
 			func(ctx context.Context) error {
 				defer release()
 				if err := flushMutationBinding(ctx, transaction, binding); err != nil {
@@ -439,7 +412,7 @@ func (backend sqlxUpsertBackend) Begin(ctx context.Context, requirement mutation
 			return nil, err
 		}
 		release := sync.OnceFunc(endOperation)
-		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), newSQLXUpsertAttempt(queryer, binding,
+		return applyUpsertAttemptFinishFault(ctx, ordinal, withUpsertAdmission(innermostHeldWrite(admitted), backend.newAttempt(queryer, binding,
 			func(ctx context.Context) error {
 				defer release()
 				if err := flushMutationBinding(ctx, connection, binding); err != nil {
@@ -502,7 +475,7 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 		_ = scope.rollback()
 		return nil, err
 	}
-	return applyUpsertAttemptFinishFault(ctx, ordinal, newSQLXUpsertAttempt(queryer, backend.binding,
+	return applyUpsertAttemptFinishFault(ctx, ordinal, backend.newAttempt(queryer, backend.binding,
 		func(ctx context.Context) error {
 			if _, err := transaction.ExecContext(ctx, "RELEASE SAVEPOINT "+quoted); err != nil {
 				return err
@@ -520,6 +493,8 @@ func (backend sqlxUpsertBackend) beginSavepoint(ctx context.Context, requirement
 type sqlxUpsertAttempt struct {
 	queryer   sqlx.QueryerContext
 	binding   *executionBinding
+	registry  *schema.Registry
+	provider  policyir.Provider
 	finish    func(context.Context) error
 	abort     func() error
 	mu        sync.Mutex
@@ -539,8 +514,70 @@ func (attempt *sqlxUpsertAttempt) AdmitAttempt(ctx context.Context) context.Cont
 	return context.WithValue(ctx, heldWriteKey{}, attempt.admission)
 }
 
-func newSQLXUpsertAttempt(queryer sqlx.QueryerContext, binding *executionBinding, finish func(context.Context) error, abort func() error) *sqlxUpsertAttempt {
-	return &sqlxUpsertAttempt{queryer: queryer, binding: binding, finish: finish, abort: abort}
+func (backend sqlxUpsertBackend) newAttempt(queryer sqlx.QueryerContext, binding *executionBinding, finish func(context.Context) error, abort func() error) *sqlxUpsertAttempt {
+	return &sqlxUpsertAttempt{queryer: queryer, binding: binding, registry: backend.registry, provider: backend.provider, finish: finish, abort: abort}
+}
+
+func (attempt *sqlxUpsertAttempt) AcquireGuard(ctx context.Context, guard mutationupsert.SelectorGuard) error {
+	return acquireSelectorGuard(ctx, attempt.binding, attempt.queryer, attempt.registry, attempt.provider, guard)
+}
+
+func (attempt *sqlxUpsertAttempt) Probe(ctx context.Context, statement mutationupsert.Statement) (uint32, error) {
+	recordQueryerStatement(ctx, attempt.queryer, attempt.binding.observation)
+	session := attempt.binding.lockSession(attempt.queryer, attempt.registry, attempt.provider, attempt.binding.mutation.limits.statementParameters)
+	rows, err := rowlock.Select(ctx, session, func(ctx context.Context) (uint32, []rowlock.Key, error) {
+		rows, err := queryIdentityRows(ctx, attempt.queryer, attempt.registry, attempt.provider, statement.ModelID(), statement.Fields(), statement.SQL(), statement.Args())
+		if err != nil {
+			return 0, nil, err
+		}
+		keys, err := rowlock.RowKeys(attempt.registry, rows)
+		return uint32(len(rows)), keys, err
+	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return 0, nil
+	}
+	return rows, err
+}
+
+func acquireSelectorGuard(ctx context.Context, binding *executionBinding, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, guard mutationupsert.SelectorGuard) error {
+	if provider == policyir.ProviderPostgreSQL {
+		recordQueryerStatement(ctx, queryer)
+		return binding.lockSession(queryer, registry, provider, binding.mutation.limits.statementParameters).Guard(ctx, guard.Token())
+	}
+	return executeNestedGuardStatement(ctx, queryer, guard.AcquireStatement())
+}
+
+func queryIdentityRows(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, fields []policyir.FieldID, text string, args []any) ([]mutationdecode.Row, error) {
+	decoder, err := readdecode.NewFields(model, registry, provider, fields)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := queryer.QueryxContext(ctx, text, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []mutationdecode.Row
+	for rows.Next() {
+		scan := decoder.NewScan()
+		if err := rows.Scan(scan.Destinations()...); err != nil {
+			return nil, err
+		}
+		cells, err := scan.Decode()
+		if err != nil {
+			return nil, err
+		}
+		row, err := mutationdecode.FromReadCells(registry, model, cells)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, rows.Close()
 }
 
 func (attempt *sqlxUpsertAttempt) Query(ctx context.Context, statement mutationupsert.Statement) (uint32, error) {
@@ -667,9 +704,6 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 			return nil, &mutationHookFailure{operation: request.Operation(), phase: golem.HookBefore, cause: err}
 		}
 	}
-	if branch == mutationir.UpsertCreateBranch && prepared.createConflict != nil {
-		return nil, prepared.createConflict
-	}
 	program := prepared.create
 	if branch == mutationir.UpsertUpdateBranch {
 		program = prepared.update
@@ -767,7 +801,7 @@ func executeUpsertBranchProjection[P, A, M any](ctx context.Context, app *App[P,
 func executePreparedRootUpsert[P, A, M any](ctx context.Context, app *App[P, A], binding *executionBinding, descriptor golem.ModelDescriptor[M], projection scalarMutationProjection, prepared preparedRuntimeUpsert, policies mutationplan.PolicySet, hooks *callerMutationHookExecution[A]) (row golem.Row[M], resultErr error) {
 	ctx, observation, deferredObservation := beginDeferredExecutionObservation(ctx, app, binding, descriptor.Metadata().ModelID(), observe.KindMutation, observe.OperationMutationUpsert)
 	defer func() { finishDeferredObservation(observation, deferredObservation, resultErr) }()
-	backend := sqlxUpsertBackend{database: app.database, provider: app.provider, binding: binding, mutation: mutationConfig(app, binding)}
+	backend := sqlxUpsertBackend{database: app.database, registry: app.registry, provider: app.provider, binding: binding, mutation: mutationConfig(app, binding)}
 	executor := runtimeUpsertBranchExecutor[P, A, M]{app: app, descriptor: descriptor, projection: projection, prepared: prepared, binding: binding, policies: policies, hooks: hooks}
 	kernelResult, err := mutationupsert.Run(ctx, prepared.kernel, backend, func(context.Context) (mutationupsert.FrozenValues, error) {
 		// Public inputs were frozen and bound exactly once before Prepare. Branch

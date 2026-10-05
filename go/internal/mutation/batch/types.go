@@ -142,6 +142,9 @@ func (program Program) CaptureStatement() Statement {
 	return copy
 }
 func (program Program) MaxRows() uint32 { return program.maxRows }
+func (program Program) Writes() []mutationir.ScalarOperation {
+	return program.context.node.ScalarOperations()
+}
 
 // SemanticIndexed carries the plan's registry-derived decision that a write to
 // this model must be recorded for semantic re-embedding.

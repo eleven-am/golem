@@ -84,11 +84,14 @@ func TestUpsertRefusesCreateInputThatContradictsTargetAcrossProviders(t *testing
 		if count := countAcceptancePosts(t, profile, 97); count != 1 {
 			t.Fatalf("agreeing upsert stored %d rows", count)
 		}
-		if _, err := SystemUpsert(ctx, system, fixture.postDescriptor, fixture.target(97), fixture.createPost(98, golem.UUID{15: 1}, "unused"), fixture.updateTitle("updated")); err != nil {
-			t.Fatalf("update branch refused an unexecuted create input: %v", err)
-		}
+		_, err = SystemUpsert(ctx, system, fixture.postDescriptor, fixture.target(97), fixture.createPost(98, golem.UUID{15: 1}, "unused"), fixture.updateTitle("updated"))
+		assertPublicUpsertCode(t, err, golem.CodeBadUserInput)
 		if count := countAcceptancePosts(t, profile, 98); count != 0 {
-			t.Fatalf("update branch created %d rows", count)
+			t.Fatalf("refused upsert created %d rows", count)
+		}
+		var title string
+		if err := fixture.app.database.GetContext(ctx, &title, `SELECT "title" FROM `+profile.posts+` WHERE "id"=`+profile.placeholder(1), mutationResultUUIDText(97)); err != nil || title != "agreeing" {
+			t.Fatalf("refused upsert left title=%q err=%v", title, err)
 		}
 	})
 }

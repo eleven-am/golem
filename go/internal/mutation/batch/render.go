@@ -117,11 +117,7 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		}
 		order[index] = context.qualified(field.Column) + " ASC"
 	}
-	lock := ""
-	if provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
-	}
-	text := "SELECT " + strings.Join(fields, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(context.alias) + " WHERE " + fragment.text + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", uint64(plan.Bounds().MaxRows())+1) + lock
+	text := "SELECT " + strings.Join(fields, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(context.alias) + " WHERE " + fragment.text + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", uint64(plan.Bounds().MaxRows())+1)
 	capture := Statement{role: CaptureExactSet, text: text, bindings: fragment.bindings, columns: columns, cardinality: AtMostSentinelRows}
 	if uint32(len(capture.bindings)) > plan.Bounds().MaxParameters() {
 		return Program{}, fail(CodeLimit, node.ModelID(), policyir.FieldID{}, "capture statement exceeds parameter bound", nil)

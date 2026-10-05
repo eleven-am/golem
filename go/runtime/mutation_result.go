@@ -6,11 +6,13 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
+	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	mutationplan "github.com/eleven-am/golem/go/internal/mutation/plan"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
+	mutationupsert "github.com/eleven-am/golem/go/internal/mutation/upsert"
 	"github.com/eleven-am/golem/go/internal/observeexec"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	policyoperator "github.com/eleven-am/golem/go/internal/policy/operator"
@@ -484,7 +486,7 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	}
 	var identity *mutationnested.TargetIdentityError
 	if errors.As(err, &identity) {
-		return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), "upsert create input does not set the target selector", err)
+		return publicTargetIdentityError(operation, model, identity, err)
 	}
 	var scalar *scalarMutationFailure
 	var hook *mutationHookFailure
@@ -508,6 +510,9 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	var cardinality *batchCardinalityError
 	if errors.As(err, &cardinality) {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, golem.FieldID{}, "nested batch mutation is not authorized", err)
+	}
+	if mutationupsert.Interference(err) {
+		return golem.RuntimeOperationError(golem.CodeConflict, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation conflicted", err)
 	}
 	return publicMutationPreparationError(operation, model, err)
 }
@@ -691,9 +696,32 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 	if errors.As(err, &nested) && nested.Code == mutationnested.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, nested.Field, "mutation is not authorized", err)
 	}
+	if refused, ok := publicForeignKeyArithmetic(scalarMutationOperationName(operation), model, err); ok {
+		return refused
+	}
 	var public *golem.Error
 	if errors.As(err, &public) {
 		return err
 	}
+	var identity *mutationnested.TargetIdentityError
+	if errors.As(err, &identity) {
+		return publicTargetIdentityError(operation, model, identity, err)
+	}
 	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation request is invalid", err)
+}
+
+func publicForeignKeyArithmetic(operation string, model golem.ModelID, err error) (error, bool) {
+	var bound *mutationbind.Error
+	if errors.As(err, &bound) && bound.Code == mutationbind.CodeForeignKeyArithmetic {
+		return golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, bound.Field, bound.Detail, err), true
+	}
+	return nil, false
+}
+
+func publicTargetIdentityError(operation mutationir.Operation, model golem.ModelID, identity *mutationnested.TargetIdentityError, err error) error {
+	message := "upsert create input does not set the target selector"
+	if identity.Operation == mutationir.ConnectOrCreate {
+		message = "connectOrCreate create input does not set the target selector"
+	}
+	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), message, err)
 }

@@ -3,12 +3,14 @@ package nested
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
 	policysql "github.com/eleven-am/golem/go/internal/policy/sql"
@@ -23,6 +25,32 @@ type SQLExpansionRequest struct {
 	Capabilities  policysql.CapabilityProof
 	MaxRows       uint32
 	MaxParameters uint32
+	Ledger        *rowlock.Ledger
+}
+
+func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statements []RelationSQLStatement) ([][]mutationdecode.Row, error) {
+	session := rowlock.Session{Ledger: request.Ledger, Queryer: request.Queryer, Registry: request.Registry, Provider: request.Provider, MaxParameters: request.MaxParameters}
+	results, err := rowlock.Select(ctx, session, func(ctx context.Context) ([][]mutationdecode.Row, []rowlock.Key, error) {
+		results := make([][]mutationdecode.Row, len(statements))
+		var keys []rowlock.Key
+		for index, statement := range statements {
+			rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statement)
+			if err != nil {
+				return nil, nil, err
+			}
+			rowKeys, err := rowlock.RowKeys(request.Registry, rows)
+			if err != nil {
+				return nil, nil, err
+			}
+			results[index], keys = rows, append(keys, rowKeys...)
+		}
+		return results, keys, nil
+	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return make([][]mutationdecode.Row, len(statements)), nil
+	}
+	return results, err
 }
 
 // ExpandRelationSQL is the production database-expansion half of the nested
@@ -116,10 +144,11 @@ func ExpandRelationSQL(ctx context.Context, request SQLExpansionRequest) (Runtim
 	if len(statements) != 1 {
 		return RuntimeExpansion{}, fmt.Errorf("P4_NESTED_EXPAND_PROGRAM: node %d rendered %d statements", node.Ordinal(), len(statements))
 	}
-	rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statements[0])
+	locked, err := lockedRelationRows(ctx, request, statements)
 	if err != nil {
 		return RuntimeExpansion{}, err
 	}
+	rows := locked[0]
 	if len(rows) == 0 {
 		exactProbe := node.Operation() == mutationir.BranchProbe && node.Branch() == mutationir.MainBranch
 		exactTarget := position.Kind() == mutationir.PositionRelatedTarget && (exactProbe || node.Operation() != mutationir.BranchProbe && node.Operation() != mutationir.ConnectOrCreate && node.Operation() != mutationir.Upsert)
@@ -272,16 +301,13 @@ func expandSetDifference(ctx context.Context, request SQLExpansionRequest, endpo
 	if len(statements) == 0 || statements[0].Role() != ExpandCurrentMembership {
 		return RuntimeExpansion{}, fmt.Errorf("P4_NESTED_EXPAND_PROGRAM: set difference lacks current membership")
 	}
-	current, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statements[0])
+	locked, err := lockedRelationRows(ctx, request, statements)
 	if err != nil {
 		return RuntimeExpansion{}, err
 	}
+	current := locked[0]
 	desired := make([]mutationdecode.Row, 0, len(statements)-1)
-	for _, statement := range statements[1:] {
-		rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statement)
-		if err != nil {
-			return RuntimeExpansion{}, err
-		}
+	for _, rows := range locked[1:] {
 		if len(rows) != 1 {
 			if len(rows) == 0 {
 				return RuntimeExpansion{}, &NotFoundError{Model: policyir.ModelID(endpoint.TargetModelID()), Field: policyir.FieldID(endpoint.FieldID())}

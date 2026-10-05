@@ -6,9 +6,10 @@ package upsert
 import (
 	"bytes"
 	"crypto/sha256"
-	"encoding/binary"
 	"fmt"
+	"strings"
 
+	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationsql "github.com/eleven-am/golem/go/internal/mutation/sql"
 	"github.com/eleven-am/golem/go/internal/physical"
@@ -55,14 +56,20 @@ const (
 // Statement is an immutable, fully parameterized piece of the selection
 // protocol. It contains no authored identifier or value text.
 type Statement struct {
-	role StatementRole
-	sql  string
-	args []any
+	role   StatementRole
+	sql    string
+	args   []any
+	model  policyir.ModelID
+	fields []policyir.FieldID
 }
 
-func (statement Statement) Role() StatementRole { return statement.role }
-func (statement Statement) SQL() string         { return statement.sql }
-func (statement Statement) Args() []any         { return cloneArgs(statement.args) }
+func (statement Statement) Role() StatementRole       { return statement.role }
+func (statement Statement) SQL() string               { return statement.sql }
+func (statement Statement) Args() []any               { return cloneArgs(statement.args) }
+func (statement Statement) ModelID() policyir.ModelID { return statement.model }
+func (statement Statement) Fields() []policyir.FieldID {
+	return append([]policyir.FieldID(nil), statement.fields...)
+}
 
 // Program is the deterministic attempt protocol prepared before any
 // transaction starts. Branch nodes remain IR, so this package cannot silently
@@ -137,7 +144,10 @@ func (program Program) TransactionRequirement() mutationsql.TransactionRequireme
 func (program Program) RetryClass() mutationir.RetryClass { return program.retry }
 func (program Program) GuardToken() [32]byte              { return program.token }
 func (program Program) GuardStatement() Statement         { return cloneStatement(program.guard) }
-func (program Program) ProbeStatement() Statement         { return cloneStatement(program.probe) }
+func (program Program) Guard() SelectorGuard {
+	return SelectorGuard{token: program.token, acquire: cloneStatement(program.guard), cleanup: program.cleanup}
+}
+func (program Program) ProbeStatement() Statement { return cloneStatement(program.probe) }
 
 // ExactSelectorProbeStatement is the private non-disclosing existence check
 // used only by the expectation-aware absent-row runtime after the authorized
@@ -238,11 +248,11 @@ func Prepare(plan mutationir.Plan, registry *schema.Registry, provider policyir.
 	if uint32(len(fragment.Args())) > plan.Bounds().MaxParameters() {
 		return Program{}, fail(CodeRender, "update-reach probe exceeds the plan parameter bound", nil)
 	}
-	lock := ""
-	if provider == policyir.ProviderPostgreSQL {
-		lock = " FOR UPDATE"
+	identity, fields, err := primarySelection(registry, resolver, provider, dialect, root.ModelID(), alias)
+	if err != nil {
+		return Program{}, err
 	}
-	probe := Statement{role: ProbeUpdateReach, sql: "SELECT 1 FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + fragment.SQL() + lock, args: fragment.Args()}
+	probe := Statement{role: ProbeUpdateReach, sql: "SELECT " + identity + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + fragment.SQL(), args: fragment.Args(), model: root.ModelID(), fields: fields}
 	exactFragment, err := policysql.Compile(policysql.Request{
 		Condition: selector, Provider: provider, Resolver: resolver,
 		Dialect: dialect, Capabilities: capabilities,
@@ -254,7 +264,7 @@ func Prepare(plan mutationir.Plan, registry *schema.Registry, provider policyir.
 	if uint32(len(exactFragment.Args())) > plan.Bounds().MaxParameters() {
 		return Program{}, fail(CodeRender, "exact selector probe exceeds the plan parameter bound", nil)
 	}
-	exactProbe := Statement{role: ProbeUpdateReach, sql: "SELECT 1 FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + exactFragment.SQL() + lock, args: exactFragment.Args()}
+	exactProbe := Statement{role: ProbeUpdateReach, sql: "SELECT " + identity + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(alias) + " WHERE " + exactFragment.SQL(), args: exactFragment.Args(), model: root.ModelID(), fields: fields}
 	guard, cleanup := guardStatements(provider, token)
 	return Program{provider: provider, transaction: transaction, retry: plan.RetryClass(), token: token, guard: guard, probe: probe, exactProbe: exactProbe, cleanup: cleanup, create: create, update: update}, nil
 }
@@ -332,11 +342,28 @@ func conjunction(model policyir.ModelID, conditions ...policyir.Condition) (poli
 	return condition, nil
 }
 
+func primarySelection(registry *schema.Registry, resolver policysql.Resolver, provider policyir.Provider, dialect policysql.Dialect, modelID policyir.ModelID, alias physical.PhysicalName) (string, []policyir.FieldID, error) {
+	model, ok := registry.Model(golem.ModelID(modelID))
+	if !ok || len(model.PrimaryKey()) == 0 {
+		return "", nil, fail(CodeSchema, "upsert model has no primary key", nil)
+	}
+	columns := make([]string, len(model.PrimaryKey()))
+	fields := make([]policyir.FieldID, len(model.PrimaryKey()))
+	for index, public := range model.PrimaryKey() {
+		field, found := resolver.Field(provider, modelID, policyir.FieldID(public))
+		if !found {
+			return "", nil, fail(CodeSchema, "upsert primary-key field has no physical descriptor", nil)
+		}
+		columns[index] = policysql.ProjectColumn(provider, field.Type, dialect.Quote(alias)+"."+dialect.Quote(field.Column))
+		fields[index] = policyir.FieldID(public)
+	}
+	return strings.Join(columns, ", "), fields, nil
+}
+
 func guardStatements(provider policyir.Provider, token [32]byte) (Statement, *Statement) {
 	switch provider {
 	case policyir.ProviderPostgreSQL:
-		lockKey := int64(binary.BigEndian.Uint64(token[:8]))
-		return Statement{role: AcquireSelectorGuard, sql: "SELECT pg_catalog.pg_advisory_xact_lock($1)", args: []any{lockKey}}, nil
+		return Statement{role: AcquireSelectorGuard}, nil
 	case policyir.ProviderSQLite:
 		value := append([]byte(nil), token[:]...)
 		guard := Statement{role: AcquireSelectorGuard, sql: `INSERT INTO "_golem_upsert_guard" ("guard_token") VALUES (?) ON CONFLICT ("guard_token") DO UPDATE SET "guard_token" = excluded."guard_token" RETURNING "guard_token"`, args: []any{value}}
