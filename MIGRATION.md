@@ -1,9 +1,12 @@
 # Migrating to 0.7.0
 
 Upgrade `@eleven-am/golem-core`, `@eleven-am/golem-generator`,
-`@eleven-am/golem` and `@eleven-am/golem-authorizer` together, to 0.7.0. Under
-0.x caret ranges `^0.6.1` does not resolve 0.7.0, so a mixed install fails to
-resolve rather than running two cores. `@eleven-am/golem-policy` stays at
+`@eleven-am/golem` and `@eleven-am/golem-authorizer` together, to 0.7.0. A
+mixed install does not fail: core is a regular dependency of the other three,
+so leaving your own `@eleven-am/golem-core` at `^0.6.1` installs a second,
+nested copy of core 0.7.0, and your app and the module then run different
+cores. After upgrading, check that `npm ls @eleven-am/golem-core` lists a
+single version. `@eleven-am/golem-policy` stays at
 0.6.0 and `@eleven-am/golem-render` at 0.1.0. `@eleven-am/golem-queue` 0.5.0
 is independent of these; see its own section below.
 
