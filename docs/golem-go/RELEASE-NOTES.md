@@ -16,8 +16,6 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.6.5
 
-Unreleased.
-
 **Behaviour change: an upsert's create input must name its target, whichever
 branch runs.** An upsert, root or nested at any depth, whose create input does
 not set every field of its unique target to the target's value is now refused
