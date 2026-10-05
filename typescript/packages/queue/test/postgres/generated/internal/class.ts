@@ -17,8 +17,8 @@ import type * as Prisma from "./prismaNamespace"
 
 const config: runtime.GetPrismaClientConfig = {
   "previewFeatures": [],
-  "clientVersion": "7.8.0",
-  "engineVersion": "3c6e192761c0362d496ed980de936e2f3cebcd3a",
+  "clientVersion": "7.9.0",
+  "engineVersion": "e922089b7d7502aff4249d5da3420f6fa55fc6ad",
   "activeProvider": "postgresql",
   "inlineSchema": "datasource db {\n  provider = \"postgresql\"\n}\n\ngenerator client {\n  provider            = \"prisma-client\"\n  output              = \"./generated\"\n  moduleFormat        = \"cjs\"\n  importFileExtension = \"\"\n}\n\nenum JobStatus {\n  PENDING\n  RUNNING\n  SUCCEEDED\n  FAILED\n}\n\nmodel Job {\n  id             String    @id @default(cuid())\n  type           String\n  payload        String\n  scopeType      String?\n  scopeId        String?\n  status         JobStatus @default(PENDING)\n  runAt          DateTime  @default(now())\n  attempts       Int       @default(0)\n  maxAttempts    Int       @default(3)\n  lastError      String?\n  dedupeKey      String?   @unique\n  leaseOwner     String?\n  leaseExpiresAt DateTime?\n  startedAt      DateTime?\n  createdAt      DateTime  @default(now())\n  updatedAt      DateTime  @updatedAt\n\n  @@index([status, runAt])\n  @@index([status, leaseExpiresAt])\n  @@index([scopeType, scopeId, status])\n}\n\nmodel JobGuard {\n  key         String    @id\n  seq         BigInt    @default(0)\n  windowStart DateTime?\n  spent       BigInt    @default(0)\n}\n",
   "runtimeDataModel": {
@@ -82,7 +82,7 @@ export interface PrismaClientConstructor {
     LogOpts extends LogOptions<Options> = LogOptions<Options>,
     OmitOpts extends Prisma.PrismaClientOptions['omit'] = Options extends { omit: infer U } ? U : Prisma.PrismaClientOptions['omit'],
     ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs
-  >(options: Prisma.Subset<Options, Prisma.PrismaClientOptions> ): PrismaClient<LogOpts, OmitOpts, ExtArgs>
+  >(options: Prisma.PrismaClientConstructorArgs<Options>): PrismaClient<LogOpts, OmitOpts, ExtArgs>
 }
 
 /**
@@ -103,7 +103,7 @@ export interface PrismaClientConstructor {
 
 export interface PrismaClient<
   in LogOpts extends Prisma.LogLevel = never,
-  in out OmitOpts extends Prisma.PrismaClientOptions['omit'] = undefined,
+  in out OmitOpts extends Prisma.PrismaClientOptions['omit'] = Prisma.PrismaClientOptions['omit'],
   in out ExtArgs extends runtime.Types.Extensions.InternalArgs = runtime.Types.Extensions.DefaultArgs
 > {
   [K: symbol]: { types: Prisma.TypeMap<ExtArgs>['other'] }

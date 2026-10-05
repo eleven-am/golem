@@ -370,7 +370,7 @@ const store = new InMemoryJobStore();
 
 ## Custom persistence
 
-Implement the full `JobStore` port to back the queue with something other than Prisma.
+Implement the full `JobStore` port to back the queue with something other than Prisma. Its terminal writes — `complete`, `fail`, `retry` — and `findOwned` must match only a row that is `RUNNING`, owned by the worker, and whose `leaseExpiresAt` is still in the future, checked in the statement that writes, so a worker whose lease expired cannot record an outcome for a job another worker may have reclaimed.
 
 The bundled `PrismaJobStore` claims work by polling for due candidates and winning each one with a compare-and-set update, through Prisma's own query API rather than hand-written SQL. That keeps it portable, and it is the right default for most apps. SQLite and Postgres are both exercised against real engines — see `test/sqlite` and `test/postgres`. MySQL is not supported.
 
