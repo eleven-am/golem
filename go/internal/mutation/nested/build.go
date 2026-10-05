@@ -46,6 +46,9 @@ func Build(request Request) (Result, error) {
 	}
 	root := request.Root
 	root.Children = append(append([]mutationir.NodeInput(nil), root.Children...), children...)
+	if err := refuseGraphOffTarget(request.Registry, root); err != nil {
+		return Result{}, err
+	}
 	if request.RuntimeValues != nil {
 		root, err = resolveRuntimeValues(root, request.RuntimeValues)
 		if err != nil {

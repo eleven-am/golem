@@ -10,6 +10,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
@@ -134,7 +135,17 @@ func TestCreateMustSetEveryTargetSelectorComponent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := validateCreateAgreesWithTarget(target, []mutationir.ScalarOperation{set(region, 7), set(id, 8)}); err != nil {
+	refuse := func(operations []mutationir.ScalarOperation) error {
+		written, err := mutationnested.RootCreatedValues(nil, operations, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := mutationnested.RefuseOffTarget(mutationir.Upsert, target, written); err != nil {
+			return publicMutationPreparationError(mutationir.Upsert, golem.ModelID(target.ModelID()), err)
+		}
+		return nil
+	}
+	if err := refuse([]mutationir.ScalarOperation{set(region, 7), set(id, 8)}); err != nil {
 		t.Fatalf("agreeing create was refused: %v", err)
 	}
 	for name, operations := range map[string][]mutationir.ScalarOperation{
@@ -143,7 +154,7 @@ func TestCreateMustSetEveryTargetSelectorComponent(t *testing.T) {
 		"no components":          nil,
 	} {
 		t.Run(name, func(t *testing.T) {
-			assertTargetIdentityRefusal(t, validateCreateAgreesWithTarget(target, operations))
+			assertTargetIdentityRefusal(t, refuse(operations))
 		})
 	}
 }
@@ -174,8 +185,14 @@ func TestRootUpsertRefusesCreateThatWouldNotCarryTheTargetIdentity(t *testing.T)
 				t.Fatalf("explicit upsert rows=%d want=%d", got, before+1)
 			}
 		}
-		if _, err := SystemUpsert(ctx, fixture.app.System(), fixture.userDescriptor, graphUserTarget(fixture, 51), graphUserCreate(fixture, nil, "never-created"), graphUserRename(fixture, "renamed-again")); err != nil {
-			t.Fatalf("update branch refused an unexecuted create without the identity: %v", err)
+		_, err = SystemUpsert(ctx, fixture.app.System(), fixture.userDescriptor, graphUserTarget(fixture, 51), graphUserCreate(fixture, nil, "never-created"), graphUserRename(fixture, "renamed-again"))
+		assertTargetIdentityRefusal(t, err)
+		_, err = CallerUpsert(ctx, caller, fixture.userDescriptor, graphUserTarget(fixture, 51), graphUserCreate(fixture, nil, "never-created"), graphUserRename(fixture, "renamed-again"))
+		assertTargetIdentityRefusal(t, err)
+		var name string
+		query := fixture.app.database.Rebind(`SELECT "name" FROM ` + nestedAcceptanceTable(fixture.app, fixture.schema.User) + ` WHERE "id"=?`)
+		if err := fixture.app.database.Get(&name, query, mutationResultUUIDText(51)); err != nil || name != "renamed" {
+			t.Fatalf("refused update-branch upsert left name=%q err=%v", name, err)
 		}
 	})
 }
@@ -310,11 +327,17 @@ func TestNestedUpsertRefusesCreateThatWouldNotCarryTheTargetIdentity(t *testing.
 		if _, err := SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, graphUserTarget(fixture, owner), nested(&explicit)); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, graphUserTarget(fixture, owner), nested(nil)); err != nil {
-			t.Fatalf("nested update branch refused an unexecuted create without the identity: %v", err)
-		}
+		_, err = SystemUpdate(ctx, fixture.app.System(), fixture.userDescriptor, graphUserTarget(fixture, owner), nested(nil))
+		assertNestedTargetIdentityRefusal(t, err)
+		_, err = CallerUpdate(ctx, caller, fixture.userDescriptor, graphUserTarget(fixture, owner), nested(nil))
+		assertNestedTargetIdentityRefusal(t, err)
 		if got := graphRowCount(t, fixture.app, fixture.schema.Post); got != 1 {
 			t.Fatalf("nested upserts left %d posts, want 1", got)
+		}
+		var title string
+		query := fixture.app.database.Rebind(`SELECT "title" FROM ` + nestedAcceptanceTable(fixture.app, fixture.schema.Post) + ` WHERE "id"=?`)
+		if err := fixture.app.database.Get(&title, query, mutationResultUUIDText(61)); err != nil || title != "nested" {
+			t.Fatalf("refused update-branch nested upsert left title=%q err=%v", title, err)
 		}
 	})
 }
@@ -349,8 +372,8 @@ func TestHookedNestedUpsertRefusesCreateThatWouldNotCarryTheTargetIdentity(t *te
 		)
 		_, err = CallerUpdate(ctx, caller, fixture.userDescriptor, graphUserTarget(fixture, owner), nested)
 		assertNestedTargetIdentityRefusal(t, err)
-		if beforeCreate == 0 {
-			t.Fatal("the nested create hook did not run, so the hooked path was not exercised")
+		if beforeCreate != 0 {
+			t.Fatalf("the nested create hook ran %d times; the refusal must precede every hook and query", beforeCreate)
 		}
 		if got := graphRowCount(t, fixture.app, fixture.schema.Post); got != 0 {
 			t.Fatalf("refused hooked nested upsert created %d posts", got)

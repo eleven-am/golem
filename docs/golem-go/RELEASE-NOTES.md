@@ -5,12 +5,41 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.4
+go get github.com/eleven-am/golem/go@v0.6.5
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.5
+
+Unreleased.
+
+**Behaviour change: an upsert's create input must name its target, whichever
+branch runs.** An upsert, root or nested at any depth, whose create input does
+not set every field of its unique target to the target's value is now refused
+with `BAD_USER_INPUT` (`upsert create input does not set the target selector`)
+before any query runs. Before, the refusal came only when the create branch
+ran, so the same call succeeded or failed depending on whether the row already
+existed. A foreign-key field of the target is satisfied by a `Connect` on its
+relation to the row holding that value, and a field a nested parent fills is
+satisfied only when the parent's value is known in the request and equal.
+
+**Behaviour change: `ConnectOrCreate` follows the same rule.** A nested
+`ConnectOrCreate` whose create input does not reproduce its target is refused
+with `BAD_USER_INPUT` (`connectOrCreate create input does not set the target
+selector`) before any query runs. Before, it created a row under a different
+identity and linked it whenever the target was absent. A `Before` create hook
+that rewrites a nested upsert or `ConnectOrCreate` create away from its target
+is refused after the write and the transaction is rolled back; before, a
+rewritten `ConnectOrCreate` create was linked.
+
+**Upgrading.** Give every upsert and `ConnectOrCreate` create input the
+target's values, even where the update or connect branch is the one you
+expect to run.
 
 ---
 

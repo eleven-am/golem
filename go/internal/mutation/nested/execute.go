@@ -459,7 +459,7 @@ type executionEngine struct {
 	orderEntry        uint32
 	hasOrderEntry     bool
 	dependencyDepth   uint32
-	entryIdentity     *mutationir.Target
+	entryIdentity     *targetIdentity
 }
 
 func (engine *executionEngine) executeNode(node mutationir.Node, inherited map[uint32]AppliedNode) error {
@@ -483,7 +483,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		value := externalAnchor.clone()
 		anchor = &value
 	}
-	identity, identityRequired, err := engine.requiredUpsertIdentity(node)
+	identity, err := engine.requiredUpsertIdentity(node)
 	if err != nil {
 		return err
 	}
@@ -494,7 +494,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 				return transformErr
 			}
 			if replaced {
-				return engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity, identityRequired)
+				return engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity)
 			}
 		}
 	}
@@ -534,7 +534,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 					return transformErr
 				}
 				if replaced {
-					if err := engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity, identityRequired); err != nil {
+					if err := engine.executeReplacement(replacement, parent, anchor, node.Ordinal(), identity); err != nil {
 						return err
 					}
 					continue
@@ -554,7 +554,7 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		if resultErr := validateApplyResult(node, result); resultErr != nil {
 			return resultErr
 		}
-		if identityRequired {
+		if identity != nil && engine.replacementEntry(node) {
 			if identityErr := validateUpsertCreateIdentity(identity, node, result); identityErr != nil {
 				return identityErr
 			}
@@ -692,16 +692,13 @@ func postExpansionTransform(node mutationir.Node) bool {
 	return ok && position.Kind() == mutationir.PositionCurrentToOne
 }
 
-func (engine *executionEngine) executeReplacement(replacement SubtreeReplacement, parent, anchor *AppliedNode, logicalOrdinal uint32, identity mutationir.Target, identityRequired bool) error {
+func (engine *executionEngine) executeReplacement(replacement SubtreeReplacement, parent, anchor *AppliedNode, logicalOrdinal uint32, identity *targetIdentity) error {
 	nodes := replacement.graph.Nodes()
 	if len(nodes) == 0 || int(replacement.entry) >= len(nodes) {
 		return fmt.Errorf("P4_NESTED_TRANSFORM: replacement graph or entry is invalid")
 	}
 	originalIdentity := engine.entryIdentity
-	engine.entryIdentity = nil
-	if identityRequired {
-		engine.entryIdentity = &identity
-	}
+	engine.entryIdentity = identity
 	defer func() { engine.entryIdentity = originalIdentity }()
 	original := engine.nodes
 	originalPrefix := engine.orderPrefix
@@ -975,41 +972,56 @@ func validateApplyResult(node mutationir.Node, result ApplyResult) error {
 	return nil
 }
 
-func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (mutationir.Target, bool, error) {
+func (engine *executionEngine) replacementEntry(node mutationir.Node) bool {
+	return engine.hasOrderEntry && node.Ordinal() == engine.orderEntry && engine.entryIdentity != nil
+}
+
+type targetIdentity struct {
+	operation mutationir.Operation
+	target    mutationir.Target
+}
+
+func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (*targetIdentity, error) {
 	if node.Operation() != mutationir.Create {
-		return mutationir.Target{}, false, nil
+		return nil, nil
 	}
-	if engine.hasOrderEntry && node.Ordinal() == engine.orderEntry && engine.entryIdentity != nil {
-		return *engine.entryIdentity, true, nil
+	if engine.replacementEntry(node) {
+		return engine.entryIdentity, nil
 	}
-	if node.Branch() != mutationir.UpsertCreateBranch {
-		return mutationir.Target{}, false, nil
+	container := map[mutationir.Branch]mutationir.Operation{mutationir.UpsertCreateBranch: mutationir.Upsert, mutationir.ConnectOrCreateCreateBranch: mutationir.ConnectOrCreate}
+	operation, selected := container[node.Branch()]
+	if !selected {
+		return nil, nil
 	}
 	parent, ok := node.ParentOrdinal()
-	if !ok || int(parent) >= len(engine.nodes) || engine.nodes[parent].Operation() != mutationir.Upsert {
-		return mutationir.Target{}, false, fmt.Errorf("P4_NESTED_EXEC_GRAPH: upsert create node %d lacks its upsert container", node.Ordinal())
+	if !ok || int(parent) >= len(engine.nodes) || engine.nodes[parent].Operation() != operation {
+		return nil, fmt.Errorf("P4_NESTED_EXEC_GRAPH: create node %d lacks its upsert or connect-or-create container", node.Ordinal())
 	}
 	position, positioned := engine.nodes[parent].RelationPosition()
 	if !positioned {
-		return mutationir.Target{}, false, nil
+		return nil, nil
 	}
-	target, selected := position.Target()
-	return target, selected, nil
+	target, targeted := position.Target()
+	if !targeted {
+		return nil, nil
+	}
+	return &targetIdentity{operation: operation, target: target}, nil
 }
 
-func validateUpsertCreateIdentity(target mutationir.Target, node mutationir.Node, result ApplyResult) error {
+func validateUpsertCreateIdentity(identity *targetIdentity, node mutationir.Node, result ApplyResult) error {
 	after, ok := result.After()
 	if !ok {
 		return fmt.Errorf("P4_NESTED_EXEC_RESULT: upsert create node %d returned no after image", node.Ordinal())
 	}
-	for _, selector := range target.Values() {
+	written := knownValues{}
+	for _, selector := range identity.target.Values() {
 		cell, present := after.Cell(selector.FieldID())
 		value, valued := cell.PolicyValue()
-		if !present || cell.IsNull() || !valued || !mutationdecode.EqualValue(value, selector.Value()) {
-			return &TargetIdentityError{Model: node.ModelID(), Field: selector.FieldID()}
+		if present && !cell.IsNull() && valued {
+			written[selector.FieldID()] = value
 		}
 	}
-	return nil
+	return RefuseOffTarget(identity.operation, identity.target, written)
 }
 
 func selectedChild(operation mutationir.Operation, branch, selected mutationir.Branch) bool {

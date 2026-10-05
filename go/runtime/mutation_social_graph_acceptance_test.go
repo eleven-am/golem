@@ -749,7 +749,7 @@ func assertEverySocialNestedOperation(t testing.TB, fixture socialMutationFixtur
 	if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.postRootCreate(54, 2, "coc-before")); err != nil {
 		t.Fatal(err)
 	}
-	unusedUser := fixture.userCreate(9, "unused")
+	unusedUser := fixture.userCreate(4, "unused")
 	coc := golem.GeneratedNestedConnectOrCreate[socialMutationPost, socialMutationUser](fixture.schema.Post, fixture.schema.PostAuthor, fixture.schema.PostAuthorship, fixture.schema.User, fixture.userTarget(4), unusedUser)
 	if _, err := CallerUpdate(ctx, caller, fixture.postDescriptor, fixture.postTarget(54), golem.GeneratedUpdateInput[socialMutationPost](fixture.schema.Post, coc)); err != nil {
 		t.Fatalf("nested connectOrCreate: %v", err)

@@ -695,7 +695,7 @@ func TestNestedConnectOrCreateUsesSelectorGuardAndCleansSQLiteGuardRows(t *testi
 	connectTarget := golem.GeneratedUniqueSelectorValue[mutationResultUser](fixture.schema.User, fixture.schema.UserKey,
 		golem.GeneratedSelectorComponent(fixture.schema.UserID, golem.UUID{15: 2}))
 	unusedCreate := golem.GeneratedCreateInput[mutationResultUser](fixture.schema.User,
-		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 9}),
+		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 2}),
 		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userName, "unused"),
 	)
 	connectInput := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
@@ -744,7 +744,7 @@ func TestEngineOwnedNestedBranchRetriesWholeAttemptAfterInterference(t *testing.
 	target := golem.GeneratedUniqueSelectorValue[mutationResultUser](fixture.schema.User, fixture.schema.UserKey,
 		golem.GeneratedSelectorComponent(fixture.schema.UserID, golem.UUID{15: 2}))
 	create := golem.GeneratedCreateInput[mutationResultUser](fixture.schema.User,
-		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 9}),
+		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 2}),
 		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userName, "unused"),
 	)
 	input := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
@@ -849,7 +849,7 @@ func TestNestedGuardedBranchesPostgreSQLProfiles(t *testing.T) {
 			userTarget := golem.GeneratedUniqueSelectorValue[mutationResultUser](fixture.schema.User, fixture.schema.UserKey,
 				golem.GeneratedSelectorComponent(fixture.schema.UserID, golem.UUID{15: 2}))
 			unused := golem.GeneratedCreateInput[mutationResultUser](fixture.schema.User,
-				golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 9}),
+				golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 2}),
 				golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userName, "unused"),
 			)
 			connect := golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post,
@@ -999,7 +999,7 @@ func assertNestedMutationVocabulary(t *testing.T, fixture mutationResultFixture,
 		t.Fatal(err)
 	}
 	coc := golem.GeneratedNestedConnectOrCreate[mutationResultPost, mutationResultUser](fixture.schema.Post, fixture.schema.PostAuthor, fixture.schema.Authorship, fixture.schema.User, userTarget(2), golem.GeneratedCreateInput[mutationResultUser](fixture.schema.User,
-		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 9}), golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userName, "unused")))
+		golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userID, golem.UUID{15: 2}), golem.GeneratedCreateFieldValue(fixture.schema.User, fixture.userName, "unused")))
 	if err := updatePostRoot(fixture.target(54), golem.GeneratedUpdateInput[mutationResultPost](fixture.schema.Post, golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.title, "coc"), coc)); err != nil {
 		t.Fatalf("nested ConnectOrCreate: %v", err)
 	}

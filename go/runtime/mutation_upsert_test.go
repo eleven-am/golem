@@ -266,7 +266,7 @@ func TestCallerRootUpsertSelectedNestedBranchHooksAndFactsAreExact(t *testing.T)
 		golem.GeneratedSetFieldValue(schema.User, fixture.userName, "selected-update"),
 		golem.GeneratedNestedCreate[graphMutationUser, graphMutationPost](schema.User, schema.UserPosts, schema.Authorship, schema.Post, post(222, "selected-update-post")),
 	)
-	if _, err := CallerUpsert(ctx, caller, fixture.userDescriptor, target(220), user(223, 224, "unselected-create"), nestedUpdate); err != nil {
+	if _, err := CallerUpsert(ctx, caller, fixture.userDescriptor, target(220), user(220, 224, "unselected-create"), nestedUpdate); err != nil {
 		t.Fatal(err)
 	}
 	if got := [9]int64{calls.userCreateBefore.Load(), calls.userCreateAfter.Load(), calls.userCreateCommit.Load(), calls.userUpdateBefore.Load(), calls.userUpdateAfter.Load(), calls.userUpdateCommit.Load(), calls.postCreateBefore.Load(), calls.postCreateAfter.Load(), calls.postCreateCommit.Load()}; got != [9]int64{1, 1, 1, 1, 1, 1, 2, 2, 2} {
@@ -365,7 +365,7 @@ func TestPostgreSQLCCallerRootUpsertSelectedNestedBranchHooksAndFactsAreExact(t 
 		golem.GeneratedSetFieldValue(schema.User, fixture.userName, "pg-selected-update"),
 		golem.GeneratedNestedCreate[graphMutationUser, graphMutationPost](schema.User, schema.UserPosts, schema.Authorship, schema.Post, post(232)),
 	)
-	if _, err := CallerUpsert(ctx, caller, fixture.userDescriptor, target(230), create(233, 234), update); err != nil {
+	if _, err := CallerUpsert(ctx, caller, fixture.userDescriptor, target(230), create(230, 234), update); err != nil {
 		t.Fatal(err)
 	}
 	if got := [3]int64{userUpdate[0].Load(), userUpdate[1].Load(), userUpdate[2].Load()}; got != [3]int64{1, 1, 1} {
@@ -429,7 +429,7 @@ func assertRootUpsertSelectedNestedBranch(t *testing.T, fixture graphMutationFix
 		golem.GeneratedSetFieldValue(schemaFixture.User, fixture.userName, "updated-user"),
 		golem.GeneratedNestedCreate[graphMutationUser, graphMutationPost](schemaFixture.User, schemaFixture.UserPosts, schemaFixture.Authorship, schemaFixture.Post, postInput),
 	)
-	if _, err := SystemUpsert(context.Background(), fixture.app.System(), fixture.userDescriptor, target(201), fixture.deepCreate(205, 206, 207), nestedUpdate); err != nil {
+	if _, err := SystemUpsert(context.Background(), fixture.app.System(), fixture.userDescriptor, target(201), fixture.deepCreate(201, 206, 207), nestedUpdate); err != nil {
 		t.Fatal(err)
 	}
 	assertGraphMutationRowsAndFacts(t, fixture, 1, 2, 1, 5)

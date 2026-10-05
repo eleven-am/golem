@@ -26,7 +26,7 @@ func TestSQLiteSourceConnectOrCreatePersistsBranchResultAndRollsBackDenial(t *te
 		wantTouched uint32
 	}{
 		{name: "connect", seedTarget: true, wantAuthor: 2, wantUsers: 1, wantTouched: 2},
-		{name: "create", wantAuthor: 3, wantUsers: 1, wantTouched: 3},
+		{name: "create", wantAuthor: 2, wantUsers: 1, wantTouched: 3},
 		{name: "deny", deny: true, wantAuthor: 1, wantUsers: 0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -44,7 +44,7 @@ func TestSQLiteSourceConnectOrCreatePersistsBranchResultAndRollsBackDenial(t *te
 			if _, err := database.Exec("INSERT INTO posts(id, author_id) VALUES (?, ?)", postID[:], original[:]); err != nil {
 				t.Fatal(err)
 			}
-			targetID, createdID := [16]byte{15: 2}, [16]byte{15: 3}
+			targetID, createdID := [16]byte{15: 2}, [16]byte{15: 2}
 			if test.seedTarget {
 				if _, err := database.Exec("INSERT INTO users(id, name) VALUES (?, ?)", targetID[:], "existing"); err != nil {
 					t.Fatal(err)

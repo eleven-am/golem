@@ -484,7 +484,7 @@ func publicNestedMutationExecutionError(operation mutationir.Operation, model go
 	}
 	var identity *mutationnested.TargetIdentityError
 	if errors.As(err, &identity) {
-		return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), "upsert create input does not set the target selector", err)
+		return publicTargetIdentityError(operation, model, identity, err)
 	}
 	var scalar *scalarMutationFailure
 	var hook *mutationHookFailure
@@ -695,5 +695,17 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 	if errors.As(err, &public) {
 		return err
 	}
+	var identity *mutationnested.TargetIdentityError
+	if errors.As(err, &identity) {
+		return publicTargetIdentityError(operation, model, identity, err)
+	}
 	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation request is invalid", err)
+}
+
+func publicTargetIdentityError(operation mutationir.Operation, model golem.ModelID, identity *mutationnested.TargetIdentityError, err error) error {
+	message := "upsert create input does not set the target selector"
+	if identity.Operation == mutationir.ConnectOrCreate {
+		message = "connectOrCreate create input does not set the target selector"
+	}
+	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID(identity.Field), message, err)
 }

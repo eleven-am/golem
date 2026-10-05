@@ -236,7 +236,7 @@ func TestSourceOwnedConnectOrCreateHasConditionalAuthorizedOwnerEffects(t *testi
 	fixture := schematest.New(t)
 	userTarget := golem.GeneratedUniqueSelectorValue[nestedUser](fixture.User, fixture.UserKey, golem.GeneratedSelectorComponent(fixture.UserID, golem.NewUUID([16]byte{2})))
 	create := golem.GeneratedCreateInput[nestedUser](fixture.User,
-		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedEqualField[nestedUser, golem.UUID](fixture.UserID), golem.NewUUID([16]byte{3})),
+		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedEqualField[nestedUser, golem.UUID](fixture.UserID), golem.NewUUID([16]byte{2})),
 		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedTextField[nestedUser, string](fixture.UserName), "created"),
 	)
 	mutations := freezeRelations(t, golem.GeneratedUpdateInput[nestedPost](fixture.Post,
@@ -344,17 +344,18 @@ func allNestedMutations(t *testing.T, fixture schematest.Fixture) []golem.Frozen
 	update := golem.GeneratedUpdateInput[nestedPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, golem.GeneratedTextField[nestedPost, string](fixture.PostTitle), "updated"))
 	updateMany := golem.GeneratedUpdateManyInput[nestedPost](fixture.Post, golem.GeneratedSetFieldValue(fixture.Post, golem.GeneratedTextField[nestedPost, string](fixture.PostTitle), "many"))
 	selector := golem.GeneratedUniqueSelectorValue[nestedPost](fixture.Post, fixture.PostKey, golem.GeneratedSelectorComponent(fixture.PostID, golem.NewUUID([16]byte{3})))
+	selected := golem.GeneratedCreateInput[nestedPost](fixture.Post, golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedEqualField[nestedPost, golem.UUID](fixture.PostID), golem.NewUUID([16]byte{3})), golem.GeneratedCreateFieldValue(fixture.Post, golem.GeneratedTextField[nestedPost, string](fixture.PostTitle), "title"))
 	predicate := golem.GeneratedEqualField[nestedPost, golem.UUID](fixture.PostID).Eq(golem.NewUUID([16]byte{3}))
 	input := golem.GeneratedUpdateInput[nestedUser](fixture.User,
 		golem.GeneratedNestedCreate[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, create),
 		golem.GeneratedNestedCreateMany[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, create, create),
 		golem.GeneratedNestedConnect[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector),
-		golem.GeneratedNestedConnectOrCreate[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector, create),
+		golem.GeneratedNestedConnectOrCreate[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector, selected),
 		golem.GeneratedNestedDisconnect[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector),
 		golem.GeneratedNestedSet[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector),
 		golem.GeneratedNestedUpdate[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector, update),
 		golem.GeneratedNestedUpdateMany[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, predicate, updateMany),
-		golem.GeneratedNestedUpsert[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector, create, update),
+		golem.GeneratedNestedUpsert[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector, selected, update),
 		golem.GeneratedNestedDelete[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, selector),
 		golem.GeneratedNestedDeleteMany[nestedUser, nestedPost](fixture.User, fixture.UserPosts, fixture.Authorship, fixture.Post, predicate),
 	)

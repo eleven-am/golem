@@ -30,7 +30,6 @@ type preparedRuntimeUpsert struct {
 	updateNested       *mutationnested.Result
 	createNestedPolicy error
 	updateNestedPolicy error
-	createConflict     error
 	request            rootUpsertPrepareRequest
 }
 
@@ -130,6 +129,13 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
+	written, err := mutationnested.RootCreatedValues(app.registry, boundCreate.Operations(), request.create.Relations())
+	if err != nil {
+		return preparedRuntimeUpsert{}, err
+	}
+	if err := mutationnested.RefuseOffTarget(mutationir.Upsert, boundTarget.Target(), written); err != nil {
+		return preparedRuntimeUpsert{}, err
+	}
 	if request.runtimeValues == nil {
 		request.runtimeValues = newMutationRuntimeValues()
 	}
@@ -141,12 +147,6 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
 	}
-	if request.concurrencyAbsent {
-		if err := validateAbsentCreateMatchesTarget(boundTarget.Target(), boundCreate.Operations()); err != nil {
-			return preparedRuntimeUpsert{}, err
-		}
-	}
-	createConflict := validateCreateAgreesWithTarget(boundTarget.Target(), boundCreate.Operations())
 	bounds, err := mutationir.NewStatementBounds(uint32(app.mutationLimits.statementParameters), uint32(app.mutationLimits.touchedRows))
 	if err != nil {
 		return preparedRuntimeUpsert{}, err
@@ -213,39 +213,7 @@ func prepareRootUpsert[P, A any](request rootUpsertPrepareRequest, stance mutati
 			updateNested = &compiled
 		}
 	}
-	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, createConflict: createConflict, request: request}, nil
-}
-
-func validateCreateAgreesWithTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
-	created := make(map[policyir.FieldID]mutationir.ScalarOperation, len(operations))
-	for _, operation := range operations {
-		created[operation.FieldID()] = operation
-	}
-	for _, selector := range target.Values() {
-		operation, written := created[selector.FieldID()]
-		value, present := operation.Value()
-		if !written || operation.Kind() != mutationir.ScalarSet || !present || !equalMutationPhysicalValue(value, selector.Value()) {
-			return golem.RuntimeOperationError(golem.CodeBadUserInput, "upsert", golem.ModelID(target.ModelID()), golem.FieldID(selector.FieldID()), "upsert create input does not set the target selector", nil)
-		}
-	}
-	return nil
-}
-
-func validateAbsentCreateMatchesTarget(target mutationir.Target, operations []mutationir.ScalarOperation) error {
-	created := make(map[policyir.FieldID]policyir.Value, len(operations))
-	for _, operation := range operations {
-		value, present := operation.Value()
-		if operation.Kind() == mutationir.ScalarSet && present {
-			created[operation.FieldID()] = value
-		}
-	}
-	for _, selector := range target.Values() {
-		value, present := created[selector.FieldID()]
-		if !present || !equalMutationPhysicalValue(value, selector.Value()) {
-			return fmt.Errorf("expect-absent create input does not match the guarded unique selector")
-		}
-	}
-	return nil
+	return preparedRuntimeUpsert{plan: plan, kernel: kernel, create: create, update: update, createNested: createNested, updateNested: updateNested, createNestedPolicy: createNestedPolicy, updateNestedPolicy: updateNestedPolicy, request: request}, nil
 }
 
 func renderUpsertBranch[P, A any](parent mutationir.Plan, node mutationir.Node, app *App[P, A]) (mutationsql.Program, error) {
@@ -666,9 +634,6 @@ func (executor runtimeUpsertBranchExecutor[P, A, M]) ExecuteBranch(ctx context.C
 		if err := validate(transformed); err != nil {
 			return nil, &mutationHookFailure{operation: request.Operation(), phase: golem.HookBefore, cause: err}
 		}
-	}
-	if branch == mutationir.UpsertCreateBranch && prepared.createConflict != nil {
-		return nil, prepared.createConflict
 	}
 	program := prepared.create
 	if branch == mutationir.UpsertUpdateBranch {

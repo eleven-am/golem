@@ -126,7 +126,7 @@ func TestSourceConnectOrCreateExecutesOnlyChosenOwnerEffect(t *testing.T) {
 	fixture := schematest.New(t)
 	userTarget := golem.GeneratedUniqueSelectorValue[nestedUser](fixture.User, fixture.UserKey, golem.GeneratedSelectorComponent(fixture.UserID, golem.NewUUID([16]byte{2})))
 	create := golem.GeneratedCreateInput[nestedUser](fixture.User,
-		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedEqualField[nestedUser, golem.UUID](fixture.UserID), golem.NewUUID([16]byte{3})),
+		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedEqualField[nestedUser, golem.UUID](fixture.UserID), golem.NewUUID([16]byte{2})),
 		golem.GeneratedCreateFieldValue(fixture.User, golem.GeneratedTextField[nestedUser, string](fixture.UserName), "created"),
 	)
 	mutations := freezeRelations(t, golem.GeneratedUpdateInput[nestedPost](fixture.Post,

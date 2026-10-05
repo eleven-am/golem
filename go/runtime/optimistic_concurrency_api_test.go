@@ -143,7 +143,7 @@ func TestOptimisticConcurrencyCreateUpdateDeleteAndLegacyBypassSQLite(t *testing
 	_, err = SystemUpsertVersioned(ctx, system, fixture.postDescriptor, fixture.target(3), golem.ExpectExisting(1), createPost(3, "unused"), fixture.updateTitle("missing"))
 	assertOptimisticConcurrencyError(t, err, golem.CodeNotFound, "record not found")
 	_, err = SystemUpsertVersioned(ctx, system, fixture.postDescriptor, fixture.target(3), golem.ExpectAbsent(), createPost(4, "mismatch"), fixture.updateTitle("unused"))
-	assertOptimisticConcurrencyError(t, err, golem.CodeBadUserInput, "mutation request is invalid")
+	assertOptimisticConcurrencyError(t, err, golem.CodeBadUserInput, "upsert create input does not set the target selector")
 
 	var createBefore, createAfter, createCommit, updateBefore, updateAfter, updateCommit, deleteBefore atomic.Int64
 	updatedField := golem.GeneratedEqualField[mutationResultPost, time.Time](schema.PostDateTime)
