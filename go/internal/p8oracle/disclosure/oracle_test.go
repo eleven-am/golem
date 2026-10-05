@@ -22,7 +22,10 @@ func TestP8HookComputedCustomAndAnalyticsDisclosureCorpus(t *testing.T) {
 	p8oracle.RunExternalScenarioRace(t, oracleSource, "hook-computed-custom-analytics")
 }
 
-const publicInputExecutions = 110
+const (
+	publicInputSeeds     = 10
+	publicInputMutations = 100
+)
 
 func FuzzP8PublicInputNeverDisclosesProtectedCanary(f *testing.F) {
 	const corpus = "external-public-input-corpus-v1"
@@ -31,6 +34,6 @@ func FuzzP8PublicInputNeverDisclosesProtectedCanary(f *testing.F) {
 		if selected != corpus {
 			return
 		}
-		p8oracle.RunExternalFuzz(t, oracleSource, "FuzzP8ExternalPublicInput", publicInputExecutions)
+		p8oracle.RunExternalFuzz(t, oracleSource, "FuzzP8ExternalPublicInput", publicInputSeeds, publicInputMutations)
 	})
 }

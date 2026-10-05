@@ -14,19 +14,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/eleven-am/golem/go/internal/testenv"
 	"github.com/eleven-am/golem/go/provider/postgresql"
-)
-
-const (
-	externalFuzzSetupBudget     = 2 * time.Minute
-	externalFuzzExecutionBudget = 5 * time.Second
 )
 
 type liveProfile struct {
@@ -68,12 +63,11 @@ func runExternalScenario(t *testing.T, source []byte, scenario string, race bool
 // external consumer own the fuzz loop. A single worker preserves disposable
 // database isolation while still exercising multiple generated inputs without
 // rebuilding the CLI or replaying migrations per input.
-func RunExternalFuzz(t *testing.T, source []byte, target string, executions int) {
+func RunExternalFuzz(t *testing.T, source []byte, target string, seeds, mutations int) {
 	t.Helper()
-	if target == "" || executions < 1 {
-		t.Fatal("external fuzz target and positive execution count are required")
+	if target == "" || seeds < 1 || mutations < 1 {
+		t.Fatal("external fuzz target, positive seed count, and positive mutation count are required")
 	}
-	arguments := externalFuzzArguments(target, executions)
 	runExternalProfiles(t, source, func(t *testing.T, consumer string, environment []string) {
 		environment = setEnvironment(environment, "P8_ORACLE_SCENARIO", "external-fuzz")
 		// The Go fuzz coordinator and its workers are separate processes. Give
@@ -84,19 +78,59 @@ func RunExternalFuzz(t *testing.T, source []byte, target string, executions int)
 			t.Fatalf("create external fuzz canary seed: %v", err)
 		}
 		environment = setEnvironment(environment, "P8_ORACLE_FUZZ_CANARY_SEED", hex.EncodeToString(canarySeed[:]))
-		output := strings.TrimSpace(runProcess(t, consumer, environment, "go", arguments...))
+		output := runExternalFuzzProcess(t, consumer, environment, target, seeds, mutations)
 		if output != "" {
 			t.Log(output)
 		}
 	})
 }
 
-func externalFuzzArguments(target string, executions int) []string {
-	timeout := externalFuzzSetupBudget + time.Duration(executions)*externalFuzzExecutionBudget
+func runExternalFuzzProcess(t testing.TB, directory string, environment []string, target string, seeds, mutations int) string {
+	t.Helper()
+	arguments := externalFuzzArguments(target, seeds, mutations, t.TempDir())
+	output := strings.TrimSpace(runProcess(t, directory, environment, "go", arguments...))
+	corpus, executions, err := externalFuzzExecutions(output)
+	if err != nil {
+		t.Fatalf("external fuzz %s did not report its executions: %v\n%s", target, err, output)
+	}
+	if corpus != seeds || executions-corpus < mutations {
+		t.Fatalf("external fuzz %s ran %d corpus inputs and %d mutations; want exactly %d seeds and at least %d mutations\n%s",
+			target, corpus, executions-corpus, seeds, mutations, output)
+	}
+	return output
+}
+
+func externalFuzzArguments(target string, seeds, mutations int, corpus string) []string {
 	return []string{
 		"test", "-race", "-run", "^$", "-fuzz", "^" + target + "$",
-		"-fuzztime", strconv.Itoa(executions) + "x", "-timeout", timeout.String(), "-parallel", "1", ".",
+		"-fuzztime", strconv.Itoa(seeds+mutations) + "x", "-fuzzminimizetime", "0x", "-parallel", "1", ".",
+		"-args", "-test.fuzzcachedir=" + corpus,
 	}
+}
+
+var (
+	externalFuzzCorpusPattern     = regexp.MustCompile(`(?m)^\s*fuzz: elapsed: \S+, (?:gathering baseline coverage|testing seed corpus): \d+/(\d+) completed`)
+	externalFuzzExecutionsPattern = regexp.MustCompile(`(?m)^\s*fuzz: elapsed: \S+, execs: (\d+) `)
+)
+
+func externalFuzzExecutions(output string) (int, int, error) {
+	corpus := externalFuzzCorpusPattern.FindStringSubmatch(output)
+	if corpus == nil {
+		return 0, 0, fmt.Errorf("no baseline corpus report")
+	}
+	executions := externalFuzzExecutionsPattern.FindAllStringSubmatch(output, -1)
+	if len(executions) == 0 {
+		return 0, 0, fmt.Errorf("fuzzing never started after the baseline corpus")
+	}
+	inputs, err := strconv.Atoi(corpus[1])
+	if err != nil {
+		return 0, 0, err
+	}
+	total, err := strconv.Atoi(executions[len(executions)-1][1])
+	if err != nil {
+		return 0, 0, err
+	}
+	return inputs, total, nil
 }
 
 // RunExternalBenchmark builds the same clean consumer once, provisions every
