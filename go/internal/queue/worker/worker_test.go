@@ -232,6 +232,22 @@ func awaitSignal(t *testing.T, signal <-chan struct{}, reason string) {
 	}
 }
 
+func awaitObservations(t *testing.T, records <-chan observe.Observation, count int, reason string) []observe.Observation {
+	t.Helper()
+	got := make([]observe.Observation, 0, count)
+	deadline := time.NewTimer(20 * time.Second)
+	defer deadline.Stop()
+	for len(got) < count {
+		select {
+		case value := <-records:
+			got = append(got, value)
+		case <-deadline.C:
+			t.Fatalf("timed out waiting for %s: observations=%d want %d", reason, len(got), count)
+		}
+	}
+	return got
+}
+
 func gateLimits() queue.Limits {
 	return queue.Limits{Concurrency: 4, ClaimBatch: 8, LeaseDuration: time.Second, PollInterval: 10 * time.Millisecond, ShutdownGrace: 2 * time.Second}
 }
@@ -1100,13 +1116,10 @@ func TestQueueLifecycleObservationsFollowDurableTransitions(t *testing.T) {
 			records <- value
 		}))
 		awaitState(t, fixture, identity, queueprovider.StateSucceeded)
+		got := awaitObservations(t, records, 4, "the retry lifecycle observations")
 		stop()
-		got := make([]observe.Observation, 0, len(records))
-		for len(records) != 0 {
-			got = append(got, <-records)
-		}
-		if len(got) != 4 {
-			t.Fatalf("observations=%d", len(got))
+		if len(records) != 0 {
+			t.Fatalf("observations=%d", len(got)+len(records))
 		}
 		wantPhases := []observe.Phase{observe.PhaseStart, observe.PhaseRetry, observe.PhaseStart, observe.PhaseFinish}
 		wantOutcomes := []observe.Outcome{observe.OutcomeSuccess, observe.OutcomeRetrying, observe.OutcomeSuccess, observe.OutcomeSuccess}
@@ -1127,17 +1140,24 @@ func TestQueueLifecycleObservationsFollowDurableTransitions(t *testing.T) {
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType))
 		records := make(chan observe.Observation, 4)
+		durable := make(chan struct{})
+		release := sync.OnceFunc(func() { close(durable) })
+		t.Cleanup(release)
 		_, stop := fixture.startObserved(t, fixture.store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+			if value.Phase() == observe.PhaseStart {
+				<-durable
+			}
 			records <- value
 		}))
 		awaitState(t, fixture, identity, queueprovider.StateFailed)
+		release()
+		got := awaitObservations(t, records, 2, "the exhaustion lifecycle observations")
 		stop()
-		if len(records) != 2 {
-			t.Fatalf("observations=%d", len(records))
+		if len(records) != 0 {
+			t.Fatalf("observations=%d", len(got)+len(records))
 		}
-		<-records
-		finished := <-records
-		if finished.Phase() != observe.PhaseFinish || finished.Outcome() != observe.OutcomeFailure || finished.Reason() != observe.ReasonLimit || finished.Attempt() != 1 {
+		finished := got[1]
+		if got[0].Phase() != observe.PhaseStart || finished.Phase() != observe.PhaseFinish || finished.Outcome() != observe.OutcomeFailure || finished.Reason() != observe.ReasonLimit || finished.Attempt() != 1 {
 			t.Fatalf("exhaustion observation=%#v", finished)
 		}
 	})
@@ -1170,22 +1190,49 @@ func TestQueueLifecycleObservationsFollowDurableTransitions(t *testing.T) {
 	t.Run("lost fence emits no false finish", func(t *testing.T) {
 		fixture := newHarness(t)
 		registry := queue.NewRegistry()
-		executed := make(chan struct{})
+		fenced := make(chan struct{}, 1)
 		jobType := register(t, registry, queue.Definition[gatePayload]{
 			Type:   "gate.observe.fenced",
-			Handle: func(context.Context, queue.Job[gatePayload]) error { close(executed); return nil },
+			Handle: func(context.Context, queue.Job[gatePayload]) error { return nil },
+		})
+		markerType := register(t, registry, queue.Definition[gatePayload]{
+			Type:   "gate.observe.marker",
+			Handle: func(context.Context, queue.Job[gatePayload]) error { return nil },
 		})
 		identity := fixture.enqueue(t, newPending(t, jobType))
-		records := make(chan observe.Observation, 4)
-		store := stubStore{Store: fixture.store, succeed: func(context.Context, string, string, string) (bool, error) { return false, nil }}
-		_, stop := fixture.startObserved(t, store, registry, gateLimits(), golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
+		records := make(chan observe.Observation, 16)
+		store := stubStore{Store: fixture.store, succeed: func(ctx context.Context, id, token, code string) (bool, error) {
+			if id != identity {
+				return fixture.store.Succeed(ctx, id, token, code)
+			}
+			select {
+			case fenced <- struct{}{}:
+			default:
+			}
+			return false, nil
+		}}
+		limits := gateLimits()
+		limits.Concurrency = 1
+		_, stop := fixture.startObserved(t, store, registry, limits, golem.SQLite, queueObserverFunc(func(_ context.Context, value observe.Observation) {
 			records <- value
 		}))
-		awaitSignal(t, executed, "the fenced handler to execute")
-		time.Sleep(25 * time.Millisecond)
+		awaitSignal(t, fenced, "the fenced completion to lose its lease")
+		fixture.enqueue(t, newPending(t, markerType))
+		var fencedStarts int
+		for marked := false; !marked; {
+			value := awaitObservations(t, records, 1, "the marker job to start after the fenced job")[0]
+			switch {
+			case value.QueueType() == "gate.observe.marker" && value.Phase() == observe.PhaseStart:
+				marked = true
+			case value.QueueType() == "gate.observe.fenced" && value.Phase() == observe.PhaseStart:
+				fencedStarts++
+			default:
+				t.Fatalf("lost fence observed %s/%s for %s job=%#v", value.Phase(), value.Outcome(), value.QueueType(), fixture.inspect(t, identity))
+			}
+		}
 		stop()
-		if len(records) != 1 || (<-records).Phase() != observe.PhaseStart {
-			t.Fatalf("lost fence observations=%d job=%#v", len(records), fixture.inspect(t, identity))
+		if fencedStarts == 0 {
+			t.Fatal("the fenced job start was not observed")
 		}
 	})
 
