@@ -360,7 +360,7 @@ func (builder *registryBuilder) indexLogical(model compilerir.ModelIR) error {
 				return fail(CodeField, fieldPath, "%v", err)
 			}
 			builder.logicalFields[logicalModel.ID][logicalField.ID] = logicalField
-			fact := Field{model: mid, id: fid, kind: logicalField.Kind}
+			fact := Field{model: mid, id: fid, kind: logicalField.Kind, logicalName: logicalField.LogicalName}
 			if logicalField.Scalar != nil {
 				fact.logicalType = cloneLogicalType(logicalField.Scalar.Type)
 				fact.nullable = logicalField.Scalar.Nullable

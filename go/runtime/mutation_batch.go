@@ -389,6 +389,10 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 		keys, err := rowlock.RowKeys(app.registry, rows)
 		return rows, keys, err
 	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		captured, err = nil, nil
+	}
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
@@ -733,6 +737,9 @@ func publicBatchPreparationError(operation mutationir.Operation, model golem.Mod
 	var planned *mutationplan.Error
 	if errors.As(err, &planned) && planned.Code == mutationplan.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, batchOperationName(operation), model, golem.FieldID(planned.Field), "batch mutation is not authorized", err)
+	}
+	if refused, ok := publicForeignKeyArithmetic(batchOperationName(operation), model, err); ok {
+		return refused
 	}
 	var public *golem.Error
 	if errors.As(err, &public) {

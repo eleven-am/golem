@@ -525,7 +525,7 @@ func (attempt *sqlxUpsertAttempt) AcquireGuard(ctx context.Context, guard mutati
 func (attempt *sqlxUpsertAttempt) Probe(ctx context.Context, statement mutationupsert.Statement) (uint32, error) {
 	recordQueryerStatement(ctx, attempt.queryer, attempt.binding.observation)
 	session := attempt.binding.lockSession(attempt.queryer, attempt.registry, attempt.provider, attempt.binding.mutation.limits.statementParameters)
-	return rowlock.Select(ctx, session, func(ctx context.Context) (uint32, []rowlock.Key, error) {
+	rows, err := rowlock.Select(ctx, session, func(ctx context.Context) (uint32, []rowlock.Key, error) {
 		rows, err := queryIdentityRows(ctx, attempt.queryer, attempt.registry, attempt.provider, statement.ModelID(), statement.Fields(), statement.SQL(), statement.Args())
 		if err != nil {
 			return 0, nil, err
@@ -533,6 +533,11 @@ func (attempt *sqlxUpsertAttempt) Probe(ctx context.Context, statement mutationu
 		keys, err := rowlock.RowKeys(attempt.registry, rows)
 		return uint32(len(rows)), keys, err
 	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return 0, nil
+	}
+	return rows, err
 }
 
 func acquireSelectorGuard(ctx context.Context, binding *executionBinding, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, guard mutationupsert.SelectorGuard) error {

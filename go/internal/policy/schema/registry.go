@@ -546,6 +546,7 @@ type Field struct {
 	updated          bool
 	databaseReadOnly bool
 	graphqlName      string
+	logicalName      string
 	modes            []compilerir.FieldMode
 	relation         golem.RelationID
 	relationRole     compilerir.RelationEndpointRole
@@ -571,6 +572,7 @@ func (field Field) Generation() (compilerir.GeneratedColumnIR, bool) {
 func (field Field) Updated() bool          { return field.updated }
 func (field Field) DatabaseReadOnly() bool { return field.databaseReadOnly }
 func (field Field) GraphQLName() string    { return field.graphqlName }
+func (field Field) LogicalName() string    { return field.logicalName }
 func (field Field) Modes() []compilerir.FieldMode {
 	return append([]compilerir.FieldMode(nil), field.modes...)
 }

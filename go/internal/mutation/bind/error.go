@@ -24,6 +24,8 @@ const (
 	CodeTarget    ErrorCode = "P4_BIND_TARGET"
 	CodeGuard     ErrorCode = "P4_BIND_GUARD"
 	CodeInternal  ErrorCode = "P4_BIND_INTERNAL"
+
+	CodeForeignKeyArithmetic ErrorCode = "P4_BIND_FOREIGN_KEY_ARITHMETIC"
 )
 
 type Error struct {

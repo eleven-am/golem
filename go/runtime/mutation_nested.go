@@ -2125,6 +2125,10 @@ func executeNestedGuardStatement(ctx context.Context, queryer sqlx.QueryerContex
 	return nil
 }
 
+func (transaction *systemNestedTransaction[P, A]) Registry() *schema.Registry {
+	return transaction.app.registry
+}
+
 func (transaction *systemNestedTransaction[P, A]) ApplyNested(ctx context.Context, request mutationnested.ApplyRequest) (result mutationnested.ApplyResult, resultErr error) {
 	if err := transaction.ensureGraphFactOrder(); err != nil {
 		return mutationnested.ApplyResult{}, err

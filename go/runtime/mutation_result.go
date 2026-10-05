@@ -6,6 +6,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationbatch "github.com/eleven-am/golem/go/internal/mutation/batch"
+	mutationbind "github.com/eleven-am/golem/go/internal/mutation/bind"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	mutationnested "github.com/eleven-am/golem/go/internal/mutation/nested"
@@ -695,6 +696,9 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 	if errors.As(err, &nested) && nested.Code == mutationnested.CodePolicy {
 		return golem.RuntimeOperationError(golem.CodeForbidden, scalarMutationOperationName(operation), model, nested.Field, "mutation is not authorized", err)
 	}
+	if refused, ok := publicForeignKeyArithmetic(scalarMutationOperationName(operation), model, err); ok {
+		return refused
+	}
 	var public *golem.Error
 	if errors.As(err, &public) {
 		return err
@@ -704,6 +708,14 @@ func publicMutationPreparationError(operation mutationir.Operation, model golem.
 		return publicTargetIdentityError(operation, model, identity, err)
 	}
 	return golem.RuntimeOperationError(golem.CodeBadUserInput, scalarMutationOperationName(operation), model, golem.FieldID{}, "mutation request is invalid", err)
+}
+
+func publicForeignKeyArithmetic(operation string, model golem.ModelID, err error) (error, bool) {
+	var bound *mutationbind.Error
+	if errors.As(err, &bound) && bound.Code == mutationbind.CodeForeignKeyArithmetic {
+		return golem.RuntimeOperationError(golem.CodeBadUserInput, operation, model, bound.Field, bound.Detail, err), true
+	}
+	return nil, false
 }
 
 func publicTargetIdentityError(operation mutationir.Operation, model golem.ModelID, identity *mutationnested.TargetIdentityError, err error) error {

@@ -232,6 +232,10 @@ func (transaction *recordingNestedTransaction) ExpandNested(_ context.Context, r
 	return NewRuntimeExpansion(works, 0)
 }
 
+func (transaction *recordingNestedTransaction) Registry() *schema.Registry {
+	return transaction.registry
+}
+
 func (transaction *recordingNestedTransaction) ApplyNested(_ context.Context, request ApplyRequest) (ApplyResult, error) {
 	if transaction.denyApply != 0 && len(transaction.applied)+1 == transaction.denyApply {
 		return ApplyResult{}, errNestedDenial

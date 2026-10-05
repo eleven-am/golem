@@ -3,6 +3,7 @@ package nested
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -29,7 +30,7 @@ type SQLExpansionRequest struct {
 
 func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statements []RelationSQLStatement) ([][]mutationdecode.Row, error) {
 	session := rowlock.Session{Ledger: request.Ledger, Queryer: request.Queryer, Registry: request.Registry, Provider: request.Provider, MaxParameters: request.MaxParameters}
-	return rowlock.Select(ctx, session, func(ctx context.Context) ([][]mutationdecode.Row, []rowlock.Key, error) {
+	results, err := rowlock.Select(ctx, session, func(ctx context.Context) ([][]mutationdecode.Row, []rowlock.Key, error) {
 		results := make([][]mutationdecode.Row, len(statements))
 		var keys []rowlock.Key
 		for index, statement := range statements {
@@ -45,6 +46,11 @@ func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statem
 		}
 		return results, keys, nil
 	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return make([][]mutationdecode.Row, len(statements)), nil
+	}
+	return results, err
 }
 
 // ExpandRelationSQL is the production database-expansion half of the nested

@@ -3,6 +3,7 @@ package rowlock
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -86,6 +87,23 @@ type ConflictError struct {
 
 func (failure *ConflictError) Error() string {
 	return fmt.Sprintf("P4_ROW_LOCK_CONFLICT: model=%x: %s", failure.Model, failure.Detail)
+}
+
+type VanishedError struct {
+	Model policyir.ModelID
+}
+
+func (failure *VanishedError) Error() string {
+	return fmt.Sprintf("P4_ROW_LOCK_VANISHED: model=%x: the selected row was deleted before it could be locked", failure.Model)
+}
+
+type vanishedRows struct {
+	model             policyir.ModelID
+	locked, requested int
+}
+
+func (failure *vanishedRows) Error() string {
+	return fmt.Sprintf("P4_ROW_LOCK_VANISHED: model=%x: %d of %d enumerated rows remained to lock", failure.model, failure.locked, failure.requested)
 }
 
 type ContentionError struct{}
@@ -190,15 +208,7 @@ func (session Session) Lock(ctx context.Context, keys []Key) (bool, error) {
 	if err := session.postgres(); err != nil {
 		return false, err
 	}
-	held, highest := session.Ledger.snapshot()
-	var pending []pendingLock
-	for _, key := range strongestSorted(keys) {
-		current, present := held[key.order]
-		if present && current >= key.mode {
-			continue
-		}
-		pending = append(pending, pendingLock{key: key, nowait: present || key.order < highest})
-	}
+	pending := plan(session.Ledger, keys)
 	if len(pending) == 0 {
 		return false, nil
 	}
@@ -217,6 +227,19 @@ func (session Session) Lock(ctx context.Context, keys []Key) (bool, error) {
 		start = end
 	}
 	return true, nil
+}
+
+func plan(ledger *Ledger, keys []Key) []pendingLock {
+	held, highest := ledger.snapshot()
+	var pending []pendingLock
+	for _, key := range strongestSorted(keys) {
+		current, present := held[key.order]
+		if present && current >= key.mode {
+			continue
+		}
+		pending = append(pending, pendingLock{key: key, nowait: present || key.order < highest})
+	}
+	return pending
 }
 
 func (session Session) lockModel(ctx context.Context, keys []Key, nowait bool) error {
@@ -296,7 +319,7 @@ func (session Session) lockChunk(ctx context.Context, resolver policysql.Resolve
 		return err
 	}
 	if keys[0].mode == Update && len(locked) != len(keys) {
-		return &ConflictError{Model: keys[0].model, Detail: fmt.Sprintf("%d of %d enumerated rows remained to lock", len(locked), len(keys))}
+		return &vanishedRows{model: keys[0].model, locked: len(locked), requested: len(keys)}
 	}
 	session.Ledger.record(locked)
 	return nil
@@ -356,6 +379,13 @@ func Select[T any](ctx context.Context, session Session, enumerate func(context.
 		}
 	}
 	acquired, err := session.Lock(ctx, keys)
+	var gone *vanishedRows
+	if errors.As(err, &gone) {
+		if len(strongestSorted(keys)) == 1 {
+			return zero, &VanishedError{Model: gone.model}
+		}
+		return zero, &ConflictError{Model: gone.model, Detail: gone.Error()}
+	}
 	if err != nil {
 		return zero, err
 	}

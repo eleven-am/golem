@@ -42,6 +42,7 @@ type SocialMutationFixture struct {
 	PostTagPostRelation, PostTagTagRelation                   golem.RelationID
 
 	UserKey, PostKey, CommentKey, FriendshipKey golem.KeyID
+	UserNameKey                                 golem.KeyID
 	TagKey, TagNameKey, PostTagKey              golem.KeyID
 }
 
@@ -66,7 +67,19 @@ func NewSubscribedSocialMutationAdversarialRelationOrderPostgreSQLNamespaces(t t
 	return newSubscribedSocialMutation(t, namespace, systemNamespace, true)
 }
 
+func NewSubscribedSocialMutationUniqueUserName(t testing.TB) SocialMutationFixture {
+	return newSocialMutation(t, "public", "_golem", false, true)
+}
+
+func NewSubscribedSocialMutationUniqueUserNamePostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) SocialMutationFixture {
+	return newSocialMutation(t, namespace, systemNamespace, false, true)
+}
+
 func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace physical.PhysicalName, adversarialRelationOrder bool) SocialMutationFixture {
+	return newSocialMutation(t, postgresNamespace, postgresSystemNamespace, adversarialRelationOrder, false)
+}
+
+func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace physical.PhysicalName, adversarialRelationOrder, uniqueUserName bool) SocialMutationFixture {
 	t.Helper()
 	user, post, comment := compilerir.ModelID(id(401)), compilerir.ModelID(id(402)), compilerir.ModelID(id(403))
 	friendship, tag, postTag := compilerir.ModelID(id(404)), compilerir.ModelID(id(405)), compilerir.ModelID(id(406))
@@ -96,6 +109,7 @@ func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystem
 
 	userKey, postKey, commentKey := compilerir.KeyID(id(481)), compilerir.KeyID(id(482)), compilerir.KeyID(id(483))
 	friendshipKey, tagKey, tagNameKey, postTagKey := compilerir.KeyID(id(484)), compilerir.KeyID(id(485)), compilerir.KeyID(id(486)), compilerir.KeyID(id(487))
+	userNameKey := compilerir.KeyID(id(488))
 
 	model := compilerir.ModelIR{
 		FormatVersion: compilerir.ModelFormatVersion,
@@ -158,6 +172,9 @@ func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystem
 		},
 	}
 
+	if uniqueUserName {
+		model.Models[0].Uniques = []compilerir.KeyIR{{ID: userNameKey, Kind: compilerir.KeyUnique, LogicalName: "Name", PhysicalName: "uq_users_name", Fields: []compilerir.FieldID{userName}}}
+	}
 	contract := compilerir.ContractIR{FormatVersion: compilerir.ContractFormatVersion, Models: []compilerir.ModelContractIR{
 		{ModelID: user, Fields: fieldContracts(userID, userName, userPosts, userComments, userFriendshipsFrom, userFriendshipsTo), Subscriptions: true},
 		{ModelID: post, Fields: fieldContracts(postID, postAuthorID, postTitle, postAuthor, postComments, postPostTags), Subscriptions: true},
@@ -203,7 +220,7 @@ func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystem
 		t.Fatalf("bootstrap social mutation schema: %v", err)
 	}
 
-	return SocialMutationFixture{
+	fixture := SocialMutationFixture{
 		Bundle: bundle, Registry: registry, SQLite: sqliteSchema, PostgreSQL: postgresSchema,
 		User: golem.ModelID(mustFixed(t, string(user))), Post: golem.ModelID(mustFixed(t, string(post))), Comment: golem.ModelID(mustFixed(t, string(comment))),
 		Friendship: golem.ModelID(mustFixed(t, string(friendship))), Tag: golem.ModelID(mustFixed(t, string(tag))), PostTag: golem.ModelID(mustFixed(t, string(postTag))),
@@ -220,4 +237,8 @@ func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystem
 		UserKey: golem.KeyID(mustFixed(t, string(userKey))), PostKey: golem.KeyID(mustFixed(t, string(postKey))), CommentKey: golem.KeyID(mustFixed(t, string(commentKey))), FriendshipKey: golem.KeyID(mustFixed(t, string(friendshipKey))),
 		TagKey: golem.KeyID(mustFixed(t, string(tagKey))), TagNameKey: golem.KeyID(mustFixed(t, string(tagNameKey))), PostTagKey: golem.KeyID(mustFixed(t, string(postTagKey))),
 	}
+	if uniqueUserName {
+		fixture.UserNameKey = golem.KeyID(mustFixed(t, string(userNameKey)))
+	}
+	return fixture
 }

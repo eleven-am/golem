@@ -8,7 +8,7 @@ import (
 	"github.com/eleven-am/golem/go/internal/policy/schematest"
 )
 
-func TestHookRewriteOfAStaticallyMatchingCreateIsRefusedAfterTheWrite(t *testing.T) {
+func TestHookRewriteOfAMatchingCreateIsRefusedBeforeTheWrite(t *testing.T) {
 	var rewrites int
 	var rewrittenAuthor *golem.UUID
 	hooks := func(schema schematest.GraphFixture) []golem.HookBinding[graphMutationActor] {

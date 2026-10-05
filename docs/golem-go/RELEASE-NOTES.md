@@ -21,21 +21,29 @@ Unreleased.
 **Behaviour change: an upsert's create input must name its target, whichever
 branch runs.** An upsert, root or nested at any depth, whose create input does
 not set every field of its unique target to the target's value is now refused
-with `BAD_USER_INPUT` (`upsert create input does not set the target selector`)
-before any query runs. Before, the refusal came only when the create branch
-ran, so the same call succeeded or failed depending on whether the row already
-existed. A foreign-key field of the target is satisfied by a `Connect` on its
-relation to the row holding that value, and a field a nested parent fills is
-satisfied only when the parent's value is known in the request and equal.
+with `BAD_USER_INPUT` (`upsert create input does not set the target selector`).
+A root upsert is refused before any query runs. A nested upsert is refused when
+its parent row has been written and before the upsert's own probe or either
+branch runs, so the parent's values are known however the parent was selected.
+Before, the refusal came only when the create branch ran, so the same call
+succeeded or failed depending on whether the row already existed. A
+foreign-key field of the target is satisfied by a `Connect` on its relation to
+the row holding that value, or by the value the nested parent's row gives it.
 
 **Behaviour change: `ConnectOrCreate` follows the same rule.** A nested
 `ConnectOrCreate` whose create input does not reproduce its target is refused
 with `BAD_USER_INPUT` (`connectOrCreate create input does not set the target
-selector`) before any query runs. Before, it created a row under a different
-identity and linked it whenever the target was absent. A `Before` create hook
-that rewrites a nested upsert or `ConnectOrCreate` create away from its target
-is refused after the write and the transaction is rolled back; before, a
-rewritten `ConnectOrCreate` create was linked.
+selector`) at the same point, before its probe or either branch runs. Before,
+it created a row under a different identity and linked it whenever the target
+was absent. A `Before` create hook that rewrites a nested upsert or
+`ConnectOrCreate` create away from its target is refused before the rewritten
+row is written; before, a rewritten `ConnectOrCreate` create was linked.
+
+**Behaviour change: arithmetic on a foreign key is refused.** An `Increment` or
+`Decrement` on a field that is part of a relation's foreign key is refused with
+`BAD_USER_INPUT: foreign key <Field> cannot be changed by arithmetic` before
+any statement runs, for every caller, in updates and `UpdateMany`. Set the new
+value instead.
 
 **Upgrading.** Give every upsert and `ConnectOrCreate` create input the
 target's values, even where the update or connect branch is the one you
@@ -80,8 +88,11 @@ a row, or a selector guard, sorting before one it already holds does not wait.
 If another transaction holds it, the write fails with `CONFLICT: mutation
 conflicted` (`batch mutation conflicted` for a batch). It also fails with
 `CONFLICT` if the rows it found changed before it could lock them, for example
-a target deleted or a new row matching an `UpdateMany` filter; it does not lock
-again. Upserts and nested writes containing an upsert or connectOrCreate retry
+one row of an `UpdateMany` deleted, a new row matching its filter, or a row
+whose matching values changed; it does not lock again. A single update, delete
+or upsert target that was deleted before it could be locked is reported
+exactly as a missing target: `NOT_FOUND` for an update or delete, and the
+create branch for an upsert. Upserts and nested writes containing an upsert or connectOrCreate retry
 the whole attempt before reporting `CONFLICT`, except inside an application
 transaction. A PostgreSQL deadlock, lock-timeout or serialization failure
 inside a nested write now reports `CONFLICT`. Before, it reported

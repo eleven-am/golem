@@ -76,7 +76,7 @@ func referencedValue(field policyir.FieldID, written map[policyir.FieldID]mutati
 		if operation.Kind() == mutationir.ScalarNull {
 			return policyir.Value{}, false, nil
 		}
-		return policyir.Value{}, false, fmt.Errorf("P4_ROW_LOCK_REFERENCE: foreign-key field %x is written by an operation whose value is not known before the write", field)
+		return policyir.Value{}, false, fmt.Errorf("P4_ROW_LOCK_INVARIANT: foreign-key field %x reached the ledger with arithmetic, which the binder refuses", field)
 	}
 	if !imaged {
 		return policyir.Value{}, false, nil

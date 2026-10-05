@@ -32,6 +32,14 @@ func onceAfterEnumeration(ctx context.Context, fault func(context.Context) error
 	})
 }
 
+func assertPublicNotFound(t testing.TB, err error) {
+	t.Helper()
+	var failure *golem.Error
+	if !errors.As(err, &failure) || failure.Code != golem.CodeNotFound {
+		t.Fatalf("error=%v failure=%#v; want %s", err, failure, golem.CodeNotFound)
+	}
+}
+
 func TestPostgreSQLRowsChangedBetweenEnumerationAndLockFailWithConflict(t *testing.T) {
 	for _, profile := range postgresAcceptanceProfiles() {
 		profile := profile
@@ -42,27 +50,29 @@ func TestPostgreSQLRowsChangedBetweenEnumerationAndLockFailWithConflict(t *testi
 			ctx := context.Background()
 			fixture, namespace := newMutationResultPostgresFixture(t, ctx, profile)
 			posts := `"` + string(namespace) + `"."posts"`
-			for _, post := range []byte{10, 11, 12} {
+			for _, post := range []byte{10, 11, 12, 13, 14, 15} {
 				if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(post, golem.UUID{15: 1}, "before")); err != nil {
 					t.Fatal(err)
 				}
 			}
 			caller := mustMutationResultCaller(t, fixture)
 			database := fixture.app.database
+			deleting := func(post byte) context.Context {
+				return onceAfterEnumeration(ctx, func(ctx context.Context) error {
+					_, err := database.ExecContext(ctx, `DELETE FROM `+posts+` WHERE "id" = $1`, mutationResultUUIDText(post))
+					return err
+				})
+			}
 
-			vanished := onceAfterEnumeration(ctx, func(ctx context.Context) error {
-				_, err := database.ExecContext(ctx, `DELETE FROM `+posts+` WHERE "id" = $1`, mutationResultUUIDText(10))
-				return err
-			})
-			_, err := CallerUpdate(vanished, caller, fixture.postDescriptor, fixture.target(11), fixture.updateTitle("after"))
-			if err != nil {
+			if _, err := CallerUpdate(deleting(10), caller, fixture.postDescriptor, fixture.target(11), fixture.updateTitle("after")); err != nil {
 				t.Fatalf("a fault on another row changed this update: %v", err)
 			}
-			vanishedTarget := onceAfterEnumeration(ctx, func(ctx context.Context) error {
-				_, err := database.ExecContext(ctx, `DELETE FROM `+posts+` WHERE "id" = $1`, mutationResultUUIDText(12))
-				return err
-			})
-			_, err = CallerUpdate(vanishedTarget, caller, fixture.postDescriptor, fixture.target(12), fixture.updateTitle("after"))
+			_, err := CallerUpdate(deleting(12), caller, fixture.postDescriptor, fixture.target(12), fixture.updateTitle("after"))
+			assertPublicNotFound(t, err)
+			_, err = CallerDelete(deleting(13), caller, fixture.postDescriptor, fixture.target(13))
+			assertPublicNotFound(t, err)
+
+			_, err = CallerUpdateMany(deleting(14), caller, fixture.postDescriptor, fixture.title.Eq("before"), golem.GeneratedUpdateManyInput[mutationResultPost](fixture.schema.Post, golem.GeneratedSetFieldValue(fixture.schema.Post, fixture.title, "bulk")))
 			assertPublicConflict(t, err)
 
 			changed := onceAfterEnumeration(ctx, func(ctx context.Context) error {
@@ -75,8 +85,8 @@ func TestPostgreSQLRowsChangedBetweenEnumerationAndLockFailWithConflict(t *testi
 			if err := database.SelectContext(ctx, &titles, `SELECT "title" FROM `+posts+` ORDER BY "id"`); err != nil {
 				t.Fatal(err)
 			}
-			if len(titles) != 1 || titles[0] != "moved" {
-				t.Fatalf("titles=%v; the conflicting writes must leave only the concurrent change", titles)
+			if len(titles) != 2 || titles[0] != "moved" || titles[1] != "before" {
+				t.Fatalf("titles=%v; the refused writes must leave only the concurrent changes", titles)
 			}
 		})
 	}

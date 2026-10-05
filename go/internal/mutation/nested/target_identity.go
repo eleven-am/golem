@@ -48,76 +48,54 @@ func RootCreatedValues(registry *schema.Registry, operations []mutationir.Scalar
 	return written, nil
 }
 
-func refuseGraphOffTarget(registry *schema.Registry, root mutationir.NodeInput) error {
-	known := knownValues{}
-	switch root.Operation {
-	case mutationir.Create:
-		known = createdValues(registry, root, known)
-	case mutationir.Update:
-		known = selectedValues(root.Target, known)
+func refuseNestedCreateOffTarget(registry *schema.Registry, nodes []mutationir.Node, identity targetIdentity, create mutationir.Node, anchor *AppliedNode) error {
+	written, err := impliedValues(registry, create, anchor)
+	if err != nil {
+		return err
 	}
-	return refuseChildrenOffTarget(registry, root.Children, known)
-}
-
-func refuseChildrenOffTarget(registry *schema.Registry, children []mutationir.NodeInput, parent knownValues) error {
-	for _, child := range children {
-		if err := refuseNodeOffTarget(registry, child, parent); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func refuseNodeOffTarget(registry *schema.Registry, node mutationir.NodeInput, parent knownValues) error {
-	switch node.Operation {
-	case mutationir.CreateMany:
-		return refuseChildrenOffTarget(registry, node.Children, parent)
-	case mutationir.Create:
-		return refuseChildrenOffTarget(registry, node.Children, createdValues(registry, node, impliedValues(registry, node.RelationPosition, parent)))
-	case mutationir.Update:
-		return refuseChildrenOffTarget(registry, node.Children, selectedValues(positionTarget(node.RelationPosition), impliedValues(registry, node.RelationPosition, parent)))
-	case mutationir.Upsert, mutationir.ConnectOrCreate:
-		implied := impliedValues(registry, node.RelationPosition, parent)
-		target := positionTarget(node.RelationPosition)
-		for _, branch := range node.Children {
-			switch branch.Operation {
-			case mutationir.Create:
-				written := createdValues(registry, branch, implied)
-				if target != nil {
-					if err := RefuseOffTarget(node.Operation, *target, written); err != nil {
-						return err
-					}
-				}
-				if err := refuseChildrenOffTarget(registry, branch.Children, written); err != nil {
-					return err
-				}
-			case mutationir.Update:
-				if err := refuseChildrenOffTarget(registry, branch.Children, selectedValues(target, implied)); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func createdValues(registry *schema.Registry, node mutationir.NodeInput, implied knownValues) knownValues {
-	written := make(knownValues, len(implied)+len(node.ScalarOperations))
-	for field, value := range implied {
-		written[field] = value
-	}
-	for _, child := range node.Children {
-		if child.Operation != mutationir.BranchProbe || !child.BeforeParent || child.RelationPosition == nil {
+	for _, ordinal := range create.ChildOrdinals() {
+		if int(ordinal) >= len(nodes) {
 			continue
 		}
-		target, selected := child.RelationPosition.Target()
-		endpoint, ok := positionEndpoint(registry, child.RelationPosition)
-		if selected && ok {
+		child := nodes[ordinal]
+		position, positioned := child.RelationPosition()
+		if child.Operation() != mutationir.BranchProbe || !child.ExecutesBeforeParent() || !positioned {
+			continue
+		}
+		target, selected := position.Target()
+		endpoint, found := registry.RelationEndpoint(golem.ModelID(position.ParentModelID()), golem.FieldID(position.FieldID()), golem.RelationID(position.RelationID()))
+		if selected && found {
 			connectedValues(endpoint, target, written)
 		}
 	}
-	authoredValues(node.ScalarOperations, written)
-	return written
+	authoredValues(create.ScalarOperations(), written)
+	return RefuseOffTarget(identity.operation, identity.target, written)
+}
+
+func impliedValues(registry *schema.Registry, create mutationir.Node, anchor *AppliedNode) (knownValues, error) {
+	implied := knownValues{}
+	position, positioned := create.RelationPosition()
+	if !positioned || anchor == nil {
+		return implied, nil
+	}
+	endpoint, found := registry.RelationEndpoint(golem.ModelID(position.ParentModelID()), golem.FieldID(position.FieldID()), golem.RelationID(position.RelationID()))
+	if !found || endpoint.Role() != compilerir.RelationInverse {
+		return implied, nil
+	}
+	row, err := appliedRow(*anchor)
+	if err != nil {
+		return nil, err
+	}
+	for _, pair := range endpoint.Correlation() {
+		cell, present := row.Cell(policyir.FieldID(pair.ParentFieldID()))
+		if !present || cell.IsNull() {
+			continue
+		}
+		if value, valued := cell.PolicyValue(); valued {
+			implied[policyir.FieldID(pair.ChildFieldID())] = value
+		}
+	}
+	return implied, nil
 }
 
 func authoredValues(operations []mutationir.ScalarOperation, written knownValues) {
@@ -133,56 +111,13 @@ func connectedValues(endpoint schema.RelationEndpoint, target mutationir.Target,
 	if endpoint.Role() != compilerir.RelationSource {
 		return
 	}
-	selected := selectedValues(&target, knownValues{})
+	selected := make(knownValues, len(target.Values()))
+	for _, value := range target.Values() {
+		selected[value.FieldID()] = value.Value()
+	}
 	for _, pair := range endpoint.Correlation() {
 		if value, present := selected[policyir.FieldID(pair.ChildFieldID())]; present {
 			written[policyir.FieldID(pair.ParentFieldID())] = value
 		}
 	}
-}
-
-func impliedValues(registry *schema.Registry, position *mutationir.RelationPosition, parent knownValues) knownValues {
-	implied := knownValues{}
-	endpoint, ok := positionEndpoint(registry, position)
-	if !ok || endpoint.Role() != compilerir.RelationInverse {
-		return implied
-	}
-	for _, pair := range endpoint.Correlation() {
-		if value, present := parent[policyir.FieldID(pair.ParentFieldID())]; present {
-			implied[policyir.FieldID(pair.ChildFieldID())] = value
-		}
-	}
-	return implied
-}
-
-func selectedValues(target *mutationir.Target, implied knownValues) knownValues {
-	selected := make(knownValues, len(implied))
-	for field, value := range implied {
-		selected[field] = value
-	}
-	if target == nil {
-		return selected
-	}
-	for _, value := range target.Values() {
-		selected[value.FieldID()] = value.Value()
-	}
-	return selected
-}
-
-func positionTarget(position *mutationir.RelationPosition) *mutationir.Target {
-	if position == nil {
-		return nil
-	}
-	target, selected := position.Target()
-	if !selected {
-		return nil
-	}
-	return &target
-}
-
-func positionEndpoint(registry *schema.Registry, position *mutationir.RelationPosition) (schema.RelationEndpoint, bool) {
-	if position == nil {
-		return schema.RelationEndpoint{}, false
-	}
-	return registry.RelationEndpoint(golem.ModelID(position.ParentModelID()), golem.FieldID(position.FieldID()), golem.RelationID(position.RelationID()))
 }

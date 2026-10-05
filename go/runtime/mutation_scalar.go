@@ -705,6 +705,10 @@ func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, bi
 		}
 		return selected{row: row, found: true}, []rowlock.Key{key}, nil
 	})
+	var vanished *rowlock.VanishedError
+	if errors.As(err, &vanished) {
+		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
+	}
 	if err != nil {
 		var failure *scalarMutationFailure
 		if errors.As(err, &failure) {

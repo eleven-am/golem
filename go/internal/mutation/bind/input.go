@@ -312,6 +312,9 @@ func bindInput(kind InputKind, frozen golem.FrozenMutationInput, registry *schem
 		if kind == InputUpdateMany && identityField(model, fieldID) {
 			return ScalarInput{}, nil, fail(CodeOperation, modelID, fieldID, "batch mutation cannot change an identity component", nil)
 		}
+		if arithmetic(public.Operation()) && foreignKeyField(registry, model, fieldID) {
+			return ScalarInput{}, nil, fail(CodeForeignKeyArithmetic, modelID, fieldID, fmt.Sprintf("foreign key %s cannot be changed by arithmetic", field.LogicalName()), nil)
+		}
 		typ, err := bindType(field.LogicalType(), field.Nullable())
 		if err != nil {
 			return ScalarInput{}, nil, fail(CodeInternal, modelID, fieldID, "active field has an invalid logical type", err)
@@ -428,6 +431,34 @@ func bindScalarOperation(kind InputKind, public golem.FrozenMutationField, field
 		return mutationir.ScalarOperation{}, fail(CodeInternal, modelID, fieldID, "scalar IR rejected a validated operation", err)
 	}
 	return bound, nil
+}
+
+func arithmetic(operation golem.MutationFieldOperation) bool {
+	return operation == golem.MutationFieldIncrement || operation == golem.MutationFieldDecrement
+}
+
+func foreignKeyField(registry *schema.Registry, model schema.Model, fieldID golem.FieldID) bool {
+	for _, candidate := range model.Fields() {
+		field, ok := registry.Field(model.ID(), candidate)
+		if !ok {
+			continue
+		}
+		relation, relational := field.RelationID()
+		role, _ := field.RelationRole()
+		if !relational || role != compilerir.RelationSource {
+			continue
+		}
+		endpoint, ok := registry.RelationEndpoint(model.ID(), candidate, relation)
+		if !ok {
+			continue
+		}
+		for _, pair := range endpoint.Correlation() {
+			if pair.ParentFieldID() == fieldID {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func mutationExposure(field schema.Field, kind InputKind) string {

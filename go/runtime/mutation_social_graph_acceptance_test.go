@@ -432,8 +432,12 @@ func openSocialMutationFixture(t testing.TB, database *sqlx.DB, provider golem.P
 	tagNameIdentity := golem.GeneratedIdentityMetadata(schema.Tag, schema.TagNameKey, golem.UniqueIdentity, schema.TagName)
 	postTagIdentity := golem.GeneratedIdentityMetadata(schema.PostTag, schema.PostTagKey, golem.PrimaryIdentity, schema.PostTagPostID, schema.PostTagTagName)
 
+	userIdentities := []golem.IdentityMetadata{userIdentity}
+	if schema.UserNameKey != (golem.KeyID{}) {
+		userIdentities = append(userIdentities, golem.GeneratedIdentityMetadata(schema.User, schema.UserNameKey, golem.UniqueIdentity, schema.UserName))
+	}
 	userDescriptor := golem.GeneratedModelDescriptor[socialMutationUser](schema.User, golem.GeneratedDescriptorShape(
-		[]golem.FieldID{schema.UserID, schema.UserName}, nil, []golem.IdentityMetadata{userIdentity}, []golem.RelationMetadata{
+		[]golem.FieldID{schema.UserID, schema.UserName}, nil, userIdentities, []golem.RelationMetadata{
 			golem.GeneratedRelationMetadata(schema.User, schema.Post, schema.UserPosts, schema.PostAuthorship, golem.RelationInverse, golem.RelationToMany),
 			golem.GeneratedRelationMetadata(schema.User, schema.Comment, schema.UserComments, schema.CommentAuthorship, golem.RelationInverse, golem.RelationToMany),
 			golem.GeneratedRelationMetadata(schema.User, schema.Friendship, schema.UserFriendshipsFrom, schema.FriendshipOrigin, golem.RelationInverse, golem.RelationToMany),

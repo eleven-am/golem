@@ -175,6 +175,8 @@ func (transaction *sqliteCOCTransaction) ExpandNested(ctx context.Context, reque
 	return NewRuntimeExpansion([]RuntimeWork{work}, 0)
 }
 
+func (transaction *sqliteCOCTransaction) Registry() *schema.Registry { return transaction.registry }
+
 func (transaction *sqliteCOCTransaction) ApplyNested(ctx context.Context, request ApplyRequest) (ApplyResult, error) {
 	node := request.Node()
 	switch node.Operation() {

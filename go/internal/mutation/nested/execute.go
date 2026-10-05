@@ -11,6 +11,7 @@ import (
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
+	"github.com/eleven-am/golem/go/internal/policy/schema"
 )
 
 // ExecutionBoundary is the provider/runtime seam for the nested engine. One
@@ -25,6 +26,7 @@ type ExecutionBoundary interface {
 // delegates row writes to the scalar, batch, and upsert kernels. VerifyNested
 // is called in reverse depth-first order after every write has succeeded.
 type ExecutionTransaction interface {
+	Registry() *schema.Registry
 	ExpandNested(context.Context, ExpansionRequest) (RuntimeExpansion, error)
 	ApplyNested(context.Context, ApplyRequest) (ApplyResult, error)
 	VerifyNested(context.Context, AppliedNode) error
@@ -415,7 +417,7 @@ func Execute(ctx context.Context, graph mutationir.Graph, maxTouchedRows uint32,
 		}
 	}()
 
-	engine := executionEngine{ctx: ctx, transaction: transaction, nodes: nodes, maxTouched: maxTouchedRows}
+	engine := executionEngine{ctx: ctx, transaction: transaction, nodes: nodes, maxTouched: maxTouchedRows, registry: transaction.Registry()}
 	if err = engine.executeNode(nodes[0], nil); err != nil {
 		return ExecutionReceipt{}, err
 	}
@@ -459,7 +461,7 @@ type executionEngine struct {
 	orderEntry        uint32
 	hasOrderEntry     bool
 	dependencyDepth   uint32
-	entryIdentity     *targetIdentity
+	registry          *schema.Registry
 }
 
 func (engine *executionEngine) executeNode(node mutationir.Node, inherited map[uint32]AppliedNode) error {
@@ -485,6 +487,9 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 	}
 	identity, err := engine.requiredUpsertIdentity(node)
 	if err != nil {
+		return err
+	}
+	if err := engine.refuseContainerOffTarget(node, relationOwner(parent, anchor)); err != nil {
 		return err
 	}
 	if allowTransform && !container(node.Operation()) && !postExpansionTransform(node) {
@@ -553,11 +558,6 @@ func (engine *executionEngine) executeNodeWithContext(node mutationir.Node, inhe
 		}
 		if resultErr := validateApplyResult(node, result); resultErr != nil {
 			return resultErr
-		}
-		if identity != nil && engine.replacementEntry(node) {
-			if identityErr := validateUpsertCreateIdentity(identity, node, result); identityErr != nil {
-				return identityErr
-			}
 		}
 		if len(dependencies) != 0 {
 			if ordered, ok := engine.transaction.(BeforeParentTransaction); ok {
@@ -697,9 +697,11 @@ func (engine *executionEngine) executeReplacement(replacement SubtreeReplacement
 	if len(nodes) == 0 || int(replacement.entry) >= len(nodes) {
 		return fmt.Errorf("P4_NESTED_TRANSFORM: replacement graph or entry is invalid")
 	}
-	originalIdentity := engine.entryIdentity
-	engine.entryIdentity = identity
-	defer func() { engine.entryIdentity = originalIdentity }()
+	if identity != nil {
+		if err := refuseNestedCreateOffTarget(engine.registry, nodes, *identity, nodes[replacement.entry], relationOwner(parent, anchor)); err != nil {
+			return err
+		}
+	}
 	original := engine.nodes
 	originalPrefix := engine.orderPrefix
 	originalEntry, originalHasEntry := engine.orderEntry, engine.hasOrderEntry
@@ -972,10 +974,6 @@ func validateApplyResult(node mutationir.Node, result ApplyResult) error {
 	return nil
 }
 
-func (engine *executionEngine) replacementEntry(node mutationir.Node) bool {
-	return engine.hasOrderEntry && node.Ordinal() == engine.orderEntry && engine.entryIdentity != nil
-}
-
 type targetIdentity struct {
 	operation mutationir.Operation
 	target    mutationir.Target
@@ -984,9 +982,6 @@ type targetIdentity struct {
 func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (*targetIdentity, error) {
 	if node.Operation() != mutationir.Create {
 		return nil, nil
-	}
-	if engine.replacementEntry(node) {
-		return engine.entryIdentity, nil
 	}
 	container := map[mutationir.Branch]mutationir.Operation{mutationir.UpsertCreateBranch: mutationir.Upsert, mutationir.ConnectOrCreateCreateBranch: mutationir.ConnectOrCreate}
 	operation, selected := container[node.Branch()]
@@ -1008,20 +1003,31 @@ func (engine *executionEngine) requiredUpsertIdentity(node mutationir.Node) (*ta
 	return &targetIdentity{operation: operation, target: target}, nil
 }
 
-func validateUpsertCreateIdentity(identity *targetIdentity, node mutationir.Node, result ApplyResult) error {
-	after, ok := result.After()
-	if !ok {
-		return fmt.Errorf("P4_NESTED_EXEC_RESULT: upsert create node %d returned no after image", node.Ordinal())
+func relationOwner(parent, anchor *AppliedNode) *AppliedNode {
+	if anchor != nil {
+		return anchor
 	}
-	written := knownValues{}
-	for _, selector := range identity.target.Values() {
-		cell, present := after.Cell(selector.FieldID())
-		value, valued := cell.PolicyValue()
-		if present && !cell.IsNull() && valued {
-			written[selector.FieldID()] = value
+	return parent
+}
+
+func (engine *executionEngine) refuseContainerOffTarget(node mutationir.Node, anchor *AppliedNode) error {
+	if node.Operation() != mutationir.Upsert && node.Operation() != mutationir.ConnectOrCreate {
+		return nil
+	}
+	position, positioned := node.RelationPosition()
+	if !positioned {
+		return nil
+	}
+	target, targeted := position.Target()
+	if !targeted {
+		return nil
+	}
+	for _, ordinal := range node.ChildOrdinals() {
+		if int(ordinal) < len(engine.nodes) && engine.nodes[ordinal].Operation() == mutationir.Create {
+			return refuseNestedCreateOffTarget(engine.registry, engine.nodes, targetIdentity{operation: node.Operation(), target: target}, engine.nodes[ordinal], anchor)
 		}
 	}
-	return RefuseOffTarget(identity.operation, identity.target, written)
+	return fmt.Errorf("P4_NESTED_EXEC_GRAPH: %d node %d has no create branch", node.Operation(), node.Ordinal())
 }
 
 func selectedChild(operation mutationir.Operation, branch, selected mutationir.Branch) bool {
