@@ -80,7 +80,7 @@ failure inside a nested write now reports `CONFLICT`. Before, it reported
 `BAD_USER_INPUT: mutation request is invalid`.
 
 **Cost.** A PostgreSQL write now runs two more statements for rows the same
-transaction has not already touched, so a single-row update or delete runs
+transaction has not already written, so a single-row update or delete runs
 three statements instead of one. A write that sets a foreign key runs one more
 statement, or three when the key references a unique field other than the
 parent's primary key; this applies only to relations with a database foreign

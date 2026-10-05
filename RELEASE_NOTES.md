@@ -79,8 +79,9 @@ missing one: `NOT_FOUND` with `<Model> not found`.
   to-many `connect`, and silent success for `set`.
 - A write that sets any link runs in a transaction, and each link is judged
   against the stored state after the write, inside that transaction. On
-  PostgreSQL a concurrent write to a linked target waits until this write
-  commits.
+  PostgreSQL a concurrent write that changes a linked target waits for this
+  write to commit, or fails with `CONFLICT` where waiting could deadlock; a
+  write that only links to the same target is not blocked.
 - A `connectOrCreate` that connects an existing row needs that row to be
   readable; a row it creates must be readable after the write, or the whole
   write rolls back with `NOT_FOUND`.
