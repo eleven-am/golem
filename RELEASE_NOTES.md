@@ -79,7 +79,8 @@ missing one: `NOT_FOUND` with `<Model> not found`.
   to-many `connect`, and silent success for `set`.
 - A write that sets any link runs in a transaction, and each link is judged
   against the stored state after the write, inside that transaction. On
-  PostgreSQL the targets are locked `FOR SHARE` until commit.
+  PostgreSQL a concurrent write to a linked target waits until this write
+  commits.
 - A `connectOrCreate` that connects an existing row needs that row to be
   readable; a row it creates must be readable after the write, or the whole
   write rolls back with `NOT_FOUND`.
@@ -133,10 +134,10 @@ value of a database default cannot be known.
 
 `delete`, `deleteMany`, and a nested `delete`/`deleteMany` inside an `update`
 or `upsert`, from GraphQL, `forContext`, a transaction, the engine or the
-unscoped client, all run one path. It opens a transaction, reads the rows it
-removes and every dependent the database will change through `onDelete:
-Cascade`, `SetNull` or `SetDefault`, locks them all, reads them again, and
-refuses with `CONFLICT` if the set changed in between. Then it deletes.
+unscoped client, all run one path. It opens a transaction and finds the rows
+it removes and every dependent the database will change through `onDelete:
+Cascade`, `SetNull` or `SetDefault`. If another write changes that set while
+the delete runs, the delete is refused with `CONFLICT`; retry it.
 
 Each cascaded row emits `DELETED` with its snapshot, and each row whose foreign
 key the database clears or resets emits `UPDATED`. Subscribers receive only
@@ -158,31 +159,30 @@ being ignored.
 
 ### Upserts decide their branch once and write it explicitly
 
-Every upsert, top-level or nested, including `connectOrCreate`, takes a stripe
-of the guard, reads the row its `where` selects, locks it and reads it again;
-if the row appeared or disappeared in between, the write is refused with
+Every upsert, top-level or nested, including `connectOrCreate`, takes the
+guard and reads the row its `where` selects; if another write creates or
+deletes that row while the upsert decides, the write is refused with
 `CONFLICT`. The decided branch is then written as an explicit create, update
 or connect by the row's identity. A native Prisma upsert is never issued, so
 Prisma never re-decides a branch Golem did not check, and a concurrent insert
 makes the create fail with `CONFLICT` instead of switching branches. Only the
 links of the branch that runs are checked.
 
-### PostgreSQL writes lock their rows in one global order
+### Concurrent PostgreSQL writes no longer deadlock
 
-Every Golem write on PostgreSQL, single-row and system-client writes included,
-locks every row it changes or links to through one lock set per transaction. A
-write outside a transaction opens one for this. Rows are locked in one order:
-model name, then canonical row identity. A lock that a later step needs on a
-row sorting before ones already held is taken with `NOWAIT`, and contention
-there gives `CONFLICT`. A nested `update`, `updateMany`, `delete` or
-`deleteMany` reads its rows, locks them and reads them again, and refuses with
-`CONFLICT` if the set changed. SQLite already serializes writers.
+Golem writes on PostgreSQL that touch the same rows, single-row and
+system-client writes included, no longer deadlock: one completes, and the
+other waits for it or, where waiting could deadlock, fails at once with
+`CONFLICT`. A write outside a transaction opens one for this. A nested
+`update`, `updateMany`, `delete` or `deleteMany` is also refused with
+`CONFLICT` if another write changed the rows it matched while it ran. Retry a
+write refused with `CONFLICT`. SQLite already serializes writers.
 
 ### Array `$transaction` runs as one interactive transaction
 
 `$transaction([...])` on the generated client runs its operations in order
-inside one interactive transaction, so they take the same locks, run through
-the same interception, and commit or roll back together.
+inside one interactive transaction, so they run through the same
+interception, and commit or roll back together.
 
 ### More batch writes publish events
 
@@ -202,7 +202,7 @@ one atomic statement. Someone else's row still returns `NOT_FOUND`.
 ### Cost
 
 Measured during review: a single-row engine update on PostgreSQL takes about
-1.2 ms longer, for the transaction, the identity read and the lock. A simple
+1.2 ms longer, for the transaction and the extra reads. A simple
 delete on SQLite takes about 0.15–0.2 ms longer.
 
 ---

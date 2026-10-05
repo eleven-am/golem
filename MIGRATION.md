@@ -25,7 +25,7 @@ under `prisma/migrations/`, and migrate.
 **3. Regenerate.** `npx prisma generate` must run with generator 0.7.0 so the
 datamodel carries `upsertGuard`, each model's `@@schema` and each relation's
 `onDelete` action. With a 0.6.x datamodel, upserts can fail asking you to
-regenerate, and deletes do not enumerate, lock or publish events for their
+regenerate, and deletes do not account for or publish events for their
 cascaded dependents.
 
 **4. Prepare the guard outside Nest.** Nest validates the guard table at
@@ -98,11 +98,10 @@ callers for them.
 - **Array `$transaction([...])` runs as one interactive transaction** on the
   generated client, in order, through Golem's interception.
 - **Concurrent writes can answer `CONFLICT`.** An upsert whose row appears or
-  disappears while it decides, a delete or nested write whose rows change
-  while they are locked, and on PostgreSQL a lock that would be taken out of
-  order and is held by another write all refuse with `CONFLICT` rather than
-  wait or act on rows Golem did not check. Retry the whole operation where
-  that is safe.
+  disappears while it decides, a delete or nested write whose rows another
+  write changes while it runs, and on PostgreSQL a write that would otherwise
+  deadlock with another all refuse with `CONFLICT` rather than wait or act on
+  rows Golem did not check. Retry the whole operation where that is safe.
 - **Every upsert takes the guard**, including those on the unscoped client and
   nested ones, and is written as an explicit create, update or connect, never a
   native Prisma upsert.
