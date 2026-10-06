@@ -381,18 +381,13 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	defer undoOnPanic(func() { abandon(nil) })
 
 	session := activeBinding.lockSession(scope.queryer, app.registry, app.provider, app.mutationLimits.statementParameters)
-	captured, err := rowlock.Select(ctx, session, func(ctx context.Context) ([]mutationdecode.Row, []rowlock.Key, error) {
+	captured, err := rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) ([]mutationdecode.Row, []rowlock.Key, error) {
 		rows, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), program.CaptureStatement(), program.SentinelRows())
 		if err != nil {
 			return nil, nil, err
 		}
-		keys, err := rowlock.RowKeys(app.registry, rows)
-		return rows, keys, err
+		return rowlock.AdmitRows(app.registry, rows, admit)
 	})
-	var vanished *rowlock.VanishedError
-	if errors.As(err, &vanished) {
-		captured, err = nil, nil
-	}
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}

@@ -112,7 +112,7 @@ func (session Session) LockReferences(ctx context.Context, references []Referenc
 		}
 		indirect = append(indirect, reference)
 	}
-	_, err := Select(ctx, session, func(ctx context.Context) (struct{}, []Key, error) {
+	_, err := Select(ctx, session, func(ctx context.Context, _ func(Key) bool) (struct{}, []Key, error) {
 		keys := append([]Key(nil), direct...)
 		for _, reference := range indirect {
 			found, err := session.referencedKeys(ctx, reference)
