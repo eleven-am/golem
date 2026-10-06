@@ -3,7 +3,6 @@ package nested
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 
 	"github.com/eleven-am/golem/go/golem"
@@ -30,7 +29,7 @@ type SQLExpansionRequest struct {
 
 func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statements []RelationSQLStatement) ([][]mutationdecode.Row, error) {
 	session := rowlock.Session{Ledger: request.Ledger, Queryer: request.Queryer, Registry: request.Registry, Provider: request.Provider, MaxParameters: request.MaxParameters}
-	results, err := rowlock.Select(ctx, session, func(ctx context.Context) ([][]mutationdecode.Row, []rowlock.Key, error) {
+	return rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) ([][]mutationdecode.Row, []rowlock.Key, error) {
 		results := make([][]mutationdecode.Row, len(statements))
 		var keys []rowlock.Key
 		for index, statement := range statements {
@@ -38,19 +37,14 @@ func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statem
 			if err != nil {
 				return nil, nil, err
 			}
-			rowKeys, err := rowlock.RowKeys(request.Registry, rows)
+			admitted, rowKeys, err := rowlock.AdmitRows(request.Registry, rows, admit)
 			if err != nil {
 				return nil, nil, err
 			}
-			results[index], keys = rows, append(keys, rowKeys...)
+			results[index], keys = admitted, append(keys, rowKeys...)
 		}
 		return results, keys, nil
 	})
-	var vanished *rowlock.VanishedError
-	if errors.As(err, &vanished) {
-		return make([][]mutationdecode.Row, len(statements)), nil
-	}
-	return results, err
 }
 
 // ExpandRelationSQL is the production database-expansion half of the nested

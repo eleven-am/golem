@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -38,7 +37,7 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 		return nil, nil
 	}
 	session := state.binding.lockSession(queryer, registry, provider, limits.statementParameters)
-	effects, err := rowlock.Select(ctx, session, func(ctx context.Context) (*cascadeEffects, []rowlock.Key, error) {
+	return rowlock.Select(ctx, session, func(ctx context.Context, _ func(rowlock.Key) bool) (*cascadeEffects, []rowlock.Key, error) {
 		effects, err := enumerateCascadeEffects(ctx, queryer, registry, provider, limits, state, model, parents)
 		if err != nil {
 			return nil, nil, err
@@ -46,11 +45,6 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 		keys, err := rowlock.RowKeys(registry, append(append([]mutationdecode.Row(nil), effects.deleted...), effects.nulled...))
 		return effects, keys, err
 	})
-	var vanished *rowlock.VanishedError
-	if errors.As(err, &vanished) {
-		return &cascadeEffects{}, nil
-	}
-	return effects, err
 }
 
 func enumerateCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, limits normalizedMutationLimits, state *mutationState, model policyir.ModelID, parents []mutationdecode.Row) (*cascadeEffects, error) {

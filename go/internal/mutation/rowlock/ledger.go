@@ -3,7 +3,6 @@ package rowlock
 import (
 	"context"
 	"encoding/binary"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -64,6 +63,20 @@ func identityKey(model policyir.ModelID, identity mutationdecode.Identity, mode 
 	return Key{order: rowPrefix + string(model[:]) + string(encoded), mode: mode, model: model, identity: identity}, nil
 }
 
+func AdmitRows(registry *schema.Registry, rows []mutationdecode.Row, admit func(Key) bool) ([]mutationdecode.Row, []Key, error) {
+	keys, err := RowKeys(registry, rows)
+	if err != nil {
+		return nil, nil, err
+	}
+	admittedRows, admittedKeys := make([]mutationdecode.Row, 0, len(rows)), make([]Key, 0, len(keys))
+	for index, key := range keys {
+		if admit(key) {
+			admittedRows, admittedKeys = append(admittedRows, rows[index]), append(admittedKeys, key)
+		}
+	}
+	return admittedRows, admittedKeys, nil
+}
+
 func RowKeys(registry *schema.Registry, rows []mutationdecode.Row) ([]Key, error) {
 	keys := make([]Key, len(rows))
 	for index, row := range rows {
@@ -87,23 +100,6 @@ type ConflictError struct {
 
 func (failure *ConflictError) Error() string {
 	return fmt.Sprintf("P4_ROW_LOCK_CONFLICT: model=%x: %s", failure.Model, failure.Detail)
-}
-
-type VanishedError struct {
-	Model policyir.ModelID
-}
-
-func (failure *VanishedError) Error() string {
-	return fmt.Sprintf("P4_ROW_LOCK_VANISHED: model=%x: the selected row was deleted before it could be locked", failure.Model)
-}
-
-type vanishedRows struct {
-	model             policyir.ModelID
-	locked, requested int
-}
-
-func (failure *vanishedRows) Error() string {
-	return fmt.Sprintf("P4_ROW_LOCK_VANISHED: model=%x: %d of %d enumerated rows remained to lock", failure.model, failure.locked, failure.requested)
 }
 
 type ContentionError struct{}
@@ -166,6 +162,12 @@ func (ledger *Ledger) snapshot() (map[string]Mode, string) {
 		}
 	}
 	return held, highest
+}
+
+func (ledger *Ledger) holds(key Key) bool {
+	ledger.mu.Lock()
+	defer ledger.mu.Unlock()
+	return ledger.held[key.order] >= key.mode
 }
 
 func (ledger *Ledger) record(keys []Key) {
@@ -318,9 +320,6 @@ func (session Session) lockChunk(ctx context.Context, resolver policysql.Resolve
 	if err := rows.Close(); err != nil {
 		return err
 	}
-	if keys[0].mode == Update && len(locked) != len(keys) {
-		return &vanishedRows{model: keys[0].model, locked: len(locked), requested: len(keys)}
-	}
 	session.Ledger.record(locked)
 	return nil
 }
@@ -367,9 +366,11 @@ func WithEnumeratedFault(ctx context.Context, fault func(context.Context) error)
 	return context.WithValue(ctx, enumeratedFaultKey{}, fault)
 }
 
-func Select[T any](ctx context.Context, session Session, enumerate func(context.Context) (T, []Key, error)) (T, error) {
+func everyRow(Key) bool { return true }
+
+func Select[T any](ctx context.Context, session Session, enumerate func(ctx context.Context, admit func(Key) bool) (T, []Key, error)) (T, error) {
 	var zero T
-	first, keys, err := enumerate(ctx)
+	first, keys, err := enumerate(ctx, everyRow)
 	if err != nil || session.Provider != policyir.ProviderPostgreSQL {
 		return first, err
 	}
@@ -379,29 +380,21 @@ func Select[T any](ctx context.Context, session Session, enumerate func(context.
 		}
 	}
 	acquired, err := session.Lock(ctx, keys)
-	var gone *vanishedRows
-	if errors.As(err, &gone) {
-		if len(strongestSorted(keys)) == 1 {
-			return zero, &VanishedError{Model: gone.model}
-		}
-		return zero, &ConflictError{Model: gone.model, Detail: gone.Error()}
-	}
 	if err != nil {
 		return zero, err
 	}
 	if !acquired {
 		return first, nil
 	}
-	second, again, err := enumerate(ctx)
+	admit := func(key Key) bool { return key.mode == KeyShare || session.Ledger.holds(key) }
+	second, again, err := enumerate(ctx, admit)
 	if err != nil {
 		return zero, err
 	}
-	if !sameOrders(keys, again) {
-		model := policyir.ModelID{}
-		if len(keys) != 0 {
-			model = keys[0].model
+	for _, key := range again {
+		if !admit(key) {
+			return zero, &ConflictError{Model: key.model, Detail: "a row matched after enumeration and is not locked by this transaction"}
 		}
-		return zero, &ConflictError{Model: model, Detail: "the selected rows changed between enumeration and locking"}
 	}
 	return second, nil
 }
@@ -420,19 +413,6 @@ func strongestSorted(keys []Key) []Key {
 		unique = append(unique, key)
 	}
 	return unique
-}
-
-func sameOrders(left, right []Key) bool {
-	leftKeys, rightKeys := strongestSorted(left), strongestSorted(right)
-	if len(leftKeys) != len(rightKeys) {
-		return false
-	}
-	for index := range leftKeys {
-		if leftKeys[index].order != rightKeys[index].order {
-			return false
-		}
-	}
-	return true
 }
 
 func encode(dialect policysql.Dialect, resolver policysql.Resolver, typ policyir.TypeRef, value policyir.Value) (any, error) {

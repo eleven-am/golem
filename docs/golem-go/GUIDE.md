@@ -247,9 +247,10 @@ row's lifetime belongs to its parent. If you may delete the parent, that
 permission covers every row the cascade removes, including rows owned by other
 users and rows you cannot read. `SetNull` works the same way: deleting the
 parent clears the reference on each dependent without checking a policy on
-that row. If another write changes the set of affected rows while the delete
+that row. A dependent that another write removes first is simply no longer
+affected. If another write adds a row the cascade would remove while the delete
 runs, the delete fails with `CONFLICT` and nothing changes; retry it. It emits
-a change event for each one: a deleted event for every cascaded row and an
+a change event for each affected row: a deleted event for every cascaded row and an
 updated event for every cleared reference, in the same transaction as the
 delete. Each subscriber still receives only the events its own read policy
 allows. A delete whose cascade would touch more rows than
@@ -257,16 +258,26 @@ allows. A delete whose cascade would touch more rows than
 
 On PostgreSQL, concurrent writes that touch the same rows do not deadlock. One
 completes, and the other either waits for it or fails at once with `CONFLICT`.
-A write also fails with `CONFLICT` when another write changed the rows it was
-about to change, for example deleting a row of an `UpdateMany` or adding a row
-that matches its filter. Retry the write. An upsert, or a nested write
+Retry a write that fails with `CONFLICT`. An upsert, or a nested write
 containing an upsert or connectOrCreate, retries by itself before reporting
-`CONFLICT`, except inside your own transaction, which golem never replays. A
-single update, delete or upsert target that another write deleted first is
-treated as missing: `NOT_FOUND` for an update or delete, and the create branch
-for an upsert. `CONFLICT` is most likely between transactions that each write
-several of the same rows, or that both reference a parent row and then both
-update it. SQLite runs one writer at a time, so none of this applies there.
+`CONFLICT`, except inside your own transaction, which golem never replays.
+
+An `UpdateMany` or `DeleteMany`, including one nested in another write, changes
+exactly the rows that match its filter while it holds them, as a plain SQL
+`UPDATE` or `DELETE` does. A row another write deleted first, or changed so
+that it no longer matches, is left out. A row that starts to match after the
+write selected its rows is left alone. The returned count, the hooks and the
+change events cover exactly the rows changed. A single update, delete or upsert
+target that another write deleted first, or changed so that it no longer
+matches, is treated as missing: `NOT_FOUND` for an update or delete, and the
+create branch for an upsert.
+
+`CONFLICT` is most likely between transactions that each write several of the
+same rows, or that both reference a parent row and then both update it. If your
+transaction writes several rows that other writers also write, write them in
+the same order in every transaction, and retry the whole transaction when it
+fails with `CONFLICT`. Two transactions that write the same rows in different
+orders do not wait for each other: one fails at once with `CONFLICT`. SQLite runs one writer at a time, so none of this applies there.
 
 ## Callers and the system client
 
