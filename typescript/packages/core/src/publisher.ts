@@ -455,7 +455,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     return batch.run(async (delegate, transaction) => {
       const port = guardPort(transaction);
       const lockWrite = (data: unknown, roots: readonly Record<string, unknown>[]) =>
-        LinkGuard.of(port, model, data, false).before(transaction.scope, roots);
+        LinkGuard.of(port, model, data, false, data, roots.length > 0).before(transaction.scope, roots);
       if (operation === 'create') {
         const data = await lockWrite(args?.data, []);
         return writeRow('CREATED', model, { ...args, data }, (finalArgs) => delegate.create(finalArgs));

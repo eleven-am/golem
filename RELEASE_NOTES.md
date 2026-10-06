@@ -1,3 +1,27 @@
+# Release notes — 0.7.1 (unreleased)
+
+These are the release notes for the TypeScript/NestJS packages. They do not
+announce a Go module release.
+
+## Faster writes on PostgreSQL
+
+0.7.0 made concurrent writes safe at the cost of extra database round trips on
+every write, which showed up as higher latency even with no contention. Writes
+now make fewer round trips, with the same guarantees:
+
+- A create that links rows through foreign keys takes about a third fewer round
+  trips; a nested create that names the same parent several times checks and
+  locks it once.
+- An `updateMany`'s round trips no longer grow with the number of rows it
+  changes.
+- A create that links nothing no longer opens a transaction when the caller has
+  no authorization context or `checkWriteResults` is off.
+
+Concurrent writes behave exactly as in 0.7.0: the same writes complete, the
+same writes are refused with `CONFLICT`, and none deadlock.
+
+---
+
 # Release notes — 0.7.0
 
 These are the release notes for the TypeScript/NestJS packages. They do not

@@ -688,8 +688,8 @@ export class GolemEngine {
     }
   }
 
-  private linkGuard(model: string, data: unknown, context: unknown, written: unknown): LinkGuard {
-    return LinkGuard.of(this.linkGuardPort(context), model, data, this.enforced(context) !== undefined, written);
+  private linkGuard(model: string, data: unknown, context: unknown, written: unknown, rooted: boolean): LinkGuard {
+    return LinkGuard.of(this.linkGuardPort(context), model, data, this.enforced(context) !== undefined, written, rooted);
   }
 
   private linkGuardPort(context: unknown): LinkGuardPort {
@@ -1147,7 +1147,7 @@ export class GolemEngine {
       await provider.authorize('create', req.model, req.context);
       await this.authorizeNestedWrites(req.model, req.data, req.context);
     }
-    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data, false);
     const prepared = await this.prepareRead(req);
     let created: unknown;
     let createPlanFast = false;
@@ -1216,7 +1216,7 @@ export class GolemEngine {
       'update',
     );
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data, true);
     const provider = this.enforced(req.context);
     const prepared = await this.prepareRead(req);
     let updated: unknown;
@@ -1295,7 +1295,7 @@ export class GolemEngine {
     this.refuseIdentityChanges(req.model, req.data, req.context);
     await this.classifyFilterFields(req.model, req.context, { where: req.where }, 'update');
     await this.authorizeNestedWrites(req.model, req.data, req.context);
-    const guard = this.linkGuard(req.model, request.data, req.context, req.data);
+    const guard = this.linkGuard(req.model, request.data, req.context, req.data, true);
     const constraint = await this.constraintFor('update', req.model, req.context);
     const provider = this.enforced(req.context);
     let result: BatchResult;

@@ -112,7 +112,15 @@ export function collectLinkTargets(
 ): readonly LinkTarget[] {
   const targets: LinkTarget[] = [];
   collect(metadata, model, data, targets);
-  return targets;
+  const distinct = new Map<string, LinkTarget>();
+  for (const target of targets) {
+    const key = `${target.model}\u0000${canonicalToken(target.where)}`;
+    const known = distinct.get(key);
+    if (!known || (known.lock === 'SHARE' && target.lock === 'UPDATE')) {
+      distinct.set(key, target);
+    }
+  }
+  return [...distinct.values()];
 }
 
 export function hasNestedBranches(metadata: ModelMetadataIndex, model: string, data: unknown): boolean {

@@ -43,8 +43,8 @@ export async function decideBranch(
   const locker = port.locker(client);
   await acquireUpsertGuard(port.upsertGuard(client), model, selector, port.upsertGuardStripes, port.provider, async (row) => {
     let present = true;
-    await locks.acquire([{ model: GOLEM_UPSERT_GUARD_MODEL, row, mode: 'UPDATE' }], async (request, wait) => {
-      present = await locker(request, wait);
+    await locks.acquire([{ model: GOLEM_UPSERT_GUARD_MODEL, row, mode: 'UPDATE' }], async (requests, wait) => {
+      present = await locker(requests, wait);
       return present;
     });
     return present;
@@ -73,14 +73,22 @@ export class LinkGuard {
     private readonly written: unknown,
     private readonly branching: boolean,
     private readonly linking: boolean,
+    private readonly rooted: boolean,
   ) {}
 
-  static of(port: LinkGuardPort, model: string, data: unknown, enforced: boolean, written: unknown = data): LinkGuard {
+  static of(
+    port: LinkGuardPort,
+    model: string,
+    data: unknown,
+    enforced: boolean,
+    written: unknown,
+    rooted: boolean,
+  ): LinkGuard {
     const unwrap = (target: string, where: unknown) => port.unwrap(target, where);
     const branching = hasNestedBranches(port.metadata, model, data) || hasNestedBranches(port.metadata, model, written);
     const linking = collectLinkTargets(port.metadata, model, data).length
       + collectLinkRemovals(port.metadata, model, data, unwrap).length > 0;
-    return new LinkGuard(port, model, enforced, data, written, branching, linking);
+    return new LinkGuard(port, model, enforced, data, written, branching, linking, rooted);
   }
 
   get needsRoot(): boolean {
@@ -88,7 +96,8 @@ export class LinkGuard {
   }
 
   get needsTransaction(): boolean {
-    return (this.enforced && this.linking) || this.branching || this.port.provider === 'postgresql';
+    const locking = this.port.provider === 'postgresql' && (this.linking || this.rooted);
+    return (this.enforced && this.linking) || this.branching || locking;
   }
 
   private key(model: string, row: Row): string {
@@ -133,17 +142,17 @@ export class LinkGuard {
       removed.push({ removal, where, rows });
       requests.push(...rows.map((row) => ({ model: removal.model, row, mode: removal.lock })));
     }
-    const found: Array<{ target: LinkTarget; where: unknown }> = [];
     for (const target of this.targets) {
       const where = this.port.unwrap(target.model, target.where);
-      const row = await this.port.findFirst(target.model, where, client);
+      const row = this.enforced
+        ? await this.port.readableRow(target.model, where, client)
+        : await this.port.findFirst(target.model, where, client);
       if (!row) {
         if (this.enforced) {
           throw new GolemNotFoundError(`${target.model} not found`);
         }
         continue;
       }
-      found.push({ target, where });
       requests.push({ model: target.model, row, mode: target.lock });
     }
     await this.port.locks(client).acquire(requests, this.port.locker(client));
@@ -158,11 +167,6 @@ export class LinkGuard {
       const readable = await this.port.readable(removal.model, where, client);
       if (readable.length !== current.length) {
         throw new GolemNotFoundError(`${removal.model} not found`);
-      }
-    }
-    for (const { target, where } of found) {
-      if (this.enforced && !(await this.port.readableRow(target.model, where, client))) {
-        throw new GolemNotFoundError(`${target.model} not found`);
       }
     }
     return written;
@@ -182,21 +186,9 @@ export class LinkGuard {
     if (!this.enforced) {
       return new Set();
     }
-    const stored: Array<{ target: LinkTarget; where: unknown }> = [];
-    const requests: LockRequest[] = [];
-    for (const target of [...this.targets, ...this.created]) {
-      const where = this.port.unwrap(target.model, target.where);
-      const row = await this.port.findFirst(target.model, where, client);
-      if (!row) {
-        throw new GolemNotFoundError(`${target.model} not found`);
-      }
-      stored.push({ target, where });
-      requests.push({ model: target.model, row, mode: 'SHARE' });
-    }
-    await this.port.locks(client).acquire(requests, this.port.locker(client));
     const linked = new Set<string>();
-    for (const { target, where } of stored) {
-      const row = await this.port.readableRow(target.model, where, client);
+    for (const target of [...this.targets, ...this.created]) {
+      const row = await this.port.readableRow(target.model, this.port.unwrap(target.model, target.where), client);
       if (!row) {
         throw new GolemNotFoundError(`${target.model} not found`);
       }
