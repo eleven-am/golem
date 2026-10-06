@@ -5,12 +5,44 @@ versions are the `go/v*` tags; the root `v*` tags belong to the TypeScript
 packages and do not describe this module.
 
 ```
-go get github.com/eleven-am/golem/go@v0.6.5
+go get github.com/eleven-am/golem/go@v0.6.6
 ```
 
 The module lives in the repository's `go/` directory, so its tags carry that
 prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 `go/v0.3.0` predate these notes and are not described here.
+
+---
+
+## go/v0.6.6
+
+Unreleased.
+
+**Fix: `DeleteMany` and `UpdateMany` no longer fail when other writers change
+their rows (PostgreSQL, regression in v0.6.5).** In v0.6.5 a `DeleteMany` or
+`UpdateMany`, root or nested, failed with `CONFLICT: batch mutation conflicted`
+(`mutation conflicted` when nested) whenever another write deleted one of its
+rows, changed a row so it no longer matched, or added a row matching its filter
+while it ran. Under steady concurrent inserts and deletes on the same rows,
+most such calls failed. Now the write changes exactly the rows that match its
+filter while it holds them, as a plain SQL `DELETE` or `UPDATE` does, and as
+v0.6.4 did: a row another write removed or changed away first is left out, and
+a row that starts to match after the write selected its rows is left alone.
+The returned count, the hooks and the change events cover exactly the rows
+changed. In a contention test of 32 writers deleting and adding comments on
+the same 10 posts, failed `DeleteMany` calls fell from about two thirds to none.
+
+**Fix: a cascade no longer fails when a dependent row is removed first.** A
+delete whose cascaded dependent was deleted by another write while it ran
+failed with `CONFLICT`. Now that row is simply no longer affected and gets no
+event. A delete still fails with `CONFLICT` when another write adds a row its
+cascade would remove; retry it.
+
+**Behaviour change: a single target that stops matching is missing.** A single
+update or delete whose target another write changed, after golem selected it,
+so that it no longer matches the target or your policy, now fails with
+`NOT_FOUND`, as a target deleted first already did. Before, it failed with
+`CONFLICT`.
 
 ---
 

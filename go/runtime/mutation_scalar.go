@@ -686,7 +686,7 @@ func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, bi
 		row   scalarMutationStatementResult
 		found bool
 	}
-	choice, err := rowlock.Select(ctx, session, func(ctx context.Context) (selected, []rowlock.Key, error) {
+	choice, err := rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) (selected, []rowlock.Key, error) {
 		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, operation, statementIndex, statement, arguments)
 		var failure *scalarMutationFailure
 		if errors.As(err, &failure) && failure.kind == scalarMutationNotFound && failure.statement == statementIndex {
@@ -703,12 +703,11 @@ func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, bi
 		if err != nil {
 			return selected{}, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image identity could not be locked", err)
 		}
+		if !admit(key) {
+			return selected{}, nil, nil
+		}
 		return selected{row: row, found: true}, []rowlock.Key{key}, nil
 	})
-	var vanished *rowlock.VanishedError
-	if errors.As(err, &vanished) {
-		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
-	}
 	if err != nil {
 		var failure *scalarMutationFailure
 		if errors.As(err, &failure) {
