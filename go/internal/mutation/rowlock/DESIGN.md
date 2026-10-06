@@ -41,8 +41,9 @@ timeout behind the victims, so throughput collapsed under contention.
    stronger mode.
 2. **Enumerate, lock, re-read** (`Select`). The caller's query enumerates the
    candidate rows without locks. `Lock` locks their keys in ledger order, one
-   statement per model and mode, `SELECT ... FOR UPDATE` (or `FOR KEY SHARE`)
-   ordered by the key ordinal. The query then runs again under the locks.
+   statement per run of keys sharing a model, a mode and the wait or `NOWAIT`
+   choice, chunked to the parameter limit: `SELECT ... FOR UPDATE` (or
+   `FOR KEY SHARE`) ordered by the key ordinal. The query then runs again under the locks.
 3. **Never wait out of order.** A key that sorts before the highest key the
    transaction already holds, or an upgrade of a key it holds (KEY SHARE to
    UPDATE), is taken with `NOWAIT`. Lock failure (55P03) is reported as
