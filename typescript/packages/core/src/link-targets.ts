@@ -105,6 +105,10 @@ function collect(
   }
 }
 
+export function linkTargetKey(target: LinkTarget): string {
+  return `${target.model}\u0000${canonicalToken(target.where)}`;
+}
+
 export function collectLinkTargets(
   metadata: ModelMetadataIndex,
   model: string,
@@ -114,7 +118,7 @@ export function collectLinkTargets(
   collect(metadata, model, data, targets);
   const distinct = new Map<string, LinkTarget>();
   for (const target of targets) {
-    const key = `${target.model}\u0000${canonicalToken(target.where)}`;
+    const key = linkTargetKey(target);
     const known = distinct.get(key);
     if (!known || (known.lock === 'SHARE' && target.lock === 'UPDATE')) {
       distinct.set(key, target);

@@ -1,7 +1,9 @@
 import { PrismaPg } from '@prisma/adapter-pg';
 import { AuthorizationProvider } from '../src/authorization';
 import { DatamodelModel } from '../src/datamodel';
+import { HookRegistry } from '../src/hooks';
 import { GolemEngine } from '../src/operations';
+import { createEventPublisher } from '../src/publisher';
 import { field } from '../src/testing';
 import { DEFAULT_UPSERT_GUARD_STRIPES, prepareUpsertGuard } from '../src/upsert-guard';
 import { PrismaClient } from './prisma-postgres/generated/client';
@@ -12,6 +14,7 @@ import {
   ensureDatabase,
   openPostgres,
 } from './support/postgres';
+import { golemClient } from './support/golem-client';
 import { upsertGuardModel } from './support/upsert-guard-model';
 
 jest.setTimeout(120000);
@@ -166,13 +169,87 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
     expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE']);
   });
 
-  it('updates one row in 5 statements, locking it once', async () => {
+  it('updates one row in 6 statements, locking it once and reading what it checks only once locked', async () => {
     const sql = await issued(() => engine(true).update({
       model: 'Thread', where: { id: 1 }, data: { title: 'edited' }, select: { id: true }, context: context(),
     }));
 
     expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR UPDATE']);
-    expect(sql).toHaveLength(5);
+    expect(sql.indexOf(locks(sql)[0])).toBeLessThan(sql.findIndex((statement) => statement.includes('"threads"."title" FROM')));
+    expect(sql).toHaveLength(6);
+  });
+
+  describe('through the engine over the intercepting client an application wires', () => {
+    const wired = () => golemClient(prisma, createEventPublisher({
+      datamodel: { models, enums: [], provider: 'postgresql', upsertGuard: upsertGuardModel },
+      eventBus: {
+        publish: async () => undefined,
+        publishMany: async () => undefined,
+        iterate: (async function* () {})() as never,
+      },
+      models: new Set(['Thread', 'Reply']),
+    }));
+    const wiredEngine = (hooks?: HookRegistry) => new GolemEngine(wired(), models, {
+      authorization,
+      checkReadFields: false,
+      provider: 'postgresql',
+      upsertGuard: upsertGuardModel,
+      hooks,
+    });
+
+    it('guards a create once: the same 6 statements as over the bare client', async () => {
+      const sql = await issued(() => wiredEngine().create({
+        model: 'Reply',
+        data: { id: 12, threadId: 1, body: 'a', postedAt: new Date('2026-01-01T00:00:00.000Z') },
+        select: { id: true },
+        context: context(),
+      }));
+
+      expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE']);
+      expect(sql).toHaveLength(6);
+    });
+
+    it('guards an update once: the same 6 statements as over the bare client', async () => {
+      const sql = await issued(() => wiredEngine().update({
+        model: 'Thread', where: { id: 1 }, data: { title: 'edited' }, select: { id: true }, context: context(),
+      }));
+
+      expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR UPDATE']);
+      expect(sql).toHaveLength(6);
+    });
+
+    it('still locks a parent that a before-create hook links, which the caller never named', async () => {
+      const hooks = new HookRegistry();
+      hooks.registerBefore('Reply', 'create', async (request) => {
+        const create = request as { data: Record<string, unknown> };
+        return { ...create, data: { ...create.data, threadId: 2 } };
+      });
+
+      const sql = await issued(() => wiredEngine(hooks).create({
+        model: 'Reply',
+        data: { id: 13, body: 'a', postedAt: new Date('2026-01-01T00:00:00.000Z') },
+        select: { id: true },
+        context: context(),
+      }));
+
+      expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE']);
+      await expect(prisma.reply.findUnique({ where: { id: 13 } })).resolves.toMatchObject({ threadId: 2 });
+    });
+
+    it('still guards a write the application issues on the client directly', async () => {
+      const sql = await issued(() => wired().reply.create({
+        data: { id: 14, threadId: 1, body: 'a', postedAt: new Date('2026-01-01T00:00:00.000Z') },
+        select: { id: true },
+      }));
+
+      expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE']);
+    });
+
+    it('still guards a direct update the application issues on the client', async () => {
+      const sql = await issued(() => wired().thread.update({ where: { id: 1 }, data: { title: 'direct' } }));
+
+      expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR UPDATE']);
+    });
   });
 
   it('locks the rows an updateMany touches in one statement per table, in the order every writer uses', async () => {

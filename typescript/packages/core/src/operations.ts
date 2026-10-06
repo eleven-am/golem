@@ -29,6 +29,7 @@ import {
   refuseUnreadableReferences,
 } from './field-references';
 import { withBufferedEvents } from './event-buffer';
+import { engineDelegate } from './engine-writes';
 import {
   CompiledReadEvent,
   CompiledReadInput,
@@ -860,7 +861,7 @@ export class GolemEngine {
     if (!delegate) {
       throw new GolemValidationError(`Prisma client has no delegate for model ${model}`);
     }
-    return delegate;
+    return engineDelegate(model, delegate);
   }
 
   private async runVerifiedWrite<T>(
@@ -1241,14 +1242,21 @@ export class GolemEngine {
       const wide = { ...updatePlan!.select, ...pkSelect };
       updated = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
-        const before = await txDelegate.findFirst({
+        const root = await txDelegate.findFirst({
           where: mergeConstraint(this.filterableWhere(req.model, req.where), constraint),
+          select: pkSelect,
+        });
+        if (!root) {
+          throw new GolemNotFoundError(`${req.model} not found`);
+        }
+        const data = await guard.before(txClient, [this.pkScalarWhere(req.model, root)]);
+        const before = await txDelegate.findFirst({
+          where: mergeConstraint(this.pkScalarWhere(req.model, root), constraint),
           select: wide,
         });
         if (!before) {
           throw new GolemNotFoundError(`${req.model} not found`);
         }
-        const data = await guard.before(txClient, [this.pkScalarWhere(req.model, before)]);
         const after = await txDelegate.update({
           where: constrainUnique(this.pkWhere(req.model, before), constraint),
           data,
@@ -1316,12 +1324,16 @@ export class GolemEngine {
       const scalars = { ...manyPlan.select, ...pkSelect };
       result = await this.runVerifiedWrite(req.model, scope, async (txClient) => {
         const txDelegate = this.delegate(req.model, txClient);
-        const beforeRows = (await txDelegate.findMany({
+        const roots = (await txDelegate.findMany({
           where: mergeConstraint(req.where, constraint),
+          select: pkSelect,
+        })) as Record<string, unknown>[];
+        const data = await guard.before(txClient, roots.map((row) => this.pkScalarWhere(req.model, row)));
+        const beforeRows = (await txDelegate.findMany({
+          where: mergeConstraint(this.pkBatchWhere(req.model, roots), constraint),
           select: scalars,
         })) as Record<string, unknown>[];
         const identityWhere = this.pkBatchWhere(req.model, beforeRows);
-        const data = await guard.before(txClient, beforeRows.map((row) => this.pkScalarWhere(req.model, row)));
         const mutationResult = await txDelegate.updateMany({
           where: mergeConstraint(identityWhere, constraint),
           data,

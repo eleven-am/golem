@@ -919,6 +919,70 @@ export function describeWritePath(
       });
     });
 
+    describe('a field another write changes before a checked update locks its row', () => {
+      const guarded = (client: Client) => new GolemEngine(client, models, {
+        authorization: {
+          ...provider(),
+          checkField: async (action: GolemAction, _model: string, _entity: unknown, name: string) =>
+            !(action === 'update' && name === 'body'),
+        },
+        checkWriteResults: true,
+        checkReadFields: false,
+        provider: provider_,
+        upsertGuard: upsertGuardModel,
+      });
+      const changedJustBeforeTheLock = () => {
+        let injected = false;
+        const wrap = (inner: Client): Client => new Proxy(inner, {
+          get: (target, property, receiver) => {
+            if (property === '$transaction') {
+              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+                target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+            }
+            if (property !== '$queryRawUnsafe') return Reflect.get(target, property, receiver);
+            return async (sql: string, ...values: unknown[]) => {
+              if (!injected && sql.startsWith('SELECT 1 FROM "replies"')) {
+                injected = true;
+                await database.concurrent.reply.update({ where: { id: 10 }, data: { body: 'theirs' } });
+              }
+              return target.$queryRawUnsafe(sql, ...values);
+            };
+          },
+        });
+        return { client: wrap(prisma), injected: () => injected };
+      };
+
+      it('is judged as it stands once locked, so a field this write leaves alone is not held against it', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).update({
+          model: 'Reply', where: { id: 10 }, data: { amount: 5 }, context: { req: {} },
+        }))).resolves.toBe('succeeded');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+
+      it('is judged as it stands once locked, so writing it back is checked as a change', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).update({
+          model: 'Reply', where: { id: 10 }, data: { body: 'a' }, context: { req: {} },
+        }))).resolves.toBe('GolemForbiddenError: Cannot update field "body" on Reply');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+
+      it('is judged as it stands once locked in an updateMany too', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).updateMany({
+          model: 'Reply', where: { id: 10 }, data: { body: 'a' }, context: { req: {} },
+        }))).resolves.toBe('GolemForbiddenError: Cannot update field "body" on Reply');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+    });
+
     describe.each([true, false])('rows one write locks together and another locks one at a time, with checkWriteResults %s', (checkWriteResults) => {
       it('are taken in the same order by both, so neither deadlocks', async () => {
         await prisma.thread.create({ data: { id: 3, title: 'third' } });

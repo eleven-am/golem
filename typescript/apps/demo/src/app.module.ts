@@ -20,6 +20,7 @@ const DEFAULT_DATABASE_URL = 'file:./prisma/dev.db';
 export interface DemoGolemOptions {
   batchEvents?: GolemBatchEventOptions;
   postTagSubscriptions?: boolean;
+  onStatement?: (sql: string) => void;
 }
 
 @Module({})
@@ -40,7 +41,12 @@ export class AppModule {
         GolemModule.forRoot({
           imports: [SearchPostsAccessModule],
           client: GolemPrismaService,
-          prismaOptions: { adapter: new PrismaBetterSqlite3({ url: databaseUrl }) },
+          prismaOptions: {
+            adapter: new PrismaBetterSqlite3({
+              url: databaseUrl,
+              ...(golem.onStatement ? { verbose: (sql?: unknown) => golem.onStatement!(String(sql)) } : {}),
+            }),
+          },
           datamodel: getDatamodel(),
           defaults: {
             maxTake: 100,
