@@ -1,4 +1,4 @@
-# Release notes — 0.7.1 (unreleased)
+# Release notes — 0.7.1
 
 These are the release notes for the TypeScript/NestJS packages. They do not
 announce a Go module release.
