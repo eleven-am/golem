@@ -16,8 +16,6 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.6.6
 
-Unreleased.
-
 **Fix: `DeleteMany` and `UpdateMany` no longer fail when other writers change
 their rows (PostgreSQL, regression in v0.6.5).** In v0.6.5 a `DeleteMany` or
 `UpdateMany`, root or nested, failed with `CONFLICT: batch mutation conflicted`
