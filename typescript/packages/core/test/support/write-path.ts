@@ -295,6 +295,31 @@ export function describeWritePath(
       await expect(prisma.message.count({ where: { id: { in: [34, 35] } } })).resolves.toBe(0);
     });
 
+    it('refuses a hidden link target before writing, so a write that fails anyway cannot tell it from a missing one', async () => {
+      const write = (channelSlug: string) =>
+        outcome(() => engine().create({ model: 'Message', data: { id: 30, channelSlug }, context: ctx }));
+
+      const hidden = await write('quiet');
+      expect(hidden).toBe(await write('nowhere'));
+      expect(hidden).toBe('GolemNotFoundError: Channel not found');
+      await expect(outcome(() => engine().create({ model: 'Message', data: { id: 30, channelSlug: 'general' }, context: ctx })))
+        .resolves.toBe('GolemConflictError: Unique constraint violation on Message');
+    });
+
+    it('links a row its connectOrCreate creates only when the caller can read it once stored', async () => {
+      const link = (id: number, slug: string, title: string) => outcome(() => engine().create({
+        model: 'Pin',
+        data: { id, channel: { connectOrCreate: { where: { slug }, create: { slug, title } } } },
+        context: ctx,
+      }));
+
+      await expect(link(47, 'shut', 'closed')).resolves.toBe('GolemNotFoundError: Channel not found');
+      await expect(prisma.channel.count({ where: { slug: 'shut' } })).resolves.toBe(0);
+      await expect(prisma.pin.count({ where: { id: 47 } })).resolves.toBe(0);
+      await expect(link(48, 'fresh', 'open')).resolves.toBe('succeeded');
+      await expect(prisma.pin.findUnique({ where: { id: 48 } })).resolves.toEqual({ id: 48, channelSlug: 'fresh' });
+    });
+
     it('connects only to a readable row', async () => {
       const connect = (slug: string, id: number) =>
         outcome(() => engine().create({ model: 'Pin', data: { id, channel: { connect: { slug } } }, context: ctx }));
@@ -391,7 +416,7 @@ export function describeWritePath(
 
     if (provider_ === 'sqlite') {
       it('judges the link against the state the write stored, after every pre-write read', async () => {
-        const race = racing(prisma, 'thread', hide, 2);
+        const race = racing(prisma, 'watch', hide, 1, 'create');
 
         await expect(engine(race.client).create({ model: 'Watch', data: { id: 24, threadId: 1 }, context: ctx }))
           .rejects.toThrow('Thread not found');
@@ -664,22 +689,22 @@ export function describeWritePath(
           checkReadFields: false,
           provider: provider_, upsertGuard: upsertGuardModel,
         });
-        const hooked = (onStatement: (sql: string) => Promise<void>) => (tx: Client): Client => new Proxy(tx, {
+        const hooked = (onStatement: (sql: string, values: unknown[]) => Promise<void>) => (tx: Client): Client => new Proxy(tx, {
           get: (target, property, receiver) => {
             if (property !== '$queryRawUnsafe') return Reflect.get(target, property, receiver);
             return async (sql: string, ...values: unknown[]) => {
               const rows = await target.$queryRawUnsafe(sql, ...values);
-              await onStatement(sql);
+              await onStatement(sql, values);
               return rows;
             };
           },
         });
         const secondLocked = barrier();
-        let firstStatements = 0;
-        const first = golemClient(prisma, publisher, hooked(async (sql) => {
-          if (sql.includes('FROM "people"')) {
-            firstStatements += 1;
-            if (firstStatements === 2) await secondLocked.wait();
+        let firstWaited = false;
+        const first = golemClient(prisma, publisher, hooked(async (sql, values) => {
+          if (!firstWaited && sql.includes('FROM "people"') && values.includes(6)) {
+            firstWaited = true;
+            await secondLocked.wait();
           }
         }));
         const second = golemClient(prisma, publisher, hooked(async (sql) => {
@@ -891,6 +916,104 @@ export function describeWritePath(
           (watch, work) => golemClient(prisma, publisher, watch).$transaction((tx: Client) => work(tx)),
         );
         expect(verdict(outcomes).sort()).toEqual(['conflict', 'fulfilled']);
+      });
+    });
+
+    describe('a field another write changes before a checked update locks its row', () => {
+      const guarded = (client: Client) => new GolemEngine(client, models, {
+        authorization: {
+          ...provider(),
+          checkField: async (action: GolemAction, _model: string, _entity: unknown, name: string) =>
+            !(action === 'update' && name === 'body'),
+        },
+        checkWriteResults: true,
+        checkReadFields: false,
+        provider: provider_,
+        upsertGuard: upsertGuardModel,
+      });
+      const changedJustBeforeTheLock = () => {
+        let injected = false;
+        const wrap = (inner: Client): Client => new Proxy(inner, {
+          get: (target, property, receiver) => {
+            if (property === '$transaction') {
+              return (work: (tx: Client) => Promise<unknown>, ...rest: unknown[]) =>
+                target.$transaction((tx: Client) => work(wrap(tx)), ...rest);
+            }
+            if (property !== '$queryRawUnsafe') return Reflect.get(target, property, receiver);
+            return async (sql: string, ...values: unknown[]) => {
+              if (!injected && sql.startsWith('SELECT 1 FROM "replies"')) {
+                injected = true;
+                await database.concurrent.reply.update({ where: { id: 10 }, data: { body: 'theirs' } });
+              }
+              return target.$queryRawUnsafe(sql, ...values);
+            };
+          },
+        });
+        return { client: wrap(prisma), injected: () => injected };
+      };
+
+      it('is judged as it stands once locked, so a field this write leaves alone is not held against it', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).update({
+          model: 'Reply', where: { id: 10 }, data: { amount: 5 }, context: { req: {} },
+        }))).resolves.toBe('succeeded');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+
+      it('is judged as it stands once locked, so writing it back is checked as a change', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).update({
+          model: 'Reply', where: { id: 10 }, data: { body: 'a' }, context: { req: {} },
+        }))).resolves.toBe('GolemForbiddenError: Cannot update field "body" on Reply');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+
+      it('is judged as it stands once locked in an updateMany too', async () => {
+        const race = changedJustBeforeTheLock();
+
+        await expect(outcome(() => guarded(race.client).updateMany({
+          model: 'Reply', where: { id: 10 }, data: { body: 'a' }, context: { req: {} },
+        }))).resolves.toBe('GolemForbiddenError: Cannot update field "body" on Reply');
+        expect(race.injected()).toBe(true);
+        await expect(prisma.reply.findUnique({ where: { id: 10 }, select: { body: true } })).resolves.toEqual({ body: 'theirs' });
+      });
+    });
+
+    describe.each([true, false])('rows one write locks together and another locks one at a time, with checkWriteResults %s', (checkWriteResults) => {
+      it('are taken in the same order by both, so neither deadlocks', async () => {
+        await prisma.thread.create({ data: { id: 3, title: 'third' } });
+        const engine = (client: Client) => new GolemEngine(client, models, {
+          authorization: provider(), checkWriteResults, checkReadFields: false, provider: provider_, upsertGuard: upsertGuardModel,
+        });
+        const batchStarted = barrier();
+        let oneAtATimeWaited = false;
+        const oneAtATime = engine(observed(async (sql) => {
+          if (!oneAtATimeWaited && sql.includes('FROM "threads"')) {
+            oneAtATimeWaited = true;
+            await batchStarted.wait();
+          }
+        })).transaction({ req: {} }, async (tx) => {
+          for (const id of [1, 3]) {
+            await tx.update({ model: 'Thread', where: { id }, data: { title: `single ${id}` } });
+          }
+        });
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        const together = engine(observed(async (sql) => {
+          if (sql.includes('FROM "threads"')) batchStarted.arrive();
+        })).updateMany({ model: 'Thread', where: { id: { in: [3, 1] } }, data: { title: 'together' }, context: { req: {} } });
+
+        const outcomes = await Promise.allSettled([oneAtATime, together]);
+
+        expect(outcomes.map((result) => result.status === 'fulfilled' ? 'fulfilled' : String((result as PromiseRejectedResult).reason)))
+          .toEqual(['fulfilled', 'fulfilled']);
+        await expect(prisma.thread.findMany({ where: { id: { in: [1, 3] } }, orderBy: { id: 'asc' } })).resolves.toEqual([
+          { id: 1, title: 'together' },
+          { id: 3, title: 'together' },
+        ]);
       });
     });
 

@@ -105,6 +105,10 @@ function collect(
   }
 }
 
+export function linkTargetKey(target: LinkTarget): string {
+  return `${target.model}\u0000${canonicalToken(target.where)}`;
+}
+
 export function collectLinkTargets(
   metadata: ModelMetadataIndex,
   model: string,
@@ -112,7 +116,15 @@ export function collectLinkTargets(
 ): readonly LinkTarget[] {
   const targets: LinkTarget[] = [];
   collect(metadata, model, data, targets);
-  return targets;
+  const distinct = new Map<string, LinkTarget>();
+  for (const target of targets) {
+    const key = linkTargetKey(target);
+    const known = distinct.get(key);
+    if (!known || (known.lock === 'SHARE' && target.lock === 'UPDATE')) {
+      distinct.set(key, target);
+    }
+  }
+  return [...distinct.values()];
 }
 
 export function hasNestedBranches(metadata: ModelMetadataIndex, model: string, data: unknown): boolean {

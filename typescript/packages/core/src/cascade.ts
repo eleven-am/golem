@@ -127,19 +127,26 @@ export class CascadePlan {
   }
 }
 
+export const LOCK_STATEMENT_ROWS = 100;
+
 export function lockStatement(
   plan: CascadePlan,
   model: string,
-  row: Row,
+  rows: readonly Row[],
   mode: 'UPDATE' | 'SHARE',
   wait: boolean,
 ): { sql: string; values: unknown[] } {
   const identity = plan.identity(model);
-  const columns = identity.map((name) => quote(plan.column(model, name))).join(', ');
-  const placeholders = identity.map((_name, index) => `$${index + 1}`).join(', ');
+  const columns = `(${identity.map((name) => quote(plan.column(model, name))).join(', ')})`;
+  const tuples = rows.map((_row, position) =>
+    `(${identity.map((_name, index) => `$${position * identity.length + index + 1}`).join(', ')})`);
+  const where = tuples.length === 1 ? `${columns} = ${tuples[0]}` : `${columns} IN (${tuples.join(', ')})`;
+  const order = tuples.length === 1
+    ? ''
+    : ` ORDER BY CASE ${tuples.map((tuple, position) => `WHEN ${columns} = ${tuple} THEN ${position}`).join(' ')} END`;
   return {
-    sql: `SELECT 1 FROM ${plan.qualifiedTable(model)} WHERE (${columns}) = (${placeholders}) FOR ${mode}${wait ? '' : ' NOWAIT'}`,
-    values: identity.map((name) => row[name]),
+    sql: `SELECT 1 FROM ${plan.qualifiedTable(model)} WHERE ${where}${order} FOR ${mode}${wait ? '' : ' NOWAIT'}`,
+    values: rows.flatMap((row) => identity.map((name) => row[name])),
   };
 }
 
@@ -151,7 +158,7 @@ export interface LockRequest {
   readonly mode: LockMode;
 }
 
-export type RowLocker = (request: LockRequest, wait: boolean) => Promise<boolean>;
+export type RowLocker = (requests: readonly LockRequest[], wait: boolean) => Promise<boolean>;
 
 function lockUnavailable(error: unknown): boolean {
   const meta = (error as { meta?: { code?: unknown } } | null)?.meta;
@@ -165,16 +172,23 @@ export function rowLocker(
 ): RowLocker {
   switch (provider) {
     case 'postgresql':
-      return async ({ model, row, mode }, wait) => {
-        const statement = lockStatement(plan, model, row, mode, wait);
-        try {
-          return ((await run(statement.sql, statement.values)) as readonly unknown[]).length > 0;
-        } catch (error) {
-          if (lockUnavailable(error)) {
-            throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
+      return async (requests, wait) => {
+        const [{ model, mode }] = requests;
+        let present = true;
+        for (let start = 0; start < requests.length; start += LOCK_STATEMENT_ROWS) {
+          const rows = requests.slice(start, start + LOCK_STATEMENT_ROWS).map((request) => request.row);
+          const statement = lockStatement(plan, model, rows, mode, wait);
+          try {
+            const locked = (await run(statement.sql, statement.values)) as readonly unknown[];
+            present = present && locked.length === rows.length;
+          } catch (error) {
+            if (lockUnavailable(error)) {
+              throw new GolemConflictError(`A row of ${model} this write needs is held by a concurrent write`);
+            }
+            throw error;
           }
-          throw error;
         }
+        return present;
       };
     case 'sqlite':
     case undefined:
@@ -198,13 +212,26 @@ export class RowLocks {
     }
     const ordered = [...wanted.entries()].sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
     const highest = [...this.held.keys()].reduce((top, key) => (key > top ? key : top), '');
+    const runs: Array<{ wait: boolean; keys: string[]; requests: LockRequest[] }> = [];
     for (const [key, request] of ordered) {
       const held = this.held.get(key);
       if (held === 'UPDATE' || held === request.mode) {
         continue;
       }
-      await lock(request, key > highest);
-      this.held.set(key, request.mode);
+      const wait = key > highest;
+      const last = runs.at(-1);
+      if (last?.wait === wait && last.requests[0].model === request.model && last.requests[0].mode === request.mode) {
+        last.keys.push(key);
+        last.requests.push(request);
+      } else {
+        runs.push({ wait, keys: [key], requests: [request] });
+      }
+    }
+    for (const run of runs) {
+      await lock(run.requests, run.wait);
+      for (const key of run.keys) {
+        this.held.set(key, run.requests[0].mode);
+      }
     }
   }
 }

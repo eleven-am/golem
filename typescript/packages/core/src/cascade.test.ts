@@ -1,5 +1,5 @@
 import { upsertGuardModel } from '../test/support/upsert-guard-model';
-import { CascadePlan, lockStatement, rowLocker, transactionRowLocks } from './cascade';
+import { CascadePlan, LOCK_STATEMENT_ROWS, lockStatement, rowLocker, transactionRowLocks } from './cascade';
 import { DatamodelDocument, DatamodelReferentialAction } from './datamodel';
 import { GolemConflictError, GolemValidationError } from './errors';
 import { GolemEventBus, GolemEventPayload } from './events';
@@ -422,13 +422,11 @@ describe('one lock order for every row a delete touches', () => {
 
     expect(batch.statements).toEqual([
       'SELECT 1 FROM "Bookmark" WHERE ("id") = ($1) FOR UPDATE',
-      'SELECT 1 FROM "Comment" WHERE ("id") = ($1) FOR UPDATE',
-      'SELECT 1 FROM "Comment" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Comment" WHERE ("id") IN (($1), ($2)) ORDER BY CASE WHEN ("id") = ($1) THEN 0 WHEN ("id") = ($2) THEN 1 END FOR UPDATE',
       'SELECT 1 FROM "posts" WHERE ("id") = ($1) FOR UPDATE',
-      'SELECT 1 FROM "Reaction" WHERE ("id") = ($1) FOR UPDATE',
-      'SELECT 1 FROM "Reaction" WHERE ("id") = ($1) FOR UPDATE',
+      'SELECT 1 FROM "Reaction" WHERE ("id") IN (($1), ($2)) ORDER BY CASE WHEN ("id") = ($1) THEN 0 WHEN ("id") = ($2) THEN 1 END FOR UPDATE',
     ]);
-    expect(batch.values).toEqual([['b1'], ['c1'], ['c2'], ['p1'], ['r1'], ['r2']]);
+    expect(batch.values).toEqual([['b1'], ['c1', 'c2'], ['p1'], ['r1', 'r2']]);
   });
 
   it.each(['sqlite', 'postgresql'])('refuses a delete whose closure changes between enumeration and lock on %s', async (provider) => {
@@ -462,9 +460,23 @@ describe('lockStatement', () => {
       ],
       primaryKey: { fields: ['a', 'b'] },
     }]);
-    expect(lockStatement(plan, 'Odd', { a: '1', b: 2 }, 'SHARE', true)).toEqual({
+    expect(lockStatement(plan, 'Odd', [{ a: '1', b: 2 }], 'SHARE', true)).toEqual({
       sql: 'SELECT 1 FROM "we""ird" WHERE ("a", "b""col") = ($1, $2) FOR SHARE',
       values: ['1', 2],
+    });
+  });
+
+  it('locks several rows of one table in one statement, in the order it names them', () => {
+    const plan = new CascadePlan([{
+      name: 'Odd',
+      fields: [field({ name: 'a', type: 'String' }), field({ name: 'b', type: 'Int' })],
+      primaryKey: { fields: ['a', 'b'] },
+    }]);
+    expect(lockStatement(plan, 'Odd', [{ a: 'x', b: 2 }, { a: 'x', b: 10 }, { a: 'y', b: 1 }], 'UPDATE', false)).toEqual({
+      sql: 'SELECT 1 FROM "Odd" WHERE ("a", "b") IN (($1, $2), ($3, $4), ($5, $6)) '
+        + 'ORDER BY CASE WHEN ("a", "b") = ($1, $2) THEN 0 WHEN ("a", "b") = ($3, $4) THEN 1 WHEN ("a", "b") = ($5, $6) THEN 2 END '
+        + 'FOR UPDATE NOWAIT',
+      values: ['x', 2, 'x', 10, 'y', 1],
     });
   });
 
@@ -475,18 +487,25 @@ describe('lockStatement', () => {
       schema: 'tenant"one',
       fields: [field({ name: 'a', type: 'String', isId: true })],
     }]);
-    expect(lockStatement(plan, 'Odd', { a: '1' }, 'UPDATE', true).sql).toBe(
+    expect(lockStatement(plan, 'Odd', [{ a: '1' }], 'UPDATE', true).sql).toBe(
       'SELECT 1 FROM "tenant""one"."items" WHERE ("a") = ($1) FOR UPDATE',
     );
   });
 
   it('takes a lock without waiting when told not to', () => {
     const plan = new CascadePlan([{ name: 'Odd', fields: [field({ name: 'a', type: 'String', isId: true })] }]);
-    expect(lockStatement(plan, 'Odd', { a: '1' }, 'SHARE', false).sql).toBe(
+    expect(lockStatement(plan, 'Odd', [{ a: '1' }], 'SHARE', false).sql).toBe(
       'SELECT 1 FROM "Odd" WHERE ("a") = ($1) FOR SHARE NOWAIT',
     );
   });
 });
+
+function recording(taken: string[]) {
+  return async (requests: readonly { model: string; row: Record<string, unknown> }[], wait: boolean) => {
+    taken.push(`${requests.map((request) => `${request.model}:${String(request.row.id)}`).join(',')}:${wait ? 'wait' : 'nowait'}`);
+    return true;
+  };
+}
 
 describe('transaction row locks', () => {
   const plan = new CascadePlan([
@@ -502,33 +521,75 @@ describe('transaction row locks', () => {
 
   it('waits for rows that sort after everything held and never for one that sorts before', async () => {
     const taken: string[] = [];
-    const lock = async (request: { model: string; row: Record<string, unknown> }, wait: boolean) => {
-      taken.push(`${request.model}:${String(request.row.id)}:${wait ? 'wait' : 'nowait'}`);
-    };
     const locks = transactionRowLocks({}, plan);
     await locks.acquire([
       { model: 'B', row: { id: '1' }, mode: 'UPDATE' },
       { model: 'A', row: { id: '2' }, mode: 'SHARE' },
-    ], lock);
+    ], recording(taken));
     await locks.acquire([
       { model: 'A', row: { id: '1' }, mode: 'UPDATE' },
       { model: 'B', row: { id: '2' }, mode: 'UPDATE' },
       { model: 'B', row: { id: '1' }, mode: 'SHARE' },
-    ], lock);
+    ], recording(taken));
     expect(taken).toEqual(['A:2:wait', 'B:1:wait', 'A:1:nowait', 'B:2:wait']);
+  });
+
+  it('takes neighbouring rows of one table and lock mode in one call, in order, split where waiting stops being safe', async () => {
+    const taken: string[] = [];
+    const locks = transactionRowLocks({}, plan);
+    await locks.acquire([{ model: 'A', row: { id: '5' }, mode: 'UPDATE' }], recording(taken));
+    await locks.acquire([
+      { model: 'B', row: { id: '3' }, mode: 'SHARE' },
+      { model: 'A', row: { id: '7' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '2' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '1' }, mode: 'UPDATE' },
+      { model: 'B', row: { id: '1' }, mode: 'SHARE' },
+      { model: 'A', row: { id: '6' }, mode: 'UPDATE' },
+      { model: 'B', row: { id: '2' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '8' }, mode: 'SHARE' },
+    ], recording(taken));
+    expect(taken).toEqual(['A:5:wait', 'A:1,A:2:nowait', 'A:6,A:7:wait', 'A:8:wait', 'B:1:wait', 'B:2:wait', 'B:3:wait']);
+  });
+
+  it('reports a batch present only when every row it names still exists', async () => {
+    const lock = rowLocker('postgresql', plan, async (_sql, values) => values.slice(1));
+    await expect(lock([{ model: 'A', row: { id: '1' }, mode: 'UPDATE' }], true)).resolves.toBe(false);
+    await expect(lock([
+      { model: 'A', row: { id: '1' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '2' }, mode: 'UPDATE' },
+    ], true)).resolves.toBe(false);
+    const all = rowLocker('postgresql', plan, async (_sql, values) => values);
+    await expect(all([
+      { model: 'A', row: { id: '1' }, mode: 'UPDATE' },
+      { model: 'A', row: { id: '2' }, mode: 'UPDATE' },
+    ], true)).resolves.toBe(true);
+  });
+
+  it(`splits a run longer than ${LOCK_STATEMENT_ROWS} rows into statements that keep its order`, async () => {
+    const statements: unknown[][] = [];
+    const lock = rowLocker('postgresql', plan, async (_sql, values) => {
+      statements.push(values);
+      return values;
+    });
+    const rows = Array.from({ length: LOCK_STATEMENT_ROWS + 1 }, (_value, index) => ({
+      model: 'A', row: { id: String(index).padStart(4, '0') }, mode: 'UPDATE' as const,
+    }));
+    await expect(lock(rows, true)).resolves.toBe(true);
+    expect(statements.map((values) => values.length)).toEqual([LOCK_STATEMENT_ROWS, 1]);
+    expect(statements.flat()).toEqual(rows.map(({ row }) => row.id));
   });
 
   it('reports a row another write holds as a conflict when it cannot wait for it', async () => {
     const lock = rowLocker('postgresql', plan, async () => {
       throw Object.assign(new Error('could not obtain lock on row in relation "A"'), { meta: { code: '55P03' } });
     });
-    await expect(lock({ model: 'A', row: { id: '1' }, mode: 'UPDATE' }, false))
+    await expect(lock([{ model: 'A', row: { id: '1' }, mode: 'UPDATE' }], false))
       .rejects.toThrow(new GolemConflictError('A row of A this write needs is held by a concurrent write'));
   });
 
   it('issues no lock statement on SQLite, where the database serialises writers', async () => {
     const run = jest.fn();
-    await rowLocker('sqlite', new CascadePlan([]), run)({ model: 'X', row: {}, mode: 'UPDATE' }, true);
+    await rowLocker('sqlite', new CascadePlan([]), run)([{ model: 'X', row: {}, mode: 'UPDATE' }], true);
     expect(run).not.toHaveBeenCalled();
   });
 });

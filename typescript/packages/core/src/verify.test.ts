@@ -483,7 +483,8 @@ describe('narrow verification readback (M14)', () => {
     const engine = new GolemEngine(client, models, { authorization: authz, checkWriteResults: true });
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: 'new' }, context: ctx });
-    const select = delegates.post.findFirst.mock.calls[0][0].select;
+    expect(delegates.post.findFirst.mock.calls[0][0].select).toEqual({ id: true });
+    const select = delegates.post.findFirst.mock.calls[1][0].select;
     expect(select.title).toBe(true);
     expect(select.authorId).toBe(true);
     expect(select.id).toBe(true);
@@ -542,7 +543,8 @@ describe('narrow verification readback (M14)', () => {
     });
 
     await engine.update({ model: 'Post', where: { id: 'p1' }, data: { title: 'new' }, context: ctx });
-    const select = delegates.post.findFirst.mock.calls[0][0].select;
+    expect(delegates.post.findFirst.mock.calls[0][0].select).toEqual({ id: true });
+    const select = delegates.post.findFirst.mock.calls[1][0].select;
     expect(select.views).toBe(true);
     expect(select.published).toBe(true);
   });

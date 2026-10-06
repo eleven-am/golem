@@ -1,6 +1,7 @@
 import { DatamodelDocument, rowIdentityFields, supportedProvider } from './datamodel';
 import { canonicalToken } from './canonical';
 import { LinkGuard, LinkGuardPort, decideBranch } from './link-guard';
+import { claimEngineWrite } from './engine-writes';
 import {
   DEFAULT_UPSERT_GUARD_STRIPES,
   GOLEM_UPSERT_GUARD_DELEGATE,
@@ -452,10 +453,12 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     if (batchUpdate && eventful && pks.some((pk) => Object.prototype.hasOwnProperty.call(args?.data ?? {}, pk))) {
       throw new GolemValidationError(`Eventful ${operation} cannot modify primary key fields on ${model}`);
     }
+    const guardedByEngine = claimEngineWrite(model, operation);
     return batch.run(async (delegate, transaction) => {
       const port = guardPort(transaction);
-      const lockWrite = (data: unknown, roots: readonly Record<string, unknown>[]) =>
-        LinkGuard.of(port, model, data, false).before(transaction.scope, roots);
+      const lockWrite = async (data: unknown, roots: readonly Record<string, unknown>[]) => guardedByEngine
+        ? data
+        : LinkGuard.of(port, model, data, false, data, roots.length > 0).before(transaction.scope, roots);
       if (operation === 'create') {
         const data = await lockWrite(args?.data, []);
         return writeRow('CREATED', model, { ...args, data }, (finalArgs) => delegate.create(finalArgs));
@@ -479,7 +482,9 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
         return manyWriteResult(operation, created, projection.strip);
       }
       if (operation === 'update' || operation === 'upsert') {
-        const root = operation === 'update'
+        const root = guardedByEngine
+          ? undefined
+          : operation === 'update'
           ? await delegate.findUnique({ where: args?.where, select: identitySelect })
           : await decideBranch(port, transaction.scope, model, args?.where, () =>
               delegate.findUnique({ where: args?.where, select: identitySelect }));

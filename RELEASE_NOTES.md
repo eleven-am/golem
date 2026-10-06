@@ -1,3 +1,47 @@
+# Release notes — 0.7.1
+
+These are the release notes for the TypeScript/NestJS packages. They do not
+announce a Go module release.
+
+## Faster writes on PostgreSQL
+
+0.7.0 made concurrent writes safe at the cost of extra database round trips on
+every write, which showed up as higher latency even with no contention. Writes
+now make fewer round trips, with the same guarantees:
+
+- A create that links rows through foreign keys takes about a third fewer round
+  trips; a nested create that names the same parent several times checks and
+  locks it once.
+- An `updateMany`'s round trips no longer grow with the number of rows it
+  changes.
+- A create that links nothing no longer opens a transaction when the caller has
+  no authorization context or `checkWriteResults` is off.
+- A write made through `forContext` or GraphQL no longer has its linked rows
+  checked a second time by the generated client. Writes the application makes on
+  the client directly are still checked.
+
+Concurrent writes behave exactly as in 0.7.0: the same writes complete, the
+same writes are refused with `CONFLICT`, and none deadlock.
+
+## Fixes
+
+### A checked update is judged against the row as it stands when it is locked
+
+With `checkWriteResults` on, an `update` or `updateMany` compared the
+changed fields against a copy of the row read before the row was locked. A
+concurrent write that landed in between could make the field checks wrong in
+either direction:
+- a field the caller left alone could count as changed, so the update was
+  refused with `FORBIDDEN`;
+- a field the caller wrote back to its earlier value could count as unchanged,
+  so its field rule was never checked.
+
+The row is now read once it is locked, so the checks see exactly what the
+update changes. This was also the case in 0.6.x. A checked update now makes one
+more round trip than before.
+
+---
+
 # Release notes — 0.7.0
 
 These are the release notes for the TypeScript/NestJS packages. They do not

@@ -202,7 +202,10 @@ describe('composite updateMany identity', () => {
       where: { AND: [{ OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] }, {}] },
       data: { addedAt: 2 },
     });
-    expect(findMany).toHaveBeenCalledTimes(1);
+    expect(findMany).toHaveBeenCalledTimes(2);
+    expect(findMany.mock.calls[1][0].where).toEqual(
+      { AND: [{ OR: [{ postId: 'p1', tagId: 't1' }, { postId: 'p1', tagId: 't2' }] }, {}] },
+    );
   });
 });
 
