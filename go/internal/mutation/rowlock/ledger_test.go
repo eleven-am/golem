@@ -160,3 +160,39 @@ func TestRollbackRestoresADowngradedMode(t *testing.T) {
 		t.Fatal("rollback to the start left the key held")
 	}
 }
+
+func TestOnlyAReaderProvablyConfinedToTheTargetRowIsMerged(t *testing.T) {
+	confined := []string{
+		`"golem_m0"."id" = $1 AND ((COALESCE("golem_m0"."author_id" = $2::uuid, FALSE)))`,
+		`CASE WHEN ((COALESCE("golem_m0"."author_id" = $4::uuid, FALSE))) THEN 1 ELSE 0 END AS "golem_auth_74"`,
+		`COALESCE(pg_catalog.jsonb_typeof("golem_m0"."tags") = 'array' AND "golem_m0"."tags" = $1::jsonb, FALSE)`,
+		`"golem_m0"."budget" = $1::numeric(18,2) AND "golem_m0"."at" = $2::timestamp(6) with time zone`,
+		`"golem_m0"."from" = 'select * from users' COLLATE "C"`,
+	}
+	for _, text := range confined {
+		if !readsOnlyTheTargetRow(text) {
+			t.Errorf("%s was not recognised as reading only the target row", text)
+		}
+	}
+	escaping := []string{
+		`EXISTS (SELECT 1 FROM "public"."users" AS "golem_r1" WHERE "golem_r1"."id" = "golem_m0"."author_id")`,
+		`EXISTS (SELECT 1 FROM pg_catalog.jsonb_array_elements("golem_m0"."tags") AS golem_e(value))`,
+		`"golem_m0"."id" IN (TABLE "public"."ids")`,
+		`lower("golem_m0"."name") = $1`,
+		`my_pg_catalog.lookup("golem_m0"."id")`,
+		`"golem_m0"."name" = 'unterminated`,
+		`"golem_m0"."id" = ANY (VALUES (1))`,
+	}
+	for _, text := range escaping {
+		if readsOnlyTheTargetRow(text) {
+			t.Errorf("%s was treated as reading only the target row", text)
+		}
+	}
+	reader := Reader{Alias: "golem_m0", Columns: `"golem_m0"."id"`, Match: `"golem_m0"."id" = $1`, Args: []any{1}}
+	if !reader.mergeable(2, 1) {
+		t.Error("a target-row reader with room for one identity was not merged")
+	}
+	if reader.mergeable(1, 1) || reader.mergeable(2, 2) {
+		t.Error("a reader whose arguments leave no room for one identity was merged")
+	}
+}

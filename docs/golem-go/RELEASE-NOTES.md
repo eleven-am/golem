@@ -16,8 +16,6 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.6.7
 
-Unreleased.
-
 **Fix: removing and re-adding a link in one nested write works.** A nested
 `Update` that combined `DeleteMany` with `Create` on the same relation, such as
 `PostTags.DeleteMany(tag = "go")` with `PostTags.Create(tag = "go")` to relink
@@ -88,6 +86,26 @@ the write failed with `FORBIDDEN: mutation is not authorized`. It now fails
 with `CONFLICT: a later nested operation removed a row this mutation wrote`,
 and nothing is written. A row that exists but fails your policy still fails
 with `FORBIDDEN`.
+
+**Faster writes on PostgreSQL when the policy reads only the row.** Since
+v0.6.5 a write locked its rows with one statement and then read them again
+with another. Now, when the write's filter, policy and field grants read only
+the row being written, one statement locks the rows and returns them as
+locked. A single-row update or delete, an `UpdateMany` or `DeleteMany`, and
+each nested relation a write touches then run one statement fewer (a
+single-row update: 7 statements inside its transaction, now 6). When any of
+them follows a relation to another table, the write keeps the separate read
+after the lock, so a grant revoked while it waited is still seen. In alternating
+single-writer runs, update latency fell by about 0.8ms and throughput rose by
+about 12%. Results, lock order and `CONFLICT` behaviour under contention are
+unchanged: no deadlocks in contention runs of 32 writers on 10 and 50 shared
+rows.
+
+**Fix: a reference through a unique key could be locked out of order.** A
+write setting a foreign key that references another row's unique (not
+primary) key could, if that value moved to a different row while the write
+ran, let the database lock the new row outside golem's lock order, which can
+deadlock. Such a write now fails with `CONFLICT`; retry it.
 
 ---
 

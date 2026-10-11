@@ -19,16 +19,9 @@ func ExecuteRelationSQL(ctx context.Context, queryer sqlx.QueryerContext, regist
 	if ctx == nil || queryer == nil || registry == nil || statement.model == (policyir.ModelID{}) || statement.text == "" || statement.maxRows == 0 || len(statement.columns) == 0 {
 		return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_INPUT: context, queryer, registry, and closed statement are required")
 	}
-	fields := make([]policyir.FieldID, len(statement.columns))
-	for index, column := range statement.columns {
-		if column.field == (policyir.FieldID{}) || column.alias == "" {
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_INPUT: statement column %d is invalid", index)
-		}
-		fields[index] = column.field
-	}
-	decoder, err := readdecode.NewFields(statement.model, registry, provider, fields)
+	scan, err := relationRowScanner(registry, provider, statement)
 	if err != nil {
-		return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+		return nil, err
 	}
 	rows, err := queryer.QueryxContext(ctx, statement.text, statement.Args()...)
 	if err != nil {
@@ -40,24 +33,9 @@ func ExecuteRelationSQL(ctx context.Context, queryer sqlx.QueryerContext, regist
 		if uint64(len(result)) >= uint64(statement.maxRows) {
 			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_LIMIT: statement returned more than %d rows", statement.maxRows)
 		}
-		scan := decoder.NewScan()
-		if err := rows.Scan(scan.Destinations()...); err != nil {
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_SCAN: %w", err)
-		}
-		cells, err := scan.Decode()
+		row, err := scan(rows)
 		if err != nil {
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
-		}
-		row, err := mutationdecode.FromReadCells(registry, statement.model, cells)
-		if err != nil {
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
-		}
-		complete, err := row.IsComplete(registry)
-		if err != nil || !complete {
-			if err == nil {
-				err = fmt.Errorf("decoded relation row is incomplete")
-			}
-			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+			return nil, err
 		}
 		result = append(result, row)
 	}
@@ -70,4 +48,40 @@ func ExecuteRelationSQL(ctx context.Context, queryer sqlx.QueryerContext, regist
 		}
 	}
 	return result, nil
+}
+
+func relationRowScanner(registry *schema.Registry, provider policyir.Provider, statement RelationSQLStatement) (func(*sqlx.Rows, ...any) (mutationdecode.Row, error), error) {
+	fields := make([]policyir.FieldID, len(statement.columns))
+	for index, column := range statement.columns {
+		if column.field == (policyir.FieldID{}) || column.alias == "" {
+			return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_INPUT: statement column %d is invalid", index)
+		}
+		fields[index] = column.field
+	}
+	decoder, err := readdecode.NewFields(statement.model, registry, provider, fields)
+	if err != nil {
+		return nil, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+	}
+	return func(rows *sqlx.Rows, trailing ...any) (mutationdecode.Row, error) {
+		scan := decoder.NewScan()
+		if err := rows.Scan(append(scan.Destinations(), trailing...)...); err != nil {
+			return mutationdecode.Row{}, fmt.Errorf("P4_NESTED_SQL_EXEC_SCAN: %w", err)
+		}
+		cells, err := scan.Decode()
+		if err != nil {
+			return mutationdecode.Row{}, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+		}
+		row, err := mutationdecode.FromReadCells(registry, statement.model, cells)
+		if err != nil {
+			return mutationdecode.Row{}, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+		}
+		complete, err := row.IsComplete(registry)
+		if err != nil || !complete {
+			if err == nil {
+				err = fmt.Errorf("decoded relation row is incomplete")
+			}
+			return mutationdecode.Row{}, fmt.Errorf("P4_NESTED_SQL_EXEC_DECODE: %w", err)
+		}
+		return row, nil
+	}, nil
 }

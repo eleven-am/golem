@@ -190,6 +190,20 @@ func TestPostgreSQLSingleTargetReplacedBeforeLockingIsMissing(t *testing.T) {
 			if err := database.SelectContext(ctx, &names, `SELECT "name" FROM `+tags); err != nil || strings.Join(names, ",") != "a" {
 				t.Fatalf("tags=%v err=%v; the row that replaced the target must be untouched", names, err)
 			}
+
+			if _, err := SystemCreate(ctx, fixture.app.System(), fixture.tagDescriptor, fixture.tagCreate(31, "c")); err != nil {
+				t.Fatal(err)
+			}
+			renamed := atEnumeration(ctx, 1, func(ctx context.Context) error {
+				_, err := database.ExecContext(ctx, `UPDATE `+tags+` SET "name" = 'd' WHERE "name" = 'c'`)
+				return err
+			})
+			_, err = CallerDelete(renamed, caller, fixture.tagDescriptor, fixture.tagNameTarget("c"))
+			assertPublicNotFound(t, err)
+			names = nil
+			if err := database.SelectContext(ctx, &names, `SELECT "name" FROM `+tags+` ORDER BY "name"`); err != nil || strings.Join(names, ",") != "a,d" {
+				t.Fatalf("tags=%v err=%v; the locked row that stopped matching the selector must be untouched", names, err)
+			}
 		})
 	}
 }

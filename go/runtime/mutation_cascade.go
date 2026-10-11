@@ -37,7 +37,7 @@ func captureCascadeEffects(ctx context.Context, queryer sqlx.QueryerContext, reg
 		return nil, nil
 	}
 	session := state.binding.lockSession(queryer, registry, provider, limits.statementParameters)
-	return rowlock.Select(ctx, session, func(ctx context.Context, _ func(rowlock.Key) bool) (*cascadeEffects, []rowlock.Key, error) {
+	return rowlock.Select(ctx, session, func(ctx context.Context) (*cascadeEffects, []rowlock.Key, error) {
 		effects, err := enumerateCascadeEffects(ctx, queryer, registry, provider, limits, state, model, parents)
 		if err != nil {
 			return nil, nil, err

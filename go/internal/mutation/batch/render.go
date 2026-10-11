@@ -8,6 +8,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -118,7 +119,7 @@ func Render(plan mutationir.Plan, registry *schema.Registry, provider policyir.P
 		order[index] = context.qualified(field.Column) + " ASC"
 	}
 	text := "SELECT " + strings.Join(fields, ", ") + " FROM " + dialect.Table(model) + " AS " + dialect.Quote(context.alias) + " WHERE " + fragment.text + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", uint64(plan.Bounds().MaxRows())+1)
-	capture := Statement{role: CaptureExactSet, text: text, bindings: fragment.bindings, columns: columns, cardinality: AtMostSentinelRows}
+	capture := Statement{role: CaptureExactSet, text: text, bindings: fragment.bindings, columns: columns, cardinality: AtMostSentinelRows, reader: rowlock.Reader{Alias: context.alias, Columns: strings.Join(fields, ", "), Match: fragment.text}}
 	if uint32(len(capture.bindings)) > plan.Bounds().MaxParameters() {
 		return Program{}, fail(CodeLimit, node.ModelID(), policyir.FieldID{}, "capture statement exceeds parameter bound", nil)
 	}

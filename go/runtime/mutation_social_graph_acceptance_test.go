@@ -401,11 +401,16 @@ func newSocialMutationFixture(t testing.TB, deniedCreate golem.ModelID, log *soc
 
 func newPostgresSocialMutationFixture(t testing.TB, profile postgresAcceptanceProfile, deniedCreate golem.ModelID, log *socialHookLog) socialMutationFixture {
 	t.Helper()
+	return newPostgresSocialMutationFixtureFrom(t, profile, schematest.NewSubscribedSocialMutationPostgreSQLNamespaces, deniedCreate, log)
+}
+
+func newPostgresSocialMutationFixtureFrom(t testing.TB, profile postgresAcceptanceProfile, schemaFor func(testing.TB, physical.PhysicalName, physical.PhysicalName) schematest.SocialMutationFixture, deniedCreate golem.ModelID, log *socialHookLog) socialMutationFixture {
+	t.Helper()
 	ctx := context.Background()
 	suffix := time.Now().UnixNano()
 	namespace := physical.PhysicalName(fmt.Sprintf("golem_p4_social_%s_%d_%d", profile.name, os.Getpid(), suffix))
 	systemNamespace := physical.PhysicalName(fmt.Sprintf("golem_p4_social_system_%s_%d_%d", profile.name, os.Getpid(), suffix))
-	schemaFixture := schematest.NewSubscribedSocialMutationPostgreSQLNamespaces(t, namespace, systemNamespace)
+	schemaFixture := schemaFor(t, namespace, systemNamespace)
 	provider := postgresprovider.New()
 	database, _, err := provider.Open(ctx, profile.dsn)
 	if err != nil {

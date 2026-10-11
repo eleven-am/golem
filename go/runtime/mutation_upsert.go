@@ -525,7 +525,7 @@ func (attempt *sqlxUpsertAttempt) AcquireGuard(ctx context.Context, guard mutati
 func (attempt *sqlxUpsertAttempt) Probe(ctx context.Context, statement mutationupsert.Statement) (uint32, error) {
 	recordQueryerStatement(ctx, attempt.queryer, attempt.binding.observation)
 	session := attempt.binding.lockSession(attempt.queryer, attempt.registry, attempt.provider, attempt.binding.mutation.limits.statementParameters)
-	return rowlock.Select(ctx, session, func(ctx context.Context, _ func(rowlock.Key) bool) (uint32, []rowlock.Key, error) {
+	return rowlock.Select(ctx, session, func(ctx context.Context) (uint32, []rowlock.Key, error) {
 		rows, err := queryIdentityRows(ctx, attempt.queryer, attempt.registry, attempt.provider, statement.ModelID(), statement.Fields(), statement.SQL(), statement.Args())
 		if err != nil {
 			return 0, nil, err

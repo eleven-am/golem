@@ -12,6 +12,7 @@ import (
 
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -100,12 +101,21 @@ type Statement struct {
 	authorizations []AuthorizationColumn
 	cardinality    Cardinality
 	expected       uint32
+	reader         rowlock.Reader
 }
 
 func (statement Statement) Role() Role               { return statement.role }
 func (statement Statement) SQL() string              { return statement.text }
 func (statement Statement) Cardinality() Cardinality { return statement.cardinality }
 func (statement Statement) ExpectedRows() uint32     { return statement.expected }
+func (statement Statement) LockReader(arguments []any) (rowlock.Reader, bool) {
+	if statement.role != CaptureExactSet || statement.reader.Columns == "" {
+		return rowlock.Reader{}, false
+	}
+	reader := statement.reader
+	reader.Args = append([]any(nil), arguments...)
+	return reader, true
+}
 func (statement Statement) Bindings() []Binding {
 	result := make([]Binding, len(statement.bindings))
 	for index := range statement.bindings {

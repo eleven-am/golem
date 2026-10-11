@@ -29,21 +29,28 @@ type SQLExpansionRequest struct {
 
 func lockedRelationRows(ctx context.Context, request SQLExpansionRequest, statements []RelationSQLStatement) ([][]mutationdecode.Row, error) {
 	session := rowlock.Session{Ledger: request.Ledger, Queryer: request.Queryer, Registry: request.Registry, Provider: request.Provider, MaxParameters: request.MaxParameters}
-	return rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) ([][]mutationdecode.Row, []rowlock.Key, error) {
-		results := make([][]mutationdecode.Row, len(statements))
-		var keys []rowlock.Key
-		for index, statement := range statements {
-			rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statement)
-			if err != nil {
-				return nil, nil, err
-			}
-			admitted, rowKeys, err := rowlock.AdmitRows(request.Registry, rows, admit)
-			if err != nil {
-				return nil, nil, err
-			}
-			results[index], keys = admitted, append(keys, rowKeys...)
+	readers := make([]rowlock.Reader, len(statements))
+	scanners := make([]func(*sqlx.Rows, ...any) (mutationdecode.Row, error), len(statements))
+	for index, statement := range statements {
+		reader, readable := statement.LockReader()
+		if !readable {
+			return nil, fmt.Errorf("P4_NESTED_EXPAND_PROGRAM: expansion statement %d has no locking read", index)
 		}
-		return results, keys, nil
+		scan, err := relationRowScanner(request.Registry, request.Provider, statement)
+		if err != nil {
+			return nil, err
+		}
+		readers[index], scanners[index] = reader, scan
+	}
+	return rowlock.SelectMatching(ctx, session, readers, func(ctx context.Context, index int) ([]mutationdecode.Row, []rowlock.Key, error) {
+		rows, err := ExecuteRelationSQL(ctx, request.Queryer, request.Registry, request.Provider, statements[index])
+		if err != nil {
+			return nil, nil, err
+		}
+		keys, err := rowlock.RowKeys(request.Registry, rows)
+		return rows, keys, err
+	}, func(index int, rows *sqlx.Rows, trailing ...any) (mutationdecode.Row, error) {
+		return scanners[index](rows, trailing...)
 	})
 }
 
