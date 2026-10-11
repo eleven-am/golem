@@ -78,6 +78,7 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
 
   let prisma: PrismaClient;
   let statements: string[] = [];
+  let parameters: string[] = [];
   let close: () => Promise<void>;
 
   beforeAll(async () => {
@@ -89,8 +90,11 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
       adapter: new PrismaPg({ connectionString: databaseUrl }),
       log: [{ emit: 'event', level: 'query' }],
     });
-    (prisma as unknown as { $on(event: 'query', listener: (event: { query: string }) => void): void })
-      .$on('query', (event) => statements.push(event.query));
+    (prisma as unknown as { $on(event: 'query', listener: (event: { query: string; params: string }) => void): void })
+      .$on('query', (event) => {
+        statements.push(event.query);
+        parameters.push(event.params);
+      });
     close = () => prisma.$disconnect();
   });
 
@@ -105,6 +109,7 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
     await prisma.thread.createMany({ data: [{ id: 1, title: 'one' }, { id: 2, title: 'two' }] });
     await prisma.person.createMany({ data: [{ id: 1 }, { id: 2 }] });
     statements = [];
+    parameters = [];
   });
 
   const engine = (checkWriteResults: boolean) => new GolemEngine(prisma as unknown as Record<string, any>, models, {
@@ -234,6 +239,84 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
 
       expect(locks(sql)).toEqual(['SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE']);
       await expect(prisma.reply.findUnique({ where: { id: 13 } })).resolves.toMatchObject({ threadId: 2 });
+    });
+
+    const postedAt = new Date('2026-01-01T00:00:00.000Z');
+    const lockedRows = async (write: () => Promise<unknown>): Promise<string[]> => {
+      statements = [];
+      parameters = [];
+      await write();
+      return statements.flatMap((statement, index) => locks([statement]).map(() => `${statement} ${parameters[index]}`));
+    };
+    type Delegate = Record<string, (args: unknown) => Promise<unknown>>;
+    const wrapping = (client: Record<string, any>, create: (real: Delegate, args: unknown) => Promise<unknown>): Record<string, any> =>
+      new Proxy(client, {
+        get: (target, property) => {
+          const member = Reflect.get(target, property);
+          if (property === '$transaction') {
+            return (work: (tx: Record<string, any>) => Promise<unknown>, ...rest: unknown[]) =>
+              member.call(target, (tx: Record<string, any>) => work(wrapping(tx, create)), ...rest);
+          }
+          if (property !== 'reply') {
+            return typeof member === 'function' ? member.bind(target) : member;
+          }
+          return new Proxy(member as Delegate, {
+            get: (delegate, operation) => operation === 'create'
+              ? (args: unknown) => create(delegate, args)
+              : Reflect.get(delegate, operation),
+          });
+        },
+      });
+    const wrappedEngine = (create: (real: Delegate, args: unknown) => Promise<unknown>) =>
+      new GolemEngine(wrapping(wired(), create), models, {
+        authorization,
+        checkReadFields: false,
+        provider: 'postgresql',
+        upsertGuard: upsertGuardModel,
+      });
+    const lock = 'SELECT 1 FROM "threads" WHERE ("id") = ($1) FOR SHARE';
+
+    it('guards a same-model write a hand-written wrapper issues inside an engine write, and the engine write once', async () => {
+      const engineWithForeignWrite = wrappedEngine(async (real, args) => {
+        await real.create({ data: { id: 31, threadId: 2, body: 'foreign', postedAt }, select: { id: true } });
+        return real.create(args);
+      });
+
+      const locked = await lockedRows(() => engineWithForeignWrite.create({
+        model: 'Reply',
+        data: { id: 30, threadId: 1, body: 'engine', postedAt },
+        select: { id: true },
+        context: context(),
+      }));
+
+      expect(locked).toEqual([`${lock} [1]`, `${lock} [2]`]);
+      await expect(prisma.reply.findMany({ orderBy: { id: 'asc' }, select: { id: true } }))
+        .resolves.toEqual([{ id: 30 }, { id: 31 }]);
+    });
+
+    it('refuses an engine write a wrapper replaced with a different write of the same model', async () => {
+      const engineWithSwappedWrite = wrappedEngine((real) =>
+        real.create({ data: { id: 33, threadId: 2, body: 'swapped', postedAt }, select: { id: true } }));
+
+      await expect(engineWithSwappedWrite.create({
+        model: 'Reply',
+        data: { id: 32, threadId: 1, body: 'engine', postedAt },
+        select: { id: true },
+        context: context(),
+      })).rejects.toThrow(/did not issue the write it guarded/);
+      await expect(prisma.reply.count()).resolves.toBe(0);
+    });
+
+    it('guards concurrent engine writes each exactly once', async () => {
+      const locked = await lockedRows(() => Promise.all([1, 2, 1, 2].map((threadId, index) => wiredEngine().create({
+        model: 'Reply',
+        data: { id: 40 + index, threadId, body: 'concurrent', postedAt },
+        select: { id: true },
+        context: context(),
+      }))));
+
+      expect([...locked].sort()).toEqual([`${lock} [1]`, `${lock} [1]`, `${lock} [2]`, `${lock} [2]`]);
+      await expect(prisma.reply.count()).resolves.toBe(4);
     });
 
     it('still guards a write the application issues on the client directly', async () => {

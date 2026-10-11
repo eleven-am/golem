@@ -453,7 +453,7 @@ export function createEventPublisher(options: CreateEventPublisherOptions): Gole
     if (batchUpdate && eventful && pks.some((pk) => Object.prototype.hasOwnProperty.call(args?.data ?? {}, pk))) {
       throw new GolemValidationError(`Eventful ${operation} cannot modify primary key fields on ${model}`);
     }
-    const guardedByEngine = claimEngineWrite(model, operation);
+    const guardedByEngine = claimEngineWrite(model, operation, args);
     return batch.run(async (delegate, transaction) => {
       const port = guardPort(transaction);
       const lockWrite = async (data: unknown, roots: readonly Record<string, unknown>[]) => guardedByEngine
