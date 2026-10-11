@@ -1,3 +1,17 @@
+# Release notes — 0.7.2 (unreleased)
+
+These are the release notes for the TypeScript/NestJS packages. They do not
+announce a Go module release.
+
+## Fixes
+
+- A write that your own code issues on the generated client while the engine is
+  writing (for example from a hand-written wrapper around the client) is now
+  always checked by the client, even when it targets the same model with the
+  same operation. Only the exact write the engine issued skips the client's
+  second check; a different write, including one a wrapper substitutes for the
+  engine's, is checked by the client like any other.
+
 # Release notes — 0.7.1
 
 These are the release notes for the TypeScript/NestJS packages. They do not
