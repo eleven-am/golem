@@ -89,13 +89,8 @@ var _ = runtime.ValidatedEvent{metadata: golem.EventMetadata{}, identity: []any{
 
 func testGeneratedFactoryConstructionInsideModule(t *testing.T, moduleRoot string) {
 	t.Helper()
-	directory, err := os.MkdirTemp(".", "p7eventtmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(directory)
-	base := filepath.Base(directory)
-	importPath := "github.com/eleven-am/golem/go/internal/codegen/event/" + base
+	directory, packagePath := generatedPackageDirectory(t, "p7eventtmp")
+	importPath := "github.com/eleven-am/golem/go/" + packagePath
 	request := eventRequest(t, importPath, directory)
 	files, err := Emit(request)
 	if err != nil {
@@ -104,7 +99,7 @@ func testGeneratedFactoryConstructionInsideModule(t *testing.T, moduleRoot strin
 	writeFile(t, filepath.Join(directory, "models.go"), generatedSupportSource())
 	writeFile(t, files[0].Path, string(files[0].Source))
 	writeFile(t, filepath.Join(directory, "events_test.go"), generatedFactoryTestSource())
-	runGo(t, moduleRoot, "test", "./internal/codegen/event/"+base)
+	runGo(t, moduleRoot, "test", "./"+packagePath)
 }
 
 func eventRequest(t *testing.T, importPath, directory string) Request {
@@ -141,13 +136,8 @@ func TestGeneratedEventIdentityKeepsAnEmptyBytesKeyEmpty(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, err := os.MkdirTemp(".", "p7eventbytestmp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(directory)
-	base := filepath.Base(directory)
-	files, err := Emit(eventRequestKeyedBy(t, "github.com/eleven-am/golem/go/internal/codegen/event/"+base, directory, ir.TypeBytes))
+	directory, packagePath := generatedPackageDirectory(t, "p7eventbytestmp")
+	files, err := Emit(eventRequestKeyedBy(t, "github.com/eleven-am/golem/go/"+packagePath, directory, ir.TypeBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +170,7 @@ func TestEmptyBytesIdentity(t *testing.T) {
   if err != nil || !ok || friendship.ID().UserID() == nil || len(friendship.ID().UserID()) != 0 || string(friendship.ID().FriendID()) != "\x07" { t.Fatalf("friendship=%#v ok=%v err=%v", built, ok, err) }
 }
 `)
-	runGo(t, moduleRoot, "test", "./internal/codegen/event/"+base)
+	runGo(t, moduleRoot, "test", "./"+packagePath)
 }
 
 func generatedSupportSource() string {
@@ -244,6 +234,22 @@ func writeFile(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func generatedPackageDirectory(t *testing.T, prefix string) (string, string) {
+	t.Helper()
+	if err := os.MkdirAll("testdata", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := os.MkdirTemp("testdata", prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		os.RemoveAll(directory)
+		os.Remove("testdata")
+	})
+	return directory, "internal/codegen/event/testdata/" + filepath.Base(directory)
 }
 
 func runGo(t *testing.T, directory string, args ...string) {
