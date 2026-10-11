@@ -74,12 +74,17 @@ timeout behind the victims, so throughput collapsed under contention.
    operator form (`COALESCE`, `CASE`, ...), a `pg_catalog.` function or a type
    cast. Anything else, including a policy or field grant that follows a
    relation (an `EXISTS (SELECT ...)`), takes the fresh-read path: the reader's
-   keys are locked with a plain `Lock` in the same ordered round, then its
-   enumeration runs again as a new statement and keeps the rows the transaction
-   holds. Why: a statement's subqueries read other tables at the snapshot taken
-   when the statement started. If the lock-read waits, a grant revoked by the
-   blocking transaction would be unseen and the write authorized on stale
-   data; a new statement after the lock sees it. The parameter fallback keeps
+   keys are locked with a plain `Lock` in the same ordered round. Once the
+   round has taken any lock, every such reader that enumerated rows runs its
+   enumeration again as a new statement and keeps the rows the transaction
+   holds, including a reader whose rows were all held before the round: any
+   lock in the round may have waited, and a grant it depends on may have been
+   revoked meanwhile. Why: a statement's subqueries read other tables at the
+   snapshot taken when the statement started. If a lock waits, a grant revoked
+   by the blocking transaction would be unseen and the write authorized on
+   stale data; a new statement after the lock sees it. A merged reader whose
+   rows were all held keeps its enumeration: it reads only those rows, and no
+   other transaction can change a row this one holds. The parameter fallback keeps
    a selection whose own arguments fill the bound working, as it did before.
 5. **Complete selections: enumerate, lock, enumerate again** (`Select`). The
    cascade closure, the root upsert probe and foreign-key parents found through

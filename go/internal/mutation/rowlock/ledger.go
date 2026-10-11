@@ -492,7 +492,6 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 	for reader := range readers {
 		locked[reader], relocked[reader] = map[string]R{}, map[string]struct{}{}
 	}
-	reread := make([]bool, len(readers))
 	plain := func(rows *sqlx.Rows, trailing ...any) (struct{}, error) { return struct{}{}, rows.Scan(trailing...) }
 	for start := 0; start < len(entries); {
 		end := start + 1
@@ -505,11 +504,6 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 			group[index] = entries[start+index].lock.key
 		}
 		if reader < 0 {
-			for _, key := range group {
-				for _, owner := range enumeratedBy[key.order] {
-					reread[owner] = reread[owner] || !merged[owner]
-				}
-			}
 			if _, err := lockRun(ctx, session, group, entries[start].lock.nowait, nil, plain); err != nil {
 				return nil, err
 			}
@@ -534,7 +528,7 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 	}
 	result := make([][]R, len(readers))
 	for reader, readerKeys := range keys {
-		if reread[reader] {
+		if len(readerKeys) != 0 && !merged[reader] {
 			rows, rowKeys, err := enumerate(ctx, reader)
 			if err != nil {
 				return nil, err

@@ -231,3 +231,109 @@ func TestPostgreSQLLockReadWhoseArgumentsFillTheParameterBoundStillLocksItsRows(
 		})
 	}
 }
+
+func TestPostgreSQLReaderWhoseRowWasAlreadyHeldSeesAGrantRevokedWhileAnotherReaderWaited(t *testing.T) {
+	for _, profile := range postgresAcceptanceProfiles() {
+		profile := profile
+		t.Run(profile.name, func(t *testing.T) {
+			if profile.dsn == "" {
+				testenv.SkipMissingPostgreSQL(t, profile.env+" is not configured")
+			}
+			ctx := context.Background()
+			fixture, namespace := newMutationResultPostgresFixture(t, ctx, profile)
+			posts, users := `"`+string(namespace)+`"."posts"`, `"`+string(namespace)+`"."users"`
+			seedCascadeUser(t, fixture, 7, "alice")
+			for _, post := range []byte{70, 71} {
+				if _, err := SystemCreate(ctx, fixture.app.System(), fixture.postDescriptor, fixture.createPost(post, golem.UUID{15: 7}, "pair")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			database := fixture.app.database
+			model, primary := policyir.ModelID(fixture.schema.Post), policyir.FieldID(fixture.schema.PostID)
+			decoder, err := readdecode.NewFields(model, fixture.app.registry, policyir.ProviderPostgreSQL, []policyir.FieldID{primary})
+			if err != nil {
+				t.Fatal(err)
+			}
+			tx, err := database.BeginTxx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback() }()
+			session := rowlock.Session{Ledger: rowlock.NewLedger(), Queryer: tx, Registry: fixture.app.registry, Provider: policyir.ProviderPostgreSQL, MaxParameters: 1000}
+			granted := `EXISTS (SELECT 1 FROM ` + users + ` AS "golem_u" WHERE "golem_u"."id" = "golem_t"."author_id" AND "golem_u"."name" = 'alice')`
+			readers := []rowlock.Reader{
+				{Alias: "golem_t", Columns: `"golem_t"."id"`, Match: `"golem_t"."id" = $1 AND ` + granted, Args: []any{mutationResultUUIDText(70)}},
+				{Alias: "golem_t", Columns: `"golem_t"."id"`, Match: `"golem_t"."id" = $1`, Args: []any{mutationResultUUIDText(71)}},
+			}
+			enumerate := func(ctx context.Context, reader int) ([]mutationdecode.Row, []rowlock.Key, error) {
+				rows, err := queryIdentityRows(ctx, tx, fixture.app.registry, policyir.ProviderPostgreSQL, model, []policyir.FieldID{primary}, `SELECT "golem_t"."id" FROM `+posts+` AS "golem_t" WHERE `+readers[reader].Match, readers[reader].Args)
+				if err != nil {
+					return nil, nil, err
+				}
+				keys, err := rowlock.RowKeys(fixture.app.registry, rows)
+				return rows, keys, err
+			}
+			heldRows, heldKeys, err := enumerate(ctx, 0)
+			if err != nil || len(heldRows) != 1 {
+				t.Fatalf("rows=%d err=%v; the first reader's row must be found before the selection", len(heldRows), err)
+			}
+			if acquired, err := session.Lock(ctx, heldKeys); err != nil || !acquired {
+				t.Fatalf("acquired=%t err=%v", acquired, err)
+			}
+			gate, err := database.BeginTxx(ctx, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := gate.ExecContext(ctx, `SELECT 1 FROM `+posts+` WHERE "id" = $1 FOR UPDATE`, mutationResultUUIDText(71)); err != nil {
+				_ = gate.Rollback()
+				t.Fatal(err)
+			}
+			type selection struct {
+				rows [][]mutationdecode.Row
+				err  error
+			}
+			done := make(chan selection, 1)
+			go func() {
+				rows, err := rowlock.SelectMatching(ctx, session, readers, enumerate, func(_ int, rows *sqlx.Rows, trailing ...any) (mutationdecode.Row, error) {
+					scan := decoder.NewScan()
+					if err := rows.Scan(append(scan.Destinations(), trailing...)...); err != nil {
+						return mutationdecode.Row{}, err
+					}
+					cells, err := scan.Decode()
+					if err != nil {
+						return mutationdecode.Row{}, err
+					}
+					return mutationdecode.FromReadCells(fixture.app.registry, model, cells)
+				})
+				done <- selection{rows: rows, err: err}
+			}()
+			deadline := time.Now().Add(15 * time.Second)
+			for lockWaiters(t, database, string(namespace)) == 0 {
+				if time.Now().After(deadline) {
+					_ = gate.Rollback()
+					t.Fatal("the second reader never waited for the held row")
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			if _, err := database.ExecContext(ctx, `UPDATE `+users+` SET "name" = 'revoked' WHERE "id" = $1`, mutationResultUUIDText(7)); err != nil {
+				_ = gate.Rollback()
+				t.Fatal(err)
+			}
+			if err := gate.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			var result selection
+			select {
+			case result = <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("the selection did not finish after the row was released")
+			}
+			if result.err != nil {
+				t.Fatal(result.err)
+			}
+			if len(result.rows[0]) != 0 || len(result.rows[1]) != 1 {
+				t.Fatalf("first reader rows=%d second reader rows=%d; the first reader's grant was revoked while the second waited, so only the second may return its row", len(result.rows[0]), len(result.rows[1]))
+			}
+		})
+	}
+}
