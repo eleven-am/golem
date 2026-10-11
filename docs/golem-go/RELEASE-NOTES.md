@@ -16,8 +16,6 @@ prefix. A plain `v0.3.0` tag would not make this module fetchable. Tags before
 
 ## go/v0.6.7
 
-Unreleased.
-
 **Fix: removing and re-adding a link in one nested write works.** A nested
 `Update` that combined `DeleteMany` with `Create` on the same relation, such as
 `PostTags.DeleteMany(tag = "go")` with `PostTags.Create(tag = "go")` to relink
