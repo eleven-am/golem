@@ -8,6 +8,7 @@ import (
 
 	"github.com/eleven-am/golem/go/golem"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -223,7 +224,7 @@ func (context renderContext) renderUpdate() ([]Statement, error) {
 		preselect += ", " + authorizationSelect
 		whereBindings = append(whereBindings, authorizationBindings...)
 	}
-	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: whereBindings, columns: preColumns, authorizations: authorizationColumns, cardinality: ExactlyOneRow}}
+	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: whereBindings, columns: preColumns, authorizations: authorizationColumns, cardinality: ExactlyOneRow, reader: rowlock.Reader{Alias: context.alias, Columns: preselect, Match: where}}}
 
 	assignments := make([]string, len(operations), len(operations)+1)
 	updateBindings := make([]Binding, 0, len(operations))
@@ -319,7 +320,7 @@ func (context renderContext) renderDelete() ([]Statement, error) {
 	if err != nil {
 		return nil, err
 	}
-	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: bindings, columns: preColumns, cardinality: ExactlyOneRow}}
+	statements := []Statement{{role: SelectPreImage, text: "SELECT " + preselect + " FROM " + context.dialect.Table(context.model) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + where, bindings: bindings, columns: preColumns, cardinality: ExactlyOneRow, reader: rowlock.Reader{Alias: context.alias, Columns: preselect, Match: where}}}
 	pkWhere, pkBindings, err := context.priorPrimaryKeyWhere(0)
 	if err != nil {
 		return nil, err

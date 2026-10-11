@@ -681,32 +681,35 @@ func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, bi
 	if statement.Role() != mutationsql.SelectPreImage {
 		return queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, operation, statementIndex, statement, arguments)
 	}
-	session := binding.lockSession(queryer, registry, provider, binding.mutation.limits.statementParameters)
-	type selected struct {
-		row   scalarMutationStatementResult
-		found bool
+	reader, readable := statement.LockReader(arguments)
+	if !readable {
+		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image has no locking read", nil)
 	}
-	choice, err := rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) (selected, []rowlock.Key, error) {
+	scan, err := exactMutationRowScanner(registry, model, provider, operation, statementIndex, statement)
+	if err != nil {
+		return scalarMutationStatementResult{}, err
+	}
+	session := binding.lockSession(queryer, registry, provider, binding.mutation.limits.statementParameters)
+	locked, err := rowlock.SelectMatching(ctx, session, []rowlock.Reader{reader}, func(ctx context.Context, _ int) ([]scalarMutationStatementResult, []rowlock.Key, error) {
 		row, err := queryExactlyOneMutationRow(ctx, queryer, registry, model, provider, operation, statementIndex, statement, arguments)
 		var failure *scalarMutationFailure
 		if errors.As(err, &failure) && failure.kind == scalarMutationNotFound && failure.statement == statementIndex {
-			return selected{}, nil, nil
+			return nil, nil, nil
 		}
 		if err != nil {
-			return selected{}, nil, err
+			return nil, nil, err
 		}
 		image, err := mutationdecode.FromReadCells(registry, model, row.cells)
 		if err != nil {
-			return selected{}, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image could not be decoded for locking", err)
+			return nil, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image could not be decoded for locking", err)
 		}
 		key, err := rowlock.RowKey(registry, image)
 		if err != nil {
-			return selected{}, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image identity could not be locked", err)
+			return nil, nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "pre-image identity could not be locked", err)
 		}
-		if !admit(key) {
-			return selected{}, nil, nil
-		}
-		return selected{row: row, found: true}, []rowlock.Key{key}, nil
+		return []scalarMutationStatementResult{row}, []rowlock.Key{key}, nil
+	}, func(_ int, rows *sqlx.Rows, trailing ...any) (scalarMutationStatementResult, error) {
+		return scan(rows, trailing...)
 	})
 	if err != nil {
 		var failure *scalarMutationFailure
@@ -715,38 +718,38 @@ func queryMutationStatement(ctx context.Context, queryer sqlx.QueryerContext, bi
 		}
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProviderFailureKind(err), statement.Role(), statementIndex, "mutation target could not be locked", err)
 	}
-	if !choice.found {
+	if len(locked[0]) != 1 {
 		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
 	}
-	return choice.row, nil
+	return locked[0][0], nil
 }
 
-func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, arguments []any) (scalarMutationStatementResult, error) {
+func exactMutationRowScanner(registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement) (func(*sqlx.Rows, ...any) (scalarMutationStatementResult, error), error) {
 	if statement.Cardinality() != mutationsql.ExactlyOneRow {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "statement has an unsupported cardinality contract", nil)
+		return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "statement has an unsupported cardinality contract", nil)
 	}
 	columns := statement.Columns()
 	authorizations := statement.AuthorizationColumns()
 	if len(columns) == 0 {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "row-producing statement has no result columns", nil)
+		return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "row-producing statement has no result columns", nil)
 	}
 	seen := make(map[policyir.FieldID]struct{}, len(columns))
 	for _, column := range columns {
 		if column.FieldID() == (policyir.FieldID{}) {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "result column has a zero field identity", nil)
+			return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "result column has a zero field identity", nil)
 		}
 		if _, duplicate := seen[column.FieldID()]; duplicate {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "result column field appears more than once", nil)
+			return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "result column field appears more than once", nil)
 		}
 		seen[column.FieldID()] = struct{}{}
 	}
 	seenAuthorizations := make(map[policyir.FieldID]struct{}, len(authorizations))
 	for _, authorization := range authorizations {
 		if authorization.FieldID() == (policyir.FieldID{}) {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "authorization column has a zero field identity", nil)
+			return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "authorization column has a zero field identity", nil)
 		}
 		if _, duplicate := seenAuthorizations[authorization.FieldID()]; duplicate {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "authorization column field appears more than once", nil)
+			return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "authorization column field appears more than once", nil)
 		}
 		seenAuthorizations[authorization.FieldID()] = struct{}{}
 	}
@@ -756,9 +759,43 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 	}
 	decoder, err := readdecode.NewFields(model, registry, provider, fieldOrder)
 	if err != nil {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "exact mutation decoder could not be built", err)
+		return nil, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "exact mutation decoder could not be built", err)
 	}
+	return func(rows *sqlx.Rows, trailing ...any) (scalarMutationStatementResult, error) {
+		scan := decoder.NewScan()
+		destinations := scan.Destinations()
+		rawGrants := make([]any, len(authorizations))
+		for index := range rawGrants {
+			destinations = append(destinations, &rawGrants[index])
+		}
+		if err := rows.Scan(append(destinations, trailing...)...); err != nil {
+			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation row scan failed", err)
+		}
+		values := scan.RawValues()
+		cells, err := scan.Decode()
+		if err != nil {
+			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation row could not be decoded exactly", err)
+		}
+		result := scalarMutationStatementResult{role: statement.Role(), fields: make(map[policyir.FieldID]any, len(columns)), cells: cells, grants: make(map[policyir.FieldID]bool, len(authorizations))}
+		for index, column := range columns {
+			result.fields[column.FieldID()] = cloneMutationPhysicalValue(values[index])
+		}
+		for index, authorization := range authorizations {
+			granted, decodeErr := decodeMutationAuthorizationGrant(rawGrants[index])
+			if decodeErr != nil {
+				return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "field authorization result is not an exact boolean", decodeErr)
+			}
+			result.grants[authorization.FieldID()] = granted
+		}
+		return result, nil
+	}, nil
+}
 
+func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, model policyir.ModelID, provider policyir.Provider, operation mutationir.Operation, statementIndex uint32, statement mutationsql.Statement, arguments []any) (scalarMutationStatementResult, error) {
+	scan, err := exactMutationRowScanner(registry, model, provider, operation, statementIndex, statement)
+	if err != nil {
+		return scalarMutationStatementResult{}, err
+	}
 	recordQueryerStatement(ctx, queryer)
 	rows, err := queryer.QueryxContext(ctx, statement.SQL(), arguments...)
 	if err != nil {
@@ -771,14 +808,9 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 		}
 		return scalarMutationStatementResult{}, zeroRowMutationError(operation, statement.Role(), statementIndex)
 	}
-	scan := decoder.NewScan()
-	destinations := scan.Destinations()
-	rawGrants := make([]any, len(authorizations))
-	for index := range rawGrants {
-		destinations = append(destinations, &rawGrants[index])
-	}
-	if err := rows.Scan(destinations...); err != nil {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation row scan failed", err)
+	result, err := scan(rows)
+	if err != nil {
+		return scalarMutationStatementResult{}, err
 	}
 	if rows.Next() {
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationInvariant, statement.Role(), statementIndex, "mutation statement returned more than one row", nil)
@@ -788,22 +820,6 @@ func queryExactlyOneMutationRow(ctx context.Context, queryer sqlx.QueryerContext
 	}
 	if err := rows.Close(); err != nil {
 		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation result stream could not close", err)
-	}
-	values := scan.RawValues()
-	cells, err := scan.Decode()
-	if err != nil {
-		return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "mutation row could not be decoded exactly", err)
-	}
-	result := scalarMutationStatementResult{role: statement.Role(), fields: make(map[policyir.FieldID]any, len(columns)), cells: cells, grants: make(map[policyir.FieldID]bool, len(authorizations))}
-	for index, column := range columns {
-		result.fields[column.FieldID()] = cloneMutationPhysicalValue(values[index])
-	}
-	for index, authorization := range authorizations {
-		granted, decodeErr := decodeMutationAuthorizationGrant(rawGrants[index])
-		if decodeErr != nil {
-			return scalarMutationStatementResult{}, scalarMutationError(operation, scalarMutationProvider, statement.Role(), statementIndex, "field authorization result is not an exact boolean", decodeErr)
-		}
-		result.grants[authorization.FieldID()] = granted
 	}
 	return result, nil
 }

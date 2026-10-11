@@ -381,16 +381,30 @@ func executePublicBatch[P, A any](ctx context.Context, app *App[P, A], binding *
 	defer undoOnPanic(func() { abandon(nil) })
 
 	session := activeBinding.lockSession(scope.queryer, app.registry, app.provider, app.mutationLimits.statementParameters)
-	captured, err := rowlock.Select(ctx, session, func(ctx context.Context, admit func(rowlock.Key) bool) ([]mutationdecode.Row, []rowlock.Key, error) {
-		rows, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), program.CaptureStatement(), program.SentinelRows())
+	capture := program.CaptureStatement()
+	reader, readable := capture.LockReader(batchStatementArguments(capture))
+	if !readable {
+		return 0, publicBatchExecutionError(program, fmt.Errorf("batch capture has no locking read"))
+	}
+	scan, err := batchRowScanner(app.registry, app.provider, program.ModelID(), capture)
+	if err != nil {
+		return 0, publicBatchExecutionError(program, err)
+	}
+	locked, err := rowlock.SelectMatching(ctx, session, []rowlock.Reader{reader}, func(ctx context.Context, _ int) ([]mutationdecode.Row, []rowlock.Key, error) {
+		rows, _, err := executeMutationBatchStatement(ctx, scope.queryer, app.registry, app.provider, program.ModelID(), capture, program.SentinelRows())
 		if err != nil {
 			return nil, nil, err
 		}
-		return rowlock.AdmitRows(app.registry, rows, admit)
+		keys, err := rowlock.RowKeys(app.registry, rows)
+		return rows, keys, err
+	}, func(_ int, rows *sqlx.Rows, trailing ...any) (mutationdecode.Row, error) {
+		row, _, err := scan(rows, trailing...)
+		return row, err
 	})
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
 	}
+	captured := locked[0]
 	prepared, err := program.PrepareCaptured(captured)
 	if err != nil {
 		return 0, publicBatchExecutionError(program, err)
@@ -532,7 +546,16 @@ func beginBatchMutationState[P, A any](ctx context.Context, app *App[P, A], bind
 	return state, scope, false, err
 }
 
-func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, statement mutationbatch.Statement, limit uint32) ([]mutationdecode.Row, [][]mutationbatch.FieldGrant, error) {
+func batchStatementArguments(statement mutationbatch.Statement) []any {
+	bindings := statement.Bindings()
+	arguments := make([]any, len(bindings))
+	for index, binding := range bindings {
+		arguments[index] = binding.Value()
+	}
+	return arguments
+}
+
+func batchRowScanner(registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, statement mutationbatch.Statement) (func(*sqlx.Rows, ...any) (mutationdecode.Row, []mutationbatch.FieldGrant, error), error) {
 	columns := statement.Columns()
 	fieldOrder := make([]policyir.FieldID, len(columns))
 	for index, column := range columns {
@@ -540,60 +563,69 @@ func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerCont
 	}
 	decoder, err := readdecode.NewFields(model, registry, provider, fieldOrder)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	bindings := statement.Bindings()
-	arguments := make([]any, len(bindings))
-	for index, binding := range bindings {
-		arguments[index] = binding.Value()
-	}
-	recordQueryerStatement(ctx, queryer)
-	rows, err := queryer.QueryxContext(ctx, statement.SQL(), arguments...)
-	if err != nil {
-		return nil, nil, err
-	}
-	defer rows.Close()
-	result := make([]mutationdecode.Row, 0)
-	grantRows := make([][]mutationbatch.FieldGrant, 0)
 	authorizationColumns := statement.AuthorizationColumns()
-	for rows.Next() {
-		if limit != 0 && uint64(len(result)) >= uint64(limit) {
-			return nil, nil, fmt.Errorf("batch statement returned more than its cardinality bound")
-		}
+	return func(rows *sqlx.Rows, trailing ...any) (mutationdecode.Row, []mutationbatch.FieldGrant, error) {
 		scan := decoder.NewScan()
 		destinations := scan.Destinations()
 		rawGrants := make([]any, len(authorizationColumns))
 		for index := range rawGrants {
 			destinations = append(destinations, &rawGrants[index])
 		}
-		if err := rows.Scan(destinations...); err != nil {
-			return nil, nil, err
+		if err := rows.Scan(append(destinations, trailing...)...); err != nil {
+			return mutationdecode.Row{}, nil, err
 		}
 		decoded, err := scan.Decode()
 		if err != nil {
-			return nil, nil, err
+			return mutationdecode.Row{}, nil, err
 		}
 		cells := make([]mutationdecode.Cell, len(decoded))
 		for index, cell := range decoded {
 			cells[index], err = exactMutationCell(cell)
 			if err != nil {
-				return nil, nil, err
+				return mutationdecode.Row{}, nil, err
 			}
 		}
 		row, err := mutationdecode.NewCompleteRow(registry, model, cells)
 		if err != nil {
-			return nil, nil, err
+			return mutationdecode.Row{}, nil, err
 		}
 		grants := make([]mutationbatch.FieldGrant, len(authorizationColumns))
 		for index, column := range authorizationColumns {
 			granted, err := decodeMutationAuthorizationGrant(rawGrants[index])
 			if err != nil {
-				return nil, nil, err
+				return mutationdecode.Row{}, nil, err
 			}
 			grants[index], err = mutationbatch.NewFieldGrant(column.FieldID(), granted)
 			if err != nil {
-				return nil, nil, err
+				return mutationdecode.Row{}, nil, err
 			}
+		}
+		return row, grants, nil
+	}, nil
+}
+
+func executeMutationBatchStatement(ctx context.Context, queryer sqlx.QueryerContext, registry *schema.Registry, provider policyir.Provider, model policyir.ModelID, statement mutationbatch.Statement, limit uint32) ([]mutationdecode.Row, [][]mutationbatch.FieldGrant, error) {
+	scan, err := batchRowScanner(registry, provider, model, statement)
+	if err != nil {
+		return nil, nil, err
+	}
+	recordQueryerStatement(ctx, queryer)
+	rows, err := queryer.QueryxContext(ctx, statement.SQL(), batchStatementArguments(statement)...)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	result := make([]mutationdecode.Row, 0)
+	grantRows := make([][]mutationbatch.FieldGrant, 0)
+	for rows.Next() {
+		if limit != 0 && uint64(len(result)) >= uint64(limit) {
+			return nil, nil, fmt.Errorf("batch statement returned more than its cardinality bound")
+		}
+		row, grants, err := scan(rows)
+		if err != nil {
+			return nil, nil, err
 		}
 		result = append(result, row)
 		grantRows = append(grantRows, grants)

@@ -68,18 +68,22 @@ func NewSubscribedSocialMutationAdversarialRelationOrderPostgreSQLNamespaces(t t
 }
 
 func NewSubscribedSocialMutationUniqueUserName(t testing.TB) SocialMutationFixture {
-	return newSocialMutation(t, "public", "_golem", false, true)
+	return newSocialMutation(t, "public", "_golem", false, true, false)
 }
 
 func NewSubscribedSocialMutationUniqueUserNamePostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) SocialMutationFixture {
-	return newSocialMutation(t, namespace, systemNamespace, false, true)
+	return newSocialMutation(t, namespace, systemNamespace, false, true, false)
+}
+
+func NewSubscribedSocialMutationPostTagForeignKeysPostgreSQLNamespaces(t testing.TB, namespace, systemNamespace physical.PhysicalName) SocialMutationFixture {
+	return newSocialMutation(t, namespace, systemNamespace, false, false, true)
 }
 
 func newSubscribedSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace physical.PhysicalName, adversarialRelationOrder bool) SocialMutationFixture {
-	return newSocialMutation(t, postgresNamespace, postgresSystemNamespace, adversarialRelationOrder, false)
+	return newSocialMutation(t, postgresNamespace, postgresSystemNamespace, adversarialRelationOrder, false, false)
 }
 
-func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace physical.PhysicalName, adversarialRelationOrder, uniqueUserName bool) SocialMutationFixture {
+func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace physical.PhysicalName, adversarialRelationOrder, uniqueUserName, postTagForeignKeys bool) SocialMutationFixture {
 	t.Helper()
 	user, post, comment := compilerir.ModelID(id(401)), compilerir.ModelID(id(402)), compilerir.ModelID(id(403))
 	friendship, tag, postTag := compilerir.ModelID(id(404)), compilerir.ModelID(id(405)), compilerir.ModelID(id(406))
@@ -172,6 +176,17 @@ func newSocialMutation(t testing.TB, postgresNamespace, postgresSystemNamespace 
 		},
 	}
 
+	for index := range model.Relations {
+		if !postTagForeignKeys {
+			break
+		}
+		switch model.Relations[index].ID {
+		case postTagPostRelation:
+			model.Relations[index].ForeignKey = &compilerir.ForeignKeyIR{ID: compilerir.ForeignKeyID(id(469)), PhysicalName: "fk_post_tags_post", OnUpdate: compilerir.ActionRestrict, OnDelete: compilerir.ActionRestrict, Match: compilerir.MatchSimple, Deferrable: compilerir.NotDeferrable}
+		case postTagTagRelation:
+			model.Relations[index].ForeignKey = &compilerir.ForeignKeyIR{ID: compilerir.ForeignKeyID(id(470)), PhysicalName: "fk_post_tags_tag", OnUpdate: compilerir.ActionRestrict, OnDelete: compilerir.ActionRestrict, Match: compilerir.MatchSimple, Deferrable: compilerir.NotDeferrable}
+		}
+	}
 	if uniqueUserName {
 		model.Models[0].Uniques = []compilerir.KeyIR{{ID: userNameKey, Kind: compilerir.KeyUnique, LogicalName: "Name", PhysicalName: "uq_users_name", Fields: []compilerir.FieldID{userName}}}
 	}

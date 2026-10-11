@@ -38,60 +38,100 @@ timeout behind the victims, so throughput collapsed under contention.
 
 1. **Order.** A key is `(model ID, encoded primary identity)`; upsert guards sort
    before every row. `strongestSorted` merges duplicate keys, keeping the
-   stronger mode.
-2. **Enumerate, lock, re-read** (`Select`). The caller's query enumerates the
-   candidate rows without locks. `Lock` locks their keys in ledger order, one
-   statement per run of keys sharing a model, a mode and the wait or `NOWAIT`
-   choice, chunked to the parameter limit: `SELECT ... FOR UPDATE` (or
-   `FOR KEY SHARE`) ordered by the key ordinal. The query then runs again under the locks.
+   stronger mode. `plan` decides, from the keys the transaction already holds,
+   which keys still need a lock and whether each may wait.
+2. **One lock statement shape.** Every row lock is
+   `SELECT <columns>, <match>, <ordinal> FROM t WHERE <keys> ORDER BY <ordinal>
+   FOR UPDATE` (or `FOR KEY SHARE`, `NOWAIT` where step 3 requires it), one
+   statement per run of keys sharing a model, a mode, the wait choice and (for
+   a locking read) the reader, chunked to the parameter limit. `WHERE` names only
+   primary keys, so every row it finds is locked and returned, and recorded in
+   the ledger. A plain `Lock` reads no caller columns and has no predicate.
 3. **Never wait out of order.** A key that sorts before the highest key the
    transaction already holds, or an upgrade of a key it holds (KEY SHARE to
    UPDATE), is taken with `NOWAIT`. Lock failure (55P03) is reported as
    `CONFLICT`. Waiting happens only in ledger order, so the waits-for graph has
    no cycle.
-4. **Foreign-key parents** a write will reference are locked `FOR KEY SHARE`
+4. **Predicate selections: enumerate, then lock and read in one statement**
+   (`SelectMatching`). The caller's query enumerates the candidate rows without
+   locks. Each candidate the transaction does not already hold is then locked
+   by a statement that also returns the caller's columns and evaluates the
+   caller's predicate as a column (`<match>`): PostgreSQL re-evaluates both on
+   the row version it locked, so the result is the row as locked and whether it
+   still matches. Each enumerating statement has its own `Reader` (columns,
+   predicate, arguments); the nested set difference enumerates current members
+   and each desired target separately, and a row both enumerate is locked by
+   the first reader's statement and read again, without waiting, by the
+   second's. Rows already held are returned as enumerated: no other
+   transaction can have changed them.
+5. **Complete selections: enumerate, lock, enumerate again** (`Select`). The
+   cascade closure, the root upsert probe and foreign-key parents found through
+   a unique key must see every row, including one that started to match after
+   enumeration, which a locking read of known keys cannot find. They lock with
+   `Lock` and run the enumeration again under the locks.
+6. **Foreign-key parents** a write will reference are locked `FOR KEY SHARE`
    (`LockReferences`) before the write, in the same order, so the database's own
-   foreign-key check never takes a lock out of order.
-5. **Upsert guards** are transaction advisory locks ordered before every row: a
+   foreign-key check never takes a lock out of order. A parent referenced by
+   its primary key is keyed from the written value without a query (mutation
+   input is refused when it exceeds the column's declared precision or scale,
+   and identity encoding is canonical, so the key equals the row's). A parent
+   referenced through another unique key is found by a query, a complete
+   selection. A parent the transaction already holds is not locked again.
+7. **Upsert guards** are transaction advisory locks ordered before every row: a
    guard is acquired blocking only while the transaction holds no row, and
    otherwise with `pg_try_advisory_xact_lock` (failure is `CONTENTION` →
    `CONFLICT`).
-6. **Savepoints.** `Mark` records the ledger length when a savepoint opens;
+8. **Savepoints.** `Mark` records the ledger length when a savepoint opens;
    `RollbackTo` removes, or restores the previous mode of, every key acquired
    after it, because PostgreSQL releases those locks on rollback to the
    savepoint.
 
-## What `Select` returns
+## What a selection returns
 
-The result is the re-read restricted to rows this transaction holds `FOR UPDATE`.
+`SelectMatching` returns the rows this transaction holds `FOR UPDATE` that still
+match, each as it was when locked, in enumeration order.
 
-- A row deleted, or changed so it no longer matches, before it was locked is
-  simply absent: `Lock` records only the rows it found, and the re-read does
-  not return it. A delete's goal state is already reached; an update has
-  nothing to change.
-- A row that starts matching after enumeration is not held. An enumeration
-  with predicate semantics passes the `admit` callback to `AdmitRows` and
-  excludes it: `DeleteMany`/`UpdateMany` (root and nested), nested relation
-  expansions, and single-target pre-images. This matches a plain READ COMMITTED
-  `DELETE ... WHERE` (its snapshot does not see rows committed after it
-  started, and a row deleted or changed away under it is skipped after
-  re-checking the predicate) and v0.6.4, whose capture was a single
-  `SELECT ... FOR UPDATE`. Including such rows would need a second, possibly
-  out-of-order, lock round per re-read and could chase concurrent inserts
-  without bound.
-- An enumeration that must be complete ignores `admit`; a row it returns
-  without holding fails `Select` with `ConflictError` (`CONFLICT`). These are
-  the cascade closure (the database removes every dependent, so an unlocked
-  one would be deleted without its event; new dependents can appear only below
-  the first level, under children not yet locked) and the upsert probe (an
-  unseen row would collide with the create branch).
-- `FOR KEY SHARE` reference keys are returned whether or not the parent exists:
-  a missing parent is reported by the foreign key itself.
+- A row deleted before it was locked is absent: the lock statement does not
+  find it. A row changed so it no longer matches is locked but its `<match>`
+  column is false, so it is left out. A delete's goal state is already reached;
+  an update has nothing to change.
+- A row that starts matching after enumeration is not among the keys and is
+  not held. This covers `DeleteMany`/`UpdateMany` (root and nested), nested
+  relation expansions, and single-target pre-images. It matches a plain READ
+  COMMITTED `DELETE ... WHERE`: its snapshot does not see rows committed after
+  it started, and a row changed under it is re-checked on the version it
+  locked, with other tables read at the statement's snapshot. v0.6.4's single
+  `SELECT ... FOR UPDATE` behaved the same way. Including such rows would need
+  a second, possibly out-of-order, lock round and could chase concurrent
+  inserts without bound.
+- The predicate is a column, not part of `WHERE`. In `WHERE`, PostgreSQL would
+  lock a row whose new version fails the re-check and not return it, so the
+  ledger would not know it holds that lock and could later wait out of order
+  while holding it.
+
+`Select` (complete) returns the second enumeration. A row it returns without
+holding fails with `ConflictError` (`CONFLICT`): for the cascade closure the
+database removes every dependent, so an unlocked one would be deleted without
+its event (new dependents can appear only below the first level, under
+children not yet locked); for the upsert probe an unseen row would collide with
+the create branch. The one exception is a `FOR KEY SHARE` parent key that the
+first enumeration requested and that was missing when locked: it is admitted,
+and a missing parent is reported by the foreign key itself. A parent key the
+second enumeration finds that the first did not (another row took the unique
+value) is a `CONFLICT`, since the foreign-key check would lock it out of order.
 
 So a single target that vanished or stopped matching is `NOT_FOUND`, a batch
 changes exactly the rows it holds, and the count, hooks, events and cascade
 facts are built from those rows. Tests: `runtime/row_lock_ledger_test.go`,
 `runtime/row_lock_batch_rule_test.go` (injected through `WithEnumeratedFault`).
+
+## Cost
+
+Per locked selection, a predicate selection costs one statement beyond its
+enumeration and a complete selection two. The statement counts per operation
+are pinned by the PostgreSQL observation oracles
+(`internal/p8oracle/mutation`, `internal/p8oracle/load`) and
+`runtime/mutation_cascade_cost_test.go`.
 
 ## Rejected: keep predicate-order locks and map 40P01 to `CONFLICT`
 
@@ -105,9 +145,13 @@ Measured with the contention harness (32 workers, mixed writes on PostgreSQL
 
 Lowering `deadlock_timeout` to 100ms only shortens the stall: 341 ops/s at 10
 hot rows, still about 3x worse than the ledger, and it is a server setting
-golem cannot own. Uncontended, the ledger costs about +0.4ms per write (two
-extra statements: enumerate and lock) and about 20% single-writer throughput
-(528 → 423 updates/s).
+golem cannot own. Uncontended, the ledger as first shipped (go/v0.6.5) cost
+about +0.4ms per write (two extra statements: lock and re-read) and about 20%
+single-writer throughput (528 → 423 updates/s). Merging the lock and the
+re-read (go/v0.6.7) leaves one extra statement per predicate selection: a
+single-row update is 6 statements inside its transaction (v0.6.4: 5, v0.6.5:
+7), and in alternating runs single-writer update latency fell by about 0.8ms
+(p50) with about 12% more updates/s.
 
 ## Known trade-off
 
@@ -115,3 +159,12 @@ An application transaction that writes rows in an order other than the ledger
 order does not wait: it fails fast with `CONFLICT` when another transaction
 holds an earlier key. Writers that touch shared rows in a consistent order, or
 retry on `CONFLICT`, are unaffected. The GUIDE says this in user terms.
+
+## Known gap
+
+A row whose primary key another transaction changes, and commits, while a lock
+statement waits for it is locked but not returned: PostgreSQL re-checks
+`WHERE <keys>` on the new version, which no longer matches. The ledger does not
+record that lock, so a later wait in the same transaction can be out of order.
+Single updates may change a primary key; batch updates may not. Present since
+go/v0.6.5, unchanged by the merged lock-read.

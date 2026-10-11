@@ -63,20 +63,6 @@ func identityKey(model policyir.ModelID, identity mutationdecode.Identity, mode 
 	return Key{order: rowPrefix + string(model[:]) + string(encoded), mode: mode, model: model, identity: identity}, nil
 }
 
-func AdmitRows(registry *schema.Registry, rows []mutationdecode.Row, admit func(Key) bool) ([]mutationdecode.Row, []Key, error) {
-	keys, err := RowKeys(registry, rows)
-	if err != nil {
-		return nil, nil, err
-	}
-	admittedRows, admittedKeys := make([]mutationdecode.Row, 0, len(rows)), make([]Key, 0, len(keys))
-	for index, key := range keys {
-		if admit(key) {
-			admittedRows, admittedKeys = append(admittedRows, rows[index]), append(admittedKeys, key)
-		}
-	}
-	return admittedRows, admittedKeys, nil
-}
-
 func RowKeys(registry *schema.Registry, rows []mutationdecode.Row) ([]Key, error) {
 	keys := make([]Key, len(rows))
 	for index, row := range rows {
@@ -206,6 +192,19 @@ type pendingLock struct {
 	nowait bool
 }
 
+type Reader struct {
+	Alias   physical.PhysicalName
+	Columns string
+	Match   string
+	Args    []any
+}
+
+type lockedRow[R any] struct {
+	key     Key
+	row     R
+	matched bool
+}
+
 func (session Session) Lock(ctx context.Context, keys []Key) (bool, error) {
 	if err := session.postgres(); err != nil {
 		return false, err
@@ -214,21 +213,30 @@ func (session Session) Lock(ctx context.Context, keys []Key) (bool, error) {
 	if len(pending) == 0 {
 		return false, nil
 	}
+	scan := func(rows *sqlx.Rows, trailing ...any) (struct{}, error) { return struct{}{}, rows.Scan(trailing...) }
 	for start := 0; start < len(pending); {
 		end := start + 1
-		for end < len(pending) && pending[end].key.model == pending[start].key.model && pending[end].key.mode == pending[start].key.mode && pending[end].nowait == pending[start].nowait {
+		for end < len(pending) && sameRun(pending[end], pending[start]) {
 			end++
 		}
-		group := make([]Key, end-start)
-		for index := range group {
-			group[index] = pending[start+index].key
-		}
-		if err := session.lockModel(ctx, group, pending[start].nowait); err != nil {
+		if _, err := lockRun(ctx, session, keysOf(pending[start:end]), pending[start].nowait, nil, scan); err != nil {
 			return false, err
 		}
 		start = end
 	}
 	return true, nil
+}
+
+func sameRun(left, right pendingLock) bool {
+	return left.key.model == right.key.model && left.key.mode == right.key.mode && left.nowait == right.nowait
+}
+
+func keysOf(pending []pendingLock) []Key {
+	keys := make([]Key, len(pending))
+	for index := range pending {
+		keys[index] = pending[index].key
+	}
+	return keys
 }
 
 func plan(ledger *Ledger, keys []Key) []pendingLock {
@@ -244,33 +252,45 @@ func plan(ledger *Ledger, keys []Key) []pendingLock {
 	return pending
 }
 
-func (session Session) lockModel(ctx context.Context, keys []Key, nowait bool) error {
+func lockRun[R any](ctx context.Context, session Session, keys []Key, nowait bool, reader *Reader, scan func(*sqlx.Rows, ...any) (R, error)) ([]lockedRow[R], error) {
 	model := keys[0].model
 	resolver := policysql.SchemaResolver(session.Registry)
 	physicalModel, ok := resolver.Model(session.Provider, model)
 	if !ok {
-		return fmt.Errorf("P4_ROW_LOCK_SCHEMA: model %x has no physical descriptor", model)
+		return nil, fmt.Errorf("P4_ROW_LOCK_SCHEMA: model %x has no physical descriptor", model)
 	}
 	width := len(keys[0].identity.Components())
 	if width == 0 {
-		return fmt.Errorf("P4_ROW_LOCK_IDENTITY: model %x identity is empty", model)
+		return nil, fmt.Errorf("P4_ROW_LOCK_IDENTITY: model %x identity is empty", model)
 	}
-	chunk := int(session.MaxParameters) / width
+	fixed := 0
+	if reader != nil {
+		fixed = len(reader.Args)
+	}
+	chunk := (int(session.MaxParameters) - fixed) / width
 	if chunk < 1 {
-		return fmt.Errorf("P4_ROW_LOCK_LIMIT: parameter bound cannot hold one identity of model %x", model)
+		return nil, fmt.Errorf("P4_ROW_LOCK_LIMIT: parameter bound cannot hold one identity of model %x", model)
 	}
+	var locked []lockedRow[R]
 	for start := 0; start < len(keys); start += chunk {
 		end := min(start+chunk, len(keys))
-		if err := session.lockChunk(ctx, resolver, physicalModel, keys[start:end], nowait); err != nil {
-			return err
+		rows, err := lockChunk(ctx, session, resolver, physicalModel, keys[start:end], nowait, reader, scan)
+		if err != nil {
+			return nil, err
 		}
+		locked = append(locked, rows...)
 	}
-	return nil
+	return locked, nil
 }
 
-func (session Session) lockChunk(ctx context.Context, resolver policysql.Resolver, physicalModel policysql.Model, keys []Key, nowait bool) error {
+func lockChunk[R any](ctx context.Context, session Session, resolver policysql.Resolver, physicalModel policysql.Model, keys []Key, nowait bool, reader *Reader, scan func(*sqlx.Rows, ...any) (R, error)) ([]lockedRow[R], error) {
 	dialect := postgresprovider.NewPolicyDialect()
-	args := make([]any, 0, len(keys)*len(keys[0].identity.Components()))
+	alias, columns := lockAlias, "1"
+	var args []any
+	if reader != nil {
+		alias, columns = reader.Alias, reader.Columns+", CASE WHEN ("+reader.Match+") THEN 1 ELSE 0 END"
+		args = append(args, reader.Args...)
+	}
 	matches := make([]string, len(keys))
 	order := make([]string, len(keys))
 	for index, key := range keys {
@@ -280,14 +300,14 @@ func (session Session) lockChunk(ctx context.Context, resolver policysql.Resolve
 			value, valued := component.PolicyValue()
 			field, found := resolver.Field(session.Provider, key.model, component.FieldID())
 			if component.IsNull() || !valued || !found {
-				return fmt.Errorf("P4_ROW_LOCK_IDENTITY: identity component %x of model %x is not lockable", component.FieldID(), key.model)
+				return nil, fmt.Errorf("P4_ROW_LOCK_IDENTITY: identity component %x of model %x is not lockable", component.FieldID(), key.model)
 			}
 			encoded, err := encode(dialect, resolver, field.Type, value)
 			if err != nil {
-				return fmt.Errorf("P4_ROW_LOCK_IDENTITY: identity component %x of model %x cannot be encoded: %w", component.FieldID(), key.model, err)
+				return nil, fmt.Errorf("P4_ROW_LOCK_IDENTITY: identity component %x of model %x cannot be encoded: %w", component.FieldID(), key.model, err)
 			}
 			args = append(args, encoded)
-			parts[position] = dialect.Quote(lockAlias) + "." + dialect.Quote(field.Column) + " = " + dialect.Placeholder(len(args))
+			parts[position] = dialect.Quote(alias) + "." + dialect.Quote(field.Column) + " = " + dialect.Placeholder(len(args))
 		}
 		matches[index] = "(" + strings.Join(parts, " AND ") + ")"
 		order[index] = fmt.Sprintf("WHEN %s THEN %d", matches[index], index)
@@ -297,31 +317,36 @@ func (session Session) lockChunk(ctx context.Context, resolver policysql.Resolve
 	if nowait {
 		suffix += " NOWAIT"
 	}
-	text := "SELECT " + ordinal + " FROM " + dialect.Table(physicalModel) + " AS " + dialect.Quote(lockAlias) + " WHERE " + strings.Join(matches, " OR ") + " ORDER BY " + ordinal + suffix
+	text := "SELECT " + columns + ", " + ordinal + " FROM " + dialect.Table(physicalModel) + " AS " + dialect.Quote(alias) + " WHERE " + strings.Join(matches, " OR ") + " ORDER BY " + ordinal + suffix
 	rows, err := session.Queryer.QueryxContext(ctx, text, args...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer rows.Close()
+	var result []lockedRow[R]
 	var locked []Key
 	for rows.Next() {
-		var index int64
-		if err := rows.Scan(&index); err != nil {
-			return err
+		var matched, index int64
+		row, err := scan(rows, &matched, &index)
+		if err != nil {
+			session.Ledger.record(locked)
+			return nil, err
 		}
 		if index < 0 || int(index) >= len(keys) {
-			return fmt.Errorf("P4_ROW_LOCK_RESULT: lock statement returned ordinal %d of %d", index, len(keys))
+			session.Ledger.record(locked)
+			return nil, fmt.Errorf("P4_ROW_LOCK_RESULT: lock statement returned ordinal %d of %d", index, len(keys))
 		}
 		locked = append(locked, keys[index])
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
+		result = append(result, lockedRow[R]{key: keys[index], row: row, matched: matched == 1})
 	}
 	session.Ledger.record(locked)
-	return nil
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 
 func (session Session) Guard(ctx context.Context, token [32]byte) error {
@@ -366,18 +391,21 @@ func WithEnumeratedFault(ctx context.Context, fault func(context.Context) error)
 	return context.WithValue(ctx, enumeratedFaultKey{}, fault)
 }
 
-func everyRow(Key) bool { return true }
+func enumeratedFault(ctx context.Context) error {
+	if fault, ok := ctx.Value(enumeratedFaultKey{}).(func(context.Context) error); ok && fault != nil {
+		return fault(ctx)
+	}
+	return nil
+}
 
-func Select[T any](ctx context.Context, session Session, enumerate func(ctx context.Context, admit func(Key) bool) (T, []Key, error)) (T, error) {
+func Select[T any](ctx context.Context, session Session, enumerate func(ctx context.Context) (T, []Key, error)) (T, error) {
 	var zero T
-	first, keys, err := enumerate(ctx, everyRow)
+	first, keys, err := enumerate(ctx)
 	if err != nil || session.Provider != policyir.ProviderPostgreSQL {
 		return first, err
 	}
-	if fault, ok := ctx.Value(enumeratedFaultKey{}).(func(context.Context) error); ok && fault != nil {
-		if err := fault(ctx); err != nil {
-			return zero, err
-		}
+	if err := enumeratedFault(ctx); err != nil {
+		return zero, err
 	}
 	acquired, err := session.Lock(ctx, keys)
 	if err != nil {
@@ -386,17 +414,109 @@ func Select[T any](ctx context.Context, session Session, enumerate func(ctx cont
 	if !acquired {
 		return first, nil
 	}
-	admit := func(key Key) bool { return key.mode == KeyShare || session.Ledger.holds(key) }
-	second, again, err := enumerate(ctx, admit)
+	requested := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key.mode == KeyShare {
+			requested[key.order] = struct{}{}
+		}
+	}
+	second, again, err := enumerate(ctx)
 	if err != nil {
 		return zero, err
 	}
 	for _, key := range again {
-		if !admit(key) {
-			return zero, &ConflictError{Model: key.model, Detail: "a row matched after enumeration and is not locked by this transaction"}
+		if _, reference := requested[key.order]; session.Ledger.holds(key) || key.mode == KeyShare && reference {
+			continue
 		}
+		return zero, &ConflictError{Model: key.model, Detail: "a row matched after enumeration and is not locked by this transaction"}
 	}
 	return second, nil
+}
+
+func SelectMatching[R any](ctx context.Context, session Session, readers []Reader, enumerate func(ctx context.Context, reader int) ([]R, []Key, error), scan func(reader int, rows *sqlx.Rows, trailing ...any) (R, error)) ([][]R, error) {
+	enumerated, keys := make([][]R, len(readers)), make([][]Key, len(readers))
+	var all []Key
+	for reader := range readers {
+		rows, rowKeys, err := enumerate(ctx, reader)
+		if err != nil {
+			return nil, err
+		}
+		if len(rows) != len(rowKeys) {
+			return nil, fmt.Errorf("P4_ROW_LOCK_INVARIANT: reader %d enumerated %d rows with %d keys", reader, len(rows), len(rowKeys))
+		}
+		enumerated[reader], keys[reader], all = rows, rowKeys, append(all, rowKeys...)
+	}
+	if session.Provider != policyir.ProviderPostgreSQL {
+		return enumerated, nil
+	}
+	if err := enumeratedFault(ctx); err != nil {
+		return nil, err
+	}
+	if err := session.postgres(); err != nil {
+		return nil, err
+	}
+	pending := plan(session.Ledger, all)
+	if len(pending) == 0 {
+		return enumerated, nil
+	}
+	enumeratedBy := make(map[string][]int, len(all))
+	for reader, readerKeys := range keys {
+		for _, key := range readerKeys {
+			if owners := enumeratedBy[key.order]; len(owners) == 0 || owners[len(owners)-1] != reader {
+				enumeratedBy[key.order] = append(owners, reader)
+			}
+		}
+	}
+	type entry struct {
+		lock   pendingLock
+		reader int
+	}
+	var entries []entry
+	for _, lock := range pending {
+		for _, reader := range enumeratedBy[lock.key.order] {
+			entries = append(entries, entry{lock: lock, reader: reader})
+		}
+	}
+	fresh := make([]map[string]R, len(readers))
+	relocked := make([]map[string]struct{}, len(readers))
+	for reader := range readers {
+		fresh[reader], relocked[reader] = map[string]R{}, map[string]struct{}{}
+	}
+	for start := 0; start < len(entries); {
+		end := start + 1
+		for end < len(entries) && entries[end].reader == entries[start].reader && sameRun(entries[end].lock, entries[start].lock) {
+			end++
+		}
+		reader := entries[start].reader
+		group := make([]Key, end-start)
+		for index := range group {
+			group[index] = entries[start+index].lock.key
+			relocked[reader][group[index].order] = struct{}{}
+		}
+		locked, err := lockRun(ctx, session, group, entries[start].lock.nowait, &readers[reader], func(rows *sqlx.Rows, trailing ...any) (R, error) {
+			return scan(reader, rows, trailing...)
+		})
+		if err != nil {
+			return nil, err
+		}
+		for _, row := range locked {
+			if row.matched {
+				fresh[reader][row.key.order] = row.row
+			}
+		}
+		start = end
+	}
+	result := make([][]R, len(readers))
+	for reader, readerKeys := range keys {
+		for position, key := range readerKeys {
+			if _, read := relocked[reader][key.order]; !read {
+				result[reader] = append(result[reader], enumerated[reader][position])
+			} else if row, matched := fresh[reader][key.order]; matched {
+				result[reader] = append(result[reader], row)
+			}
+		}
+	}
+	return result, nil
 }
 
 func strongestSorted(keys []Key) []Key {

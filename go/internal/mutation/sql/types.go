@@ -9,6 +9,7 @@ import (
 	"time"
 
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 )
 
@@ -119,6 +120,7 @@ type Statement struct {
 	columns        []ResultColumn
 	authorizations []AuthorizationColumn
 	cardinality    Cardinality
+	reader         rowlock.Reader
 }
 
 // Every statement is a row-producing query, including INSERT/UPDATE/DELETE
@@ -136,6 +138,15 @@ func (statement Statement) Columns() []ResultColumn {
 }
 func (statement Statement) AuthorizationColumns() []AuthorizationColumn {
 	return append([]AuthorizationColumn(nil), statement.authorizations...)
+}
+
+func (statement Statement) LockReader(arguments []any) (rowlock.Reader, bool) {
+	if statement.role != SelectPreImage || statement.reader.Columns == "" {
+		return rowlock.Reader{}, false
+	}
+	reader := statement.reader
+	reader.Args = append([]any(nil), arguments...)
+	return reader, true
 }
 
 type IdentityVerification struct {

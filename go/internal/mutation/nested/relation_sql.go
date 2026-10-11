@@ -12,6 +12,7 @@ import (
 	compilerir "github.com/eleven-am/golem/go/internal/compiler/ir"
 	mutationdecode "github.com/eleven-am/golem/go/internal/mutation/decode"
 	mutationir "github.com/eleven-am/golem/go/internal/mutation/ir"
+	"github.com/eleven-am/golem/go/internal/mutation/rowlock"
 	"github.com/eleven-am/golem/go/internal/physical"
 	policyir "github.com/eleven-am/golem/go/internal/policy/ir"
 	"github.com/eleven-am/golem/go/internal/policy/schema"
@@ -45,6 +46,7 @@ type RelationSQLStatement struct {
 	args    []any
 	columns []RelationSQLColumn
 	maxRows uint32
+	reader  rowlock.Reader
 }
 
 func (statement RelationSQLStatement) Role() RelationSQLRole { return statement.role }
@@ -57,6 +59,14 @@ func (statement RelationSQLStatement) Columns() []RelationSQLColumn {
 	return append([]RelationSQLColumn(nil), statement.columns...)
 }
 func (statement RelationSQLStatement) MaxRows() uint32 { return statement.maxRows }
+func (statement RelationSQLStatement) LockReader() (rowlock.Reader, bool) {
+	if statement.reader.Columns == "" {
+		return rowlock.Reader{}, false
+	}
+	reader := statement.reader
+	reader.Args = cloneRelationArgs(statement.args)
+	return reader, true
+}
 
 type RelationSQLProgram struct{ statements []RelationSQLStatement }
 
@@ -427,7 +437,7 @@ func (context relationRenderContext) renderTargetQuery(role RelationSQLRole, tar
 		limit++ // sentinel; executor refuses rather than truncates.
 	}
 	text := "SELECT " + fields + " FROM " + context.dialect.Table(context.targetModel) + " AS " + context.dialect.Quote(context.alias) + " WHERE " + strings.Join(parts, " AND ") + " ORDER BY " + strings.Join(order, ", ") + fmt.Sprintf(" LIMIT %d", limit)
-	return RelationSQLStatement{role: role, model: policyir.ModelID(context.endpoint.TargetModelID()), text: text, args: args, columns: columns, maxRows: maxRows}, nil
+	return RelationSQLStatement{role: role, model: policyir.ModelID(context.endpoint.TargetModelID()), text: text, args: args, columns: columns, maxRows: maxRows, reader: rowlock.Reader{Alias: context.alias, Columns: fields, Match: strings.Join(parts, " AND ")}}, nil
 }
 
 type relationFragment struct {
