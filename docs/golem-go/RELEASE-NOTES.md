@@ -89,12 +89,15 @@ with `CONFLICT: a later nested operation removed a row this mutation wrote`,
 and nothing is written. A row that exists but fails your policy still fails
 with `FORBIDDEN`.
 
-**Faster writes on PostgreSQL: one statement fewer per locked selection.**
-Since v0.6.5 a write locked its rows with one statement and then read them
-again with another. Now one statement locks the rows and returns them as
+**Faster writes on PostgreSQL when the policy reads only the row.** Since
+v0.6.5 a write locked its rows with one statement and then read them again
+with another. Now, when the write's filter, policy and field grants read only
+the row being written, one statement locks the rows and returns them as
 locked. A single-row update or delete, an `UpdateMany` or `DeleteMany`, and
-each nested relation a write touches run one statement fewer (a single-row
-update: 7 statements inside its transaction, now 6). In alternating
+each nested relation a write touches then run one statement fewer (a
+single-row update: 7 statements inside its transaction, now 6). When any of
+them follows a relation to another table, the write keeps the separate read
+after the lock, so a grant revoked while it waited is still seen. In alternating
 single-writer runs, update latency fell by about 0.8ms and throughput rose by
 about 12%. Results, lock order and `CONFLICT` behaviour under contention are
 unchanged: no deadlocks in contention runs of 32 writers on 10 and 50 shared

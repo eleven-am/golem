@@ -459,6 +459,10 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 	if len(pending) == 0 {
 		return enumerated, nil
 	}
+	merged := make([]bool, len(readers))
+	for reader := range readers {
+		merged[reader] = len(keys[reader]) != 0 && readers[reader].mergeable(session.MaxParameters, len(keys[reader][0].identity.Components()))
+	}
 	enumeratedBy := make(map[string][]int, len(all))
 	for reader, readerKeys := range keys {
 		for _, key := range readerKeys {
@@ -473,15 +477,23 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 	}
 	var entries []entry
 	for _, lock := range pending {
+		fresh := false
 		for _, reader := range enumeratedBy[lock.key.order] {
-			entries = append(entries, entry{lock: lock, reader: reader})
+			if merged[reader] {
+				entries = append(entries, entry{lock: lock, reader: reader})
+			} else if !fresh {
+				fresh = true
+				entries = append(entries, entry{lock: lock, reader: -1})
+			}
 		}
 	}
-	fresh := make([]map[string]R, len(readers))
+	locked := make([]map[string]R, len(readers))
 	relocked := make([]map[string]struct{}, len(readers))
 	for reader := range readers {
-		fresh[reader], relocked[reader] = map[string]R{}, map[string]struct{}{}
+		locked[reader], relocked[reader] = map[string]R{}, map[string]struct{}{}
 	}
+	reread := make([]bool, len(readers))
+	plain := func(rows *sqlx.Rows, trailing ...any) (struct{}, error) { return struct{}{}, rows.Scan(trailing...) }
 	for start := 0; start < len(entries); {
 		end := start + 1
 		for end < len(entries) && entries[end].reader == entries[start].reader && sameRun(entries[end].lock, entries[start].lock) {
@@ -491,32 +503,121 @@ func SelectMatching[R any](ctx context.Context, session Session, readers []Reade
 		group := make([]Key, end-start)
 		for index := range group {
 			group[index] = entries[start+index].lock.key
-			relocked[reader][group[index].order] = struct{}{}
 		}
-		locked, err := lockRun(ctx, session, group, entries[start].lock.nowait, &readers[reader], func(rows *sqlx.Rows, trailing ...any) (R, error) {
+		if reader < 0 {
+			for _, key := range group {
+				for _, owner := range enumeratedBy[key.order] {
+					reread[owner] = reread[owner] || !merged[owner]
+				}
+			}
+			if _, err := lockRun(ctx, session, group, entries[start].lock.nowait, nil, plain); err != nil {
+				return nil, err
+			}
+			start = end
+			continue
+		}
+		for _, key := range group {
+			relocked[reader][key.order] = struct{}{}
+		}
+		rows, err := lockRun(ctx, session, group, entries[start].lock.nowait, &readers[reader], func(rows *sqlx.Rows, trailing ...any) (R, error) {
 			return scan(reader, rows, trailing...)
 		})
 		if err != nil {
 			return nil, err
 		}
-		for _, row := range locked {
+		for _, row := range rows {
 			if row.matched {
-				fresh[reader][row.key.order] = row.row
+				locked[reader][row.key.order] = row.row
 			}
 		}
 		start = end
 	}
 	result := make([][]R, len(readers))
 	for reader, readerKeys := range keys {
+		if reread[reader] {
+			rows, rowKeys, err := enumerate(ctx, reader)
+			if err != nil {
+				return nil, err
+			}
+			if len(rows) != len(rowKeys) {
+				return nil, fmt.Errorf("P4_ROW_LOCK_INVARIANT: reader %d enumerated %d rows with %d keys", reader, len(rows), len(rowKeys))
+			}
+			for index, key := range rowKeys {
+				if session.Ledger.holds(key) {
+					result[reader] = append(result[reader], rows[index])
+				}
+			}
+			continue
+		}
 		for position, key := range readerKeys {
 			if _, read := relocked[reader][key.order]; !read {
 				result[reader] = append(result[reader], enumerated[reader][position])
-			} else if row, matched := fresh[reader][key.order]; matched {
+			} else if row, matched := locked[reader][key.order]; matched {
 				result[reader] = append(result[reader], row)
 			}
 		}
 	}
 	return result, nil
+}
+
+func (reader Reader) mergeable(maxParameters uint32, width int) bool {
+	return width != 0 && int(maxParameters)-len(reader.Args) >= width && readsOnlyTheTargetRow(reader.Columns) && readsOnlyTheTargetRow(reader.Match)
+}
+
+var targetRowCalls = map[string]struct{}{"COALESCE": {}, "NULLIF": {}, "GREATEST": {}, "LEAST": {}, "IN": {}, "AND": {}, "OR": {}, "NOT": {}, "WHEN": {}, "THEN": {}, "ELSE": {}, "CASE": {}, "IS": {}, "ANY": {}, "ALL": {}, "ARRAY": {}, "ROW": {}}
+
+var otherRowWords = map[string]struct{}{"SELECT": {}, "FROM": {}, "JOIN": {}, "TABLE": {}, "LATERAL": {}, "VALUES": {}}
+
+func wordRune(character rune) bool {
+	return character == '_' || character >= '0' && character <= '9' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z'
+}
+
+func readsOnlyTheTargetRow(text string) bool {
+	runes := []rune(text)
+	for index := 0; index < len(runes); {
+		switch character := runes[index]; {
+		case character == '"' || character == '\'':
+			closing := index + 1
+			for closing < len(runes) {
+				if runes[closing] == character {
+					if closing+1 < len(runes) && runes[closing+1] == character {
+						closing += 2
+						continue
+					}
+					break
+				}
+				closing++
+			}
+			if closing >= len(runes) {
+				return false
+			}
+			index = closing + 1
+		case character == '_' || character >= 'A' && character <= 'Z' || character >= 'a' && character <= 'z':
+			start := index
+			for index < len(runes) && (wordRune(runes[index]) || runes[index] == '$') {
+				index++
+			}
+			word := strings.ToUpper(string(runes[start:index]))
+			if _, other := otherRowWords[word]; other {
+				return false
+			}
+			next := index
+			for next < len(runes) && (runes[next] == ' ' || runes[next] == '\t' || runes[next] == '\n') {
+				next++
+			}
+			if next < len(runes) && runes[next] == '(' {
+				_, allowed := targetRowCalls[word]
+				qualified := start > len("pg_catalog") && runes[start-1] == '.' && string(runes[start-1-len("pg_catalog"):start-1]) == "pg_catalog" && (start-1-len("pg_catalog") == 0 || !wordRune(runes[start-2-len("pg_catalog")]))
+				cast := start > 1 && runes[start-1] == ':' && runes[start-2] == ':'
+				if !allowed && !qualified && !cast {
+					return false
+				}
+			}
+		default:
+			index++
+		}
+	}
+	return true
 }
 
 func strongestSorted(keys []Key) []Key {

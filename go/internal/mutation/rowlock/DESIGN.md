@@ -64,6 +64,23 @@ timeout behind the victims, so throughput collapsed under contention.
    the first reader's statement and read again, without waiting, by the
    second's. Rows already held are returned as enumerated: no other
    transaction can have changed them.
+
+   The merged lock-read is used only for a reader proven, from its rendered
+   SQL, to read nothing but the target row, and whose own arguments leave room
+   in the parameter bound for at least one identity (`Reader.mergeable`). The
+   proof is syntactic and closed: after skipping quoted identifiers and
+   literals, the columns and predicate may not contain `SELECT`, `FROM`, `JOIN`,
+   `TABLE`, `LATERAL` or `VALUES`, and every function call must be a listed
+   operator form (`COALESCE`, `CASE`, ...), a `pg_catalog.` function or a type
+   cast. Anything else, including a policy or field grant that follows a
+   relation (an `EXISTS (SELECT ...)`), takes the fresh-read path: the reader's
+   keys are locked with a plain `Lock` in the same ordered round, then its
+   enumeration runs again as a new statement and keeps the rows the transaction
+   holds. Why: a statement's subqueries read other tables at the snapshot taken
+   when the statement started. If the lock-read waits, a grant revoked by the
+   blocking transaction would be unseen and the write authorized on stale
+   data; a new statement after the lock sees it. The parameter fallback keeps
+   a selection whose own arguments fill the bound working, as it did before.
 5. **Complete selections: enumerate, lock, enumerate again** (`Select`). The
    cascade closure, the root upsert probe and foreign-key parents found through
    a unique key must see every row, including one that started to match after
@@ -97,11 +114,11 @@ match, each as it was when locked, in enumeration order.
   an update has nothing to change.
 - A row that starts matching after enumeration is not among the keys and is
   not held. This covers `DeleteMany`/`UpdateMany` (root and nested), nested
-  relation expansions, and single-target pre-images. It matches a plain READ
-  COMMITTED `DELETE ... WHERE`: its snapshot does not see rows committed after
-  it started, and a row changed under it is re-checked on the version it
-  locked, with other tables read at the statement's snapshot. v0.6.4's single
-  `SELECT ... FOR UPDATE` behaved the same way. Including such rows would need
+  relation expansions, and single-target pre-images, on both paths: the merged
+  lock-read names only enumerated keys, and the fresh-read path keeps only rows
+  the transaction holds. A row that stopped matching is judged on the version
+  locked; on the fresh-read path any other table it depends on is read after
+  the lock. Including rows that start matching would need
   a second, possibly out-of-order, lock round and could chase concurrent
   inserts without bound.
 - The predicate is a column, not part of `WHERE`. In `WHERE`, PostgreSQL would
@@ -127,11 +144,15 @@ facts are built from those rows. Tests: `runtime/row_lock_ledger_test.go`,
 
 ## Cost
 
-Per locked selection, a predicate selection costs one statement beyond its
-enumeration and a complete selection two. The statement counts per operation
-are pinned by the PostgreSQL observation oracles
-(`internal/p8oracle/mutation`, `internal/p8oracle/load`) and
-`runtime/mutation_cascade_cost_test.go`.
+Beyond its enumeration, a merged predicate selection costs one statement; a
+fresh-read predicate selection (a policy, grant or predicate that reads another
+table, or arguments that fill the parameter bound) and a complete selection
+cost two. A single-row update with a single-table policy is 6 statements inside
+its transaction; with a relation policy it is 7, as in go/v0.6.6. The counts
+are pinned by the PostgreSQL observation oracles (`internal/p8oracle/mutation`,
+`internal/p8oracle/load`, single-table policies), by
+`runtime/mutation_cascade_cost_test.go`, and, for the fresh-read path, by
+`runtime/row_lock_fresh_read_test.go`.
 
 ## Rejected: keep predicate-order locks and map 40P01 to `CONFLICT`
 
@@ -148,9 +169,9 @@ hot rows, still about 3x worse than the ledger, and it is a server setting
 golem cannot own. Uncontended, the ledger as first shipped (go/v0.6.5) cost
 about +0.4ms per write (two extra statements: lock and re-read) and about 20%
 single-writer throughput (528 → 423 updates/s). Merging the lock and the
-re-read (go/v0.6.7) leaves one extra statement per predicate selection: a
-single-row update is 6 statements inside its transaction (v0.6.4: 5, v0.6.5:
-7), and in alternating runs single-writer update latency fell by about 0.8ms
+re-read (go/v0.6.7) leaves one extra statement per predicate selection whose
+reads stay on the target row: a single-row update under a single-table policy
+is 6 statements inside its transaction (v0.6.4: 5, v0.6.5: 7), and in alternating runs single-writer update latency fell by about 0.8ms
 (p50) with about 12% more updates/s.
 
 ## Known trade-off
@@ -168,3 +189,8 @@ statement waits for it is locked but not returned: PostgreSQL re-checks
 record that lock, so a later wait in the same transaction can be out of order.
 Single updates may change a primary key; batch updates may not. Present since
 go/v0.6.5, unchanged by the merged lock-read.
+
+The merged lock-read evaluates the target row's own columns on the version it
+locked, but a statement cannot see other tables after its start. That is why a
+reader that reads any other table, or that cannot be proven not to, uses the
+fresh-read path; the price is the second statement go/v0.6.6 paid.
