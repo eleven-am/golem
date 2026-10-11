@@ -74,13 +74,15 @@ describe('engine-issued writes', () => {
     await expect(engineDelegate('Post', delegate).create(args)).resolves.toBe(false);
   });
 
-  it('fails loudly when the client offered a same-operation write but never the one the engine guarded', async () => {
+  it('leaves a write the client substituted for the engine write unclaimed', async () => {
+    const claims: boolean[] = [];
     const delegate: EngineDelegate = {
-      create: async () => claimEngineWrite('Post', 'create', { data: { id: 9 } }),
+      create: async () => claims.push(claimEngineWrite('Post', 'create', { data: { id: 9 } })),
     };
 
-    await expect(engineDelegate('Post', delegate).create(args))
-      .rejects.toThrow('The client the engine wrote create on Post through did not issue the write it guarded');
+    await engineDelegate('Post', delegate).create(args);
+
+    expect(claims).toEqual([false]);
   });
 
   it('marks nothing for a write it cannot fingerprint exactly, so the interceptor guards it too', async () => {

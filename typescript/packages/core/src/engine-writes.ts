@@ -5,7 +5,6 @@ interface EngineWrite {
   readonly model: string;
   readonly operation: string;
   readonly fingerprint: string;
-  offered: boolean;
   claimed: boolean;
 }
 
@@ -26,19 +25,12 @@ function fingerprintOf(args: unknown): string | undefined {
   }
 }
 
-async function issue(model: string, operation: string, args: unknown, write: () => Promise<any>): Promise<any> {
+function issue(model: string, operation: string, args: unknown, write: () => Promise<any>): Promise<any> {
   const fingerprint = fingerprintOf(args);
   if (fingerprint === undefined) {
-    return issued.exit(write);
+    return write();
   }
-  const record: EngineWrite = { model, operation, fingerprint, offered: false, claimed: false };
-  const result = await issued.run(record, write);
-  if (record.offered && !record.claimed) {
-    throw new Error(
-      `The client the engine wrote ${operation} on ${model} through did not issue the write it guarded`,
-    );
-  }
-  return result;
+  return issued.run({ model, operation, fingerprint, claimed: false }, write);
 }
 
 export function engineDelegate(model: string, delegate: EngineDelegate): EngineDelegate {
@@ -58,7 +50,6 @@ export function claimEngineWrite(model: string, operation: string, args: unknown
   if (!write || write.claimed || write.model !== model || write.operation !== operation) {
     return false;
   }
-  write.offered = true;
   if (fingerprintOf(args) !== write.fingerprint) {
     return false;
   }

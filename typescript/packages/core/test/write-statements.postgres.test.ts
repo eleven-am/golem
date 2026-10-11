@@ -294,17 +294,18 @@ describe('the statements an uncontended write issues on PostgreSQL', () => {
         .resolves.toEqual([{ id: 30 }, { id: 31 }]);
     });
 
-    it('refuses an engine write a wrapper replaced with a different write of the same model', async () => {
+    it('guards a different write a wrapper substituted for the engine write', async () => {
       const engineWithSwappedWrite = wrappedEngine((real) =>
         real.create({ data: { id: 33, threadId: 2, body: 'swapped', postedAt }, select: { id: true } }));
 
-      await expect(engineWithSwappedWrite.create({
+      const locked = await lockedRows(() => engineWithSwappedWrite.create({
         model: 'Reply',
         data: { id: 32, threadId: 1, body: 'engine', postedAt },
         select: { id: true },
         context: context(),
-      })).rejects.toThrow(/did not issue the write it guarded/);
-      await expect(prisma.reply.count()).resolves.toBe(0);
+      }));
+
+      expect(locked).toEqual([`${lock} [1]`, `${lock} [2]`]);
     });
 
     it('guards concurrent engine writes each exactly once', async () => {
